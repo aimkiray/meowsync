@@ -1,0 +1,666 @@
+/* Fusion Pixel 字体定义 */
+@font-face {
+  font-family: 'Fusion Pixel';
+  src: url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2'),
+       url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Fusion Pixel';
+  src: url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff2') format('woff2'),
+       url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
+
+/* pixel音乐播放器样式 */
+/* 经典8bit配色方案 */
+:root {
+  --pixel-bg: #0f0f23;
+  --pixel-card-bg: #1a1a2e;
+  --pixel-primary: #00ff41;
+  --pixel-secondary: #0080ff;
+  --pixel-accent: #ff0080;
+  --pixel-warning: #ffff00;
+  --pixel-success: #00ff00;
+  --pixel-border: #333366;
+  --pixel-text: #ffffff;
+  --pixel-text-dim: #cccccc;
+  --pixel-dark: #000000;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Fusion Pixel', 'Press Start 2P', 'Noto Sans SC', monospace;
+  background: var(--pixel-bg);
+  min-height: 100vh;
+  color: var(--pixel-text);
+  overflow-x: hidden;
+  image-rendering: pixelated;
+}
+
+/* pixel滚动条 */
+::-webkit-scrollbar {
+  width: 16px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--pixel-dark);
+  border: 2px solid var(--pixel-border);
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-dark);
+  border-radius: 0;
+  box-shadow: inset 0 0 0 1px var(--pixel-secondary);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--pixel-secondary);
+  box-shadow: inset 0 0 0 1px var(--pixel-primary);
+}
+
+/* 确保滚动条不影响内容对齐 */
+.jirai-card.max-h-96 {
+  max-height: 32rem; /* 增加高度从24rem到32rem */
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  /* 在左侧添加与滚动条宽度相等的padding */
+  padding-left: calc(1.5rem + 16px); /* 原有padding + 滚动条宽度 */
+  padding-right: 1.5rem; /* 保持原有右侧padding */
+}
+
+/* 桌面端铺满页面布局 */
+@media (min-width: 1024px) {
+  .desktop-fullscreen {
+    height: 100vh;
+    overflow: hidden;
+  }
+  
+  .desktop-content {
+    height: calc(100vh - 140px - 120px); /* 减去导航栏高度和底部播放器高度 */
+  }
+  
+  .jirai-card.max-h-96 {
+    max-height: calc(100vh - 200px - 120px); /* 桌面端使用视口高度，减去底部播放器高度 */
+    height: calc(100vh - 200px - 120px);
+  }
+}
+
+.jirai-button-primary {
+  background: #1a1a2e;
+  border: none;
+  border-radius: 0;
+  color: var(--pixel-text);
+  padding: 12px 24px;
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  font-weight: normal;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  position: relative;
+  margin: 4px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  /* 8bit立体边框 */
+  border: 3px solid var(--pixel-primary);
+  box-shadow: 
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 255, 65, 0.2);
+}
+
+.jirai-button-primary:hover {
+  background: #2a2a3e;
+  border: 3px solid var(--pixel-primary);
+  color: var(--pixel-primary);
+  box-shadow: 
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 255, 65, 0.3);
+}
+
+.jirai-button-primary:active {
+  background: #0a0a1e;
+  border: 3px solid var(--pixel-primary);
+  color: var(--pixel-primary);
+  box-shadow: 
+    1px 1px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.5);
+  transform: translate(2px, 2px);
+}
+
+/* pixel按钮样式 */
+.jirai-button {
+  background: #1a1a2e;
+  border: none;
+  border-radius: 0;
+  color: var(--pixel-text);
+  padding: 12px 24px;
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  font-weight: normal;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  position: relative;
+  margin: 4px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  /* 8bit立体边框 */
+  border: 2px solid var(--pixel-text-dim);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.jirai-button:hover {
+  background: #2a2a3e;
+  border: 2px solid var(--pixel-primary);
+  color: var(--pixel-primary);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 255, 65, 0.2);
+}
+
+.jirai-button:active {
+  background: #0a0a1e;
+  border: 2px solid var(--pixel-primary);
+  color: var(--pixel-primary);
+  box-shadow: 
+    1px 1px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.5);
+  transform: translate(1px, 1px);
+}
+
+/* pixel按钮样式 */
+.pixel-button {
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  font-size: 8px;
+  padding: 6px 10px;
+  background: var(--pixel-primary);
+  border: none;
+  border-radius: 0;
+  color: var(--pixel-dark);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  position: relative;
+  margin: 2px;
+  /* 8bit按钮边框 */
+  border: 2px solid var(--pixel-text);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  height: 28px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.pixel-button:hover {
+  background: var(--pixel-secondary);
+  border: 2px solid var(--pixel-text);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.pixel-button:active {
+  background: var(--pixel-accent);
+  border: 2px solid var(--pixel-text);
+  box-shadow: 
+    1px 1px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.3);
+  transform: translate(1px, 1px);
+}
+
+/* pixel卡片容器 */
+.jirai-card {
+  background: var(--pixel-card-bg);
+  border: 3px solid var(--pixel-text);
+  border-radius: 0;
+  box-shadow: 
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  position: relative;
+  margin: 4px;
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  image-rendering: pixelated;
+}
+
+/* 修复滚动容器内的卡片边距 */
+.jirai-card.max-h-96 .jirai-card {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* 隐藏滚动条但保持滚动功能 */
+body {
+  overflow-x: hidden;
+}
+
+body::-webkit-scrollbar {
+  width: 0px;
+  background: transparent;
+}
+
+/* 底部播放器特殊样式 */
+.jirai-card.fixed {
+  background: var(--pixel-card-bg);
+  border-top: 4px solid var(--pixel-primary);
+  border-radius: 0;
+  box-shadow: 
+    0 -3px 0px var(--pixel-dark),
+    inset 1px 1px 0px rgba(255, 255, 255, 0.3);
+  position: fixed !important;
+  margin: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100vw !important;
+  z-index: 9999 !important;
+}
+
+/* pixel音乐卡片 */
+.music-card {
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-text-dim);
+  border-radius: 0;
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.2);
+  position: relative;
+  image-rendering: pixelated;
+}
+
+.music-card:hover {
+  border: 2px solid var(--pixel-primary);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  background: var(--pixel-border);
+}
+
+.music-card:active {
+  border: 2px solid var(--pixel-secondary);
+  box-shadow: 
+    1px 1px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.2);
+  transform: translateY(0px);
+  background: var(--pixel-secondary);
+}
+
+/* 8bit播放按钮 */
+.play-button {
+  width: 60px;
+  height: 60px;
+  background: var(--pixel-primary);
+  border: 4px solid var(--pixel-text);
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  box-shadow: 
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  position: relative;
+  image-rendering: pixelated;
+}
+
+.play-button::before {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.2) 50%, transparent 70%);
+  animation: shimmer 3s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.play-button:hover {
+  background: var(--pixel-secondary);
+  box-shadow: 
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.play-button:active {
+  background: var(--pixel-accent);
+  box-shadow: 
+    1px 1px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.3);
+  transform: scale(0.95);
+}
+
+/* pixel进度条 */
+.pixel-progress {
+  height: 12px;
+  background: var(--pixel-dark);
+  border: 2px solid var(--pixel-text);
+  border-radius: 0;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 
+    inset 1px 1px 0px rgba(0, 0, 0, 0.5),
+    1px 1px 0px rgba(255, 255, 255, 0.2);
+  image-rendering: pixelated;
+}
+
+.pixel-progress-fill {
+  height: 100%;
+  background: var(--pixel-primary);
+  transition: width 0.1s ease;
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  image-rendering: pixelated;
+}
+
+@keyframes progressFlow {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 8bit歌词样式 */
+.lyric-line {
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  font-size: 12px;
+  padding: 8px 0;
+  transition: all 0.2s ease;
+  color: var(--pixel-text-dim);
+  text-shadow: 1px 1px 0px var(--pixel-dark);
+}
+
+.lyric-active {
+  color: var(--pixel-primary);
+  font-weight: normal;
+  transform: scale(1.02);
+  text-shadow: 
+    1px 1px 0px var(--pixel-dark),
+    2px 2px 0px rgba(0, 0, 0, 0.3);
+  animation: lyricGlow 2s ease-in-out infinite alternate;
+}
+
+@keyframes lyricGlow {
+  0% { 
+    text-shadow: 
+      1px 1px 0px var(--pixel-dark),
+      2px 2px 0px rgba(0, 0, 0, 0.3);
+  }
+  100% { 
+    text-shadow: 
+      1px 1px 0px var(--pixel-dark),
+      2px 2px 0px rgba(0, 0, 0, 0.5),
+      0 0 4px var(--pixel-primary);
+  }
+}
+
+/* pixel输入框 */
+.pixel-input {
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-text-dim);
+  border-radius: 0;
+  color: var(--pixel-text);
+  padding: 10px 16px;
+  font-size: 10px;
+  outline: none;
+  transition: all 0.1s ease;
+  box-shadow: 
+    inset 1px 1px 0px rgba(0, 0, 0, 0.3),
+    1px 1px 0px rgba(255, 255, 255, 0.2);
+  image-rendering: pixelated;
+  height: 40px;
+  box-sizing: border-box;
+}
+
+.pixel-input:focus {
+  border-color: var(--pixel-primary);
+  background: var(--pixel-border);
+  box-shadow: 
+    inset 1px 1px 0px rgba(0, 0, 0, 0.2),
+    1px 1px 0px rgba(255, 255, 255, 0.3),
+    0 0 0 2px var(--pixel-primary);
+}
+
+.pixel-input::placeholder {
+  color: var(--pixel-text-dim);
+  opacity: 0.7;
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+}
+
+/* 8bit标题 */
+.jirai-title {
+  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
+  font-size: 24px;
+  color: var(--pixel-primary);
+  text-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    4px 4px 0px rgba(0, 0, 0, 0.3);
+  letter-spacing: 2px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.glow-text {
+  text-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    4px 4px 0px rgba(0, 0, 0, 0.3),
+    0 0 4px var(--pixel-primary);
+  animation: textGlow 3s ease-in-out infinite alternate;
+}
+
+@keyframes textGlow {
+  0% { 
+    text-shadow: 
+      2px 2px 0px var(--pixel-dark),
+      4px 4px 0px rgba(0, 0, 0, 0.3),
+      0 0 4px var(--pixel-primary);
+  }
+  100% { 
+    text-shadow: 
+      2px 2px 0px var(--pixel-dark),
+      4px 4px 0px rgba(0, 0, 0, 0.5),
+      0 0 8px var(--pixel-secondary);
+  }
+}
+
+@keyframes titleFlow {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* pixel音量控制 */
+.pixel-volume {
+  width: 100px;
+  height: 12px;
+  background: var(--pixel-dark);
+  border: 2px solid var(--pixel-text);
+  border-radius: 0;
+  outline: none;
+  cursor: pointer;
+  box-shadow: 
+    inset 1px 1px 0px rgba(0, 0, 0, 0.5),
+    1px 1px 0px rgba(255, 255, 255, 0.2);
+  image-rendering: pixelated;
+}
+
+.pixel-volume::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-text);
+  border-radius: 0;
+  cursor: pointer;
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  image-rendering: pixelated;
+}
+
+.pixel-volume::-webkit-slider-thumb:hover {
+  background: var(--pixel-secondary);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* pixel滑块控制 */
+.jirai-slider {
+  width: 100px;
+  height: 8px;
+  background: var(--pixel-dark);
+  border: 2px solid var(--pixel-text);
+  border-radius: 0;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  box-shadow: 
+    inset 1px 1px 0px rgba(0, 0, 0, 0.5),
+    1px 1px 0px rgba(255, 255, 255, 0.2);
+  image-rendering: pixelated;
+}
+
+.jirai-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-text);
+  border-radius: 0;
+  cursor: pointer;
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  image-rendering: pixelated;
+}
+
+.jirai-slider::-webkit-slider-thumb:hover {
+  background: var(--pixel-secondary);
+  border: 2px solid var(--pixel-text);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.jirai-slider::-webkit-slider-thumb:active {
+  background: var(--pixel-accent);
+  border: 2px solid var(--pixel-text);
+  box-shadow: 
+    1px 1px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.3);
+  transform: scale(0.9);
+}
+
+.jirai-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-text);
+  border-radius: 0;
+  cursor: pointer;
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.jirai-slider::-moz-range-track {
+  height: 8px;
+  background: var(--pixel-dark);
+  border: 2px solid var(--pixel-text);
+  border-radius: 0;
+}
+
+
+
+/* pixel加载动画 - 圆形 */
+.pixel-loading {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--pixel-border);
+  border-top: 3px solid var(--pixel-primary);
+  border-radius: 50%;
+  animation: pixelSpin 1.5s linear infinite;
+  image-rendering: pixelated;
+}
+
+@keyframes pixelSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .jirai-title {
+    font-size: 16px;
+  }
+  
+  .pixel-button {
+    font-size: 8px;
+    padding: 8px 12px;
+  }
+  
+  .play-button {
+    width: 50px;
+    height: 50px;
+  }
+}
+
+/* 特殊效果：8bit像素星空背景 */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    radial-gradient(2px 2px at 20px 30px, var(--pixel-primary), transparent),
+    radial-gradient(1px 1px at 40px 70px, var(--pixel-secondary), transparent),
+    radial-gradient(1px 1px at 90px 40px, var(--pixel-text), transparent),
+    radial-gradient(2px 2px at 130px 80px, var(--pixel-accent), transparent),
+    radial-gradient(1px 1px at 160px 30px, var(--pixel-border), transparent),
+    radial-gradient(1px 1px at 200px 60px, var(--pixel-text-dim), transparent);
+  background-repeat: repeat;
+  background-size: 250px 120px;
+  animation: sparkle 25s linear infinite;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.4;
+  image-rendering: pixelated;
+}
+
+@keyframes sparkle {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-120px); }
+}
