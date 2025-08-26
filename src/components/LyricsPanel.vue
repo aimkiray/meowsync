@@ -20,7 +20,7 @@
         <p class="text-gray-600">选择一首歌开始播放喵~</p>
       </div>
       
-      <div v-else class="-mx-6 px-6 flex-1 flex flex-col overflow-hidden">
+      <div v-else class="-mx-6 px-6 flex-1 flex flex-col">
         <!-- 当前播放歌曲信息 -->
         <div class="text-center mb-6">
           <!-- 时长警告提示 -->
@@ -53,7 +53,7 @@
           <p class="text-pink-300 flex justify-center items-center">加载歌词中喵...</p>
         </div>
         
-        <div v-else ref="lyricsContainer" class="space-y-2 jirai-lyrics flex-1 overflow-y-auto">
+        <div v-else ref="lyricsContainer" class="space-y-2 jirai-lyrics flex-1">
           <div
             v-for="(lyric, index) in lyrics"
             :key="index"

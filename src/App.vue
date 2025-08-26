@@ -15,12 +15,17 @@
             :selected-playlist="selectedPlaylist"
             :user-playlists="userPlaylists"
             :search-results="searchResults"
+            :current-page="playlistCurrentPage"
+            :page-size="playlistPageSize"
             @update:active-tab="activeTab = $event"
             @search="searchPlaylists"
             @search-by-id="loadPlaylistByIdAndAdd"
             @select-playlist="selectPlaylist"
             @add-playlist="addPlaylistToLibrary"
             @remove-playlist="removePlaylistFromLibrary"
+            @go-to-page="goToPlaylistPage"
+            @prev-page="prevPlaylistPage"
+            @next-page="nextPlaylistPage"
           />
         </div>
 
@@ -140,6 +145,10 @@ export default {
     const currentPage = ref(1)
     const pageSize = ref(10)
     
+    // 歌单分页相关数据
+    const playlistCurrentPage = ref(1)
+    const playlistPageSize = ref(10)
+    
     let howl = null
     let lyricTimer = null
 
@@ -193,6 +202,31 @@ export default {
     const nextPage = () => {
       if (currentPage.value < totalPages.value) {
         currentPage.value++
+      }
+    }
+
+    // 歌单分页控制函数
+    const goToPlaylistPage = (page) => {
+      const maxPages = activeTab.value === 'my' 
+        ? Math.ceil(userPlaylists.value.length / playlistPageSize.value)
+        : Math.ceil(searchResults.value.length / playlistPageSize.value)
+      if (page >= 1 && page <= maxPages) {
+        playlistCurrentPage.value = page
+      }
+    }
+    
+    const prevPlaylistPage = () => {
+      if (playlistCurrentPage.value > 1) {
+        playlistCurrentPage.value--
+      }
+    }
+    
+    const nextPlaylistPage = () => {
+      const maxPages = activeTab.value === 'my' 
+        ? Math.ceil(userPlaylists.value.length / playlistPageSize.value)
+        : Math.ceil(searchResults.value.length / playlistPageSize.value)
+      if (playlistCurrentPage.value < maxPages) {
+        playlistCurrentPage.value++
       }
     }
 
@@ -297,9 +331,22 @@ export default {
           return
         }
         
-        userPlaylists.value.push(playlist)
+        // 确保歌单包含完整的tracks数据
+        let fullPlaylist = playlist
+        if (!playlist.tracks || playlist.tracks.length === 0) {
+          console.log('🔄 歌单缺少tracks数据，从服务器获取完整信息...')
+          try {
+            fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
+            console.log('✅ 获取完整歌单数据成功，歌曲数量:', fullPlaylist.tracks?.length || 0)
+          } catch (error) {
+            console.error('❌ 获取完整歌单数据失败，使用原始数据:', error)
+            fullPlaylist = playlist
+          }
+        }
+        
+        userPlaylists.value.push(fullPlaylist)
         savePlaylistsToStorage()
-        console.log('✅ 歌单已添加:', playlist.name)
+        console.log('✅ 歌单已添加:', fullPlaylist.name)
       } catch (error) {
         console.error('❌ 添加歌单失败:', error)
       }
@@ -362,15 +409,18 @@ export default {
         
         console.log('🎵 加载歌单歌曲:', playlist.name)
         
-        // 如果歌单已经包含歌曲信息，直接使用
-        if (playlist.tracks && playlist.tracks.length > 0) {
-          songs.value = playlist.tracks
-          console.log('✅ 使用已有歌曲数据，共', songs.value.length, '首')
-        } else {
-          // 否则重新获取完整歌单信息
-          const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
-          songs.value = fullPlaylist.tracks || []
-          console.log('✅ 重新获取歌曲完成，共', songs.value.length, '首')
+        // 强制从服务器重新获取最新的歌单信息和歌曲数据
+        console.log('🔄 从服务器获取最新歌单数据...')
+        const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
+        songs.value = fullPlaylist.tracks || []
+        console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
+        
+        // 更新本地歌单库中的数据
+        const playlistIndex = userPlaylists.value.findIndex(p => p.id === playlist.id)
+        if (playlistIndex !== -1) {
+          userPlaylists.value[playlistIndex] = { ...userPlaylists.value[playlistIndex], ...fullPlaylist }
+          savePlaylistsToStorage()
+          console.log('✅ 已更新本地歌单数据')
         }
       } catch (error) {
         console.error('❌ 加载歌曲失败:', error)
@@ -698,6 +748,11 @@ export default {
       currentPage.value = 1
     })
 
+    // 监听选项卡切换，重置歌单分页
+    watch(activeTab, () => {
+      playlistCurrentPage.value = 1
+    })
+
     // 检查是否为首次访问
     const isFirstVisit = () => {
       const saved = localStorage.getItem('userPlaylists')
@@ -821,6 +876,8 @@ export default {
       playerContainer,
       currentPage,
       pageSize,
+      playlistCurrentPage,
+      playlistPageSize,
       
       // 计算属性
       progressPercentage,
@@ -833,6 +890,9 @@ export default {
       goToPage,
       prevPage,
       nextPage,
+      goToPlaylistPage,
+      prevPlaylistPage,
+      nextPlaylistPage,
       extractPlaylistId,
       handleSearch,
       loadPlaylistByIdAndAdd,
