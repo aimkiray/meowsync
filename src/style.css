@@ -204,7 +204,7 @@ body {
     height: 100%; /* 使用100%高度而不是calc */
     min-height: 200px; /* 设置最小高度，确保至少显示3个条目 */
     flex: 1;
-    overflow: hidden; /* 防止卡片容器溢出 */
+    overflow-y: auto; /* 启用垂直滚动 */
     display: flex;
     flex-direction: column;
   }
@@ -297,7 +297,7 @@ body {
 .pixel-button {
   font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
   font-size: 8px;
-  padding: 6px 10px;
+  padding: 2px 8px;
   background: var(--pixel-primary);
   border: none;
   border-radius: 0;
@@ -313,7 +313,6 @@ body {
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
     inset 1px 1px 0 rgba(255, 255, 255, 0.3);
-  height: 28px;
   box-sizing: border-box;
   display: flex;
   align-items: center;

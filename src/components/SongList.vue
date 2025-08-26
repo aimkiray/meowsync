@@ -2,7 +2,7 @@
   <div class="lg:col-span-1">
     <div class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
       <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-2" style="background: rgba(26, 26, 46, 0.9);">
-        <span class="flex items-center">歌曲列表</span>
+        <span class="flex items-center">歌曲</span>
         <div class="flex items-center space-x-2">
           <button
             @click="$emit('toggle-play-mode')"
@@ -34,7 +34,7 @@
       </div>
       
       <div v-else class="flex-1 flex flex-col">
-        <div class="space-y-2 mb-4 -mx-6 px-6 flex-1 overflow-y-auto">
+        <div class="space-y-2 mb-4 -mx-6 px-6">
           <div
             v-for="(song, index) in paginatedSongs"
             :key="song.id"
@@ -100,7 +100,7 @@
             ←
           </button>
           
-          <span class="text-pink-300 text-xs px-2 py-1 bg-black/50 min-w-[48px] text-center">
+          <span class="text-pink-300 text-xs px-2 py-1 min-w-[48px] text-center">
             {{ currentPage }}/{{ totalPages }}
           </span>
           
