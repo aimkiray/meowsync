@@ -28,38 +28,50 @@
 ## 快速开始
 
 ### 环境要求
-
-- Node.js >= 16.0.0
-- npm >= 8.0.0
+- Node.js 16.0 或更高版本
+- npm 或 yarn 包管理器
 
 ### 安装依赖
-
 ```bash
 npm install
 ```
 
+### 配置环境变量
+```bash
+# 复制环境变量模板
+cp .env.example .env
+
+# 编辑 .env 文件，根据需要修改配置
+# 开发环境通常使用默认配置即可
+```
+
 ### 启动开发服务器
 
+#### 方式一：一键启动（推荐）
 ```bash
-# 启动前端开发服务器
+# 同时启动前端和后端服务
+npm start
+```
+
+#### 方式二：分别启动
+```bash
+# 启动前端开发服务器 (端口: 3000)
 npm run dev
 
-# 在另一个终端启动API服务器
-node netease-api-server.js
+# 启动网易云音乐API服务器 (端口: 3002)
+npm run start:api
 ```
-
-服务地址：
-- 前端应用: http://localhost:3000
-- API服务器: http://localhost:3002
 
 ### 构建生产版本
-
 ```bash
+# 开发环境构建
 npm run build
+
+# 生产环境构建
+npm run build:prod
 ```
 
-### 预览构建结果
-
+### 预览生产版本
 ```bash
 npm run preview
 ```
@@ -98,6 +110,84 @@ meowsync/
 - **随机播放**: 启用随机模式体验不同的音乐
 - **歌单管理**: 长按歌单可以删除不需要的歌单
 
+## 部署指南
+
+### 本地部署
+
+#### 开发环境部署
+```bash
+# 克隆项目
+git clone https://github.com/aimkiray/meowsync.git
+cd meowsync
+
+# 安装依赖
+npm install
+
+# 启动开发服务器
+npm start
+```
+
+#### 生产环境部署
+```bash
+# 构建生产版本
+npm run build:prod
+
+# 使用静态文件服务器部署
+npm install -g serve
+serve -s dist -l 3000
+```
+
+### Docker部署
+
+#### 使用Docker Compose（推荐）
+```bash
+# 创建docker-compose.yml
+docker-compose up -d
+```
+
+#### 手动Docker部署
+```bash
+# 构建镜像
+docker build -t meowsync .
+
+# 运行容器
+docker run -d -p 3000:3000 -p 3002:3002 meowsync
+```
+
+### 云平台部署
+
+#### Vercel部署
+1. Fork本项目到你的GitHub
+2. 在Vercel中导入项目
+3. 配置环境变量
+4. 部署完成
+
+#### Netlify部署
+1. 连接GitHub仓库
+2. 设置构建命令：`npm run build:prod`
+3. 设置发布目录：`dist`
+4. 配置环境变量并部署
+
+### 环境变量配置
+
+#### 前端环境变量
+```bash
+VITE_PORT=3000
+VITE_API_BASE_URL=http://localhost:3002
+VITE_BACKUP_API_URL=https://your-backup-api.com
+VITE_API_TIMEOUT=10000
+VITE_BASE_PATH=/
+```
+
+#### 后端环境变量
+```bash
+API_PORT=3002
+HOST=localhost
+CORS_ORIGINS=http://localhost:3000
+ENABLE_REQUEST_LOG=true
+API_TIMEOUT=30000
+```
+
 ## 配置说明
 
 ### API配置
@@ -127,6 +217,16 @@ meowsync/
 - 音乐资源来自网易云音乐，请遵守相关版权规定
 - 部分歌曲可能因版权限制无法播放
 - 建议在良好的网络环境下使用以获得最佳体验
+
+## 详细部署文档
+
+如需了解更详细的部署配置信息，请查看 [DEPLOYMENT.md](./DEPLOYMENT.md) 文档，其中包含：
+- 完整的环境变量配置说明
+- 多种部署方式的详细步骤
+- Nginx配置示例
+- Docker部署配置
+- 故障排除指南
+- 性能优化建议
 
 ## 已知问题
 

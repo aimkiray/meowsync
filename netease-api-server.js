@@ -3,6 +3,9 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 
+// 加载环境变量
+require('dotenv').config();
+
 // 导入NeteaseCloudMusicApi的request工具
 const request = require('./node_modules/NeteaseCloudMusicApi/util/request');
 
@@ -26,11 +29,24 @@ if (fs.existsSync(modulePath)) {
 }
 
 const app = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.API_PORT || process.env.PORT || 3002;
+const HOST = process.env.HOST || '0.0.0.0';
+
+// 解析CORS来源配置
+const corsOrigins = process.env.CORS_ORIGINS 
+  ? process.env.CORS_ORIGINS.split(',')
+  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001'];
+
+// 配置选项
+const config = {
+  enableRequestLog: process.env.ENABLE_REQUEST_LOG === 'true',
+  logLevel: process.env.LOG_LEVEL || 'info',
+  apiTimeout: parseInt(process.env.API_TIMEOUT) || 10000
+};
 
 // 中间件
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: corsOrigins,
   credentials: true
 }));
 app.use(express.json());
@@ -70,7 +86,10 @@ app.all('/:apiName', async (req, res) => {
   }
 
   try {
-    console.log(`[${new Date().toISOString()}] ${req.method} /${apiName}`, params);
+    // 根据配置决定是否记录请求日志
+    if (config.enableRequestLog) {
+      console.log(`[${new Date().toISOString()}] ${req.method} /${apiName}`, params);
+    }
     
     // 调用对应的API模块，传入request函数
     const result = await apiModules[apiName](params, request);
@@ -88,11 +107,14 @@ app.all('/:apiName', async (req, res) => {
 });
 
 // 启动服务器
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   console.log(`\n🎵 NeteaseCloudMusicApi Server is running!`);
-  console.log(`📍 Server: http://localhost:${PORT}`);
-  console.log(`📚 API Docs: http://localhost:${PORT}`);
+  console.log(`📍 Server: http://${HOST}:${PORT}`);
+  console.log(`📚 API Docs: http://${HOST}:${PORT}`);
   console.log(`🔧 Loaded ${Object.keys(apiModules).length} API modules`);
+  console.log(`🌐 CORS Origins: ${corsOrigins.join(', ')}`);
+  console.log(`📝 Request Logging: ${config.enableRequestLog ? 'Enabled' : 'Disabled'}`);
+  console.log(`⏱️  API Timeout: ${config.apiTimeout}ms`);
   console.log(`\n✨ Ready to serve music data!\n`);
 });
 

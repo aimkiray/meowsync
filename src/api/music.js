@@ -1,14 +1,14 @@
 import axios from 'axios'
 import CryptoJS from 'crypto-js'
 
-// 使用本地NeteaseCloudMusicApi服务器
-const API_BASE_URL = 'http://localhost:3002'
+// 使用环境变量配置API服务器地址
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002'
 // 备用第三方API服务（稳定可靠）
-const BACKUP_API_BASE_URL = 'https://163api.qijieya.cn'
+const BACKUP_API_BASE_URL = import.meta.env.VITE_BACKUP_API_URL || 'https://163api.qijieya.cn'
 // 备用第三方API服务2（ALAPI）
 const BACKUP_API_BASE_URL_2 = 'https://v2.alapi.cn/api/music'
 
-// 加密相关常量
+// 网抑云加密相关常量
 const IV = '0102030405060708'
 const PRESET_KEY = '0CoJUm6Qyw8W8jud'
 const LINUX_API_KEY = 'rFgB&h#%2?^eDg:Q'
@@ -68,33 +68,28 @@ function eapi(url, object) {
   }
 }
 
+// 获取超时配置
+const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT) || 10000
+
 // 创建主API实例
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: API_TIMEOUT,
   withCredentials: true,
   headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Referer': 'https://music.163.com/',
     'Accept': '*/*',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive'
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
   }
 })
 
 // 创建备用API实例
 const backupApi = axios.create({
   baseURL: BACKUP_API_BASE_URL,
-  timeout: 10000,
+  timeout: API_TIMEOUT,
   withCredentials: true,
   headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Referer': 'https://music.163.com/',
     'Accept': '*/*',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive'
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
   }
 })
 
