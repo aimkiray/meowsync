@@ -1,9 +1,9 @@
 <template>
-  <div id="app" class="min-h-screen">
+  <div id="app" class="min-h-screen lg:h-screen lg:overflow-hidden">
     <!-- 顶部导航 -->
     <TopNavigation />
 
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-32 md:pb-32 lg:pb-24 desktop-content">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-32 md:pb-32 lg:pb-0 desktop-content">
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- 左侧：歌单列表 -->
         <div class="lg:col-span-1">

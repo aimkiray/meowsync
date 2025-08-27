@@ -99,7 +99,7 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md bg-black/30 sticky bottom-0 z-10">
+        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md bg-black/30">
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"
@@ -198,7 +198,7 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md bg-black/30 sticky bottom-0 z-10">
+        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md bg-black/30">
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"
