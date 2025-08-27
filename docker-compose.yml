@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  meowsync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meowsync-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"  # 前端端口
+      - "3002:3002"  # API端口
+    environment:
+      - NODE_ENV=production
+      - API_PORT=3002
+      - HOST=0.0.0.0
+      - CORS_ORIGINS=http://localhost:3000,https://qaq.tat.mom
+      - ENABLE_REQUEST_LOG=false
+      - LOG_LEVEL=info
+      - API_TIMEOUT=30000
+      - VITE_API_BASE_URL=http://localhost:3002
+      - VITE_API_TIMEOUT=10000
+    volumes:
+      # 可选：挂载日志目录
+      - ./logs:/app/logs
+    networks:
+      - meowsync-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3002/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：Nginx反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: meowsync-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro  # SSL证书目录
+    depends_on:
+      - meowsync
+    networks:
+      - meowsync-network
+    profiles:
+      - with-nginx  # 使用 --profile with-nginx 启用
+
+networks:
+  meowsync-network:
+    driver: bridge
+
+volumes:
+  logs:
+    driver: local
