@@ -75,7 +75,6 @@
         :current-time="currentTime"
         :duration="duration"
         :volume="volume"
-        :progress-percentage="progressPercentage"
         @toggle-play="togglePlay"
         @previous-song="previousSong"
         @next-song="nextSong"
