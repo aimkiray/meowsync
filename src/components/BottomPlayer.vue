@@ -81,60 +81,62 @@
         </div>
         
         <!-- 主要控制区域 -->
-        <div class="flex items-center">
-          <!-- 歌曲信息 -->
-          <div class="flex items-center space-x-4 flex-1 min-w-0">
-            <img
-              :src="currentSong.al?.picUrl"
-              :alt="currentSong.name"
-              class="w-12 h-12 object-cover border-2 border-pink-400"
-              :class="{ 'playing-animation': isPlaying }"
-              style="border-radius: 0; image-rendering: pixelated;"
-            />
-            <div class="min-w-0 flex-1">
-              <h4 class="font-medium text-pink-300 truncate">{{ currentSong.name }}</h4>
-              <p class="text-sm text-purple-300 truncate">
-                {{ currentSong.ar?.map(artist => artist.name).join(', ') }}
-              </p>
-            </div>
-          </div>
-
-          <!-- 中央控制区域：播放控制 + 音量控制 -->
-          <div class="flex items-center space-x-6">
-            <!-- 播放控制 -->
-            <div class="flex items-center space-x-4">
-              <button
-                @click="$emit('previous-song')"
-                class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
-              >
-                ◀◀
-              </button>
-              <button
-                @click="$emit('toggle-play')"
-                class="jirai-button-primary p-3 text-xl w-12 h-12 flex items-center justify-center"
-              >
-                {{ isPlaying ? '■' : '▶' }}
-              </button>
-              <button
-                @click="$emit('next-song')"
-                class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
-              >
-                ▶▶
-              </button>
-            </div>
-
-            <!-- 音量控制 -->
-            <div class="flex items-center space-x-2">
-              <span class="text-lg text-pink-300">♪</span>
-              <input
-                :value="volume"
-                type="range"
-                min="0"
-                max="100"
-                class="w-20 jirai-slider"
-                @input="$emit('update-volume', $event.target.value)"
+        <div class="max-w-4xl mx-auto">
+          <div class="flex items-center justify-between">
+            <!-- 歌曲信息 -->
+            <div class="flex items-center space-x-4 min-w-0 flex-1">
+              <img
+                :src="currentSong.al?.picUrl"
+                :alt="currentSong.name"
+                class="w-12 h-12 object-cover border-2 border-pink-400 flex-shrink-0"
+                :class="{ 'playing-animation': isPlaying }"
+                style="border-radius: 0; image-rendering: pixelated;"
               />
-              <span class="text-sm text-pink-300 w-8">{{ volume }}</span>
+              <div class="min-w-0 flex-1">
+                <h4 class="font-medium text-pink-300 truncate">{{ currentSong.name }}</h4>
+                <p class="text-sm text-purple-300 truncate">
+                  {{ currentSong.ar?.map(artist => artist.name).join(', ') }}
+                </p>
+              </div>
+            </div>
+
+            <!-- 右侧控制区域 -->
+            <div class="flex items-center space-x-6 flex-shrink-0">
+              <!-- 音量控制 -->
+              <div class="flex items-center space-x-2">
+                <span class="text-lg text-pink-300">♪</span>
+                <input
+                  :value="volume"
+                  type="range"
+                  min="0"
+                  max="100"
+                  class="w-20 jirai-slider"
+                  @input="$emit('update-volume', $event.target.value)"
+                />
+                <span class="text-sm text-pink-300 w-8">{{ volume }}</span>
+              </div>
+
+              <!-- 播放控制 -->
+              <div class="flex items-center space-x-3">
+                <button
+                  @click="$emit('previous-song')"
+                  class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
+                >
+                  ◀◀
+                </button>
+                <button
+                  @click="$emit('toggle-play')"
+                  class="jirai-button-primary p-3 text-xl w-12 h-12 flex items-center justify-center"
+                >
+                  {{ isPlaying ? '■' : '▶' }}
+                </button>
+                <button
+                  @click="$emit('next-song')"
+                  class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
+                >
+                  ▶▶
+                </button>
+              </div>
             </div>
           </div>
         </div>

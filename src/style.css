@@ -179,11 +179,27 @@ body {
     overflow: hidden;
   }
   
+  /* 桌面端统一header和footer的边距 */
+  nav {
+    padding-top: 0.5rem; /* 8px，与footer保持一致 */
+  }
+  
+  footer {
+    padding-bottom: 0.5rem; /* 8px，与header保持一致 */
+    position: fixed; /* 固定定位 */
+    bottom: 0; /* 贴着底边 */
+    left: 0;
+    right: 0;
+    z-index: 40; /* 确保在其他内容之上，但在播放器之下 */
+  }
+  
   .desktop-content {
-    height: calc(100vh - 70px - 60px - 120px); /* 减去导航栏(70px)、页脚(60px)和底部播放器(120px)高度 */
+    height: calc(100vh - 80px - 60px - 120px - 48px); /* 减去导航栏(80px)、页脚(60px)、底部播放器(120px)和额外间距(48px) */
     display: flex;
     flex-direction: column;
     overflow: hidden; /* 防止页面出现滚动条 */
+    padding-bottom: 0; /* 移除底部padding，避免额外空间 */
+    margin-bottom: 0; /* 确保没有额外的外边距 */
   }
   
   .desktop-content > .grid {
@@ -200,11 +216,20 @@ body {
   }
   
   .jirai-card.max-h-96 {
-    max-height: none; /* 移除最大高度限制 */
-    height: 100%; /* 使用100%高度而不是calc */
+    max-height: 600px; /* 设置合理的最大高度 */
+    height: auto; /* 让高度自适应内容 */
     min-height: 200px; /* 设置最小高度，确保至少显示3个条目 */
     flex: 1;
     overflow-y: auto; /* 启用垂直滚动 */
+    display: flex;
+    flex-direction: column;
+  }
+  
+  /* 确保桌面端所有组件都有正确的高度和滚动 */
+  .desktop-content .jirai-card {
+    height: auto;
+    max-height: 600px;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
   }
