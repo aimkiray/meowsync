@@ -15,7 +15,7 @@ export default defineConfig(({ command, mode }) => {
     server: {
       port: parseInt(env.VITE_PORT) || 3000,
       host: env.HOST || 'localhost',
-      open: true
+      open: env.VITE_OPEN_BROWSER !== 'false' && process.platform !== 'linux'
     },
     
     // 预览服务器配置
