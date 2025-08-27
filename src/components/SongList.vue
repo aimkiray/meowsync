@@ -1,12 +1,12 @@
 <template>
   <div class="lg:col-span-1">
     <div class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
-      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-2" style="background: rgba(26, 26, 46, 0.9);">
+      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
         <span class="flex items-center">歌曲</span>
         <div class="flex items-center space-x-2">
           <button
             @click="$emit('toggle-play-mode')"
-            class="text-xs px-2 py-1 border transition-colors bg-blue-600 text-white border-blue-400 hover:bg-blue-500"
+            class="text-xs px-2 py-1 border transition-colors bg-pink-600 text-white border-pink-400 hover:bg-pink-500"
             style="border-radius: 0;"
             :title="playModeText"
           >
@@ -81,7 +81,7 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md bg-black/30">
+        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"

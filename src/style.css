@@ -749,7 +749,7 @@ body::-webkit-scrollbar {
 /* 响应式设计 */
 @media (max-width: 768px) {
   .jirai-title {
-    font-size: 16px;
+    font-size: 24px;
   }
   
   .pixel-button {

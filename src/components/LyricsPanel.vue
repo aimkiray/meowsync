@@ -1,7 +1,7 @@
 <template>
   <div class="lg:col-span-1">
     <div ref="playerContainer" class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
-      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-2" style="background: rgba(26, 26, 46, 0.9);">
+      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
         <span class="flex items-center">歌词</span>
         <button 
           @click="$emit('toggle-auto-follow-lyrics')" 
@@ -60,12 +60,12 @@
             :data-lyric-index="index"
             class="text-center py-1 transition-all duration-300 lyric-line"
             :class="{
-              'text-pink-300 font-bold text-lg glow-text': index === currentLyricIndex,
+              'text-pink-300 font-bold glow-text': index === currentLyricIndex,
               'text-purple-300': index !== currentLyricIndex
             }"
           >
-            <p>{{ lyric.text }}</p>
-            <p v-if="lyric.translation" class="text-sm mt-1">
+            <p :class="{ 'text-base': index === currentLyricIndex }">{{ lyric.text }}</p>
+            <p v-if="lyric.translation" class="mt-1" :class="index === currentLyricIndex ? 'text-base' : 'text-sm'">
               {{ lyric.translation }}
             </p>
           </div>

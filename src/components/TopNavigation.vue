@@ -4,7 +4,7 @@
       <div class="jirai-card py-6">
         <div class="flex justify-center items-center">
           <div class="flex items-center justify-center">
-            <h1 class="jirai-title flex items-center">
+            <h1 class="jirai-title flex items-center text-2xl md:text-2xl lg:text-2xl font-bold">
               MeowSync
             </h1>
           </div>

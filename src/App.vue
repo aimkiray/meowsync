@@ -773,7 +773,6 @@ export default {
         
         const defaultPlaylistIds = [
           '6725496800', // 默认歌单1
-          '12446531674', // 默认歌单2
         ]
         
         const removedIds = getRemovedDefaultPlaylists()
