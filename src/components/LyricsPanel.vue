@@ -1,7 +1,7 @@
 <template>
   <div class="lg:col-span-1">
     <div ref="playerContainer" class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
-      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
+      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" :style="headerStyle">
         <span class="flex items-center">歌词</span>
         <button 
           @click="$emit('toggle-auto-follow-lyrics')" 
@@ -76,7 +76,7 @@
 </template>
 
 <script>
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from 'vue'
 
 export default {
   name: 'LyricsPanel',
@@ -118,6 +118,47 @@ export default {
   setup(props) {
     const playerContainer = ref(null)
     const lyricsContainer = ref(null)
+    const currentTheme = ref('default')
+    
+    // 检测当前主题
+    const detectTheme = () => {
+      const root = document.documentElement
+      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
+    }
+    
+    // 动态样式
+    const headerStyle = computed(() => {
+      if (currentTheme.value === 'pixel-retro') {
+        return {
+          background: 'rgba(240, 179, 192, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(240, 179, 192, 0.4)',
+          borderRadius: '0'
+        }
+      } else {
+        return {
+          background: 'rgba(255, 192, 203, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(255, 182, 193, 0.4)',
+          borderRadius: '0'
+        }
+      }
+    })
+    
+    // 监听主题变化
+    const observer = new MutationObserver(() => {
+      detectTheme()
+    })
+    
+    onMounted(() => {
+      detectTheme()
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme']
+      })
+    })
+    
+    onUnmounted(() => {
+      observer.disconnect()
+    })
 
     // 监听当前歌词索引变化，实现自动滚动
     watch(() => props.currentLyricIndex, async (newIndex) => {
@@ -147,7 +188,8 @@ export default {
 
     return {
       playerContainer,
-      lyricsContainer
+      lyricsContainer,
+      headerStyle
     }
   }
 }

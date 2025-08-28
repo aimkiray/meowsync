@@ -37,87 +37,105 @@
   --pixel-text: #ffffff;
   --pixel-text-dim: #cccccc;
   --pixel-dark: #000000;
+  --pixel-highlight: rgba(255, 255, 255, 0.3);
+}
+
+/* 像素风格主题 - 用户指定的4色配色 */
+:root[data-theme="pixel-retro"] {
+  --pixel-bg: rgb(173, 215, 230); /* Light Blue */
+  --pixel-card-bg: rgba(252, 238, 220, 0.95); /* Ivory White with transparency */
+  --pixel-primary: rgb(240, 179, 192); /* Pale Pink */
+  --pixel-secondary: rgb(173, 215, 230); /* Light Blue */
+  --pixel-accent: rgb(255, 251, 209); /* Soft Yellow */
+  --pixel-warning: rgb(255, 251, 209); /* Soft Yellow */
+  --pixel-success: rgb(173, 215, 230); /* Light Blue */
+  --pixel-border: rgb(240, 179, 192); /* Pale Pink */
+  --pixel-text: rgb(120, 90, 100); /* Darker tone for text readability */
+  --pixel-text-dim: rgb(160, 140, 150); /* Muted tone for secondary text */
+  --pixel-dark: rgb(80, 60, 70); /* Dark tone for shadows */
+  --pixel-box-shadow: rgb(200, 160, 170); /* Muted pink for shadows */
+  --pixel-highlight: rgba(240, 179, 192, 0.3); /* Pale Pink highlight */
 }
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* 覆盖Tailwind背景色，设置90%透明度 */
-.bg-pink-900 {
-  background-color: rgba(131, 24, 67, 0.9) !important;
+/* 4色配色方案背景色覆盖，仅在pixel-retro主题下生效 */
+:root[data-theme="pixel-retro"] .bg-pink-900 {
+  background-color: rgba(120, 90, 100, 0.9) !important;
 }
 
-.bg-gray-900 {
-  background-color: rgba(17, 24, 39, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-gray-900 {
+  background-color: rgba(80, 60, 70, 0.9) !important;
 }
 
-.bg-pink-950 {
-  background-color: rgba(80, 7, 36, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-pink-950 {
+  background-color: rgba(100, 70, 80, 0.9) !important;
 }
 
-.bg-pink-800\/20 {
-  background-color: rgba(157, 23, 77, 0.18) !important; /* 20% * 90% = 18% */
+:root[data-theme="pixel-retro"] .bg-pink-800\/20 {
+  background-color: rgba(240, 179, 192, 0.18) !important; /* 20% * 90% = 18% */
 }
 
-.bg-red-600 {
-  background-color: rgba(220, 38, 127, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-red-600 {
+  background-color: rgba(240, 179, 192, 0.9) !important;
 }
 
-.bg-red-700 {
-  background-color: rgba(190, 24, 93, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-red-700 {
+  background-color: rgba(240, 179, 192, 0.9) !important;
 }
 
-.bg-gray-700 {
-  background-color: rgba(55, 65, 81, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-gray-700 {
+  background-color: rgba(160, 140, 150, 0.9) !important;
 }
 
-.bg-gray-600 {
-  background-color: rgba(75, 85, 99, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-gray-600 {
+  background-color: rgba(160, 140, 150, 0.9) !important;
 }
 
-.bg-pink-500 {
-  background-color: rgba(236, 72, 153, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-pink-500 {
+  background-color: rgba(240, 179, 192, 0.9) !important;
 }
 
-.bg-blue-600 {
-  background-color: rgba(37, 99, 235, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-blue-600 {
+  background-color: rgba(173, 215, 230, 0.9) !important;
 }
 
-.bg-blue-500 {
-  background-color: rgba(59, 130, 246, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-blue-500 {
+  background-color: rgba(173, 215, 230, 0.9) !important;
 }
 
-.bg-yellow-500 {
-  background-color: rgba(234, 179, 8, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-yellow-500 {
+  background-color: rgba(255, 251, 209, 0.9) !important;
 }
 
-.bg-yellow-100 {
-  background-color: rgba(254, 249, 195, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-yellow-100 {
+  background-color: rgba(252, 238, 220, 0.9) !important;
 }
 
-.bg-pink-600 {
-  background-color: rgba(219, 39, 119, 0.9) !important;
+:root[data-theme="pixel-retro"] .bg-pink-600 {
+  background-color: rgba(240, 179, 192, 0.9) !important;
 }
 
-.hover\:bg-pink-500:hover {
-  background-color: rgba(236, 72, 153, 0.9) !important;
+:root[data-theme="pixel-retro"] .hover\:bg-pink-500:hover {
+  background-color: rgba(240, 179, 192, 0.9) !important;
 }
 
-.hover\:bg-pink-950:hover {
-  background-color: rgba(80, 7, 36, 0.9) !important;
+:root[data-theme="pixel-retro"] .hover\:bg-pink-950:hover {
+  background-color: rgba(100, 70, 80, 0.9) !important;
 }
 
-.hover\:bg-gray-600:hover {
-  background-color: rgba(75, 85, 99, 0.9) !important;
+:root[data-theme="pixel-retro"] .hover\:bg-gray-600:hover {
+  background-color: rgba(160, 140, 150, 0.9) !important;
 }
 
-.hover\:bg-red-700:hover {
-  background-color: rgba(190, 24, 93, 0.9) !important;
+:root[data-theme="pixel-retro"] .hover\:bg-red-700:hover {
+  background-color: rgba(240, 179, 192, 0.9) !important;
 }
 
-.hover\:bg-blue-500:hover {
-  background-color: rgba(59, 130, 246, 0.9) !important;
+:root[data-theme="pixel-retro"] .hover\:bg-blue-500:hover {
+  background-color: rgba(173, 215, 230, 0.9) !important;
 }
 
 * {
@@ -137,6 +155,16 @@ body {
   color: var(--pixel-text);
   overflow-x: hidden;
   image-rendering: pixelated;
+}
+
+/* 像素风格主题下的body样式 */
+:root[data-theme="pixel-retro"] body {
+  background-color: var(--pixel-bg);
+  color: var(--pixel-text);
+  background-image: url('/cinnamoroll2.png');
+  background-repeat: repeat;
+  background-size: auto;
+  background-position: top left;
 }
 
 /* pixel滚动条 */
@@ -236,7 +264,7 @@ body {
 }
 
 .jirai-button-primary {
-  background: rgba(26, 26, 46, 0.9);
+  background: var(--pixel-card-bg);
   border: none;
   border-radius: 0;
   color: var(--pixel-text);
@@ -253,21 +281,21 @@ body {
   /* 8bit立体边框 */
   border: 3px solid var(--pixel-primary);
   box-shadow: 
-    3px 3px 0px var(--pixel-dark),
+    3px 3px 0px var(--pixel-box-shadow),
     inset 1px 1px 0 rgba(0, 255, 65, 0.2);
 }
 
 .jirai-button-primary:hover {
-  background: rgba(42, 42, 62, 0.9);
+  background: var(--pixel-accent);
   border: 3px solid var(--pixel-primary);
   color: var(--pixel-primary);
   box-shadow: 
-    3px 3px 0px var(--pixel-dark),
+    3px 3px 0px var(--pixel-box-shadow),
     inset 1px 1px 0 rgba(0, 255, 65, 0.3);
 }
 
 .jirai-button-primary:active {
-  background: rgba(10, 10, 30, 0.9);
+  background: var(--pixel-primary);
   border: 3px solid var(--pixel-primary);
   color: var(--pixel-primary);
   box-shadow: 
@@ -278,7 +306,7 @@ body {
 
 /* pixel按钮样式 */
 .jirai-button {
-  background: rgba(26, 26, 46, 0.9);
+  background: var(--pixel-card-bg);
   border: none;
   border-radius: 0;
   color: var(--pixel-text);
@@ -296,11 +324,11 @@ body {
   border: 2px solid var(--pixel-text-dim);
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.1);
+    inset 1px 1px 0 var(--pixel-highlight);
 }
 
 .jirai-button:hover {
-  background: rgba(42, 42, 62, 0.9);
+  background: var(--pixel-accent);
   border: 2px solid var(--pixel-primary);
   color: var(--pixel-primary);
   box-shadow: 
@@ -309,7 +337,7 @@ body {
 }
 
 .jirai-button:active {
-  background: rgba(10, 10, 30, 0.9);
+  background: var(--pixel-primary);
   border: 2px solid var(--pixel-primary);
   color: var(--pixel-primary);
   box-shadow: 
@@ -337,7 +365,7 @@ body {
   border: 2px solid var(--pixel-text);
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0 var(--pixel-highlight);
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -350,7 +378,7 @@ body {
   border: 2px solid var(--pixel-text);
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+    inset 1px 1px 0 var(--pixel-highlight);
 }
 
 .pixel-button:active {
@@ -369,11 +397,60 @@ body {
   border-radius: 0;
   box-shadow: 
     3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0 var(--pixel-highlight);
   position: relative;
   margin: 4px;
   font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
   image-rendering: pixelated;
+}
+
+/* 像素风格主题的卡片样式 */
+:root[data-theme="pixel-retro"] .jirai-card {
+  background-color: var(--pixel-card-bg);
+  box-shadow: 
+    0 -2px 0 0 var(--pixel-card-bg),
+    2px 0 0 0 var(--pixel-card-bg),
+    0 2px 0 0 var(--pixel-card-bg),
+    -2px 0 0 0 var(--pixel-card-bg),
+    0 0 0 2px var(--pixel-border),
+    0 -4px 0 0 var(--pixel-border),
+    4px 0 0 0 var(--pixel-border),
+    0 4px 0 0 var(--pixel-border),
+    -4px 0 0 0 var(--pixel-border);
+  filter: drop-shadow(4px 4px 0 var(--pixel-box-shadow));
+  border: none;
+}
+
+/* 修复桌面端像素主题下滚动容器的阴影显示问题 */
+@media (min-width: 1024px) {
+  :root[data-theme="pixel-retro"] .jirai-card.max-h-96 {
+    /* 保持原有的 padding 和滚动，只为阴影留出空间 */
+    padding: 1.5rem; /* 保持原有的均匀 padding */
+    margin: 4px 8px 8px 4px; /* 为边框和阴影留空间 */
+  }
+  
+  :root[data-theme="pixel-retro"] .jirai-card.max-h-96 .music-card {
+    /* 为内部卡片的阴影留出空间 */
+    margin: 4px 6px 6px 4px;
+  }
+  
+  /* 桌面端像素主题下header和footer的宽度对齐 */
+  :root[data-theme="pixel-retro"] nav .jirai-card {
+    margin: 4px 8px 8px 4px; /* 与主要内容区域的卡片保持一致的margin */
+  }
+  
+  :root[data-theme="pixel-retro"] footer .jirai-card {
+    margin: 4px 8px 8px 4px; /* 与主要内容区域的卡片保持一致的margin */
+  }
+  
+  /* 像素主题下增加header顶部和footer底部间隔 */
+  :root[data-theme="pixel-retro"] nav {
+    padding-top: 1rem; /* 从0.5rem增加到1rem，增加顶部间隔 */
+  }
+  
+  :root[data-theme="pixel-retro"] footer {
+    padding-bottom: 1rem; /* 从0.5rem增加到1rem，增加底部间隔 */
+  }
 }
 
 /* 修复滚动容器内的卡片边距 */
@@ -399,7 +476,7 @@ body::-webkit-scrollbar {
   border-radius: 0;
   box-shadow: 
     0 -3px 0px var(--pixel-dark),
-    inset 1px 1px 0px rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0px var(--pixel-highlight);
   position: fixed !important;
   margin: 0 !important;
   bottom: 0 !important;
@@ -407,6 +484,12 @@ body::-webkit-scrollbar {
   right: 0 !important;
   width: 100vw !important;
   z-index: 9999 !important;
+}
+
+/* 像素风格主题下的底部播放器样式 */
+:root[data-theme="pixel-retro"] .jirai-card.fixed {
+  box-shadow: none;
+  filter: none;
 }
 
 /* pixel音乐卡片 */
@@ -417,7 +500,7 @@ body::-webkit-scrollbar {
   border-radius: 0;
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.2);
+    inset 1px 1px 0 var(--pixel-highlight);
   position: relative;
   image-rendering: pixelated;
 }
@@ -426,7 +509,7 @@ body::-webkit-scrollbar {
   border: 2px solid var(--pixel-primary);
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0 var(--pixel-highlight);
   background: var(--pixel-border);
 }
 
@@ -453,7 +536,7 @@ body::-webkit-scrollbar {
   transition: all 0.1s ease;
   box-shadow: 
     3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0 var(--pixel-highlight);
   position: relative;
   image-rendering: pixelated;
 }
@@ -464,7 +547,7 @@ body::-webkit-scrollbar {
   width: 100%;
   height: 100%;
   border-radius: 0;
-  background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.2) 50%, transparent 70%);
+  background: linear-gradient(45deg, transparent 30%, var(--pixel-highlight) 50%, transparent 70%);
   animation: shimmer 3s linear infinite;
 }
 
@@ -477,7 +560,7 @@ body::-webkit-scrollbar {
   background: var(--pixel-secondary);
   box-shadow: 
     3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+    inset 1px 1px 0 var(--pixel-highlight);
 }
 
 .play-button:active {
@@ -498,7 +581,7 @@ body::-webkit-scrollbar {
   position: relative;
   box-shadow: 
     inset 1px 1px 0px rgba(0, 0, 0, 0.5),
-    1px 1px 0px rgba(255, 255, 255, 0.2);
+    1px 1px 0px var(--pixel-highlight);
   image-rendering: pixelated;
 }
 
@@ -507,7 +590,7 @@ body::-webkit-scrollbar {
   background: var(--pixel-primary);
   transition: width 0.1s ease;
   border-radius: 0;
-  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+  box-shadow: inset 1px 1px 0 var(--pixel-highlight);
   image-rendering: pixelated;
 }
 
@@ -563,7 +646,7 @@ body::-webkit-scrollbar {
   transition: all 0.1s ease;
   box-shadow: 
     inset 1px 1px 0px rgba(0, 0, 0, 0.3),
-    1px 1px 0px rgba(255, 255, 255, 0.2);
+    1px 1px 0px var(--pixel-highlight);
   image-rendering: pixelated;
   height: 40px;
   box-sizing: border-box;
@@ -574,7 +657,7 @@ body::-webkit-scrollbar {
   background: var(--pixel-border);
   box-shadow: 
     inset 1px 1px 0px rgba(0, 0, 0, 0.2),
-    1px 1px 0px rgba(255, 255, 255, 0.3),
+    1px 1px 0px var(--pixel-highlight),
     0 0 0 2px var(--pixel-primary);
 }
 
@@ -593,7 +676,7 @@ body::-webkit-scrollbar {
     2px 2px 0px var(--pixel-dark),
     4px 4px 0px rgba(0, 0, 0, 0.3);
   letter-spacing: 2px;
-  margin-bottom: 20px;
+  margin-bottom: 0; /* 移除底部margin */
   text-align: center;
 }
 
@@ -636,7 +719,7 @@ body::-webkit-scrollbar {
   cursor: pointer;
   box-shadow: 
     inset 1px 1px 0px rgba(0, 0, 0, 0.5),
-    1px 1px 0px rgba(255, 255, 255, 0.2);
+    1px 1px 0px var(--pixel-highlight);
   image-rendering: pixelated;
 }
 
@@ -650,7 +733,7 @@ body::-webkit-scrollbar {
   cursor: pointer;
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0 var(--pixel-highlight);
   image-rendering: pixelated;
 }
 
@@ -658,7 +741,7 @@ body::-webkit-scrollbar {
   background: var(--pixel-secondary);
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+    inset 1px 1px 0 var(--pixel-highlight);
 }
 
 /* pixel滑块控制 */
@@ -673,7 +756,7 @@ body::-webkit-scrollbar {
   appearance: none;
   box-shadow: 
     inset 1px 1px 0px rgba(0, 0, 0, 0.5),
-    1px 1px 0px rgba(255, 255, 255, 0.2);
+    1px 1px 0px var(--pixel-highlight);
   image-rendering: pixelated;
 }
 
@@ -687,7 +770,7 @@ body::-webkit-scrollbar {
   cursor: pointer;
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0 var(--pixel-highlight);
   image-rendering: pixelated;
 }
 
@@ -696,7 +779,7 @@ body::-webkit-scrollbar {
   border: 2px solid var(--pixel-text);
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+    inset 1px 1px 0 var(--pixel-highlight);
 }
 
 .jirai-slider::-webkit-slider-thumb:active {
@@ -717,7 +800,7 @@ body::-webkit-scrollbar {
   cursor: pointer;
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.3);
+    inset 1px 1px 0 var(--pixel-highlight);
 }
 
 .jirai-slider::-moz-range-track {
@@ -729,21 +812,390 @@ body::-webkit-scrollbar {
 
 
 
-/* pixel加载动画 - 圆形 */
+/* pixel加载动画 - 8位风格方块旋转 */
 .pixel-loading {
   display: inline-block;
-  width: 20px;
-  height: 20px;
-  border: 3px solid var(--pixel-border);
-  border-top: 3px solid var(--pixel-primary);
-  border-radius: 50%;
-  animation: pixelSpin 1.5s linear infinite;
+  width: 24px;
+  height: 24px;
+  position: relative;
   image-rendering: pixelated;
 }
 
-@keyframes pixelSpin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+.pixel-loading::before {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-border);
+  border-radius: 0;
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+  animation: pixelBlockSpin 1.2s ease-in-out infinite;
+}
+
+.pixel-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background: var(--pixel-secondary);
+  border: 1px solid var(--pixel-border);
+  border-radius: 0;
+  transform: translate(-50%, -50%);
+  animation: pixelCorePulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes pixelBlockSpin {
+  0% { 
+    transform: rotate(0deg) scale(1);
+    background: var(--pixel-primary);
+  }
+  25% { 
+    transform: rotate(90deg) scale(0.9);
+    background: var(--pixel-secondary);
+  }
+  50% { 
+    transform: rotate(180deg) scale(1);
+    background: var(--pixel-accent);
+  }
+  75% { 
+    transform: rotate(270deg) scale(0.9);
+    background: var(--pixel-secondary);
+  }
+  100% { 
+    transform: rotate(360deg) scale(1);
+    background: var(--pixel-primary);
+  }
+}
+
+@keyframes pixelCorePulse {
+  0% { 
+    transform: translate(-50%, -50%) scale(0.5);
+    opacity: 0.7;
+  }
+  100% { 
+    transform: translate(-50%, -50%) scale(1.2);
+    opacity: 1;
+  }
+}
+
+/* 像素风格主题下的加载动画覆盖 */
+:root[data-theme="pixel-retro"] .pixel-loading::before {
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .pixel-loading::after {
+  background: var(--pixel-secondary);
+  border: 1px solid var(--pixel-border);
+}
+
+/* 主题切换按钮样式 */
+.theme-toggle-btn {
+  min-width: 40px;
+  height: 40px;
+  font-size: 16px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+  transform: scale(1.1);
+}
+
+/* 像素风格主题下的按钮样式 */
+:root[data-theme="pixel-retro"] .theme-toggle-btn {
+  background: var(--pixel-accent);
+  border: 2px solid var(--pixel-border);
+  color: var(--pixel-card-bg);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .theme-toggle-btn:hover {
+  background: var(--pixel-primary);
+  color: var(--pixel-dark);
+  box-shadow: 
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* 像素风格主题下的其他按钮样式 */
+:root[data-theme="pixel-retro"] .jirai-button,
+:root[data-theme="pixel-retro"] .jirai-button-primary,
+:root[data-theme="pixel-retro"] .pixel-button {
+  background: var(--pixel-accent);
+  border: 2px solid var(--pixel-border);
+  color: var(--pixel-card-bg);
+}
+
+:root[data-theme="pixel-retro"] .jirai-button:hover,
+:root[data-theme="pixel-retro"] .jirai-button-primary:hover,
+:root[data-theme="pixel-retro"] .pixel-button:hover {
+  background: var(--pixel-primary);
+  color: var(--pixel-dark);
+}
+
+/* 像素风格主题下的标题样式 */
+:root[data-theme="pixel-retro"] .jirai-title {
+  color: var(--pixel-primary);
+  text-shadow: 0 0 4px var(--pixel-primary);
+}
+
+:root[data-theme="pixel-retro"] .glow-text {
+  text-shadow: 0 0 4px var(--pixel-primary);
+  animation: pixelTextGlow 3s ease-in-out infinite alternate;
+}
+
+@keyframes pixelTextGlow {
+  0% { 
+    text-shadow: 0 0 4px var(--pixel-primary);
+  }
+  100% { 
+    text-shadow: 0 0 8px var(--pixel-secondary);
+  }
+}
+
+/* 像素风格主题下的输入框样式 */
+:root[data-theme="pixel-retro"] .pixel-input {
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-border);
+  color: var(--pixel-text);
+}
+
+:root[data-theme="pixel-retro"] .pixel-input:focus {
+  border-color: var(--pixel-primary);
+  background: var(--pixel-card-bg);
+}
+
+/* 像素风格主题下的歌词样式 */
+:root[data-theme="pixel-retro"] .lyric-line {
+  text-shadow: none;
+}
+
+:root[data-theme="pixel-retro"] .lyric-active {
+  text-shadow: 0 0 4px var(--pixel-primary);
+  animation: pixelLyricGlow 2s ease-in-out infinite alternate;
+}
+
+@keyframes pixelLyricGlow {
+  0% { 
+    text-shadow: 0 0 4px var(--pixel-primary);
+  }
+  100% { 
+    text-shadow: 0 0 8px var(--pixel-secondary);
+  }
+}
+
+/* 像素风格主题下的歌单选项卡样式 */
+:root[data-theme="pixel-retro"] .bg-pink-900 {
+  background-color: var(--pixel-primary) !important;
+}
+
+:root[data-theme="pixel-retro"] .border-pink-500 {
+  border-color: var(--pixel-secondary) !important;
+}
+
+:root[data-theme="pixel-retro"] .text-pink-100 {
+  color: var(--pixel-card-bg) !important;
+}
+
+:root[data-theme="pixel-retro"] .bg-gray-900 {
+  background-color: var(--pixel-accent) !important;
+}
+
+:root[data-theme="pixel-retro"] .border-gray-600 {
+  border-color: var(--pixel-secondary) !important;
+}
+
+:root[data-theme="pixel-retro"] .text-gray-300 {
+  color: var(--pixel-text) !important;
+}
+
+:root[data-theme="pixel-retro"] .hover\:bg-pink-950:hover {
+  background-color: var(--pixel-secondary) !important;
+}
+
+:root[data-theme="pixel-retro"] .hover\:border-pink-600:hover {
+  border-color: var(--pixel-primary) !important;
+}
+
+:root[data-theme="pixel-retro"] .hover\:text-pink-200:hover {
+  color: var(--pixel-card-bg) !important;
+}
+
+:root[data-theme="pixel-retro"] .bg-pink-800\/20 {
+  background-color: rgba(240, 179, 192, 0.2) !important;
+}
+
+/* 像素风格主题下的列表间距 */
+:root[data-theme="pixel-retro"] .space-y-2 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 16px; /* 增加间距从 0.5rem (8px) 到 24px */
+}
+
+/* 像素风格主题下的按钮阴影覆盖 */
+:root[data-theme="pixel-retro"] .jirai-button {
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .jirai-button:hover {
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .jirai-button:active {
+  box-shadow: 
+    1px 1px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 rgba(240, 179, 192, 0.5);
+}
+
+:root[data-theme="pixel-retro"] .pixel-button {
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .pixel-button:hover {
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .pixel-button:active {
+  box-shadow: 
+    1px 1px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 rgba(173, 215, 230, 0.3);
+}
+
+:root[data-theme="pixel-retro"] .play-button {
+  box-shadow: 
+    3px 3px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .play-button:hover {
+  box-shadow: 
+    3px 3px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .play-button:active {
+  box-shadow: 
+    1px 1px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 rgba(255, 251, 209, 0.3);
+}
+
+/* 像素风格主题下的滚动条覆盖 */
+:root[data-theme="pixel-retro"] ::-webkit-scrollbar-track {
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-border);
+}
+
+:root[data-theme="pixel-retro"] ::-webkit-scrollbar-thumb {
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-box-shadow);
+  box-shadow: inset 0 0 0 1px var(--pixel-secondary);
+}
+
+:root[data-theme="pixel-retro"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--pixel-secondary);
+  box-shadow: inset 0 0 0 1px var(--pixel-primary);
+}
+
+/* 像素风格主题下的进度条覆盖 */
+:root[data-theme="pixel-retro"] .pixel-progress {
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 
+    inset 1px 1px 0px rgba(200, 160, 170, 0.5),
+    1px 1px 0px var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .pixel-progress-fill {
+  background: var(--pixel-primary);
+  box-shadow: inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* 像素风格主题下的音量控制覆盖 */
+:root[data-theme="pixel-retro"] .pixel-volume {
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 
+    inset 1px 1px 0px rgba(200, 160, 170, 0.5),
+    1px 1px 0px var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .pixel-volume::-webkit-slider-thumb {
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .pixel-volume::-webkit-slider-thumb:hover {
+  background: var(--pixel-secondary);
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* 像素风格主题下的滑块控制覆盖 */
+:root[data-theme="pixel-retro"] .jirai-slider {
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 
+    inset 1px 1px 0px rgba(200, 160, 170, 0.5),
+    1px 1px 0px var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .jirai-slider::-webkit-slider-thumb {
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .jirai-slider::-webkit-slider-thumb:hover {
+  background: var(--pixel-secondary);
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .jirai-slider::-webkit-slider-thumb:active {
+  background: var(--pixel-accent);
+  box-shadow: 
+    1px 1px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 rgba(255, 251, 209, 0.3);
+}
+
+:root[data-theme="pixel-retro"] .jirai-slider::-moz-range-thumb {
+  background: var(--pixel-primary);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 
+    2px 2px 0px var(--pixel-box-shadow),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+:root[data-theme="pixel-retro"] .jirai-slider::-moz-range-track {
+  background: var(--pixel-card-bg);
+  border: 2px solid var(--pixel-border);
 }
 
 /* 响应式设计 */
@@ -760,5 +1212,17 @@ body::-webkit-scrollbar {
   .play-button {
     width: 50px;
     height: 50px;
+  }
+  
+  .theme-toggle-btn {
+    min-width: 32px;
+    height: 32px;
+    font-size: 14px;
+    padding: 6px;
+  }
+  
+  /* 移动端像素风格主题的列表间距 */
+  :root[data-theme="pixel-retro"] .space-y-2 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 16px; /* 移动端稍小的间距 */
   }
 }

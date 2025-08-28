@@ -7,7 +7,7 @@
           @click="$emit('update:activeTab', 'my')"
           class="flex-1 py-2 px-4 text-center transition-all duration-200 border-2 relative overflow-hidden group"
           :class="!showAddPlaylist ? 'bg-pink-900 border-pink-500 text-pink-100 shadow-inner' : 'bg-gray-900 border-gray-600 text-gray-300 hover:bg-pink-950 hover:border-pink-600 hover:text-pink-200 border-r-0'"
-          style="border-radius: 0; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);"
+          :style="{ borderRadius: '0', boxShadow: tabButtonStyle }"
         >
           <span class="relative z-10 font-bold tracking-wide text-sm uppercase">我的歌单</span>
           <div class="absolute inset-0 bg-pink-800/20 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
@@ -16,7 +16,7 @@
           @click="$emit('update:activeTab', 'discover')"
           class="flex-1 py-2 px-4 text-center transition-all duration-200 border-2 relative overflow-hidden group"
           :class="showAddPlaylist ? 'bg-pink-900 border-pink-500 text-pink-100 shadow-inner' : 'bg-gray-900 border-gray-600 text-gray-300 hover:bg-pink-950 hover:border-pink-600 hover:text-pink-200 border-l-0'"
-          style="border-radius: 0; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);"
+          :style="{ borderRadius: '0', boxShadow: tabButtonStyle }"
         >
           <span class="relative z-10 font-bold tracking-wide text-sm uppercase">发现歌单</span>
           <div class="absolute inset-0 bg-pink-800/20 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
@@ -99,7 +99,7 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
+        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" :style="paginationStyle">
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"
@@ -198,7 +198,7 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 p-3 backdrop-blur-md" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
+        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 p-3 backdrop-blur-md" :style="paginationStyle">
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"
@@ -252,7 +252,7 @@
 </template>
 
 <script>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 export default {
   name: 'PlaylistPanel',
@@ -296,6 +296,56 @@ export default {
   },
   emits: ['select-playlist', 'add-playlist', 'remove-playlist', 'search', 'search-by-id', 'update:searchQuery', 'update:activeTab', 'go-to-page', 'prev-page', 'next-page'],
   setup(props, { emit }) {
+    const currentTheme = ref('default')
+    
+    // 检测当前主题
+    const detectTheme = () => {
+      const root = document.documentElement
+      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
+    }
+    
+    // 动态样式
+    const paginationStyle = computed(() => {
+      if (currentTheme.value === 'pixel-retro') {
+        return {
+          background: 'rgba(240, 179, 192, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(240, 179, 192, 0.4)',
+          borderRadius: '0'
+        }
+      } else {
+        return {
+          background: 'rgba(255, 192, 203, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(255, 182, 193, 0.4)',
+          borderRadius: '0'
+        }
+      }
+    })
+    
+    const tabButtonStyle = computed(() => {
+      if (currentTheme.value === 'pixel-retro') {
+        return 'inset 0 2px 4px rgba(240, 179, 192, 0.3)'
+      } else {
+        return 'inset 0 2px 4px rgba(0,0,0,0.3)'
+      }
+    })
+    
+    // 监听主题变化
+    const observer = new MutationObserver(() => {
+      detectTheme()
+    })
+    
+    onMounted(() => {
+      detectTheme()
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme']
+      })
+    })
+    
+    onUnmounted(() => {
+      observer.disconnect()
+    })
+
     const showAddPlaylist = computed(() => props.activeTab === 'discover')
 
     // 分页计算属性 - 我的歌单库
@@ -374,7 +424,9 @@ export default {
       currentPlaylists,
       totalCount,
       extractPlaylistId,
-      handleSearch
+      handleSearch,
+      paginationStyle,
+      tabButtonStyle
     }
   }
 }
