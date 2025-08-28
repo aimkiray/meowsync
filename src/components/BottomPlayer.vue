@@ -3,7 +3,7 @@
     v-if="currentSong"
     class="fixed bottom-0 left-0 right-0 jirai-card z-50 backdrop-blur-md transition-transform duration-300"
     :class="{ 'translate-y-full': isHidden }"
-    style="margin: 0; border-radius: 0; border-bottom: none; border-left: none; border-right: none; background: rgba(255, 192, 203, 0.2); border-top: 4px solid var(--jirai-pink);"
+    style="margin: 0; border-radius: 0; border-bottom: none; border-left: none; border-right: none; background: rgba(240, 192, 192, 0.2); border-top: 4px solid var(--jirai-pink);"
   >
     <div class="px-3 sm:px-6 lg:px-8">
       <!-- 移动端布局 -->
@@ -148,13 +148,12 @@
   <!-- 隐藏按钮 - 浮动在播放器外部右上角 -->
   <div
     v-if="currentSong && !isHidden"
-    class="fixed right-4 z-50"
-    style="bottom: 140px;"
+    class="fixed right-4 z-50 bottom-[100px] md:bottom-[140px]"
   >
     <button
       @click="toggleHidden"
       class="jirai-button p-1 text-xs w-6 h-6 flex items-center justify-center backdrop-blur-md"
-      style="background: rgba(255, 192, 203, 0.8); border: 2px solid var(--jirai-pink);"
+      :style="hideButtonStyle"
       title="隐藏播放器"
     >
       ▼
@@ -169,7 +168,7 @@
     <button
       @click="toggleHidden"
       class="jirai-button-primary p-2 text-sm w-10 h-10 flex items-center justify-center backdrop-blur-md"
-      style="background: rgba(255, 192, 203, 0.8); border: 2px solid var(--jirai-pink);"
+      :style="showButtonStyle"
       title="显示播放器"
     >
       ♪
@@ -178,7 +177,7 @@
 </template>
 
 <script>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 
 export default {
   name: 'BottomPlayer',
@@ -207,6 +206,59 @@ export default {
   emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume'],
   setup(props) {
     const isHidden = ref(false)
+    const currentTheme = ref('default')
+    
+    // 检测当前主题
+    const detectTheme = () => {
+      const root = document.documentElement
+      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
+    }
+    
+    // 动态样式
+    const hideButtonStyle = computed(() => {
+      if (currentTheme.value === 'pixel-retro') {
+        return {
+          background: 'rgba(240, 179, 192, 0.8)',
+          border: '2px solid var(--jirai-pink)'
+        }
+      } else {
+        return {
+          background: 'rgba(255, 192, 203, 0.8)',
+          border: '2px solid var(--jirai-pink)'
+        }
+      }
+    })
+    
+    const showButtonStyle = computed(() => {
+      if (currentTheme.value === 'pixel-retro') {
+        return {
+          background: 'rgba(240, 179, 192, 0.8)',
+          border: '2px solid var(--jirai-pink)'
+        }
+      } else {
+        return {
+          background: 'rgba(255, 192, 203, 0.8)',
+          border: '2px solid var(--jirai-pink)'
+        }
+      }
+    })
+    
+    // 监听主题变化
+    const observer = new MutationObserver(() => {
+      detectTheme()
+    })
+    
+    onMounted(() => {
+      detectTheme()
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme']
+      })
+    })
+    
+    onUnmounted(() => {
+      observer.disconnect()
+    })
 
     const toggleHidden = () => {
       isHidden.value = !isHidden.value
@@ -226,7 +278,9 @@ export default {
       progressPercentage,
       formatTime,
       isHidden,
-      toggleHidden
+      toggleHidden,
+      hideButtonStyle,
+      showButtonStyle
     }
   }
 }

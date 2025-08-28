@@ -1,7 +1,7 @@
 <template>
   <div class="lg:col-span-1">
     <div class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
-      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
+      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" :style="headerStyle">
         <span class="flex items-center">歌曲</span>
         <div class="flex items-center space-x-2">
           <button
@@ -81,7 +81,7 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" style="background: rgba(255, 192, 203, 0.2); box-shadow: inset 0 0 0 2px rgba(255, 192, 203, 0.4); border-radius: 0;">
+        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" :style="paginationStyle">
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"
@@ -138,7 +138,7 @@
 </template>
 
 <script>
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 
 export default {
   name: 'SongList',
@@ -178,6 +178,64 @@ export default {
   },
   emits: ['play-song', 'toggle-play-mode', 'toggle-vip-songs', 'go-to-page', 'prev-page', 'next-page'],
   setup(props) {
+    const currentTheme = ref('default')
+    
+    // 检测当前主题
+    const detectTheme = () => {
+      const root = document.documentElement
+      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
+    }
+    
+    // 动态样式
+    const headerStyle = computed(() => {
+      if (currentTheme.value === 'pixel-retro') {
+        return {
+          background: 'rgba(240, 179, 192, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(240, 179, 192, 0.4)',
+          borderRadius: '0'
+        }
+      } else {
+        return {
+          background: 'rgba(255, 192, 203, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(255, 182, 193, 0.4)',
+          borderRadius: '0'
+        }
+      }
+    })
+    
+    const paginationStyle = computed(() => {
+      if (currentTheme.value === 'pixel-retro') {
+        return {
+          background: 'rgba(240, 179, 192, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(240, 179, 192, 0.4)',
+          borderRadius: '0'
+        }
+      } else {
+        return {
+          background: 'rgba(255, 192, 203, 0.2)',
+          boxShadow: 'inset 0 0 0 2px rgba(255, 182, 193, 0.4)',
+          borderRadius: '0'
+        }
+      }
+    })
+    
+    // 监听主题变化
+    const observer = new MutationObserver(() => {
+      detectTheme()
+    })
+    
+    onMounted(() => {
+      detectTheme()
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme']
+      })
+    })
+    
+    onUnmounted(() => {
+      observer.disconnect()
+    })
+    
     // 过滤后的歌曲列表（根据VIP显示设置）
     const filteredSongs = computed(() => {
       if (props.showVipSongs) {
@@ -209,7 +267,9 @@ export default {
       filteredSongs,
       totalPages,
       paginatedSongs,
-      formatDuration
+      formatDuration,
+      headerStyle,
+      paginationStyle
     }
   }
 }
