@@ -281,7 +281,7 @@ body {
   /* 8bit立体边框 */
   border: 3px solid var(--pixel-primary);
   box-shadow: 
-    3px 3px 0px var(--pixel-box-shadow),
+    2px 2px 0px var(--pixel-box-shadow),
     inset 1px 1px 0 rgba(0, 255, 65, 0.2);
 }
 
@@ -290,7 +290,7 @@ body {
   border: 3px solid var(--pixel-primary);
   color: var(--pixel-primary);
   box-shadow: 
-    3px 3px 0px var(--pixel-box-shadow),
+    2px 2px 0px var(--pixel-box-shadow),
     inset 1px 1px 0 rgba(0, 255, 65, 0.3);
 }
 
@@ -424,14 +424,7 @@ body {
 /* 修复桌面端像素主题下滚动容器的阴影显示问题 */
 @media (min-width: 1024px) {
   :root[data-theme="pixel-retro"] .jirai-card.max-h-96 {
-    /* 保持原有的 padding 和滚动，只为阴影留出空间 */
-    padding: 1.5rem; /* 保持原有的均匀 padding */
     margin: 4px 8px 8px 4px; /* 为边框和阴影留空间 */
-  }
-  
-  :root[data-theme="pixel-retro"] .jirai-card.max-h-96 .music-card {
-    /* 为内部卡片的阴影留出空间 */
-    margin: 4px 6px 6px 4px;
   }
   
   /* 桌面端像素主题下header和footer的宽度对齐 */
@@ -535,7 +528,7 @@ body::-webkit-scrollbar {
   cursor: pointer;
   transition: all 0.1s ease;
   box-shadow: 
-    3px 3px 0px var(--pixel-dark),
+    2px 2px 0px var(--pixel-dark),
     inset 1px 1px 0 var(--pixel-highlight);
   position: relative;
   image-rendering: pixelated;
@@ -559,7 +552,7 @@ body::-webkit-scrollbar {
 .play-button:hover {
   background: var(--pixel-secondary);
   box-shadow: 
-    3px 3px 0px var(--pixel-dark),
+    2px 2px 0px var(--pixel-dark),
     inset 1px 1px 0 var(--pixel-highlight);
 }
 
@@ -812,7 +805,7 @@ body::-webkit-scrollbar {
 
 
 
-/* pixel加载动画 - 8位风格方块旋转 */
+/* pixel加载动画 - 圆圈旋转 */
 .pixel-loading {
   display: inline-block;
   width: 24px;
@@ -824,37 +817,24 @@ body::-webkit-scrollbar {
 .pixel-loading::before {
   content: '';
   position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   width: 100%;
   height: 100%;
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-border);
-  border-radius: 0;
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-  animation: pixelBlockSpin 1.2s ease-in-out infinite;
+  background: transparent;
+  border: 3px solid var(--pixel-primary);
+  border-top: 3px solid transparent;
+  border-radius: 50%;
+  animation: pixelCircleSpin 1s linear infinite;
 }
 
-@keyframes pixelBlockSpin {
+@keyframes pixelCircleSpin {
   0% { 
-    transform: rotate(0deg) scale(1);
-    background: var(--pixel-primary);
-  }
-  25% { 
-    transform: rotate(90deg) scale(0.9);
-    background: var(--pixel-secondary);
-  }
-  50% { 
-    transform: rotate(180deg) scale(1);
-    background: var(--pixel-accent);
-  }
-  75% { 
-    transform: rotate(270deg) scale(0.9);
-    background: var(--pixel-secondary);
+    transform: translate(-50%, -50%) rotate(0deg);
   }
   100% { 
-    transform: rotate(360deg) scale(1);
-    background: var(--pixel-primary);
+    transform: translate(-50%, -50%) rotate(360deg);
   }
 }
 
@@ -871,16 +851,10 @@ body::-webkit-scrollbar {
 
 /* 像素风格主题下的加载动画覆盖 */
 :root[data-theme="pixel-retro"] .pixel-loading::before {
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .pixel-loading::after {
-  background: var(--pixel-secondary);
-  border: 1px solid var(--pixel-border);
+  background: transparent;
+  border: 3px solid var(--pixel-primary);
+  border-top: 3px solid transparent;
+  border-radius: 50%;
 }
 
 /* 主题切换按钮样式 */
@@ -1069,13 +1043,13 @@ body::-webkit-scrollbar {
 
 :root[data-theme="pixel-retro"] .play-button {
   box-shadow: 
-    3px 3px 0px var(--pixel-box-shadow),
+    2px 2px 0px var(--pixel-box-shadow),
     inset 1px 1px 0 var(--pixel-highlight);
 }
 
 :root[data-theme="pixel-retro"] .play-button:hover {
   box-shadow: 
-    3px 3px 0px var(--pixel-box-shadow),
+    2px 2px 0px var(--pixel-box-shadow),
     inset 1px 1px 0 var(--pixel-highlight);
 }
 

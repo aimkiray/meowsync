@@ -151,6 +151,8 @@ export default {
     
     let howl = null
     let lyricTimer = null
+    let currentAbortController = null // 用于取消正在进行的网络请求
+    let currentPlayingId = null // 当前正在播放的歌曲ID，用于防止竞态条件
 
     // 计算属性
     const progressPercentage = computed(() => {
@@ -436,14 +438,29 @@ export default {
       try {
         console.log('🎵 播放歌曲:', song.name)
         
+        // 设置当前播放的歌曲ID，用于防止竞态条件
+        currentPlayingId = song.id
+        
+        // 取消上一个正在进行的网络请求
+        if (currentAbortController) {
+          console.log('🚫 取消上一个歌曲的网络请求')
+          currentAbortController.abort()
+          currentAbortController = null
+        }
+        
+        // 创建新的AbortController
+        currentAbortController = new AbortController()
+        const abortSignal = currentAbortController.signal
+        
         // 设置歌曲切换状态
         songSwitching.value = true
         durationWarning.value = ''
         
-        // 停止当前播放
+        // 立即停止当前播放，防止多首歌同时播放
         if (howl) {
           howl.stop()
           howl.unload()
+          howl = null
         }
         
         // 清除歌词定时器
@@ -452,17 +469,27 @@ export default {
           lyricTimer = null
         }
         
-        currentSong.value = song
-        currentSongIndex.value = index
+        // 立即设置播放状态为false
         isPlaying.value = false
         currentTime.value = 0
         duration.value = 0
         
+        currentSong.value = song
+        currentSongIndex.value = index
+        
         // 获取歌曲播放URL
-        const songUrlData = await musicApi.getSongUrl(song.id)
+        const songUrlData = await musicApi.getSongUrl(song.id, abortSignal)
+        
+        // 检查请求是否被取消
+        if (abortSignal.aborted) {
+          console.log('🚫 歌曲加载被取消:', song.name)
+          return
+        }
+        
         if (!songUrlData || !songUrlData.url) {
           console.error('❌ 无法获取歌曲播放链接')
           songSwitching.value = false
+          currentAbortController = null
           return
         }
         
@@ -474,6 +501,26 @@ export default {
           html5: true,
           preload: true,
           onload: () => {
+            // 检查请求是否已被取消
+            if (abortSignal.aborted) {
+              console.log('🚫 歌曲加载完成但请求已被取消，不开始播放')
+              if (howl) {
+                howl.unload()
+                howl = null
+              }
+              return
+            }
+            
+            // 检查是否还是当前应该播放的歌曲（防止竞态条件）
+            if (currentPlayingId !== song.id) {
+              console.log('🚫 歌曲加载完成但已切换到其他歌曲，不开始播放:', song.name)
+              if (howl) {
+                howl.unload()
+                howl = null
+              }
+              return
+            }
+            
             console.log('✅ 歌曲加载完成')
             duration.value = howl.duration()
             
@@ -482,13 +529,24 @@ export default {
             const actualDuration = howl.duration()
             
             if (Math.abs(expectedDuration - actualDuration) > 5) {
-              durationWarning.value = `时长不匹配：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
+              durationWarning.value = `VIP 歌曲试听版本：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
             }
             
             songSwitching.value = false
             howl.play()
           },
           onplay: () => {
+            // 再次检查是否还是当前应该播放的歌曲
+            if (currentPlayingId !== song.id) {
+              console.log('🚫 开始播放但已切换到其他歌曲，停止播放:', song.name)
+              if (howl) {
+                howl.stop()
+                howl.unload()
+                howl = null
+              }
+              return
+            }
+            
             console.log('▶️ 开始播放')
             isPlaying.value = true
             updateProgress()
@@ -509,10 +567,12 @@ export default {
           onloaderror: (id, error) => {
             console.error('❌ 歌曲加载错误:', error)
             songSwitching.value = false
+            currentAbortController = null
           },
           onplayerror: (id, error) => {
             console.error('❌ 播放错误:', error)
             songSwitching.value = false
+            currentAbortController = null
           }
         })
         
@@ -522,9 +582,18 @@ export default {
         // 加载歌词
         await loadLyrics(song.id)
         
+        // 清除AbortController引用（请求已完成）
+        currentAbortController = null
+        
       } catch (error) {
+        // 检查是否是因为请求被取消
+        if (error.name === 'AbortError') {
+          console.log('🚫 歌曲加载请求被取消')
+          return
+        }
         console.error('❌ 播放歌曲失败:', error)
         songSwitching.value = false
+        currentAbortController = null
       }
     }
 
@@ -588,6 +657,12 @@ export default {
     // 播放控制
     const togglePlay = () => {
       if (!howl) return
+      
+      // 检查当前Howler实例是否对应当前歌曲
+      if (currentSong.value && currentPlayingId !== currentSong.value.id) {
+        console.log('🚫 播放控制被忽略，当前Howler实例不匹配当前歌曲')
+        return
+      }
       
       if (isPlaying.value) {
         howl.pause()
@@ -670,10 +745,10 @@ export default {
 
     const getPlayModeText = () => {
       switch (playMode.value) {
-        case 'list': return '列表播放'
-        case 'loop': return '列表循环'
-        case 'single': return '单曲循环'
-        default: return '列表播放'
+        case 'list': return '顺序'
+        case 'loop': return '循环'
+        case 'single': return '单曲'
+        default: return '顺序'
       }
     }
 

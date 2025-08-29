@@ -45,9 +45,7 @@
           <div class="flex items-center space-x-1 flex-shrink-0">
             <button
               @click="$emit('previous-song')"
-              :disabled="songSwitching"
               class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-              :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
             >
               ◀◀
             </button>
@@ -61,9 +59,7 @@
             </button>
             <button
               @click="$emit('next-song')"
-              :disabled="songSwitching"
               class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-              :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
             >
               ▶▶
             </button>
@@ -127,9 +123,7 @@
                 <div class="flex items-center space-x-3">
                   <button
                     @click="$emit('previous-song')"
-                    :disabled="songSwitching"
                     class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
-                    :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
                   >
                     ◀◀
                   </button>
@@ -143,9 +137,7 @@
                   </button>
                   <button
                     @click="$emit('next-song')"
-                    :disabled="songSwitching"
                     class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
-                    :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
                   >
                     ▶▶
                   </button>

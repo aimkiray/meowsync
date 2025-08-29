@@ -81,13 +81,45 @@
                 {{ playlist.trackCount }} 首
               </div>
             </div>
-            <button
-              @click.stop="$emit('remove-playlist', playlist.id)"
-              class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 border border-red-400"
-              style="border-radius: 0;"
-            >
-              🗑️
-            </button>
+            <!-- 菜单按钮 -->
+            <div class="playlist-menu absolute top-0 right-0">
+              <button
+                @click.stop="toggleMenu(playlist.id, $event)"
+                class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
+                style="border-radius: 0;"
+              >
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M15 21H8v-1H7v-1H6V3h1V2h1V1h4v1h1v1h1v14h-1v1h-3v-1H9V5h2v11h1V4h-1V3H9v1H8v14h1v1h5v-1h1V5h2v14h-1v1h-1Z"/></svg>
+              </button>
+            </div>
+            
+            <!-- 下拉菜单 - 使用 Teleport 确保显示在外部 -->
+            <Teleport to="body">
+              <div
+                v-if="openMenuId === playlist.id"
+                class="fixed bg-gray-900 border border-purple-400 shadow-lg z-[9999] w-[140px] max-w-[140px]"
+                style="border-radius: 0;"
+                :style="getMenuPosition(playlist.id)"
+              >
+                <button
+                  @click.stop="openInNetease(playlist)"
+                  class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+                >
+                  🎵 打开网易云
+                </button>
+                <button
+                  @click.stop="copyShareLink(playlist)"
+                  class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+                >
+                  🔗 复制分享链接
+                </button>
+                <button
+                  @click.stop="removePlaylist(playlist.id)"
+                  class="w-full text-left px-3 py-2 text-xs text-red-300 hover:bg-red-800 hover:text-white transition-colors truncate"
+                >
+                  🗑️ 删除歌单
+                </button>
+              </div>
+            </Teleport>
           </div>
         </div>
         
@@ -179,13 +211,22 @@
                 </div>
               </div>
               <button
-                @click.stop="$emit('add-playlist', playlist)"
-                class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-green-600 hover:bg-green-700 text-white text-xs px-2 py-1 border border-green-400"
+                @click.stop="handleAddPlaylist(playlist)"
+                class="absolute top-0 right-0 transition-all p-1 flex items-center justify-center"
                 style="border-radius: 0;"
-                :disabled="userPlaylists.find(p => p.id === playlist.id)"
-                :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': userPlaylists.find(p => p.id === playlist.id) }"
+                :class="{
+                  'text-pink-500 hover:text-pink-600': userPlaylists.find(p => p.id === playlist.id),
+                  'text-orange-500 hover:text-orange-600': isPlaylistAdding(playlist.id),
+                  'text-gray-400 hover:text-pink-300': !userPlaylists.find(p => p.id === playlist.id) && !isPlaylistAdding(playlist.id)
+                }"
+                :disabled="userPlaylists.find(p => p.id === playlist.id) || isPlaylistAdding(playlist.id)"
               >
-                {{ userPlaylists.find(p => p.id === playlist.id) ? '✅' : '➕' }}
+                <svg v-if="!userPlaylists.find(p => p.id === playlist.id)" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+                  <path fill="currentColor" d="M12 16h-2v-4H6v-2h4V6h2v4h4v2h-4Zm6 4H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1Zm-1-2v-1h1V5h-1V4H5v1H4v12h1v1Z"/>
+                </svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+                  <path fill="currentColor" d="M18 20H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1Zm-6-4v-4h4v-2h-4V6h-2v4H6v2h4v4Z"/>
+                </svg>
               </button>
             </div>
         </div>
@@ -252,7 +293,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 
 export default {
   name: 'PlaylistPanel',
@@ -297,6 +338,10 @@ export default {
   emits: ['select-playlist', 'add-playlist', 'remove-playlist', 'search', 'search-by-id', 'update:searchQuery', 'update:activeTab', 'go-to-page', 'prev-page', 'next-page'],
   setup(props, { emit }) {
     const currentTheme = ref('default')
+    const openMenuId = ref(null)
+    const menuPositions = ref({})
+    const addingPlaylists = ref(new Set()) // 正在添加的歌单ID集合
+    const addingTimeouts = ref(new Map()) // 防抖定时器
     
     // 检测当前主题
     const detectTheme = () => {
@@ -340,10 +385,16 @@ export default {
         attributes: true,
         attributeFilter: ['data-theme']
       })
+      document.addEventListener('click', handleClickOutside)
     })
-    
+
     onUnmounted(() => {
       observer.disconnect()
+      document.removeEventListener('click', handleClickOutside)
+      // 清理所有定时器
+      addingTimeouts.value.forEach(timeoutId => clearTimeout(timeoutId))
+      addingTimeouts.value.clear()
+      addingPlaylists.value.clear()
     })
 
     const showAddPlaylist = computed(() => props.activeTab === 'discover')
@@ -418,16 +469,146 @@ export default {
       }
     }
 
-    return {
-      showAddPlaylist,
-      totalPages,
-      currentPlaylists,
-      totalCount,
-      extractPlaylistId,
-      handleSearch,
-      paginationStyle,
-      tabButtonStyle
+    // 菜单相关方法
+    const toggleMenu = (playlistId, event) => {
+      if (openMenuId.value === playlistId) {
+        openMenuId.value = null
+      } else {
+        // 计算菜单位置
+        const button = event.target
+        const rect = button.getBoundingClientRect()
+        menuPositions.value[playlistId] = {
+          top: rect.bottom + 4 + 'px',
+          left: rect.right - 140 + 'px' // 140px是菜单宽度
+        }
+        openMenuId.value = playlistId
+      }
     }
+
+    const getMenuPosition = (playlistId) => {
+      return menuPositions.value[playlistId] || { top: '0px', left: '0px' }
+    }
+
+    const closeMenu = () => {
+      openMenuId.value = null
+    }
+
+    const openInNetease = (playlist) => {
+      const url = `https://music.163.com/#/playlist?id=${playlist.id}`
+      window.open(url, '_blank')
+      closeMenu()
+    }
+
+    const copyShareLink = async (playlist) => {
+      const url = `${window.location.origin}/?playlist=${playlist.id}`
+      try {
+        await navigator.clipboard.writeText(url)
+        // 这里可以添加一个提示消息
+        console.log('分享链接已复制到剪贴板')
+      } catch (err) {
+        console.error('复制失败:', err)
+        // 降级方案
+        const textArea = document.createElement('textarea')
+        textArea.value = url
+        document.body.appendChild(textArea)
+        textArea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textArea)
+      }
+      closeMenu()
+    }
+
+    const removePlaylist = (playlistId) => {
+      emit('remove-playlist', playlistId)
+      closeMenu()
+    }
+
+    // 点击外部关闭菜单
+     const handleClickOutside = (event) => {
+       if (!event.target.closest('.playlist-menu')) {
+         closeMenu()
+       }
+     }
+
+    // 处理添加歌单（带防抖）
+    const handleAddPlaylist = (playlist) => {
+      const playlistId = playlist.id
+      
+      // 如果已经在添加中或已经添加过，直接返回
+      if (addingPlaylists.value.has(playlistId) || props.userPlaylists.find(p => p.id === playlistId)) {
+        return
+      }
+      
+      // 清除之前的定时器
+      if (addingTimeouts.value.has(playlistId)) {
+        clearTimeout(addingTimeouts.value.get(playlistId))
+      }
+      
+      // 立即标记为添加中
+      addingPlaylists.value.add(playlistId)
+      
+      // 设置防抖定时器
+      const timeoutId = setTimeout(() => {
+        emit('add-playlist', playlist)
+        
+        // 设置10秒超时清理机制，防止添加状态永久保持
+        const cleanupTimeoutId = setTimeout(() => {
+          if (addingPlaylists.value.has(playlistId)) {
+            addingPlaylists.value.delete(playlistId)
+            addingTimeouts.value.delete(playlistId)
+          }
+        }, 10000) // 10秒超时
+        
+        addingTimeouts.value.set(playlistId, cleanupTimeoutId)
+      }, 300) // 300ms防抖
+      
+      addingTimeouts.value.set(playlistId, timeoutId)
+    }
+
+    // 检查歌单是否正在添加中
+    const isPlaylistAdding = (playlistId) => {
+      return addingPlaylists.value.has(playlistId)
+    }
+
+    // 监听userPlaylists变化，清除已添加歌单的添加状态
+    watch(() => props.userPlaylists, (newPlaylists, oldPlaylists) => {
+      if (newPlaylists && oldPlaylists) {
+        // 找出新添加的歌单
+        const newPlaylistIds = newPlaylists.map(p => p.id)
+        const oldPlaylistIds = oldPlaylists.map(p => p.id)
+        
+        newPlaylistIds.forEach(playlistId => {
+          if (!oldPlaylistIds.includes(playlistId) && addingPlaylists.value.has(playlistId)) {
+            // 歌单已成功添加，清除添加状态
+            addingPlaylists.value.delete(playlistId)
+            if (addingTimeouts.value.has(playlistId)) {
+              clearTimeout(addingTimeouts.value.get(playlistId))
+              addingTimeouts.value.delete(playlistId)
+            }
+          }
+        })
+      }
+    }, { deep: true })
+
+    return {
+       showAddPlaylist,
+       totalPages,
+       currentPlaylists,
+       totalCount,
+       extractPlaylistId,
+       handleSearch,
+       paginationStyle,
+       tabButtonStyle,
+       openMenuId,
+       toggleMenu,
+       closeMenu,
+       openInNetease,
+       copyShareLink,
+       removePlaylist,
+       getMenuPosition,
+       handleAddPlaylist,
+       isPlaylistAdding
+     }
   }
 }
 </script>
