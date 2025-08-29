@@ -2,7 +2,7 @@
   <div class="lg:col-span-1">
     <div class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
       <!-- 选项卡导航 -->
-      <div class="flex mb-4 sticky top-0 backdrop-blur-md z-10 -mx-6 px-6">
+      <div class="flex mb-4 sticky top-0 backdrop-blur-md z-10 -mx-12">
         <button
           @click="$emit('update:activeTab', 'my')"
           class="flex-1 py-2 px-4 text-center transition-all duration-200 border-2 relative overflow-hidden group"
