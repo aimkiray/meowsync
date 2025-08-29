@@ -268,7 +268,7 @@ body {
   border: none;
   border-radius: 0;
   color: var(--pixel-text);
-  padding: 12px 24px;
+  padding: 12px 22px 12px 24px;
   font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
   font-weight: normal;
   font-size: 10px;
@@ -301,7 +301,7 @@ body {
   box-shadow: 
     1px 1px 0px var(--pixel-dark),
     inset 1px 1px 0 rgba(0, 0, 0, 0.5);
-  transform: translate(2px, 2px);
+  transform: translate(1px, 1px);
 }
 
 /* pixel按钮样式 */
@@ -317,7 +317,6 @@ body {
   cursor: pointer;
   transition: all 0.1s ease;
   position: relative;
-  margin: 4px;
   text-transform: uppercase;
   letter-spacing: 1px;
   /* 8bit立体边框 */
