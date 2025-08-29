@@ -835,20 +835,6 @@ body::-webkit-scrollbar {
   animation: pixelBlockSpin 1.2s ease-in-out infinite;
 }
 
-.pixel-loading::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 8px;
-  height: 8px;
-  background: var(--pixel-secondary);
-  border: 1px solid var(--pixel-border);
-  border-radius: 0;
-  transform: translate(-50%, -50%);
-  animation: pixelCorePulse 0.8s ease-in-out infinite alternate;
-}
-
 @keyframes pixelBlockSpin {
   0% { 
     transform: rotate(0deg) scale(1);
@@ -937,7 +923,7 @@ body::-webkit-scrollbar {
 :root[data-theme="pixel-retro"] .pixel-button {
   background: var(--pixel-accent);
   border: 2px solid var(--pixel-border);
-  color: var(--pixel-card-bg);
+  color: var(--pixel-primary);
 }
 
 :root[data-theme="pixel-retro"] .jirai-button:hover,

@@ -45,19 +45,25 @@
           <div class="flex items-center space-x-1 flex-shrink-0">
             <button
               @click="$emit('previous-song')"
+              :disabled="songSwitching"
               class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center"
+              :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
             >
               ◀◀
             </button>
             <button
               @click="$emit('toggle-play')"
+              :disabled="songSwitching"
               class="jirai-button-primary p-1 text-sm w-8 h-8 flex items-center justify-center"
+              :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
             >
-              {{ isPlaying ? '■' : '▶' }}
+              {{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}
             </button>
             <button
               @click="$emit('next-song')"
+              :disabled="songSwitching"
               class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center"
+              :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
             >
               ▶▶
             </button>
@@ -121,19 +127,25 @@
                 <div class="flex items-center space-x-3">
                   <button
                     @click="$emit('previous-song')"
+                    :disabled="songSwitching"
                     class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
+                    :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
                   >
                     ◀◀
                   </button>
                   <button
                     @click="$emit('toggle-play')"
+                    :disabled="songSwitching"
                     class="jirai-button-primary p-3 text-xl w-12 h-12 flex items-center justify-center"
+                    :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
                   >
-                    {{ isPlaying ? '■' : '▶' }}
+                    {{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}
                   </button>
                   <button
                     @click="$emit('next-song')"
+                    :disabled="songSwitching"
                     class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
+                    :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
                   >
                     ▶▶
                   </button>
@@ -201,6 +213,10 @@ export default {
     volume: {
       type: Number,
       default: 80
+    },
+    songSwitching: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume'],

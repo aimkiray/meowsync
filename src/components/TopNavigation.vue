@@ -3,7 +3,7 @@
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="jirai-card py-6">
         <div class="flex justify-between items-center">
-          <div class="flex-1"></div>
+          <div class="flex-1 px-2"></div>
           <div class="flex items-center justify-center flex-1">
             <h1 class="jirai-title flex items-center text-2xl md:text-2xl lg:text-2xl font-bold">
               MeowSync

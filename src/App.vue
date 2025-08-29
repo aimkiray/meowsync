@@ -75,6 +75,7 @@
         :current-time="currentTime"
         :duration="duration"
         :volume="volume"
+        :song-switching="songSwitching"
         @toggle-play="togglePlay"
         @previous-song="previousSong"
         @next-song="nextSong"
@@ -123,7 +124,7 @@ export default {
     const currentSong = ref(null)
     const currentSongIndex = ref(0)
     const activeTab = ref('my') // 控制选项卡：'my' 或 'discover'
-    const showVipSongs = ref(false) // 控制VIP歌曲显示，默认隐藏
+    const showVipSongs = ref(true) // 控制VIP歌曲显示，默认显示
     const playMode = ref('list') // 播放模式：'list'(列表播放), 'loop'(列表循环), 'single'(单曲循环)
     const lyrics = ref([])
     const currentLyricIndex = ref(0)
@@ -270,18 +271,19 @@ export default {
         loading.value = true
         console.log('🔍 通过ID加载歌单:', id)
         
+        // 检查是否已存在（确保ID类型一致）
+        const exists = userPlaylists.value.find(p => String(p.id) === String(id))
+        if (exists) {
+          console.log('ℹ️ 歌单已存在于库中:', exists.name)
+          searchQuery.value = ''
+          return
+        }
+        
         const playlist = await musicApi.getPlaylistDetail(id)
         if (playlist) {
           console.log('✅ 歌单加载成功:', playlist.name)
-          
-          // 检查是否已存在
-          const exists = userPlaylists.value.find(p => p.id === playlist.id)
-          if (!exists) {
-            await addPlaylistToLibrary(playlist)
-            console.log('✅ 歌单已添加到库中')
-          } else {
-            console.log('ℹ️ 歌单已存在于库中')
-          }
+          await addPlaylistToLibrary(playlist)
+          console.log('✅ 歌单已添加到库中')
           
           // 清空搜索框
           searchQuery.value = ''
@@ -323,10 +325,10 @@ export default {
 
     const addPlaylistToLibrary = async (playlist) => {
       try {
-        // 检查是否已存在
-        const exists = userPlaylists.value.find(p => p.id === playlist.id)
+        // 检查是否已存在（确保ID类型一致）
+        const exists = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
         if (exists) {
-          console.log('ℹ️ 歌单已存在')
+          console.log('ℹ️ 歌单已存在:', exists.name)
           return
         }
         
@@ -752,6 +754,26 @@ export default {
       playlistCurrentPage.value = 1
     })
 
+    // 从URL参数获取歌单ID列表
+    const getPlaylistIdsFromUrl = () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const playlistParam = urlParams.get('playlists') || urlParams.get('playlist')
+      
+      if (!playlistParam) {
+        // 如果没有URL参数，返回空数组
+        return []
+      }
+      
+      // 支持多种格式：
+      // ?playlist=123456 (单个歌单)
+      // ?playlists=123456,789012 (多个歌单，逗号分隔)
+      // ?playlists=123456|789012 (多个歌单，竖线分隔)
+      const ids = playlistParam.split(/[,|]/).map(id => id.trim()).filter(id => /^\d+$/.test(id))
+      
+      console.log('🔗 从URL获取歌单ID:', ids)
+      return ids
+    }
+
     // 检查是否为首次访问
     const isFirstVisit = () => {
       const saved = localStorage.getItem('userPlaylists')
@@ -759,29 +781,41 @@ export default {
       return !saved && !hasVisited
     }
 
-    // 默认歌单加载（仅在首次访问时）
+    // URL歌单加载
     const loadDefaultPlaylists = async () => {
       try {
-        console.log('🎵 检查是否需要加载默认歌单...')
+        console.log('🎵 检查是否需要加载URL歌单...')
         
-        // 只在首次访问时加载默认歌单
-        if (!isFirstVisit()) {
-          console.log('✅ 非首次访问，跳过默认歌单加载')
+        // 获取URL参数中的歌单ID
+        const urlPlaylistIds = getPlaylistIdsFromUrl()
+        
+        // 如果没有URL参数，跳过加载
+        if (urlPlaylistIds.length === 0) {
+          console.log('✅ 无URL歌单参数，跳过加载')
+          // 标记已访问
+          localStorage.setItem('hasVisited', 'true')
           return
         }
         
-        const defaultPlaylistIds = [
-          '6725496800', // 默认歌单1
-        ]
+        console.log('🔗 检测到URL歌单参数，加载指定歌单:', urlPlaylistIds)
+        const defaultPlaylistIds = urlPlaylistIds
         
         const removedIds = getRemovedDefaultPlaylists()
         
-        // 过滤掉已移除的歌单ID
+        // 过滤掉已移除的歌单ID和已存在的歌单ID
         const validIds = defaultPlaylistIds.filter(id => {
           if (removedIds.includes(id)) {
             console.log('⏭️ 跳过已移除的默认歌单:', id)
             return false
           }
+          
+          // 检查是否已存在相同ID的歌单（确保ID类型一致）
+          const exists = userPlaylists.value.find(p => String(p.id) === String(id))
+          if (exists) {
+            console.log('⏭️ 跳过已存在的歌单:', id, exists.name)
+            return false
+          }
+          
           return true
         })
         
@@ -792,7 +826,7 @@ export default {
           return
         }
         
-        console.log('🌐 首次访问，加载默认歌单:', validIds)
+        console.log('🌐 加载歌单:', validIds)
         
         // 并行加载所有歌单
         const playlistPromises = validIds.map(async (id) => {
@@ -827,9 +861,9 @@ export default {
         // 标记已访问
         localStorage.setItem('hasVisited', 'true')
         
-        console.log('✅ 默认歌单加载完成')
+        console.log('✅ URL歌单加载完成')
       } catch (error) {
-        console.error('❌ 加载默认歌单失败:', error)
+        console.error('❌ 加载URL歌单失败:', error)
       }
     }
 
