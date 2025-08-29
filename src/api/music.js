@@ -321,7 +321,7 @@ export const musicApi = {
   },
 
   // 获取歌曲播放URL
-   getSongUrl: async (id) => {
+   getSongUrl: async (id, abortSignal = null) => {
      // 尝试不同的音质参数
      const bitrates = [320000, 192000, 128000, 96000]
      
@@ -332,7 +332,8 @@ export const musicApi = {
            params: {
              id,
              br // 比特率
-           }
+           },
+           signal: abortSignal
          })
          
          console.log('🎵 歌曲URL响应:', response)
@@ -369,7 +370,8 @@ export const musicApi = {
            params: {
              id,
              br
-           }
+           },
+           signal: abortSignal
          })
          
          console.log('🎵 备用API歌曲URL响应:', backupResponse)

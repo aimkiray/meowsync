@@ -19,7 +19,7 @@
             style="border-radius: 0;"
             title="切换VIP歌曲显示"
           >
-            {{ showVipSongs ? '隐藏VIP' : '显示VIP' }}
+            {{ showVipSongs ? '隐藏' : '显示' }}
           </button>
         </div>
       </h2>

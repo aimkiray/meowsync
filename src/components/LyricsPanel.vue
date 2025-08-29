@@ -7,8 +7,8 @@
           @click="$emit('toggle-auto-follow-lyrics')" 
           class="text-xs px-2 py-1 border transition-colors"
           :class="{
-            'bg-gray-700 text-gray-300 border-gray-500 hover:bg-gray-600': autoFollowLyrics,
-            'bg-pink-500 text-white border-pink-400': !autoFollowLyrics
+            'bg-pink-500 text-white border-pink-400': autoFollowLyrics,
+            'bg-gray-700 text-gray-300 border-gray-500 hover:bg-gray-600': !autoFollowLyrics
           }"
           :title="autoFollowLyrics ? '关闭自动跟随' : '开启自动跟随'"
         >
@@ -45,7 +45,7 @@
         
         <div v-if="songSwitching" class="text-center py-8">
           <div class="pixel-loading mx-auto mb-4"></div>
-          <p class="text-yellow-300 flex justify-center items-center font-bold">正在切换歌曲喵...</p>
+          <p class="text-pink-300 flex justify-center items-center font-bold">正在切换歌曲喵...</p>
         </div>
         
         <div v-else-if="loadingLyrics" class="text-center py-8">
