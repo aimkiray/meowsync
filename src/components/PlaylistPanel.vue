@@ -95,14 +95,26 @@
                 {{ playlist.trackCount }} 首
               </div>
             </div>
-            <!-- 菜单按钮 -->
-            <div class="playlist-menu absolute top-0 right-0">
+            <!-- 菜单与分享按钮 -->
+            <div class="playlist-menu absolute top-0 right-0 flex">
+              <!-- 分享按钮（与歌曲一致的样式与图标） -->
+              <button 
+                @click.stop="sharePlaylist(playlist)"
+                class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
+                style="border-radius: 0;"
+                title="分享歌单"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M9 15H8v-1H7v-1h1v-1h1v-1h1v-1h1V9H8V7h7v7h-2v-3h-1v1h-1v1h-1v1H9m9 6H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1m-1-1v-1h1V5h-1V4H5v1H4v12h1v1Z"/></svg>
+              </button>
+
+              <!-- 更多菜单按钮 -->
               <button
                 @click.stop="toggleMenu(playlist.id, $event)"
                 class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
                 style="border-radius: 0;"
+                title="更多操作"
               >
-              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M15 21H8v-1H7v-1H6V3h1V2h1V1h4v1h1v1h1v14h-1v1h-3v-1H9V5h2v11h1V4h-1V3H9v1H8v14h1v1h5v-1h1V5h2v14h-1v1h-1Z"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M15 21H8v-1H7v-1H6V3h1V2h1V1h4v1h1v1h1v14h-1v1h-3v-1H9V5h2v11h1V4h-1V3H9v1H8v14h1v1h5v-1h1V5h2v14h-1v1h-1Z"/></svg>
               </button>
             </div>
             
@@ -224,24 +236,36 @@
                   {{ playlist.trackCount }} 首
                 </div>
               </div>
-              <button
-                @click.stop="handleAddPlaylist(playlist)"
-                class="absolute top-0 right-0 transition-all p-1 flex items-center justify-center"
-                style="border-radius: 0;"
-                :class="{
-                  'text-pink-500 hover:text-pink-600': userPlaylists.find(p => p.id === playlist.id),
-                  'text-orange-500 hover:text-orange-600': isPlaylistAdding(playlist.id),
-                  'text-gray-400 hover:text-pink-300': !userPlaylists.find(p => p.id === playlist.id) && !isPlaylistAdding(playlist.id)
-                }"
-                :disabled="userPlaylists.find(p => p.id === playlist.id) || isPlaylistAdding(playlist.id)"
-              >
-                <svg v-if="!userPlaylists.find(p => p.id === playlist.id)" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
-                  <path fill="currentColor" d="M12 16h-2v-4H6v-2h4V6h2v4h4v2h-4Zm6 4H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1Zm-1-2v-1h1V5h-1V4H5v1H4v12h1v1Z"/>
-                </svg>
-                <svg v-else xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
-                  <path fill="currentColor" d="M18 20H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1Zm-6-4v-4h4v-2h-4V6h-2v4H6v2h4v4Z"/>
-                </svg>
-              </button>
+              <!-- 发现歌单：分享与添加按钮 -->
+              <div class="absolute top-0 right-0 flex">
+                <button 
+                  @click.stop="sharePlaylist(playlist)"
+                  class="transition-all p-1 flex items-center justify-center text-gray-400 hover:text-pink-300"
+                  style="border-radius: 0;"
+                  title="分享歌单"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M9 15H8v-1H7v-1h1v-1h1v-1h1v-1h1V9H8V7h7v7h-2v-3h-1v1h-1v1h-1v1H9m9 6H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1m-1-1v-1h1V5h-1V4H5v1H4v12h1v1Z"/></svg>
+                </button>
+                <button
+                  @click.stop="handleAddPlaylist(playlist)"
+                  class="transition-all p-1 flex items-center justify-center"
+                  style="border-radius: 0;"
+                  :class="{
+                    'text-pink-500 hover:text-pink-600': userPlaylists.find(p => p.id === playlist.id),
+                    'text-orange-500 hover:text-orange-600': isPlaylistAdding(playlist.id),
+                    'text-gray-400 hover:text-pink-300': !userPlaylists.find(p => p.id === playlist.id) && !isPlaylistAdding(playlist.id)
+                  }"
+                  :disabled="userPlaylists.find(p => p.id === playlist.id) || isPlaylistAdding(playlist.id)"
+                  title="添加到我的歌单"
+                >
+                  <svg v-if="!userPlaylists.find(p => p.id === playlist.id)" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+                    <path fill="currentColor" d="M12 16h-2v-4H6v-2h4V6h2v4h4v2h-4Zm6 4H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1Zm-1-2v-1h1V5h-1V4H5v1H4v12h1v1Z"/>
+                  </svg>
+                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+                    <path fill="currentColor" d="M18 20H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1Zm-6-4v-4h4v-2h-4V6h-2v4H6v2h4v4Z"/>
+                  </svg>
+                </button>
+              </div>
             </div>
         </div>
         
@@ -600,6 +624,40 @@ export default {
       closeMenu()
     }
 
+    // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
+    const sharePlaylist = async (playlist) => {
+      const shareUrl = `${window.location.origin}/?playlist=${playlist.id}`
+      const shareText = `🎵 歌单：${playlist.name}`
+      try {
+        if (navigator.share) {
+          await navigator.share({
+            title: shareText,
+            text: `来看看这个歌单：${playlist.name}`,
+            url: shareUrl
+          })
+          console.log('歌单分享成功')
+        } else {
+          await navigator.clipboard.writeText(shareUrl)
+          console.log('分享链接已复制到剪贴板:', shareUrl)
+          alert('分享链接已复制到剪贴板！')
+        }
+      } catch (err) {
+        console.error('分享失败:', err)
+        try {
+          const textArea = document.createElement('textarea')
+          textArea.value = shareUrl
+          document.body.appendChild(textArea)
+          textArea.select()
+          document.execCommand('copy')
+          document.body.removeChild(textArea)
+          alert('分享链接已复制到剪贴板！')
+        } catch (copyErr) {
+          console.error('复制失败:', copyErr)
+          alert('分享失败，请手动复制链接')
+        }
+      }
+    }
+
     const removePlaylist = (playlistId) => {
       emit('remove-playlist', playlistId)
       closeMenu()
@@ -687,6 +745,7 @@ export default {
        openInNetease,
        copyShareLink,
        removePlaylist,
+       sharePlaylist,
        getMenuPosition,
        handleAddPlaylist,
        isPlaylistAdding,
