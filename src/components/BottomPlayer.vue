@@ -69,7 +69,7 @@
 
       <!-- 桌面端布局 -->
       <div class="hidden md:block py-4">
-        <div class="max-w-7xl px-4 sm:px-6 lg:px-8 mx-auto">
+        <div class="max-w-[1440px] px-4 sm:px-6 lg:px-8 mx-auto">
             <!-- 进度条 - 桌面端顶部 -->
             <div class="mb-4">
               <div class="flex items-center space-x-2">
