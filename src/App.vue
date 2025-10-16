@@ -3,7 +3,7 @@
     <!-- 顶部导航 -->
     <TopNavigation />
 
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-32 md:pb-32 lg:pb-0 desktop-content">
+    <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-32 md:pb-32 lg:pb-0 desktop-content">
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- 左侧：歌单列表 -->
         <div class="lg:col-span-1">
