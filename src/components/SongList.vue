@@ -91,13 +91,7 @@
                 @click.stop="shareSong(song)"
                 title="分享歌曲"
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="18" cy="5" r="3"/>
-                  <circle cx="6" cy="12" r="3"/>
-                  <circle cx="18" cy="19" r="3"/>
-                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-                  <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M9 15H8v-1H7v-1h1v-1h1v-1h1v-1h1V9H8V7h7v7h-2v-3h-1v1h-1v1h-1v1H9m9 6H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1m-1-1v-1h1V5h-1V4H5v1H4v12h1v1Z"/></svg>
               </button>
               
               <!-- 下载按钮 -->
@@ -496,7 +490,7 @@ export default {
     // 分享歌曲
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
-      const shareUrl = `${window.location.origin}/?song=${song.id}&playlist=${song.playlistId || ''}`
+      const shareUrl = `${window.location.origin}/?song=${song.id}`
       const shareText = `🎵 ${song.name} - ${artistNames}`
       
       try {
