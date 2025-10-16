@@ -394,6 +394,112 @@ export const musicApi = {
      throw new Error('无法获取歌曲播放链接，可能是版权限制')
    },
 
+  // 获取下载链接（支持选择码率）
+  getDownloadUrl: async (id, bitrate = 320000, abortSignal = null) => {
+    try {
+      console.log('📥 获取下载链接，ID:', id, '码率:', bitrate)
+      
+      // 首先尝试主API
+      try {
+        const response = await api.get('/song_url', {
+          params: {
+            id,
+            br: bitrate
+          },
+          signal: abortSignal
+        })
+        
+        const data = response.body || response
+        const songData = data.data?.[0] || {}
+        
+        if (songData.url) {
+          console.log('✅ 主API获取下载链接成功')
+          return {
+            url: songData.url,
+            bitrate: bitrate,
+            size: songData.size || 0,
+            type: songData.type || 'mp3'
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ 主API获取下载链接失败:', error.message)
+      }
+      
+      // 主API失败，尝试备用API
+      try {
+        const backupResponse = await backupApi.get('/song/url', {
+          params: {
+            id,
+            br: bitrate
+          },
+          signal: abortSignal
+        })
+        
+        const backupData = backupResponse.body || backupResponse
+        const songData = backupData.data?.[0] || {}
+        
+        if (songData.url) {
+          console.log('✅ 备用API获取下载链接成功')
+          return {
+            url: songData.url,
+            bitrate: bitrate,
+            size: songData.size || 0,
+            type: songData.type || 'mp3'
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ 备用API获取下载链接失败:', error.message)
+      }
+      
+      throw new Error('无法获取下载链接')
+    } catch (error) {
+      console.error('❌ 获取下载链接失败:', error.message)
+      throw error
+    }
+  },
+
+  // 下载歌曲
+  downloadSong: async (song, bitrate = 320000) => {
+    try {
+      console.log('📥 开始下载歌曲:', song.name, '码率:', bitrate)
+      
+      // 获取下载链接
+      const downloadData = await musicApi.getDownloadUrl(song.id, bitrate)
+      
+      if (!downloadData.url) {
+        throw new Error('无法获取下载链接')
+      }
+      
+      // 创建下载链接
+      const link = document.createElement('a')
+      link.href = downloadData.url
+      
+      // 生成文件名
+      const artists = song.ar?.map(artist => artist.name).join(', ') || 
+                     song.artists?.map(a => a.name).join(', ') || '未知艺术家'
+      const fileName = `${artists} - ${song.name}.${downloadData.type}`
+      
+      link.download = fileName
+      link.style.display = 'none'
+      
+      // 添加到页面并触发下载
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      console.log('✅ 下载开始:', fileName)
+      return {
+        success: true,
+        fileName,
+        bitrate: downloadData.bitrate,
+        size: downloadData.size
+      }
+    } catch (error) {
+      console.error('❌ 下载失败:', error.message)
+      throw error
+    }
+  },
+
   // 获取歌词
   getLyrics: async (id) => {
      try {
@@ -456,6 +562,49 @@ export const musicApi = {
            ]
          }
        }
+    }
+  },
+
+  // 获取单首歌曲详情
+  getSongDetail: async (id) => {
+    try {
+      console.log('🎵 获取歌曲详情，ID:', id)
+      const response = await api.get('/song/detail', {
+        params: { ids: id }
+      })
+      
+      console.log('📊 主API歌曲详情响应:', response)
+      const data = response.body || response
+      const songs = data.songs || []
+      
+      if (songs.length > 0) {
+        return songs[0]
+      }
+      
+      throw new Error('歌曲不存在')
+    } catch (error) {
+      console.error('主API获取歌曲详情失败:', error)
+      
+      // 尝试使用备用API
+      try {
+        console.log('🔄 尝试备用API获取歌曲详情:', id)
+        const backupResponse = await backupApi.get('/song/detail', {
+          params: { ids: id }
+        })
+        
+        console.log('📊 备用API歌曲详情响应:', backupResponse)
+        const backupData = backupResponse.body || backupResponse
+        const songs = backupData.songs || []
+        
+        if (songs.length > 0) {
+          return songs[0]
+        }
+        
+        throw new Error('歌曲不存在')
+      } catch (backupError) {
+        console.error('备用API也失败了:', backupError)
+        throw new Error('无法获取歌曲详情')
+      }
     }
   }
 }

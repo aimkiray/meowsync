@@ -17,6 +17,7 @@
             :search-results="searchResults"
             :current-page="playlistCurrentPage"
             :page-size="playlistPageSize"
+            :collapsed="playlistCollapsed"
             @update:active-tab="activeTab = $event"
             @search="searchPlaylists"
             @search-by-id="loadPlaylistByIdAndAdd"
@@ -26,6 +27,7 @@
             @go-to-page="goToPlaylistPage"
             @prev-page="prevPlaylistPage"
             @next-page="nextPlaylistPage"
+            @toggle-collapse="togglePlaylistCollapse"
           />
         </div>
 
@@ -40,12 +42,14 @@
             :play-mode-text="getPlayModeText()"
             :current-page="currentPage"
             :page-size="pageSize"
+            :collapsed="songListCollapsed"
             @play-song="playSong"
             @toggle-play-mode="togglePlayMode"
             @toggle-vip-songs="showVipSongs = !showVipSongs"
             @go-to-page="goToPage"
             @prev-page="prevPage"
             @next-page="nextPage"
+            @toggle-collapse="toggleSongListCollapse"
           />
         </div>
 
@@ -60,9 +64,11 @@
             :loading-lyrics="loadingLyrics"
             :song-switching="songSwitching"
             :duration-warning="durationWarning"
+            :collapsed="lyricsCollapsed"
             @toggle-auto-follow-lyrics="toggleAutoFollowLyrics"
             @previous-song="previousSong"
             @next-song="nextSong"
+            @toggle-collapse="toggleLyricsCollapse"
           />
         </div>
       </div>
@@ -120,6 +126,7 @@ export default {
     const searchResults = ref([]) // 搜索结果
     const userPlaylists = ref([]) // 用户添加的歌单
     const selectedPlaylist = ref(null)
+    const currentPlaylist = ref(null) // 当前播放的歌单
     const songs = ref([])
     const currentSong = ref(null)
     const currentSongIndex = ref(0)
@@ -148,6 +155,11 @@ export default {
     // 歌单分页相关数据
     const playlistCurrentPage = ref(1)
     const playlistPageSize = ref(10)
+    
+    // 面板折叠状态
+    const playlistCollapsed = ref(false)
+    const songListCollapsed = ref(false)
+    const lyricsCollapsed = ref(false)
     
     let howl = null
     let lyricTimer = null
@@ -412,18 +424,26 @@ export default {
         
         console.log('🎵 加载歌单歌曲:', playlist.name)
         
-        // 强制从服务器重新获取最新的歌单信息和歌曲数据
-        console.log('🔄 从服务器获取最新歌单数据...')
-        const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
-        songs.value = fullPlaylist.tracks || []
-        console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
-        
-        // 更新本地歌单库中的数据
-        const playlistIndex = userPlaylists.value.findIndex(p => p.id === playlist.id)
-        if (playlistIndex !== -1) {
-          userPlaylists.value[playlistIndex] = { ...userPlaylists.value[playlistIndex], ...fullPlaylist }
-          savePlaylistsToStorage()
-          console.log('✅ 已更新本地歌单数据')
+        // 检查是否为临时歌单（单曲分享）
+        // 某些歌单ID为数字，直接调用 startsWith 会报错，先转换为字符串
+        if (playlist.id && String(playlist.id).startsWith('single_song_')) {
+          // 对于临时歌单，直接使用已有的歌曲数据
+          songs.value = playlist.tracks || []
+          console.log('✅ 临时歌单加载完成，共', songs.value.length, '首')
+        } else {
+          // 对于正常歌单，从服务器重新获取最新的歌单信息和歌曲数据
+          console.log('🔄 从服务器获取最新歌单数据...')
+          const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
+          songs.value = fullPlaylist.tracks || []
+          console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
+          
+          // 更新本地歌单库中的数据
+          const playlistIndex = userPlaylists.value.findIndex(p => p.id === playlist.id)
+          if (playlistIndex !== -1) {
+            userPlaylists.value[playlistIndex] = { ...userPlaylists.value[playlistIndex], ...fullPlaylist }
+            savePlaylistsToStorage()
+            console.log('✅ 已更新本地歌单数据')
+          }
         }
       } catch (error) {
         console.error('❌ 加载歌曲失败:', error)
@@ -849,6 +869,24 @@ export default {
       return ids
     }
 
+    // 从URL参数获取单首歌曲ID
+    const getSongIdFromUrl = () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const songParam = urlParams.get('song')
+      
+      if (!songParam || !/^\d+$/.test(songParam.trim())) {
+        return null
+      }
+      
+      console.log('🎵 从URL获取歌曲ID:', songParam.trim())
+      return songParam.trim()
+    }
+
+    // 检查是否为单首歌曲分享
+    const isSingleSongShare = () => {
+      return getSongIdFromUrl() !== null
+    }
+
     // 检查是否为首次访问
     const isFirstVisit = () => {
       const saved = localStorage.getItem('userPlaylists')
@@ -942,15 +980,86 @@ export default {
       }
     }
 
+    // 处理面板折叠
+    const togglePlaylistCollapse = () => {
+      playlistCollapsed.value = !playlistCollapsed.value
+    }
+
+    const toggleSongListCollapse = () => {
+      songListCollapsed.value = !songListCollapsed.value
+    }
+
+    const toggleLyricsCollapse = () => {
+      lyricsCollapsed.value = !lyricsCollapsed.value
+    }
+
     // 组件挂载
     onMounted(async () => {
       console.log('🚀 App组件挂载完成')
+      
+      // 检查是否为单首歌曲分享，如果是则默认折叠歌单面板（仅移动端）
+      if (isSingleSongShare() && window.innerWidth < 1024) {
+        playlistCollapsed.value = true
+        console.log('📱 检测到单首歌曲分享，移动端默认折叠歌单面板')
+      }
       
       // 加载保存的歌单
       loadPlaylistsFromStorage()
       
       // 加载默认歌单
       await loadDefaultPlaylists()
+      
+      // 如果有单首歌曲ID，尝试加载并播放
+      const songId = getSongIdFromUrl()
+      if (songId) {
+        console.log('🎵 检测到单首歌曲分享，歌曲ID:', songId)
+        try {
+          // 检查是否已经存在相同的临时歌单
+          const tempPlaylistId = `single_song_${songId}`
+          let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
+          
+          if (existingPlaylist) {
+            console.log('🎵 找到已存在的单曲分享歌单，直接使用')
+            // 使用已存在的歌单
+            currentPlaylist.value = existingPlaylist
+            currentSong.value = existingPlaylist.tracks[0]
+            songs.value = existingPlaylist.tracks || []
+            
+            // 自动播放
+            await playSong(existingPlaylist.tracks[0])
+          } else {
+            console.log('🎵 创建新的单曲分享歌单')
+            // 获取歌曲详情
+            const songDetail = await musicApi.getSongDetail(songId)
+            console.log('🎵 获取到歌曲详情:', songDetail)
+            
+            // 创建一个临时歌单包含这首歌
+            const tempPlaylist = {
+              id: tempPlaylistId,
+              name: `单曲分享 - ${songDetail.name}`,
+              coverImgUrl: songDetail.al?.picUrl || songDetail.album?.picUrl || '',
+              creator: { nickname: '分享歌曲' },
+              trackCount: 1,
+              tracks: [songDetail]
+            }
+            
+            // 添加到用户歌单列表
+            userPlaylists.value.unshift(tempPlaylist)
+            
+            // 设置当前歌单和歌曲
+            currentPlaylist.value = tempPlaylist
+            currentSong.value = songDetail
+            songs.value = tempPlaylist.tracks || []
+            
+            // 自动播放
+            await playSong(songDetail)
+          }
+          
+          console.log('✅ 单首歌曲分享加载完成并开始播放')
+        } catch (error) {
+          console.error('❌ 加载单首歌曲失败:', error)
+        }
+      }
       
       console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
     })
@@ -985,6 +1094,7 @@ export default {
       pageSize,
       playlistCurrentPage,
       playlistPageSize,
+      playlistCollapsed,
       
       // 计算属性
       progressPercentage,
@@ -1027,7 +1137,12 @@ export default {
       formatTime,
       formatDuration,
       toggleAutoFollowLyrics,
-      loadDefaultPlaylists
+      loadDefaultPlaylists,
+      togglePlaylistCollapse,
+      toggleSongListCollapse,
+      toggleLyricsCollapse,
+      songListCollapsed,
+      lyricsCollapsed
     }
   }
 }

@@ -1,8 +1,22 @@
 <template>
   <div class="lg:col-span-1">
-    <div class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
-      <!-- 选项卡导航 -->
-      <div class="flex mb-4 sticky top-0 backdrop-blur-md z-10 -px-12">
+    <div ref="panelContainer" class="jirai-card flex flex-col relative" :class="collapsed ? 'p-4 min-h-[3rem]' : 'p-6 max-h-96 overflow-y-auto'">
+      <!-- 移动端折叠按钮 -->
+      <button 
+        v-if="isMobile"
+        @click="toggleCollapse"
+        ref="collapseButtonRef"
+        class="absolute z-10 w-6 h-6 flex justify-center items-center text-pink-300 hover:text-pink-200 transition-colors rounded-md hover:bg-pink-900/20 left-2"
+        :class="collapsed ? 'top-1/2 -translate-y-1/2' : ''"
+        :style="!collapsed && fixedButtonTop ? { top: fixedButtonTop } : null"
+      >
+        <span class="text-sm">{{ collapsed ? '▼' : '▲' }}</span>
+      </button>
+      
+      <!-- 歌单内容 -->
+      <div v-show="!collapsed || !isMobile" class="flex flex-col" :class="collapsed ? '' : 'flex-1'">
+        <!-- 选项卡导航 -->
+        <div class="flex mb-4 sticky top-0 backdrop-blur-md z-10 -px-12">
         <button
           @click="$emit('update:activeTab', 'my')"
           class="flex-1 py-2 px-4 text-center transition-all duration-200 border-2 relative overflow-hidden group"
@@ -135,8 +149,8 @@
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === 1 }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             ⇤
           </button>
@@ -144,8 +158,8 @@
           <button 
             @click="$emit('prev-page')" 
             :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === 1 }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             ←
           </button>
@@ -157,8 +171,8 @@
           <button 
             @click="$emit('next-page')" 
             :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === totalPages }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             →
           </button>
@@ -166,8 +180,8 @@
           <button 
             @click="$emit('go-to-page', totalPages)" 
             :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === totalPages }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             ⇥
           </button>
@@ -243,8 +257,8 @@
           <button 
             @click="$emit('go-to-page', 1)" 
             :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === 1 }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             ⇤
           </button>
@@ -252,8 +266,8 @@
           <button 
             @click="$emit('prev-page')" 
             :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === 1 }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             ←
           </button>
@@ -265,8 +279,8 @@
           <button 
             @click="$emit('next-page')" 
             :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === totalPages }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             →
           </button>
@@ -274,8 +288,8 @@
           <button 
             @click="$emit('go-to-page', totalPages)" 
             :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 bg-pink-600 hover:bg-pink-500 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="{ 'opacity-50 cursor-not-allowed bg-gray-600': currentPage === totalPages }"
+            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
+            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
           >
             ⇥
           </button>
@@ -288,12 +302,13 @@
           </span>
         </div>
       </div>
+      </div> <!-- 歌单内容结束 -->
     </div>
   </div>
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 
 export default {
   name: 'PlaylistPanel',
@@ -333,15 +348,67 @@ export default {
     pageSize: {
       type: Number,
       default: 10
+    },
+    collapsed: {
+      type: Boolean,
+      default: false
     }
   },
-  emits: ['select-playlist', 'add-playlist', 'remove-playlist', 'search', 'search-by-id', 'update:searchQuery', 'update:activeTab', 'go-to-page', 'prev-page', 'next-page'],
+  emits: ['select-playlist', 'add-playlist', 'remove-playlist', 'search', 'search-by-id', 'update:searchQuery', 'update:activeTab', 'go-to-page', 'prev-page', 'next-page', 'toggle-collapse'],
   setup(props, { emit }) {
     const currentTheme = ref('default')
     const openMenuId = ref(null)
     const menuPositions = ref({})
     const addingPlaylists = ref(new Set()) // 正在添加的歌单ID集合
     const addingTimeouts = ref(new Map()) // 防抖定时器
+    
+    // 移动端检测
+    const isMobile = ref(false)
+    
+    const checkMobile = () => {
+      isMobile.value = window.innerWidth < 1024 // lg断点
+    }
+
+    // 折叠按钮位置计算：折叠时居中，展开后保持同一像素位置
+    const panelContainer = ref(null)
+    const collapseButtonRef = ref(null)
+    const fixedButtonTop = ref(null)
+
+    // 精确计算折叠态的垂直居中像素位置：通过隐藏克隆节点测量真实高度
+    const computeCollapsedCenterTop = () => {
+      nextTick(() => {
+        if (!collapseButtonRef.value) return
+        const buttonHeight = collapseButtonRef.value.offsetHeight || 24
+
+        // 创建一个隐藏的克隆容器，应用折叠态的样式以获得真实高度
+        const clone = document.createElement('div')
+        clone.className = 'jirai-card flex flex-col relative p-4 min-h-[3rem]'
+        clone.style.position = 'absolute'
+        clone.style.visibility = 'hidden'
+        clone.style.left = '-9999px'
+        clone.style.top = '-9999px'
+        // 宽度与实际容器一致，避免某些样式因宽度不同影响垂直尺寸（尽管通常无影响）
+        if (panelContainer.value) {
+          clone.style.width = panelContainer.value.offsetWidth + 'px'
+        }
+        document.body.appendChild(clone)
+        const collapsedHeight = clone.offsetHeight
+        document.body.removeChild(clone)
+
+        const topValue = (collapsedHeight / 2) - (buttonHeight / 2)
+        fixedButtonTop.value = Math.round(topValue) + 'px'
+      })
+    }
+
+    const handleResizeForButton = () => {
+      // 任意窗口尺寸变化都重新计算，保证展开初始位置稳定
+      computeCollapsedCenterTop()
+    }
+    
+    // 折叠功能
+    const toggleCollapse = () => {
+      emit('toggle-collapse')
+    }
     
     // 检测当前主题
     const detectTheme = () => {
@@ -381,20 +448,35 @@ export default {
     
     onMounted(() => {
       detectTheme()
+      checkMobile()
       observer.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ['data-theme']
       })
+      window.addEventListener('resize', checkMobile)
+      window.addEventListener('resize', handleResizeForButton)
       document.addEventListener('click', handleClickOutside)
+
+      // 初始计算：无论是否折叠，都先计算一个“折叠居中”的像素位置，
+      // 以便初始为展开时也能使用固定像素，避免首次跳变
+      computeCollapsedCenterTop()
     })
 
     onUnmounted(() => {
       observer.disconnect()
+      window.removeEventListener('resize', checkMobile)
+      window.removeEventListener('resize', handleResizeForButton)
       document.removeEventListener('click', handleClickOutside)
       // 清理所有定时器
       addingTimeouts.value.forEach(timeoutId => clearTimeout(timeoutId))
       addingTimeouts.value.clear()
       addingPlaylists.value.clear()
+    })
+
+    // 当切换到折叠状态时，记录按钮的居中像素位置，用于展开后保持不变
+    watch(() => props.collapsed, () => {
+      // 每次进入折叠态都重新计算一次，用于后续展开复用
+      computeCollapsedCenterTop()
     })
 
     const showAddPlaylist = computed(() => props.activeTab === 'discover')
@@ -607,7 +689,12 @@ export default {
        removePlaylist,
        getMenuPosition,
        handleAddPlaylist,
-       isPlaylistAdding
+       isPlaylistAdding,
+       isMobile,
+       toggleCollapse,
+       panelContainer,
+       collapseButtonRef,
+       fixedButtonTop
      }
   }
 }
