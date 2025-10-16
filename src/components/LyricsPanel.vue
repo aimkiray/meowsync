@@ -1,76 +1,91 @@
 <template>
   <div class="lg:col-span-1">
-    <div ref="playerContainer" class="jirai-card p-6 max-h-96 overflow-y-auto flex flex-col">
-      <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" :style="headerStyle">
-        <span class="flex items-center">歌词</span>
-        <button 
-          @click="$emit('toggle-auto-follow-lyrics')" 
-          class="text-xs px-2 py-1 border transition-colors"
-          :class="{
-            'bg-pink-500 text-white border-pink-400': autoFollowLyrics,
-            'bg-gray-700 text-gray-300 border-gray-500 hover:bg-gray-600': !autoFollowLyrics
-          }"
-          :title="autoFollowLyrics ? '关闭自动跟随' : '开启自动跟随'"
-        >
-          {{ autoFollowLyrics ? '跟随' : '手动' }}
-        </button>
-      </h2>
+    <div ref="playerContainer" class="jirai-card flex flex-col relative" :class="collapsed ? 'p-4 min-h-[3rem]' : 'p-6 max-h-96 overflow-y-auto'">
+      <!-- 移动端折叠按钮 -->
+      <button 
+        v-if="isMobile"
+        @click="toggleCollapse"
+        ref="collapseButtonRef"
+        class="absolute z-10 w-6 h-6 flex justify-center items-center text-pink-300 hover:text-pink-200 transition-colors rounded-md hover:bg-pink-900/20 left-2"
+        :class="collapsed ? 'top-1/2 -translate-y-1/2' : ''"
+        :style="!collapsed && fixedButtonTop ? { top: fixedButtonTop } : null"
+      >
+        <span class="text-sm">{{ collapsed ? '▼' : '▲' }}</span>
+      </button>
       
-      <div v-if="!currentSong" class="text-center py-8">
-        <p class="text-gray-600">选择一首歌开始播放喵~</p>
-      </div>
-      
-      <div v-else class="-mx-6 px-6 flex-1 flex flex-col">
-        <!-- 当前播放歌曲信息 -->
-        <div class="text-center mb-6">
-          <!-- 时长警告提示 -->
-          <div v-if="durationWarning" class="mb-3 p-2 bg-yellow-100 border-2 border-yellow-400 text-yellow-800 text-xs">
-            ⚠️ {{ durationWarning }}
-          </div>
-          
-          <div class="relative mx-auto w-32 h-32">
-            <img
-              :src="currentSong.al?.picUrl || currentSong.album?.picUrl"
-              :alt="currentSong.name"
-              class="w-full h-full object-cover border-4 border-pink-400"
-              :class="{ 'playing-animation': isPlaying }"
-              style="border-radius: 0; image-rendering: pixelated;"
-            />
-          </div>
-          <h3 class="mt-3 text-lg font-bold text-pink-300">{{ currentSong.name }}</h3>
-          <p class="text-purple-300">
-            {{ currentSong.ar?.map(a => a.name).join(', ') || currentSong.artists?.map(a => a.name).join(', ') }}
-          </p>
-        </div>
-        
-        <div v-if="songSwitching" class="text-center py-8">
-          <div class="pixel-loading mx-auto mb-4"></div>
-          <p class="text-pink-300 flex justify-center items-center font-bold">正在切换歌曲喵...</p>
-        </div>
-        
-        <div v-else-if="loadingLyrics" class="text-center py-8">
-          <div class="pixel-loading mx-auto mb-4"></div>
-          <p class="text-pink-300 flex justify-center items-center">加载歌词中喵...</p>
-        </div>
-        
-        <div v-else ref="lyricsContainer" class="space-y-2 jirai-lyrics flex-1">
-          <div
-            v-for="(lyric, index) in lyrics"
-            :key="index"
-            :data-lyric-index="index"
-            class="text-center py-1 transition-all duration-300 lyric-line"
+      <!-- 歌词内容 -->
+      <div v-show="!collapsed || !isMobile" class="lyrics-content">
+        <h2 class="text-xl font-bold mb-4 flex items-center justify-between text-pink-300 sticky top-0 backdrop-blur-md z-10 py-2 px-4" :style="headerStyle">
+          <span class="flex items-center">歌词</span>
+          <button 
+            @click="$emit('toggle-auto-follow-lyrics')" 
+            class="text-xs px-2 py-1 border transition-colors"
             :class="{
-              'text-pink-300 font-bold glow-text': index === currentLyricIndex,
-              'text-purple-300': index !== currentLyricIndex
+              'bg-pink-500 text-white border-pink-400': autoFollowLyrics,
+              'bg-gray-700 text-gray-300 border-gray-500 hover:bg-gray-600': !autoFollowLyrics
             }"
+            :title="autoFollowLyrics ? '关闭自动跟随' : '开启自动跟随'"
           >
-            <p :class="{ 'text-base': index === currentLyricIndex }">{{ lyric.text }}</p>
-            <p v-if="lyric.translation" class="mt-1" :class="index === currentLyricIndex ? 'text-base' : 'text-sm'">
-              {{ lyric.translation }}
+            {{ autoFollowLyrics ? '跟随' : '手动' }}
+          </button>
+        </h2>
+        
+        <div v-if="!currentSong" class="text-center py-8">
+          <p class="text-gray-600">选择一首歌开始播放喵~</p>
+        </div>
+        
+        <div v-else class="-mx-6 px-6 flex-1 flex flex-col">
+          <!-- 当前播放歌曲信息 -->
+          <div class="text-center mb-6">
+            <!-- 时长警告提示 -->
+            <div v-if="durationWarning" class="mb-3 p-2 bg-yellow-100 border-2 border-yellow-400 text-yellow-800 text-xs">
+              ⚠️ {{ durationWarning }}
+            </div>
+            
+            <div class="relative mx-auto w-32 h-32">
+              <img
+                :src="currentSong.al?.picUrl || currentSong.album?.picUrl"
+                :alt="currentSong.name"
+                class="w-full h-full object-cover border-4 border-pink-400"
+                :class="{ 'playing-animation': isPlaying }"
+                style="border-radius: 0; image-rendering: pixelated;"
+              />
+            </div>
+            <h3 class="mt-3 text-lg font-bold text-pink-300">{{ currentSong.name }}</h3>
+            <p class="text-purple-300">
+              {{ currentSong.ar?.map(a => a.name).join(', ') || currentSong.artists?.map(a => a.name).join(', ') }}
             </p>
           </div>
+          
+          <div v-if="songSwitching" class="text-center py-8">
+            <div class="pixel-loading mx-auto mb-4"></div>
+            <p class="text-pink-300 flex justify-center items-center font-bold">正在切换歌曲喵...</p>
+          </div>
+          
+          <div v-else-if="loadingLyrics" class="text-center py-8">
+            <div class="pixel-loading mx-auto mb-4"></div>
+            <p class="text-pink-300 flex justify-center items-center">加载歌词中喵...</p>
+          </div>
+          
+          <div v-else ref="lyricsContainer" class="space-y-2 jirai-lyrics flex-1">
+            <div
+              v-for="(lyric, index) in lyrics"
+              :key="index"
+              :data-lyric-index="index"
+              class="text-center py-1 transition-all duration-300 lyric-line"
+              :class="{
+                'text-pink-300 font-bold glow-text': index === currentLyricIndex,
+                'text-purple-300': index !== currentLyricIndex
+              }"
+            >
+              <p :class="{ 'text-base': index === currentLyricIndex }">{{ lyric.text }}</p>
+              <p v-if="lyric.translation" class="mt-1" :class="index === currentLyricIndex ? 'text-base' : 'text-sm'">
+                {{ lyric.translation }}
+              </p>
+            </div>
+          </div>
         </div>
-      </div>
+      </div> <!-- 关闭 lyrics-content div -->
     </div>
   </div>
 </template>
@@ -112,13 +127,56 @@ export default {
     autoFollowLyrics: {
       type: Boolean,
       default: true
+    },
+    collapsed: {
+      type: Boolean,
+      default: false
     }
   },
-  emits: ['toggle-auto-follow-lyrics'],
-  setup(props) {
+  emits: ['toggle-auto-follow-lyrics', 'toggle-collapse'],
+  setup(props, { emit }) {
     const playerContainer = ref(null)
     const lyricsContainer = ref(null)
     const currentTheme = ref('default')
+    const collapseButtonRef = ref(null)
+    const fixedButtonTop = ref(null)
+    
+    // 移动端检测
+    const isMobile = ref(false)
+    const checkMobile = () => {
+      isMobile.value = window.innerWidth <= 768
+    }
+    
+    // 折叠功能
+    const toggleCollapse = () => {
+      emit('toggle-collapse')
+    }
+
+    // 计算折叠态居中像素，用于展开时固定位置
+    const computeCollapsedCenterTop = () => {
+      nextTick(() => {
+        if (!collapseButtonRef.value) return
+        const buttonHeight = collapseButtonRef.value.offsetHeight || 24
+        const clone = document.createElement('div')
+        clone.className = 'jirai-card flex flex-col relative p-4 min-h-[3rem]'
+        clone.style.position = 'absolute'
+        clone.style.visibility = 'hidden'
+        clone.style.left = '-9999px'
+        clone.style.top = '-9999px'
+        if (playerContainer.value) {
+          clone.style.width = playerContainer.value.offsetWidth + 'px'
+        }
+        document.body.appendChild(clone)
+        const collapsedHeight = clone.offsetHeight
+        document.body.removeChild(clone)
+        const topValue = (collapsedHeight / 2) - (buttonHeight / 2)
+        fixedButtonTop.value = Math.round(topValue) + 'px'
+      })
+    }
+
+    const handleResizeForButton = () => {
+      computeCollapsedCenterTop()
+    }
     
     // 检测当前主题
     const detectTheme = () => {
@@ -150,14 +208,26 @@ export default {
     
     onMounted(() => {
       detectTheme()
+      checkMobile()
       observer.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ['data-theme']
       })
+      window.addEventListener('resize', checkMobile)
+      window.addEventListener('resize', handleResizeForButton)
+
+      // 初始计算折叠居中位置，避免首屏展开位置跳变
+      computeCollapsedCenterTop()
     })
     
     onUnmounted(() => {
       observer.disconnect()
+      window.removeEventListener('resize', checkMobile)
+      window.removeEventListener('resize', handleResizeForButton)
+    })
+
+    watch(() => props.collapsed, () => {
+      computeCollapsedCenterTop()
     })
 
     // 监听当前歌词索引变化，实现自动滚动
@@ -189,7 +259,11 @@ export default {
     return {
       playerContainer,
       lyricsContainer,
-      headerStyle
+      headerStyle,
+      isMobile,
+      toggleCollapse,
+      collapseButtonRef,
+      fixedButtonTop
     }
   }
 }
