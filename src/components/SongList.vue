@@ -53,7 +53,7 @@
             :key="song.id"
             class="music-card cursor-pointer p-4 jirai-card transition-all w-full relative group"
             :class="{
-              'border-pink-400 bg-pink-950/40 playing-song': currentSong?.id === song.id,
+              'playing-song': currentSong?.id === song.id,
               'opacity-50 grayscale': song.fee === 1 || song.privilege?.fee === 1
             }"
           >
@@ -71,7 +71,7 @@
               </div>
               <div class="flex-1 min-w-0">
                 <h4 class="font-medium truncate flex items-center"
-                  :class="currentSong?.id === song.id ? 'text-pink-200 font-bold' : 'text-pink-300'"
+                  :class="currentSong?.id === song.id ? 'text-pink-500 font-bold' : 'text-pink-300'"
                 >
                   {{ song.name }}
                   <span v-if="song.fee === 1 || song.privilege?.fee === 1" class="ml-2 text-xs bg-yellow-500 text-black px-1 rounded">VIP</span>
