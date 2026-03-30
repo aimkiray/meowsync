@@ -1,6 +1,6 @@
 <template>
   <div class="lg:col-span-1">
-    <div ref="panelContainer" class="jirai-card flex flex-col relative" :class="collapsed ? 'p-4 min-h-[3rem]' : 'p-6 max-h-96 overflow-y-auto'">
+    <div ref="panelContainer" class="jirai-card card-playlist flex flex-col relative" :class="collapsed ? 'p-4 min-h-[3rem]' : 'p-6 max-h-96 overflow-y-auto'">
       <!-- 移动端折叠按钮 -->
       <button 
         v-if="isMobile"
@@ -150,7 +150,7 @@
         </div>
         
         <!-- 歌单统计信息 -->
-        <div class="text-center mt-4 mb-2">
+        <div v-if="userPlaylists.length > 0" class="text-center mt-4 mb-2">
           <span class="text-pink-300 text-sm">
             显示第 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, userPlaylists.length) }} 个歌单
           </span>
@@ -270,7 +270,7 @@
         </div>
         
         <!-- 搜索结果统计信息 -->
-        <div class="text-center mt-4 mb-2">
+        <div v-if="searchResults.length > 0" class="text-center mt-4 mb-2">
           <span class="text-pink-300 text-sm">
             显示第 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, searchResults.length) }} 个歌单
           </span>

@@ -1,6 +1,6 @@
 <template>
   <div class="lg:col-span-1">
-    <div ref="panelContainer" class="jirai-card flex flex-col relative" :class="collapsed ? 'p-4 min-h-[3rem]' : 'p-6 max-h-96 overflow-y-auto'">
+    <div ref="panelContainer" class="jirai-card card-songlist flex flex-col relative" :class="collapsed ? 'p-4 min-h-[3rem]' : 'p-6 max-h-96 overflow-y-auto'">
       <!-- 移动端折叠按钮 -->
       <button 
         v-if="isMobile" 
