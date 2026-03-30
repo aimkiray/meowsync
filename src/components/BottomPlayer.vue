@@ -1,7 +1,7 @@
 <template>
   <div
     v-if="currentSong"
-    class="fixed bottom-0 left-0 right-0 jirai-card z-50 backdrop-blur-md transition-transform duration-300"
+    class="fixed bottom-0 left-0 right-0 jirai-card card-player z-50 backdrop-blur-md transition-transform duration-300"
     :class="{ 'translate-y-full': isHidden }"
     style="margin: 0; border-radius: 0; border-bottom: none; border-left: none; border-right: none; background: rgba(240, 192, 192, 0.2); border-top: 4px solid var(--jirai-pink);"
   >

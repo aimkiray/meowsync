@@ -138,6 +138,179 @@
   background-color: rgba(173, 215, 230, 0.9) !important;
 }
 
+/* ── pixel-retro 主题：各卡片内文字颜色与边框色系统一 ── */
+
+/* 导航栏（蓝色系） */
+:root[data-theme="pixel-retro"] .card-nav .text-pink-300,
+:root[data-theme="pixel-retro"] .card-nav .text-purple-300 { color: rgb(50, 100, 160) !important; }
+:root[data-theme="pixel-retro"] .card-nav .text-gray-400,
+:root[data-theme="pixel-retro"] .card-nav .text-gray-600 { color: rgb(100, 140, 190) !important; }
+:root[data-theme="pixel-retro"] .card-nav .jirai-title { color: rgb(30, 80, 140) !important; }
+
+/* 歌单面板（绿色系） */
+:root[data-theme="pixel-retro"] .card-playlist .text-pink-300 { color: rgb(40, 120, 80) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .text-purple-300 { color: rgb(60, 140, 90) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .text-gray-400,
+:root[data-theme="pixel-retro"] .card-playlist .text-gray-600 { color: rgb(100, 160, 120) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .text-red-300 { color: rgb(180, 60, 60) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .border-pink-400 { border-color: rgb(80, 170, 120) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .border-pink-500 { border-color: rgb(60, 150, 100) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .border-purple-400 { border-color: rgb(60, 150, 100) !important; }
+
+/* 歌单面板：子卡片（歌单条目） */
+:root[data-theme="pixel-retro"] .card-playlist .music-card,
+:root[data-theme="pixel-retro"] .card-playlist .jirai-card {
+  background: rgba(200, 240, 215, 0.9) !important;
+  border: none !important;
+  box-shadow:
+    0 -2px 0 0 rgba(200, 240, 215, 0.9),
+    2px 0 0 0 rgba(200, 240, 215, 0.9),
+    0 2px 0 0 rgba(200, 240, 215, 0.9),
+    -2px 0 0 0 rgba(200, 240, 215, 0.9),
+    0 0 0 2px rgb(80, 160, 110),
+    0 -4px 0 0 rgb(80, 160, 110),
+    4px 0 0 0 rgb(80, 160, 110),
+    0 4px 0 0 rgb(80, 160, 110),
+    -4px 0 0 0 rgb(80, 160, 110) !important;
+  filter: none !important;
+}
+:root[data-theme="pixel-retro"] .card-playlist .music-card:hover,
+:root[data-theme="pixel-retro"] .card-playlist .jirai-card:hover {
+  background: rgba(170, 230, 195, 0.95) !important;
+  box-shadow:
+    0 -2px 0 0 rgba(170, 230, 195, 0.95),
+    2px 0 0 0 rgba(170, 230, 195, 0.95),
+    0 2px 0 0 rgba(170, 230, 195, 0.95),
+    -2px 0 0 0 rgba(170, 230, 195, 0.95),
+    0 0 0 2px rgb(50, 140, 85),
+    0 -4px 0 0 rgb(50, 140, 85),
+    4px 0 0 0 rgb(50, 140, 85),
+    0 4px 0 0 rgb(50, 140, 85),
+    -4px 0 0 0 rgb(50, 140, 85) !important;
+}
+
+/* 歌单面板：tab 按钮 */
+:root[data-theme="pixel-retro"] .card-playlist .bg-pink-900 { background-color: rgba(60, 140, 95, 0.9) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .bg-gray-900 { background-color: rgba(180, 225, 200, 0.9) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .text-pink-100 { color: rgb(240, 255, 245) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .text-gray-300 { color: rgb(60, 120, 80) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .border-gray-600 { border-color: rgb(130, 190, 155) !important; }
+
+/* 歌单面板：输入框 */
+:root[data-theme="pixel-retro"] .card-playlist .pixel-input {
+  background: rgba(235, 252, 242, 0.95) !important;
+  border-color: rgb(100, 180, 130) !important;
+  color: rgb(30, 100, 60) !important;
+}
+:root[data-theme="pixel-retro"] .card-playlist .pixel-input::placeholder { color: rgb(120, 175, 140) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .pixel-input:focus {
+  border-color: rgb(50, 150, 90) !important;
+  background: rgba(215, 245, 228, 0.95) !important;
+}
+
+/* 歌单面板：按钮 */
+:root[data-theme="pixel-retro"] .card-playlist .pixel-button {
+  background: rgba(80, 160, 110, 0.9) !important;
+  border-color: rgb(50, 130, 80) !important;
+  color: rgb(240, 255, 245) !important;
+  box-shadow: none !important;
+}
+:root[data-theme="pixel-retro"] .card-playlist .pixel-button:hover {
+  background: rgba(60, 140, 90, 0.95) !important;
+  box-shadow: none !important;
+}
+:root[data-theme="pixel-retro"] .card-playlist .pixel-button:active {
+  background: rgba(40, 120, 70, 0.95) !important;
+  box-shadow: none !important;
+  transform: translate(1px, 1px);
+}
+
+/* 歌单面板：tab 按钮 hover/active */
+:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-pink-950:hover {
+  background-color: rgba(50, 130, 85, 0.9) !important;
+}
+:root[data-theme="pixel-retro"] .card-playlist .hover\:border-pink-600:hover {
+  border-color: rgb(50, 140, 90) !important;
+}
+:root[data-theme="pixel-retro"] .card-playlist .hover\:text-pink-200:hover {
+  color: rgb(230, 255, 240) !important;
+}
+
+/* 歌单面板：右键菜单 */
+:root[data-theme="pixel-retro"] .card-playlist .bg-gray-900.border { background-color: rgba(220, 245, 230, 0.98) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .border-gray-700 { border-color: rgb(150, 200, 170) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-purple-800:hover { background-color: rgba(80, 160, 110, 0.9) !important; }
+:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-red-800:hover { background-color: rgba(200, 80, 80, 0.9) !important; }
+
+/* 歌单面板：分页按钮 */
+:root[data-theme="pixel-retro"] .card-playlist .bg-purple-600 { background-color: rgb(70, 150, 100) !important; box-shadow: none !important; }
+:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-purple-500:hover { background-color: rgb(55, 135, 85) !important; box-shadow: none !important; }
+
+/* 歌曲列表（粉色系） */
+:root[data-theme="pixel-retro"] .card-songlist .text-pink-300 { color: rgb(180, 60, 100) !important; }
+:root[data-theme="pixel-retro"] .card-songlist .text-purple-300 { color: rgb(160, 80, 120) !important; }
+:root[data-theme="pixel-retro"] .card-songlist .text-gray-400,
+:root[data-theme="pixel-retro"] .card-songlist .text-gray-600 { color: rgb(190, 130, 150) !important; }
+:root[data-theme="pixel-retro"] .card-songlist .border-pink-400 { border-color: rgb(210, 120, 160) !important; }
+:root[data-theme="pixel-retro"] .card-songlist .border-purple-400 { border-color: rgb(200, 100, 140) !important; }
+
+/* 歌曲列表：子卡片 */
+:root[data-theme="pixel-retro"] .card-songlist .music-card,
+:root[data-theme="pixel-retro"] .card-songlist .jirai-card {
+  background: rgba(255, 215, 228, 0.9) !important;
+  border: none !important;
+  box-shadow:
+    0 -2px 0 0 rgba(255, 215, 228, 0.9),
+    2px 0 0 0 rgba(255, 215, 228, 0.9),
+    0 2px 0 0 rgba(255, 215, 228, 0.9),
+    -2px 0 0 0 rgba(255, 215, 228, 0.9),
+    0 0 0 2px rgb(210, 120, 155),
+    0 -4px 0 0 rgb(210, 120, 155),
+    4px 0 0 0 rgb(210, 120, 155),
+    0 4px 0 0 rgb(210, 120, 155),
+    -4px 0 0 0 rgb(210, 120, 155) !important;
+  filter: none !important;
+}
+:root[data-theme="pixel-retro"] .card-songlist .music-card:hover,
+:root[data-theme="pixel-retro"] .card-songlist .jirai-card:hover {
+  background: rgba(250, 195, 215, 0.95) !important;
+  box-shadow:
+    0 -2px 0 0 rgba(250, 195, 215, 0.95),
+    2px 0 0 0 rgba(250, 195, 215, 0.95),
+    0 2px 0 0 rgba(250, 195, 215, 0.95),
+    -2px 0 0 0 rgba(250, 195, 215, 0.95),
+    0 0 0 2px rgb(185, 90, 130),
+    0 -4px 0 0 rgb(185, 90, 130),
+    4px 0 0 0 rgb(185, 90, 130),
+    0 4px 0 0 rgb(185, 90, 130),
+    -4px 0 0 0 rgb(185, 90, 130) !important;
+}
+
+/* 歌曲列表：分页按钮 */
+:root[data-theme="pixel-retro"] .card-songlist .bg-purple-600 { background-color: rgb(200, 100, 140) !important; box-shadow: none !important; }
+:root[data-theme="pixel-retro"] .card-songlist .hover\:bg-purple-500:hover { background-color: rgb(180, 80, 120) !important; box-shadow: none !important; }
+:root[data-theme="pixel-retro"] .card-songlist .pixel-button { box-shadow: none !important; }
+
+:root[data-theme="pixel-retro"] .card-lyrics .text-pink-300 { color: rgb(120, 60, 180) !important; }
+:root[data-theme="pixel-retro"] .card-lyrics .text-purple-300 { color: rgb(140, 80, 200) !important; }
+:root[data-theme="pixel-retro"] .card-lyrics .text-gray-400,
+:root[data-theme="pixel-retro"] .card-lyrics .text-gray-600 { color: rgb(160, 130, 200) !important; }
+:root[data-theme="pixel-retro"] .card-lyrics .border-pink-400 { border-color: rgb(160, 110, 210) !important; }
+:root[data-theme="pixel-retro"] .card-lyrics .border-yellow-400 { border-color: rgb(180, 140, 220) !important; }
+:root[data-theme="pixel-retro"] .card-lyrics .text-yellow-800 { color: rgb(100, 60, 150) !important; }
+:root[data-theme="pixel-retro"] .card-lyrics .bg-yellow-100 { background-color: rgba(230, 220, 248, 0.9) !important; }
+
+/* 底部播放器（玫瑰红系） */
+:root[data-theme="pixel-retro"] .card-player .text-pink-300 { color: rgb(180, 50, 80) !important; }
+:root[data-theme="pixel-retro"] .card-player .text-purple-300 { color: rgb(160, 70, 100) !important; }
+:root[data-theme="pixel-retro"] .card-player .border-pink-400 { border-color: rgb(210, 100, 130) !important; }
+
+/* 页脚（黄色系） */
+:root[data-theme="pixel-retro"] .card-footer .text-pink-300,
+:root[data-theme="pixel-retro"] .card-footer .text-purple-300 { color: rgb(140, 110, 40) !important; }
+:root[data-theme="pixel-retro"] .card-footer .text-gray-400,
+:root[data-theme="pixel-retro"] .card-footer .text-gray-600 { color: rgb(170, 145, 80) !important; }
+
 * {
   margin: 0;
   padding: 0;
@@ -189,6 +362,39 @@ body {
   background: var(--pixel-secondary);
   box-shadow: inset 0 0 0 1px var(--pixel-primary);
 }
+
+/* 暗色主题各卡片滚动条色系 */
+/* 导航栏（蓝色系） */
+.card-nav::-webkit-scrollbar-track,
+.card-nav ::-webkit-scrollbar-track { background: rgba(14, 28, 55, 0.95); border-color: rgb(60, 100, 160); }
+.card-nav::-webkit-scrollbar-thumb,
+.card-nav ::-webkit-scrollbar-thumb { background: rgb(80, 140, 210); border-color: rgb(40, 80, 140); box-shadow: inset 0 0 0 1px rgb(130, 190, 240); }
+.card-nav::-webkit-scrollbar-thumb:hover,
+.card-nav ::-webkit-scrollbar-thumb:hover { background: rgb(110, 170, 240); box-shadow: inset 0 0 0 1px rgb(80, 140, 210); }
+
+/* 歌单面板（绿色系） */
+.card-playlist::-webkit-scrollbar-track,
+.card-playlist ::-webkit-scrollbar-track { background: rgba(10, 28, 20, 0.95); border-color: rgb(60, 130, 90); }
+.card-playlist::-webkit-scrollbar-thumb,
+.card-playlist ::-webkit-scrollbar-thumb { background: rgb(60, 160, 100); border-color: rgb(30, 100, 60); box-shadow: inset 0 0 0 1px rgb(100, 200, 140); }
+.card-playlist::-webkit-scrollbar-thumb:hover,
+.card-playlist ::-webkit-scrollbar-thumb:hover { background: rgb(80, 190, 120); box-shadow: inset 0 0 0 1px rgb(60, 160, 100); }
+
+/* 歌曲列表（橙色系） */
+.card-songlist::-webkit-scrollbar-track,
+.card-songlist ::-webkit-scrollbar-track { background: rgba(35, 18, 5, 0.95); border-color: rgb(160, 90, 40); }
+.card-songlist::-webkit-scrollbar-thumb,
+.card-songlist ::-webkit-scrollbar-thumb { background: rgb(210, 130, 60); border-color: rgb(150, 80, 20); box-shadow: inset 0 0 0 1px rgb(255, 190, 110); }
+.card-songlist::-webkit-scrollbar-thumb:hover,
+.card-songlist ::-webkit-scrollbar-thumb:hover { background: rgb(240, 160, 80); box-shadow: inset 0 0 0 1px rgb(210, 130, 60); }
+
+/* 歌词面板（紫色系） */
+.card-lyrics::-webkit-scrollbar-track,
+.card-lyrics ::-webkit-scrollbar-track { background: rgba(22, 10, 38, 0.95); border-color: rgb(110, 70, 160); }
+.card-lyrics::-webkit-scrollbar-thumb,
+.card-lyrics ::-webkit-scrollbar-thumb { background: rgb(150, 90, 210); border-color: rgb(90, 50, 150); box-shadow: inset 0 0 0 1px rgb(200, 150, 240); }
+.card-lyrics::-webkit-scrollbar-thumb:hover,
+.card-lyrics ::-webkit-scrollbar-thumb:hover { background: rgb(180, 120, 240); box-shadow: inset 0 0 0 1px rgb(150, 90, 210); }
 
 /* 确保滚动条不影响内容对齐 */
 .jirai-card.max-h-96 {
@@ -406,7 +612,7 @@ body {
 /* 像素风格主题的卡片样式 */
 :root[data-theme="pixel-retro"] .jirai-card {
   background-color: var(--pixel-card-bg);
-  box-shadow: 
+  box-shadow:
     0 -2px 0 0 var(--pixel-card-bg),
     2px 0 0 0 var(--pixel-card-bg),
     0 2px 0 0 var(--pixel-card-bg),
@@ -418,6 +624,165 @@ body {
     -4px 0 0 0 var(--pixel-border);
   filter: drop-shadow(4px 4px 0 var(--pixel-box-shadow));
   border: none;
+}
+
+/* ── 各功能区域专属边框（默认主题） ── */
+
+/* 导航栏：蓝色双线 */
+.card-nav {
+  border: 3px solid rgb(100, 160, 220);
+  background: rgba(20, 40, 80, 0.92) !important;
+  box-shadow:
+    0 0 0 1px rgb(173, 215, 230),
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* 歌单面板：绿色虚线风格 */
+.card-playlist {
+  border: 3px dashed rgb(100, 190, 140);
+  background: rgba(15, 40, 30, 0.92) !important;
+  box-shadow:
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* 歌曲列表：橙色粗实线 */
+.card-songlist {
+  border: 3px solid rgb(230, 150, 80);
+  background: rgba(50, 28, 10, 0.92) !important;
+  box-shadow:
+    0 0 0 1px rgb(255, 200, 130),
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* 歌词面板：紫色点线 */
+.card-lyrics {
+  border: 3px dotted rgb(170, 120, 210);
+  background: rgba(35, 18, 55, 0.92) !important;
+  box-shadow:
+    3px 3px 0px var(--pixel-dark),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* 底部播放器：红色顶边 + 无其他边 */
+.card-player {
+  border-top: 4px solid rgb(220, 80, 100) !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  background: rgba(50, 15, 20, 0.95) !important;
+  box-shadow:
+    0 -2px 0 0 rgb(255, 160, 170),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
+}
+
+/* 页脚：灰色细线 */
+.card-footer {
+  border: 2px solid rgb(180, 160, 170);
+  background: rgba(30, 20, 25, 0.88) !important;
+  box-shadow:
+    2px 2px 0px var(--pixel-dark),
+    inset 1px 1px 0 var(--pixel-highlight);
+}
+
+/* ── 各功能区域专属边框（pixel-retro 主题） ── */
+
+/* 底部播放器：玫瑰色背景 */
+:root[data-theme="pixel-retro"] .card-player {
+  background-color: rgba(252, 220, 228, 0.97) !important;
+  border-top: 4px solid rgb(220, 120, 150) !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  box-shadow: 0 -2px 0 0 rgb(240, 160, 180) !important;
+  filter: none;
+}
+
+/* 导航栏：蓝色像素边框 */
+:root[data-theme="pixel-retro"] .card-nav {
+  border: none;
+  background-color: rgba(210, 235, 248, 0.97) !important;
+  box-shadow:
+    0 -2px 0 0 rgba(210, 235, 248, 0.97),
+    2px 0 0 0 rgba(210, 235, 248, 0.97),
+    0 2px 0 0 rgba(210, 235, 248, 0.97),
+    -2px 0 0 0 rgba(210, 235, 248, 0.97),
+    0 0 0 2px rgb(130, 190, 230),
+    0 -4px 0 0 rgb(130, 190, 230),
+    4px 0 0 0 rgb(130, 190, 230),
+    0 4px 0 0 rgb(130, 190, 230),
+    -4px 0 0 0 rgb(130, 190, 230);
+  filter: drop-shadow(4px 4px 0 rgb(160, 200, 220));
+}
+
+/* 歌单面板：绿色像素边框 */
+:root[data-theme="pixel-retro"] .card-playlist {
+  border: none;
+  background-color: rgba(220, 245, 230, 0.97) !important;
+  box-shadow:
+    0 -2px 0 0 rgba(220, 245, 230, 0.97),
+    2px 0 0 0 rgba(220, 245, 230, 0.97),
+    0 2px 0 0 rgba(220, 245, 230, 0.97),
+    -2px 0 0 0 rgba(220, 245, 230, 0.97),
+    0 0 0 2px rgb(120, 190, 150),
+    0 -4px 0 0 rgb(120, 190, 150),
+    4px 0 0 0 rgb(120, 190, 150),
+    0 4px 0 0 rgb(120, 190, 150),
+    -4px 0 0 0 rgb(120, 190, 150);
+  filter: drop-shadow(4px 4px 0 rgb(150, 210, 170));
+}
+
+/* 歌曲列表：橙色像素边框 */
+:root[data-theme="pixel-retro"] .card-songlist {
+  border: none;
+  background-color: rgba(255, 225, 235, 0.97) !important;
+  box-shadow:
+    0 -2px 0 0 rgba(255, 225, 235, 0.97),
+    2px 0 0 0 rgba(255, 225, 235, 0.97),
+    0 2px 0 0 rgba(255, 225, 235, 0.97),
+    -2px 0 0 0 rgba(255, 225, 235, 0.97),
+    0 0 0 2px rgb(220, 140, 170),
+    0 -4px 0 0 rgb(220, 140, 170),
+    4px 0 0 0 rgb(220, 140, 170),
+    0 4px 0 0 rgb(220, 140, 170),
+    -4px 0 0 0 rgb(220, 140, 170);
+  filter: drop-shadow(4px 4px 0 rgb(235, 170, 195));
+}
+
+/* 歌词面板：紫色像素边框 */
+:root[data-theme="pixel-retro"] .card-lyrics {
+  border: none;
+  background-color: rgba(240, 230, 252, 0.97) !important;
+  box-shadow:
+    0 -2px 0 0 rgba(240, 230, 252, 0.97),
+    2px 0 0 0 rgba(240, 230, 252, 0.97),
+    0 2px 0 0 rgba(240, 230, 252, 0.97),
+    -2px 0 0 0 rgba(240, 230, 252, 0.97),
+    0 0 0 2px rgb(180, 140, 210),
+    0 -4px 0 0 rgb(180, 140, 210),
+    4px 0 0 0 rgb(180, 140, 210),
+    0 4px 0 0 rgb(180, 140, 210),
+    -4px 0 0 0 rgb(180, 140, 210);
+  filter: drop-shadow(4px 4px 0 rgb(200, 170, 225));
+}
+
+/* 页脚：浅黄色像素边框 */
+:root[data-theme="pixel-retro"] .card-footer {
+  border: none;
+  background-color: rgba(255, 251, 220, 0.97) !important;
+  box-shadow:
+    0 -2px 0 0 rgba(252, 238, 220, 0.97),
+    2px 0 0 0 rgba(252, 238, 220, 0.97),
+    0 2px 0 0 rgba(252, 238, 220, 0.97),
+    -2px 0 0 0 rgba(252, 238, 220, 0.97),
+    0 0 0 2px var(--pixel-border),
+    0 -4px 0 0 var(--pixel-border),
+    4px 0 0 0 var(--pixel-border),
+    0 4px 0 0 var(--pixel-border),
+    -4px 0 0 0 var(--pixel-border);
+  filter: drop-shadow(4px 4px 0 var(--pixel-box-shadow));
 }
 
 /* 修复桌面端像素主题下滚动容器的阴影显示问题 */
@@ -1074,6 +1439,47 @@ body::-webkit-scrollbar {
   background: var(--pixel-secondary);
   box-shadow: inset 0 0 0 1px var(--pixel-primary);
 }
+
+/* 各卡片内滚动条颜色 */
+/* 导航栏（蓝色系） */
+:root[data-theme="pixel-retro"] .card-nav::-webkit-scrollbar-track,
+:root[data-theme="pixel-retro"] .card-nav ::-webkit-scrollbar-track { background: rgba(210, 235, 248, 0.97); border-color: rgb(130, 190, 230); }
+:root[data-theme="pixel-retro"] .card-nav::-webkit-scrollbar-thumb,
+:root[data-theme="pixel-retro"] .card-nav ::-webkit-scrollbar-thumb { background: rgb(100, 160, 210); border-color: rgb(70, 130, 180); box-shadow: none; }
+:root[data-theme="pixel-retro"] .card-nav::-webkit-scrollbar-thumb:hover,
+:root[data-theme="pixel-retro"] .card-nav ::-webkit-scrollbar-thumb:hover { background: rgb(70, 130, 180); box-shadow: none; }
+
+/* 歌单面板（绿色系） */
+:root[data-theme="pixel-retro"] .card-playlist::-webkit-scrollbar-track,
+:root[data-theme="pixel-retro"] .card-playlist ::-webkit-scrollbar-track { background: rgba(220, 245, 230, 0.97); border-color: rgb(120, 190, 150); }
+:root[data-theme="pixel-retro"] .card-playlist::-webkit-scrollbar-thumb,
+:root[data-theme="pixel-retro"] .card-playlist ::-webkit-scrollbar-thumb { background: rgb(80, 160, 110); border-color: rgb(50, 130, 80); box-shadow: none; }
+:root[data-theme="pixel-retro"] .card-playlist::-webkit-scrollbar-thumb:hover,
+:root[data-theme="pixel-retro"] .card-playlist ::-webkit-scrollbar-thumb:hover { background: rgb(50, 140, 85); box-shadow: none; }
+
+/* 歌曲列表（粉色系） */
+:root[data-theme="pixel-retro"] .card-songlist::-webkit-scrollbar-track,
+:root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-track { background: rgba(255, 225, 235, 0.97); border-color: rgb(220, 140, 170); }
+:root[data-theme="pixel-retro"] .card-songlist::-webkit-scrollbar-thumb,
+:root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-thumb { background: rgb(210, 100, 145); border-color: rgb(180, 70, 115); box-shadow: none; }
+:root[data-theme="pixel-retro"] .card-songlist::-webkit-scrollbar-thumb:hover,
+:root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-thumb:hover { background: rgb(180, 70, 115); box-shadow: none; }
+
+/* 歌词面板（紫色系） */
+:root[data-theme="pixel-retro"] .card-lyrics::-webkit-scrollbar-track,
+:root[data-theme="pixel-retro"] .card-lyrics ::-webkit-scrollbar-track { background: rgba(240, 230, 252, 0.97); border-color: rgb(180, 140, 210); }
+:root[data-theme="pixel-retro"] .card-lyrics::-webkit-scrollbar-thumb,
+:root[data-theme="pixel-retro"] .card-lyrics ::-webkit-scrollbar-thumb { background: rgb(160, 110, 200); border-color: rgb(130, 80, 170); box-shadow: none; }
+:root[data-theme="pixel-retro"] .card-lyrics::-webkit-scrollbar-thumb:hover,
+:root[data-theme="pixel-retro"] .card-lyrics ::-webkit-scrollbar-thumb:hover { background: rgb(130, 80, 170); box-shadow: none; }
+
+/* 底部播放器（玫瑰红系） */
+:root[data-theme="pixel-retro"] .card-player::-webkit-scrollbar-track,
+:root[data-theme="pixel-retro"] .card-player ::-webkit-scrollbar-track { background: rgba(252, 220, 228, 0.97); border-color: rgb(220, 120, 150); }
+:root[data-theme="pixel-retro"] .card-player::-webkit-scrollbar-thumb,
+:root[data-theme="pixel-retro"] .card-player ::-webkit-scrollbar-thumb { background: rgb(200, 90, 125); border-color: rgb(170, 60, 95); box-shadow: none; }
+:root[data-theme="pixel-retro"] .card-player::-webkit-scrollbar-thumb:hover,
+:root[data-theme="pixel-retro"] .card-player ::-webkit-scrollbar-thumb:hover { background: rgb(170, 60, 95); box-shadow: none; }
 
 /* 像素风格主题下的进度条覆盖 */
 :root[data-theme="pixel-retro"] .pixel-progress {
