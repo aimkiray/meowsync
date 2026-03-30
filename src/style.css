@@ -1591,3 +1591,14 @@ body::-webkit-scrollbar {
     margin-top: 16px; /* 移动端稍小的间距 */
   }
 }
+
+/* 正在播放的歌曲左侧竖条 */
+.playing-song::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--jirai-pink);
+}
