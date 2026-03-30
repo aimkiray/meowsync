@@ -9,8 +9,22 @@
               MeowSync
             </h1>
           </div>
-          <div class="flex-1 flex justify-end px-2">
-            <button 
+          <div class="flex-1 flex justify-end px-2 items-center gap-2">
+            <!-- 远程控制模式指示 -->
+            <a
+              v-if="remoteMode === 'host'"
+              :href="controllerUrl"
+              target="_blank"
+              class="pixel-button"
+              title="在新标签页打开手机控制器"
+              style="font-size:12px;padding:4px 8px;"
+            >📱 控制器</a>
+            <span
+              v-else-if="remoteMode === 'off'"
+              style="font-size:11px;opacity:0.5;cursor:default;"
+              title="添加 ?mode=host 启用远程控制"
+            >远程控制: 关</span>
+            <button
               @click="toggleTheme"
               class="pixel-button theme-toggle-btn"
               :title="currentTheme === 'pixel-retro' ? '切换到默认主题' : '切换到像素风格'"
@@ -38,6 +52,9 @@ export default {
   name: 'TopNavigation',
   setup() {
     const currentTheme = ref('pixel-retro')
+    const urlParams = new URLSearchParams(window.location.search)
+    const remoteMode = ref(urlParams.get('mode') || 'off')
+    const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     
     // 从localStorage加载主题
     const loadTheme = () => {
@@ -70,7 +87,9 @@ export default {
     
     return {
       currentTheme,
-      toggleTheme
+      toggleTheme,
+      remoteMode,
+      controllerUrl
     }
   }
 }

@@ -1,5 +1,8 @@
 <template>
-  <div id="app" class="min-h-screen lg:h-screen lg:overflow-hidden">
+  <!-- 手机控制器模式 -->
+  <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteWsUrl" />
+
+  <div v-else id="app" class="min-h-screen lg:h-screen lg:overflow-hidden">
     <!-- 顶部导航 -->
     <TopNavigation />
 
@@ -106,6 +109,7 @@ import SongList from './components/SongList.vue'
 import LyricsPanel from './components/LyricsPanel.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
 import Footer from './components/Footer.vue'
+import RemoteController from './components/RemoteController.vue'
 console.log('📦 所有导入完成，musicApi:', musicApi)
 
 export default {
@@ -116,7 +120,8 @@ export default {
     SongList,
     LyricsPanel,
     BottomPlayer,
-    Footer
+    Footer,
+    RemoteController
   },
   setup() {
     // 响应式数据
@@ -165,6 +170,53 @@ export default {
     let lyricTimer = null
     let currentAbortController = null // 用于取消正在进行的网络请求
     let currentPlayingId = null // 当前正在播放的歌曲ID，用于防止竞态条件
+
+    // 远程控制模式
+    const urlParams = new URLSearchParams(window.location.search)
+    const remoteMode = ref(urlParams.get('mode') || 'off') // 'off' | 'host' | 'controller'
+    const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002'
+    const remoteWsUrl = apiBase.replace(/^http/, 'ws') + '/remote'
+    let remoteWs = null
+    let remoteStateTimer = null
+
+    function sendRemoteState() {
+      if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) return
+      remoteWs.send(JSON.stringify({
+        type: 'state_update',
+        payload: {
+          isPlaying: isPlaying.value,
+          currentSong: currentSong.value,
+          currentTime: currentTime.value,
+          duration: duration.value,
+          volume: volume.value
+        }
+      }))
+    }
+
+    function connectRemoteHost() {
+      remoteWs = new WebSocket(remoteWsUrl + '?role=host')
+      remoteWs.onopen = () => {
+        console.log('[remote] host WS connected')
+        remoteStateTimer = setInterval(sendRemoteState, 2000)
+      }
+      remoteWs.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'play') togglePlay()
+          else if (msg.type === 'pause') togglePlay()
+          else if (msg.type === 'next') nextSong()
+          else if (msg.type === 'prev') previousSong()
+          else if (msg.type === 'seek' && howl) { howl.seek(msg.payload); currentTime.value = msg.payload }
+          else if (msg.type === 'volume') updateVolume(msg.payload)
+          else if (msg.type === 'request_state') sendRemoteState()
+        } catch {}
+      }
+      remoteWs.onclose = () => {
+        clearInterval(remoteStateTimer)
+        setTimeout(connectRemoteHost, 3000)
+      }
+      remoteWs.onerror = () => remoteWs.close()
+    }
 
     // 计算属性
     const progressPercentage = computed(() => {
@@ -850,6 +902,11 @@ export default {
       playlistCurrentPage.value = 1
     })
 
+    // host 模式：状态变化时立即推送
+    watch([isPlaying, currentSong, volume], () => {
+      if (remoteMode.value === 'host') sendRemoteState()
+    })
+
     // 从URL参数获取歌单ID列表
     const getPlaylistIdsFromUrl = () => {
       const urlParams = new URLSearchParams(window.location.search)
@@ -997,6 +1054,11 @@ export default {
     // 组件挂载
     onMounted(async () => {
       console.log('🚀 App组件挂载完成')
+
+      // 启动远程控制 host 连接
+      if (remoteMode.value === 'host') {
+        connectRemoteHost()
+      }
       
       // 检查是否为单首歌曲分享，如果是则默认折叠歌单面板（仅移动端）
       if (isSingleSongShare() && window.innerWidth < 1024) {
@@ -1067,6 +1129,8 @@ export default {
 
     return {
       // 响应式数据
+      remoteMode,
+      remoteWsUrl,
       searchQuery,
       loading,
       loadingSongs,
