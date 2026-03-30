@@ -518,6 +518,7 @@ export default {
         // 创建Howler实例
         howl = new Howl({
           src: [songUrlData.url],
+          format: ['mp4', 'mp3', 'flac'],
           html5: true,
           preload: true,
           onload: () => {
