@@ -46,7 +46,7 @@ if (fs.existsSync(modulePath)) {
 const request = require(path.join(__dirname, '../../../node_modules/NeteaseCloudMusicApi/util/request'));
 const unblockmatch = require('@unblockneteasemusic/server');
 
-const sources = ['migu', 'kuwo', 'ytdlp'];
+const sources = ['kuwo', 'ytdlp'];
 
 router.get('/', (req, res) => {
   res.json({
