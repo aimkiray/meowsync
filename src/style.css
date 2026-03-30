@@ -301,6 +301,7 @@
     0 4px 0 0 rgb(220, 80, 130),
     -4px 0 0 0 rgb(220, 80, 130) !important;
 }
+:root[data-theme="pixel-retro"] .card-songlist .playing-song .text-pink-500 { color: rgb(160, 30, 80) !important; }
 
 /* 亮色主题正在播放高亮 */
 .playing-song {
