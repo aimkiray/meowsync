@@ -13,6 +13,7 @@
     "build:prod": "vite build --mode production"
   },
   "dependencies": {
+    "@unblockneteasemusic/server": "^0.28.0",
     "@vueuse/core": "^10.4.1",
     "axios": "^1.5.0",
     "cors": "^2.8.5",
