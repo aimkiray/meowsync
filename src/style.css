@@ -290,17 +290,25 @@
 :root[data-theme="pixel-retro"] .card-songlist .playing-song,
 :root[data-theme="pixel-retro"] .card-songlist .playing-song:hover {
   background: rgba(200, 80, 130, 0.25) !important;
+  box-shadow:
+    0 0 0 2px rgb(160, 20, 70),
+    0 -4px 0 0 rgb(160, 20, 70),
+    4px 0 0 0 rgb(160, 20, 70),
+    0 4px 0 0 rgb(160, 20, 70),
+    -4px 0 0 0 rgb(160, 20, 70) !important;
 }
 :root[data-theme="pixel-retro"] .card-songlist .playing-song .text-pink-500 { color: rgb(160, 30, 80) !important; }
 
 /* 亮色主题正在播放高亮 */
 .playing-song {
   background: rgba(236, 72, 153, 0.12) !important;
+  border-color: rgb(180, 30, 90) !important;
 }
 
 /* 暗色主题正在播放高亮 */
 :root:not([data-theme="pixel-retro"]) .card-songlist .playing-song {
   background: rgba(236, 72, 153, 0.22) !important;
+  border-color: rgb(220, 40, 100) !important;
 }
 
 /* 歌曲列表：分页按钮 */
