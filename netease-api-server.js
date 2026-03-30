@@ -6,6 +6,9 @@ const path = require('path');
 // 加载环境变量
 require('dotenv').config();
 
+const { ensureAnonymousToken } = require('./src/lib/init-anonymous-token');
+ensureAnonymousToken();
+
 // 导入NeteaseCloudMusicApi的request工具
 const request = require('./node_modules/NeteaseCloudMusicApi/util/request');
 
