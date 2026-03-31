@@ -973,6 +973,9 @@ body::-webkit-scrollbar {
 :root[data-theme="pixel-retro"] .player-progress-fill {
   background: var(--pixel-primary);
 }
+
+/* pixel进度条 */
+.pixel-progress {
   height: 12px;
   background: var(--pixel-dark);
   border: 2px solid var(--pixel-text);
