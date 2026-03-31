@@ -18,16 +18,11 @@
     <div class="px-3 sm:px-6 lg:px-8">
       <!-- 移动端布局 -->
       <div class="block md:hidden">
-        <!-- 时间显示 - 移动端 -->
-        <div class="pt-3 pb-1 flex justify-between">
-          <span class="text-xs text-pink-300">{{ formatTime(currentTime) }}</span>
-          <span class="text-xs text-pink-300">{{ formatTime(duration) }}</span>
-        </div>
-        
-        <!-- 主要控制区域 -->
-        <div class="flex items-center justify-between pb-3">
+        <!-- 控制区域（含时间） -->
+        <div class="flex items-center justify-between py-3">
+          <span class="text-xs text-pink-300 w-10 flex-shrink-0">{{ formatTime(currentTime) }}</span>
           <!-- 歌曲信息 -->
-          <div class="flex items-center space-x-3 flex-1 min-w-0">
+          <div class="flex items-center space-x-3 flex-1 min-w-0 mx-2">
             <img
               :src="currentSong.al?.picUrl"
               :alt="currentSong.name"
@@ -45,43 +40,27 @@
 
           <!-- 播放控制 -->
           <div class="flex items-center space-x-1 flex-shrink-0">
-            <button
-              @click="$emit('previous-song')"
-              class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-            >
-              ◀◀
-            </button>
+            <button @click="$emit('previous-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center">◀◀</button>
             <button
               @click="$emit('toggle-play')"
               :disabled="songSwitching"
               class="jirai-button-primary p-1 text-sm w-8 h-8 flex items-center justify-center"
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-            >
-              {{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}
-            </button>
-            <button
-              @click="$emit('next-song')"
-              class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-            >
-              ▶▶
-            </button>
+            >{{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}</button>
+            <button @click="$emit('next-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center">▶▶</button>
           </div>
+          <span class="text-xs text-pink-300 w-10 flex-shrink-0 text-right">{{ formatTime(duration) }}</span>
         </div>
       </div>
 
       <!-- 桌面端布局 -->
       <div class="hidden md:block py-4">
         <div class="max-w-[1440px] px-4 sm:px-6 lg:px-8 mx-auto">
-            <!-- 时间显示 - 桌面端 -->
-            <div class="mb-3 flex justify-between">
-              <span class="text-xs text-pink-300">{{ formatTime(currentTime) }}</span>
-              <span class="text-xs text-pink-300">{{ formatTime(duration) }}</span>
-            </div>
-            
-            <!-- 主要控制区域 -->
+            <!-- 主要控制区域（含时间） -->
             <div class="flex items-center justify-between">
-              <!-- 歌曲信息 -->
-              <div class="flex items-center space-x-4 min-w-0 flex-1">
+              <!-- 左：当前时间 + 歌曲信息 -->
+              <div class="flex items-center space-x-3 min-w-0 flex-1">
+                <span class="text-xs text-pink-300 flex-shrink-0 w-10">{{ formatTime(currentTime) }}</span>
                 <img
                   :src="currentSong.al?.picUrl"
                   :alt="currentSong.name"
@@ -115,27 +94,16 @@
 
                 <!-- 播放控制 -->
                 <div class="flex items-center space-x-3">
-                  <button
-                    @click="$emit('previous-song')"
-                    class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
-                  >
-                    ◀◀
-                  </button>
+                  <button @click="$emit('previous-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center">◀◀</button>
                   <button
                     @click="$emit('toggle-play')"
                     :disabled="songSwitching"
                     class="jirai-button-primary p-3 text-xl w-12 h-12 flex items-center justify-center"
                     :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-                  >
-                    {{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}
-                  </button>
-                  <button
-                    @click="$emit('next-song')"
-                    class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center"
-                  >
-                    ▶▶
-                  </button>
+                  >{{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}</button>
+                  <button @click="$emit('next-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center">▶▶</button>
                 </div>
+                <span class="text-xs text-pink-300 w-10 text-right">{{ formatTime(duration) }}</span>
               </div>
             </div>
         </div>
