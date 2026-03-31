@@ -1,5 +1,5 @@
 <template>
-  <footer class="mt-8 pb-4">
+  <footer class="mt-8 pb-4 lg:mt-0 lg:pb-4">
     <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
       <div class="jirai-card card-footer py-4">
         <div class="text-center text-sm text-gray-600">
