@@ -95,7 +95,7 @@
     </div>
 
     <!-- 页脚 -->
-    <Footer v-if="!currentSong || playerHidden" />
+    <Footer :style="currentSong && !playerHidden ? { visibility: 'hidden' } : {}" />
   </div>
 </template>
 
