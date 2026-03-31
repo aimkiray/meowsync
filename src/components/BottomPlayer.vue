@@ -115,7 +115,7 @@
   <!-- 隐藏按钮 - 浮动在播放器外部右上角 -->
   <div
     v-if="currentSong && !isHidden"
-    class="fixed right-4 z-50 bottom-[80px] md:bottom-[120px]"
+    class="fixed right-4 z-50 bottom-[60px] md:bottom-[100px]"
   >
     <button
       @click="toggleHidden"
