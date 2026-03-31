@@ -947,8 +947,32 @@ body::-webkit-scrollbar {
   transform: scale(0.95);
 }
 
-/* pixel进度条 */
-.pixel-progress {
+/* 播放器顶部进度条（兼作上边框） */
+.player-progress-bar {
+  height: 4px;
+  background: rgba(236, 72, 153, 0.25);
+  transition: height 0.2s ease;
+  z-index: 1;
+}
+
+.player-progress-bar:hover {
+  height: 6px;
+}
+
+.player-progress-fill {
+  height: 100%;
+  background: var(--jirai-pink);
+  transition: width 0.1s linear;
+}
+
+:root[data-theme="pixel-retro"] .player-progress-bar {
+  background: var(--pixel-dark);
+  border-bottom: 1px solid var(--pixel-border);
+}
+
+:root[data-theme="pixel-retro"] .player-progress-fill {
+  background: var(--pixel-primary);
+}
   height: 12px;
   background: var(--pixel-dark);
   border: 2px solid var(--pixel-text);
