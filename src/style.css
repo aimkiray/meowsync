@@ -444,12 +444,8 @@ body {
   }
   
   footer {
-    padding-bottom: 0.5rem; /* 8px，与header保持一致 */
-    position: fixed; /* 固定定位 */
-    bottom: 0; /* 贴着底边 */
-    left: 0;
-    right: 0;
-    z-index: 40; /* 确保在其他内容之上，但在播放器之下 */
+    position: static;
+    z-index: 40;
   }
   
   .desktop-content {
