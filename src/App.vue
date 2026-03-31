@@ -95,7 +95,7 @@
     </div>
 
     <!-- 页脚 -->
-    <Footer v-show="!currentSong || playerHidden" />
+    <Footer v-if="!currentSong || playerHidden" />
   </div>
 </template>
 
