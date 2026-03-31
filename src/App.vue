@@ -90,11 +90,12 @@
         @next-song="nextSong"
         @seek-to="seekTo"
         @update-volume="updateVolume"
+        @update:player-hidden="val => playerHidden = val"
       />
     </div>
-    
+
     <!-- 页脚 -->
-    <Footer />
+    <Footer v-show="!currentSong || playerHidden" />
   </div>
 </template>
 
@@ -143,6 +144,7 @@ export default {
     const autoFollowLyrics = ref(true) // 歌词自动跟随，默认开启
     const songSwitching = ref(false) // 歌曲切换提示
     const isPlaying = ref(false)
+    const playerHidden = ref(false)
     const currentTime = ref(0)
     const duration = ref(0)
     const volume = ref(80)
@@ -1130,6 +1132,7 @@ export default {
     return {
       // 响应式数据
       remoteMode,
+      playerHidden,
       remoteWsUrl,
       searchQuery,
       loading,
