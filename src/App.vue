@@ -2,11 +2,11 @@
   <!-- 手机控制器模式 -->
   <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteWsUrl" />
 
-  <div v-else id="app" class="min-h-screen lg:h-screen lg:overflow-hidden">
+  <div v-else id="app" class="min-h-screen lg:h-screen lg:overflow-hidden lg:flex lg:flex-col">
     <!-- 顶部导航 -->
     <TopNavigation />
 
-    <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-32 md:pb-32 lg:pt-4 lg:pb-4 desktop-content">
+    <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-32 md:pb-32 lg:pt-4 lg:pb-4 desktop-content lg:flex-1 lg:min-h-0">
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- 左侧：歌单列表 -->
         <div class="lg:col-span-1">
