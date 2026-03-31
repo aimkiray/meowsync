@@ -65,7 +65,7 @@
                   class="w-12 h-12 object-cover border-2 border-pink-400"
                   style="border-radius: 0; image-rendering: pixelated;"
                 />
-                <div v-if="currentSong?.id === song.id && isPlaying" class="absolute inset-0 flex items-center justify-center bg-black/50">
+                <div v-if="currentSong?.id === song.id && isPlaying" class="absolute inset-0 flex items-center justify-center">
                   <div class="text-pink-300 text-sm animate-pulse flex items-center justify-center">♡</div>
                 </div>
               </div>
