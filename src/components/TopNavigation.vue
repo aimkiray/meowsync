@@ -1,5 +1,5 @@
 <template>
-  <nav class="pt-2">
+  <nav class="pt-4">
     <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
       <div class="jirai-card card-nav py-6">
         <div class="flex justify-between items-center">
