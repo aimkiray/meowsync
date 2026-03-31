@@ -20,9 +20,8 @@
       <div class="block md:hidden">
         <!-- 控制区域（含时间） -->
         <div class="flex items-center justify-between py-3">
-          <span class="text-xs text-pink-300 w-10 flex-shrink-0">{{ formatTime(currentTime) }}</span>
           <!-- 歌曲信息 -->
-          <div class="flex items-center space-x-3 flex-1 min-w-0 mx-2">
+          <div class="flex items-center space-x-3 flex-1 min-w-0 mr-2">
             <img
               :src="currentSong.al?.picUrl"
               :alt="currentSong.name"
@@ -38,7 +37,7 @@
             </div>
           </div>
 
-          <!-- 播放控制 -->
+          <!-- 播放控制 + 时间 -->
           <div class="flex items-center space-x-1 flex-shrink-0">
             <button @click="$emit('previous-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center">◀◀</button>
             <button
@@ -48,8 +47,8 @@
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
             >{{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}</button>
             <button @click="$emit('next-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center">▶▶</button>
+            <span class="text-xs text-pink-300 ml-2 whitespace-nowrap">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
           </div>
-          <span class="text-xs text-pink-300 w-10 flex-shrink-0 text-right">{{ formatTime(duration) }}</span>
         </div>
       </div>
 
@@ -58,9 +57,8 @@
         <div class="max-w-[1440px] px-4 sm:px-6 lg:px-8 mx-auto">
             <!-- 主要控制区域（含时间） -->
             <div class="flex items-center justify-between">
-              <!-- 左：当前时间 + 歌曲信息 -->
+              <!-- 左：歌曲信息 -->
               <div class="flex items-center space-x-3 min-w-0 flex-1">
-                <span class="text-xs text-pink-300 flex-shrink-0 w-10">{{ formatTime(currentTime) }}</span>
                 <img
                   :src="currentSong.al?.picUrl"
                   :alt="currentSong.name"
@@ -78,8 +76,9 @@
 
               <!-- 右侧控制区域 -->
               <div class="flex items-center space-x-6 flex-shrink-0">
-                <!-- 音量控制 -->
+                <!-- 时间 + 音量控制 -->
                 <div class="flex items-center space-x-2">
+                  <span class="text-xs text-pink-300">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
                   <span class="text-lg text-pink-300">♪</span>
                   <input
                     :value="volume"
@@ -103,7 +102,6 @@
                   >{{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}</button>
                   <button @click="$emit('next-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center">▶▶</button>
                 </div>
-                <span class="text-xs text-pink-300 w-10 text-right">{{ formatTime(duration) }}</span>
               </div>
             </div>
         </div>
