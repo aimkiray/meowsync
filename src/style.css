@@ -456,9 +456,8 @@ body {
     height: calc(100vh - 80px - 60px - 120px - 48px); /* 减去导航栏(80px)、页脚(60px)、底部播放器(120px)和额外间距(48px) */
     display: flex;
     flex-direction: column;
-    overflow: hidden; /* 防止页面出现滚动条 */
-    padding-bottom: 0; /* 移除底部padding，避免额外空间 */
-    margin-bottom: 0; /* 确保没有额外的外边距 */
+    overflow: hidden;
+    margin-bottom: 0;
   }
   
   .desktop-content > .grid {
