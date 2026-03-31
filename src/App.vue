@@ -6,7 +6,7 @@
     <!-- 顶部导航 -->
     <TopNavigation />
 
-    <div class="max-w-[1440px] mx-auto w-full px-4 sm:px-6 lg:px-8 pt-6 pb-32 md:pb-32 lg:pt-4 lg:pb-4 desktop-content lg:flex-1 lg:min-h-0">
+    <div class="max-w-[1440px] mx-auto w-full px-4 sm:px-6 lg:px-16 pt-6 pb-32 md:pb-32 lg:pt-6 lg:pb-6 desktop-content lg:flex-1 lg:min-h-0">
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- 左侧：歌单列表 -->
         <div class="lg:col-span-1">
