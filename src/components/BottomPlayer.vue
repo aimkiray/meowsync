@@ -93,7 +93,6 @@
                     />
                   </div>
                 </div>
-                </div>
 
                 <!-- 播放控制 -->
                 <div class="flex items-center space-x-3">
