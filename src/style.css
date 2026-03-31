@@ -453,11 +453,10 @@ body {
   }
   
   .desktop-content {
-    height: calc(100vh - 80px - 60px - 120px - 48px); /* 减去导航栏(80px)、页脚(60px)、底部播放器(120px)和额外间距(48px) */
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    margin-bottom: 0;
+    min-height: 0;
   }
   
   .desktop-content > .grid {
