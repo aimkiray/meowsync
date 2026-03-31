@@ -3,23 +3,25 @@
     v-if="currentSong"
     class="fixed bottom-0 left-0 right-0 jirai-card card-player z-50 backdrop-blur-md transition-transform duration-300"
     :class="{ 'translate-y-full': isHidden }"
-    style="margin: 0; border-radius: 0; border-bottom: none; border-left: none; border-right: none; background: rgba(240, 192, 192, 0.2); border-top: 4px solid var(--jirai-pink);"
+    style="margin: 0; border-radius: 0; border-bottom: none; border-left: none; border-right: none; border-top: none; background: rgba(240, 192, 192, 0.2);"
   >
+    <!-- 顶部进度条（兼作上边框） -->
+    <div
+      class="player-progress-bar cursor-pointer absolute top-0 left-0 right-0"
+      @click="$emit('seek-to', $event)"
+    >
+      <div
+        class="player-progress-fill"
+        :style="{ width: progressPercentage + '%' }"
+      ></div>
+    </div>
     <div class="px-3 sm:px-6 lg:px-8">
       <!-- 移动端布局 -->
       <div class="block md:hidden">
-        <!-- 进度条 - 移动端顶部 -->
-        <div class="py-2">
-          <div class="flex items-center space-x-2">
-            <span class="text-xs text-pink-300 w-10 text-center">{{ formatTime(currentTime) }}</span>
-            <div class="flex-1 pixel-progress cursor-pointer" @click="$emit('seek-to', $event)">
-              <div
-                class="pixel-progress-fill transition-all duration-300"
-                :style="{ width: progressPercentage + '%' }"
-              ></div>
-            </div>
-            <span class="text-xs text-pink-300 w-10 text-center">{{ formatTime(duration) }}</span>
-          </div>
+        <!-- 时间显示 - 移动端 -->
+        <div class="pt-3 pb-1 flex justify-between">
+          <span class="text-xs text-pink-300">{{ formatTime(currentTime) }}</span>
+          <span class="text-xs text-pink-300">{{ formatTime(duration) }}</span>
         </div>
         
         <!-- 主要控制区域 -->
@@ -70,18 +72,10 @@
       <!-- 桌面端布局 -->
       <div class="hidden md:block py-4">
         <div class="max-w-[1440px] px-4 sm:px-6 lg:px-8 mx-auto">
-            <!-- 进度条 - 桌面端顶部 -->
-            <div class="mb-4">
-              <div class="flex items-center space-x-2">
-                <span class="text-xs text-pink-300 w-12 text-center">{{ formatTime(currentTime) }}</span>
-                <div class="flex-1 pixel-progress cursor-pointer" @click="$emit('seek-to', $event)">
-                  <div
-                    class="pixel-progress-fill transition-all duration-300"
-                    :style="{ width: progressPercentage + '%' }"
-                  ></div>
-                </div>
-                <span class="text-xs text-pink-300 w-12 text-center">{{ formatTime(duration) }}</span>
-              </div>
+            <!-- 时间显示 - 桌面端 -->
+            <div class="mb-3 flex justify-between">
+              <span class="text-xs text-pink-300">{{ formatTime(currentTime) }}</span>
+              <span class="text-xs text-pink-300">{{ formatTime(duration) }}</span>
             </div>
             
             <!-- 主要控制区域 -->
