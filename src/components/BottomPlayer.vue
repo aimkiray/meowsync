@@ -115,7 +115,7 @@
   <!-- 隐藏按钮 - 浮动在播放器外部右上角 -->
   <div
     v-if="currentSong && !isHidden"
-    class="fixed right-4 z-50 bottom-[100px] md:bottom-[140px]"
+    class="fixed right-4 z-50 bottom-[80px] md:bottom-[120px]"
   >
     <button
       @click="toggleHidden"
@@ -174,8 +174,8 @@ export default {
       default: false
     }
   },
-  emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume'],
-  setup(props) {
+  emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:player-hidden'],
+  setup(props, { emit }) {
     const isHidden = ref(false)
     const currentTheme = ref('default')
     
@@ -233,6 +233,7 @@ export default {
 
     const toggleHidden = () => {
       isHidden.value = !isHidden.value
+      emit('update:player-hidden', isHidden.value)
     }
     const progressPercentage = computed(() => {
       return props.duration > 0 ? (props.currentTime / props.duration) * 100 : 0
