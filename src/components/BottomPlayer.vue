@@ -75,11 +75,13 @@
               </div>
 
               <!-- 右侧控制区域 -->
-              <div class="flex items-center space-x-6 flex-shrink-0">
+              <div class="flex items-center space-x-4 flex-shrink-0">
                 <!-- 时间 + 音量控制 -->
                 <div class="flex items-center space-x-2">
                   <span class="text-xs text-pink-300">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
-                  <span class="text-lg text-pink-300">♪</span>
+                  <svg class="w-4 h-4 text-pink-300 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                  </svg>
                   <input
                     :value="volume"
                     type="range"
