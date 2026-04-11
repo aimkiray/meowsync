@@ -23,6 +23,7 @@
     "howler": "^2.2.3",
     "http-proxy-middleware": "^2.0.9",
     "NeteaseCloudMusicApi": "^4.27.0",
+    "segmentit": "^2.0.3",
     "vue": "^3.3.4",
     "ws": "^8.20.0"
   },

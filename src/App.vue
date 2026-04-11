@@ -78,7 +78,7 @@
 
       <!-- 底部播放器 -->
       <BottomPlayer
-        v-if="currentSong"
+        v-if="currentSong && !isFullscreenPlayerOpen"
         :current-song="currentSong"
         :is-playing="isPlaying"
         :current-time="currentTime"
@@ -90,12 +90,34 @@
         @next-song="nextSong"
         @seek-to="seekTo"
         @update-volume="updateVolume"
+        @open-fullscreen="openFullscreenPlayer"
         @update:player-hidden="val => playerHidden = val"
       />
     </div>
 
+    <FullscreenPlayer
+      v-if="isFullscreenPlayerOpen && currentSong"
+      :current-song="currentSong"
+      :is-playing="isPlaying"
+      :current-time="currentTime"
+      :duration="duration"
+      :volume="volume"
+      :lyrics="lyrics"
+      :song-switching="songSwitching"
+      :lyric-mode="fullscreenLyricMode"
+      :interaction-mode="fullscreenInteractionMode"
+      @close="closeFullscreenPlayer"
+      @toggle-play="togglePlay"
+      @previous-song="previousSong"
+      @next-song="nextSong"
+      @seek-to="seekTo"
+      @update-volume="updateVolume"
+      @update:lyric-mode="fullscreenLyricMode = $event"
+      @update:interaction-mode="fullscreenInteractionMode = $event"
+    />
+
     <!-- 页脚 -->
-    <Footer :style="currentSong && !playerHidden ? { visibility: 'hidden' } : {}" />
+    <Footer :style="currentSong && !playerHidden && !isFullscreenPlayerOpen ? { visibility: 'hidden' } : {}" />
   </div>
 </template>
 
@@ -109,6 +131,7 @@ import PlaylistPanel from './components/PlaylistPanel.vue'
 import SongList from './components/SongList.vue'
 import LyricsPanel from './components/LyricsPanel.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
+import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import Footer from './components/Footer.vue'
 import RemoteController from './components/RemoteController.vue'
 console.log('📦 所有导入完成，musicApi:', musicApi)
@@ -121,6 +144,7 @@ export default {
     SongList,
     LyricsPanel,
     BottomPlayer,
+    FullscreenPlayer,
     Footer,
     RemoteController
   },
@@ -145,11 +169,17 @@ export default {
     const songSwitching = ref(false) // 歌曲切换提示
     const isPlaying = ref(false)
     const playerHidden = ref(false)
+    const isFullscreenPlayerOpen = ref(false)
     const currentTime = ref(0)
     const duration = ref(0)
     const volume = ref(80)
     const durationWarning = ref('')
     const loadingLyrics = ref(false)
+    const fullscreenLyricMode = ref('original')
+    const fullscreenInteractionMode = ref('auto')
+    const PLAYER_STATE_STORAGE_KEY = 'meowsync-player-state'
+    let restorePlayerState = null
+    let lastSavedWholeSecond = -1
     
     // 歌词滚动相关
     const lyricsContainer = ref(null)
@@ -176,7 +206,38 @@ export default {
     // 远程控制模式
     const urlParams = new URLSearchParams(window.location.search)
     const remoteMode = ref(urlParams.get('mode') || 'off') // 'off' | 'host' | 'controller'
-    const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002'
+    function resolveApiBase() {
+      const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
+      const fallbackPort = import.meta.env.VITE_API_PORT || import.meta.env.API_PORT || '3002'
+
+      if (configuredBase) {
+        try {
+          const configuredUrl = new URL(configuredBase, window.location.origin)
+          const configuredHost = configuredUrl.hostname
+          const currentHost = window.location.hostname
+          const isLocalConfigured = ['localhost', '127.0.0.1', '0.0.0.0'].includes(configuredHost)
+
+          if (!isLocalConfigured && currentHost && configuredHost !== currentHost) {
+            configuredUrl.protocol = window.location.protocol
+            configuredUrl.hostname = currentHost
+            configuredUrl.port = fallbackPort
+            return configuredUrl.toString().replace(/\/$/, '')
+          }
+
+          if (!configuredUrl.port) {
+            configuredUrl.port = fallbackPort
+          }
+
+          return configuredUrl.toString().replace(/\/$/, '')
+        } catch {
+          return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
+        }
+      }
+
+      return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
+    }
+
+    const apiBase = resolveApiBase()
     const remoteWsUrl = apiBase.replace(/^http/, 'ws') + '/remote'
     let remoteWs = null
     let remoteStateTimer = null
@@ -467,6 +528,95 @@ export default {
       }
     }
 
+    const savePlayerStateToStorage = () => {
+      const state = {
+        selectedPlaylistId: selectedPlaylist.value?.id ?? null,
+        currentSongId: currentSong.value?.id ?? null,
+        currentSongIndex: currentSongIndex.value ?? 0,
+        currentTime: Number.isFinite(currentTime.value) ? currentTime.value : 0,
+        volume: volume.value,
+        playMode: playMode.value,
+        showVipSongs: showVipSongs.value,
+        autoFollowLyrics: autoFollowLyrics.value,
+        playlistCollapsed: playlistCollapsed.value,
+        songListCollapsed: songListCollapsed.value,
+        lyricsCollapsed: lyricsCollapsed.value,
+        playerHidden: playerHidden.value,
+        isFullscreenPlayerOpen: isFullscreenPlayerOpen.value,
+        fullscreenLyricMode: fullscreenLyricMode.value,
+        fullscreenInteractionMode: fullscreenInteractionMode.value
+      }
+
+      localStorage.setItem(PLAYER_STATE_STORAGE_KEY, JSON.stringify(state))
+    }
+
+    const loadPlayerStateFromStorage = () => {
+      const saved = localStorage.getItem(PLAYER_STATE_STORAGE_KEY)
+      if (!saved) return null
+
+      try {
+        const parsed = JSON.parse(saved)
+        return parsed && typeof parsed === 'object' ? parsed : null
+      } catch (error) {
+        console.error('❌ 播放器状态读取失败:', error)
+        return null
+      }
+    }
+
+    const savePlaybackTimeIfNeeded = (force = false) => {
+      if (!currentSong.value) return
+
+      const wholeSecond = Math.floor(currentTime.value || 0)
+      if (!force && wholeSecond === lastSavedWholeSecond) return
+
+      lastSavedWholeSecond = wholeSecond
+      savePlayerStateToStorage()
+    }
+
+    const restoreUiState = (savedState) => {
+      if (!savedState) return
+
+      if (typeof savedState.volume === 'number') volume.value = savedState.volume
+      if (typeof savedState.playMode === 'string') playMode.value = savedState.playMode
+      if (typeof savedState.showVipSongs === 'boolean') showVipSongs.value = savedState.showVipSongs
+      if (typeof savedState.autoFollowLyrics === 'boolean') autoFollowLyrics.value = savedState.autoFollowLyrics
+      if (typeof savedState.playlistCollapsed === 'boolean') playlistCollapsed.value = savedState.playlistCollapsed
+      if (typeof savedState.songListCollapsed === 'boolean') songListCollapsed.value = savedState.songListCollapsed
+      if (typeof savedState.lyricsCollapsed === 'boolean') lyricsCollapsed.value = savedState.lyricsCollapsed
+      if (typeof savedState.playerHidden === 'boolean') playerHidden.value = savedState.playerHidden
+      if (typeof savedState.fullscreenLyricMode === 'string') fullscreenLyricMode.value = savedState.fullscreenLyricMode
+      if (typeof savedState.fullscreenInteractionMode === 'string') fullscreenInteractionMode.value = savedState.fullscreenInteractionMode
+    }
+
+    const restorePlaybackState = async (savedState) => {
+      if (!savedState?.selectedPlaylistId || !savedState?.currentSongId) return
+
+      const playlist = userPlaylists.value.find(p => String(p.id) === String(savedState.selectedPlaylistId))
+      if (!playlist) return
+
+      await selectPlaylist(playlist)
+
+      const restoredSongs = songs.value
+      if (!restoredSongs.length) return
+
+      let restoredIndex = restoredSongs.findIndex(song => String(song.id) === String(savedState.currentSongId))
+      if (restoredIndex === -1 && Number.isInteger(savedState.currentSongIndex)) {
+        restoredIndex = savedState.currentSongIndex
+      }
+
+      const restoredSong = restoredSongs[restoredIndex]
+      if (!restoredSong) return
+
+      await playSong(restoredSong, restoredIndex, {
+        autoplay: false,
+        seekTime: typeof savedState.currentTime === 'number' ? savedState.currentTime : 0
+      })
+
+      if (savedState.isFullscreenPlayerOpen) {
+        isFullscreenPlayerOpen.value = true
+      }
+    }
+
     // 歌单选择
     const selectPlaylist = async (playlist) => {
       if (selectedPlaylist.value?.id === playlist.id) return
@@ -508,7 +658,9 @@ export default {
     }
 
     // 歌曲播放逻辑
-    const playSong = async (song, index) => {
+    const playSong = async (song, index, options = {}) => {
+      const { autoplay = true, seekTime = 0 } = options
+
       try {
         console.log('🎵 播放歌曲:', song.name)
         
@@ -608,7 +760,16 @@ export default {
             }
             
             songSwitching.value = false
-            howl.play()
+
+            const safeSeekTime = Math.max(0, Math.min(seekTime || 0, duration.value || 0))
+            if (safeSeekTime > 0) {
+              howl.seek(safeSeekTime)
+              currentTime.value = safeSeekTime
+            }
+
+            if (autoplay) {
+              howl.play()
+            }
           },
           onplay: () => {
             // 再次检查是否还是当前应该播放的歌曲
@@ -629,11 +790,13 @@ export default {
           onpause: () => {
             console.log('⏸️ 暂停播放')
             isPlaying.value = false
+            savePlaybackTimeIfNeeded(true)
           },
           onstop: () => {
             console.log('⏹️ 停止播放')
             isPlaying.value = false
             currentTime.value = 0
+            savePlaybackTimeIfNeeded(true)
           },
           onend: () => {
             console.log('🔚 播放结束')
@@ -643,11 +806,13 @@ export default {
             console.error('❌ 歌曲加载错误:', error)
             songSwitching.value = false
             currentAbortController = null
+            savePlayerStateToStorage()
           },
           onplayerror: (id, error) => {
             console.error('❌ 播放错误:', error)
             songSwitching.value = false
             currentAbortController = null
+            savePlayerStateToStorage()
           }
         })
         
@@ -659,6 +824,7 @@ export default {
         
         // 清除AbortController引用（请求已完成）
         currentAbortController = null
+        savePlayerStateToStorage()
         
       } catch (error) {
         // 检查是否是因为请求被取消
@@ -669,6 +835,7 @@ export default {
         console.error('❌ 播放歌曲失败:', error)
         songSwitching.value = false
         currentAbortController = null
+        savePlayerStateToStorage()
       }
     }
 
@@ -816,6 +983,7 @@ export default {
       const nextIndex = (currentIndex + 1) % modes.length
       playMode.value = modes[nextIndex]
       console.log('🔄 播放模式切换为:', getPlayModeText())
+      savePlayerStateToStorage()
     }
 
     const getPlayModeText = () => {
@@ -839,24 +1007,38 @@ export default {
     // 进度条点击跳转
     const seekTo = (event) => {
       if (!howl || !duration.value) return
-      
+
       const rect = event.currentTarget.getBoundingClientRect()
       const clickX = event.clientX - rect.left
       const percentage = clickX / rect.width
       const seekTime = percentage * duration.value
-      
+
       howl.seek(seekTime)
       currentTime.value = seekTime
+      savePlaybackTimeIfNeeded(true)
     }
 
     // 音量控制
     const updateVolume = (newVolume) => {
-      const volumeValue = parseInt(newVolume)
+      const volumeValue = Math.max(0, Math.min(100, Number(newVolume)))
       volume.value = volumeValue
-      
+
       if (howl) {
         howl.volume(volumeValue / 100)
       }
+
+      savePlayerStateToStorage()
+    }
+
+    const openFullscreenPlayer = () => {
+      if (!currentSong.value) return
+      isFullscreenPlayerOpen.value = true
+      savePlayerStateToStorage()
+    }
+
+    const closeFullscreenPlayer = () => {
+      isFullscreenPlayerOpen.value = false
+      savePlayerStateToStorage()
     }
 
     // 时间格式化
@@ -877,12 +1059,13 @@ export default {
     const toggleAutoFollowLyrics = () => {
       autoFollowLyrics.value = !autoFollowLyrics.value
       console.log('🎯 歌词自动跟随:', autoFollowLyrics.value ? '开启' : '关闭')
+      savePlayerStateToStorage()
     }
 
     // 监听歌词索引变化，自动滚动
     watch(currentLyricIndex, (newIndex) => {
       if (!autoFollowLyrics.value || !lyricsContainer.value) return
-      
+
       nextTick(() => {
         const lyricElement = lyricsContainer.value.querySelector(`[data-lyric-index="${newIndex}"]`)
         if (lyricElement) {
@@ -892,6 +1075,20 @@ export default {
           })
         }
       })
+    })
+
+    watch(currentTime, () => {
+      savePlaybackTimeIfNeeded()
+    })
+
+    watch([
+      showVipSongs,
+      playerHidden,
+      isFullscreenPlayerOpen,
+      fullscreenLyricMode,
+      fullscreenInteractionMode
+    ], () => {
+      savePlayerStateToStorage()
     })
 
     // 监听VIP歌曲显示状态变化，重置分页
@@ -1043,14 +1240,17 @@ export default {
     // 处理面板折叠
     const togglePlaylistCollapse = () => {
       playlistCollapsed.value = !playlistCollapsed.value
+      savePlayerStateToStorage()
     }
 
     const toggleSongListCollapse = () => {
       songListCollapsed.value = !songListCollapsed.value
+      savePlayerStateToStorage()
     }
 
     const toggleLyricsCollapse = () => {
       lyricsCollapsed.value = !lyricsCollapsed.value
+      savePlayerStateToStorage()
     }
 
     // 组件挂载
@@ -1070,7 +1270,9 @@ export default {
       
       // 加载保存的歌单
       loadPlaylistsFromStorage()
-      
+      restorePlayerState = loadPlayerStateFromStorage()
+      restoreUiState(restorePlayerState)
+
       // 加载默认歌单
       await loadDefaultPlaylists()
       
@@ -1082,14 +1284,14 @@ export default {
           // 检查是否已经存在相同的临时歌单
           const tempPlaylistId = `single_song_${songId}`
           let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
-          
+
           if (existingPlaylist) {
             console.log('🎵 找到已存在的单曲分享歌单，直接使用')
             // 使用已存在的歌单
             currentPlaylist.value = existingPlaylist
             currentSong.value = existingPlaylist.tracks[0]
             songs.value = existingPlaylist.tracks || []
-            
+
             // 自动播放
             await playSong(existingPlaylist.tracks[0])
           } else {
@@ -1097,7 +1299,7 @@ export default {
             // 获取歌曲详情
             const songDetail = await musicApi.getSongDetail(songId)
             console.log('🎵 获取到歌曲详情:', songDetail)
-            
+
             // 创建一个临时歌单包含这首歌
             const tempPlaylist = {
               id: tempPlaylistId,
@@ -1107,24 +1309,28 @@ export default {
               trackCount: 1,
               tracks: [songDetail]
             }
-            
+
             // 添加到用户歌单列表
             userPlaylists.value.unshift(tempPlaylist)
-            
+
             // 设置当前歌单和歌曲
             currentPlaylist.value = tempPlaylist
             currentSong.value = songDetail
             songs.value = tempPlaylist.tracks || []
-            
+
             // 自动播放
             await playSong(songDetail)
           }
-          
+
           console.log('✅ 单首歌曲分享加载完成并开始播放')
         } catch (error) {
           console.error('❌ 加载单首歌曲失败:', error)
         }
+      } else if (restorePlayerState) {
+        await restorePlaybackState(restorePlayerState)
       }
+
+      savePlayerStateToStorage()
       
       console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
     })
@@ -1154,6 +1360,9 @@ export default {
       currentTime,
       duration,
       volume,
+      isFullscreenPlayerOpen,
+      fullscreenLyricMode,
+      fullscreenInteractionMode,
       durationWarning,
       loadingLyrics,
       lyricsContainer,
@@ -1202,6 +1411,8 @@ export default {
       getPlayModeIcon,
       seekTo,
       updateVolume,
+      openFullscreenPlayer,
+      closeFullscreenPlayer,
       formatTime,
       formatDuration,
       toggleAutoFollowLyrics,
