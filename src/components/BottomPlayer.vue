@@ -39,6 +39,11 @@
 
           <!-- 播放控制 + 时间 -->
           <div class="flex items-center space-x-1 flex-shrink-0">
+            <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏">
+              <svg class="bottom-player__icon bottom-player__icon--mobile" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
+              </svg>
+            </button>
             <button @click="$emit('previous-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center">◀◀</button>
             <button
               @click="$emit('toggle-play')"
@@ -84,18 +89,24 @@
                       <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
                     </svg>
                     <input
-                      :value="volume"
+                      :value="Number(volume)"
                       type="range"
                       min="0"
                       max="100"
+                      step="1"
                       class="w-20 jirai-slider"
-                      @input="$emit('update-volume', $event.target.value)"
+                      @input="$emit('update-volume', Number($event.target.value))"
                     />
                   </div>
                 </div>
 
                 <!-- 播放控制 -->
                 <div class="flex items-center space-x-3">
+                  <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-3 text-xl w-12 h-12 flex items-center justify-center" title="全屏">
+                    <svg class="bottom-player__icon bottom-player__icon--desktop" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
+                    </svg>
+                  </button>
                   <button @click="$emit('previous-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center">◀◀</button>
                   <button
                     @click="$emit('toggle-play')"
@@ -174,7 +185,7 @@ export default {
       default: false
     }
   },
-  emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:player-hidden'],
+  emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:player-hidden', 'open-fullscreen'],
   setup(props, { emit }) {
     const isHidden = ref(false)
     const currentTheme = ref('default')
@@ -257,3 +268,29 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.bottom-player__icon-button {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.bottom-player__icon {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+.bottom-player__icon--mobile {
+  width: 14px;
+  height: 14px;
+}
+
+.bottom-player__icon--desktop {
+  width: 18px;
+  height: 18px;
+}
+</style>

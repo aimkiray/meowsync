@@ -336,6 +336,14 @@
 :root[data-theme="pixel-retro"] .card-footer .text-gray-400,
 :root[data-theme="pixel-retro"] .card-footer .text-gray-600 { color: rgb(170, 145, 80) !important; }
 
+:root {
+  --fullscreen-background-image: url('/qb.png');
+}
+
+:root[data-theme="pixel-retro"] {
+  --fullscreen-background-image: url('/cinnamoroll2.png');
+}
+
 * {
   margin: 0;
   padding: 0;
