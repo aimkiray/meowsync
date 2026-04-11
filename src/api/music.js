@@ -1,7 +1,38 @@
 import axios from 'axios'
 import CryptoJS from 'crypto-js'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002'
+function resolveApiBaseUrl() {
+  const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
+  const fallbackPort = import.meta.env.VITE_API_PORT || import.meta.env.API_PORT || '3002'
+
+  if (configuredBase) {
+    try {
+      const configuredUrl = new URL(configuredBase, window.location.origin)
+      const configuredHost = configuredUrl.hostname
+      const currentHost = window.location.hostname
+      const isLocalConfigured = ['localhost', '127.0.0.1', '0.0.0.0'].includes(configuredHost)
+
+      if (!isLocalConfigured && currentHost && configuredHost !== currentHost) {
+        configuredUrl.protocol = window.location.protocol
+        configuredUrl.hostname = currentHost
+        configuredUrl.port = fallbackPort
+        return configuredUrl.toString().replace(/\/$/, '')
+      }
+
+      if (!configuredUrl.port) {
+        configuredUrl.port = fallbackPort
+      }
+
+      return configuredUrl.toString().replace(/\/$/, '')
+    } catch {
+      return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
+    }
+  }
+
+  return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
+}
+
+const API_BASE_URL = resolveApiBaseUrl()
 const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT) || 10000
 const RETRY_COUNT = 3
 const RETRY_DELAY = 500
@@ -74,12 +105,16 @@ api.interceptors.response.use(
   error => Promise.reject(error)
 )
 
+function isAbortError(error) {
+  return error?.name === 'AbortError' || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED'
+}
+
 async function withRetry(fn, retries = RETRY_COUNT) {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn()
     } catch (error) {
-      if (i === retries - 1) throw error
+      if (isAbortError(error) || i === retries - 1) throw error
       console.warn(`请求失败，${RETRY_DELAY}ms 后重试 (${i + 1}/${retries})`, error.message)
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (i + 1)))
     }
@@ -112,24 +147,29 @@ export const musicApi = {
   },
 
   getSongUrl: async (id, abortSignal = null) => {
-    const bitrates = [320000, 192000, 128000, 96000]
+    const bitrates = [320000, 192000]
     for (const br of bitrates) {
+      if (abortSignal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError')
+      }
+
       try {
         const response = await withRetry(() =>
           api.get('/song_url', { params: { id, br }, signal: abortSignal })
         )
         const data = response.body || response
         const songData = data.data?.[0] || {}
-        // 解锁失败或仍是试听版，抛出明确错误
-        if (songData.unlockFailed || songData.freeTrialInfo != null) {
-          throw new Error('无法获取完整版播放链接，可能是版权限制')
-        }
-        if (songData.url) {
+
+        if (songData.url && !songData.freeTrialInfo) {
           songData.bitrate = br
           return songData
         }
+
+        if (songData.unlockFailed || songData.freeTrialInfo != null) {
+          throw new Error('无法获取完整版播放链接，可能是版权限制')
+        }
       } catch (error) {
-        if (error.message.includes('版权限制')) throw error
+        if (isAbortError(error) || error.message.includes('版权限制')) throw error
         console.warn(`音质 ${br} 获取失败:`, error.message)
       }
     }

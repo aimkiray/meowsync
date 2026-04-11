@@ -46,7 +46,7 @@ if (fs.existsSync(modulePath)) {
 const request = require(path.join(__dirname, '../../../node_modules/NeteaseCloudMusicApi/util/request'));
 const unblockmatch = require('@unblockneteasemusic/server');
 
-const sources = ['kuwo', 'ytdlp'];
+const sources = ['ytdlp', 'kuwo'];
 
 router.get('/', (req, res) => {
   res.json({
@@ -102,8 +102,11 @@ router.all('/:apiName', async (req, res) => {
               if (originalDt && unblocked.br) {
                 const contentLength = await getContentLength(unblocked.url);
                 const estimated = estimateDuration(contentLength, unblocked.br);
-                if (estimated && Math.abs(estimated - originalDt) / originalDt > 0.2) {
-                  console.warn(`[unlock] ${item.id} source=${source} duration mismatch: estimated=${estimated}ms original=${originalDt}ms, skipping`);
+                const maxDurationDelta = source === 'ytdlp' ? 0.4 : 0.2;
+                if (estimated && Math.abs(estimated - originalDt) / originalDt > maxDurationDelta) {
+                  console.warn(
+                    `[unlock] ${item.id} source=${source} duration mismatch: estimated=${estimated}ms original=${originalDt}ms, skipping`
+                  );
                   continue;
                 }
               }
