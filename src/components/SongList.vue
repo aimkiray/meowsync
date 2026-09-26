@@ -60,11 +60,17 @@
             <div @click="$emit('play-song', song)" class="flex items-center space-x-3">
               <div class="relative">
                 <img
+                  v-if="song.al?.picUrl || song.album?.picUrl"
                   :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
                   :alt="song.name"
                   class="w-12 h-12 object-cover border-2 border-pink-400"
                   style="border-radius: 0; image-rendering: pixelated;"
                 />
+                <div
+                  v-else
+                  class="w-12 h-12 border-2 border-pink-400 flex items-center justify-center text-pink-300"
+                  style="border-radius: 0;"
+                >♪</div>
                 <div v-if="currentSong?.id === song.id && isPlaying" class="absolute inset-0 flex items-center justify-center">
                   <div class="text-pink-300 text-sm animate-pulse flex items-center justify-center">♡</div>
                 </div>

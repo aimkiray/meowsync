@@ -9,6 +9,8 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
         VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
         VITE_REMOTE_TOKEN: ${VITE_REMOTE_TOKEN:-}
+        # 服务端设了 DOWNLOAD_TOKEN 时前端构建必须带相同值，否则写接口全 401
+        VITE_DOWNLOAD_TOKEN: ${DOWNLOAD_TOKEN:-}
     container_name: meowsync-app
     restart: unless-stopped
     ports:
@@ -22,6 +24,8 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3101}
       # 可选：远程遥控令牌（设置后 ?token= 必填；前端构建需同步设 VITE_REMOTE_TOKEN）
       - REMOTE_TOKEN=${REMOTE_TOKEN:-}
+      # 公网/局域网暴露时必需：/downloads 与 /playlists 写接口鉴权令牌
+      - DOWNLOAD_TOKEN=${DOWNLOAD_TOKEN:-}
       # 在会改写 Host 的反向代理后部署时才需要设为 1
       - TRUST_PROXY=${TRUST_PROXY:-}
       # 数据目录（SQLite + 下载文件）；默认 /app/data，与下方挂载卷一致

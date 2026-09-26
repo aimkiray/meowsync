@@ -20,10 +20,13 @@ async function callUpstream(apiName, params, options = {}) {
   try {
     return await callNeteaseApi(apiName, params, options);
   } catch (error) {
-    // body.msg 可能是 Error 对象（上游 axios 失败路径），只取其 message
+    // body.msg 可能是 Error 对象（上游 axios 失败路径），只取其 message；
+    // 字符串消息可能带服务器绝对路径（fs ENOENT 等）——剥掉再透出
     let upstreamMsg = error?.body?.msg || error?.body?.message || error?.message;
     if (upstreamMsg && typeof upstreamMsg === 'object') upstreamMsg = upstreamMsg.message;
-    const detail = upstreamMsg && String(upstreamMsg).length < 120 ? `：${upstreamMsg}` : '';
+    upstreamMsg = String(upstreamMsg || '')
+      .replace(/(?:[A-Za-z]:[\\/]|\/)[\w.@%~+-]*(?:[\\/][\w.@%~+-]+)+/g, '<path>');
+    const detail = upstreamMsg && upstreamMsg.length < 120 ? `：${upstreamMsg}` : '';
     throw httpError(502, `网易云接口请求失败${detail}`);
   }
 }

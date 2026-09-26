@@ -580,7 +580,11 @@ export default {
 
       try {
         const response = await downloadsApi.deletePlaylistDownloads(playlist.id)
-        const deletedSongs = response.data?.data?.deletedSongs || 0
+        // 畸形响应（反代返回 HTML 200 等）不该吞成"0 首"假提示
+        const deletedSongs = response.data?.data?.deletedSongs
+        if (typeof deletedSongs !== 'number') {
+          throw new Error('接口返回异常')
+        }
         alert(deletedSongs > 0 ? `已删除 ${deletedSongs} 首已下载歌曲` : '这个歌单没有可删除的已下载歌曲')
         emit('playlist-downloads-deleted', playlist.id)
       } catch (error) {

@@ -16,18 +16,23 @@ const { Hono } = require('hono');
 const { cors } = require('hono/cors');
 
 const app = new Hono();
-// 逐变量校验：API_PORT='abc'（非法但真值）时不应吞掉合法的 PORT
+// 逐变量校验：API_PORT='abc'（非法但真值）时不应吞掉合法的 PORT；
+// 严格纯数字——parseInt 会吞尾部垃圾（'3101abc'→3101、'80.9'→80）
 const parsePort = (v) => {
-  const n = parseInt(v || '', 10);
-  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : null;
+  if (!/^\d{1,5}$/.test(String(v || '').trim())) return null;
+  const n = Number(v);
+  return n > 0 && n <= 65535 ? n : null;
 };
 const PORT = parsePort(process.env.API_PORT) || parsePort(process.env.PORT) || 3101;
 const HOST = process.env.HOST || '0.0.0.0';
 
-// 解析CORS来源配置（WebSocket Origin 校验共用此白名单）
+// 解析CORS来源配置（WebSocket Origin 校验共用此白名单）。
+// 默认只留 localhost——credentials:true 下白名单里的任何公网域名都能跨站
+// 读写本实例（含 DELETE /playlists、文件清理）；局域网/公网部署必须显式
+// 配 CORS_ORIGINS，不要把第三方域名内建进默认值
 const corsOrigins = (process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',')
-  : ['http://localhost:3100', 'http://127.0.0.1:3100', 'http://localhost:3101', 'http://127.0.0.1:3101', 'http://poi.boats:31000', 'http://poi.boats:31001']
+  : ['http://localhost:3100', 'http://127.0.0.1:3100', 'http://localhost:3101', 'http://127.0.0.1:3101']
 ).map(o => o.trim()).filter(Boolean);
 
 // 中间件

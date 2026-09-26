@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { resolveApiBaseUrl } from '../lib/api-base'
+import { httpsCover } from '../lib/url'
 
 const API_BASE_URL = resolveApiBaseUrl()
 const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT) || 10000
@@ -57,12 +58,24 @@ function isUnavailableTrack(songData) {
   return songData.unlockFailed || songData.freeTrialInfo != null
 }
 
+// 响应形态校验：反代把 API 错指到静态服时会返回 HTML 200——不经校验的
+// `.result`/`.playlist` 会静默吞成空态（"无结果"/"空歌单"假象），必须抛错
+function unwrapBody(response) {
+  const data = response && typeof response === 'object' && 'body' in response
+    ? response.body
+    : response
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('接口返回异常')
+  }
+  return data
+}
+
 export const musicApi = {
   searchPlaylists: async (keywords, limit = 20, abortSignal = null) => {
     const response = await withRetry(() =>
       api.get('/search', { params: { keywords, type: 1000, limit }, signal: abortSignal })
     )
-    const data = response.body || response
+    const data = unwrapBody(response)
     return data.result || {}
   },
 
@@ -70,8 +83,11 @@ export const musicApi = {
     const response = await withRetry(() =>
       api.get('/playlist_detail', { params: { id }, signal: abortSignal })
     )
-    const data = response.body || response
-    const playlist = data.playlist || {}
+    const data = unwrapBody(response)
+    if (!data.playlist || typeof data.playlist !== 'object') {
+      throw new Error('歌单接口返回异常')
+    }
+    const playlist = data.playlist
 
     const tracksResponse = await withRetry(() =>
       api.get('/playlist_track_all', {
@@ -79,8 +95,8 @@ export const musicApi = {
         signal: abortSignal
       })
     )
-    const tracksData = tracksResponse.body || tracksResponse
-    return { ...playlist, tracks: tracksData.songs || [] }
+    const tracksData = unwrapBody(tracksResponse)
+    return { ...playlist, tracks: Array.isArray(tracksData.songs) ? tracksData.songs : [] }
   },
 
   getSongUrl: async (id, abortSignal = null) => {
@@ -92,12 +108,14 @@ export const musicApi = {
         const response = await withRetry(() =>
           api.get('/song_url', { params: { id, br, purpose: 'playback' }, signal: abortSignal })
         )
-        const data = response.body || response
+        const data = unwrapBody(response)
         const songData = data.data?.[0] || {}
 
         if (songData.url && !songData.freeTrialInfo) {
-          // 记录实际返回的码率而非请求的码率
+          // 记录实际返回的码率而非请求的码率；
+          // http:// 音频链在 HTTPS 部署下会被混合内容拦截（Safari 不自动升级）
           songData.bitrate = songData.br || br
+          songData.url = httpsCover(songData.url)
           return songData
         }
 
@@ -116,11 +134,12 @@ export const musicApi = {
     const response = await withRetry(() =>
       api.get('/song_url', { params: { id, br: bitrate, purpose: 'download' }, signal: abortSignal })
     )
-    const data = response.body || response
+    const data = unwrapBody(response)
     const songData = data.data?.[0] || {}
     if (!songData.url) throw new Error('无法获取下载链接')
     if (isUnavailableTrack(songData)) throw new Error('仅获取到试听片段，可能受版权限制')
-    return { url: songData.url, bitrate: songData.br || bitrate, size: songData.size || 0, type: songData.type || 'mp3' }
+    // fetch 是主动混合内容——http:// 在 HTTPS 页面下必被拦截且不自动升级
+    return { url: httpsCover(songData.url), bitrate: songData.br || bitrate, size: songData.size || 0, type: songData.type || 'mp3' }
   },
 
   downloadSong: async (song, bitrate = 320000) => {
@@ -154,7 +173,7 @@ export const musicApi = {
     const response = await withRetry(() =>
       api.get('/lyric', { params: { id }, signal: abortSignal })
     )
-    const data = response.body || response
+    const data = unwrapBody(response)
     const lyrics = parseLyrics(data.lrc?.lyric || '')
     const translations = parseLyrics(data.tlyric?.lyric || '')
     return {
@@ -166,7 +185,7 @@ export const musicApi = {
     const response = await withRetry(() =>
       api.get('/song_detail', { params: { ids: id }, signal: abortSignal })
     )
-    const data = response.body || response
+    const data = unwrapBody(response)
     const songs = data.songs || []
     if (songs.length > 0) return songs[0]
     throw new Error('歌曲不存在')
