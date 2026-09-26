@@ -127,6 +127,7 @@
                 :style="getMenuPosition(playlist.id)"
               >
                 <button
+                  v-if="!isTempPlaylist(playlist)"
                   @click.stop="downloadPlaylist(playlist)"
                   class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
                 >
@@ -145,6 +146,7 @@
                   🔗 复制分享链接
                 </button>
                 <button
+                  v-if="!isTempPlaylist(playlist)"
                   @click.stop="deletePlaylistDownloads(playlist)"
                   class="w-full text-left px-3 py-2 text-xs text-orange-300 hover:bg-orange-800 hover:text-white transition-colors border-b border-gray-700 truncate"
                 >
@@ -514,6 +516,9 @@ export default {
       closeMenu()
     }
 
+    // 单曲分享生成的 single_song_* 是本地内存态临时歌单，服务端无对应持久行——不提供下载入口
+    const isTempPlaylist = (playlist) => String(playlist?.id ?? '').startsWith('single_song_')
+
     // 下载歌单
     const downloadPlaylist = async (playlist) => {
       try {
@@ -526,11 +531,12 @@ export default {
         })
 
         alert('下载队列已创建！正在后台下载...')
-        closeMenu()
       } catch (error) {
         console.error('创建下载队列失败:', error)
         const message = error.response?.data?.message || error.message
         alert('下载失败: ' + message)
+      } finally {
+        closeMenu() // 失败也要关菜单——否则菜单挂着看似还能点
       }
     }
 
@@ -544,11 +550,12 @@ export default {
         const deletedSongs = response.data?.data?.deletedSongs || 0
         alert(deletedSongs > 0 ? `已删除 ${deletedSongs} 首已下载歌曲` : '这个歌单没有可删除的已下载歌曲')
         emit('playlist-downloads-deleted', playlist.id)
-        closeMenu()
       } catch (error) {
         console.error('批量删除已下载歌曲失败:', error)
         const message = error.response?.data?.message || error.message
         alert('删除失败: ' + message)
+      } finally {
+        closeMenu()
       }
     }
 
@@ -637,6 +644,7 @@ export default {
        sharePlaylist,
        downloadPlaylist,
        deletePlaylistDownloads,
+       isTempPlaylist,
        getMenuPosition,
        handleAddPlaylist,
        isPlaylistAdding,

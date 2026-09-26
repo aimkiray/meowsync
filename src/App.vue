@@ -537,7 +537,8 @@ export default {
     }
 
     const handlePlaylistDownloadsDeleted = (playlistId) => {
-      if (selectedPlaylist.value?.id === playlistId) {
+      // playlistId 可能经路由/JSON 变成 string，统一 String 比较防静默失配
+      if (String(selectedPlaylist.value?.id) === String(playlistId)) {
         playlistDownloadsRefreshKey.value += 1
       }
     }

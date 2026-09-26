@@ -62,7 +62,18 @@ function getContentLength(url, hops = 0) {
     const req = mod.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
       res.resume(); // 消费响应，及时释放 keep-alive socket
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        resolve(getContentLength(new URL(res.headers.location, url).toString(), hops + 1));
+        // 回调内同步执行——畸形 Location 必须吞掉，否则抛错穿透 emit 成 uncaughtException
+        let next;
+        try {
+          const u = new URL(res.headers.location, url);
+          // 只允许 http/https 跳——file:///javascript: 之类直接放弃
+          if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad scheme');
+          next = u.toString();
+        } catch {
+          resolve(null);
+          return;
+        }
+        resolve(getContentLength(next, hops + 1));
         return;
       }
       resolve(parseInt(res.headers['content-length']) || null);

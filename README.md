@@ -184,8 +184,9 @@ docker compose --profile with-nginx up -d --build
 docker build -t meowsync .
 
 # 运行容器（单端口，前端+API+WebSocket 同进程）
-# -v 挂载数据目录，持久化 SQLite 数据库与下载文件
-docker run -d -p 3101:3002 -v ./data:/app/data meowsync
+# -v 挂载数据目录，持久化 SQLite 数据库与下载文件。
+# 容器以 uid 1001 运行，推荐命名卷；bind mount 需先 chown -R 1001:1001 ./data
+docker run -d -p 3101:3002 -v meowsync-data:/app/data meowsync
 ```
 
 > **注意**：本项目依赖服务端代理播放与 WebSocket 遥控，需 Node.js 运行时，不适用于纯静态托管平台（Vercel/Netlify）。请使用 Docker 或 VPS 部署。

@@ -128,7 +128,7 @@ server {
     server_name your-domain.com;
 
     location / {
-        proxy_pass http://localhost:3002;
+        proxy_pass http://localhost:3101;  # 宿主机部署的监听端口（容器内才是 3002）
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;        # WebSocket 必需
         proxy_set_header Connection $connection_upgrade;

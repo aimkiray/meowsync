@@ -107,7 +107,7 @@
 
         <div class="absolute top-0 right-0 flex">
           <button
-            class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
+            class="queue-menu-trigger p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
             style="border-radius: 0;"
             title="更多操作"
             @click.stop="toggleMenu(queue.id, $event)"
@@ -124,7 +124,7 @@
             :style="getMenuPosition(queue.id)"
           >
             <button
-              v-if="queue.status === 'pending'"
+              v-if="['pending', 'cancelled', 'failed', 'completed'].includes(queue.status)"
               @click.stop="runQueueAction('start', queue.id)"
               class="w-full text-left px-3 py-2 text-xs text-green-200 hover:bg-green-800 hover:text-white transition-colors border-b border-gray-700"
             >
@@ -145,7 +145,7 @@
               恢复
             </button>
             <button
-              v-if="queue.status === 'running' || queue.status === 'paused'"
+              v-if="['pending', 'running', 'paused'].includes(queue.status)"
               @click.stop="runQueueAction('cancel', queue.id)"
               class="w-full text-left px-3 py-2 text-xs text-red-200 hover:bg-red-800 hover:text-white transition-colors border-b border-gray-700"
             >
@@ -270,7 +270,7 @@ function handleWindowPointerDown(event) {
   const target = event.target;
   // 菜单是 Teleport 到 body 的——不在 .music-card 内，必须单独豁免；
   // 否则 pointerdown（先于 click）就把菜单关了，菜单项点击永远不触发
-  if (target instanceof Element && target.closest('.music-card, .queue-menu, [title="更多操作"]')) {
+  if (target instanceof Element && target.closest('.music-card, .queue-menu, .queue-menu-trigger')) {
     return;
   }
   closeMenu();

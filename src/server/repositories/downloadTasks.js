@@ -202,6 +202,17 @@ function findTaskByPlaylistAndSongId(playlistId, songId) {
   return mapTaskRow(row);
 }
 
+// (playlist_id, song_id) 上有唯一约束——不限 queue_id 查那一行，
+// 用于建队列时判断是否收养 standalone 任务而非盲插撞 UNIQUE
+function findAnyTaskByPlaylistAndSongId(playlistId, songId) {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT * FROM download_tasks
+    WHERE playlist_id = ? AND song_id = ?
+  `).get(playlistId, songId);
+  return mapTaskRow(row);
+}
+
 function countTasksByQueueAndStatus(queueId) {
   const db = getDb();
   const rows = db.prepare(`
@@ -237,5 +248,6 @@ module.exports = {
   deleteTasksByQueue,
   findTaskByQueueAndSongId,
   findTaskByPlaylistAndSongId,
+  findAnyTaskByPlaylistAndSongId,
   countTasksByQueueAndStatus
 };

@@ -16,11 +16,12 @@ const { Hono } = require('hono');
 const { cors } = require('hono/cors');
 
 const app = new Hono();
-// parseInt 无 radix 时 '08'/'0x' 之类按进制前缀解析——显式 10 进制 + 合法性校验
-const PORT = (() => {
-  const n = parseInt(process.env.API_PORT || process.env.PORT || '', 10);
-  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : 3101;
-})();
+// 逐变量校验：API_PORT='abc'（非法但真值）时不应吞掉合法的 PORT
+const parsePort = (v) => {
+  const n = parseInt(v || '', 10);
+  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : null;
+};
+const PORT = parsePort(process.env.API_PORT) || parsePort(process.env.PORT) || 3101;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // 解析CORS来源配置（WebSocket Origin 校验共用此白名单）
@@ -69,10 +70,18 @@ app.route('/', require('./src/server/routes/playlists'));
 app.route('/', require('./src/server/routes/downloads'));
 app.route('/', require('./src/server/routes/music'));
 
-// SPA 兜底：未被任何路由处理的 GET 请求返回 index.html
+// SPA 兜底：未被任何路由处理的 GET 返回 index.html；
+// API 前缀（downloads/playlists/audio-proxy/remote）不进兜底——
+// 未匹配的 API GET 必须返回 JSON 404，否则 axios 拿到 HTML 解析失败而非业务 404
 if (hasDist) {
   const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
-  app.get('*', (c) => c.html(indexHtml));
+  const API_PREFIXES = ['/downloads', '/playlists', '/audio-proxy', '/remote', '/ping', '/healthz'];
+  app.get('*', (c) => {
+    if (API_PREFIXES.some(p => c.req.path === p || c.req.path.startsWith(p + '/'))) {
+      return c.json({ code: 404, message: 'Not Found' }, 404);
+    }
+    return c.html(indexHtml);
+  });
 }
 
 // 未匹配的其余请求（非 GET、无 dist 时的 GET）返回 JSON 404，与 API 错误格式一致
@@ -107,8 +116,7 @@ const remote = attachRemoteControl(server, {
 const downloadManager = require('./src/server/services/download-manager');
 const { getDb } = require('./src/server/db/client');
 
-// 启动即初始化 DB（运行迁移）并恢复崩溃残留的 running/downloading 假死状态。
-// 不放在模块加载期：健康检查/单测导入 server 时不应触发磁盘 IO
+// 启动即初始化 DB（运行迁移）并恢复崩溃残留的 running/downloading 假死状态
 try {
   getDb();
   downloadManager.recoverStaleStates();

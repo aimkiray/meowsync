@@ -57,9 +57,13 @@ export function resolveApiBaseUrl() {
 
   const pagePort = window.location.port
   const standardPorts = ['', '80', '443']
+  // vite preview 服务的是生产产物（PROD 已烘焙）但监听 VITE_PORT，API 在独立端口——
+  // 必须排除，否则 preview 模式下所有 API 请求打到静态服务器拿 HTML
+  const vitePreviewPort = String(import.meta.env.VITE_PORT || '3100')
+  const isVitePreview = import.meta.env.PROD && pagePort === vitePreviewPort
   // 单进程部署/反代：生产构建产物与 API 同源——Docker 里没有 VITE_API_PORT，
   // 用 import.meta.env.PROD 区分（构建产物恒为 PROD），不能再靠端口反推
-  if (pageIsHttp && (import.meta.env.PROD || standardPorts.includes(pagePort) || pagePort === fallbackPort)) {
+  if (pageIsHttp && !isVitePreview && (import.meta.env.PROD || standardPorts.includes(pagePort) || pagePort === fallbackPort)) {
     return window.location.origin
   }
   // 开发环境：vite 端口 + 独立 API 端口（默认 3101）

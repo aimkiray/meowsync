@@ -71,7 +71,44 @@ curl http://localhost:3101/downloads/queues/{queueId}
 
 ```bash
 curl 'http://localhost:3101/downloads/tasks?queueId={queueId}'
+# 或按歌单/状态过滤：?playlistId=1 / ?status=completed
 ```
+
+### 暂停 / 恢复 / 取消 / 重试队列
+
+```bash
+curl -X POST http://localhost:3101/downloads/queues/{queueId}/pause
+curl -X POST http://localhost:3101/downloads/queues/{queueId}/resume
+curl -X POST http://localhost:3101/downloads/queues/{queueId}/cancel    # 中止在途下载，任务复位 pending
+curl -X POST http://localhost:3101/downloads/queues/{queueId}/retry    # 重置失败任务并重跑
+```
+
+### 删除队列 / 任务 / 歌曲文件
+
+```bash
+curl -X DELETE http://localhost:3101/downloads/queues/{queueId}        # 中止队列并连带删除已落盘文件
+curl -X DELETE http://localhost:3101/downloads/tasks/{taskId}
+curl -X DELETE 'http://localhost:3101/downloads/songs/{songId}?playlistId=1'
+curl -X DELETE http://localhost:3101/downloads/playlists/1/files       # 清空歌单全部已下载文件
+```
+
+### 单曲下载与状态查询
+
+```bash
+curl -X POST http://localhost:3101/downloads/songs/{songId} \
+  -H "Content-Type: application/json" \
+  -d '{"playlistId":1,"bitrate":320000,"downloadLyrics":true,"downloadCover":true}'
+
+curl 'http://localhost:3101/downloads/songs/{songId}/status?playlistId=1'
+```
+
+### 一键创建并启动歌单下载
+
+```bash
+curl -X POST http://localhost:3101/downloads/playlists/{playlistId}/quick
+```
+
+错误统一返回 `{ "code": <http状态>, "message": "<原因>" }`。
 
 ## 文件存储结构
 
@@ -141,7 +178,7 @@ data/downloads/
 
 ### 下载失败
 1. 检查网络连接
-2. 查看服务器日志：开发模式看 `npm run server`/`node start.js` 的终端输出；Docker 用 `docker compose logs -f meowsync`
+2. 查看服务器日志：开发模式看 `npm start`/`npm run start:api` 的终端输出；Docker 用 `docker compose logs -f meowsync`
 3. 确认歌曲 ID 有效
 4. 尝试降低并发数
 

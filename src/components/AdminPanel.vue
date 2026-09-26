@@ -386,13 +386,20 @@ async function deleteQueue(queueId) {
   }
 }
 
+let pollInFlight = false;
 function startPolling() {
   pollInterval = setInterval(async () => {
-    // 标签页不可见时跳过轮询：隐藏页面的进度刷新用户看不到，白耗请求
-    if (document.hidden) return;
-    await loadQueues({ silent: true });
-    if (selectedQueue.value) {
-      await loadTasks(selectedQueue.value.id, { silent: true });
+    // 标签页不可见时跳过轮询：隐藏页面的进度刷新用户看不到，白耗请求；
+    // in-flight 防 RTT>间隔时的请求重叠交错写
+    if (document.hidden || pollInFlight) return;
+    pollInFlight = true;
+    try {
+      await loadQueues({ silent: true });
+      if (selectedQueue.value) {
+        await loadTasks(selectedQueue.value.id, { silent: true });
+      }
+    } finally {
+      pollInFlight = false;
     }
   }, 2000);
 }

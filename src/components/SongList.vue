@@ -431,7 +431,11 @@ export default {
 
     // 直接下载（浏览器下载，最高码率）
     const downloadSongDirect = async (song, bitrate = 320000) => {
-      if (!song) return
+      if (!song) {
+        // 菜单目标已不在当前歌单（翻页/换单后残留）——关菜单而不是静默无效
+        showDownloadMenu.value = null
+        return
+      }
       try {
         downloadingStates.value[song.id] = true
         await musicApi.downloadSong(song, bitrate)
@@ -446,14 +450,19 @@ export default {
 
     // 批量查询所有歌曲的下载状态：一次 listTasks 拉回该歌单全部任务本地映射，
     // 避免逐曲 N+1 请求（歌单未导入时服务端返回空数组，天然无副作用）
+    // 请求序号守卫：切歌单时旧歌单的 in-flight 响应不能写状态（跨歌单同 songId 会串标）
+    let statusCheckSeq = 0
     const checkAllSongsDownloadStatus = async () => {
-      if (!props.selectedPlaylist || !props.songs.length || isSingleSongPlaylist.value) {
+      const seq = ++statusCheckSeq
+      const playlistId = props.selectedPlaylist?.id
+      if (!playlistId || !props.songs.length || isSingleSongPlaylist.value) {
         serverDownloadedStates.value = {}
         return
       }
 
       try {
-        const response = await downloadsApi.listTasks({ playlistId: props.selectedPlaylist.id })
+        const response = await downloadsApi.listTasks({ playlistId })
+        if (seq !== statusCheckSeq) return // 已有更新的请求在飞，丢弃本次结果
         const tasks = response.data?.data || []
         const downloadedIds = new Set(
           tasks.filter(t => t.status === 'completed').map(t => String(t.songId))
@@ -462,6 +471,7 @@ export default {
           serverDownloadedStates.value[song.id] = downloadedIds.has(String(song.id))
         }
       } catch (error) {
+        if (seq !== statusCheckSeq) return
         // 查询失败必须清空旧状态：否则切歌单/服务重启后残留上一歌单的"已下载"标记
         serverDownloadedStates.value = {}
         console.error('查询下载状态失败:', error)
@@ -470,7 +480,10 @@ export default {
 
     // 下载到服务器或删除
     const toggleServerDownload = async (song) => {
-      if (!song) return
+      if (!song) {
+        showDownloadMenu.value = null
+        return
+      }
       if (!props.selectedPlaylist) {
         alert('请先选择歌单')
         return
@@ -521,6 +534,7 @@ export default {
     // 监听歌曲列表/歌单变化，自动查询状态；切歌单先清旧状态防止串标
     watch(() => props.selectedPlaylist?.id, () => {
       serverDownloadedStates.value = {}
+      serverDownloadingStates.value = {} // 处理中标记同样属于旧歌单，一并清
       checkAllSongsDownloadStatus()
     })
 

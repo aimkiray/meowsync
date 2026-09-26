@@ -126,6 +126,18 @@ function decrementCompleted(id, amount = 1) {
   return findQueueById(id);
 }
 
+function decrementTotal(id, amount = 1) {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE download_queues
+    SET total_tasks = MAX(total_tasks - ?, 0),
+        updated_at = ?
+    WHERE id = ?
+  `).run(amount, now, id);
+  return findQueueById(id);
+}
+
 function incrementCompleted(id) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -170,6 +182,7 @@ module.exports = {
   deleteQueue,
   incrementCompleted,
   decrementCompleted,
+  decrementTotal,
   incrementFailed,
   decrementFailed
 };
