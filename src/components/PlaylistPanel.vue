@@ -477,7 +477,11 @@ export default {
         const button = event.target.closest('button') || event.target
         const rect = button.getBoundingClientRect()
         const menuWidth = 140
-        const menuHeight = 190 // 最多 5 个选项的大致高度
+        // 菜单高度按可见项数算：临时歌单隐藏 4 项只剩"删除歌单"，
+        // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空
+        const currentPlaylist = currentPlaylists.value.find(p => p.id === playlistId)
+        const itemCount = isTempPlaylist(currentPlaylist) ? 1 : 5
+        const menuHeight = itemCount * 38 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh
@@ -525,6 +529,11 @@ export default {
     }
 
     const removePlaylist = (playlistId) => {
+      // 与其他删除项保持一致的确认（本地库移除，误删可重加但易误触）
+      if (!confirm('确定要从库中移除该歌单吗？')) {
+        closeMenu()
+        return
+      }
       emit('remove-playlist', playlistId)
       closeMenu()
     }

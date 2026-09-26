@@ -10,18 +10,21 @@ const { readJsonBody } = require('../lib/http-body');
 
 const app = new Hono();
 
-// 路由 :id 参数统一校验：Number('abc')/''/Infinity 一律 400
+// 路由 :id 参数统一校验：只收纯十进制——Number() 会放过 '1e5'/'0x10'/' 3 '
 function parsePlaylistId(c) {
-  const n = Number(c.req.param('id'));
-  return Number.isInteger(n) && n > 0 ? n : null;
+  const raw = c.req.param('id');
+  if (!/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 
 
 function handleError(c, error, tag) {
-  // err.status 标记的是业务层自撰消息，可回传（含 5xx 业务错误如导入上游失败）；
-  // 未标记的内部异常一律 500 且不带细节
-  const marked = Number.isInteger(error.status) && error.status >= 400 && error.status < 600;
+  // err.exposed 标记的是业务层自撰消息，可回传（含 5xx 业务错误如导入上游失败）；
+  // 未标记的内部异常一律 500 且不带细节（axios .status 不视为业务标记）
+  const marked = error.exposed === true
+    && Number.isInteger(error.status) && error.status >= 400 && error.status < 600;
   if (marked) {
     if (error.status >= 500) console.error(`${tag}:`, error);
     return c.json({ code: error.status, message: error.message || '请求失败' }, error.status);

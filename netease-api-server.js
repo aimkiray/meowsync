@@ -78,15 +78,19 @@ if (hasDist) {
 const downloadToken = process.env.DOWNLOAD_TOKEN || '';
 if (downloadToken) {
   const crypto = require('crypto');
-  const expected = Buffer.from(downloadToken);
+  // 双方先 sha256 再比较：等长摘要消除长度侧信道（长度不同的猜测耗时更短），
+  // 与 ws/remote.js 的 REMOTE_TOKEN 校验同一写法
+  const expectedHash = crypto.createHash('sha256').update(downloadToken).digest();
   app.use('*', async (c, next) => {
     const p = c.req.path;
     const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
       || p === '/playlists' || p.startsWith('/playlists/'))
       && c.req.method !== 'GET' && c.req.method !== 'HEAD';
     if (!protectedWrite) return next();
-    const provided = Buffer.from(c.req.header('x-download-token') || '');
-    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+    const providedHash = crypto.createHash('sha256')
+      .update(c.req.header('x-download-token') || '')
+      .digest();
+    if (!crypto.timingSafeEqual(providedHash, expectedHash)) {
       return c.json({ code: 401, message: '未授权：缺少或错误的下载令牌' }, 401);
     }
     return next();
@@ -109,10 +113,17 @@ if (hasDist) {
   const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
   const API_PREFIXES = ['/downloads', '/playlists', '/audio-proxy', '/remote', '/ping', '/healthz'];
   const apiNames = musicRoutes.ALLOWED_APIS || new Set();
+  // 未白名单的上游模块名（/login/xxx 之类）与 /assets/ 静态资源同样不喂 HTML：
+  // 前者会让 axios 把 index.html 当 JSON 解析，后者让浏览器拿到 MIME 错乱的 200
+  const { apiModules } = require('./src/server/services/netease-api');
+  const apiFirstSegments = new Set([...apiNames, ...Object.keys(apiModules)]);
   app.get('*', (c) => {
     const p = c.req.path;
     const firstSegment = p.split('/')[1] || '';
-    if (API_PREFIXES.some(px => p === px || p.startsWith(px + '/')) || apiNames.has(firstSegment)) {
+    if (API_PREFIXES.some(px => p === px || p.startsWith(px + '/'))
+      || apiFirstSegments.has(firstSegment)
+      || p.startsWith('/assets/')
+      || /\.[a-z0-9]+$/i.test(p)) {
       return c.json({ code: 404, message: 'Not Found' }, 404);
     }
     return c.html(indexHtml);

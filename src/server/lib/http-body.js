@@ -4,6 +4,7 @@
 function bodyTooLarge() {
   const err = new Error('Payload Too Large');
   err.status = 413;
+  err.exposed = true; // 路由层按 exposed 标记透传业务错误
   return err;
 }
 

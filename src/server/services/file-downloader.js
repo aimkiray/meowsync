@@ -57,20 +57,37 @@ function describeError(error) {
   return '未知错误';
 }
 
-// 下载地址校验：只允许 http/https，剥离内嵌 credentials
+// 下载地址校验：只允许 http/https，剥离内嵌 credentials（确定性错误标 fatal）
 function toDownloadUrl(raw) {
   let parsed;
   try {
     parsed = new URL(raw);
   } catch {
-    throw new Error('无效的下载链接');
+    throw fatalError('无效的下载链接');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('仅支持 http/https 下载');
+    throw fatalError('仅支持 http/https 下载');
   }
   parsed.username = '';
   parsed.password = '';
   return parsed;
+}
+
+// 流停滞看门狗：axios 的 timeout 在拿到响应头后经 settle 就失效——一个
+// "响应头之后停流"的上游会无限期占住并发工位。data 事件刷新时间戳，
+// 超过 stallMs 无数据即毁流（错误冒泡到 pipeline，走正常失败路径）
+const STALL_MS = 30000;
+function watchStall(stream, stallMs = STALL_MS) {
+  let lastData = Date.now();
+  const onData = () => { lastData = Date.now(); };
+  const timer = setInterval(() => {
+    if (Date.now() - lastData > stallMs) {
+      stream.destroy(new Error('下载流停滞超时'));
+    }
+  }, Math.min(stallMs, 10000));
+  timer.unref();
+  stream.on('data', onData);
+  stream.on('close', () => clearInterval(timer));
 }
 
 // 手动逐跳跟随重定向：axios maxRedirects 内部跟随、每跳不再过校验，
@@ -94,8 +111,10 @@ async function fetchStream(rawUrl, { timeout, signal }) {
         timeout,
         maxRedirects: 0,
         signal,
-        // identity：axios 默认透明解压但保留原 content-length——解压字节与声明
-        // 字节不一致会让落盘对账误判"下载不完整"；音频/图片本就压缩过，无损失
+        // identity + decompress:false：axios 默认透明解压且删掉 content-encoding 头，
+        // 落盘字节与声明 content-length 不一致会让对账确定性误判"下载不完整"。
+        // 关掉解压后若上游仍回编码内容，响应头里能看到——按上游违规判 fatal
+        decompress: false,
         headers: { 'Accept-Encoding': 'identity' },
         // 3xx 由本层处理以便逐跳校验；其余状态码进 catch 统一处理
         validateStatus: s => s >= 200 && s < 400
@@ -171,22 +190,35 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     const audioResponse = await fetchStream(songData.url, { timeout: 300000, signal });
     if (audioResponse.status !== 200 && audioResponse.status !== 206) {
       audioResponse.data.destroy();
-      throw new Error(`上游返回 ${audioResponse.status}`);
+      throw fatalError(`上游返回 ${audioResponse.status}`);
+    }
+    // decompress:false 下 content-encoding 可见：上游违背 identity 声明，
+    // 此时 content-length 与落盘字节不可对账——确定性违规，不浪费时间传完
+    if (audioResponse.headers['content-encoding']) {
+      audioResponse.data.destroy();
+      throw fatalError('上游返回了压缩内容，无法校验完整性');
     }
 
     const totalLength = parseInt(audioResponse.headers['content-length'], 10);
+    // 声明就已超限：headers 到手即拒，不把 512MiB 先流一遍
+    if (totalLength > MAX_AUDIO_BYTES) {
+      audioResponse.data.destroy();
+      throw fatalError(`文件超过大小上限 ${MAX_AUDIO_BYTES}`);
+    }
     let downloadedLength = 0;
     let lastProgress = -1;
 
+    watchStall(audioResponse.data);
     audioResponse.data.on('data', (chunk) => {
       downloadedLength += chunk.length;
       // 超限即毁流——pipeline 会把该错误冒泡，removePartial 清残片
       if (downloadedLength > MAX_AUDIO_BYTES) {
-        audioResponse.data.destroy(new Error(`文件超过大小上限 ${MAX_AUDIO_BYTES}`));
+        audioResponse.data.destroy(fatalError(`文件超过大小上限 ${MAX_AUDIO_BYTES}`));
         return;
       }
       if (onProgress && totalLength > 0) {
-        const progress = Math.round((downloadedLength / totalLength) * 100);
+        // 上游低报 content-length 时进度可能超 100——钳位到 100
+        const progress = Math.min(Math.round((downloadedLength / totalLength) * 100), 100);
         if (progress !== lastProgress) {
           lastProgress = progress;
           try {
@@ -271,7 +303,11 @@ async function downloadLyrics(songId, outputPath, signal) {
     if (error.message === '歌词不存在') {
       throw error;
     }
-    throw new Error(`下载歌词失败: ${describeError(error)}`);
+    const err = new Error(`下载歌词失败: ${describeError(error)}`);
+    // 取消语义不得被包装吞掉——processTask 靠 aborted 标记区分取消与失败
+    err.aborted = Boolean(error.aborted);
+    err.fatal = Boolean(error.fatal);
+    throw err;
   }
 }
 
@@ -287,15 +323,24 @@ async function downloadCover(coverUrl, outputPath, signal) {
     const response = await fetchStream(coverUrl, { timeout: 60000, signal });
     if (response.status !== 200) {
       response.data.destroy();
-      throw new Error(`上游返回 ${response.status}`);
+      throw fatalError(`上游返回 ${response.status}`);
+    }
+    if (response.headers['content-encoding']) {
+      response.data.destroy();
+      throw fatalError('上游返回了压缩内容，无法校验完整性');
     }
 
     const coverLength = parseInt(response.headers['content-length'], 10);
+    if (coverLength > MAX_COVER_BYTES) {
+      response.data.destroy();
+      throw fatalError(`封面超过大小上限 ${MAX_COVER_BYTES}`);
+    }
     let coverBytes = 0;
+    watchStall(response.data);
     response.data.on('data', (chunk) => {
       coverBytes += chunk.length;
       if (coverBytes > MAX_COVER_BYTES) {
-        response.data.destroy(new Error(`封面超过大小上限 ${MAX_COVER_BYTES}`));
+        response.data.destroy(fatalError(`封面超过大小上限 ${MAX_COVER_BYTES}`));
       }
     });
 

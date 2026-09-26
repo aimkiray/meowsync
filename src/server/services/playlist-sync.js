@@ -14,6 +14,7 @@ const {
 function httpError(status, message) {
   const err = new Error(message);
   err.status = status;
+  err.exposed = true; // 路由层按此标记透传业务消息（axios .status 不算数）
   return err;
 }
 

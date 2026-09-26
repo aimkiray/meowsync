@@ -57,13 +57,28 @@ function migrateDownloadTasks(database) {
     `);
   }
   // (playlist_id, song_id) 唯一约束：新库由 CREATE TABLE 声明；老库可能只有旧索引
-  // 或完全没有——先删重复行（保留最小 id 行），再补唯一索引统一收敛
+  // 或完全没有——先删重复行，再补唯一索引统一收敛。
+  // 去重保留优先级：completed 行带文件路径，删了它文件会变孤儿；同级保留最小 id
   database.exec(`
     DELETE FROM download_tasks
     WHERE id NOT IN (
-      SELECT MIN(id) FROM download_tasks GROUP BY playlist_id, song_id
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY playlist_id, song_id
+          ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, id
+        ) AS rn FROM download_tasks
+      ) WHERE rn = 1
     )
   `);
+  // IF NOT EXISTS 只认名字：同名但非唯一的旧索引会静默跳过 → 约束落空。
+  // 校验 sql 里确实带 UNIQUE 才算数，否则先删旧索引再建
+  const idx = database.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'index' AND name = 'idx_download_tasks_playlist_song'
+  `).get();
+  if (idx && !/unique/i.test(idx.sql || '')) {
+    database.exec('DROP INDEX idx_download_tasks_playlist_song');
+  }
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_playlist_song
     ON download_tasks(playlist_id, song_id)
