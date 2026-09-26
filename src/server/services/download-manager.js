@@ -9,6 +9,7 @@ const { importPlaylistFromNetease } = require('./playlist-sync');
 const fileDownloader = require('./file-downloader');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
+const { deletingPlaylists, deletingQueues } = require('../lib/deletion-locks');
 
 // 下载文件根目录：<dataDir>/downloads，可用 DOWNLOAD_DIR 覆盖（容器内指到挂载卷）
 // resolve 归一化：路径安全比较依赖绝对路径
@@ -30,11 +31,8 @@ const drainingQueues = new Map();
 // 从两个 Map 中消失即"僵尸"：没有任何机制能再定位它在途的流，删除/停机排空
 // 都会漏掉它。timeout 释放时入列追踪，done settle 时出列
 const zombieControllers = new Set();
-// 正在做文件级联删除的歌单：删除窗口内拒绝新建下载，否则排空竞态产生孤儿文件
-const deletingPlaylists = new Set();
-// 正在排空+删行的队列：删除窗口内 startQueue/retryTask 必须 409，
-// 否则新协程在排空 await 期间起来，行删后仍在写盘——永久失联的孤儿协程
-const deletingQueues = new Set();
+// deletingPlaylists/deletingQueues 来自 lib/deletion-locks（共享给 playlist-sync
+// 的刷新路径用——直接 import 本模块会成环）
 // 停机期间拒绝新建/启动下载，避免半途任务留下脏状态
 let shuttingDown = false;
 
@@ -828,6 +826,11 @@ async function deleteQueue(queueId) {
   if (deletingQueues.has(queueId)) {
     throw httpError(409, '队列正在删除中');
   }
+  // 交叉锁：歌单级联删除正在进行时，cascade 的 drain 会把控制器移出 Map，
+  // 这里再跑一遍排空=空转后直接删行——cascade 里在途协程写完即孤儿
+  if (deletingPlaylists.has(queue.playlistId)) {
+    throw httpError(409, '该歌单正在删除中');
+  }
   deletingQueues.add(queueId);
 
   try {
@@ -1261,12 +1264,15 @@ async function deletePlaylistCascade(playlistId) {
   try {
     await deletePlaylistFiles(playlistId);
     // 显式删子表行：FK 级联依赖建表期声明，老库 ALTER 补的列可能没带
-    // REFERENCES/ON DELETE CASCADE——不能把行删除押在 schema 史上
-    for (const task of downloadTasksRepo.listTasksByPlaylist(playlistId)) {
-      downloadTasksRepo.deleteTask(task.id);
-    }
-    downloadQueuesRepo.deleteQueuesByPlaylist(playlistId);
-    return playlistsRepo.deletePlaylist(playlistId);
+    // REFERENCES/ON DELETE CASCADE——不能把行删除押在 schema 史上。
+    // 三条 DELETE 同事务：半途失败整体回滚，不留子表已删父表还在的不一致
+    return getDb().transaction(() => {
+      for (const task of downloadTasksRepo.listTasksByPlaylist(playlistId)) {
+        downloadTasksRepo.deleteTask(task.id);
+      }
+      downloadQueuesRepo.deleteQueuesByPlaylist(playlistId);
+      return playlistsRepo.deletePlaylist(playlistId);
+    })();
   } finally {
     deletingPlaylists.delete(playlistId);
   }
@@ -1295,6 +1301,10 @@ async function retryTask(taskId) {
   if (deletingPlaylists.has(task.playlistId)) {
     throw httpError(409, '该歌单正在删除中');
   }
+  // 队列删除窗口同理：对将被删的行做复位/计数是无意义写，且结果可能落空
+  if (task.queueId && deletingQueues.has(task.queueId)) {
+    throw httpError(409, '所在队列正在删除中');
+  }
 
   const queue = task.queueId ? downloadQueuesRepo.findQueueById(task.queueId) : null;
 
@@ -1304,7 +1314,10 @@ async function retryTask(taskId) {
     errorMessage: null,
     completedAt: null,
     retryCount: 0,
-    // 与收养重置对齐：残留的旧路径可能已指向别的任务的文件，重跑前清空
+    // 与收养重置对齐：残留的旧路径可能已指向别的任务的文件，重跑前清空。
+    // queueId 指向已不存在的队列（孤儿行）时一并归位 standalone——
+    // 否则任务永远绑着死队列
+    ...(queue ? {} : { queueId: null }),
     audioPath: null,
     lyricsPath: null,
     coverPath: null,
@@ -1323,14 +1336,20 @@ async function retryTask(taskId) {
     // 否则任务永远停在"等待中"直到用户手动启动
     try {
       await startQueue(queue.id);
-    } catch {
-      // 排空窗口内（draining）启动会 409——任务仍 pending，等下一次启动接管
+    } catch (e) {
+      // 排空窗口内（draining）启动会 409——任务仍 pending，等下一次启动接管。
+      // 非 409 是真故障，至少留痕
+      if (e?.status !== 409) console.error(`队列 ${queue.id} 自动重启失败:`, e);
     }
     return downloadTasksRepo.findTaskById(taskId);
   }
 
-  // 独立任务没有队列消费 pending——就地重跑
-  return runStandaloneTask(downloadTasksRepo.findTaskById(taskId));
+  // 独立任务没有队列消费 pending——就地重跑；并发删除窗口内行可能已消失
+  const fresh = downloadTasksRepo.findTaskById(taskId);
+  if (!fresh) {
+    throw httpError(404, '任务不存在');
+  }
+  return runStandaloneTask(fresh);
 }
 
 async function retryQueue(queueId) {
@@ -1346,8 +1365,12 @@ async function retryQueue(queueId) {
   // 运行中队列重置 failed→pending 会产生两套调度来源（活控制器与新协程），
   // 且 status=pending 覆写 running 造成状态漂移——要求先取消再重试。
   // draining 同理：排空协程的 abort-reset 会与新调度来源交错
-  if (activeQueues.has(queueId) || drainingQueues.has(queueId)) {
+  if (activeQueues.has(queueId) || drainingQueues.has(queueId)
+      || [...zombieControllers].some(z => z.queueId === queueId)) {
     throw httpError(409, '队列正在运行中，请先取消');
+  }
+  if (deletingQueues.has(queueId)) {
+    throw httpError(409, '队列正在删除中');
   }
   if (deletingPlaylists.has(queue.playlistId)) {
     throw httpError(409, '该歌单正在删除中');

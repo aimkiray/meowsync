@@ -23,7 +23,7 @@
           <!-- 歌曲信息 -->
           <div class="flex items-center space-x-3 flex-1 min-w-0 mr-2">
             <img
-              :src="httpsCover(currentSong.al?.picUrl)"
+              :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
               :alt="currentSong.name"
               class="w-12 h-12 object-cover flex-shrink-0 border-2 border-pink-400"
               :class="{ 'playing-animation': isPlaying }"
@@ -65,7 +65,7 @@
               <!-- 左：歌曲信息 -->
               <div class="flex items-center space-x-3 min-w-0 flex-1">
                 <img
-                  :src="httpsCover(currentSong.al?.picUrl)"
+                  :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
                   :alt="currentSong.name"
                   class="w-12 h-12 object-cover border-2 border-pink-400 flex-shrink-0"
                   :class="{ 'playing-animation': isPlaying }"
