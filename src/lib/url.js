@@ -1,5 +1,12 @@
-// 共享 URL 工具：HTTPS 部署下 http:// 外链（网易图床 *.music.126.net 等均支持 TLS）
-// 会被浏览器混拦为 mixed content——所有落到 <img>/媒体 src 的上游 URL 统一升级
+// 共享 URL 工具：HTTPS 页面下 http:// 外链（网易图床 *.music.126.net、
+// 各解锁源 CDN 等均支持 TLS）会被浏览器混拦为 mixed content——统一升级。
+// 仅在 HTTPS 页面升级：纯 HTTP 部署（自托管常态）下服务端回链
+// （/audio-proxy?url=... 由 requestOrigin 拼出，scheme 跟随入站请求）就是
+// 合法 http 地址，对只讲 HTTP 的源做 TLS 会握手失败；http 页面本就没有混拦
 export function httpsCover(url) {
-  return String(url || '').replace(/^http:\/\//, 'https://');
+  const s = String(url || '');
+  if (typeof window !== 'undefined' && window.location?.protocol !== 'https:') {
+    return s;
+  }
+  return s.replace(/^http:\/\//i, 'https://');
 }

@@ -123,7 +123,10 @@ export const musicApi = {
           throw new Error('无法获取完整版播放链接，可能是版权限制')
         }
       } catch (error) {
-        if (isAbortError(error) || String(error?.message ?? '').includes('版权限制')) throw error
+        // 形态校验错误（部署错配/反代 HTML）必须直接透出——吞掉换码率重试会
+        // 把部署问题降级成误导性的"版权限制"
+        const msg = String(error?.message ?? '')
+        if (isAbortError(error) || msg.includes('版权限制') || msg === '接口返回异常') throw error
         console.warn(`音质 ${br} 获取失败:`, error?.message)
       }
     }

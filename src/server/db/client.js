@@ -47,6 +47,15 @@ function hasUniqueIndexOn(database, table, columns) {
 // 老库逐列补齐：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，
 // 哪些列是后加的就补哪些（queue_id IS NULL 是独立单曲任务的合法状态，绝不做数据回填/删除）
 const DOWNLOAD_TASK_COLUMNS = {
+  // 基列也补齐：老库若缺 status/playlist_id 等，迁移/索引/去重 SQL 会引用不到而崩
+  playlist_id: 'INTEGER REFERENCES playlists(id) ON DELETE CASCADE',
+  song_id: "TEXT NOT NULL DEFAULT ''",
+  song_name: "TEXT NOT NULL DEFAULT ''",
+  artist: "TEXT NOT NULL DEFAULT ''",
+  album: 'TEXT',
+  cover_url: 'TEXT',
+  status: "TEXT NOT NULL DEFAULT 'pending'",
+  progress: 'INTEGER DEFAULT 0',
   // ALTER ADD COLUMN 支持 REFERENCES（SQLite ≥3.6.19），不加则删队列时任务行不级联
   queue_id: 'INTEGER REFERENCES download_queues(id) ON DELETE CASCADE',
   error_message: 'TEXT',
@@ -60,7 +69,9 @@ const DOWNLOAD_TASK_COLUMNS = {
   bitrate: 'INTEGER DEFAULT 320000',
   file_size: 'INTEGER',
   duration_ms: 'INTEGER',
-  completed_at: 'TEXT'
+  completed_at: 'TEXT',
+  created_at: 'TEXT',
+  updated_at: 'TEXT'
 };
 
 function migrateDownloadTasks(database) {
@@ -172,8 +183,10 @@ function migrateLegacyTables(database) {
       if (hasIndex(database, 'idx_playlists_netease_id')) {
         database.exec('DROP INDEX idx_playlists_netease_id');
       }
-      database.exec(`
-        DELETE FROM playlists
+      // FK ON 下删有子行的重复歌单会违例崩启动——老库子表 REFERENCES 可能
+      // 没声明 ON DELETE CASCADE；先查出弃留行，显式清掉子表再删父行
+      const doomed = database.prepare(`
+        SELECT id FROM playlists
         WHERE netease_playlist_id IS NOT NULL
           AND id NOT IN (
             SELECT id FROM (
@@ -183,7 +196,19 @@ function migrateLegacyTables(database) {
               WHERE netease_playlist_id IS NOT NULL
             ) WHERE rn = 1
           )
-      `);
+      `).all().map(r => r.id);
+      if (doomed.length > 0) {
+        const marks = doomed.map(() => '?').join(',');
+        // download_tasks 同时引用 queues——必须先删孙行再删子行
+        database.prepare(`DELETE FROM download_tasks WHERE playlist_id IN (${marks})`).run(...doomed);
+        database.prepare(
+          `DELETE FROM download_tasks WHERE queue_id IN
+             (SELECT id FROM download_queues WHERE playlist_id IN (${marks}))`
+        ).run(...doomed);
+        database.prepare(`DELETE FROM download_queues WHERE playlist_id IN (${marks})`).run(...doomed);
+        database.prepare(`DELETE FROM playlist_tracks WHERE playlist_id IN (${marks})`).run(...doomed);
+        database.prepare(`DELETE FROM playlists WHERE id IN (${marks})`).run(...doomed);
+      }
       database.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_playlists_netease_id
         ON playlists(netease_playlist_id)
@@ -225,9 +250,6 @@ function initSchema(database) {
       FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
       UNIQUE (playlist_id, position)
     );
-
-    CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_id ON playlist_tracks(playlist_id);
-    CREATE INDEX IF NOT EXISTS idx_playlist_tracks_song_id ON playlist_tracks(song_id);
 
     CREATE TABLE IF NOT EXISTS download_queues (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -280,16 +302,28 @@ function initSchema(database) {
       UNIQUE (playlist_id, song_id)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_download_tasks_playlist ON download_tasks(playlist_id);
-    CREATE INDEX IF NOT EXISTS idx_download_tasks_status ON download_tasks(status);
-    CREATE INDEX IF NOT EXISTS idx_download_queues_status ON download_queues(status);
-
     -- /healthz 用写探测表：SELECT 1 是纯内存查询测不出磁盘满
     CREATE TABLE IF NOT EXISTS _healthz (ts INTEGER);
   `);
 
+  // 索引必须在列迁移之后创建——老库若缺被索引的列（如 playlist_tracks.song_id），
+  // 先建索引会抛 no such column 使 initSchema 中断，migrate 永远跑不到
   migrateDownloadTasks(database);
   migrateLegacyTables(database);
+
+  const INDEX_COLUMNS = [
+    ['idx_playlist_tracks_playlist_id', 'playlist_tracks', 'playlist_id'],
+    ['idx_playlist_tracks_song_id', 'playlist_tracks', 'song_id'],
+    ['idx_download_tasks_playlist', 'download_tasks', 'playlist_id'],
+    ['idx_download_tasks_status', 'download_tasks', 'status'],
+    ['idx_download_queues_status', 'download_queues', 'status']
+  ];
+  for (const [name, table, column] of INDEX_COLUMNS) {
+    // hasColumn 缺列场景不建（索引缺失可继续跑，比启动即崩可恢复）
+    if (!hasIndex(database, name) && hasColumn(database, table, column)) {
+      database.exec(`CREATE INDEX ${name} ON ${table}(${column})`);
+    }
+  }
 }
 
 function getDb() {

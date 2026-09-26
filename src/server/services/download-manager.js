@@ -194,8 +194,15 @@ async function createDownloadQueue(playlistId, options = {}) {
         const owner = existing.queueId
           ? downloadQueuesRepo.findQueueById(existing.queueId)
           : null;
-        const ownerActive = owner
-          && ['pending', 'running', 'paused'].includes(owner.status);
+        // 内存控制器才是真判据：cancelled 队列的协程可能还在 draining/僵尸集里
+        // 跑（不可中止上游调用超 DRAIN_TIMEOUT）——此时收养会让新旧协程对同一
+        // 批行双调度，僵尸的 abort 复位还会把"已取消"写进新队列的行
+        const ownerBusy = existing.queueId != null
+          && (activeQueues.has(existing.queueId)
+            || drainingQueues.has(existing.queueId)
+            || [...zombieControllers].some(z => z.queueId === existing.queueId));
+        const ownerActive = ownerBusy
+          || (owner && ['pending', 'running', 'paused'].includes(owner.status));
         // owner 为 null = queue_id 指向已消失队列的孤儿行，同样收养
         if (!standaloneActive && (existing.queueId == null || !ownerActive)) {
           const keepCompleted = existing.status === 'completed';
@@ -404,7 +411,11 @@ async function processQueue(queueId, controller) {
       } catch { /* 任务行可能已被删 */ }
     }
   };
-  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  // unref：race 输掉的退避/暂停 timer 不该拖住进程退出
+  const sleep = (ms) => new Promise(resolve => {
+    const t = setTimeout(resolve, ms);
+    t.unref?.();
+  });
 
   const waitWhilePaused = async () => {
     // 取消在暂停等待中也要生效——否则 cancelled 队列的协程永久自旋。
@@ -695,13 +706,14 @@ async function processTask(task, queueId, signal) {
     }
 
     try {
-      downloadTasksRepo.updateTask(task.id, {
+      const done = downloadTasksRepo.updateTask(task.id, {
         status: 'completed',
         progress: 100,
         completedAt: new Date().toISOString()
       });
+      // updateTask 对不存在行返回 null 而非抛错——行已删时不再给队列计数
+      if (!done) return;
     } catch {
-      // 行已被删：不再给队列计数
       return;
     }
 
@@ -920,8 +932,9 @@ async function deleteQueue(queueId) {
   }
   downloadQueuesRepo.deleteQueue(queueId);
   // 在途任务的流已被 abort：正在写的那段残片由 downloader 的 removePartial 清，
-  // 已落盘的前段（如 audio 已完成、歌词在途）仍要删
-  deleteFiles(filePaths);
+  // 已落盘的前段（如 audio 已完成、歌词在途）仍要删；空目录骨架顺手剪掉
+  // （目录非空时 rmdirSync 安全跳过——同歌单 standalone/其他队列文件不受影响）
+  cleanupPlaylistFilesAndDirs(queue.playlistId, filePaths);
   } finally {
     deletingQueues.delete(queueId);
   }
@@ -1070,13 +1083,13 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
   const queueTask = existing.find(t => t.queueId !== null && t.queueId !== undefined);
 
   if (queueTask) {
-    if (queueTask.status === 'completed') {
-      return queueTask; // 幂等：队列已下载，直接返回
-    }
-    // 队列删除窗口：属主行还在但 deleteQueue 正在排空/清扫——此时把行摘出
-    // 队列会逃出清扫清单，standalone 落盘成"删后落盘"孤儿文件
+    // 队列删除窗口前置拦：completed 行连同文件即将被删，此时返回它等于给
+    // 客户端一个指向已删文件的"下载成功"；接管更是把行摘出清扫清单
     if (deletingQueues.has(queueTask.queueId)) {
       throw httpError(409, '所在队列正在删除中');
+    }
+    if (queueTask.status === 'completed') {
+      return queueTask; // 幂等：队列已下载，直接返回
     }
     const owner = downloadQueuesRepo.findQueueById(queueTask.queueId);
     // 内存控制器是真判据：队列 status 已 cancelled 但协程仍在排空/僵尸集里跑

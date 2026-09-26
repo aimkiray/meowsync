@@ -11,8 +11,10 @@ function replaceTracksForPlaylist(playlistId, tracks) {
 
   const transaction = db.transaction(() => {
     deleteStmt.run(playlistId);
-    // 上游曲目缺 id 时 String(undefined) 会写入 'undefined' 脏行——直接跳过
-    const validTracks = tracks.filter(t => t && t.id !== undefined && t.id !== null);
+    // 上游曲目缺 id/空 id 会写入 'undefined'/'' 脏行——直接跳过
+    const validTracks = tracks.filter(
+      t => t && t.id !== undefined && t.id !== null && String(t.id) !== ''
+    );
     validTracks.forEach((track, index) => {
       insertStmt.run(
         playlistId,
@@ -39,19 +41,28 @@ function listTracksByPlaylistId(playlistId) {
     ORDER BY position ASC
   `).all(playlistId);
 
-  return rows.map(row => {
-    // 单行 raw_json 损坏不该让整个歌单/建队列 500——退化到列字段重建
-    let raw = {};
+  const parseJsonColumn = (text, fallback) => {
     try {
-      raw = JSON.parse(row.raw_json || '{}');
-    } catch { /* 损坏行用列字段兜底 */ }
-    if (typeof raw !== 'object' || raw === null) raw = {};
+      const parsed = JSON.parse(text || '');
+      return parsed ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  return rows.map(row => {
+    // 单行 JSON 损坏不该让整个歌单/建队列 500——退化到列字段重建；
+    // 非对象/非数组形态同理（下游会对 ar 跑 .filter 之类数组方法）
+    const rawObj = parseJsonColumn(row.raw_json, {});
+    const raw = typeof rawObj === 'object' ? rawObj : {};
+    const artists = Array.isArray(raw.ar) ? raw.ar : parseJsonColumn(row.artist_json, []);
+    const album = (raw.al && typeof raw.al === 'object') ? raw.al : parseJsonColumn(row.album_json, {});
     return {
       ...raw,
       id: raw.id ?? row.song_id,
       name: raw.name ?? row.name,
-      ar: raw.ar || JSON.parse(row.artist_json || '[]'),
-      al: raw.al || JSON.parse(row.album_json || '{}'),
+      ar: Array.isArray(artists) ? artists : [],
+      al: (album && typeof album === 'object') ? album : {},
       dt: raw.dt ?? row.duration_ms
     };
   });

@@ -28,6 +28,7 @@ cp .env.example .env
 | VITE_API_PORT | 3101 | 开发模式下的后端端口 |
 | VITE_BASE_PATH | / | 应用基础路径 |
 | VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌 |
+| VITE_DOWNLOAD_TOKEN | - | 与后端 `DOWNLOAD_TOKEN` 配对的下载接口令牌（npm/vite 构建路径用；docker compose 只需设 `DOWNLOAD_TOKEN`，构建 arg 会自动取它） |
 | VITE_PORT | 3100 | 开发服务器端口 |
 | VITE_OPEN_BROWSER | true（Linux 下恒不打开） | 启动时自动打开浏览器，设为 `false` 关闭 |
 | VITE_ALLOWED_HOSTS | - | dev 服务器允许的 Host 列表 |
@@ -101,10 +102,16 @@ docker run -d -p 3101:3002 -v meowsync-data:/app/data --name meowsync meowsync
 ```
 
 构建期前端变量（打包进 bundle，运行时不可改）可用 `--build-arg` 注入，
-如启用遥控令牌：`docker build --build-arg VITE_REMOTE_TOKEN=xxx -t meowsync .`。
+如启用遥控令牌：`docker build --build-arg VITE_REMOTE_TOKEN=xxx -t meowsync .`；
+启用下载写鉴权时须双管齐下：
+`docker build --build-arg VITE_DOWNLOAD_TOKEN=xxx -t meowsync .` +
+`docker run -e DOWNLOAD_TOKEN=xxx`。
 Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_BASE_PATH`/
-`VITE_REMOTE_TOKEN`，并从同一 `.env` 读取 `CORS_ORIGINS`/`REMOTE_TOKEN`/`TRUST_PROXY`
-注入容器运行环境。
+`VITE_REMOTE_TOKEN`/`VITE_DOWNLOAD_TOKEN`（缺省回落到 `DOWNLOAD_TOKEN`，即
+compose 下单设 `DOWNLOAD_TOKEN` 即可），并从同一 `.env` 读取 `CORS_ORIGINS`/
+`REMOTE_TOKEN`/`DOWNLOAD_TOKEN`/`TRUST_PROXY` 注入容器运行环境。
+注意：改了令牌变量后要 `docker compose up -d --build` 重建镜像——旧 bundle
+没有令牌会在写接口上全部 401。
 
 ### Docker Compose
 
@@ -165,6 +172,9 @@ server {
 4. **with-nginx 反代突然 502** — nginx 仅在启动时解析一次 `meowsync` 服务名；
    单独重建后端容器后 IP 可能变化，执行 `docker compose restart nginx` 即可
 5. **端口被占用** — `API_PORT` 修改监听端口；Windows 下确认无残留 node 进程
+6. **下载/歌单写接口全 401** — 服务端设了 `DOWNLOAD_TOKEN` 但前端 bundle 没带
+   `VITE_DOWNLOAD_TOKEN`（compose 下只需设 `DOWNLOAD_TOKEN` 并用 `--build` 重建）；
+   或反之——只设前端变量没设后端变量等于没开鉴权
 
 ## 更新部署
 

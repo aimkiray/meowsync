@@ -23,7 +23,12 @@ const parsePort = (v) => {
   const n = Number(v);
   return n > 0 && n <= 65535 ? n : null;
 };
-const PORT = parsePort(process.env.API_PORT) || parsePort(process.env.PORT) || 3101;
+const parsedApiPort = parsePort(process.env.API_PORT);
+if (process.env.API_PORT && parsedApiPort === null) {
+  // 非法值静默回落到 PORT/默认会让部署者以为端口生效——留痕可观测
+  console.warn(`[config] API_PORT='${process.env.API_PORT}' 不是合法端口，已忽略`);
+}
+const PORT = parsedApiPort || parsePort(process.env.PORT) || 3101;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // 解析CORS来源配置（WebSocket Origin 校验共用此白名单）。
