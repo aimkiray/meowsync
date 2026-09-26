@@ -34,15 +34,15 @@ async function readJsonBody(c) {
 }
 
 function handleError(c, error, tag) {
-  // 只在 400-599 范围内信任 error.status——异常对象混入的整数（如 errno）不能当 HTTP 码
-  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600
-    ? error.status
-    : 500;
-  if (status >= 500) {
-    console.error(`${tag}:`, error);
-    return c.json({ code: status, message: '服务器错误' }, status);
+  // err.status 标记的是业务层自撰消息，可回传（含 5xx 业务错误如导入上游失败）；
+  // 未标记的内部异常一律 500 且不带细节
+  const marked = Number.isInteger(error.status) && error.status >= 400 && error.status < 600;
+  if (marked) {
+    if (error.status >= 500) console.error(`${tag}:`, error);
+    return c.json({ code: error.status, message: error.message || '请求失败' }, error.status);
   }
-  return c.json({ code: status, message: error.message || '请求失败' }, status);
+  console.error(`${tag}:`, error);
+  return c.json({ code: 500, message: '服务器错误' }, 500);
 }
 
 app.get('/playlists', (c) => {

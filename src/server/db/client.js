@@ -26,39 +26,31 @@ function hasIndex(database, indexName) {
   return Boolean(row);
 }
 
+// 老库逐列补齐：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，
+// 哪些列是后加的就补哪些（queue_id IS NULL 是独立单曲任务的合法状态，绝不做数据回填/删除）
+const DOWNLOAD_TASK_COLUMNS = {
+  // ALTER ADD COLUMN 支持 REFERENCES（SQLite ≥3.6.19），不加则删队列时任务行不级联
+  queue_id: 'INTEGER REFERENCES download_queues(id) ON DELETE CASCADE',
+  error_message: 'TEXT',
+  retry_count: 'INTEGER DEFAULT 0',
+  download_audio: 'INTEGER DEFAULT 1',
+  download_lyrics: 'INTEGER DEFAULT 1',
+  download_cover: 'INTEGER DEFAULT 1',
+  audio_path: 'TEXT',
+  lyrics_path: 'TEXT',
+  cover_path: 'TEXT',
+  bitrate: 'INTEGER DEFAULT 320000',
+  file_size: 'INTEGER',
+  duration_ms: 'INTEGER',
+  completed_at: 'TEXT'
+};
+
 function migrateDownloadTasks(database) {
-  // 仅在旧库缺少 queue_id 列时补齐迁移；queue_id IS NULL 是独立单曲任务的合法状态，
-  // 绝不能在此 DELETE（否则每次启动都会清空单曲下载记录）
-  const hasQueueId = hasColumn(database, 'download_tasks', 'queue_id');
-  if (hasQueueId) {
-    if (!hasIndex(database, 'idx_download_tasks_queue')) {
-      database.exec(`
-        CREATE INDEX idx_download_tasks_queue ON download_tasks(queue_id)
-      `);
+  for (const [column, type] of Object.entries(DOWNLOAD_TASK_COLUMNS)) {
+    if (!hasColumn(database, 'download_tasks', column)) {
+      database.exec(`ALTER TABLE download_tasks ADD COLUMN ${column} ${type}`);
     }
-    return;
   }
-
-  database.exec(`
-    ALTER TABLE download_tasks ADD COLUMN queue_id INTEGER;
-  `);
-
-  const queueRows = database.prepare(`
-    SELECT id, playlist_id
-    FROM download_queues
-    ORDER BY id ASC
-  `).all();
-
-  const assignQueueId = database.prepare(`
-    UPDATE download_tasks
-    SET queue_id = ?
-    WHERE playlist_id = ? AND queue_id IS NULL
-  `);
-
-  for (const queue of queueRows) {
-    assignQueueId.run(queue.id, queue.playlist_id);
-  }
-
   if (!hasIndex(database, 'idx_download_tasks_queue')) {
     database.exec(`
       CREATE INDEX idx_download_tasks_queue ON download_tasks(queue_id)
