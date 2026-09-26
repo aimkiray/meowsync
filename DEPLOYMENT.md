@@ -28,7 +28,7 @@ cp .env.example .env
 | VITE_BASE_PATH | / | 应用基础路径 |
 | VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌 |
 | VITE_PORT | 3000 | 开发服务器端口 |
-| VITE_OPEN_BROWSER | false | 启动时自动打开浏览器 |
+| VITE_OPEN_BROWSER | true（Linux 下恒不打开） | 启动时自动打开浏览器，设为 `false` 关闭 |
 | VITE_ALLOWED_HOSTS | - | dev 服务器允许的 Host 列表 |
 
 ### 3. 后端变量（运行期生效）
@@ -36,11 +36,12 @@ cp .env.example .env
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | API_PORT | 3002 | 服务监听端口 |
+| PORT | - | `API_PORT` 的备用变量（Heroku/Railway 等 PaaS 自动注入；`API_PORT` 优先） |
 | HOST | 0.0.0.0 | 绑定地址 |
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
 | REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 必须带 `?token=` |
 | TRUST_PROXY | - | 可选：设为 `1`/`true` 时采信 `X-Forwarded-Proto/Host` |
-| NODE_ENV | development | 设为 `production` 启用安全响应头 |
+| NODE_ENV | development | 环境标识（约定变量，服务代码不直接读取；镜像与 compose 已内置 `production`） |
 
 ## 部署步骤
 
@@ -85,12 +86,18 @@ pm2 start ecosystem.config.js && pm2 save
 ### Docker（推荐）
 
 仓库内 `Dockerfile` 为三阶段构建：前端构建 → 生产依赖 → 非 root 运行时。
-镜像内只有一个 Node 进程，健康检查走 `/healthz`。
+镜像内只有一个 Node 进程，健康检查走 `/healthz`（Node 内置 fetch 探测）。
 
 ```bash
 docker build -t meowsync .
 docker run -d -p 3002:3002 --name meowsync meowsync
 ```
+
+构建期前端变量（打包进 bundle，运行时不可改）可用 `--build-arg` 注入，
+如启用遥控令牌：`docker build --build-arg VITE_REMOTE_TOKEN=xxx -t meowsync .`。
+Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_BASE_PATH`/
+`VITE_REMOTE_TOKEN`，并从同一 `.env` 读取 `CORS_ORIGINS`/`REMOTE_TOKEN`/`TRUST_PROXY`
+注入容器运行环境。
 
 ### Docker Compose
 

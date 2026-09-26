@@ -200,31 +200,32 @@ export default {
     })
     const { currentTheme } = useTheme()
     
-    // 动态样式
+    // 动态样式（--jirai-pink 从未定义，原写法会让 border 失效 → 按钮无边框；
+    // 用各主题卡片同款粉边框色替代）
     const hideButtonStyle = computed(() => {
       if (currentTheme.value === 'pixel-retro') {
         return {
           background: 'rgba(240, 179, 192, 0.8)',
-          border: '2px solid var(--jirai-pink)'
+          border: '2px solid rgb(210, 100, 130)'
         }
       } else {
         return {
           background: 'rgba(255, 192, 203, 0.8)',
-          border: '2px solid var(--jirai-pink)'
+          border: '2px solid rgb(244, 114, 182)'
         }
       }
     })
-    
+
     const showButtonStyle = computed(() => {
       if (currentTheme.value === 'pixel-retro') {
         return {
           background: 'rgba(240, 179, 192, 0.8)',
-          border: '2px solid var(--jirai-pink)'
+          border: '2px solid rgb(210, 100, 130)'
         }
       } else {
         return {
           background: 'rgba(255, 192, 203, 0.8)',
-          border: '2px solid var(--jirai-pink)'
+          border: '2px solid rgb(244, 114, 182)'
         }
       }
     })

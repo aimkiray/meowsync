@@ -1,5 +1,5 @@
 import { Segment, useDefault } from 'segmentit'
-import { Lyric } from './lyric'
+import { Lyric } from './lyric.js'
 
 const MIN_LINE_DURATION_MS = 900
 const MAX_LINE_DURATION_MS = 5200
@@ -229,6 +229,29 @@ function segmentJapaneseToken(text) {
   return mergeJapaneseParticles(segments.filter(Boolean))
 }
 
+// 超长拉丁段按空格分组到 MAX_LATIN_SEGMENT_LENGTH 内，避免整句一次性点亮；
+// 单个单词超过限制时保留整词（词中截断会破坏可读性）
+function splitLatinSegment(text) {
+  if (text.length <= MAX_LATIN_SEGMENT_LENGTH) {
+    return [text]
+  }
+
+  const chunks = []
+  let buffer = ''
+  for (const word of text.split(' ')) {
+    if (buffer && `${buffer} ${word}`.length > MAX_LATIN_SEGMENT_LENGTH) {
+      chunks.push(buffer)
+      buffer = word
+    } else {
+      buffer = buffer ? `${buffer} ${word}` : word
+    }
+  }
+  if (buffer) {
+    chunks.push(buffer)
+  }
+  return chunks
+}
+
 function splitLongSegment(segment) {
   const text = String(segment || '')
   if (!text) {
@@ -241,7 +264,7 @@ function splitLongSegment(segment) {
 
   const normalizedLatin = normalizeLatinSpacing(text)
   if (/^[A-Za-z0-9][A-Za-z0-9’’\-\s]*$/.test(normalizedLatin)) {
-    return [normalizedLatin]
+    return splitLatinSegment(normalizedLatin)
   }
 
   const glyphs = Array.from(text)
@@ -367,16 +390,26 @@ function chunkGlyphs(text) {
 
 export function createLocalTextAliveVideo(lines = [], durationSeconds = 0) {
   const normalized = Array.isArray(lines)
-    ? lines.filter(line => line && typeof line.text === 'string' && line.text.trim())
+    ? lines.filter(line =>
+      line &&
+      typeof line.text === 'string' &&
+      line.text.trim() &&
+      // 时间戳无效（NaN/Infinity/缺失）的行无法定位，显示在 0:00 只会遮挡首句
+      Number.isFinite(Number(line.time)))
     : []
+
+  // 画布按时间单调递增做增量扫描，乱序输入会卡死激活索引；
+  // 排序基准必须与 lineStartMs 一致（负数时间同样 clamp 到 0）
+  const lineStartOf = (line) => Math.max(Number(line.time) * 1000, 0)
+  normalized.sort((a, b) => lineStartOf(a) - lineStartOf(b))
 
   const chars = []
 
   normalized.forEach((line, index) => {
-    const text = line.text
-    const lineStartMs = Math.max((Number(line.time) || 0) * 1000, 0)
-    const nextTimeSeconds = normalized[index + 1]?.time
-    const nextStartMs = typeof nextTimeSeconds === 'number' ? nextTimeSeconds * 1000 : null
+    const text = line.text.trim()
+    const lineStartMs = lineStartOf(line)
+    const nextTimeSeconds = Number(normalized[index + 1]?.time)
+    const nextStartMs = Number.isFinite(nextTimeSeconds) ? nextTimeSeconds * 1000 : null
     const lineDurationMs = getLineDurationMs({
       text,
       startMs: lineStartMs,

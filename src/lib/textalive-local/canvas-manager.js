@@ -59,6 +59,14 @@ export class CanvasManager {
       window.addEventListener('touchend', this._handleLeave)
     }
 
+    // 容器尺寸变化不一定伴随 window resize（全屏开关、布局变化等），
+    // 只靠 window.resize 会让 backing store 停在旧尺寸导致拉伸模糊
+    this._resizeObserver = null
+    if (typeof ResizeObserver === 'function') {
+      this._resizeObserver = new ResizeObserver(this._handleResize)
+      this._resizeObserver.observe(this._container)
+    }
+
     this.resize()
   }
 
@@ -91,6 +99,12 @@ export class CanvasManager {
   }
 
   update(position) {
+    // NaN/Infinity 参与相机插值后 _px/_py 永久变成 NaN，之后所有帧都无法恢复，
+    // 非有限输入一律回退到上一帧的 position
+    if (!Number.isFinite(position)) {
+      position = this._position
+    }
+
     if (this._interactionMode !== 'pointer') {
       this._isOver = false
     }
@@ -145,6 +159,7 @@ export class CanvasManager {
     window.removeEventListener('resize', this._handleResize)
     window.removeEventListener('touchmove', this._handleMove)
     window.removeEventListener('touchend', this._handleLeave)
+    this._resizeObserver?.disconnect()
     this._can.remove()
   }
 
@@ -475,6 +490,11 @@ export class CanvasManager {
             if (result) {
               lyric.glyphPositions = result.positions
               lyric.slotKeys = result.slotKeys
+            } else {
+              // 重建失败必须清掉 isDraw：否则空 glyphPositions 永远画不出来，
+              // 且生成逻辑（!lyric.isDraw）不会再重试，这句歌词将永久不可见
+              lyric.isDraw = false
+              continue
             }
           }
 

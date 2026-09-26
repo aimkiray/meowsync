@@ -49,15 +49,15 @@
       <div v-else class="flex-1 flex flex-col">
         <div class="space-y-2 mb-4 -mx-6 px-6">
           <div
-            v-for="(song, index) in paginatedSongs"
+            v-for="song in paginatedSongs"
             :key="song.id"
             class="music-card cursor-pointer p-4 jirai-card transition-all w-full relative group"
             :class="{
               'playing-song': currentSong?.id === song.id,
-              'opacity-50 grayscale': song.fee === 1 || song.privilege?.fee === 1
+              'opacity-50 grayscale': isVipSong(song)
             }"
           >
-            <div @click="$emit('play-song', song, filteredSongs.findIndex(s => s.id === song.id))" class="flex items-center space-x-3">
+            <div @click="$emit('play-song', song)" class="flex items-center space-x-3">
               <div class="relative">
                 <img
                   :src="song.al?.picUrl || song.album?.picUrl"
@@ -74,7 +74,7 @@
                   :class="currentSong?.id === song.id ? 'text-pink-500 font-bold' : 'text-pink-300'"
                 >
                   {{ song.name }}
-                  <span v-if="song.fee === 1 || song.privilege?.fee === 1" class="ml-2 text-xs bg-yellow-500 text-black px-1 rounded">VIP</span>
+                  <span v-if="isVipSong(song)" class="ml-2 text-xs bg-yellow-500 text-black px-1 rounded">VIP</span>
                 </h4>
                 <p class="text-sm text-purple-300 truncate">
                   {{ song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') }}
@@ -114,7 +114,7 @@
         <!-- 歌曲统计信息 -->
         <div class="text-center mt-4 mb-2">
           <span class="text-pink-300 text-sm">
-            显示第 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, filteredSongs.length) }} 首歌曲
+            显示第 {{ filteredSongs.length ? (currentPage - 1) * pageSize + 1 : 0 }}-{{ Math.min(currentPage * pageSize, filteredSongs.length) }} 首歌曲
           </span>
         </div>
         
@@ -219,6 +219,7 @@ import { useTheme } from '../composables/useTheme'
 import { useCollapseButton } from '../composables/useCollapseButton'
 import { useMediaQuery } from '../composables/useMediaQuery'
 import { formatDuration } from '../lib/format'
+import { isVipSong } from '../lib/song'
 import { shareOrCopy } from '../lib/share'
 
 export default {
@@ -329,7 +330,7 @@ export default {
       if (props.showVipSongs) {
         return props.songs // 显示所有歌曲
       } else {
-        return props.songs.filter(song => !(song.fee === 1 || song.privilege?.fee === 1)) // 隐藏VIP歌曲
+        return props.songs.filter(song => !isVipSong(song)) // 隐藏VIP歌曲
       }
     })
     
@@ -417,6 +418,7 @@ export default {
       totalPages,
       paginatedSongs,
       formatDuration,
+      isVipSong,
       headerStyle,
       paginationStyle,
       showDownloadMenu,

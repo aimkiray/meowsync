@@ -45,7 +45,7 @@
             :current-page="currentPage"
             :page-size="pageSize"
             :collapsed="songListCollapsed"
-            @play-song="playSong"
+            @play-song="song => playSong(song)"
             @toggle-play-mode="togglePlayMode"
             @toggle-vip-songs="showVipSongs = !showVipSongs"
             @go-to-page="goToPage"
@@ -123,6 +123,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { Howl } from 'howler'
 import { musicApi } from './api/music'
 import { resolveApiBaseUrl } from './lib/api-base'
+import { formatTime } from './lib/format'
+import { isVipSong } from './lib/song'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import SongList from './components/SongList.vue'
@@ -154,7 +156,6 @@ export default {
     const selectedPlaylist = ref(null)
     const songs = ref([])
     const currentSong = ref(null)
-    const currentSongIndex = ref(-1)
     const activeTab = ref('my') // 控制选项卡：'my' 或 'discover'
     const showVipSongs = ref(true) // 控制VIP歌曲显示，默认显示
     const playMode = ref('list') // 播放模式：'list'(列表播放), 'loop'(列表循环), 'single'(单曲循环)
@@ -270,7 +271,7 @@ export default {
           break
         case 'play_song': {
           const targetIndex = filteredSongs.value.findIndex(s => String(s.id) === String(msg.payload))
-          if (targetIndex !== -1) playSong(filteredSongs.value[targetIndex], targetIndex)
+          if (targetIndex !== -1) playSong(filteredSongs.value[targetIndex])
           break
         }
         case 'request_state':
@@ -319,7 +320,7 @@ export default {
       if (showVipSongs.value) {
         return songs.value // 显示所有歌曲
       } else {
-        return songs.value.filter(song => !(song.fee === 1 || song.privilege?.fee === 1)) // 隐藏VIP歌曲
+        return songs.value.filter(song => !isVipSong(song)) // 隐藏VIP歌曲
       }
     })
     
@@ -561,7 +562,6 @@ export default {
       const state = {
         selectedPlaylistId: selectedPlaylist.value?.id ?? null,
         currentSongId: currentSong.value?.id ?? null,
-        currentSongIndex: currentSongIndex.value ?? 0,
         currentTime: Number.isFinite(currentTime.value) ? currentTime.value : 0,
         volume: Number.isFinite(volume.value) ? volume.value : 80,
         playMode: playMode.value,
@@ -630,7 +630,7 @@ export default {
 
       const restoredSong = restoredSongs[restoredIndex]
 
-      await playSong(restoredSong, restoredIndex, {
+      await playSong(restoredSong, {
         autoplay: false,
         seekTime: typeof savedState.currentTime === 'number' ? savedState.currentTime : 0
       })
@@ -691,7 +691,7 @@ export default {
     // 歌曲播放逻辑
     // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
     // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
-    const playSong = async (song, index = 0, options = {}) => {
+    const playSong = async (song, options = {}) => {
       const { autoplay = true, seekTime = 0 } = options
 
       console.log('🎵 播放歌曲:', song.name)
@@ -725,6 +725,9 @@ export default {
           clearInterval(lyricTimer)
           lyricTimer = null
         }
+        // 重置歌词加载态：上一次被 abort 的 loadLyrics 不会进 finally 复位，
+        // 若本次请求随后提前返回（如无URL），loadingLyrics 会一直卡 true
+        loadingLyrics.value = false
 
         // 立即设置播放状态为false
         isPlaying.value = false
@@ -732,9 +735,6 @@ export default {
         duration.value = 0
 
         currentSong.value = song
-        // 以当前过滤列表内的真实位置为准；调用方传入的 index 仅作兜底
-        const filteredIdx = filteredSongs.value.findIndex(s => String(s.id) === String(song.id))
-        currentSongIndex.value = filteredIdx !== -1 ? filteredIdx : index
 
         // 获取歌曲播放URL
         const songUrlData = await musicApi.getSongUrl(song.id, abortSignal)
@@ -766,6 +766,7 @@ export default {
             if (isStale()) {
               console.log('🚫 歌曲加载完成但已被取消/切换，不开始播放:', song.name)
               newHowl.unload()
+              if (howl === newHowl) howl = null
               return
             }
 
@@ -805,19 +806,28 @@ export default {
             startProgressLoop()
           },
           onpause: () => {
+            if (isStale()) return
             isPlaying.value = false
             savePlaybackTimeIfNeeded(true)
           },
           onstop: () => {
+            // 过期实例的 stop（如 onplay stale 分支里 newHowl.stop() 同步触发）
+            // 不得改写新歌的共享状态
+            if (isStale()) return
             isPlaying.value = false
-            currentTime.value = 0
+            // 不再重置 currentTime：非 stale 的 stop 只会发生在卸载等收尾场景，
+            // 归零后 watch(currentTime) 会把已保存的续播位置覆盖成 0
             savePlaybackTimeIfNeeded(true)
           },
           onend: () => {
+            if (isStale()) return
             handleSongEnd()
           },
           onloaderror: (id, error) => {
             console.error('❌ 歌曲加载错误:', error)
+            // 无论是否过期都回收实例；过期时不得触碰新歌的共享状态
+            newHowl.unload()
+            if (isStale()) return
             songSwitching.value = false
             if (currentAbortController === myController) currentAbortController = null
             if (howl === newHowl) howl = null
@@ -825,6 +835,8 @@ export default {
           },
           onplayerror: (id, error) => {
             console.error('❌ 播放错误:', error)
+            newHowl.unload()
+            if (isStale()) return
             songSwitching.value = false
             if (currentAbortController === myController) currentAbortController = null
             if (howl === newHowl) howl = null
@@ -916,7 +928,8 @@ export default {
     const updateProgress = () => {
       progressRafId = null
       if (howl && isPlaying.value) {
-        currentTime.value = howl.seek()
+        const t = howl.seek()
+        if (Number.isFinite(t)) currentTime.value = t
         progressRafId = requestAnimationFrame(updateProgress)
       }
     }
@@ -947,16 +960,21 @@ export default {
     // 以歌曲ID实时定位索引，避免 VIP 过滤/换歌单导致 currentSongIndex 漂移
     const currentFilteredIndex = () => {
       if (!currentSong.value) return -1
-      return filteredSongs.value.findIndex(s => s.id === currentSong.value.id)
+      // 与 playSong 一致用 String 比较：不同接口返回的 id 可能是 number 或 string
+      return filteredSongs.value.findIndex(s => String(s.id) === String(currentSong.value.id))
     }
 
     const previousSong = () => {
-      if (filteredSongs.value.length === 0) return
+      if (filteredSongs.value.length === 0) {
+        // 兜底：列表为空且音频确已停止时复位播放态（正常播放中则保持 true）
+        if (!howl || !howl.playing()) isPlaying.value = false
+        return
+      }
 
       const cur = currentFilteredIndex()
       if (playMode.value === 'single' && cur >= 0) {
         // 单曲循环模式下，重新播放当前歌曲
-        playSong(filteredSongs.value[cur], cur)
+        playSong(filteredSongs.value[cur])
         return
       }
 
@@ -971,17 +989,20 @@ export default {
 
       const song = filteredSongs.value[newIndex]
       if (song) {
-        playSong(song, newIndex)
+        playSong(song)
       }
     }
 
     const nextSong = () => {
-      if (filteredSongs.value.length === 0) return
+      if (filteredSongs.value.length === 0) {
+        if (!howl || !howl.playing()) isPlaying.value = false
+        return
+      }
 
       const cur = currentFilteredIndex()
       if (playMode.value === 'single' && cur >= 0) {
         // 单曲循环模式下，重新播放当前歌曲
-        playSong(filteredSongs.value[cur], cur)
+        playSong(filteredSongs.value[cur])
         return
       }
 
@@ -1000,17 +1021,24 @@ export default {
 
       const song = filteredSongs.value[newIndex]
       if (song) {
-        playSong(song, newIndex)
+        playSong(song)
       }
     }
 
     const handleSongEnd = () => {
       if (playMode.value === 'single') {
-        // 单曲循环：重新播放当前歌曲
-        if (howl) {
-          howl.seek(0)
-          howl.play()
-        }
+        // 单曲循环：延迟到下一拍再重播。Howler 的 _ended 在 emit('end') 之后还会
+        // 对当前 sound 执行内部 stop()，若在此同步 seek+play，刚发起的 play()
+        // Promise 会被内部 stop 打断并触发 playerror（把 howl 置空），单曲循环失效。
+        const endedHowl = howl
+        const endedSongId = currentPlayingId
+        setTimeout(() => {
+          // 期间若已切歌/卸载/被暂停则放弃重播（onend 本身不重置 isPlaying）
+          if (endedHowl && howl === endedHowl && currentPlayingId === endedSongId && isPlaying.value) {
+            endedHowl.seek(0)
+            endedHowl.play()
+          }
+        }, 0)
       } else {
         // 列表播放和列表循环：播放下一首
         nextSong()
@@ -1038,7 +1066,7 @@ export default {
 
     // 进度条点击跳转（子组件传来归一化比例 0-1）
     const seekTo = (ratio) => {
-      if (!howl || !duration.value || !Number.isFinite(ratio)) return
+      if (!howl || !Number.isFinite(duration.value) || duration.value <= 0 || !Number.isFinite(ratio)) return
 
       const clamped = Math.max(0, Math.min(1, ratio))
       const seekTime = clamped * duration.value
@@ -1070,15 +1098,6 @@ export default {
 
     const closeFullscreenPlayer = () => {
       isFullscreenPlayerOpen.value = false
-    }
-
-    // 时间格式化
-    const formatTime = (seconds) => {
-      if (!seconds || isNaN(seconds)) return '0:00'
-      
-      const mins = Math.floor(seconds / 60)
-      const secs = Math.floor(seconds % 60)
-      return `${mins}:${secs.toString().padStart(2, '0')}`
     }
 
     // 歌词自动跟随切换
@@ -1382,10 +1401,8 @@ export default {
       selectedPlaylist,
       songs,
       currentSong,
-      currentSongIndex,
       activeTab,
       showVipSongs,
-      playMode,
       lyrics,
       currentLyricIndex,
       autoFollowLyrics,
@@ -1405,10 +1422,6 @@ export default {
       playlistPageSize,
       playlistCollapsed,
 
-      // 计算属性
-      filteredSongs,
-      totalPages,
-
       // 方法
       goToPage,
       prevPage,
@@ -1421,26 +1434,18 @@ export default {
       searchPlaylists,
       addPlaylistToLibrary,
       removePlaylistFromLibrary,
-      getRemovedDefaultPlaylists,
-      savePlaylistsToStorage,
-      loadPlaylistsFromStorage,
       selectPlaylist,
       playSong,
-      loadLyrics,
-      startLyricSync,
       togglePlay,
       previousSong,
       nextSong,
-      handleSongEnd,
       togglePlayMode,
       getPlayModeText,
       seekTo,
       updateVolume,
       openFullscreenPlayer,
       closeFullscreenPlayer,
-      formatTime,
       toggleAutoFollowLyrics,
-      loadDefaultPlaylists,
       togglePlaylistCollapse,
       toggleSongListCollapse,
       toggleLyricsCollapse,

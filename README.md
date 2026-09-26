@@ -29,7 +29,7 @@
 ## 快速开始
 
 ### 环境要求
-- Node.js 18.0 或更高版本（推荐 22.x）
+- Node.js 20.3 或更高版本（推荐 22.x，与 Dockerfile 一致；音频代理依赖 `AbortSignal.any`）
 - npm 包管理器
 
 ### 安装依赖
@@ -84,11 +84,19 @@ meowsync/
 ├── src/
 │   ├── api/
 │   │   └── music.js              # 音乐API接口封装
+│   ├── components/               # Vue组件
+│   ├── composables/              # 组合式函数
+│   ├── lib/                      # 共享工具（含服务端补丁/初始化逻辑）
+│   ├── server/                   # 服务端路由与 WebSocket（routes/、ws/）
 │   ├── fonts/                    # Fusion Pixel字体文件
 │   ├── App.vue                   # 主应用组件
 │   ├── main.js                   # 应用入口
 │   └── style.css                 # 全局样式
-├── netease-api-server.js         # 网易云音乐API服务器
+├── netease-api-server.js         # 单进程服务入口（API + WebSocket + 静态托管）
+├── start.js                      # 开发环境一键启动脚本
+├── Dockerfile                    # 三阶段构建（前端构建 → 生产依赖 → 运行时）
+├── docker-compose.yml            # Compose 编排（可选 with-nginx 反代 profile）
+├── nginx.conf                    # Nginx 反代完整主配置（含 WS Upgrade 头）
 ├── package.json                  # 项目配置和依赖
 ├── vite.config.js                # Vite构建配置
 ├── tailwind.config.js            # TailwindCSS配置
@@ -162,8 +170,11 @@ NODE_ENV=production node netease-api-server.js
 
 #### 使用Docker Compose（推荐）
 ```bash
-# 创建docker-compose.yml
-docker-compose up -d
+# 仓库已含 docker-compose.yml，直接构建并启动
+docker compose up -d --build
+
+# 可选：附带 nginx 反代（80 端口，使用仓库内 nginx.conf）
+docker compose --profile with-nginx up -d --build
 ```
 
 #### 手动Docker部署
@@ -181,7 +192,7 @@ docker run -d -p 3002:3002 meowsync
 
 #### 前端环境变量（构建期）
 ```bash
-VITE_API_BASE_URL=http://localhost:3002   # 生产单进程部署留空 = 同源自动推断
+# VITE_API_BASE_URL=                      # 可选：默认留空自动推断（dev=主机:3002，prod=同源）
 VITE_API_TIMEOUT=10000
 VITE_BASE_PATH=/
 VITE_REMOTE_TOKEN=                        # 与后端 REMOTE_TOKEN 配对（可选）
@@ -190,6 +201,7 @@ VITE_REMOTE_TOKEN=                        # 与后端 REMOTE_TOKEN 配对（可�
 #### 后端环境变量（运行期）
 ```bash
 API_PORT=3002
+# PORT=                                   # 备用端口变量（仅 API_PORT 未设时生效，PaaS 常用）
 HOST=0.0.0.0
 CORS_ORIGINS=http://localhost:3002        # 逗号分隔多个来源；留空 = 同源
 REMOTE_TOKEN=                             # 可选：/remote WebSocket 访问令牌
@@ -244,7 +256,7 @@ TRUST_PROXY=                              # 可选：设为 1 时采信 X-Forwar
 
 ## 开源协议
 
-MIT License - 详见 [LICENSE](LICENSE) 文件
+MIT License
 
 ## 贡献指南
 

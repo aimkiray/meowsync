@@ -152,7 +152,7 @@
         <!-- 歌单统计信息 -->
         <div v-if="userPlaylists.length > 0" class="text-center mt-4 mb-2">
           <span class="text-pink-300 text-sm">
-            显示第 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, userPlaylists.length) }} 个歌单
+            显示第 {{ userPlaylists.length ? (currentPage - 1) * pageSize + 1 : 0 }}-{{ Math.min(currentPage * pageSize, userPlaylists.length) }} 个歌单
           </span>
         </div>
         
@@ -240,7 +240,7 @@
         <!-- 搜索结果统计信息 -->
         <div v-if="searchResults.length > 0" class="text-center mt-4 mb-2">
           <span class="text-pink-300 text-sm">
-            显示第 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, searchResults.length) }} 个歌单
+            显示第 {{ searchResults.length ? (currentPage - 1) * pageSize + 1 : 0 }}-{{ Math.min(currentPage * pageSize, searchResults.length) }} 个歌单
           </span>
         </div>
         
@@ -412,11 +412,6 @@ export default {
       return showAddPlaylist.value ? paginatedSearchResults.value : paginatedMyPlaylists.value
     })
 
-    // 当前显示的总数量
-    const totalCount = computed(() => {
-      return showAddPlaylist.value ? props.searchResults.length : props.userPlaylists.length
-    })
-
     // 从URL或文本中提取歌单ID
     const extractPlaylistId = (input) => {
       // 匹配网易云音乐歌单URL中的ID
@@ -455,8 +450,8 @@ export default {
       if (openMenuId.value === playlistId) {
         openMenuId.value = null
       } else {
-        // 计算菜单位置
-        const button = event.target
+        // 计算菜单位置（event.target 可能是内部 svg/path，须定位到按钮本身）
+        const button = event.target.closest('button') || event.target
         const rect = button.getBoundingClientRect()
         menuPositions.value[playlistId] = {
           top: rect.bottom + 4 + 'px',
@@ -579,7 +574,7 @@ export default {
        showAddPlaylist,
        totalPages,
        currentPlaylists,
-       totalCount,
+
        extractPlaylistId,
        handleSearch,
        paginationStyle,
