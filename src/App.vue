@@ -45,7 +45,7 @@
             :current-page="currentPage"
             :page-size="pageSize"
             :collapsed="songListCollapsed"
-            @play-song="song => playSong(song)"
+            @play-song="playSong"
             @toggle-play-mode="togglePlayMode"
             @toggle-vip-songs="showVipSongs = !showVipSongs"
             @go-to-page="goToPage"
@@ -258,8 +258,9 @@ export default {
           previousSong()
           break
         case 'seek': {
-          const t = Number(msg.payload)
-          if (howl && Number.isFinite(t)) {
+          // 严格校验：null/true/'' 会被 Number() 强转成 0/1 蒙混过 isFinite
+          const t = msg.payload
+          if (howl && typeof t === 'number' && Number.isFinite(t)) {
             const clamped = Math.max(0, Math.min(t, duration.value || 0))
             howl.seek(clamped)
             currentTime.value = clamped
@@ -283,27 +284,31 @@ export default {
     let remoteRetries = 0
     function connectRemoteHost() {
       if (remoteMode.value !== 'host') return
-      remoteWs = new WebSocket(remoteHostWsUrl)
-      remoteWs.onopen = () => {
+      // 回调一律操作局部 ws：迟到的 onerror/onclose 若引用共享 remoteWs，
+      // 会把已被取代的新 socket 误关/清空
+      const ws = remoteWs = new WebSocket(remoteHostWsUrl)
+      ws.onopen = () => {
         remoteRetries = 0
         console.log('[remote] host WS connected')
         remoteStateTimer = setInterval(sendRemoteState, 2000)
       }
-      remoteWs.onmessage = (e) => {
+      ws.onmessage = (e) => {
         try {
           handleRemoteMessage(JSON.parse(e.data))
         } catch { /* 忽略畸形消息 */ }
       }
-      remoteWs.onclose = (e) => {
+      ws.onclose = (e) => {
+        if (remoteWs === ws) remoteWs = null
         clearInterval(remoteStateTimer)
         remoteStateTimer = null
-        remoteWs = null
         // 被新 host 顶替（服务端 close code 4000）：不再重连，
         // 否则两端会反复互踢形成踢皮球循环
         if (e && e.code === 4000) {
           console.warn('[remote] 已有新的 host 接管，本端停止远程控制')
           return
         }
+        // 该 socket 已被更新的连接取代，不重连（新连接自己负责）
+        if (remoteWs && remoteWs !== ws) return
         // 断线重连有上限：握手即被拒（token/Origin 不通过）时避免无限重试
         remoteRetries++
         if (remoteRetries > 5) {
@@ -312,7 +317,7 @@ export default {
         }
         remoteReconnectTimer = setTimeout(connectRemoteHost, 3000)
       }
-      remoteWs.onerror = () => remoteWs && remoteWs.close()
+      ws.onerror = () => ws.close()
     }
 
     // 过滤后的歌曲列表（根据VIP显示设置）
@@ -792,7 +797,9 @@ export default {
 
             songSwitching.value = false
 
-            const safeSeekTime = Math.max(0, Math.min(seekTime || 0, duration.value || 0))
+            // -0.5s 缓冲：恢复的进度若恰好在末尾（上次播完时持久化的 currentTime≈duration），
+            // seek 到精确结尾会立刻触发 'end' 又跳下一首，回退半秒让用户能从结尾续播
+            const safeSeekTime = Math.max(0, Math.min(seekTime || 0, (duration.value || 0) - 0.5))
             if (safeSeekTime > 0) {
               newHowl.seek(safeSeekTime)
               currentTime.value = safeSeekTime
@@ -873,6 +880,9 @@ export default {
         }
         console.error('❌ 播放歌曲失败:', error)
         songSwitching.value = false
+        // 清掉上一首歌的残留歌词，避免在新歌标题下渲染旧歌词
+        lyrics.value = []
+        currentLyricIndex.value = 0
         if (currentAbortController === myController) currentAbortController = null
         savePlayerStateToStorage()
       }

@@ -33,9 +33,10 @@
           step="1"
           @input="onSeekInput"
           @change="onSeek"
-          @pointerdown="seekDragging = true"
-          @pointerup="seekDragging = false"
-          @pointercancel="seekDragging = false"
+          @pointerdown="onSeekPointerDown"
+          @pointerup="onDragPointerEnd"
+          @pointercancel="onDragPointerEnd"
+          @lostpointercapture="onDragPointerEnd"
         />
         <span class="rc-time">{{ formatTime(state.duration) }}</span>
       </div>
@@ -61,9 +62,10 @@
           step="1"
           @input="onVolumeInput"
           @change="onVolume"
-          @pointerdown="volumeDragging = true"
-          @pointerup="volumeDragging = false"
-          @pointercancel="volumeDragging = false"
+          @pointerdown="onVolumePointerDown"
+          @pointerup="onDragPointerEnd"
+          @pointercancel="onDragPointerEnd"
+          @lostpointercapture="onDragPointerEnd"
         />
         <span class="rc-vol-icon">🔊</span>
       </div>
@@ -87,6 +89,10 @@ const gaveUp = ref(false)
 // 拖动滑块期间屏蔽本地推进/远端推送回写，防止 thumb 被拽回旧值
 const seekDragging = ref(false)
 const volumeDragging = ref(false)
+// 记录发起拖动的 pointerId：window 级 pointerup/pointercancel 只在同一指针时
+// 释放标志位，避免双指分别拖进度/音量两个滑块时互相误清
+let seekPointerId = null
+let volumePointerId = null
 const state = ref({
   isPlaying: false,
   currentSong: null,
@@ -109,6 +115,7 @@ function connect() {
     retries = 0
     connected.value = true
     hostDisconnected.value = false
+    gaveUp.value = false // 防御性复位：未来若出现重连路径可自动恢复
   }
 
   ws.onmessage = (e) => {
@@ -123,6 +130,8 @@ function connect() {
         state.value = { ...state.value, ...payload }
       } else if (msg.type === 'host_disconnected') {
         hostDisconnected.value = true
+        // v-if 会摘除滑块元素，悬挂的拖动标志（pointerup 可能不再派发）必须复位
+        resetDragState()
       }
     } catch {}
   }
@@ -130,6 +139,7 @@ function connect() {
   ws.onclose = () => {
     connected.value = false
     ws = null
+    resetDragState() // 同上：滑块随 connected=false 被摘除，不能留下悬挂标志
     if (destroyed) return
     // 重连上限：握手被 401/403 拒绝时避免无限重试
     if (++retries > 5) {
@@ -151,12 +161,44 @@ function send(type, payload) {
   }
 }
 
+function onSeekPointerDown(e) {
+  seekPointerId = e.pointerId
+  seekDragging.value = true
+}
+
+function onVolumePointerDown(e) {
+  volumePointerId = e.pointerId
+  volumeDragging.value = true
+}
+
+// pointerup/pointercancel/lostpointercapture 共用释放逻辑（按 pointerId 匹配）。
+// 同时挂到 window 兜底：鼠标没有隐式捕获，在滑块外松开时 pointerup 不会派发到
+// 滑块元素上；此时若值恰好未变，@change 也不会触发，元素级监听不足以复位标志
+function onDragPointerEnd(e) {
+  if (e.pointerId === seekPointerId) {
+    seekPointerId = null
+    seekDragging.value = false
+  }
+  if (e.pointerId === volumePointerId) {
+    volumePointerId = null
+    volumeDragging.value = false
+  }
+}
+
+function resetDragState() {
+  seekPointerId = null
+  volumePointerId = null
+  seekDragging.value = false
+  volumeDragging.value = false
+}
+
 // 拖动中仅本地预览（不发包），松手 @change 时一次性提交并发送
 function onSeekInput(e) {
   state.value.currentTime = Number(e.target.value)
 }
 
 function onSeek(e) {
+  seekPointerId = null
   seekDragging.value = false
   const t = Number(e.target.value)
   // 本地立即提交：host 每 2s 才推送一次，不回写会闪回旧进度
@@ -169,6 +211,7 @@ function onVolumeInput(e) {
 }
 
 function onVolume(e) {
+  volumePointerId = null
   volumeDragging.value = false
   const v = Number(e.target.value)
   state.value.volume = v
@@ -190,11 +233,15 @@ onMounted(() => {
       s.currentTime = Math.min(s.currentTime + 1, s.duration)
     }
   }, 1000)
+  window.addEventListener('pointerup', onDragPointerEnd)
+  window.addEventListener('pointercancel', onDragPointerEnd)
 })
 onUnmounted(() => {
   destroyed = true
   clearTimeout(reconnectTimer)
   clearInterval(progressTickTimer)
+  window.removeEventListener('pointerup', onDragPointerEnd)
+  window.removeEventListener('pointercancel', onDragPointerEnd)
   if (ws) {
     ws.onclose = null // 阻止卸载后异步 close 触发重连
     ws.close()

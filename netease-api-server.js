@@ -86,14 +86,15 @@ server.on('error', (err) => {
 });
 
 const { attachRemoteControl } = require('./src/server/ws/remote');
-attachRemoteControl(server, {
+const remote = attachRemoteControl(server, {
   allowedOrigins: corsOrigins,
   token: process.env.REMOTE_TOKEN || ''
 });
 
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
-// 在途请求与 WS 连接给 3s 排空窗口后强推（server 'close' 触发 remote.js 的
-// 心跳清理），最迟 10s 强退兜底
+// WS 连接由 remote.close() 立即 terminate（升级 socket 不归 close()/
+// closeAllConnections() 管，但计入 server._connections，不销毁则 'close'
+// 永不触发）；在途 HTTP 请求给 3s 排空窗口后强推，最迟 10s 强退兜底
 let shuttingDown = false;
 function shutdown(signal) {
   if (shuttingDown) return;
@@ -108,6 +109,7 @@ function shutdown(signal) {
 
   server.close(() => process.exit(0));
   server.closeIdleConnections?.();
+  remote?.close?.();
   setTimeout(() => server.closeAllConnections?.(), 3000).unref();
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

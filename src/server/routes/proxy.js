@@ -24,17 +24,22 @@ function isAllowedHost(hostname) {
 // 命中这些段说明 DNS 被劫持/投毒或 hosts 被篡改，拒绝代理
 function isPrivateIPv4(ip) {
   const o = ip.split('.').map(Number);
-  const [a, b] = o;
+  const [a, b, c] = o;
   return (
     a === 0 || a === 10 || a === 127 || // 0/8 本机、10/8 RFC1918、127/8 loopback
     (a === 100 && b >= 64 && b <= 127) || // 100.64/10 CGNAT
     (a === 169 && b === 254) || // link-local
     (a === 172 && b >= 16 && b <= 31) || // 172.16/12 RFC1918
-    (a === 192 && b === 0) || // 192.0/24（含 192.0.0/24 与 192.0.2/24 文档段）
+    (a === 192 && b === 0 && c === 0) || // 192.0.0/24 IETF 协议分配
+    (a === 192 && b === 0 && c === 2) || // 192.0.2/24 文档段 TEST-NET-1
+    (a === 192 && b === 31 && c === 196) || // 192.31.196/24 AS112
+    (a === 192 && b === 52 && c === 193) || // 192.52.193/24 AMT
+    (a === 192 && b === 88 && c === 99) || // 192.88.99/24 6to4 relay anycast
     (a === 192 && b === 168) || // RFC1918
+    (a === 192 && b === 175 && c === 48) || // 192.175.48/24 AS112 direct delegation
     (a === 198 && (b === 18 || b === 19)) || // 198.18/15 基准测试段
-    (a === 198 && b === 51 && o[2] === 100) || // 198.51.100/24 文档段
-    (a === 203 && b === 0 && o[2] === 113) || // 203.0.113/24 文档段
+    (a === 198 && b === 51 && c === 100) || // 198.51.100/24 文档段
+    (a === 203 && b === 0 && c === 113) || // 203.0.113/24 文档段
     a >= 224 // 224/4 multicast、240/4 reserved（含 255 广播）
   );
 }
@@ -42,14 +47,24 @@ function isPrivateIPv4(ip) {
 function isPrivateIPv6(ip) {
   const s = ip.toLowerCase();
   if (s === '::' || s === '::1') return true; // unspecified / loopback
+  // 注意顺序：::ffff:a.b.c.d 映射地址必须先按内嵌 v4 判定，
+  // 再落入下面的"首段为 0"兜底；该正则必须在 first===0 检查之前运行
   const mapped = s.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
   if (mapped) return isPrivateIPv4(mapped[1]); // IPv4-mapped 按内嵌 v4 判定
-  if (s.startsWith('::')) return true; // 其它 ::/96 兼容/映射形式一律拒绝（公网 v6 不以 :: 开头）
-  const first = parseInt(s.split(':')[0] || '0', 16);
+  const parts = s.split(':');
+  const first = parseInt(parts[0] || '0', 16);
+  const second = parseInt(parts[1] || '0', 16);
   return (
+    first === 0 || // ::/16 全域：unspecified、::/96 兼容地址、展开式映射
+                   // （0:0:0:0:ffff:7f00:1 这类非压缩写法）等——公网 v6 首段必非 0，
+                   // 且比 startsWith('::') 更严（后者漏掉未压缩形式）
     (first & 0xfe00) === 0xfc00 || // fc00::/7 unique-local
     (first & 0xffc0) === 0xfe80 || // fe80::/10 link-local（覆盖 fe80–febf）
-    (first & 0xff00) === 0xff00 // ff00::/8 multicast
+    (first & 0xff00) === 0xff00 || // ff00::/8 multicast
+    first === 0x2002 || // 2002::/16 6to4（内嵌 v4，可指向私网地址）
+    (first === 0x2001 && second === 0) || // 2001::/32 Teredo（内嵌 v4）
+    (first === 0x2001 && second === 0xdb8) || // 2001:db8::/32 文档段
+    (first === 0x64 && second === 0xff9b) // 64:ff9b::/96 + 64:ff9b:1::/48 NAT64（内嵌 v4）
   );
 }
 

@@ -135,11 +135,11 @@ function attachRemoteControl(server, options = {}) {
       ? (req.headers['x-forwarded-host'] || '').split(',')[0].trim()
       : '';
     const hostHeader = fwdHost || req.headers.host;
-    if (
-      origin &&
-      allowedOrigins.length > 0 &&
-      !isOriginAllowed(origin, hostHeader, allowedOrigins)
-    ) {
+    // 注意：不能加 allowedOrigins.length > 0 的跳过门——白名单为空时
+    // isOriginAllowed 退化为仅同源放行，而不是放开任意站点；否则
+    // CORS_ORIGINS 配空（如只有分隔符）会静默关闭整个 Origin 防护，
+    // 局域网部署下任意网页都能跨站 WS 劫持（HTTP CORS 却仍是全拒，自相矛盾）
+    if (origin && !isOriginAllowed(origin, hostHeader, allowedOrigins)) {
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }
@@ -177,13 +177,25 @@ function attachRemoteControl(server, options = {}) {
   wss.on('close', () => clearInterval(heartbeat));
 
   // noServer 模式下 wss.close() 不会被宿主 server 自动调用，
-  // 必须在 server 'close' 时手动清理，否则心跳 interval 永久泄漏
-  server.on('close', () => {
+  // 必须在 server 'close' 时手动清理，否则心跳 interval 永久泄漏。
+  // 关键：升级成功的 WS socket 不受 http.Server 的连接追踪管理
+  // （server.close() / closeAllConnections() 都不会销毁它），但仍计入
+  // server._connections——不主动 terminate，'close' 事件永远不会触发，
+  // 优雅停机只能干等兜底强退。因此把清理句柄返回给调用方，供停机流程
+  // 在 server.close() 之后立即调用
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     clearInterval(heartbeat);
     server.removeListener('upgrade', onUpgrade);
-    for (const ws of wss.clients) ws.terminate();
+    // terminate() 对仍处 CONNECTING 态的 socket 会抛错，停机路径上吞掉
+    for (const ws of wss.clients) {
+      try { ws.terminate(); } catch { /* 已在关闭中 */ }
+    }
     wss.close();
-  });
+  };
+  server.on('close', cleanup);
 
   wss.on('connection', (ws, req, url) => {
     ws.isAlive = true;
@@ -248,6 +260,10 @@ function attachRemoteControl(server, options = {}) {
   });
 
   console.log('[remote] WebSocket remote control ready at ws://.../remote');
+
+  // 停机流程须在 server.close() 后调用 close() 主动 terminate WS 客户端，
+  // 否则升级 socket 卡住 _connections，'close' 事件不触发
+  return { close: cleanup };
 }
 
 module.exports = { attachRemoteControl };

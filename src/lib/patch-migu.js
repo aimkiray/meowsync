@@ -50,6 +50,8 @@ if (!fs.existsSync(MIGU_PATH)) {
       // 歌曲 id 错当成 track 结果透传），此时回退原版而非产出半坏补丁
       if (!original || typeof original.track !== 'function') {
         console.warn('[patch-migu] 原模块缺少 track()，结构已变化，补丁未生效');
+        // 标记缓存避免之后每次 require 重复告警；early-return 读到的 exports 即 original，语义不变
+        if (Module._cache[resolved]) Module._cache[resolved].patchedByMeowSync = true;
         return original;
       }
       const request_ = require(path.join(PROVIDER_DIR, '../request.js'));
@@ -102,6 +104,8 @@ if (!fs.existsSync(MIGU_PATH)) {
     } catch (error) {
       // 上游内部结构变化导致补丁失败时回退原版，不阻断启动
       console.warn('[patch-migu] 补丁应用失败，回退原版 migu provider:', error.message);
+      // 同上：标记已处理，后续 require 直接短路返回原始 exports
+      if (Module._cache[resolved]) Module._cache[resolved].patchedByMeowSync = true;
       return original;
     }
   };
