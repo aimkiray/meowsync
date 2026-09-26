@@ -1,41 +1,43 @@
-# 使用Node.js 18 Alpine镜像作为基础镜像
-FROM node:18-alpine
+# syntax=docker/dockerfile:1
 
-# 设置工作目录
+# ---------- 阶段 1：前端构建 ----------
+FROM node:22-alpine AS frontend
 WORKDIR /app
-
-# 安装必要的系统依赖
-RUN apk add --no-cache git
-
-# 复制package文件
 COPY package*.json ./
-
-# 安装依赖（包括开发依赖，用于构建）
 RUN npm ci
-
-# 复制源代码
-COPY . .
-
-# 构建前端应用
+COPY index.html vite.config.js postcss.config.js tailwind.config.js ./
+COPY public ./public
+COPY src ./src
 RUN npm run build
 
-# 清理开发依赖，只保留生产依赖
-RUN npm ci --only=production && npm cache clean --force
+# ---------- 阶段 2：生产依赖 ----------
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package*.json ./
+# NeteaseCloudMusicApi / unblockneteasemusic 为运行时 CJS 依赖，不打包
+RUN npm ci --omit=dev && npm cache clean --force
 
-# 创建非root用户
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S meowsync -u 1001
+# ---------- 阶段 3：单进程运行时 ----------
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
 
-# 更改文件所有权
-RUN chown -R meowsync:nodejs /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=frontend /app/dist ./dist
+COPY package.json netease-api-server.js ./
+COPY src/server ./src/server
+COPY src/lib ./src/lib
+
+# 非 root 运行
+RUN addgroup -g 1001 -S nodejs \
+  && adduser -S meowsync -u 1001 \
+  && chown -R meowsync:nodejs /app
 USER meowsync
 
-# 暴露端口
-EXPOSE 3000 3002
+# 单端口：API + WS + 静态站点同端口托管
+EXPOSE 3002
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3002/ping || exit 1
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3002/healthz || exit 1
 
-# 启动命令
-CMD ["sh", "-c", "node netease-api-server.js & npx serve dist -s -l 3000"]
+CMD ["node", "netease-api-server.js"]

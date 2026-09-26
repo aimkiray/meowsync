@@ -2,295 +2,151 @@
 
 本文档详细说明如何配置和部署 MeowSync 音乐播放器项目。
 
+## 架构说明
+
+MeowSync 采用**单进程全栈架构**：
+
+- 前端：Vue 3 SPA，Vite 构建为 `dist/`
+- 后端：Hono（`netease-api-server.js`），同端口提供 API、WebSocket 遥控（`/remote`）、音频代理（`/audio-proxy`）以及前端静态资源与 SPA fallback
+- 生产环境只需运行 **一个 Node.js 进程**，对外暴露 **一个端口（默认 3002）**
+
 ## 环境变量配置
 
 ### 1. 创建环境变量文件
-
-复制 `.env.example` 文件并重命名为 `.env`：
 
 ```bash
 cp .env.example .env
 ```
 
-### 2. 配置环境变量
+### 2. 前端变量（构建期生效，`VITE_` 前缀）
 
-根据你的部署环境修改 `.env` 文件中的配置：
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| VITE_API_BASE_URL | - | API 地址；生产单进程部署**留空**即自动同源 |
+| VITE_API_TIMEOUT | 10000 | API 请求超时（毫秒） |
+| VITE_API_PORT | 3002 | 开发模式下的后端端口 |
+| VITE_BASE_PATH | / | 应用基础路径 |
+| VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌 |
+| VITE_PORT | 3000 | 开发服务器端口 |
+| VITE_OPEN_BROWSER | false | 启动时自动打开浏览器 |
+| VITE_ALLOWED_HOSTS | - | dev 服务器允许的 Host 列表 |
 
-#### 前端配置
-```env
-# 前端服务端口
-VITE_PORT=3000
+### 3. 后端变量（运行期生效）
 
-# API服务器地址（重要：部署时需要修改为实际域名）
-VITE_API_BASE_URL=https://your-domain.com:3002
-
-# 备用API地址
-VITE_BACKUP_API_URL=https://163api.qijieya.cn
-
-# API超时时间（毫秒）
-VITE_API_TIMEOUT=10000
-
-# 基础路径（如果部署在子目录）
-VITE_BASE_PATH=/
-```
-
-#### 后端配置
-```env
-# API服务器端口
-API_PORT=3002
-
-# 服务器主机地址
-HOST=0.0.0.0
-
-# CORS允许的来源（重要：部署时需要添加实际域名）
-CORS_ORIGINS=https://your-domain.com,http://localhost:3000
-
-# 是否启用请求日志
-ENABLE_REQUEST_LOG=true
-
-# 日志级别
-LOG_LEVEL=info
-
-# API超时时间
-API_TIMEOUT=30000
-```
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| API_PORT | 3002 | 服务监听端口 |
+| HOST | 0.0.0.0 | 绑定地址 |
+| CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
+| REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 必须带 `?token=` |
+| TRUST_PROXY | - | 可选：设为 `1`/`true` 时采信 `X-Forwarded-Proto/Host` |
+| NODE_ENV | development | 设为 `production` 启用安全响应头 |
 
 ## 部署步骤
 
 ### 本地开发
 
-1. **安装依赖**
-   ```bash
-   npm install
-   ```
+```bash
+npm install
+cp .env.example .env
+npm start          # 同时启动 Vite(3000) 与后端(3002)
+```
 
-2. **配置环境变量**
-   ```bash
-   cp .env.example .env
-   # 编辑 .env 文件
-   ```
+### 生产部署（Node.js）
 
-3. **启动开发服务器**
-   ```bash
-   # 启动前端开发服务器
-   npm run dev
-   
-   # 启动后端API服务器（新终端）
-   node netease-api-server.js
-   ```
+```bash
+npm run build:prod
+NODE_ENV=production node netease-api-server.js
+# 访问 http://localhost:3002
+```
 
-### 生产环境部署
+### PM2
 
-#### 方式一：传统部署
+```javascript
+// ecosystem.config.js —— 仅需一个进程
+module.exports = {
+  apps: [{
+    name: 'meowsync',
+    script: 'netease-api-server.js',
+    env: {
+      NODE_ENV: 'production',
+      API_PORT: 3002,
+      HOST: '0.0.0.0',
+      CORS_ORIGINS: 'https://your-domain.com'
+    }
+  }]
+}
+```
 
-1. **构建前端**
-   ```bash
-   npm run build
-   ```
+```bash
+pm2 start ecosystem.config.js && pm2 save
+```
 
-2. **配置生产环境变量**
-   ```env
-   # .env.production
-   VITE_API_BASE_URL=https://qaq.tat.mom:3002
-   CORS_ORIGINS=https://qaq.tat.mom
-   HOST=0.0.0.0
-   API_PORT=3002
-   ENABLE_REQUEST_LOG=false
-   ```
+### Docker（推荐）
 
-3. **启动服务**
-   ```bash
-   # 启动API服务器
-   NODE_ENV=production node netease-api-server.js
-   
-   # 使用静态文件服务器托管前端（如nginx、apache等）
-   # 或使用Node.js静态服务器
-   npx serve dist -p 3000
-   ```
+仓库内 `Dockerfile` 为三阶段构建：前端构建 → 生产依赖 → 非 root 运行时。
+镜像内只有一个 Node 进程，健康检查走 `/healthz`。
 
-#### 方式二：使用PM2（推荐）
+```bash
+docker build -t meowsync .
+docker run -d -p 3002:3002 --name meowsync meowsync
+```
 
-1. **安装PM2**
-   ```bash
-   npm install -g pm2
-   ```
+### Docker Compose
 
-2. **创建PM2配置文件**
-   ```javascript
-   // ecosystem.config.js
-   module.exports = {
-     apps: [
-       {
-         name: 'meowsync-api',
-         script: 'netease-api-server.js',
-         env: {
-           NODE_ENV: 'production',
-           API_PORT: 3002,
-           HOST: '0.0.0.0',
-           CORS_ORIGINS: 'https://qaq.tat.mom',
-           ENABLE_REQUEST_LOG: false
-         }
-       },
-       {
-         name: 'meowsync-frontend',
-         script: 'npx',
-         args: 'serve dist -p 3000',
-         env: {
-           NODE_ENV: 'production'
-         }
-       }
-     ]
-   }
-   ```
+```bash
+docker compose up -d                    # 单容器，暴露 3002
+docker compose --profile with-nginx up -d   # 附带 nginx 反代（80 端口）
+```
 
-3. **启动服务**
-   ```bash
-   pm2 start ecosystem.config.js
-   pm2 save
-   pm2 startup
-   ```
+compose 中的 `with-nginx` profile 使用仓库根目录的 `nginx.conf`，
+已配置 WebSocket `Upgrade`/`Connection` 头转发，遥控功能可穿透反代。
 
-#### 方式三：Docker部署
-
-1. **创建Dockerfile**
-   ```dockerfile
-   FROM node:18-alpine
-   
-   WORKDIR /app
-   
-   # 复制package文件
-   COPY package*.json ./
-   RUN npm ci --only=production
-   
-   # 复制源代码
-   COPY . .
-   
-   # 构建前端
-   RUN npm run build
-   
-   # 暴露端口
-   EXPOSE 3000 3002
-   
-   # 启动脚本
-   CMD ["npm", "run", "start"]
-   ```
-
-2. **添加启动脚本到package.json**
-   ```json
-   {
-     "scripts": {
-       "start": "node netease-api-server.js & npx serve dist -p 3000"
-     }
-   }
-   ```
-
-## Nginx配置示例
+## Nginx 反向代理（独立部署时）
 
 ```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 server {
     listen 80;
-    server_name qaq.tat.mom;
-    
-    # 前端静态文件
+    server_name your-domain.com;
+
     location / {
-        root /path/to/your/dist;
-        try_files $uri $uri/ /index.html;
-    }
-    
-    # API代理
-    location /api/ {
-        proxy_pass http://localhost:3002/;
+        proxy_pass http://localhost:3002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;        # WebSocket 必需
+        proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;                        # 音频流长连接
     }
 }
 ```
 
-## 环境变量说明
+> 使用反向代理时在 `.env` 设置 `TRUST_PROXY=1`，使 `/song_url` 解锁
+> 下发的 `/audio-proxy` 地址使用正确的 `https://` 对外地址。
 
-### 前端环境变量（VITE_前缀）
+## 远程遥控
 
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| VITE_PORT | 3000 | 前端开发服务器端口 |
-| VITE_API_BASE_URL | http://localhost:3002 | API服务器地址 |
-| VITE_BACKUP_API_URL | https://163api.qijieya.cn | 备用API地址 |
-| VITE_API_TIMEOUT | 10000 | API请求超时时间（毫秒） |
-| VITE_BASE_PATH | / | 应用基础路径 |
-
-### 后端环境变量
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| API_PORT | 3002 | API服务器端口 |
-| HOST | localhost | 服务器绑定地址 |
-| CORS_ORIGINS | http://localhost:3000 | CORS允许的来源 |
-| ENABLE_REQUEST_LOG | true | 是否启用请求日志 |
-| LOG_LEVEL | info | 日志级别 |
-| API_TIMEOUT | 30000 | API超时时间（毫秒） |
-
-## 注意事项
-
-1. **CORS配置**：确保 `CORS_ORIGINS` 包含你的前端域名
-2. **API地址**：生产环境中 `VITE_API_BASE_URL` 必须指向正确的API服务器地址
-3. **端口配置**：确保服务器防火墙开放相应端口
-4. **SSL证书**：生产环境建议配置HTTPS
-5. **版权合规**：请遵守相关音乐版权法律法规
-6. **性能优化**：可以配置CDN、缓存等优化策略
+- 主机端：`http://<host>:3002/?mode=host`
+- 遥控端：扫描主机端二维码或访问 `/?mode=controller&host=<地址>`
+- 设置 `REMOTE_TOKEN`（后端）与 `VITE_REMOTE_TOKEN`（构建期）启用令牌校验
+- WebSocket 校验 Origin：默认同源或 `CORS_ORIGINS` 白名单内来源
 
 ## 故障排除
 
-### 常见问题
-
-1. **API连接失败**
-   - 检查 `VITE_API_BASE_URL` 配置
-   - 确认API服务器正在运行
-   - 检查CORS配置
-
-2. **环境变量不生效**
-   - 确认 `.env` 文件位置正确
-   - 重启开发服务器
-   - 检查变量名前缀（前端需要 `VITE_` 前缀）
-
-3. **构建失败**
-   - 检查Node.js版本（推荐16+）
-   - 清除缓存：`npm run build -- --force`
-   - 检查依赖版本兼容性
-
-### 日志查看
-
-```bash
-# PM2日志
-pm2 logs
-
-# 直接运行时的日志
-node netease-api-server.js
-```
+1. **页面打开但 API 报错** — 检查 `VITE_API_BASE_URL` 是否误指向 localhost
+   （生产构建应留空走同源）；查看 `CORS_ORIGINS`
+2. **遥控连接失败** — 确认反代透传了 `Upgrade` 头；校验 token 配对
+3. **容器一直 unhealthy** — `curl http://localhost:3002/healthz` 应返回 `{"ok":true}`
+4. **端口被占用** — `API_PORT` 修改监听端口；Windows 下确认无残留 node 进程
 
 ## 更新部署
 
-1. **拉取最新代码**
-   ```bash
-   git pull origin main
-   ```
-
-2. **更新依赖**
-   ```bash
-   npm install
-   ```
-
-3. **重新构建**
-   ```bash
-   npm run build
-   ```
-
-4. **重启服务**
-   ```bash
-   pm2 restart all
-   ```
-
----
-
-如有问题，请查看项目README或提交Issue。
+```bash
+git pull && npm install && npm run build
+pm2 restart meowsync        # 或 docker compose up -d --build
+```
