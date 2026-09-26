@@ -93,6 +93,8 @@ const remote = attachRemoteControl(server, {
   token: process.env.REMOTE_TOKEN || ''
 });
 
+const downloadManager = require('./src/server/services/download-manager');
+
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
 // WS 连接由 remote.close() 立即 terminate（升级 socket 不归 close()/
 // closeAllConnections() 管，但计入 server._connections，不销毁则 'close'
@@ -112,6 +114,12 @@ function shutdown(signal) {
   server.close(() => process.exit(0));
   server.closeIdleConnections?.();
   remote?.close?.();
+  // 取消运行中的下载队列并把 downloading 任务复位为 pending，避免重启后假状态
+  try {
+    downloadManager.shutdownAll();
+  } catch (error) {
+    console.error('[api] 停止下载队列失败:', error);
+  }
   setTimeout(() => server.closeAllConnections?.(), 3000).unref();
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

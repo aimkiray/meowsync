@@ -320,14 +320,6 @@ export default {
     const panelContainer = ref(null)
     const { collapseButtonRef, fixedButtonTop } = useCollapseButton(panelContainer, () => props.collapsed)
 
-    // 码率选项
-    const bitrateOptions = [
-      { label: '320kbps (高品质)', value: 320000 },
-      { label: '192kbps (标准)', value: 192000 },
-      { label: '128kbps (普通)', value: 128000 },
-      { label: '96kbps (节省流量)', value: 96000 }
-    ]
-    
     // 动态样式
     const headerStyle = computed(() => {
       if (currentTheme.value === 'pixel-retro') {
@@ -421,25 +413,9 @@ export default {
       else if (result === 'failed') alert('分享失败，请手动复制链接')
     }
 
-    // 下载歌曲
-    const downloadSong = async (song, bitrate) => {
-      try {
-        // 关闭下载菜单
-        showDownloadMenu.value = null
-        
-        // 设置下载状态
-        downloadingStates.value[song.id] = true
-        
-        // 调用API下载歌曲
-        await musicApi.downloadSong(song, bitrate)
-      } catch (error) {
-        console.error('下载失败:', error.message)
-        // 可以在这里添加错误提示
-        alert(`下载失败: ${error.message}`)
-      } finally {
-        // 清除下载状态
-        delete downloadingStates.value[song.id]
-      }
+    // 服务端错误统一返回 { code, message }，优先取 message 展示
+    const extractErrorMessage = (error) => {
+      return error.response?.data?.message || error.message
     }
 
     // 直接下载（浏览器下载，最高码率）
@@ -451,34 +427,28 @@ export default {
         showDownloadMenu.value = null
       } catch (error) {
         console.error('下载失败:', error)
-        alert('下载失败: ' + error.message)
+        alert('下载失败: ' + extractErrorMessage(error))
       } finally {
         downloadingStates.value[song.id] = false
       }
     }
 
-    // 查询歌曲下载状态
-    const checkSongDownloadStatus = async (song) => {
-      if (!props.selectedPlaylist) return
-
-      try {
-        const response = await downloadsApi.getSongDownloadStatus(
-          props.selectedPlaylist.id,
-          song.id
-        )
-        serverDownloadedStates.value[song.id] = response.data.data.downloaded
-      } catch (error) {
-        console.error('查询下载状态失败:', error)
-        serverDownloadedStates.value[song.id] = false
-      }
-    }
-
-    // 批量查询所有歌曲的下载状态
+    // 批量查询所有歌曲的下载状态：一次 listTasks 拉回该歌单全部任务本地映射，
+    // 避免逐曲 N+1 请求（歌单未导入时服务端返回空数组，天然无副作用）
     const checkAllSongsDownloadStatus = async () => {
       if (!props.selectedPlaylist || !props.songs.length) return
 
-      for (const song of props.songs) {
-        await checkSongDownloadStatus(song)
+      try {
+        const response = await downloadsApi.listTasks({ playlistId: props.selectedPlaylist.id })
+        const tasks = response.data?.data || []
+        const downloadedIds = new Set(
+          tasks.filter(t => t.status === 'completed').map(t => String(t.songId))
+        )
+        for (const song of props.songs) {
+          serverDownloadedStates.value[song.id] = downloadedIds.has(String(song.id))
+        }
+      } catch (error) {
+        console.error('查询下载状态失败:', error)
       }
     }
 
@@ -505,7 +475,7 @@ export default {
           alert('删除成功！')
         } catch (error) {
           console.error('删除失败:', error)
-          alert('删除失败: ' + error.message)
+          alert('删除失败: ' + extractErrorMessage(error))
         } finally {
           serverDownloadingStates.value[song.id] = false
           showDownloadMenu.value = null
@@ -524,7 +494,7 @@ export default {
           alert('下载成功！')
         } catch (error) {
           console.error('下载失败:', error)
-          alert('下载失败: ' + error.message)
+          alert('下载失败: ' + extractErrorMessage(error))
         } finally {
           serverDownloadingStates.value[song.id] = false
           showDownloadMenu.value = null
@@ -553,10 +523,8 @@ export default {
       downloadingStates,
       serverDownloadedStates,
       serverDownloadingStates,
-      bitrateOptions,
       toggleDownloadMenu,
       shareSong,
-      downloadSong,
       downloadSongDirect,
       toggleServerDownload,
       getMenuPosition,

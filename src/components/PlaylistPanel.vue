@@ -529,7 +529,7 @@ export default {
         closeMenu()
       } catch (error) {
         console.error('创建下载队列失败:', error)
-        const message = error.response?.data?.error || error.message
+        const message = error.response?.data?.message || error.message
         alert('下载失败: ' + message)
       }
     }
@@ -547,7 +547,7 @@ export default {
         closeMenu()
       } catch (error) {
         console.error('批量删除已下载歌曲失败:', error)
-        const message = error.response?.data?.error || error.message
+        const message = error.response?.data?.message || error.message
         alert('删除失败: ' + message)
       }
     }

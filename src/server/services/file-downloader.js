@@ -7,6 +7,22 @@ function sanitizeFilename(filename) {
   return filename.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim();
 }
 
+// 下载地址校验：URL 来自上游响应/DB 字段，只允许 http/https，剥离内嵌 credentials
+function toDownloadUrl(raw) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('无效的下载链接');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('仅支持 http/https 下载');
+  }
+  parsed.username = '';
+  parsed.password = '';
+  return parsed.toString();
+}
+
 async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress) {
   try {
     // 进程内直调上游模块 + 共享解锁后处理（purpose=download：kuwo 优先、不走 audio-proxy），
@@ -28,7 +44,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress) {
 
     const audioResponse = await axios({
       method: 'get',
-      url: songData.url,
+      url: toDownloadUrl(songData.url),
       responseType: 'stream',
       timeout: 300000,
       maxRedirects: 5
@@ -51,6 +67,10 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress) {
     return new Promise((resolve, reject) => {
       writer.on('finish', () => {
         const stats = fs.statSync(outputPath);
+        if (stats.size === 0) {
+          reject(new Error('下载内容为空'));
+          return;
+        }
         resolve({
           path: outputPath,
           size: stats.size,
@@ -112,7 +132,7 @@ async function downloadCover(coverUrl, outputPath) {
 
     const response = await axios({
       method: 'get',
-      url: coverUrl,
+      url: toDownloadUrl(coverUrl),
       responseType: 'stream',
       timeout: 60000
     });
@@ -123,6 +143,10 @@ async function downloadCover(coverUrl, outputPath) {
     return new Promise((resolve, reject) => {
       writer.on('finish', () => {
         const stats = fs.statSync(outputPath);
+        if (stats.size === 0) {
+          reject(new Error('下载内容为空'));
+          return;
+        }
         resolve({
           path: outputPath,
           size: stats.size
