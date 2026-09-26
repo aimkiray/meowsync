@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
 const playlistTracksRepo = require('../repositories/playlistTracks');
@@ -8,40 +9,60 @@ const { importPlaylistFromNetease } = require('./playlist-sync');
 const fileDownloader = require('./file-downloader');
 
 // 下载文件根目录：<dataDir>/downloads，可用 DOWNLOAD_DIR 覆盖（容器内指到挂载卷）
-const DOWNLOAD_BASE_DIR = process.env.DOWNLOAD_DIR || path.join(dataDir, 'downloads');
+// resolve 归一化：路径安全比较依赖绝对路径
+const DOWNLOAD_BASE_DIR = path.resolve(process.env.DOWNLOAD_DIR || path.join(dataDir, 'downloads'));
 
 // 运行中队列的控制器集合：queueId -> { paused, cancelled }
 const activeQueues = new Map();
+// 停机期间拒绝新建/启动下载，避免半途任务留下脏状态
+let shuttingDown = false;
 
+// 附带 HTTP 状态码的业务错误，路由层统一映射为 { code, message }
+function httpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+// 仅查本地、绝不触发远端导入：GET/DELETE 等读/删操作不允许产生写副作用
+function findExistingPlaylistId(playlistId) {
+  if (playlistId === undefined || playlistId === null) return null;
+  const str = String(playlistId).trim();
+  if (!str) return null;
+  const numericId = Number(str);
+  if (Number.isInteger(numericId)) {
+    const byLocalId = playlistsRepo.findPlaylistById(numericId);
+    if (byLocalId) return byLocalId.id;
+  }
+  const byNeteaseId = playlistsRepo.findPlaylistByNeteaseId(str);
+  return byNeteaseId ? byNeteaseId.id : null;
+}
+
+// 写操作（创建队列/下载单曲）专用：本地未命中时尝试从网易云导入
 async function resolvePlaylistId(playlistId) {
-  const numericId = Number(playlistId);
-  if (Number.isNaN(numericId)) {
-    throw new Error('无效的歌单 ID');
+  const localId = findExistingPlaylistId(playlistId);
+  if (localId !== null) return localId;
+  if (playlistId === undefined || playlistId === null || !String(playlistId).trim()) {
+    throw httpError(400, '无效的歌单 ID');
   }
-
-  const byLocalId = playlistsRepo.findPlaylistById(numericId);
-  if (byLocalId) {
-    return byLocalId.id;
-  }
-
-  const byNeteaseId = playlistsRepo.findPlaylistByNeteaseId(String(playlistId));
-  if (byNeteaseId) {
-    return byNeteaseId.id;
-  }
-
-  const imported = await importPlaylistFromNetease(String(playlistId));
+  const imported = await importPlaylistFromNetease(String(playlistId).trim());
   if (imported?.id) {
     return imported.id;
   }
+  throw httpError(404, '歌单不存在');
+}
 
-  throw new Error('歌单不存在');
+// 防路径逃逸：任务记录的文件路径来自 DB，只允许删除 DOWNLOAD_BASE_DIR 内的文件
+function isUnderDownloadDir(filePath) {
+  const resolved = path.resolve(filePath);
+  return resolved.startsWith(DOWNLOAD_BASE_DIR + path.sep);
 }
 
 function deleteFiles(filePaths) {
-  const fs = require('fs');
   let deletedFiles = 0;
 
   for (const filePath of filePaths.filter(Boolean)) {
+    if (!isUnderDownloadDir(filePath)) continue;
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
       deletedFiles += 1;
@@ -52,15 +73,19 @@ function deleteFiles(filePaths) {
 }
 
 async function createDownloadQueue(playlistId, options = {}) {
+  if (shuttingDown) {
+    throw httpError(409, '服务正在停机');
+  }
+
   const resolvedPlaylistId = await resolvePlaylistId(playlistId);
   const playlist = playlistsRepo.findPlaylistById(resolvedPlaylistId);
   if (!playlist) {
-    throw new Error('歌单不存在');
+    throw httpError(404, '歌单不存在');
   }
 
   const tracks = playlistTracksRepo.listTracksByPlaylistId(resolvedPlaylistId);
   if (tracks.length === 0) {
-    throw new Error('歌单中没有歌曲');
+    throw httpError(400, '歌单中没有歌曲');
   }
 
   const queue = downloadQueuesRepo.createQueue({
@@ -105,13 +130,17 @@ async function createDownloadQueue(playlistId, options = {}) {
 }
 
 async function startQueue(queueId) {
+  if (shuttingDown) {
+    throw httpError(409, '服务正在停机');
+  }
+
   const queue = downloadQueuesRepo.findQueueById(queueId);
   if (!queue) {
-    throw new Error('队列不存在');
+    throw httpError(404, '队列不存在');
   }
 
   if (activeQueues.has(queueId)) {
-    throw new Error('队列已在运行中');
+    throw httpError(409, '队列已在运行中');
   }
 
   downloadQueuesRepo.updateQueue(queueId, { status: 'running' });
@@ -133,6 +162,11 @@ async function startQueue(queueId) {
 
 async function processQueue(queueId, controller) {
   const queue = downloadQueuesRepo.findQueueById(queueId);
+  // 队列可能已被 DELETE 移除：控制器取消即可返回，避免对空行裸取字段
+  if (!queue) {
+    activeQueues.delete(queueId);
+    return;
+  }
   const tasks = downloadTasksRepo.listTasksByQueue(queueId);
 
   const pendingTasks = tasks.filter(t => t.status === 'pending');
@@ -283,7 +317,7 @@ async function processTask(task, queueId) {
 async function pauseQueue(queueId) {
   const controller = activeQueues.get(queueId);
   if (!controller) {
-    throw new Error('队列未运行');
+    throw httpError(409, '队列未运行');
   }
 
   controller.paused = true;
@@ -295,7 +329,7 @@ async function pauseQueue(queueId) {
 async function resumeQueue(queueId) {
   const controller = activeQueues.get(queueId);
   if (!controller) {
-    throw new Error('队列未运行');
+    throw httpError(409, '队列未运行');
   }
 
   controller.paused = false;
@@ -305,21 +339,45 @@ async function resumeQueue(queueId) {
 }
 
 async function cancelQueue(queueId) {
+  const queue = downloadQueuesRepo.findQueueById(queueId);
+  if (!queue) {
+    throw httpError(404, '队列不存在');
+  }
+
   const controller = activeQueues.get(queueId);
   if (controller) {
     controller.cancelled = true;
   }
 
-  downloadQueuesRepo.updateQueue(queueId, { status: 'cancelled' });
+  // 终态队列不应被改写为 cancelled（completed/failed 是有意义的终态）
+  if (queue.status === 'pending' || queue.status === 'running' || queue.status === 'paused') {
+    downloadQueuesRepo.updateQueue(queueId, { status: 'cancelled' });
+  }
   activeQueues.delete(queueId);
 
   return downloadQueuesRepo.findQueueById(queueId);
 }
 
+// DELETE /queues/:id：先取消运行中的控制器再删行，防止孤儿循环继续写库
+function deleteQueue(queueId) {
+  const queue = downloadQueuesRepo.findQueueById(queueId);
+  if (!queue) {
+    throw httpError(404, '队列不存在');
+  }
+
+  const controller = activeQueues.get(queueId);
+  if (controller) {
+    controller.cancelled = true;
+  }
+  activeQueues.delete(queueId);
+
+  downloadQueuesRepo.deleteQueue(queueId);
+}
+
 function getQueueProgress(queueId) {
   const queue = downloadQueuesRepo.findQueueById(queueId);
   if (!queue) {
-    throw new Error('队列不存在');
+    throw httpError(404, '队列不存在');
   }
 
   const tasks = downloadTasksRepo.listTasksByQueue(queueId);
@@ -333,14 +391,45 @@ function getQueueProgress(queueId) {
   };
 }
 
+// 任务列表查询：playlistId 支持本地 id 或网易云 id（未导入则空数组，不触发导入）
+function listTasks({ playlistId, queueId, status } = {}) {
+  if (queueId !== undefined && queueId !== null && queueId !== '') {
+    return downloadTasksRepo.listTasksByQueue(queueId);
+  }
+  if (playlistId !== undefined && playlistId !== null && playlistId !== '') {
+    const resolved = findExistingPlaylistId(playlistId);
+    return resolved === null ? [] : downloadTasksRepo.listTasksByPlaylist(resolved);
+  }
+  if (status) {
+    return downloadTasksRepo.listTasksByStatus(status);
+  }
+  throw httpError(400, '需要提供 playlistId、queueId 或 status 参数');
+}
+
+// 删除任务记录及其已落盘文件
+function deleteTask(taskId) {
+  const task = downloadTasksRepo.findTaskById(taskId);
+  if (!task) {
+    throw httpError(404, '任务不存在');
+  }
+
+  const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]);
+  downloadTasksRepo.deleteTask(taskId);
+  return { success: true, deletedFiles };
+}
+
 // 下载单首歌曲到服务器
 async function downloadSingleSong(playlistId, songId, options = {}) {
+  if (shuttingDown) {
+    throw httpError(409, '服务正在停机');
+  }
+
   const resolvedPlaylistId = await resolvePlaylistId(playlistId);
   const tracks = playlistTracksRepo.listTracksByPlaylistId(resolvedPlaylistId);
   const track = tracks.find(t => String(t.id) === String(songId));
 
   if (!track) {
-    throw new Error('歌曲不存在');
+    throw httpError(404, '歌曲不存在');
   }
 
   const artists = track.ar || track.artists || [];
@@ -373,24 +462,29 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
   return downloadTasksRepo.findTaskById(task.id);
 }
 
-// 查询歌曲下载状态
+// 查询歌曲下载状态（读操作：歌单未导入时返回未下载，不触发远端导入）
 async function getSongDownloadStatus(playlistId, songId) {
-  const resolvedPlaylistId = await resolvePlaylistId(playlistId);
-  const task = downloadTasksRepo.findTaskByPlaylistAndSongId(resolvedPlaylistId, String(songId));
+  const resolvedPlaylistId = findExistingPlaylistId(playlistId);
+  const task = resolvedPlaylistId === null
+    ? null
+    : downloadTasksRepo.findTaskByPlaylistAndSongId(resolvedPlaylistId, String(songId));
 
   return {
-    downloaded: task && task.status === 'completed',
+    downloaded: Boolean(task && task.status === 'completed'),
     task: task || null
   };
 }
 
-// 删除歌曲文件
+// 删除歌曲文件（读路径 resolver：删除未导入歌单的任务没有意义，直接 404）
 async function deleteSongFiles(playlistId, songId) {
-  const resolvedPlaylistId = await resolvePlaylistId(playlistId);
+  const resolvedPlaylistId = findExistingPlaylistId(playlistId);
+  if (resolvedPlaylistId === null) {
+    throw httpError(404, '歌单不存在');
+  }
   const task = downloadTasksRepo.findTaskByPlaylistAndSongId(resolvedPlaylistId, String(songId));
 
   if (!task) {
-    throw new Error('任务不存在');
+    throw httpError(404, '任务不存在');
   }
 
   const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]);
@@ -401,7 +495,10 @@ async function deleteSongFiles(playlistId, songId) {
 }
 
 async function deletePlaylistDownloadedFiles(playlistId) {
-  const resolvedPlaylistId = await resolvePlaylistId(playlistId);
+  const resolvedPlaylistId = findExistingPlaylistId(playlistId);
+  if (resolvedPlaylistId === null) {
+    throw httpError(404, '歌单不存在');
+  }
   const tasks = downloadTasksRepo.listStandaloneTasksByPlaylist(resolvedPlaylistId);
   const downloadedTasks = tasks.filter(task => task.status === 'completed' || task.audioPath || task.lyricsPath || task.coverPath);
 
@@ -422,9 +519,13 @@ async function deletePlaylistDownloadedFiles(playlistId) {
 }
 
 async function retryTask(taskId) {
+  if (shuttingDown) {
+    throw httpError(409, '服务正在停机');
+  }
+
   const task = downloadTasksRepo.findTaskById(taskId);
   if (!task) {
-    throw new Error('任务不存在');
+    throw httpError(404, '任务不存在');
   }
 
   const queue = task.queueId ? downloadQueuesRepo.findQueueById(task.queueId) : null;
@@ -450,16 +551,20 @@ async function retryTask(taskId) {
 }
 
 async function retryQueue(queueId) {
+  if (shuttingDown) {
+    throw httpError(409, '服务正在停机');
+  }
+
   const queue = downloadQueuesRepo.findQueueById(queueId);
   if (!queue) {
-    throw new Error('队列不存在');
+    throw httpError(404, '队列不存在');
   }
 
   const tasks = downloadTasksRepo.listTasksByQueue(queueId);
   const failedTasks = tasks.filter(task => task.status === 'failed');
 
   if (failedTasks.length === 0) {
-    throw new Error('没有可重试的失败任务');
+    throw httpError(400, '没有可重试的失败任务');
   }
 
   for (const task of failedTasks) {
@@ -481,17 +586,39 @@ async function retryQueue(queueId) {
   return downloadQueuesRepo.findQueueById(queueId);
 }
 
+// 优雅停机：取消所有运行中队列，把停留在 downloading 的任务复位为 pending
+// （进程退出后 axios 流随之断开；复位后用户重启可重跑这些任务而非永久卡死）
+function shutdownAll() {
+  shuttingDown = true;
+  for (const [queueId, controller] of activeQueues) {
+    controller.cancelled = true;
+    downloadQueuesRepo.updateQueue(queueId, { status: 'cancelled' });
+  }
+  activeQueues.clear();
+
+  for (const task of downloadTasksRepo.listTasksByStatus('downloading')) {
+    downloadTasksRepo.updateTask(task.id, {
+      status: 'pending',
+      errorMessage: '服务停机中断'
+    });
+  }
+}
+
 module.exports = {
   createDownloadQueue,
   startQueue,
   pauseQueue,
   resumeQueue,
   cancelQueue,
+  deleteQueue,
+  deleteTask,
   retryTask,
   retryQueue,
   getQueueProgress,
+  listTasks,
   downloadSingleSong,
   getSongDownloadStatus,
   deleteSongFiles,
-  deletePlaylistDownloadedFiles
+  deletePlaylistDownloadedFiles,
+  shutdownAll
 };

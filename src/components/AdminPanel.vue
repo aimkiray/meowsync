@@ -372,6 +372,8 @@ async function deleteQueue(queueId) {
 
 function startPolling() {
   pollInterval = setInterval(async () => {
+    // 标签页不可见时跳过轮询：隐藏页面的进度刷新用户看不到，白耗请求
+    if (document.hidden) return;
     await loadQueues({ silent: true });
     if (selectedQueue.value) {
       await loadTasks(selectedQueue.value.id, { silent: true });
