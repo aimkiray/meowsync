@@ -11,7 +11,9 @@ function replaceTracksForPlaylist(playlistId, tracks) {
 
   const transaction = db.transaction(() => {
     deleteStmt.run(playlistId);
-    tracks.forEach((track, index) => {
+    // 上游曲目缺 id 时 String(undefined) 会写入 'undefined' 脏行——直接跳过
+    const validTracks = tracks.filter(t => t && t.id !== undefined && t.id !== null);
+    validTracks.forEach((track, index) => {
       insertStmt.run(
         playlistId,
         String(track.id),
@@ -38,7 +40,12 @@ function listTracksByPlaylistId(playlistId) {
   `).all(playlistId);
 
   return rows.map(row => {
-    const raw = JSON.parse(row.raw_json);
+    // 单行 raw_json 损坏不该让整个歌单/建队列 500——退化到列字段重建
+    let raw = {};
+    try {
+      raw = JSON.parse(row.raw_json || '{}');
+    } catch { /* 损坏行用列字段兜底 */ }
+    if (typeof raw !== 'object' || raw === null) raw = {};
     return {
       ...raw,
       id: raw.id ?? row.song_id,

@@ -265,16 +265,19 @@ const TaskRow = {
               h('div', { class: 'flex-1 h-1.5 bg-gray-800 border border-gray-700' }, [
                 h('div', {
                   class: 'h-full bg-pink-500 transition-all',
-                  style: `width: ${rowProps.task.progress}%`
+                  // undefined/>100 会产生非法/溢出样式
+                  style: `width: ${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`
                 })
               ]),
-              h('div', { class: 'text-[11px] text-gray-400 w-10 text-right' }, `${rowProps.task.progress}%`)
+              h('div', { class: 'text-[11px] text-gray-400 w-10 text-right' }, `${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`)
             ])
           ])
           : null,
-        rowProps.task.status === 'failed' && rowProps.task.errorMessage
+        rowProps.task.status === 'failed'
           ? h('div', { class: 'mt-1' }, [
-            h('p', { class: 'text-[11px] text-red-300 break-words' }, `下载失败喵：${rowProps.task.errorMessage}`),
+            rowProps.task.errorMessage
+              ? h('p', { class: 'text-[11px] text-red-300 break-words' }, `下载失败喵：${rowProps.task.errorMessage}`)
+              : h('p', { class: 'text-[11px] text-red-300 break-words' }, '下载失败喵'),
             rowProps.task.retryCount > 0
               ? h('p', { class: 'text-[11px] text-gray-400 mt-1' }, `已重试 ${rowProps.task.retryCount} 次`)
               : null,

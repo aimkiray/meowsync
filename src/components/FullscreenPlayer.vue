@@ -75,8 +75,8 @@
         </div>
 
         <img
-          v-if="currentSong?.al?.picUrl"
-          :src="httpsCover(currentSong.al.picUrl)"
+          v-if="currentSong?.al?.picUrl || currentSong?.album?.picUrl"
+          :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
           :alt="currentSong.name"
           class="fullscreen-player__cover"
           :class="{ 'playing-animation': isPlaying }"

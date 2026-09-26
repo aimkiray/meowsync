@@ -26,6 +26,24 @@ function hasIndex(database, indexName) {
   return Boolean(row);
 }
 
+// 唯一约束检测：存在任一 unique 非 partial 索引且列集恰好匹配——同名但列
+// 不同的唯一索引也会让约束落空；sqlite_autoindex_* 必须走 PRAGMA 查
+// （sqlite_master.sql 为 NULL）。列序不敏感——UNIQUE(a,b) 与 UNIQUE(b,a) 等价
+function hasUniqueIndexOn(database, table, columns) {
+  return database.prepare(`PRAGMA index_list('${table}')`).all().some((index) => {
+    // partial 索引的唯一性只覆盖 WHERE 子集，全表约束未落实
+    if (!index.unique || index.partial) return false;
+    // PRAGMA 不支持绑定参数——index.name 来自 sqlite_master 属可信源，
+    // 仍按字符串字面量转义兜底
+    const cols = new Set(
+      database.prepare(
+        `PRAGMA index_info('${String(index.name).replace(/'/g, "''")}')`
+      ).all().map(col => col.name)
+    );
+    return cols.size === columns.length && columns.every(c => cols.has(c));
+  });
+}
+
 // 老库逐列补齐：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，
 // 哪些列是后加的就补哪些（queue_id IS NULL 是独立单曲任务的合法状态，绝不做数据回填/删除）
 const DOWNLOAD_TASK_COLUMNS = {
@@ -57,28 +75,15 @@ function migrateDownloadTasks(database) {
     `);
   }
   // (playlist_id, song_id) 唯一约束：新库由 CREATE TABLE 的 UNIQUE(...) 生成
-  // sqlite_autoindex_*（sqlite_master.sql 为 NULL，必须走 PRAGMA 查）；老库可能
-  // 只有非唯一旧索引或完全没有——约束缺失才跑去重+补索引。
-  // 判定条件：存在任一 unique 索引且列恰好是 (playlist_id, song_id)——同名但列
-  // 不同的唯一索引（如只在 song_id 上）也会让约束落空
-  const hasCorrectUniqueIndex = database.prepare(
-    `PRAGMA index_list('download_tasks')`
-  ).all().some((index) => {
-    // partial 索引的唯一性只覆盖 WHERE 子集，全表约束未落实；列序不敏感——
-    // UNIQUE(a,b) 与 UNIQUE(b,a) 语义等价，sqlite_autoindex 列序可能与手写不同
-    if (!index.unique || index.partial) return false;
-    // PRAGMA 不支持绑定参数——index.name 来自 sqlite_master 属可信源，
-    // 仍按字符串字面量转义兜底
-    const cols = new Set(
-      database.prepare(
-        `PRAGMA index_info('${String(index.name).replace(/'/g, "''")}')`
-      ).all().map(col => col.name)
-    );
-    return cols.size === 2 && cols.has('playlist_id') && cols.has('song_id');
-  });
+  // sqlite_autoindex_*；老库可能只有非唯一旧索引或完全没有——约束缺失才跑
+  // 去重+补索引
+  const hasCorrectUniqueIndex = hasUniqueIndexOn(
+    database, 'download_tasks', ['playlist_id', 'song_id']
+  );
   if (!hasCorrectUniqueIndex) {
     // 约束缺失才跑去重（约束已在时数学上不可能有重复，全表 DELETE 是纯浪费）。
     // 去重保留优先级：completed 行带文件路径，删了它文件会变孤儿；同级保留最小 id。
+    // NULL 行跳过：UNIQUE 索引里 NULL 互不冲突，折叠会误删合法多行。
     // DROP+CREATE 放同一事务：中间崩溃留无索引状态，下次启动自愈重建
     database.transaction(() => {
       if (hasIndex(database, 'idx_download_tasks_playlist_song')) {
@@ -86,18 +91,102 @@ function migrateDownloadTasks(database) {
       }
       database.exec(`
         DELETE FROM download_tasks
-        WHERE id NOT IN (
-          SELECT id FROM (
-            SELECT id, ROW_NUMBER() OVER (
-              PARTITION BY playlist_id, song_id
-              ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, id
-            ) AS rn FROM download_tasks
-          ) WHERE rn = 1
-        )
+        WHERE playlist_id IS NOT NULL AND song_id IS NOT NULL
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id, ROW_NUMBER() OVER (
+                PARTITION BY playlist_id, song_id
+                ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, id
+              ) AS rn FROM download_tasks
+              WHERE playlist_id IS NOT NULL AND song_id IS NOT NULL
+            ) WHERE rn = 1
+          )
       `);
       database.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_playlist_song
         ON download_tasks(playlist_id, song_id)
+      `);
+    })();
+  }
+}
+
+// 其余三张表同款的逐列补齐：ALTER ADD COLUMN 不允许 NOT NULL 无默认值、
+// 也不允许 CURRENT_TIMESTAMP 作默认值——时间戳列一律可空，写入方负责赋值
+const LEGACY_TABLE_COLUMNS = {
+  playlists: {
+    netease_playlist_id: 'TEXT',
+    name: "TEXT NOT NULL DEFAULT ''",
+    cover_img_url: 'TEXT',
+    creator_nickname: 'TEXT',
+    track_count: 'INTEGER NOT NULL DEFAULT 0',
+    source: "TEXT NOT NULL DEFAULT 'netease'",
+    is_default: 'INTEGER NOT NULL DEFAULT 0',
+    created_at: 'TEXT',
+    updated_at: 'TEXT',
+    last_synced_at: 'TEXT'
+  },
+  playlist_tracks: {
+    // REFERENCES 列必须可空（ADD COLUMN 带 REFERENCES 时默认须为 NULL）
+    playlist_id: 'INTEGER REFERENCES playlists(id) ON DELETE CASCADE',
+    song_id: "TEXT NOT NULL DEFAULT ''",
+    name: "TEXT NOT NULL DEFAULT ''",
+    artist_json: 'TEXT',
+    album_json: 'TEXT',
+    duration_ms: 'INTEGER NOT NULL DEFAULT 0',
+    position: 'INTEGER NOT NULL DEFAULT 0',
+    raw_json: 'TEXT',
+    created_at: 'TEXT'
+  },
+  download_queues: {
+    playlist_id: 'INTEGER REFERENCES playlists(id) ON DELETE CASCADE',
+    name: "TEXT NOT NULL DEFAULT ''",
+    status: "TEXT NOT NULL DEFAULT 'pending'",
+    total_tasks: 'INTEGER DEFAULT 0',
+    completed_tasks: 'INTEGER DEFAULT 0',
+    failed_tasks: 'INTEGER DEFAULT 0',
+    concurrent_limit: 'INTEGER DEFAULT 3',
+    bitrate: 'INTEGER DEFAULT 320000',
+    download_audio: 'INTEGER DEFAULT 1',
+    download_lyrics: 'INTEGER DEFAULT 1',
+    download_cover: 'INTEGER DEFAULT 1',
+    created_at: 'TEXT',
+    updated_at: 'TEXT',
+    completed_at: 'TEXT'
+  }
+};
+
+function migrateLegacyTables(database) {
+  for (const [table, columns] of Object.entries(LEGACY_TABLE_COLUMNS)) {
+    for (const [column, type] of Object.entries(columns)) {
+      if (!hasColumn(database, table, column)) {
+        database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      }
+    }
+  }
+
+  // upsertPlaylist 依赖 ON CONFLICT(netease_playlist_id)——老库若没有该唯一
+  // 约束，导入/刷新会永久报 "ON CONFLICT clause does not match"。约束缺失时
+  // 先去重再补索引（保留最小 id，脏行引用由后续逻辑兜底）
+  if (!hasUniqueIndexOn(database, 'playlists', ['netease_playlist_id'])) {
+    database.transaction(() => {
+      if (hasIndex(database, 'idx_playlists_netease_id')) {
+        database.exec('DROP INDEX idx_playlists_netease_id');
+      }
+      database.exec(`
+        DELETE FROM playlists
+        WHERE netease_playlist_id IS NOT NULL
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id, ROW_NUMBER() OVER (
+                PARTITION BY netease_playlist_id ORDER BY id
+              ) AS rn FROM playlists
+              WHERE netease_playlist_id IS NOT NULL
+            ) WHERE rn = 1
+          )
+      `);
+      database.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_playlists_netease_id
+        ON playlists(netease_playlist_id)
       `);
     })();
   }
@@ -200,6 +289,7 @@ function initSchema(database) {
   `);
 
   migrateDownloadTasks(database);
+  migrateLegacyTables(database);
 }
 
 function getDb() {
