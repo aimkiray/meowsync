@@ -1,86 +1,10 @@
 import axios from 'axios'
-import CryptoJS from 'crypto-js'
-
-function resolveApiBaseUrl() {
-  const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
-  const fallbackPort = import.meta.env.VITE_API_PORT || import.meta.env.API_PORT || '3002'
-
-  if (configuredBase) {
-    try {
-      const configuredUrl = new URL(configuredBase, window.location.origin)
-      const configuredHost = configuredUrl.hostname
-      const currentHost = window.location.hostname
-      const isLocalConfigured = ['localhost', '127.0.0.1', '0.0.0.0'].includes(configuredHost)
-
-      if (!isLocalConfigured && currentHost && configuredHost !== currentHost) {
-        configuredUrl.protocol = window.location.protocol
-        configuredUrl.hostname = currentHost
-        configuredUrl.port = fallbackPort
-        return configuredUrl.toString().replace(/\/$/, '')
-      }
-
-      if (!configuredUrl.port) {
-        configuredUrl.port = fallbackPort
-      }
-
-      return configuredUrl.toString().replace(/\/$/, '')
-    } catch {
-      return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
-    }
-  }
-
-  return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
-}
+import { resolveApiBaseUrl } from '../lib/api-base'
 
 const API_BASE_URL = resolveApiBaseUrl()
 const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT) || 10000
 const RETRY_COUNT = 3
 const RETRY_DELAY = 500
-
-// 网抑云加密相关常量
-const IV = '0102030405060708'
-const PRESET_KEY = '0CoJUm6Qyw8W8jud'
-const LINUX_API_KEY = 'rFgB&h#%2?^eDg:Q'
-const BASE62 = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-
-function randomString(length) {
-  let result = ''
-  for (let i = 0; i < length; i++) {
-    result += BASE62.charAt(Math.floor(Math.random() * BASE62.length))
-  }
-  return result
-}
-
-function aesEncrypt(text, key) {
-  const keyBytes = CryptoJS.enc.Utf8.parse(key)
-  const ivBytes = CryptoJS.enc.Utf8.parse(IV)
-  const encrypted = CryptoJS.AES.encrypt(text, keyBytes, {
-    iv: ivBytes,
-    mode: CryptoJS.mode.CBC,
-    padding: CryptoJS.pad.Pkcs7
-  })
-  return encrypted.toString()
-}
-
-function rsaEncrypt(text) {
-  return '257348aecb5e556c066de214e531faadd1c55d814f9be95fd06d6bff9f4c7a41f831f6394d5a3fd2e3881736d94a02ca919d952872e7d0a50ebfa1769a7a62d512f5f1ca21aec60bc3819a9c3ffca5eca9a0dba6d6f7249b06f5965ecfff3695b54e1c28f3f624750ed39e7de08fc8493242e26dbc4484a01c76f739e135637c'
-}
-
-function weapi(object) {
-  const text = JSON.stringify(object)
-  const secretKey = randomString(16)
-  const params = aesEncrypt(aesEncrypt(text, PRESET_KEY), secretKey)
-  const encSecKey = rsaEncrypt(secretKey.split('').reverse().join(''))
-  return { params, encSecKey }
-}
-
-function eapi(url, object) {
-  const text = JSON.stringify(object)
-  const message = `nobody${url}use${text}md5forencrypt`
-  const digest = CryptoJS.MD5(message).toString()
-  const data = `${url}-36cd479b6b5-${text}-36cd479b6b5-${digest}`
-  return { params: aesEncrypt(data, LINUX_API_KEY).toUpperCase() }
-}
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -94,7 +18,8 @@ const api = axios.create({
 
 api.interceptors.request.use(
   config => {
-    if (config.params) config.params._t = Date.now()
+    // 不污染调用方传入的 params 对象
+    config.params = { ...config.params, _t: Date.now() }
     return config
   },
   error => Promise.reject(error)
@@ -109,37 +34,49 @@ function isAbortError(error) {
   return error?.name === 'AbortError' || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED'
 }
 
+// 4xx 客户端错误（含参数错误、未找到的 API）重试无意义
+function isRetryable(error) {
+  const status = error?.response?.status
+  return !(status >= 400 && status < 500)
+}
+
 async function withRetry(fn, retries = RETRY_COUNT) {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn()
     } catch (error) {
-      if (isAbortError(error) || i === retries - 1) throw error
+      if (isAbortError(error) || !isRetryable(error) || i === retries - 1) throw error
       console.warn(`请求失败，${RETRY_DELAY}ms 后重试 (${i + 1}/${retries})`, error.message)
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (i + 1)))
     }
   }
 }
 
+// 试听版/解锁失败统一判定
+function isUnavailableTrack(songData) {
+  return songData.unlockFailed || songData.freeTrialInfo != null
+}
+
 export const musicApi = {
-  searchPlaylists: async (keywords, limit = 20) => {
+  searchPlaylists: async (keywords, limit = 20, abortSignal = null) => {
     const response = await withRetry(() =>
-      api.get('/search', { params: { keywords, type: 1000, limit } })
+      api.get('/search', { params: { keywords, type: 1000, limit }, signal: abortSignal })
     )
     const data = response.body || response
     return data.result || {}
   },
 
-  getPlaylistDetail: async (id) => {
+  getPlaylistDetail: async (id, abortSignal = null) => {
     const response = await withRetry(() =>
-      api.get('/playlist_detail', { params: { id } })
+      api.get('/playlist_detail', { params: { id }, signal: abortSignal })
     )
     const data = response.body || response
     const playlist = data.playlist || {}
 
     const tracksResponse = await withRetry(() =>
       api.get('/playlist_track_all', {
-        params: { id, limit: playlist.trackCount || 1000, offset: 0 }
+        params: { id, limit: playlist.trackCount || 1000, offset: 0 },
+        signal: abortSignal
       })
     )
     const tracksData = tracksResponse.body || tracksResponse
@@ -149,9 +86,7 @@ export const musicApi = {
   getSongUrl: async (id, abortSignal = null) => {
     const bitrates = [320000, 192000]
     for (const br of bitrates) {
-      if (abortSignal?.aborted) {
-        throw new DOMException('The operation was aborted.', 'AbortError')
-      }
+      abortSignal?.throwIfAborted?.()
 
       try {
         const response = await withRetry(() =>
@@ -161,11 +96,12 @@ export const musicApi = {
         const songData = data.data?.[0] || {}
 
         if (songData.url && !songData.freeTrialInfo) {
-          songData.bitrate = br
+          // 记录实际返回的码率而非请求的码率
+          songData.bitrate = songData.br || br
           return songData
         }
 
-        if (songData.unlockFailed || songData.freeTrialInfo != null) {
+        if (isUnavailableTrack(songData)) {
           throw new Error('无法获取完整版播放链接，可能是版权限制')
         }
       } catch (error) {
@@ -183,42 +119,52 @@ export const musicApi = {
     const data = response.body || response
     const songData = data.data?.[0] || {}
     if (!songData.url) throw new Error('无法获取下载链接')
-    return { url: songData.url, bitrate, size: songData.size || 0, type: songData.type || 'mp3' }
+    if (isUnavailableTrack(songData)) throw new Error('仅获取到试听片段，可能受版权限制')
+    return { url: songData.url, bitrate: songData.br || bitrate, size: songData.size || 0, type: songData.type || 'mp3' }
   },
 
   downloadSong: async (song, bitrate = 320000) => {
     const downloadData = await musicApi.getDownloadUrl(song.id, bitrate)
-    const link = document.createElement('a')
-    link.href = downloadData.url
     const artists = song.ar?.map(a => a.name).join(', ') ||
                    song.artists?.map(a => a.name).join(', ') || '未知艺术家'
     const fileName = `${artists} - ${song.name}.${downloadData.type}`
-    link.download = fileName
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+      .replace(/[\\/:*?"<>|]/g, '_')
+
+    // 跨域 URL 的 download 属性会被浏览器忽略，需拉取为 blob 后触发本地下载
+    const blobResponse = await fetch(downloadData.url)
+    if (!blobResponse.ok) throw new Error(`下载失败: HTTP ${blobResponse.status}`)
+    const blob = await blobResponse.blob()
+    const objectUrl = URL.createObjectURL(blob)
+
+    try {
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = fileName
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+    }
     return { success: true, fileName, bitrate: downloadData.bitrate, size: downloadData.size }
   },
 
-  getLyrics: async (id) => {
+  getLyrics: async (id, abortSignal = null) => {
     const response = await withRetry(() =>
-      api.get('/lyric', { params: { id } })
+      api.get('/lyric', { params: { id }, signal: abortSignal })
     )
     const data = response.body || response
     const lyrics = parseLyrics(data.lrc?.lyric || '')
     const translations = parseLyrics(data.tlyric?.lyric || '')
     return {
-      lyrics: lyrics.map(lyric => ({
-        ...lyric,
-        translation: translations.find(t => Math.abs(t.time - lyric.time) < 0.5)?.text || ''
-      }))
+      lyrics: mergeTranslations(lyrics, translations)
     }
   },
 
-  getSongDetail: async (id) => {
+  getSongDetail: async (id, abortSignal = null) => {
     const response = await withRetry(() =>
-      api.get('/song/detail', { params: { ids: id } })
+      api.get('/song_detail', { params: { ids: id }, signal: abortSignal })
     )
     const data = response.body || response
     const songs = data.songs || []
@@ -227,14 +173,34 @@ export const musicApi = {
   }
 }
 
+// 歌词与翻译数组均按时间排序，双指针合并 O(n+m)
+function mergeTranslations(lyrics, translations) {
+  let j = 0
+  return lyrics.map(lyric => {
+    while (j < translations.length - 1 &&
+           Math.abs(translations[j + 1].time - lyric.time) <= Math.abs(translations[j].time - lyric.time)) {
+      j++
+    }
+    const translation = translations[j] && Math.abs(translations[j].time - lyric.time) < 0.5
+      ? translations[j].text
+      : ''
+    return { ...lyric, translation }
+  })
+}
+
 function parseLyrics(lyricText) {
   if (!lyricText) return []
   return lyricText.split('\n')
     .map(line => {
-      const match = line.match(/\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/)
+      const match = line.match(/\[(\d+):(\d{1,2})(?:[.:](\d{1,3}))?\](.*)/)
       if (!match) return null
-      const time = parseInt(match[1]) * 60 + parseInt(match[2]) + parseInt(match[3].padEnd(3, '0')) / 1000
-      const text = match[4].trim()
+      // 去除增强LRC的行内时间标签 <mm:ss.xx> 和残留的重复时间戳
+      const text = match[4]
+        .replace(/<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g, '')
+        .replace(/^\s*(?:\[\d+:\d{1,2}(?:[.:]\d{1,3})?\]\s*)+/, '')
+        .trim()
+      const ms = match[3] ? parseInt(match[3].padEnd(3, '0')) : 0
+      const time = parseInt(match[1]) * 60 + parseInt(match[2]) + ms / 1000
       return text ? { time, text } : null
     })
     .filter(Boolean)
