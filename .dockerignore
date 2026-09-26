@@ -23,6 +23,7 @@ logs
 *.log
 
 # 运行时数据
+data
 pids
 *.pid
 *.seed

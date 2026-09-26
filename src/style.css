@@ -828,21 +828,25 @@ body {
   :root[data-theme="pixel-retro"] .jirai-card.max-h-96 {
     margin: 4px 8px 8px 4px; /* 为边框和阴影留空间 */
   }
-  
+
   /* 桌面端像素主题下header和footer的宽度对齐 */
   :root[data-theme="pixel-retro"] nav .jirai-card {
     margin: 4px 8px 8px 4px; /* 与主要内容区域的卡片保持一致的margin */
   }
-  
+
+  :root[data-theme="pixel-retro"] .desktop-content > .grid > .lg\:col-span-3 > .card-songlist {
+    margin: 4px 8px 8px 4px;
+  }
+
   :root[data-theme="pixel-retro"] footer .jirai-card {
     margin: 4px 8px 8px 4px; /* 与主要内容区域的卡片保持一致的margin */
   }
-  
+
   /* 像素主题下增加header顶部和footer底部间隔 */
   :root[data-theme="pixel-retro"] nav {
     padding-top: 1rem; /* 从0.5rem增加到1rem，增加顶部间隔 */
   }
-  
+
   :root[data-theme="pixel-retro"] footer {
     padding-bottom: 1rem; /* 从0.5rem增加到1rem，增加底部间隔 */
   }

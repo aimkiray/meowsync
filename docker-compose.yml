@@ -12,17 +12,24 @@ services:
     container_name: meowsync-app
     restart: unless-stopped
     ports:
-      - "3002:3002"  # 单进程：API + WS + 静态前端同端口
+      # 单进程：API + WS + 静态前端同端口；本分支默认对外 3101
+      - "${API_PORT:-3101}:3002"
     environment:
       - NODE_ENV=production
       - API_PORT=3002
       - HOST=0.0.0.0
       # 跨域 + WS Origin 白名单；逗号分隔多来源，改成你的实际域名
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3002}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3101}
       # 可选：远程遥控令牌（设置后 ?token= 必填；前端构建需同步设 VITE_REMOTE_TOKEN）
       - REMOTE_TOKEN=${REMOTE_TOKEN:-}
       # 在会改写 Host 的反向代理后部署时才需要设为 1
       - TRUST_PROXY=${TRUST_PROXY:-}
+      # 数据目录（SQLite + 下载文件）；默认 /app/data，与下方挂载卷一致
+      - DATA_DIR=${DATA_DIR:-}
+      - DOWNLOAD_DIR=${DOWNLOAD_DIR:-}
+    volumes:
+      # SQLite 数据库与下载文件持久化；改路径需同步调整 DATA_DIR
+      - ./data:/app/data
     networks:
       - meowsync-network
     healthcheck:

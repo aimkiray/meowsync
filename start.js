@@ -141,8 +141,8 @@ function main() {
   const viteBin = path.join(__dirname, 'node_modules', 'vite', 'bin', 'vite.js');
   startProcess([viteBin], 'Frontend', 'green');
 
-  const apiPort = process.env.API_PORT || process.env.PORT || '3002';
-  const vitePort = process.env.VITE_PORT || '3000';
+  const apiPort = process.env.API_PORT || process.env.PORT || '3101';
+  const vitePort = process.env.VITE_PORT || '3100';
   console.log('\n💡 提示:');
   console.log(`   - 前端地址: http://localhost:${vitePort}`);
   console.log(`   - API地址: http://localhost:${apiPort}`);

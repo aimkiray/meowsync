@@ -16,13 +16,13 @@ const { Hono } = require('hono');
 const { cors } = require('hono/cors');
 
 const app = new Hono();
-const PORT = parseInt(process.env.API_PORT || process.env.PORT, 10) || 3002;
+const PORT = parseInt(process.env.API_PORT || process.env.PORT, 10) || 3101;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // 解析CORS来源配置（WebSocket Origin 校验共用此白名单）
 const corsOrigins = (process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',')
-  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001']
+  : ['http://localhost:3100', 'http://127.0.0.1:3100', 'http://localhost:3101', 'http://127.0.0.1:3101', 'http://poi.boats:31000', 'http://poi.boats:31001']
 ).map(o => o.trim()).filter(Boolean);
 
 // 中间件
@@ -51,9 +51,11 @@ if (hasDist) {
   });
 }
 
-// 路由：音频代理 → 受限的网易云API
-// Hono 路由中静态路径（/audio-proxy、/healthz）优先级高于参数路由（/:apiName）
+// 路由：音频代理 → 歌单/下载管理 → 受限的网易云API
+// Hono 路由中静态路径（/audio-proxy、/healthz、/playlists、/downloads/*）优先级高于参数路由（/:apiName）
 app.route('/', require('./src/server/routes/proxy'));
+app.route('/', require('./src/server/routes/playlists'));
+app.route('/', require('./src/server/routes/downloads'));
 app.route('/', require('./src/server/routes/music'));
 
 // SPA 兜底：未被任何路由处理的 GET 请求返回 index.html

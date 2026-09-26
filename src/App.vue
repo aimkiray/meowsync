@@ -2,14 +2,14 @@
   <!-- 手机控制器模式 -->
   <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" />
 
-  <div v-else id="app" class="min-h-screen lg:h-screen lg:overflow-hidden lg:flex lg:flex-col">
+  <div v-else id="app" class="min-h-screen lg:h-screen lg:flex lg:flex-col">
     <!-- 顶部导航 -->
-    <TopNavigation />
+    <TopNavigation :is-downloads-view="centerView === 'downloads'" @toggle-center-view="toggleCenterView" />
 
     <div class="max-w-[1440px] mx-auto w-full px-4 sm:px-6 lg:px-16 pt-6 pb-32 md:pb-32 lg:pt-10 lg:pb-10 desktop-content lg:flex-1 lg:min-h-0">
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- 左侧：歌单列表 -->
-        <div class="lg:col-span-1">
+        <div v-if="centerView === 'songs'" class="lg:col-span-1">
           <PlaylistPanel
             :active-tab="activeTab"
             v-model:search-query="searchQuery"
@@ -26,6 +26,7 @@
             @select-playlist="selectPlaylist"
             @add-playlist="addPlaylistToLibrary"
             @remove-playlist="removePlaylistFromLibrary"
+            @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
             @go-to-page="goToPlaylistPage"
             @prev-page="prevPlaylistPage"
             @next-page="nextPlaylistPage"
@@ -33,9 +34,10 @@
           />
         </div>
 
-        <!-- 中间：歌曲列表 -->
-        <div class="lg:col-span-1">
+        <!-- 中间：歌曲列表 / 下载管理 -->
+        <div :class="centerView === 'downloads' ? 'lg:col-span-3 min-h-0' : 'lg:col-span-1'">
           <SongList
+            v-if="centerView === 'songs'"
             :songs="songs"
             :loading-songs="loadingSongs"
             :current-song="currentSong"
@@ -45,6 +47,8 @@
             :current-page="currentPage"
             :page-size="pageSize"
             :collapsed="songListCollapsed"
+            :selected-playlist="selectedPlaylist"
+            :playlist-downloads-refresh-key="playlistDownloadsRefreshKey"
             @play-song="playSong"
             @toggle-play-mode="togglePlayMode"
             @toggle-vip-songs="showVipSongs = !showVipSongs"
@@ -53,10 +57,14 @@
             @next-page="nextPage"
             @toggle-collapse="toggleSongListCollapse"
           />
+          <AdminPanel
+            v-else
+            :selected-playlist="selectedPlaylist"
+          />
         </div>
 
         <!-- 右侧：歌词面板 -->
-        <div class="lg:col-span-1">
+        <div v-if="centerView === 'songs'" class="lg:col-span-1">
           <LyricsPanel
             :current-song="currentSong"
             :is-playing="isPlaying"
@@ -133,6 +141,7 @@ import BottomPlayer from './components/BottomPlayer.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import Footer from './components/Footer.vue'
 import RemoteController from './components/RemoteController.vue'
+import AdminPanel from './components/AdminPanel.vue'
 
 export default {
   name: 'App',
@@ -144,7 +153,8 @@ export default {
     BottomPlayer,
     FullscreenPlayer,
     Footer,
-    RemoteController
+    RemoteController,
+    AdminPanel
   },
   setup() {
     // 响应式数据
@@ -191,6 +201,8 @@ export default {
     const playlistCollapsed = ref(false)
     const songListCollapsed = ref(false)
     const lyricsCollapsed = ref(false)
+    const centerView = ref('songs')
+    const playlistDownloadsRefreshKey = ref(0)
     
     let howl = null
     let lyricTimer = null
@@ -521,6 +533,12 @@ export default {
           selectedPlaylist.value = null
           songs.value = []
         }
+      }
+    }
+
+    const handlePlaylistDownloadsDeleted = (playlistId) => {
+      if (selectedPlaylist.value?.id === playlistId) {
+        playlistDownloadsRefreshKey.value += 1
       }
     }
 
@@ -1289,6 +1307,10 @@ export default {
       savePlayerStateToStorage()
     }
 
+    const toggleCenterView = () => {
+      centerView.value = centerView.value === 'songs' ? 'downloads' : 'songs'
+    }
+
     // 组件挂载
     onMounted(async () => {
       console.log('🚀 App组件挂载完成')
@@ -1440,6 +1462,8 @@ export default {
       playlistCurrentPage,
       playlistPageSize,
       playlistCollapsed,
+      centerView,
+      playlistDownloadsRefreshKey,
 
       // 方法
       goToPage,
@@ -1453,6 +1477,7 @@ export default {
       searchPlaylists,
       addPlaylistToLibrary,
       removePlaylistFromLibrary,
+      handlePlaylistDownloadsDeleted,
       selectPlaylist,
       playSong,
       togglePlay,
@@ -1468,6 +1493,7 @@ export default {
       togglePlaylistCollapse,
       toggleSongListCollapse,
       toggleLyricsCollapse,
+      toggleCenterView,
       songListCollapsed,
       lyricsCollapsed
     }
