@@ -8,6 +8,16 @@ RUN npm ci
 COPY index.html vite.config.js postcss.config.js tailwind.config.js ./
 COPY public ./public
 COPY src ./src
+
+# 构建期变量（VITE_* 会打包进前端产物）：
+# 通过 docker build --build-arg 或 compose build.args 注入；留空走同源自动推断
+ARG VITE_API_BASE_URL=""
+ARG VITE_BASE_PATH="/"
+ARG VITE_REMOTE_TOKEN=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
+    VITE_BASE_PATH=$VITE_BASE_PATH \
+    VITE_REMOTE_TOKEN=$VITE_REMOTE_TOKEN
+
 RUN npm run build
 
 # ---------- 阶段 2：生产依赖 ----------
@@ -37,7 +47,9 @@ USER meowsync
 # 单端口：API + WS + 静态站点同端口托管
 EXPOSE 3002
 
+# 注意：node:22-alpine 的 wget 是 busybox 精简版，不支持 --no-verbose/--tries
+# （会报 unrecognized option 恒失败），改用 Node 内置 fetch 探活
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3002/healthz || exit 1
+  CMD node -e "fetch('http://localhost:3002/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "netease-api-server.js"]

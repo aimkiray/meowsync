@@ -65,6 +65,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { formatTime } from '../lib/format'
 
 const props = defineProps({
   // 完整 WS URL，须已包含 ?role=controller 及可选 &token=（由 App.vue 构建）
@@ -137,13 +138,6 @@ function onSeek(e) {
 
 function onVolume(e) {
   send('volume', Number(e.target.value))
-}
-
-function formatTime(sec) {
-  if (!sec || isNaN(sec)) return '0:00'
-  const m = Math.floor(sec / 60)
-  const s = Math.floor(sec % 60).toString().padStart(2, '0')
-  return `${m}:${s}`
 }
 
 const artistName = computed(() => {
