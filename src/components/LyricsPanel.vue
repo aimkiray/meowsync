@@ -67,7 +67,7 @@
             <p class="text-pink-300 flex justify-center items-center">加载歌词中喵...</p>
           </div>
           
-          <div v-else ref="lyricsContainer" class="space-y-2 jirai-lyrics flex-1">
+          <div v-else class="space-y-2 jirai-lyrics flex-1">
             <div
               v-for="(lyric, index) in lyrics"
               :key="index"
@@ -139,7 +139,6 @@ export default {
   emits: ['toggle-auto-follow-lyrics', 'toggle-collapse'],
   setup(props, { emit }) {
     const playerContainer = ref(null)
-    const lyricsContainer = ref(null)
     const { currentTheme } = useTheme()
 
     // 移动端检测
@@ -198,7 +197,6 @@ export default {
 
     return {
       playerContainer,
-      lyricsContainer,
       headerStyle,
       isMobile,
       toggleCollapse,

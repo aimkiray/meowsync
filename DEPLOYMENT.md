@@ -148,8 +148,11 @@ server {
 1. **页面打开但 API 报错** — 检查 `VITE_API_BASE_URL` 是否误指向 localhost
    （生产构建应留空走同源）；查看 `CORS_ORIGINS`
 2. **遥控连接失败** — 确认反代透传了 `Upgrade` 头；校验 token 配对
-3. **容器一直 unhealthy** — `curl http://localhost:3002/healthz` 应返回 `{"ok":true}`
-4. **端口被占用** — `API_PORT` 修改监听端口；Windows 下确认无残留 node 进程
+3. **容器一直 unhealthy** — `curl http://localhost:3002/healthz` 应返回 `{"ok":true}`；
+   健康检查端口跟随 `API_PORT`/`PORT` 环境变量，改端口无需改探活配置
+4. **with-nginx 反代突然 502** — nginx 仅在启动时解析一次 `meowsync` 服务名；
+   单独重建后端容器后 IP 可能变化，执行 `docker compose restart nginx` 即可
+5. **端口被占用** — `API_PORT` 修改监听端口；Windows 下确认无残留 node 进程
 
 ## 更新部署
 

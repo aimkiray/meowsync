@@ -34,8 +34,14 @@ const ALLOWED_APIS = new Set([
   'personalized',
 ]);
 
-// 上游模块会消费的危险参数（比较前统一转小写）：proxy 可把请求走私到攻击者代理，real_ip 可伪造客户端IP
-const BLOCKED_PARAMS = new Set(['proxy', 'real_ip', 'realip']);
+// 请求体上限：这些 API 只需小 JSON/表单参数，大包只会消耗内存（解析前按 Content-Length 拒绝）
+const MAX_BODY_BYTES = 1024 * 1024;
+
+// 上游模块会消费的危险参数（比较前统一转小写，覆盖 realIP 等大小写变体）：
+// proxy 可把上游请求走私到攻击者代理，real_ip/realIP 可伪造客户端IP；
+// crypto='api' 会让上游走明文无签名通道、ua 允许篡改发往网易的 User-Agent、
+// e_r 改变上游响应形态——三者都是 createOption() 的 option 通道参数，前端从不下发，统一封禁
+const BLOCKED_PARAMS = new Set(['proxy', 'real_ip', 'realip', 'crypto', 'ua', 'e_r']);
 
 // 通过 Content-Length + 码率估算音频时长（毫秒）
 function estimateDuration(contentLength, br) {
@@ -152,6 +158,12 @@ app.all('/:apiName', async (c) => {
   // 合并 query 与 body 参数
   let body = {};
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+    // 声明长度超限直接拒绝，避免 parseBody/json 把整个大包读进内存
+    // （无 Content-Length 的 chunked 请求仍会被解析，但不受此限——Node/代理层自行兜底）
+    const declaredLength = Number(c.req.header('content-length') || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+      return c.json({ code: 413, message: 'Payload Too Large' }, 413);
+    }
     const contentType = c.req.header('content-type') || '';
     try {
       const parsed = contentType.includes('json') ? await c.req.json() : await c.req.parseBody();

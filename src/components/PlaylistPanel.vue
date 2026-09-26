@@ -478,9 +478,7 @@ export default {
     const copyShareLink = async (playlist) => {
       const url = `${window.location.origin}/?playlist=${playlist.id}`
       const ok = await copyText(url)
-      if (ok) {
-        console.log('分享链接已复制到剪贴板')
-      } else {
+      if (!ok) {
         alert('复制失败，请手动复制链接')
       }
       closeMenu()

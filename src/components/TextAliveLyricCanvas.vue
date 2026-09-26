@@ -5,7 +5,17 @@
 <script>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { CanvasManager } from '../lib/textalive-local/canvas-manager'
-import { createLocalTextAliveLyrics } from '../lib/textalive-local/local-textalive-adapter'
+
+// segmentit 分词词典体积很大，静态引入会把它打进首屏 chunk。
+// 本组件只在打开全屏播放时挂载，适配器改为按需加载（多次并发调用共享同一 Promise）
+let adapterModule = null
+let adapterPromise = null
+const loadAdapter = () => {
+  if (adapterModule) return Promise.resolve(adapterModule)
+  adapterPromise ??= import('../lib/textalive-local/local-textalive-adapter')
+    .then(m => (adapterModule = m))
+  return adapterPromise
+}
 
 export default {
   name: 'TextAliveLyricCanvas',
@@ -49,9 +59,12 @@ export default {
 
     const syncLyrics = () => {
       if (!manager) return
-      const { lyrics } = createLocalTextAliveLyrics(displayLyrics.value, props.duration)
-      manager.setLyrics(lyrics)
-      manager.update((props.currentTime || 0) * 1000)
+      loadAdapter().then(({ createLocalTextAliveLyrics }) => {
+        if (!manager) return
+        const { lyrics } = createLocalTextAliveLyrics(displayLyrics.value, props.duration)
+        manager.setLyrics(lyrics)
+        manager.update((props.currentTime || 0) * 1000)
+      })
     }
 
     const syncPosition = () => {

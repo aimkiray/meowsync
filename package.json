@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "复古网易云音乐播放器",
   "main": "netease-api-server.js",
+  "engines": {
+    "node": ">=20.3.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

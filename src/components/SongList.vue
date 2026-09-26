@@ -394,15 +394,8 @@ export default {
         // 设置下载状态
         downloadingStates.value[song.id] = true
         
-        console.log('开始下载歌曲:', song.name, '码率:', bitrate)
-        
         // 调用API下载歌曲
-        const result = await musicApi.downloadSong(song, bitrate)
-        
-        if (result.success) {
-          // 可以在这里添加成功提示
-          console.log('下载成功:', result.fileName)
-        }
+        await musicApi.downloadSong(song, bitrate)
       } catch (error) {
         console.error('下载失败:', error.message)
         // 可以在这里添加错误提示
