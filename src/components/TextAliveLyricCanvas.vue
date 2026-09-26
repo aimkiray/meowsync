@@ -14,6 +14,12 @@ const loadAdapter = () => {
   if (adapterModule) return Promise.resolve(adapterModule)
   adapterPromise ??= import('../lib/textalive-local/local-textalive-adapter')
     .then(m => (adapterModule = m))
+    .catch(err => {
+      // 失败不落缓存：重置后下一次 syncLyrics 会重新发起 import，
+      // 否则 chunk 拉取偶发失败后歌词将永久空白（rejected promise 被 ??= 永久缓存）
+      adapterPromise = null
+      throw err
+    })
   return adapterPromise
 }
 
@@ -59,12 +65,15 @@ export default {
 
     const syncLyrics = () => {
       if (!manager) return
-      loadAdapter().then(({ createLocalTextAliveLyrics }) => {
-        if (!manager) return
-        const { lyrics } = createLocalTextAliveLyrics(displayLyrics.value, props.duration)
-        manager.setLyrics(lyrics)
-        manager.update((props.currentTime || 0) * 1000)
-      })
+      loadAdapter()
+        .then(({ createLocalTextAliveLyrics }) => {
+          if (!manager) return
+          const { lyrics } = createLocalTextAliveLyrics(displayLyrics.value, props.duration)
+          manager.setLyrics(lyrics)
+          manager.update((props.currentTime || 0) * 1000)
+        })
+        // 兜底 catch：加载失败已重置缓存可重试，这里避免 unhandledrejection 噪音
+        .catch(err => console.warn('[textalive] lyric sync failed:', err))
     }
 
     const syncPosition = () => {

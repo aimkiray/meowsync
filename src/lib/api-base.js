@@ -15,8 +15,10 @@ const isLocalHost = (host) => LOCAL_HOSTS.includes(host) || host.endsWith('.loca
 export function resolveApiBaseUrl() {
   const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
   const envPort = String(import.meta.env.VITE_API_PORT ?? '').trim()
-  // 端口必须是纯数字：空白/非法值会让拼接或 URL.port 赋值产出畸形地址
-  const fallbackPort = /^\d{1,5}$/.test(envPort) ? envPort : '3002'
+  // 端口必须是合法 TCP 端口：非数字、0、>65535（new URL 直接抛错、请求必失败）都回退默认
+  const fallbackPort = /^\d{1,5}$/.test(envPort) && Number(envPort) >= 1 && Number(envPort) <= 65535
+    ? envPort
+    : '3002'
   // 页面可能不是 http(s)（file://、扩展页、opaque origin），此时 origin 是 'null'、
   // protocol 也无法复用，只能退回 http://localhost:端口
   const pageIsHttp = /^https?:$/.test(window.location.protocol)
@@ -40,7 +42,13 @@ export function resolveApiBaseUrl() {
         if (!configuredUrl.port) configuredUrl.port = fallbackPort
       }
 
-      return configuredUrl.toString().replace(/\/$/, '')
+      // HTTPS 页面请求 HTTP API 会被浏览器按混合内容拦截，提前告警便于定位
+      if (window.location.protocol === 'https:' && configuredUrl.protocol === 'http:') {
+        console.warn('[api] 页面为 HTTPS 但 API 地址是 HTTP，浏览器将拦截混合内容请求:', configuredBase)
+      }
+
+      // toString() 会给空路径补 '/'；去掉全部尾部斜杠，否则 App.vue 拼 '/remote' 出现 '//remote'
+      return configuredUrl.toString().replace(/\/+$/, '')
     } catch {
       return devFallback()
     }

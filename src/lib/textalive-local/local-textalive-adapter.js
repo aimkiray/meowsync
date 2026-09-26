@@ -240,7 +240,8 @@ function splitLatinSegment(text) {
   let buffer = ''
   for (const word of text.split(' ')) {
     if (buffer && `${buffer} ${word}`.length > MAX_LATIN_SEGMENT_LENGTH) {
-      chunks.push(buffer)
+      // 边界空格挂到前一段：否则分段后 chunks.join('') 丢空格，渲染出连写词
+      chunks.push(buffer + ' ')
       buffer = word
     } else {
       buffer = buffer ? `${buffer} ${word}` : word
@@ -388,6 +389,13 @@ function chunkGlyphs(text) {
   return limitRevealSteps(groups)
 }
 
+// null/''/false 会被 Number() 静默当成 0 → 缺时间戳的行漏进 0:00 遮挡首句；
+// 先按类型收窄再校验有限性（数字字符串如 '12.5' 仍兼容）
+const isValidLineTime = (time) =>
+  typeof time === 'number'
+    ? Number.isFinite(time)
+    : typeof time === 'string' && time.trim() !== '' && Number.isFinite(Number(time))
+
 export function createLocalTextAliveVideo(lines = [], durationSeconds = 0) {
   const normalized = Array.isArray(lines)
     ? lines.filter(line =>
@@ -395,7 +403,7 @@ export function createLocalTextAliveVideo(lines = [], durationSeconds = 0) {
       typeof line.text === 'string' &&
       line.text.trim() &&
       // 时间戳无效（NaN/Infinity/缺失）的行无法定位，显示在 0:00 只会遮挡首句
-      Number.isFinite(Number(line.time)))
+      isValidLineTime(line.time))
     : []
 
   // 画布按时间单调递增做增量扫描，乱序输入会卡死激活索引；
@@ -408,8 +416,8 @@ export function createLocalTextAliveVideo(lines = [], durationSeconds = 0) {
   normalized.forEach((line, index) => {
     const text = line.text.trim()
     const lineStartMs = lineStartOf(line)
-    const nextTimeSeconds = Number(normalized[index + 1]?.time)
-    const nextStartMs = Number.isFinite(nextTimeSeconds) ? nextTimeSeconds * 1000 : null
+    // 下一行起点同样走 lineStartOf，保证与排序键/负值 clamp 语义一致
+    const nextStartMs = index + 1 < normalized.length ? lineStartOf(normalized[index + 1]) : null
     const lineDurationMs = getLineDurationMs({
       text,
       startMs: lineStartMs,
