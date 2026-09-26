@@ -15,6 +15,8 @@ function mapQueueRow(row) {
     downloadAudio: Boolean(row.download_audio),
     downloadLyrics: Boolean(row.download_lyrics),
     downloadCover: Boolean(row.download_cover),
+    // 歌单封面 URL（前端 getQueueCover 直接用作 img src）
+    coverImgUrl: row.cover_img_url || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at
@@ -103,8 +105,10 @@ function findQueueById(id) {
 function listQueues() {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT * FROM download_queues
-    ORDER BY datetime(created_at) DESC
+    SELECT q.*, p.cover_img_url
+    FROM download_queues q
+    LEFT JOIN playlists p ON p.id = q.playlist_id
+    ORDER BY datetime(q.created_at) DESC
   `).all();
   return rows.map(mapQueueRow);
 }

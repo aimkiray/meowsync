@@ -124,7 +124,7 @@
             :style="getMenuPosition(queue.id)"
           >
             <button
-              v-if="['pending', 'cancelled', 'failed', 'completed'].includes(queue.status)"
+              v-if="['pending', 'cancelled'].includes(queue.status)"
               @click.stop="runQueueAction('start', queue.id)"
               class="w-full text-left px-3 py-2 text-xs text-green-200 hover:bg-green-800 hover:text-white transition-colors border-b border-gray-700"
             >
@@ -270,7 +270,9 @@ function handleWindowPointerDown(event) {
   const target = event.target;
   // 菜单是 Teleport 到 body 的——不在 .music-card 内，必须单独豁免；
   // 否则 pointerdown（先于 click）就把菜单关了，菜单项点击永远不触发
-  if (target instanceof Element && target.closest('.music-card, .queue-menu, .queue-menu-trigger')) {
+  // 豁免收窄到菜单本体与触发钮：.music-card 整卡豁免会让"点另一张卡片不关菜单"，
+  // 选中置顶排序后旧菜单悬空指向错误卡片
+  if (target instanceof Element && target.closest('.queue-menu, .queue-menu-trigger')) {
     return;
   }
   closeMenu();

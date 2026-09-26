@@ -6,11 +6,9 @@ const {
 } = require('../services/playlist-sync');
 const { deletePlaylist, findPlaylistById } = require('../repositories/playlists');
 const { deletePlaylistFiles } = require('../services/download-manager');
+const { readJsonBody } = require('../lib/http-body');
 
 const app = new Hono();
-
-// 请求体上限：导入/刷新只需小 JSON（与 downloads.js 同策略）
-const MAX_BODY_BYTES = 1024 * 1024;
 
 // 路由 :id 参数统一校验：Number('abc')/''/Infinity 一律 400
 function parsePlaylistId(c) {
@@ -18,20 +16,7 @@ function parsePlaylistId(c) {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-async function readJsonBody(c) {
-  const declaredLength = Number(c.req.header('content-length') || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-    const err = new Error('Payload Too Large');
-    err.status = 413;
-    throw err;
-  }
-  try {
-    const parsed = await c.req.json();
-    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+
 
 function handleError(c, error, tag) {
   // err.status 标记的是业务层自撰消息，可回传（含 5xx 业务错误如导入上游失败）；
@@ -101,14 +86,14 @@ app.post('/playlists/:id/refresh', async (c) => {
   }
 });
 
-app.delete('/playlists/:id', (c) => {
+app.delete('/playlists/:id', async (c) => {
   const id = parsePlaylistId(c);
   if (id === null) {
     return c.json({ code: 400, message: '无效的歌单 ID' }, 400);
   }
   try {
-    // 先中止该歌单的活跃队列并清理任务文件，再删行——否则磁盘上留孤儿文件
-    deletePlaylistFiles(id);
+    // 先中止该歌单的活跃队列/单曲任务并排空清理文件，再删行——否则磁盘上留孤儿文件
+    await deletePlaylistFiles(id);
     const deleted = deletePlaylist(id);
     if (!deleted) {
       return c.json({ code: 404, message: '歌单不存在' }, 404);

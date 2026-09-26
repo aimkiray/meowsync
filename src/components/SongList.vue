@@ -389,12 +389,17 @@ export default {
       if (showDownloadMenu.value === songId) {
         showDownloadMenu.value = null
       } else {
-        // 计算菜单位置
+        // 计算菜单位置：下方空间不足时翻到按钮上方，左右越界时收回视口内
         const button = event.target.closest('button')
         const rect = button.getBoundingClientRect()
+        const menuWidth = 140
+        const menuHeight = 120 // 3 个选项的大致高度，用于翻转判断
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        const belowFits = rect.bottom + 4 + menuHeight <= vh
         menuPositions.value[songId] = {
-          top: rect.bottom + 4 + 'px',
-          left: rect.right - 140 + 'px' // 140px是菜单宽度
+          top: (belowFits ? rect.bottom + 4 : Math.max(8, rect.top - menuHeight - 4)) + 'px',
+          left: Math.max(8, Math.min(rect.right - menuWidth, vw - menuWidth - 8)) + 'px'
         }
         showDownloadMenu.value = songId
       }
@@ -439,12 +444,13 @@ export default {
       try {
         downloadingStates.value[song.id] = true
         await musicApi.downloadSong(song, bitrate)
-        showDownloadMenu.value = null
       } catch (error) {
         console.error('下载失败:', error)
         alert('下载失败: ' + extractErrorMessage(error))
       } finally {
+        // 成败都关菜单——失败后 overlay 还罩全屏需多点一次才可继续操作
         downloadingStates.value[song.id] = false
+        showDownloadMenu.value = null
       }
     }
 
@@ -490,6 +496,11 @@ export default {
       }
 
       const isDownloaded = serverDownloadedStates.value[song.id]
+      // 请求在途时用户可能已切换歌单——响应落地后写状态会污染新歌单的同 id 歌曲
+      // （状态 map 是"当前歌单"的视图，写前必须确认归属未变）
+      const ownerPlaylistId = props.selectedPlaylist.id
+      const stillCurrent = () =>
+        String(props.selectedPlaylist?.id) === String(ownerPlaylistId)
 
       if (isDownloaded) {
         // 删除已下载文件
@@ -499,33 +510,37 @@ export default {
 
         try {
           serverDownloadingStates.value[song.id] = true
-          await downloadsApi.deleteSongDownload(props.selectedPlaylist.id, song.id)
-          serverDownloadedStates.value[song.id] = false
+          await downloadsApi.deleteSongDownload(ownerPlaylistId, song.id)
+          if (stillCurrent()) serverDownloadedStates.value[song.id] = false
           alert('删除成功！')
         } catch (error) {
           console.error('删除失败:', error)
           alert('删除失败: ' + extractErrorMessage(error))
         } finally {
-          serverDownloadingStates.value[song.id] = false
+          if (stillCurrent()) {
+            serverDownloadingStates.value[song.id] = false
+          }
           showDownloadMenu.value = null
         }
       } else {
         // 下载到服务器
         try {
           serverDownloadingStates.value[song.id] = true
-          await downloadsApi.downloadSongToServer(props.selectedPlaylist.id, song.id, {
+          await downloadsApi.downloadSongToServer(ownerPlaylistId, song.id, {
             bitrate: 320000,
             downloadAudio: true,
             downloadLyrics: true,
             downloadCover: true
           })
-          serverDownloadedStates.value[song.id] = true
+          if (stillCurrent()) serverDownloadedStates.value[song.id] = true
           alert('下载成功！')
         } catch (error) {
           console.error('下载失败:', error)
           alert('下载失败: ' + extractErrorMessage(error))
         } finally {
-          serverDownloadingStates.value[song.id] = false
+          if (stillCurrent()) {
+            serverDownloadingStates.value[song.id] = false
+          }
           showDownloadMenu.value = null
         }
       }
@@ -546,11 +561,16 @@ export default {
       checkAllSongsDownloadStatus()
     })
 
-    // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌
+    // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌；Escape 同关
     if (typeof window !== 'undefined') {
       const closeOnScroll = () => { showDownloadMenu.value = null }
+      const closeOnEscape = (e) => { if (e.key === 'Escape') showDownloadMenu.value = null }
       window.addEventListener('scroll', closeOnScroll, true)
-      onBeforeUnmount(() => window.removeEventListener('scroll', closeOnScroll, true))
+      window.addEventListener('keydown', closeOnEscape)
+      onBeforeUnmount(() => {
+        window.removeEventListener('scroll', closeOnScroll, true)
+        window.removeEventListener('keydown', closeOnEscape)
+      })
     }
 
     return {

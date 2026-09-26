@@ -56,6 +56,18 @@ function migrateDownloadTasks(database) {
       CREATE INDEX idx_download_tasks_queue ON download_tasks(queue_id)
     `);
   }
+  // (playlist_id, song_id) 唯一约束：新库由 CREATE TABLE 声明；老库可能只有旧索引
+  // 或完全没有——先删重复行（保留最小 id 行），再补唯一索引统一收敛
+  database.exec(`
+    DELETE FROM download_tasks
+    WHERE id NOT IN (
+      SELECT MIN(id) FROM download_tasks GROUP BY playlist_id, song_id
+    )
+  `);
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_playlist_song
+    ON download_tasks(playlist_id, song_id)
+  `);
 }
 
 function initSchema(database) {
@@ -140,12 +152,18 @@ function initSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       completed_at TEXT,
       FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-      FOREIGN KEY (queue_id) REFERENCES download_queues(id) ON DELETE CASCADE
+      FOREIGN KEY (queue_id) REFERENCES download_queues(id) ON DELETE CASCADE,
+      -- 同一歌单的同一首歌只允许一条任务行（standalone 与队列任务共享此唯一域；
+      -- 建队列时收养而非重复插入，依赖该约束存在）
+      UNIQUE (playlist_id, song_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_download_tasks_playlist ON download_tasks(playlist_id);
     CREATE INDEX IF NOT EXISTS idx_download_tasks_status ON download_tasks(status);
     CREATE INDEX IF NOT EXISTS idx_download_queues_status ON download_queues(status);
+
+    -- /healthz 用写探测表：SELECT 1 是纯内存查询测不出磁盘满
+    CREATE TABLE IF NOT EXISTS _healthz (ts INTEGER);
   `);
 
   migrateDownloadTasks(database);

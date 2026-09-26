@@ -43,6 +43,7 @@ cp .env.example .env
 | HOST | 0.0.0.0 | 绑定地址 |
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
 | REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 必须带 `?token=` |
+| DOWNLOAD_TOKEN | - | 可选：设置后非 GET 的 `/downloads`、`/playlists` 请求须带 `x-download-token`；前端需同时设置 `VITE_DOWNLOAD_TOKEN` |
 | TRUST_PROXY | - | 可选：设为 `1`/`true` 时采信 `X-Forwarded-Proto/Host` |
 | NODE_ENV | development | 环境标识（约定变量，服务代码不直接读取；镜像与 compose 已内置 `production`） |
 

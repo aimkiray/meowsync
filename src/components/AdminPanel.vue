@@ -122,8 +122,10 @@ const queueListTitle = computed(() => {
   return `下载列队 (${displayQueues.value.length})`;
 });
 
+// 首次加载失败与"真的为空"要区分开——否则服务挂掉时 UI 显示空态误导
+const loadError = ref('');
 const queueEmptyText = computed(() => {
-  return '还没有下载队列喵~';
+  return loadError.value || '还没有下载队列喵~';
 });
 
 function getQueueStatusText(status) {
@@ -258,9 +260,14 @@ async function loadQueues(options = {}) {
       }
 
       hasLoadedQueues.value = true;
+      loadError.value = '';
     }
   } catch (error) {
     console.error('加载队列失败:', error);
+    // 首次加载失败给用户可见的错误态；轮询静默失败不打断界面
+    if (!hasLoadedQueues.value) {
+      loadError.value = '加载失败: ' + (error.response?.data?.message || error.message);
+    }
   } finally {
     if (!silent) {
       loadingQueues.value = false;
@@ -276,6 +283,8 @@ async function loadTasks(queueId, options = {}) {
       loadingTasks.value = true;
     }
     const response = await downloadsApi.listTasks({ queueId });
+    // 响应可能属于上一个选中队列（并发 selectQueue 交错）——归属校验防错写
+    if (String(selectedQueue.value?.id) !== String(queueId)) return;
     if (response.data && response.data.data) {
       const nextTasks = response.data.data;
       if (hasCollectionChanged(tasks.value, nextTasks, hasTaskChanged)) {

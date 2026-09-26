@@ -134,12 +134,14 @@
                   📥 下载歌单
                 </button>
                 <button
+                  v-if="!isTempPlaylist(playlist)"
                   @click.stop="openInNetease(playlist)"
                   class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
                 >
                   🎵 打开网易云
                 </button>
                 <button
+                  v-if="!isTempPlaylist(playlist)"
                   @click.stop="copyShareLink(playlist)"
                   class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
                 >
@@ -378,15 +380,19 @@ export default {
       }
     })
     
+    const closeOnEscape = (e) => { if (e.key === 'Escape') closeMenu() }
+
     onMounted(() => {
       document.addEventListener('click', handleClickOutside)
       // 菜单是 fixed 定位，面板滚动后位置脱节——滚动时直接关闭
       window.addEventListener('scroll', closeMenu, true)
+      window.addEventListener('keydown', closeOnEscape)
     })
 
     onUnmounted(() => {
       document.removeEventListener('click', handleClickOutside)
       window.removeEventListener('scroll', closeMenu, true)
+      window.removeEventListener('keydown', closeOnEscape)
       // 清理所有定时器
       addingTimeouts.value.forEach(timeoutId => clearTimeout(timeoutId))
       addingTimeouts.value.clear()
@@ -465,12 +471,19 @@ export default {
       if (openMenuId.value === playlistId) {
         openMenuId.value = null
       } else {
-        // 计算菜单位置（event.target 可能是内部 svg/path，须定位到按钮本身）
+        // 计算菜单位置（event.target 可能是内部 svg/path，须定位到按钮本身）；
+        // 下方空间不足翻到上方、左侧越界收回视口内——面板可滚动而菜单 fixed，
+        // 开出视口后 scroll-close 又挡住滚动，菜单就永远不可达
         const button = event.target.closest('button') || event.target
         const rect = button.getBoundingClientRect()
+        const menuWidth = 140
+        const menuHeight = 190 // 最多 5 个选项的大致高度
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        const belowFits = rect.bottom + 4 + menuHeight <= vh
         menuPositions.value[playlistId] = {
-          top: rect.bottom + 4 + 'px',
-          left: rect.right - 140 + 'px' // 140px是菜单宽度
+          top: (belowFits ? rect.bottom + 4 : Math.max(8, rect.top - menuHeight - 4)) + 'px',
+          left: Math.max(8, Math.min(rect.right - menuWidth, vw - menuWidth - 8)) + 'px'
         }
         openMenuId.value = playlistId
       }

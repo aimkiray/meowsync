@@ -9,19 +9,32 @@ const { resolvesToPublicIp } = require('../lib/net-guard');
 // 可被链路篡改成 302 到内网/云元数据地址，与 proxy.js 同一威胁模型：每跳都做公网校验
 const MAX_REDIRECTS = 5;
 const MAX_FILENAME_BYTES = 120;
+// 体积上限：明文源站被 302 到无限流/超大文件的威胁模型下，写完再对账已经磁盘写满
+const MAX_AUDIO_BYTES = 512 * 1024 * 1024;
+const MAX_COVER_BYTES = 32 * 1024 * 1024;
 // Windows 保留名：即便在 mac/linux 生成，用户最终可能在 Windows 上操作这些文件
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
 function sanitizeFilename(filename, maxBytes = MAX_FILENAME_BYTES) {
   let cleaned = String(filename || '')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    // 只剥孤立代理项（截断半个 UTF-8 字符/脏数据的产物）：[\uD800-\uDFFF] 全量匹配
+    // 会把合法 surrogate pair（emoji、CJK 扩展 B）两半都删掉
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-  // 按 UTF-8 字节截断：slice 可能切出半个多字节字符（孤立代理项），结尾再剥掉
-  while (Buffer.byteLength(cleaned, 'utf8') > maxBytes) {
-    cleaned = cleaned.slice(0, -8);
+  // 按 UTF-8 字节截断：按 code point 推进一次到位，不切半个多字节字符；
+  // 上游可控的超长名字下 while-slice 是 O(n²)，病态输入会拖慢整队列
+  if (Buffer.byteLength(cleaned, 'utf8') > maxBytes) {
+    let bytes = 0;
+    let end = 0;
+    for (const ch of cleaned) {
+      bytes += Buffer.byteLength(ch, 'utf8');
+      if (bytes > maxBytes) break;
+      end += ch.length;
+    }
+    cleaned = cleaned.slice(0, end);
   }
-  cleaned = cleaned.replace(/[\uD800-\uDFFF]/g, ''); // 剥孤立代理项（截断半个 UTF-8 字符的产物）
   cleaned = cleaned.replace(/[ .]+$/, ''); // 尾随空格/点 Windows 非法
   if (!cleaned || WINDOWS_RESERVED.test(cleaned)) {
     return 'untitled';
@@ -66,37 +79,48 @@ async function fetchStream(rawUrl, { timeout, signal }) {
   let url = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const parsed = toDownloadUrl(url);
-    // IP 字面量判段、域名走 DNS 解析：任一落入私网/保留段即拒（fail closed）
+    // IP 字面量判段、域名走 DNS 解析：任一落入私网/保留段即拒（fail closed）。
+    // SSRF 拒绝是确定性的——标 fatal 不浪费重试
     if (!(await resolvesToPublicIp(parsed.hostname))) {
-      throw new Error('下载地址解析到非公网地址');
+      throw fatalError('下载地址解析到非公网地址');
     }
 
-    const response = await axios({
-      method: 'get',
-      url: parsed.toString(),
-      responseType: 'stream',
-      timeout,
-      maxRedirects: 0,
-      signal,
-      // 3xx 由本层处理；4xx/5xx 也进 then 以便给出干净错误
-      validateStatus: s => (s >= 200 && s < 300) || (s >= 300 && s < 400)
-    });
+    let response;
+    try {
+      response = await axios({
+        method: 'get',
+        url: parsed.toString(),
+        responseType: 'stream',
+        timeout,
+        maxRedirects: 0,
+        signal,
+        // identity：axios 默认透明解压但保留原 content-length——解压字节与声明
+        // 字节不一致会让落盘对账误判"下载不完整"；音频/图片本就压缩过，无损失
+        headers: { 'Accept-Encoding': 'identity' },
+        // 3xx 由本层处理以便逐跳校验；其余状态码进 catch 统一处理
+        validateStatus: s => s >= 200 && s < 400
+      });
+    } catch (error) {
+      // 4xx/5xx 的响应流无人消费会悬挂 keep-alive socket——显式销毁
+      error.response?.data?.destroy?.();
+      throw error;
+    }
 
     if (response.status >= 300 && response.status < 400) {
       response.data.destroy(); // 释放连接，不留悬挂 socket
       const location = response.headers.location;
-      if (!location) throw new Error(`上游重定向缺少 Location (${response.status})`);
+      if (!location) throw fatalError(`上游重定向缺少 Location (${response.status})`);
       try {
         url = new URL(location, parsed.toString()).toString();
       } catch {
-        throw new Error('上游重定向地址无效');
+        throw fatalError('上游重定向地址无效');
       }
       continue;
     }
 
     return response;
   }
-  throw new Error('重定向次数过多');
+  throw fatalError('重定向次数过多');
 }
 
 function removePartial(outputPath) {
@@ -156,11 +180,20 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
 
     audioResponse.data.on('data', (chunk) => {
       downloadedLength += chunk.length;
+      // 超限即毁流——pipeline 会把该错误冒泡，removePartial 清残片
+      if (downloadedLength > MAX_AUDIO_BYTES) {
+        audioResponse.data.destroy(new Error(`文件超过大小上限 ${MAX_AUDIO_BYTES}`));
+        return;
+      }
       if (onProgress && totalLength > 0) {
         const progress = Math.round((downloadedLength / totalLength) * 100);
         if (progress !== lastProgress) {
           lastProgress = progress;
-          onProgress(progress);
+          try {
+            onProgress(progress);
+          } catch {
+            // 回调异常不得穿透 'data' 监听器成 uncaughtException
+          }
         }
       }
     });
@@ -171,9 +204,11 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
 
     const stats = fs.statSync(outputPath);
     if (stats.size === 0) {
-      throw new Error('下载内容为空');
+      // 上游 200 但空 body 对该 URL 是确定性失败——标 fatal 不浪费重试
+      throw fatalError('下载内容为空');
     }
     // content-length 与落盘大小对账：framing 完整但服务端截断的残文件不能当完成
+    // （截断是传输瞬时问题，保持可重试）
     if (totalLength > 0 && stats.size !== totalLength) {
       throw new Error(`下载不完整（${stats.size}/${totalLength} 字节）`);
     }
@@ -193,9 +228,21 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
   }
 }
 
-async function downloadLyrics(songId, outputPath) {
+async function downloadLyrics(songId, outputPath, signal) {
   try {
+    // 上游 lyric 模块是进程内调用，请求级 abort 传不进去——在调用前后各查一次
+    // signal，取消语义不丢（请求本身时长很短，段间检查足够）
+    if (signal?.aborted) {
+      const err = new Error('已取消');
+      err.aborted = true;
+      throw err;
+    }
     const response = await callNeteaseApi('lyric', { id: songId });
+    if (signal?.aborted) {
+      const err = new Error('已取消');
+      err.aborted = true;
+      throw err;
+    }
 
     if (!response || !response.body || response.body.code !== 200) {
       throw new Error('无法获取歌词');
@@ -243,11 +290,24 @@ async function downloadCover(coverUrl, outputPath, signal) {
       throw new Error(`上游返回 ${response.status}`);
     }
 
+    const coverLength = parseInt(response.headers['content-length'], 10);
+    let coverBytes = 0;
+    response.data.on('data', (chunk) => {
+      coverBytes += chunk.length;
+      if (coverBytes > MAX_COVER_BYTES) {
+        response.data.destroy(new Error(`封面超过大小上限 ${MAX_COVER_BYTES}`));
+      }
+    });
+
     await pipeline(response.data, fs.createWriteStream(outputPath));
 
     const stats = fs.statSync(outputPath);
     if (stats.size === 0) {
-      throw new Error('下载内容为空');
+      throw fatalError('下载内容为空');
+    }
+    // 封面同音频：服务端截断的残图不能当完成（截断瞬时，可重试）
+    if (coverLength > 0 && stats.size !== coverLength) {
+      throw new Error(`下载不完整（${stats.size}/${coverLength} 字节）`);
     }
     return {
       path: outputPath,
