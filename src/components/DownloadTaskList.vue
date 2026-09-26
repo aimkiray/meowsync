@@ -231,8 +231,10 @@ const TaskRow = {
         style: 'border-radius: 0;'
       }, rowProps.task.coverUrl
         ? h('img', {
-          // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底
-          src: rowProps.task.coverUrl,
+          // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底。
+          // coverUrl 是上游 http 明文 CDN 地址：HTTPS 部署下被动混合内容
+          // 会被浏览器拦截，显式升级 https（*.music.126.net 均支持 TLS）
+          src: String(rowProps.task.coverUrl).replace(/^http:\/\//, 'https://'),
           alt: rowProps.task.songName,
           class: 'w-full h-full object-cover',
           style: 'image-rendering: pixelated;'

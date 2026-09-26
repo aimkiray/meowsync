@@ -119,7 +119,7 @@ const displayQueues = computed(() => {
 });
 
 const queueListTitle = computed(() => {
-  return `下载列队 (${displayQueues.value.length})`;
+  return `下载队列 (${displayQueues.value.length})`;
 });
 
 // 首次加载失败与"真的为空"要区分开——否则服务挂掉时 UI 显示空态误导
@@ -127,30 +127,6 @@ const loadError = ref('');
 const queueEmptyText = computed(() => {
   return loadError.value || '还没有下载队列喵~';
 });
-
-function getQueueStatusText(status) {
-  const statusMap = {
-    pending: '等待中',
-    running: '运行中',
-    paused: '已暂停',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消'
-  };
-  return statusMap[status] || status;
-}
-
-function getQueueStatusClass(status) {
-  const classMap = {
-    pending: 'bg-gray-800 text-gray-300 border-gray-600',
-    running: 'bg-blue-900 text-blue-200 border-blue-500',
-    paused: 'bg-yellow-900 text-yellow-200 border-yellow-500',
-    completed: 'bg-green-900 text-green-200 border-green-500',
-    failed: 'bg-red-900 text-red-200 border-red-500',
-    cancelled: 'bg-gray-900 text-gray-400 border-gray-700'
-  };
-  return classMap[status] || 'bg-gray-800 text-gray-300 border-gray-600';
-}
 
 function getQueueProgress(queue) {
   if (!queue || queue.totalTasks === 0) {
@@ -167,9 +143,7 @@ function hasQueueChanged(currentQueue, nextQueue) {
   return currentQueue.id !== nextQueue.id
     || currentQueue.playlistId !== nextQueue.playlistId
     || currentQueue.name !== nextQueue.name
-    || currentQueue.coverUrl !== nextQueue.coverUrl
     || currentQueue.coverImgUrl !== nextQueue.coverImgUrl
-    || currentQueue.cover_img_url !== nextQueue.cover_img_url
     || currentQueue.status !== nextQueue.status
     || currentQueue.totalTasks !== nextQueue.totalTasks
     || currentQueue.completedTasks !== nextQueue.completedTasks
@@ -298,13 +272,16 @@ async function loadTasks(queueId, options = {}) {
     const response = await downloadsApi.listTasks({ queueId });
     // 响应可能属于上一个选中队列（并发 selectQueue 交错）——归属校验防错写
     if (String(selectedQueue.value?.id) !== String(queueId)) return;
-    if (response.data && response.data.data) {
-      const nextTasks = response.data.data;
-      if (hasCollectionChanged(tasks.value, nextTasks, hasTaskChanged)) {
-        tasks.value = nextTasks;
-      }
-      hasLoadedTasks.value = true;
+    // 与 loadQueues 对齐：打错部署（静态服务器返回 HTML）不能让任务面板
+    // 永远显示"还没有任务"
+    if (!response.data || !Array.isArray(response.data.data)) {
+      throw new Error('任务列表响应格式异常');
     }
+    const nextTasks = response.data.data;
+    if (hasCollectionChanged(tasks.value, nextTasks, hasTaskChanged)) {
+      tasks.value = nextTasks;
+    }
+    hasLoadedTasks.value = true;
   } catch (error) {
     console.error('加载任务失败:', error);
   } finally {
@@ -399,6 +376,7 @@ async function deleteQueue(queueId) {
     await downloadsApi.deleteQueue(queueId);
     await loadQueues();
     if (selectedQueue.value?.id === queueId) {
+      selectionMissCount = 0; // 手动清选中同样要归零——loadQueues 内缺席计数会留下惰性 =1
       selectedQueue.value = null;
       tasks.value = [];
     }
@@ -417,7 +395,9 @@ function startPolling() {
     pollInFlight = true;
     try {
       await loadQueues({ silent: true });
-      if (selectedQueue.value) {
+      // 选中队列缺席窗口内（连续两轮未命中才清选中）不轮询任务——
+      // 那两行快照里队列已删，任务接口会返回 [] 闪一帧"已删队列+空任务"
+      if (selectedQueue.value && selectionMissCount === 0) {
         await loadTasks(selectedQueue.value.id, { silent: true });
       }
     } finally {

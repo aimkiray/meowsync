@@ -119,7 +119,10 @@ if (hasDist) {
   const apiFirstSegments = new Set([...apiNames, ...Object.keys(apiModules)]);
   app.get('*', (c) => {
     const p = c.req.path;
-    const firstSegment = p.split('/')[1] || '';
+    // 首段判定时统一小写——/Song_url/x 之类的变体同样是 API 请求，不该喂 HTML。
+    // 注意：apiFirstSegments 覆盖全量上游模块名（login/search/album/... 约 300 个），
+    // 前端如果将来引入 vue-router，新增路由必须避开这些名字，否则会被判成 API 404
+    const firstSegment = (p.split('/')[1] || '').toLowerCase();
     if (API_PREFIXES.some(px => p === px || p.startsWith(px + '/'))
       || apiFirstSegments.has(firstSegment)
       || p.startsWith('/assets/')
@@ -152,8 +155,16 @@ try {
   process.exit(1);
 }
 
-// 启动服务器（serve() 返回原生 http.Server，可挂 WebSocket upgrade）
-const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {
+// 启动服务器（serve() 返回原生 http.Server，可挂 WebSocket upgrade）。
+// autoCleanupIncoming 显式声明：多条路由故意不读 body（401/400 早退、纯触发型 POST
+// /downloads/queues/:id/start 等），未读完的 body 靠它自动 drain——若按性能建议
+// 关掉，所有不读 body 的请求都会泄漏 keep-alive socket
+const server = serve({
+  fetch: app.fetch,
+  port: PORT,
+  hostname: HOST,
+  autoCleanupIncoming: true
+}, (info) => {
   console.log(`\n🎵 MeowSync Server is running!`);
   console.log(`📍 Server: http://${HOST}:${info.port}`);
   console.log(`🎮 Remote WS: ws://${HOST}:${info.port}/remote`);

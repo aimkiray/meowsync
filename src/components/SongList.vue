@@ -387,7 +387,7 @@ export default {
     // 切换下载菜单显示
     const toggleDownloadMenu = (songId, event) => {
       if (showDownloadMenu.value === songId) {
-        showDownloadMenu.value = null
+        closeDownloadMenu()
       } else {
         // 计算菜单位置：下方空间不足时翻到按钮上方，左右越界时收回视口内
         const button = event.target.closest('button')
@@ -410,10 +410,10 @@ export default {
       return menuPositions.value[songId] || { top: '0px', left: '0px' }
     }
     
-    // 关闭菜单
+    // 关闭菜单：所有关闭路径收口到这里，顺带清位置缓存（只增不减会泄漏）
     const closeDownloadMenu = () => {
       if (showDownloadMenu.value !== null) {
-        delete menuPositions.value[showDownloadMenu.value] // 位置缓存只增不减，顺手清
+        delete menuPositions.value[showDownloadMenu.value]
       }
       showDownloadMenu.value = null
     }
@@ -441,12 +441,12 @@ export default {
     const downloadSongDirect = async (song, bitrate = 320000) => {
       if (!song) {
         // 菜单目标已不在当前歌单（翻页/换单后残留）——关菜单而不是静默无效
-        showDownloadMenu.value = null
+        closeDownloadMenu()
         return
       }
       // 点击即关菜单：直接下载要等整个 fetch+blob（可能数十秒），
       // 留着透明 overlay 罩全屏会阻塞一切点击
-      showDownloadMenu.value = null
+      closeDownloadMenu()
       try {
         downloadingStates.value[song.id] = true
         await musicApi.downloadSong(song, bitrate)
@@ -492,7 +492,7 @@ export default {
     // 下载到服务器或删除
     const toggleServerDownload = async (song) => {
       if (!song) {
-        showDownloadMenu.value = null
+        closeDownloadMenu()
         return
       }
       if (!props.selectedPlaylist) {
@@ -525,7 +525,7 @@ export default {
           if (stillCurrent()) {
             serverDownloadingStates.value[song.id] = false
           }
-          showDownloadMenu.value = null
+          closeDownloadMenu()
         }
       } else {
         // 下载到服务器
@@ -546,7 +546,7 @@ export default {
           if (stillCurrent()) {
             serverDownloadingStates.value[song.id] = false
           }
-          showDownloadMenu.value = null
+          closeDownloadMenu()
         }
       }
     }
@@ -555,7 +555,7 @@ export default {
     watch(() => props.selectedPlaylist?.id, () => {
       serverDownloadedStates.value = {}
       serverDownloadingStates.value = {} // 处理中标记同样属于旧歌单，一并清
-      showDownloadMenu.value = null // 菜单目标已随歌单失效，不留悬空菜单
+      closeDownloadMenu() // 菜单目标已随歌单失效，不留悬空菜单
       checkAllSongsDownloadStatus()
     })
 
@@ -569,8 +569,8 @@ export default {
 
     // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌；Escape 同关
     if (typeof window !== 'undefined') {
-      const closeOnScroll = () => { showDownloadMenu.value = null }
-      const closeOnEscape = (e) => { if (e.key === 'Escape') showDownloadMenu.value = null }
+      const closeOnScroll = () => { closeDownloadMenu() }
+      const closeOnEscape = (e) => { if (e.key === 'Escape') closeDownloadMenu() }
       window.addEventListener('scroll', closeOnScroll, true)
       window.addEventListener('keydown', closeOnEscape)
       onBeforeUnmount(() => {
