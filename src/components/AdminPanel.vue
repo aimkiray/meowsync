@@ -225,9 +225,16 @@ function hasCollectionChanged(currentItems, nextItems, compareItem) {
 
 function selectQueue(queue) {
   selectedQueue.value = queue;
+  selectionMissCount = 0;
+  // 立即清空旧队列任务——加载/轮询间隙不应在 B 名下展示 A 的任务列表
+  tasks.value = [];
   hasLoadedTasks.value = false;
   loadTasks(queue.id);
 }
+
+// 选中项"在快照里缺席"的连续计数：请求发出到响应落地之间用户新选的队列
+// 不在旧快照里是正常竞态——一轮缺席可能恰是窗口，两轮都不在才是真删除
+let selectionMissCount = 0;
 
 async function loadQueues(options = {}) {
   const { silent = false } = options;
@@ -237,31 +244,37 @@ async function loadQueues(options = {}) {
       loadingQueues.value = true;
     }
     const response = await downloadsApi.listQueues();
-    if (response.data && response.data.data) {
-      const nextQueues = response.data.data;
-      const previousSelectedQueueId = selectedQueue.value?.id ?? null;
-      const queuesChanged = hasCollectionChanged(queues.value, nextQueues, hasQueueChanged);
-
-      if (queuesChanged) {
-        queues.value = nextQueues;
-      }
-
-      const activeQueues = queuesChanged ? nextQueues : queues.value;
-
-      if (previousSelectedQueueId != null) {
-        const matchedQueue = activeQueues.find(queue => queue.id === previousSelectedQueueId);
-        if (matchedQueue) {
-          selectedQueue.value = matchedQueue;
-        } else {
-          selectedQueue.value = null;
-          tasks.value = [];
-          hasLoadedTasks.value = false;
-        }
-      }
-
-      hasLoadedQueues.value = true;
-      loadError.value = '';
+    // 响应体非 envelope（如同源静态服的 index.html 200）：不能当空列表吞掉，
+    // 抛错走 catch → 首载显示错误态而不是"还没有下载队列"假象
+    if (!response.data || !Array.isArray(response.data.data)) {
+      throw new Error('接口返回了非预期内容（可能打到了静态服务器）');
     }
+    const nextQueues = response.data.data;
+    const previousSelectedQueueId = selectedQueue.value?.id ?? null;
+    const queuesChanged = hasCollectionChanged(queues.value, nextQueues, hasQueueChanged);
+
+    if (queuesChanged) {
+      queues.value = nextQueues;
+    }
+
+    const activeQueues = queuesChanged ? nextQueues : queues.value;
+
+    if (previousSelectedQueueId != null) {
+      const matchedQueue = activeQueues.find(queue => queue.id === previousSelectedQueueId);
+      if (matchedQueue) {
+        selectionMissCount = 0;
+        selectedQueue.value = matchedQueue;
+      } else if (++selectionMissCount >= 2) {
+        // 连续两轮快照都缺席才判定删除——单轮缺席可能只是"响应快照早于用户点击"
+        selectionMissCount = 0;
+        selectedQueue.value = null;
+        tasks.value = [];
+        hasLoadedTasks.value = false;
+      }
+    }
+
+    hasLoadedQueues.value = true;
+    loadError.value = '';
   } catch (error) {
     console.error('加载队列失败:', error);
     // 首次加载失败给用户可见的错误态；轮询静默失败不打断界面

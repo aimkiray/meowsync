@@ -63,7 +63,9 @@ function sendUpstreamResult(c, answer) {
     ? answer.status
     : 200;
   c.status(upstreamStatus);
-  return c.json(answer.body ?? answer);
+  // answer.body 缺失时不能把整个 envelope（status/cookie）序列化出去——
+  // cookie 明文会落进响应体。回落到空对象，状态码仍按 answer.status 透传
+  return c.json(answer.body ?? {});
 }
 
 // 判断 catch 到的是否为上游 answer 对象（区别于真正的 Error/字符串异常）
@@ -103,6 +105,9 @@ app.all('/:apiName', async (c) => {
       if (error.status === 413) {
         return c.json({ code: 413, message: 'Payload Too Large' }, 413);
       }
+      // 慢速/断流上传的非 413 读流错误：静默回落会把"客户端异常"打成正常上游请求，
+      // 至少留日志可排障
+      console.warn(`[music] ${apiName} 请求体读取失败，按空 body 处理:`, error.message);
       body = {};
     }
   }

@@ -23,8 +23,14 @@ export function resolveApiBaseUrl() {
   // 页面可能不是 http(s)（file://、扩展页、opaque origin），此时 origin 是 'null'、
   // protocol 也无法复用，只能退回 http://localhost:端口
   const pageIsHttp = /^https?:$/.test(window.location.protocol)
-  const devFallback = () =>
-    `${pageIsHttp ? window.location.protocol : 'http:'}//${window.location.hostname || 'localhost'}:${fallbackPort}`
+  const devFallback = () => {
+    // https 页面配 http API 会被混合内容拦截——devFallback 分支也要告警
+    const base = `${pageIsHttp ? window.location.protocol : 'http:'}//${window.location.hostname || 'localhost'}:${fallbackPort}`
+    if (window.location.protocol === 'https:') {
+      console.warn('[api] 页面为 HTTPS，推断的 API 地址是 HTTP，浏览器将拦截混合内容请求:', base)
+    }
+    return base
+  }
 
   if (configuredBase) {
     try {
@@ -34,13 +40,23 @@ export function resolveApiBaseUrl() {
         return devFallback()
       }
       const configuredUrl = new URL(configuredBase)
+      // 配置带 query/hash 多半是误配（如带了 '?' 或 '#'）——剥掉并告警而不是
+      // 让拼出的 '/downloads?x=1/queues' 静默打错端点
+      if (configuredUrl.search || configuredUrl.hash) {
+        console.warn('[api] VITE_API_BASE_URL 不应包含 query/hash，已忽略:', configuredBase)
+        configuredUrl.search = ''
+        configuredUrl.hash = ''
+      }
       const configuredHost = configuredUrl.hostname
       const currentHost = window.location.hostname
+      // 显式写了默认端口（:80/:443）时 URL.port 归一化为空——只有原串没写
+      // 端口时才补 fallbackPort，别把用户显式配置吞掉
+      const hasExplicitPort = /^https?:\/\/[^/]*:\d+/i.test(configuredBase)
 
       // 配置了本机地址但页面从其他主机打开 → 替换主机为页面主机（保留端口），支持局域网访问
       if (isLocalHost(configuredHost) && currentHost && !isLocalHost(currentHost)) {
         configuredUrl.hostname = currentHost
-        if (!configuredUrl.port) configuredUrl.port = fallbackPort
+        if (!configuredUrl.port && !hasExplicitPort) configuredUrl.port = fallbackPort
       }
 
       // HTTPS 页面请求 HTTP API 会被浏览器按混合内容拦截，提前告警便于定位
@@ -66,6 +82,11 @@ export function resolveApiBaseUrl() {
     && isLocalHost(window.location.hostname)
   if (isVitePreview) {
     console.warn(`[api] 检测到 vite preview（${window.location.origin}），API 推断为 ${fallbackPort} 端口；非 preview 部署请配置 VITE_API_BASE_URL`)
+  } else if (import.meta.env.PROD && pagePort === vitePreviewPort) {
+    // 歧义场景无法静态区分：vite preview --host 的局域网访问 与 恰好跑在 3100 的
+    // 生产部署。preview 时同源请求会拿到 index.html（200）被 axios 当成功解析——
+    // 至少留告警便于定位；部署方请显式配置 VITE_API_BASE_URL 消除歧义
+    console.warn(`[api] 页面端口 ${pagePort} 与 vite preview 端口相同：若这是 vite preview --host 的局域网访问，API 请求会打到静态服务器；若是生产部署请忽略（可用 VITE_API_BASE_URL 显式指定）`)
   }
   // 单进程部署/反代：生产构建产物与 API 同源——Docker 里没有 VITE_API_PORT，
   // 用 import.meta.env.PROD 区分（构建产物恒为 PROD），不能再靠端口反推

@@ -76,6 +76,9 @@ async function getContentLength(url, hops = 0) {
   return new Promise((resolve) => {
     const mod = cleanUrl.startsWith('https') ? https : http;
     const req = mod.request(cleanUrl, { method: 'HEAD', timeout: 5000 }, (res) => {
+      // res 在 drain 期间仍可能收 socket 错误（对端 RST）——IncomingMessage 无
+      // error 监听会抛 uncaughtException 打崩进程（上游 URL 可被 302 投毒，远程可触发）
+      res.on('error', () => resolve(null));
       res.resume(); // 消费响应，及时释放 keep-alive socket
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         // 回调内同步执行——畸形 Location 必须吞掉，否则抛错穿透 emit 成 uncaughtException
@@ -92,7 +95,11 @@ async function getContentLength(url, hops = 0) {
         resolve(getContentLength(next, hops + 1));
         return;
       }
-      resolve(parseInt(res.headers['content-length']) || null);
+      // 仅 2xx 的 content-length 是文件大小——405/500 错误页的 length 会被当作
+      // 文件大小做时长估算，误杀本来可用的解锁源
+      resolve(res.statusCode >= 200 && res.statusCode < 300
+        ? (parseInt(res.headers['content-length']) || null)
+        : null);
     });
     req.on('error', () => resolve(null));
     req.on('timeout', () => { req.destroy(); resolve(null); });

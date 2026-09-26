@@ -11,12 +11,13 @@ function fail(c, status, message) {
   return c.json({ code: status, message }, status);
 }
 
-// 业务错误统一映射：err.status 由 download-manager 的 httpError() 标记；
-// 未标记的异常一律 500（并记录日志），不向前端泄漏内部细节之外的堆栈
+// 业务错误统一映射：err.exposed 由 download-manager 的 httpError() 与 body 解析的
+// 413 显式标记；未标记的异常一律 500（并记录日志），不向前端泄漏内部细节之外的堆栈。
+// 不能只看 err.status——axios 的 AxiosError 自带 .status（上游响应码），透传其
+// message 会把上游错误细节当业务消息漏给客户端
 function handleError(c, error, tag) {
-  // err.status 标记的是 download-manager 自撰的业务消息（含 502 下载失败原因），
-  // 可以回传；未标记的内部异常一律 500 且不带细节（路径/SQL 等不外泄）
-  const marked = Number.isInteger(error.status) && error.status >= 400 && error.status < 600;
+  const marked = error.exposed === true
+    && Number.isInteger(error.status) && error.status >= 400 && error.status < 600;
   if (marked) {
     if (error.status >= 500) console.error(`${tag}:`, error);
     return fail(c, error.status, error.message || '请求失败');
@@ -25,10 +26,13 @@ function handleError(c, error, tag) {
   return fail(c, 500, '服务器错误');
 }
 
-// 路由 :id 参数统一校验：拒绝 NaN 与 parseInt 截断（"12abc" → 12 这类脏输入）
+// 路由 :id 参数统一校验：只收纯十进制数字——Number() 会放过 '1e5'/'0x10'/' 3 '
+// 这类脏输入，parseInt 又会截断 '12abc'，两者都得拦
 function parseIdParam(c, name = 'id') {
-  const n = Number(c.req.param(name));
-  return Number.isInteger(n) && n > 0 ? n : null;
+  const raw = c.req.param(name);
+  if (!/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 

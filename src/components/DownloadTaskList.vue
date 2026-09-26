@@ -229,9 +229,10 @@ const TaskRow = {
       h('div', {
         class: 'w-10 h-10 border-2 border-pink-400 bg-gray-900 overflow-hidden flex-shrink-0',
         style: 'border-radius: 0;'
-      }, rowProps.task.coverUrl || rowProps.task.coverPath
+      }, rowProps.task.coverUrl
         ? h('img', {
-          src: rowProps.task.coverUrl || rowProps.task.coverPath,
+          // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底
+          src: rowProps.task.coverUrl,
           alt: rowProps.task.songName,
           class: 'w-full h-full object-cover',
           style: 'image-rendering: pixelated;'

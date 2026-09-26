@@ -109,6 +109,22 @@ function updateTask(id, updates) {
     fields.push('file_size = @file_size');
     params.file_size = updates.fileSize;
   }
+  if (updates.bitrate !== undefined) {
+    fields.push('bitrate = @bitrate');
+    params.bitrate = updates.bitrate;
+  }
+  if (updates.downloadAudio !== undefined) {
+    fields.push('download_audio = @download_audio');
+    params.download_audio = updates.downloadAudio ? 1 : 0;
+  }
+  if (updates.downloadLyrics !== undefined) {
+    fields.push('download_lyrics = @download_lyrics');
+    params.download_lyrics = updates.downloadLyrics ? 1 : 0;
+  }
+  if (updates.downloadCover !== undefined) {
+    fields.push('download_cover = @download_cover');
+    params.download_cover = updates.downloadCover ? 1 : 0;
+  }
   if (updates.completedAt !== undefined) {
     fields.push('completed_at = @completed_at');
     params.completed_at = updates.completedAt;

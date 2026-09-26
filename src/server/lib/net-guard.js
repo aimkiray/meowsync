@@ -39,10 +39,15 @@ function isPrivateIPv6(ip) {
     first === 0 || // ::/16 全域：unspecified、::/96 兼容地址、展开式映射
     (first & 0xfe00) === 0xfc00 || // fc00::/7 unique-local
     (first & 0xffc0) === 0xfe80 || // fe80::/10 link-local（覆盖 fe80–febf）
+    (first & 0xffc0) === 0xfec0 || // fec0::/10 site-local（已废弃但仍可能被路由）
     (first & 0xff00) === 0xff00 || // ff00::/8 multicast
     first === 0x2002 || // 2002::/16 6to4（内嵌 v4，可指向私网地址）
     (first === 0x2001 && second === 0) || // 2001::/32 Teredo（内嵌 v4）
     (first === 0x2001 && second === 0xdb8) || // 2001:db8::/32 文档段
+    (first === 0x2001 && second === 0x0002) || // 2001:2::/48 基准测试段
+    (first === 0x2001 && (second & 0xfff0) === 0x0010) || // 2001:10::/28 ORCHIDv1
+    (first === 0x2001 && (second & 0xfff0) === 0x0020) || // 2001:20::/28 ORCHIDv2
+    (first & 0xfff0) === 0x3ff0 || // 3fff::/20 文档段（RFC 9637）
     (first === 0x64 && second === 0xff9b) // 64:ff9b::/96 + 64:ff9b:1::/48 NAT64（内嵌 v4）
   );
 }
@@ -69,6 +74,8 @@ const DNS_CACHE_TTL_OK_MS = 10000;
 const DNS_CACHE_TTL_ERR_MS = 5000;
 const DNS_CACHE_MAX = 256;
 const dnsCache = new Map();
+// 同 hostname 并发 miss 各自发 lookup 是重复放大——缓存 pending promise 做合并
+const dnsInflight = new Map();
 
 /**
  * hostname → 公网 IP 校验。防御两类场景：
@@ -88,20 +95,29 @@ async function resolvesToPublicIp(hostname) {
   const cached = dnsCache.get(hostname);
   if (cached && cached.expires > Date.now()) return cached.ok;
 
-  let ok = false;
-  try {
-    const addrs = await dns.lookup(hostname, { all: true });
-    ok = addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address, a.family));
-  } catch {
-    ok = false;
+  let pending = dnsInflight.get(hostname);
+  if (!pending) {
+    pending = (async () => {
+      let ok = false;
+      try {
+        const addrs = await dns.lookup(hostname, { all: true });
+        ok = addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address, a.family));
+      } catch {
+        ok = false;
+      }
+      // 满时淘汰最旧条目而非全清——突发多 host 时全清会造成缓存抖动
+      if (dnsCache.size >= DNS_CACHE_MAX) {
+        dnsCache.delete(dnsCache.keys().next().value);
+      }
+      dnsCache.set(hostname, {
+        ok,
+        expires: Date.now() + (ok ? DNS_CACHE_TTL_OK_MS : DNS_CACHE_TTL_ERR_MS),
+      });
+      return ok;
+    })().finally(() => dnsInflight.delete(hostname));
+    dnsInflight.set(hostname, pending);
   }
-
-  if (dnsCache.size >= DNS_CACHE_MAX) dnsCache.clear();
-  dnsCache.set(hostname, {
-    ok,
-    expires: Date.now() + (ok ? DNS_CACHE_TTL_OK_MS : DNS_CACHE_TTL_ERR_MS),
-  });
-  return ok;
+  return pending;
 }
 
 module.exports = {

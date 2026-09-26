@@ -259,7 +259,8 @@ function runQueueAction(action, payload) {
 }
 
 function canRetry(queue) {
-  return queue.failedTasks > 0 && queue.status !== 'running';
+  // paused 仍在服务端 activeQueues 里，retryQueue 会 409"请先取消"——不显示入口
+  return queue.failedTasks > 0 && queue.status !== 'running' && queue.status !== 'paused';
 }
 
 function canDelete(queue) {

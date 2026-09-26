@@ -21,6 +21,8 @@ const httpLong = axios.create({
 
 export const downloadsApi = {
   createQueue: (playlistId, options = {}) => {
+    // 歌单未导入时服务端会先走两次上游往返（detail+tracks），慢网可超默认 15s——
+    // 超时后服务端仍建成队列，重试只会撞 409，给足 60s
     return http.post(`${API_BASE_URL}/downloads/queues`, {
       playlistId,
       bitrate: options.bitrate || 320000,
@@ -28,7 +30,7 @@ export const downloadsApi = {
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
       concurrentLimit: options.concurrentLimit || 3
-    });
+    }, { timeout: 60000 });
   },
 
   listQueues: () => {
@@ -60,7 +62,11 @@ export const downloadsApi = {
   },
 
   deleteQueue: (id) => {
-    return http.delete(`${API_BASE_URL}/downloads/queues/${id}`);
+    // 服务端要等中止+排空在途下载（排空上限 30s），15s 默认超时会让客户端
+    // 先报"失败"而服务端实际删完——重试拿到 404 体验错乱，给 60s
+    return http.delete(`${API_BASE_URL}/downloads/queues/${id}`, {
+      timeout: 60000
+    });
   },
 
   listTasks: (params = {}) => {
@@ -112,7 +118,8 @@ export const downloadsApi = {
     });
   },
 
-  // 快速下载歌单（建队列 + 启动即返回，后台跑；不需要长超时）
+  // 快速下载歌单（建队列 + 启动即返回，后台跑）；歌单未导入时同样要先走上游
+  // 导入（detail+tracks 两次往返），超时后重试会撞"已有进行中队列"的 409——给 60s
   quickDownloadPlaylist: (playlistId, options = {}) => {
     return http.post(`${API_BASE_URL}/downloads/playlists/${playlistId}/quick`, {
       bitrate: options.bitrate || 320000,
@@ -120,6 +127,6 @@ export const downloadsApi = {
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
       concurrentLimit: options.concurrentLimit || 3
-    });
+    }, { timeout: 60000 });
   }
 };

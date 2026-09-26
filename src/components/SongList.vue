@@ -412,6 +412,9 @@ export default {
     
     // 关闭菜单
     const closeDownloadMenu = () => {
+      if (showDownloadMenu.value !== null) {
+        delete menuPositions.value[showDownloadMenu.value] // 位置缓存只增不减，顺手清
+      }
       showDownloadMenu.value = null
     }
     
@@ -441,6 +444,9 @@ export default {
         showDownloadMenu.value = null
         return
       }
+      // 点击即关菜单：直接下载要等整个 fetch+blob（可能数十秒），
+      // 留着透明 overlay 罩全屏会阻塞一切点击
+      showDownloadMenu.value = null
       try {
         downloadingStates.value[song.id] = true
         await musicApi.downloadSong(song, bitrate)
@@ -448,9 +454,7 @@ export default {
         console.error('下载失败:', error)
         alert('下载失败: ' + extractErrorMessage(error))
       } finally {
-        // 成败都关菜单——失败后 overlay 还罩全屏需多点一次才可继续操作
         downloadingStates.value[song.id] = false
-        showDownloadMenu.value = null
       }
     }
 
@@ -463,6 +467,7 @@ export default {
       const playlistId = props.selectedPlaylist?.id
       if (!playlistId || !props.songs.length || isSingleSongPlaylist.value) {
         serverDownloadedStates.value = {}
+        serverDownloadingStates.value = {} // 在途标记同属旧歌单，一并清
         return
       }
 
@@ -550,6 +555,7 @@ export default {
     watch(() => props.selectedPlaylist?.id, () => {
       serverDownloadedStates.value = {}
       serverDownloadingStates.value = {} // 处理中标记同样属于旧歌单，一并清
+      showDownloadMenu.value = null // 菜单目标已随歌单失效，不留悬空菜单
       checkAllSongsDownloadStatus()
     })
 
