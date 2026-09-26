@@ -54,7 +54,8 @@ function upsertPlaylist(input) {
       creator_nickname = excluded.creator_nickname,
       track_count = excluded.track_count,
       source = excluded.source,
-      is_default = excluded.is_default,
+      -- 重复导入/刷新不带 isDefault 时不得清掉已有的默认标记
+      is_default = CASE WHEN excluded.is_default = 1 THEN 1 ELSE playlists.is_default END,
       updated_at = excluded.updated_at,
       last_synced_at = excluded.last_synced_at
   `).run({

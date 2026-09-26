@@ -16,7 +16,11 @@ const { Hono } = require('hono');
 const { cors } = require('hono/cors');
 
 const app = new Hono();
-const PORT = parseInt(process.env.API_PORT || process.env.PORT, 10) || 3101;
+// parseInt 无 radix 时 '08'/'0x' 之类按进制前缀解析——显式 10 进制 + 合法性校验
+const PORT = (() => {
+  const n = parseInt(process.env.API_PORT || process.env.PORT || '', 10);
+  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : 3101;
+})();
 const HOST = process.env.HOST || '0.0.0.0';
 
 // 解析CORS来源配置（WebSocket Origin 校验共用此白名单）
@@ -31,10 +35,17 @@ app.use('*', cors({
   credentials: true,
 }));
 
-// 健康检查（Docker HEALTHCHECK 探测的是 /ping；/healthz 供负载探针使用）
-const healthCheck = (c) => c.json({ ok: true });
-app.get('/healthz', healthCheck);
-app.get('/ping', healthCheck);
+// 健康检查：/ping 只探活（Docker HEALTHCHECK 用它）；/healthz 额外探 DB，
+// 磁盘满/DB 损坏时能暴露为 503 而不是"进程活着但功能全挂"
+app.get('/ping', (c) => c.json({ ok: true }));
+app.get('/healthz', (c) => {
+  try {
+    getDb().prepare('SELECT 1').get();
+    return c.json({ ok: true });
+  } catch {
+    return c.json({ ok: false, message: 'database unavailable' }, 503);
+  }
+});
 
 // 生产模式：托管前端构建产物
 // 注意路由顺序：静态资源优先匹配（'/' -> index.html），再进入业务API
@@ -94,6 +105,17 @@ const remote = attachRemoteControl(server, {
 });
 
 const downloadManager = require('./src/server/services/download-manager');
+const { getDb } = require('./src/server/db/client');
+
+// 启动即初始化 DB（运行迁移）并恢复崩溃残留的 running/downloading 假死状态。
+// 不放在模块加载期：健康检查/单测导入 server 时不应触发磁盘 IO
+try {
+  getDb();
+  downloadManager.recoverStaleStates();
+} catch (error) {
+  console.error('[db] 初始化/状态恢复失败:', error);
+  process.exit(1);
+}
 
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
 // WS 连接由 remote.close() 立即 terminate（升级 socket 不归 close()/

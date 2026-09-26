@@ -32,6 +32,7 @@
           <option value="pending">等待中</option>
           <option value="failed">失败</option>
           <option value="completed">已完成</option>
+          <option value="cancelled">已取消</option>
         </select>
       </div>
     </div>
@@ -118,7 +119,7 @@
         <Teleport to="body">
           <div
             v-if="openMenuId === queue.id"
-            class="fixed bg-gray-900 border border-purple-400 shadow-lg z-[9999] w-[132px]"
+            class="queue-menu fixed bg-gray-900 border border-purple-400 shadow-lg z-[9999] w-[132px]"
             style="border-radius: 0;"
             :style="getMenuPosition(queue.id)"
           >
@@ -142,6 +143,13 @@
               class="w-full text-left px-3 py-2 text-xs text-blue-200 hover:bg-blue-800 hover:text-white transition-colors border-b border-gray-700"
             >
               恢复
+            </button>
+            <button
+              v-if="queue.status === 'running' || queue.status === 'paused'"
+              @click.stop="runQueueAction('cancel', queue.id)"
+              class="w-full text-left px-3 py-2 text-xs text-red-200 hover:bg-red-800 hover:text-white transition-colors border-b border-gray-700"
+            >
+              取消
             </button>
             <button
               @click.stop="runQueueAction('select', queue)"
@@ -206,7 +214,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['start', 'pause', 'resume', 'retry', 'delete', 'select', 'update:search-query', 'update:status-filter']);
+const emit = defineEmits(['start', 'pause', 'resume', 'cancel', 'retry', 'delete', 'select', 'update:search-query', 'update:status-filter']);
 
 const openMenuId = ref(null);
 const menuPosition = ref({ top: '0px', left: '0px' });
@@ -223,11 +231,16 @@ function toggleMenu(queueId, event) {
 
   const rect = event.currentTarget.getBoundingClientRect();
   const menuWidth = 132;
+  const menuHeight = 180; // 5 项约 180px，不足时上翻避免出视口底
   const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
   const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));
+  const top = rect.bottom + 6 + menuHeight > viewportHeight
+    ? Math.max(8, rect.top - menuHeight - 6)
+    : rect.bottom + 6;
 
   menuPosition.value = {
-    top: `${rect.bottom + 6}px`,
+    top: `${top}px`,
     left: `${left}px`
   };
   openMenuId.value = queueId;
@@ -255,7 +268,9 @@ function canDelete(queue) {
 
 function handleWindowPointerDown(event) {
   const target = event.target;
-  if (target instanceof Element && target.closest('.music-card, [title="更多操作"]')) {
+  // 菜单是 Teleport 到 body 的——不在 .music-card 内，必须单独豁免；
+  // 否则 pointerdown（先于 click）就把菜单关了，菜单项点击永远不触发
+  if (target instanceof Element && target.closest('.music-card, .queue-menu, [title="更多操作"]')) {
     return;
   }
   closeMenu();
@@ -267,15 +282,22 @@ function handleWindowKeydown(event) {
   }
 }
 
+// 任何滚动（含嵌套滚动容器）都会让 fixed 菜单与触发按钮脱节——捕获阶段监听直接关
+function handleScroll() {
+  closeMenu();
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('pointerdown', handleWindowPointerDown);
   window.addEventListener('keydown', handleWindowKeydown);
+  window.addEventListener('scroll', handleScroll, true);
 }
 
 onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('pointerdown', handleWindowPointerDown);
     window.removeEventListener('keydown', handleWindowKeydown);
+    window.removeEventListener('scroll', handleScroll, true);
   }
 });
 

@@ -94,7 +94,7 @@ data/downloads/
 - id：队列 ID
 - playlist_id：歌单 ID
 - name：队列名称
-- status：状态（pending/running/paused/completed/failed）
+- status：状态（pending/running/paused/completed/failed/cancelled）
 - total_tasks：总任务数
 - completed_tasks：已完成任务数
 - failed_tasks：失败任务数
@@ -141,12 +141,12 @@ data/downloads/
 
 ### 下载失败
 1. 检查网络连接
-2. 查看服务器日志：`tail -f /tmp/server.log`
+2. 查看服务器日志：开发模式看 `npm run server`/`node start.js` 的终端输出；Docker 用 `docker compose logs -f meowsync`
 3. 确认歌曲 ID 有效
 4. 尝试降低并发数
 
 ### 前端无法访问
-1. 确认后端服务器运行在 3002 端口
+1. 确认后端服务器运行端口：开发默认 3101，Docker 容器内 3002（宿主映射默认 3101）
 2. 检查 CORS 配置
 3. 清除浏览器缓存
 

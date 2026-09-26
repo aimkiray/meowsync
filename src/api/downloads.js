@@ -35,6 +35,10 @@ export const downloadsApi = {
     return axios.post(`${API_BASE_URL}/downloads/queues/${id}/resume`);
   },
 
+  cancelQueue: (id) => {
+    return axios.post(`${API_BASE_URL}/downloads/queues/${id}/cancel`);
+  },
+
   retryQueue: (id) => {
     return axios.post(`${API_BASE_URL}/downloads/queues/${id}/retry`);
   },

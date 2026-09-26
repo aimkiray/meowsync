@@ -16,6 +16,7 @@
             @start="startQueue"
             @pause="pauseQueue"
             @resume="resumeQueue"
+            @cancel="cancelQueue"
             @retry="retryQueue"
             @delete="deleteQueue"
             @select="selectQueue"
@@ -297,7 +298,7 @@ async function startQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('启动队列失败:', error);
-    alert('启动队列失败: ' + error.message);
+    alert('启动队列失败: ' + (error.response?.data?.message || error.message));
   }
 }
 
@@ -307,7 +308,7 @@ async function pauseQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('暂停队列失败:', error);
-    alert('暂停队列失败: ' + error.message);
+    alert('暂停队列失败: ' + (error.response?.data?.message || error.message));
   }
 }
 
@@ -317,7 +318,7 @@ async function resumeQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('恢复队列失败:', error);
-    alert('恢复队列失败: ' + error.message);
+    alert('恢复队列失败: ' + (error.response?.data?.message || error.message));
   }
 }
 
@@ -335,9 +336,24 @@ async function retryTask(taskId) {
     }
   } catch (error) {
     console.error('重试任务失败:', error);
-    alert('重试任务失败: ' + error.message);
+    alert('重试任务失败: ' + (error.response?.data?.message || error.message));
   } finally {
     retryingTaskId.value = null;
+  }
+}
+
+async function cancelQueue(queueId) {
+  if (!confirm('确定要取消这个队列吗？未完成的任务将停止下载')) return;
+
+  try {
+    await downloadsApi.cancelQueue(queueId);
+    await loadQueues();
+    if (selectedQueue.value?.id === queueId) {
+      await loadTasks(queueId);
+    }
+  } catch (error) {
+    console.error('取消队列失败:', error);
+    alert('取消队列失败: ' + (error.response?.data?.message || error.message));
   }
 }
 
@@ -350,7 +366,7 @@ async function retryQueue(queueId) {
     }
   } catch (error) {
     console.error('重试队列失败:', error);
-    alert('重试队列失败: ' + error.message);
+    alert('重试队列失败: ' + (error.response?.data?.message || error.message));
   }
 }
 
@@ -366,7 +382,7 @@ async function deleteQueue(queueId) {
     }
   } catch (error) {
     console.error('删除队列失败:', error);
-    alert('删除队列失败: ' + error.message);
+    alert('删除队列失败: ' + (error.response?.data?.message || error.message));
   }
 }
 

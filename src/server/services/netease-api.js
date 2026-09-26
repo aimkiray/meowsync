@@ -51,12 +51,20 @@ function estimateDuration(contentLength, br) {
   return Math.round((contentLength * 8) / br * 1000);
 }
 
-// HEAD 请求获取 Content-Length
-function getContentLength(url) {
+// HEAD 请求获取 Content-Length（跟随有限重定向；30x 响应体的 length 不是目标文件大小）
+function getContentLength(url, hops = 0) {
   return new Promise((resolve) => {
+    if (hops > 3) {
+      resolve(null);
+      return;
+    }
     const mod = url.startsWith('https') ? https : http;
     const req = mod.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
       res.resume(); // 消费响应，及时释放 keep-alive socket
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        resolve(getContentLength(new URL(res.headers.location, url).toString(), hops + 1));
+        return;
+      }
       resolve(parseInt(res.headers['content-length']) || null);
     });
     req.on('error', () => resolve(null));
@@ -92,7 +100,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   }
 
   await Promise.all(items.map(async (item) => {
-    const isTrial = item.freeTrialInfo != null || (item.url && item.time > 0 && item.time <= TRIAL_MAX_DURATION_MS);
+    // 试听判定：freeTrialInfo 是明确标记；时长启发式只对付费曲目生效——
+    // 免费短歌（intro/间奏 <60s）fee=0 且 url 即完整曲，误判会错误触发解锁
+    const isTrial = item.freeTrialInfo != null
+      || (item.url && item.time > 0 && item.time <= TRIAL_MAX_DURATION_MS && item.fee > 0);
     if ((!item.url || isTrial) && item.id) {
       const originalDt = originalDurations[item.id] || item.dt || null;
       let unlocked = false;
@@ -103,8 +114,11 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
 
           const validateDuration = !(purpose === 'download' && source === 'kuwo');
           if (originalDt && unblocked.br && validateDuration) {
-            const contentLength = await getContentLength(unblocked.url);
-            const estimated = estimateDuration(contentLength, unblocked.br);
+            // match() 内部 check() 已发过 range 请求并解析出 size——优先复用，少发一次 HEAD
+            const size = Number.isFinite(unblocked.size) && unblocked.size > 0
+              ? unblocked.size
+              : await getContentLength(unblocked.url);
+            const estimated = estimateDuration(size, unblocked.br);
             const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
             if (estimated && Math.abs(estimated - originalDt) / originalDt > tolerance) {
               console.warn(
@@ -131,6 +145,8 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
       }
       if (!unlocked) {
         item.unlockFailed = true;
+        // 试听片段/失效链不再下发——否则下载端会把 30s 残片当完整曲落盘并标 completed
+        item.url = null;
         console.warn(`[unlock] ${item.id} purpose=${purpose} all sources failed or duration mismatch`);
       }
     }

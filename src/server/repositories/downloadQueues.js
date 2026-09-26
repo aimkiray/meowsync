@@ -114,6 +114,18 @@ function deleteQueue(id) {
   db.prepare('DELETE FROM download_queues WHERE id = ?').run(id);
 }
 
+function decrementCompleted(id, amount = 1) {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE download_queues
+    SET completed_tasks = MAX(completed_tasks - ?, 0),
+        updated_at = ?
+    WHERE id = ?
+  `).run(amount, now, id);
+  return findQueueById(id);
+}
+
 function incrementCompleted(id) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -157,6 +169,7 @@ module.exports = {
   listQueues,
   deleteQueue,
   incrementCompleted,
+  decrementCompleted,
   incrementFailed,
   decrementFailed
 };

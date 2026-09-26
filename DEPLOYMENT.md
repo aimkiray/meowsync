@@ -93,8 +93,10 @@ pm2 start ecosystem.config.js && pm2 save
 
 ```bash
 docker build -t meowsync .
-docker run -d -p 3101:3002 -v ./data:/app/data --name meowsync meowsync
-# -v 挂载 /app/data：SQLite 数据库与下载文件持久化（不挂载则随容器删除）
+docker run -d -p 3101:3002 -v meowsync-data:/app/data --name meowsync meowsync
+# -v 挂载 /app/data：SQLite 数据库与下载文件持久化（不挂载则随容器删除）。
+# 推荐命名卷：容器以 uid 1001 运行，bind mount 宿主机目录属主不匹配会导致 SQLITE_CANTOPEN。
+# 若坚持用宿主机目录，先 `mkdir -p ./data && chown -R 1001:1001 ./data` 再 `-v ./data:/app/data`
 ```
 
 构建期前端变量（打包进 bundle，运行时不可改）可用 `--build-arg` 注入，

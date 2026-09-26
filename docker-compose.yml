@@ -28,8 +28,9 @@ services:
       - DATA_DIR=${DATA_DIR:-}
       - DOWNLOAD_DIR=${DOWNLOAD_DIR:-}
     volumes:
-      # SQLite 数据库与下载文件持久化；改路径需同步调整 DATA_DIR
-      - ./data:/app/data
+      # 命名卷而非 bind mount：容器以 uid 1001 运行，bind mount 宿主机 ./data
+      # 属主不对会直接 SQLITE_CANTOPEN / EACCES；命名卷首次挂载时继承镜像内 /app/data 属主
+      - meowsync-data:/app/data
     networks:
       - meowsync-network
     healthcheck:
@@ -57,6 +58,9 @@ services:
       - meowsync-network
     profiles:
       - with-nginx  # 使用 --profile with-nginx 启用
+
+volumes:
+  meowsync-data:
 
 networks:
   meowsync-network:

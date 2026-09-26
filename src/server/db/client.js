@@ -2,7 +2,9 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 
-const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../../data');
+// DATA_DIR 可能是相对路径（docker-compose bind mount、命令行 export）——先归一化为绝对，
+// 否则 DB 与 downloads/ 的实际落盘位置取决于启动 cwd，跨启动方式会静默分叉
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, '../../../data'));
 const dbPath = path.join(dataDir, 'meowsync.sqlite');
 
 let db = null;
@@ -25,12 +27,21 @@ function hasIndex(database, indexName) {
 }
 
 function migrateDownloadTasks(database) {
+  // 仅在旧库缺少 queue_id 列时补齐迁移；queue_id IS NULL 是独立单曲任务的合法状态，
+  // 绝不能在此 DELETE（否则每次启动都会清空单曲下载记录）
   const hasQueueId = hasColumn(database, 'download_tasks', 'queue_id');
-  if (!hasQueueId) {
-    database.exec(`
-      ALTER TABLE download_tasks ADD COLUMN queue_id INTEGER;
-    `);
+  if (hasQueueId) {
+    if (!hasIndex(database, 'idx_download_tasks_queue')) {
+      database.exec(`
+        CREATE INDEX idx_download_tasks_queue ON download_tasks(queue_id)
+      `);
+    }
+    return;
   }
+
+  database.exec(`
+    ALTER TABLE download_tasks ADD COLUMN queue_id INTEGER;
+  `);
 
   const queueRows = database.prepare(`
     SELECT id, playlist_id
@@ -48,11 +59,6 @@ function migrateDownloadTasks(database) {
     assignQueueId.run(queue.id, queue.playlist_id);
   }
 
-  database.exec(`
-    DELETE FROM download_tasks
-    WHERE queue_id IS NULL
-  `);
-
   if (!hasIndex(database, 'idx_download_tasks_queue')) {
     database.exec(`
       CREATE INDEX idx_download_tasks_queue ON download_tasks(queue_id)
@@ -61,6 +67,8 @@ function migrateDownloadTasks(database) {
 }
 
 function initSchema(database) {
+  database.pragma('journal_mode = WAL');
+  database.pragma('busy_timeout = 5000');
   database.pragma('foreign_keys = ON');
   database.exec(`
     CREATE TABLE IF NOT EXISTS playlists (
