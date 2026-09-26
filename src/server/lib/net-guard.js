@@ -73,6 +73,8 @@ function isIpLiteral(hostname) {
 const DNS_CACHE_TTL_OK_MS = 10000;
 const DNS_CACHE_TTL_ERR_MS = 5000;
 const DNS_CACHE_MAX = 256;
+// 解析本身的有界性比缓存命中更重要：lookup 卡死会把整个下载排空链路拖死
+const DNS_LOOKUP_TIMEOUT_MS = 10000;
 const dnsCache = new Map();
 // 同 hostname 并发 miss 各自发 lookup 是重复放大——缓存 pending promise 做合并
 const dnsInflight = new Map();
@@ -106,8 +108,20 @@ async function resolveHostState(hostname) {
   if (!pending) {
     pending = (async () => {
       let result = 'error';
+      let timer;
       try {
-        const addrs = await dns.lookup(key, { all: true });
+        // dns.lookup 跑在 libuv 线程池上，不可中止也无内建超时——卡死的解析会让
+        // 调用方的协程永远不 settle（下载排空、僵尸回收全部失效）。竞速兜底
+        const addrs = await Promise.race([
+          dns.lookup(key, { all: true }),
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('DNS 查询超时')),
+              DNS_LOOKUP_TIMEOUT_MS
+            );
+            timer.unref?.();
+          })
+        ]).finally(() => clearTimeout(timer));
         if (addrs.length > 0) {
           result = addrs.every((a) => !isPrivateIp(a.address, a.family)) ? 'ok' : 'blocked';
         }

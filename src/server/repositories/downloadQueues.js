@@ -118,6 +118,23 @@ function deleteQueue(id) {
   db.prepare('DELETE FROM download_queues WHERE id = ?').run(id);
 }
 
+function listQueuesByPlaylist(playlistId) {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT q.*, p.cover_img_url
+    FROM download_queues q
+    LEFT JOIN playlists p ON p.id = q.playlist_id
+    WHERE q.playlist_id = ?
+    ORDER BY datetime(q.created_at) DESC
+  `).all(playlistId);
+  return rows.map(mapQueueRow);
+}
+
+function deleteQueuesByPlaylist(playlistId) {
+  const db = getDb();
+  db.prepare('DELETE FROM download_queues WHERE playlist_id = ?').run(playlistId);
+}
+
 function decrementCompleted(id, amount = 1) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -183,7 +200,9 @@ module.exports = {
   updateQueue,
   findQueueById,
   listQueues,
+  listQueuesByPlaylist,
   deleteQueue,
+  deleteQueuesByPlaylist,
   incrementCompleted,
   decrementCompleted,
   decrementTotal,

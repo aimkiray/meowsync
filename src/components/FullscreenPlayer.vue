@@ -76,7 +76,7 @@
 
         <img
           v-if="currentSong?.al?.picUrl"
-          :src="currentSong.al.picUrl"
+          :src="httpsCover(currentSong.al.picUrl)"
           :alt="currentSong.name"
           class="fullscreen-player__cover"
           :class="{ 'playing-animation': isPlaying }"
@@ -97,6 +97,7 @@
 import { computed, onMounted, onUnmounted } from 'vue'
 import TextAliveLyricCanvas from './TextAliveLyricCanvas.vue'
 import { formatTime } from '../lib/format'
+import { httpsCover } from '../lib/url'
 
 export default {
   name: 'FullscreenPlayer',
@@ -173,6 +174,7 @@ export default {
     return {
       progressPercentage,
       formatTime,
+      httpsCover,
       onSeekClick
     }
   }

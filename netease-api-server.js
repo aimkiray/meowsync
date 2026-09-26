@@ -116,7 +116,9 @@ if (hasDist) {
   // 未白名单的上游模块名（/login/xxx 之类）与 /assets/ 静态资源同样不喂 HTML：
   // 前者会让 axios 把 index.html 当 JSON 解析，后者让浏览器拿到 MIME 错乱的 200
   const { apiModules } = require('./src/server/services/netease-api');
-  const apiFirstSegments = new Set([...apiNames, ...Object.keys(apiModules)]);
+  const apiFirstSegments = new Set(
+    [...apiNames, ...Object.keys(apiModules)].map(s => s.toLowerCase())
+  );
   app.get('*', (c) => {
     const p = c.req.path;
     // 首段判定时统一小写——/Song_url/x 之类的变体同样是 API 请求，不该喂 HTML。

@@ -10,7 +10,7 @@
       <div class="rc-cover-wrap">
         <img
           v-if="state.currentSong?.al?.picUrl || state.currentSong?.album?.picUrl"
-          :src="state.currentSong?.al?.picUrl || state.currentSong?.album?.picUrl"
+          :src="httpsCover(state.currentSong?.al?.picUrl || state.currentSong?.album?.picUrl)"
           class="rc-cover"
           :class="{ spinning: state.isPlaying }"
         />
@@ -76,6 +76,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatTime } from '../lib/format'
+import { httpsCover } from '../lib/url'
 
 const props = defineProps({
   // 完整 WS URL，须已包含 ?role=controller 及可选 &token=（由 App.vue 构建）

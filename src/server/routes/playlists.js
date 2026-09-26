@@ -48,13 +48,16 @@ app.get('/playlists/:id', (c) => {
 app.post('/playlists/import', async (c) => {
   try {
     const body = await readJsonBody(c);
-    const neteasePlaylistId = String(body.neteasePlaylistId || c.req.query('neteasePlaylistId') || '');
-    // 只收纯数字：脏输入打一次无效上游往返才失败，前置拦截
-    if (!/^\d+$/.test(neteasePlaylistId)) {
+    // 前导零归一化：'000123' 与 '123' 是同一远端歌单，不归一化会建重复本地行；
+    // 只收纯数字（长度封顶）——脏输入打一次无效上游往返才失败，前置拦截
+    const neteasePlaylistId = String(
+      body.neteasePlaylistId || c.req.query('neteasePlaylistId') || ''
+    ).trim().replace(/^0+(?=\d)/, '');
+    if (!/^\d{1,20}$/.test(neteasePlaylistId)) {
       return c.json({ code: 400, message: '无效的 neteasePlaylistId' }, 400);
     }
 
-    const playlist = await importPlaylistFromNetease(String(neteasePlaylistId), {
+    const playlist = await importPlaylistFromNetease(neteasePlaylistId, {
       // 字符串 'false'/'0' 按布尔 false 处理（Boolean('false') === true 的坑）
       isDefault: body.isDefault === true || c.req.query('isDefault') === 'true'
     });
