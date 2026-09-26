@@ -83,7 +83,7 @@
         />
         <div
           v-else
-          class="fullscreen-player__cover flex items-center justify-center text-4xl text-pink-300 border-2 border-pink-400"
+          class="fullscreen-player__cover flex items-center justify-center text-4xl text-pink-300"
         >♪</div>
       </div>
 

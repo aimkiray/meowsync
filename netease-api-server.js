@@ -28,7 +28,11 @@ if (process.env.API_PORT && parsedApiPort === null) {
   // 非法值静默回落到 PORT/默认会让部署者以为端口生效——留痕可观测
   console.warn(`[config] API_PORT='${process.env.API_PORT}' 不是合法端口，已忽略`);
 }
-const PORT = parsedApiPort || parsePort(process.env.PORT) || 3101;
+const parsedFallbackPort = parsePort(process.env.PORT);
+if (parsedApiPort === null && process.env.PORT && parsedFallbackPort === null) {
+  console.warn(`[config] PORT='${process.env.PORT}' 不是合法端口，已忽略`);
+}
+const PORT = parsedApiPort || parsedFallbackPort || 3101;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // 解析CORS来源配置（WebSocket Origin 校验共用此白名单）。
