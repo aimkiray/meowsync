@@ -1,17 +1,7 @@
 const { Hono } = require('hono');
-const path = require('path');
-const fs = require('fs');
-const http = require('http');
-const https = require('https');
+const { apiModules, callNeteaseApi, resolveSongUrls } = require('../services/netease-api');
 
 const app = new Hono();
-
-// 试听版判定阈值：上游返回的 url 时长不超过 60s 视为试听片段
-const TRIAL_MAX_DURATION_MS = 60000;
-// 解锁结果的时长校验容差（估算时长与原始时长偏差占比）
-const DURATION_TOLERANCE = { ytdlp: 0.4, default: 0.2 };
-// 解锁音源
-const UNLOCK_SOURCES = ['ytdlp', 'kuwo'];
 
 // 仅放行前端实际使用的只读 API，避免暴露登录、发短信等高危端点
 const ALLOWED_APIS = new Set([
@@ -43,26 +33,6 @@ const MAX_BODY_BYTES = 1024 * 1024;
 // e_r 改变上游响应形态——三者都是 createOption() 的 option 通道参数，前端从不下发，统一封禁
 const BLOCKED_PARAMS = new Set(['proxy', 'real_ip', 'realip', 'crypto', 'ua', 'e_r']);
 
-// 通过 Content-Length + 码率估算音频时长（毫秒）
-function estimateDuration(contentLength, br) {
-  if (!contentLength || !br) return null;
-  return Math.round((contentLength * 8) / br * 1000);
-}
-
-// HEAD 请求获取 Content-Length
-function getContentLength(url) {
-  return new Promise((resolve) => {
-    const mod = url.startsWith('https') ? https : http;
-    const req = mod.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
-      res.resume(); // 消费响应，及时释放 keep-alive socket
-      resolve(parseInt(res.headers['content-length']) || null);
-    });
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
-    req.end();
-  });
-}
-
 // 由请求推导对外访问源
 // x-forwarded-* 头仅在 TRUST_PROXY=1/true 时采信——否则客户端可伪造该头，污染下发给前端的 audio-proxy 地址
 // c.req.url 由 @hono/node-server 基于 Host 头与 socket 加密状态构建（Host 是客户端实际拨号的地址）
@@ -75,39 +45,6 @@ function requestOrigin(c) {
   const host = (fwdHost || url.host).split(',')[0].trim();
   return `${proto}://${host}`;
 }
-
-// 动态导入所有API模块
-const apiModules = Object.create(null);
-function resolvePackageDir(pkg) {
-  try {
-    return path.dirname(require.resolve(`${pkg}/package.json`));
-  } catch {
-    return path.join(__dirname, '../../../node_modules', pkg);
-  }
-}
-
-const modulePath = path.join(resolvePackageDir('NeteaseCloudMusicApi'), 'module');
-if (fs.existsSync(modulePath)) {
-  const files = fs.readdirSync(modulePath);
-  files.forEach(file => {
-    if (file.endsWith('.js')) {
-      const moduleName = file.replace('.js', '');
-      try {
-        apiModules[moduleName] = require(path.join(modulePath, file));
-      } catch (error) {
-        console.warn(`Failed to load module ${moduleName}:`, error.message);
-      }
-    }
-  });
-}
-
-let request;
-try {
-  request = require('NeteaseCloudMusicApi/util/request');
-} catch {
-  request = require(path.join(resolvePackageDir('NeteaseCloudMusicApi'), 'util', 'request'));
-}
-const unblockmatch = require('@unblockneteasemusic/server');
 
 // 上游统一返回结构 {status, body, cookie}
 // 注意：NeteaseCloudMusicApi 的 request() 对非 200 响应是 reject(answer) 而非 resolve，
@@ -179,6 +116,9 @@ app.all('/:apiName', async (c) => {
   for (const key of Object.keys(params)) {
     if (BLOCKED_PARAMS.has(key.toLowerCase())) delete params[key];
   }
+  // 内部参数：purpose 只影响服务端解锁后处理，不透传给上游模块
+  const purpose = params.purpose === 'download' ? 'download' : 'playback';
+  delete params.purpose;
   // Cookie 双向透传：客户端显式携带的 Cookie 转发给上游（登录态支持）
   // 显式 cookie 参数优先；空字符串视为未提供，回落到 Cookie 头
   const clientCookie = c.req.header('cookie');
@@ -187,62 +127,14 @@ app.all('/:apiName', async (c) => {
   }
 
   try {
-    const result = await apiModules[apiName](params, request);
+    const result = await callNeteaseApi(apiName, params);
 
     // 对 song_url 接口：若 url 为空或为试听版则尝试 UnblockNeteaseMusic fallback
     if (apiName === 'song_url' && Array.isArray(result.body?.data)) {
-      const ids = result.body.data.map(i => i.id).filter(Boolean).join(',');
-      const originalDurations = {};
-      if (ids && apiModules['song_detail']) {
-        try {
-          const detail = await apiModules['song_detail']({ ids }, request);
-          (detail.body?.songs || []).forEach(s => { originalDurations[s.id] = s.dt; });
-        } catch (e) { /* 获取失败不阻塞 */ }
-      }
-
-      const origin = requestOrigin(c);
-      const unlockTasks = result.body.data.map(async (item) => {
-        const isTrial = item.freeTrialInfo != null || (item.url && item.time > 0 && item.time <= TRIAL_MAX_DURATION_MS);
-        if ((!item.url || isTrial) && item.id) {
-          const originalDt = originalDurations[item.id] || item.dt || null;
-          let unlocked = false;
-          for (const source of UNLOCK_SOURCES) {
-            try {
-              const unblocked = await unblockmatch(item.id, [source]);
-              if (!unblocked?.url) continue;
-
-              if (originalDt && unblocked.br) {
-                const contentLength = await getContentLength(unblocked.url);
-                const estimated = estimateDuration(contentLength, unblocked.br);
-                const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
-                if (estimated && Math.abs(estimated - originalDt) / originalDt > tolerance) {
-                  console.warn(
-                    `[unlock] ${item.id} source=${source} duration mismatch: estimated=${estimated}ms original=${originalDt}ms, skipping`
-                  );
-                  continue;
-                }
-              }
-
-              item.url = source === 'ytdlp'
-                ? `${origin}/audio-proxy?url=${encodeURIComponent(unblocked.url)}`
-                : unblocked.url;
-              item.unblocked = true;
-              item.unblockedSource = source;
-              item.freeTrialInfo = null;
-              unlocked = true;
-              break;
-            } catch (e) {
-              // 该源失败，继续下一个
-            }
-          }
-          if (!unlocked) {
-            item.unlockFailed = true;
-            console.warn(`[unlock] ${item.id} all sources failed or duration mismatch`);
-          }
-        }
-        return item;
+      await resolveSongUrls(result.body.data, {
+        purpose,
+        proxyOrigin: requestOrigin(c),
       });
-      result.body.data = await Promise.all(unlockTasks);
     }
 
     return sendUpstreamResult(c, result);

@@ -24,6 +24,9 @@ RUN npm run build
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
+# better-sqlite3 是原生模块：musl 有预编译产物则直接用，没有则回退 node-gyp 编译，
+# 工具链只装在本阶段（不带入最终镜像）
+RUN apk add --no-cache python3 make g++
 # NeteaseCloudMusicApi / unblockneteasemusic 为运行时 CJS 依赖，不打包
 RUN npm ci --omit=dev && npm cache clean --force
 
@@ -38,9 +41,10 @@ COPY package.json netease-api-server.js ./
 COPY src/server ./src/server
 COPY src/lib ./src/lib
 
-# 非 root 运行
+# 非 root 运行；/app/data 存放 SQLite 与下载文件（compose 挂载 ./data 持久化）
 RUN addgroup -g 1001 -S nodejs \
   && adduser -S meowsync -u 1001 \
+  && mkdir -p /app/data \
   && chown -R meowsync:nodejs /app
 USER meowsync
 

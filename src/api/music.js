@@ -90,7 +90,7 @@ export const musicApi = {
 
       try {
         const response = await withRetry(() =>
-          api.get('/song_url', { params: { id, br }, signal: abortSignal })
+          api.get('/song_url', { params: { id, br, purpose: 'playback' }, signal: abortSignal })
         )
         const data = response.body || response
         const songData = data.data?.[0] || {}
@@ -114,7 +114,7 @@ export const musicApi = {
 
   getDownloadUrl: async (id, bitrate = 320000, abortSignal = null) => {
     const response = await withRetry(() =>
-      api.get('/song_url', { params: { id, br: bitrate }, signal: abortSignal })
+      api.get('/song_url', { params: { id, br: bitrate, purpose: 'download' }, signal: abortSignal })
     )
     const data = response.body || response
     const songData = data.data?.[0] || {}

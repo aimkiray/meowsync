@@ -8,7 +8,8 @@ MeowSync 采用**单进程全栈架构**：
 
 - 前端：Vue 3 SPA，Vite 构建为 `dist/`
 - 后端：Hono（`netease-api-server.js`），同端口提供 API、WebSocket 遥控（`/remote`）、音频代理（`/audio-proxy`）以及前端静态资源与 SPA fallback
-- 生产环境只需运行 **一个 Node.js 进程**，对外暴露 **一个端口（默认 3002）**
+- 生产环境只需运行 **一个 Node.js 进程**，对外暴露 **一个端口（默认 3101）**
+- 下载管理功能使用 SQLite（`better-sqlite3`）持久化队列/任务，音频/歌词/封面写入 `DATA_DIR`（默认 `./data`）下的 `downloads/`
 
 ## 环境变量配置
 
@@ -24,10 +25,10 @@ cp .env.example .env
 |--------|--------|------|
 | VITE_API_BASE_URL | - | API 地址；生产单进程部署**留空**即自动同源 |
 | VITE_API_TIMEOUT | 10000 | API 请求超时（毫秒） |
-| VITE_API_PORT | 3002 | 开发模式下的后端端口 |
+| VITE_API_PORT | 3101 | 开发模式下的后端端口 |
 | VITE_BASE_PATH | / | 应用基础路径 |
 | VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌 |
-| VITE_PORT | 3000 | 开发服务器端口 |
+| VITE_PORT | 3100 | 开发服务器端口 |
 | VITE_OPEN_BROWSER | true（Linux 下恒不打开） | 启动时自动打开浏览器，设为 `false` 关闭 |
 | VITE_ALLOWED_HOSTS | - | dev 服务器允许的 Host 列表 |
 
@@ -35,7 +36,9 @@ cp .env.example .env
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| API_PORT | 3002 | 服务监听端口 |
+| API_PORT | 3101 | 服务监听端口 |
+| DATA_DIR | `./data`（容器内 `/app/data`） | SQLite 与下载文件根目录 |
+| DOWNLOAD_DIR | `<DATA_DIR>/downloads` | 下载文件存放目录 |
 | PORT | - | `API_PORT` 的备用变量（Heroku/Railway 等 PaaS 自动注入；`API_PORT` 优先） |
 | HOST | 0.0.0.0 | 绑定地址 |
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
@@ -50,7 +53,7 @@ cp .env.example .env
 ```bash
 npm install
 cp .env.example .env
-npm start          # 同时启动 Vite(3000) 与后端(3002)
+npm start          # 同时启动 Vite(3100) 与后端(3101)
 ```
 
 ### 生产部署（Node.js）
@@ -58,7 +61,7 @@ npm start          # 同时启动 Vite(3000) 与后端(3002)
 ```bash
 npm run build:prod
 NODE_ENV=production node netease-api-server.js
-# 访问 http://localhost:3002
+# 访问 http://localhost:3101
 ```
 
 ### PM2
@@ -71,7 +74,7 @@ module.exports = {
     script: 'netease-api-server.js',
     env: {
       NODE_ENV: 'production',
-      API_PORT: 3002,
+      API_PORT: 3101,
       HOST: '0.0.0.0',
       CORS_ORIGINS: 'https://your-domain.com'
     }
@@ -90,7 +93,8 @@ pm2 start ecosystem.config.js && pm2 save
 
 ```bash
 docker build -t meowsync .
-docker run -d -p 3002:3002 --name meowsync meowsync
+docker run -d -p 3101:3002 -v ./data:/app/data --name meowsync meowsync
+# -v 挂载 /app/data：SQLite 数据库与下载文件持久化（不挂载则随容器删除）
 ```
 
 构建期前端变量（打包进 bundle，运行时不可改）可用 `--build-arg` 注入，
@@ -102,7 +106,7 @@ Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_B
 ### Docker Compose
 
 ```bash
-docker compose up -d                    # 单容器，暴露 3002
+docker compose up -d                    # 单容器，宿主暴露 3101（容器内 3002）
 docker compose --profile with-nginx up -d   # 附带 nginx 反代（80 端口）
 ```
 
@@ -138,7 +142,7 @@ server {
 
 ## 远程遥控
 
-- 主机端：`http://<host>:3002/?mode=host`
+- 主机端：`http://<host>:3101/?mode=host`
 - 遥控端：扫描主机端二维码或访问 `/?mode=controller&host=<地址>`
 - 设置 `REMOTE_TOKEN`（后端）与 `VITE_REMOTE_TOKEN`（构建期）启用令牌校验
 - WebSocket 校验 Origin：默认同源或 `CORS_ORIGINS` 白名单内来源
@@ -148,7 +152,7 @@ server {
 1. **页面打开但 API 报错** — 检查 `VITE_API_BASE_URL` 是否误指向 localhost
    （生产构建应留空走同源）；查看 `CORS_ORIGINS`
 2. **遥控连接失败** — 确认反代透传了 `Upgrade` 头；校验 token 配对
-3. **容器一直 unhealthy** — `curl http://localhost:3002/healthz` 应返回 `{"ok":true}`；
+3. **容器一直 unhealthy** — `curl http://localhost:3101/healthz` 应返回 `{"ok":true}`；
    健康检查端口跟随 `API_PORT`/`PORT` 环境变量，改端口无需改探活配置
 4. **with-nginx 反代突然 502** — nginx 仅在启动时解析一次 `meowsync` 服务名；
    单独重建后端容器后 IP 可能变化，执行 `docker compose restart nginx` 即可

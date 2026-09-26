@@ -155,13 +155,26 @@
         :style="getMenuPosition(showDownloadMenu)"
         @click.stop
       >
-        <div 
-          v-for="option in bitrateOptions" 
-          :key="option.value"
+        <div class="download-option download-option-header">
+          下载选项
+        </div>
+
+        <!-- 获取源文件（浏览器下载） -->
+        <div
           class="download-option"
-          @click="downloadSong(paginatedSongs.find(s => s.id === showDownloadMenu), option.value)"
+          @click="downloadSongDirect(paginatedSongs.find(s => s.id === showDownloadMenu), 320000)"
         >
-          {{ option.label }}
+          📄 获取源文件 (320k)
+        </div>
+
+        <!-- 下载到服务器 / 删除已下载 -->
+        <div
+          class="download-option"
+          @click="toggleServerDownload(paginatedSongs.find(s => s.id === showDownloadMenu))"
+        >
+          <span v-if="serverDownloadingStates[showDownloadMenu]">⏳ 处理中...</span>
+          <span v-else-if="serverDownloadedStates[showDownloadMenu]">🗑️ 删除已下载文件</span>
+          <span v-else>💾 下载到服务器</span>
         </div>
       </div>
     </div>
@@ -205,6 +218,16 @@
   border-bottom: none;
 }
 
+.download-option-header {
+  cursor: default;
+  color: #a78bfa;
+}
+
+.download-option-header:hover {
+  background: transparent;
+  color: #a78bfa;
+}
+
 .download-option:hover {
   background-color: #6b21a8;
   color: #fff;
@@ -212,8 +235,9 @@
 </style>
 
 <script>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { musicApi } from '../api/music.js'
+import { downloadsApi } from '../api/downloads.js'
 import PaginationControls from './PaginationControls.vue'
 import { useTheme } from '../composables/useTheme'
 import { useCollapseButton } from '../composables/useCollapseButton'
@@ -263,6 +287,14 @@ export default {
     collapsed: {
       type: Boolean,
       default: false
+    },
+    selectedPlaylist: {
+      type: Object,
+      default: null
+    },
+    playlistDownloadsRefreshKey: {
+      type: Number,
+      default: 0
     }
   },
   emits: ['play-song', 'toggle-play-mode', 'toggle-vip-songs', 'go-to-page', 'prev-page', 'next-page', 'toggle-collapse'],
@@ -271,6 +303,10 @@ export default {
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})
     const menuPositions = ref({})
+
+    // 服务器下载状态
+    const serverDownloadedStates = ref({})  // 是否已下载
+    const serverDownloadingStates = ref({}) // 是否正在下载
 
     // 移动端检测
     const isMobile = useMediaQuery()
@@ -405,7 +441,106 @@ export default {
         delete downloadingStates.value[song.id]
       }
     }
-    
+
+    // 直接下载（浏览器下载，最高码率）
+    const downloadSongDirect = async (song, bitrate = 320000) => {
+      if (!song) return
+      try {
+        downloadingStates.value[song.id] = true
+        await musicApi.downloadSong(song, bitrate)
+        showDownloadMenu.value = null
+      } catch (error) {
+        console.error('下载失败:', error)
+        alert('下载失败: ' + error.message)
+      } finally {
+        downloadingStates.value[song.id] = false
+      }
+    }
+
+    // 查询歌曲下载状态
+    const checkSongDownloadStatus = async (song) => {
+      if (!props.selectedPlaylist) return
+
+      try {
+        const response = await downloadsApi.getSongDownloadStatus(
+          props.selectedPlaylist.id,
+          song.id
+        )
+        serverDownloadedStates.value[song.id] = response.data.data.downloaded
+      } catch (error) {
+        console.error('查询下载状态失败:', error)
+        serverDownloadedStates.value[song.id] = false
+      }
+    }
+
+    // 批量查询所有歌曲的下载状态
+    const checkAllSongsDownloadStatus = async () => {
+      if (!props.selectedPlaylist || !props.songs.length) return
+
+      for (const song of props.songs) {
+        await checkSongDownloadStatus(song)
+      }
+    }
+
+    // 下载到服务器或删除
+    const toggleServerDownload = async (song) => {
+      if (!song) return
+      if (!props.selectedPlaylist) {
+        alert('请先选择歌单')
+        return
+      }
+
+      const isDownloaded = serverDownloadedStates.value[song.id]
+
+      if (isDownloaded) {
+        // 删除已下载文件
+        if (!confirm(`确定要删除 "${song.name}" 的已下载文件吗？`)) {
+          return
+        }
+
+        try {
+          serverDownloadingStates.value[song.id] = true
+          await downloadsApi.deleteSongDownload(props.selectedPlaylist.id, song.id)
+          serverDownloadedStates.value[song.id] = false
+          alert('删除成功！')
+        } catch (error) {
+          console.error('删除失败:', error)
+          alert('删除失败: ' + error.message)
+        } finally {
+          serverDownloadingStates.value[song.id] = false
+          showDownloadMenu.value = null
+        }
+      } else {
+        // 下载到服务器
+        try {
+          serverDownloadingStates.value[song.id] = true
+          await downloadsApi.downloadSongToServer(props.selectedPlaylist.id, song.id, {
+            bitrate: 320000,
+            downloadAudio: true,
+            downloadLyrics: true,
+            downloadCover: true
+          })
+          serverDownloadedStates.value[song.id] = true
+          alert('下载成功！')
+        } catch (error) {
+          console.error('下载失败:', error)
+          alert('下载失败: ' + error.message)
+        } finally {
+          serverDownloadingStates.value[song.id] = false
+          showDownloadMenu.value = null
+        }
+      }
+    }
+
+    // 监听歌曲列表变化，自动查询状态
+    watch(() => props.songs, () => {
+      checkAllSongsDownloadStatus()
+    }, { immediate: true })
+
+    watch(() => props.playlistDownloadsRefreshKey, () => {
+      checkAllSongsDownloadStatus()
+    })
+
     return {
       filteredSongs,
       totalPages,
@@ -416,10 +551,14 @@ export default {
       paginationStyle,
       showDownloadMenu,
       downloadingStates,
+      serverDownloadedStates,
+      serverDownloadingStates,
       bitrateOptions,
       toggleDownloadMenu,
       shareSong,
       downloadSong,
+      downloadSongDirect,
+      toggleServerDownload,
       getMenuPosition,
       closeDownloadMenu,
       isMobile,

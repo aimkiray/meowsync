@@ -14,6 +14,7 @@
 - **分页浏览** - 大歌单分页显示，优化性能
 - **VIP歌曲过滤** - 可选择隐藏VIP歌曲
 - **歌单收藏** - 本地保存喜爱的歌单
+- **下载管理** - 歌单/单曲下载到服务端（音频+歌词+封面），队列管理与进度跟踪，详见 [DOWNLOAD_GUIDE.md](DOWNLOAD_GUIDE.md)
 
 ## 技术栈
 
@@ -56,10 +57,10 @@ npm start
 
 #### 方式二：分别启动
 ```bash
-# 启动前端开发服务器 (端口: 3000)
+# 启动前端开发服务器 (端口: 3100)
 npm run dev
 
-# 启动网易云音乐API服务器 (端口: 3002)
+# 启动网易云音乐API服务器 (端口: 3101)
 npm run start:api
 ```
 
@@ -115,8 +116,8 @@ meowsync/
 
 ### URL参数功能
 - **直接加载歌单**: 通过URL参数直接加载指定歌单，无需手动搜索添加
-- **单个歌单**: `http://localhost:3000/?playlist=歌单ID`
-- **多个歌单**: `http://localhost:3000/?playlists=歌单ID1,歌单ID2,歌单ID3`
+- **单个歌单**: `http://localhost:3100/?playlist=歌单ID`
+- **多个歌单**: `http://localhost:3100/?playlists=歌单ID1,歌单ID2,歌单ID3`
 - **支持格式**: 支持逗号(`,`)或竖线(`|`)分隔多个歌单ID
 - **智能加载**: URL参数优先级高于默认设置，确保指定歌单正确加载
 - **防重复**: 自动过滤重复的歌单ID，避免重复添加
@@ -124,13 +125,13 @@ meowsync/
 #### URL参数示例
 ```
 # 加载单个歌单
-http://localhost:3000/?playlist=2829883282
+http://localhost:3100/?playlist=2829883282
 
 # 加载多个歌单（逗号分隔）
-http://localhost:3000/?playlists=2829883282,6725496800,123456789
+http://localhost:3100/?playlists=2829883282,6725496800,123456789
 
 # 加载多个歌单（竖线分隔）
-http://localhost:3000/?playlists=2829883282|6725496800|123456789
+http://localhost:3100/?playlists=2829883282|6725496800|123456789
 ```
 
 ### 高级功能
@@ -164,7 +165,7 @@ npm run build:prod
 # 启动后端（自动托管 dist 静态资源 + SPA fallback）
 NODE_ENV=production node netease-api-server.js
 ```
-应用与 API 均在 **3002** 端口提供访问。
+应用与 API 均在 **3101** 端口提供访问（`API_PORT` 可覆盖）。
 
 ### Docker部署
 
@@ -183,7 +184,8 @@ docker compose --profile with-nginx up -d --build
 docker build -t meowsync .
 
 # 运行容器（单端口，前端+API+WebSocket 同进程）
-docker run -d -p 3002:3002 meowsync
+# -v 挂载数据目录，持久化 SQLite 数据库与下载文件
+docker run -d -p 3101:3002 -v ./data:/app/data meowsync
 ```
 
 > **注意**：本项目依赖服务端代理播放与 WebSocket 遥控，需 Node.js 运行时，不适用于纯静态托管平台（Vercel/Netlify）。请使用 Docker 或 VPS 部署。
@@ -192,7 +194,7 @@ docker run -d -p 3002:3002 meowsync
 
 #### 前端环境变量（构建期）
 ```bash
-# VITE_API_BASE_URL=                      # 可选：默认留空自动推断（dev=主机:3002，prod=同源）
+# VITE_API_BASE_URL=                      # 可选：默认留空自动推断（dev=主机:3101，prod=同源）
 VITE_API_TIMEOUT=10000
 VITE_BASE_PATH=/
 VITE_REMOTE_TOKEN=                        # 与后端 REMOTE_TOKEN 配对（可选）
@@ -200,12 +202,14 @@ VITE_REMOTE_TOKEN=                        # 与后端 REMOTE_TOKEN 配对（可�
 
 #### 后端环境变量（运行期）
 ```bash
-API_PORT=3002
+API_PORT=3101
 # PORT=                                   # 备用端口变量（仅 API_PORT 未设时生效，PaaS 常用）
 HOST=0.0.0.0
-CORS_ORIGINS=http://localhost:3002        # 逗号分隔多个来源；留空 = 同源
+CORS_ORIGINS=http://localhost:3101        # 逗号分隔多个来源；留空 = 同源
 REMOTE_TOKEN=                             # 可选：/remote WebSocket 访问令牌
 TRUST_PROXY=                              # 可选：设为 1 时采信 X-Forwarded-* 头
+# DATA_DIR=                               # 可选：SQLite/下载文件根目录（默认 ./data，容器内 /app/data）
+# DOWNLOAD_DIR=                           # 可选：下载文件目录（默认 <DATA_DIR>/downloads）
 ```
 
 ## 配置说明

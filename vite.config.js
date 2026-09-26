@@ -16,7 +16,7 @@ export default defineConfig(({ command, mode }) => {
 
     // 开发服务器配置
     server: {
-      port: parseInt(env.VITE_PORT) || 3000,
+      port: parseInt(env.VITE_PORT) || 3100,
       // VITE_HOST 独立于后端 HOST，避免共享变量互相影响
       host: env.VITE_HOST || 'localhost',
       open: env.VITE_OPEN_BROWSER !== 'false' && process.platform !== 'linux',
@@ -29,7 +29,7 @@ export default defineConfig(({ command, mode }) => {
 
     // 预览服务器配置
     preview: {
-      port: parseInt(env.VITE_PORT) || 3000,
+      port: parseInt(env.VITE_PORT) || 3100,
       host: env.VITE_HOST || 'localhost'
     },
 

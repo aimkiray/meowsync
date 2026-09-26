@@ -1,0 +1,143 @@
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+const https = require('https');
+
+// NeteaseCloudMusicApi 安装路径经 require.resolve 解析，避免依赖 process.cwd()/__dirname 布局
+function resolvePackageDir(pkg) {
+  try {
+    return path.dirname(require.resolve(`${pkg}/package.json`));
+  } catch {
+    return path.join(__dirname, '../../../node_modules', pkg);
+  }
+}
+
+// 动态导入所有API模块
+const apiModules = Object.create(null);
+const modulePath = path.join(resolvePackageDir('NeteaseCloudMusicApi'), 'module');
+if (fs.existsSync(modulePath)) {
+  const files = fs.readdirSync(modulePath);
+  files.forEach(file => {
+    if (file.endsWith('.js')) {
+      const moduleName = file.replace('.js', '');
+      try {
+        apiModules[moduleName] = require(path.join(modulePath, file));
+      } catch (error) {
+        console.warn(`Failed to load module ${moduleName}:`, error.message);
+      }
+    }
+  });
+}
+
+let request;
+try {
+  request = require('NeteaseCloudMusicApi/util/request');
+} catch {
+  request = require(path.join(resolvePackageDir('NeteaseCloudMusicApi'), 'util', 'request'));
+}
+const unblockmatch = require('@unblockneteasemusic/server');
+
+// 试听版判定阈值：上游返回的 url 时长不超过 60s 视为试听片段
+const TRIAL_MAX_DURATION_MS = 60000;
+// 解锁结果的时长校验容差（估算时长与原始时长偏差占比）
+const DURATION_TOLERANCE = { ytdlp: 0.4, default: 0.2 };
+// 播放走 ytdlp 优先（音质稳定）；下载走 kuwo 优先（ytdlp 直连源站对服务端下载无增益且慢）
+const PLAYBACK_SOURCES = ['ytdlp', 'kuwo'];
+const DOWNLOAD_SOURCES = ['kuwo', 'ytdlp'];
+
+// 通过 Content-Length + 码率估算音频时长（毫秒）
+function estimateDuration(contentLength, br) {
+  if (!contentLength || !br) return null;
+  return Math.round((contentLength * 8) / br * 1000);
+}
+
+// HEAD 请求获取 Content-Length
+function getContentLength(url) {
+  return new Promise((resolve) => {
+    const mod = url.startsWith('https') ? https : http;
+    const req = mod.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
+      res.resume(); // 消费响应，及时释放 keep-alive socket
+      resolve(parseInt(res.headers['content-length']) || null);
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+async function callNeteaseApi(apiName, params) {
+  if (!apiModules[apiName]) {
+    throw new Error(`API '${apiName}' not found`);
+  }
+  return apiModules[apiName](params, request);
+}
+
+// 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）
+// - url 为空或为试听片段的条目尝试 unblockmatch 回退源
+// - purpose='download' 时：源顺序 kuwo 优先；kuwo 链接跳过时长校验（其元数据不可靠）；
+//   且不走 /audio-proxy（代理是给浏览器用的，服务端下载直连源站）
+// - purpose='playback' 时：ytdlp 命中经 proxyOrigin 拼 /audio-proxy 回链
+async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null } = {}) {
+  if (!Array.isArray(items)) return items;
+
+  const sources = purpose === 'download' ? DOWNLOAD_SOURCES : PLAYBACK_SOURCES;
+  const ids = items.map(i => i.id).filter(Boolean).join(',');
+
+  const originalDurations = {};
+  if (ids && apiModules['song_detail']) {
+    try {
+      const detail = await apiModules['song_detail']({ ids }, request);
+      (detail.body?.songs || []).forEach(s => { originalDurations[s.id] = s.dt; });
+    } catch (e) { /* 获取失败不阻塞 */ }
+  }
+
+  await Promise.all(items.map(async (item) => {
+    const isTrial = item.freeTrialInfo != null || (item.url && item.time > 0 && item.time <= TRIAL_MAX_DURATION_MS);
+    if ((!item.url || isTrial) && item.id) {
+      const originalDt = originalDurations[item.id] || item.dt || null;
+      let unlocked = false;
+      for (const source of sources) {
+        try {
+          const unblocked = await unblockmatch(item.id, [source]);
+          if (!unblocked?.url) continue;
+
+          const validateDuration = !(purpose === 'download' && source === 'kuwo');
+          if (originalDt && unblocked.br && validateDuration) {
+            const contentLength = await getContentLength(unblocked.url);
+            const estimated = estimateDuration(contentLength, unblocked.br);
+            const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
+            if (estimated && Math.abs(estimated - originalDt) / originalDt > tolerance) {
+              console.warn(
+                `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${estimated}ms original=${originalDt}ms, skipping`
+              );
+              continue;
+            }
+          }
+
+          const useProxy = purpose === 'playback' && source === 'ytdlp' && !!proxyOrigin;
+          item.url = useProxy
+            ? `${proxyOrigin}/audio-proxy?url=${encodeURIComponent(unblocked.url)}`
+            : unblocked.url;
+          item.unblocked = true;
+          item.unblockedSource = source;
+          item.usedAudioProxy = useProxy;
+          item.freeTrialInfo = null;
+          unlocked = true;
+          console.info(`[unlock] ${item.id} purpose=${purpose} source=${source} proxy=${useProxy}`);
+          break;
+        } catch (e) {
+          // 该源失败，继续下一个
+        }
+      }
+      if (!unlocked) {
+        item.unlockFailed = true;
+        console.warn(`[unlock] ${item.id} purpose=${purpose} all sources failed or duration mismatch`);
+      }
+    }
+    return item;
+  }));
+
+  return items;
+}
+
+module.exports = { callNeteaseApi, apiModules, request, resolveSongUrls };

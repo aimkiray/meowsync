@@ -127,6 +127,12 @@
                 :style="getMenuPosition(playlist.id)"
               >
                 <button
+                  @click.stop="downloadPlaylist(playlist)"
+                  class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+                >
+                  📥 下载歌单
+                </button>
+                <button
                   @click.stop="openInNetease(playlist)"
                   class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
                 >
@@ -137,6 +143,12 @@
                   class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
                 >
                   🔗 复制分享链接
+                </button>
+                <button
+                  @click.stop="deletePlaylistDownloads(playlist)"
+                  class="w-full text-left px-3 py-2 text-xs text-orange-300 hover:bg-orange-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+                >
+                  🧹 删除已下载歌曲
                 </button>
                 <button
                   @click.stop="removePlaylist(playlist.id)"
@@ -269,6 +281,7 @@
 
 <script>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { downloadsApi } from '../api/downloads'
 import PaginationControls from './PaginationControls.vue'
 import { useTheme } from '../composables/useTheme'
 import { useCollapseButton } from '../composables/useCollapseButton'
@@ -318,7 +331,7 @@ export default {
       default: false
     }
   },
-  emits: ['select-playlist', 'add-playlist', 'remove-playlist', 'search', 'search-by-id', 'update:searchQuery', 'update:activeTab', 'go-to-page', 'prev-page', 'next-page', 'toggle-collapse'],
+  emits: ['select-playlist', 'add-playlist', 'remove-playlist', 'search', 'search-by-id', 'update:searchQuery', 'update:activeTab', 'go-to-page', 'prev-page', 'next-page', 'toggle-collapse', 'playlist-downloads-deleted'],
   setup(props, { emit }) {
     const { currentTheme } = useTheme()
     const openMenuId = ref(null)
@@ -501,6 +514,44 @@ export default {
       closeMenu()
     }
 
+    // 下载歌单
+    const downloadPlaylist = async (playlist) => {
+      try {
+        await downloadsApi.quickDownloadPlaylist(playlist.id, {
+          bitrate: 320000,
+          downloadAudio: true,
+          downloadLyrics: true,
+          downloadCover: true,
+          concurrentLimit: 3
+        })
+
+        alert('下载队列已创建！正在后台下载...')
+        closeMenu()
+      } catch (error) {
+        console.error('创建下载队列失败:', error)
+        const message = error.response?.data?.error || error.message
+        alert('下载失败: ' + message)
+      }
+    }
+
+    const deletePlaylistDownloads = async (playlist) => {
+      if (!confirm(`确定要删除歌单 "${playlist.name}" 的已下载歌曲吗？`)) {
+        return
+      }
+
+      try {
+        const response = await downloadsApi.deletePlaylistDownloads(playlist.id)
+        const deletedSongs = response.data?.data?.deletedSongs || 0
+        alert(deletedSongs > 0 ? `已删除 ${deletedSongs} 首已下载歌曲` : '这个歌单没有可删除的已下载歌曲')
+        emit('playlist-downloads-deleted', playlist.id)
+        closeMenu()
+      } catch (error) {
+        console.error('批量删除已下载歌曲失败:', error)
+        const message = error.response?.data?.error || error.message
+        alert('删除失败: ' + message)
+      }
+    }
+
     // 点击外部关闭菜单
      const handleClickOutside = (event) => {
        if (!event.target.closest('.playlist-menu')) {
@@ -584,6 +635,8 @@ export default {
        copyShareLink,
        removePlaylist,
        sharePlaylist,
+       downloadPlaylist,
+       deletePlaylistDownloads,
        getMenuPosition,
        handleAddPlaylist,
        isPlaylistAdding,

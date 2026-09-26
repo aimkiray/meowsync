@@ -10,6 +10,15 @@
             </h1>
           </div>
           <div class="flex-1 flex justify-end px-2 items-center gap-2">
+            <!-- 管理页面入口 -->
+            <button
+              v-if="remoteMode === 'off'"
+              @click="$emit('toggle-center-view')"
+              class="pixel-button"
+              :title="isDownloadsView ? '返回歌曲列表' : '打开下载管理'"
+              style="font-size:12px;padding:4px 8px;"
+            >{{ isDownloadsView ? '🎵 歌曲' : '⚙️ 管理' }}</button>
+
             <!-- 远程控制模式指示 -->
             <a
               v-if="remoteMode === 'host'"
@@ -51,6 +60,13 @@ import { ref, onMounted } from 'vue'
 
 export default {
   name: 'TopNavigation',
+  props: {
+    isDownloadsView: {
+      type: Boolean,
+      default: false
+    }
+  },
+  emits: ['toggle-center-view'],
   setup() {
     const currentTheme = ref('pixel-retro')
     const urlParams = new URLSearchParams(window.location.search)

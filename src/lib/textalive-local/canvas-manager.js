@@ -1,20 +1,14 @@
-const AUTO_DRIFT_SPEED = 680
+const AUTO_DRIFT_SPEED = 120
 const TOUCH_DRIFT_SPEED_MULTIPLIER = 0.5
 const MAX_DELTA_SECONDS = 0.08
 const INTRO_ANIMATION_MS = 560
-const CAMERA_BASE_SMOOTHING = 0.012
-const CAMERA_REVEAL_BOOST = 0.004
 const MIN_GLYPH_DURATION_MS = 80
 const LYRIC_PERSIST_MS = 1800
 const SPAWN_RADIUS_X = 3
 const SPAWN_RADIUS_Y = 2
-const CAMERA_LOOKAHEAD = 0.08
-const CAMERA_WORD_CENTER_PULL = 0.7
-const CAMERA_SETTLED_PULL = 0.58
-const CAMERA_IDLE_AMPLITUDE_X = 0.16
-const CAMERA_IDLE_AMPLITUDE_Y = 0.12
-const CAMERA_IDLE_SPEED_X = 0.00024
-const CAMERA_IDLE_SPEED_Y = 0.00017
+const DRIFT_DIRECTION_CHANGE_MIN_MS = 2000
+const DRIFT_DIRECTION_CHANGE_MAX_MS = 6000
+const DRIFT_ROTATION_RATE = 0.8
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
@@ -38,6 +32,10 @@ export class CanvasManager {
     this._interactionMode = 'auto'
     this._lyrics = []
     this._activeLyricIndex = -1
+    this._lastUpdateTime = 0
+    this._driftAngle = Math.random() * Math.PI * 2
+    this._driftTargetAngle = this._driftAngle
+    this._nextDriftChange = 0
 
     this._can = document.createElement('canvas')
     this._ctx = this._can.getContext('2d')
@@ -110,23 +108,25 @@ export class CanvasManager {
     }
 
     if (!this._isOver) {
-      const followTarget = this._findCameraTarget(position)
-      const idleOffset = this._getIdleCameraOffset(position, followTarget?.idleStrength ?? 1)
+      const now = performance.now()
+      if (!this._lastUpdateTime) this._lastUpdateTime = now
+      const dt = Math.min((now - this._lastUpdateTime) / 1000, MAX_DELTA_SECONDS)
+      this._lastUpdateTime = now
 
-      if (followTarget) {
-        const targetPx = -(followTarget.x + idleOffset.x) * this._space + this._stw / 2
-        const targetPy = -(followTarget.y + idleOffset.y) * this._space + this._sth / 2
-        const smoothing = CAMERA_BASE_SMOOTHING + followTarget.revealStrength * CAMERA_REVEAL_BOOST
-
-        this._px += (targetPx - this._px) * smoothing
-        this._py += (targetPy - this._py) * smoothing
-      } else {
-        const targetPx = -idleOffset.x * this._space
-        const targetPy = -idleOffset.y * this._space
-
-        this._px += (targetPx - this._px) * CAMERA_BASE_SMOOTHING
-        this._py += (targetPy - this._py) * CAMERA_BASE_SMOOTHING
+      if (now >= this._nextDriftChange) {
+        this._driftAngle = this._driftTargetAngle
+        this._driftTargetAngle = Math.random() * Math.PI * 2
+        this._nextDriftChange = now + DRIFT_DIRECTION_CHANGE_MIN_MS + Math.random() * (DRIFT_DIRECTION_CHANGE_MAX_MS - DRIFT_DIRECTION_CHANGE_MIN_MS)
       }
+
+      let angleDiff = this._driftTargetAngle - this._driftAngle
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
+      const maxRotation = DRIFT_ROTATION_RATE * dt
+      this._driftAngle += Math.max(-maxRotation, Math.min(maxRotation, angleDiff))
+
+      this._px += Math.cos(this._driftAngle) * AUTO_DRIFT_SPEED * dt
+      this._py += Math.sin(this._driftAngle) * AUTO_DRIFT_SPEED * dt
 
       this._mouseX = this._stw / 2
       this._mouseY = this._sth / 2
