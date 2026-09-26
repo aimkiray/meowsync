@@ -5,6 +5,7 @@ const {
   listSavedPlaylists
 } = require('../services/playlist-sync');
 const { deletePlaylist, findPlaylistById } = require('../repositories/playlists');
+const { deletePlaylistFiles } = require('../services/download-manager');
 
 const app = new Hono();
 
@@ -33,11 +34,15 @@ async function readJsonBody(c) {
 }
 
 function handleError(c, error, tag) {
-  const status = Number.isInteger(error.status) ? error.status : 500;
+  // 只在 400-599 范围内信任 error.status——异常对象混入的整数（如 errno）不能当 HTTP 码
+  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600
+    ? error.status
+    : 500;
   if (status >= 500) {
     console.error(`${tag}:`, error);
+    return c.json({ code: status, message: '服务器错误' }, status);
   }
-  return c.json({ code: status, message: error.message || '服务器错误' }, status);
+  return c.json({ code: status, message: error.message || '请求失败' }, status);
 }
 
 app.get('/playlists', (c) => {
@@ -65,7 +70,8 @@ app.post('/playlists/import', async (c) => {
     }
 
     const playlist = await importPlaylistFromNetease(String(neteasePlaylistId), {
-      isDefault: Boolean(body.isDefault || c.req.query('isDefault'))
+      // 字符串 'false'/'0' 按布尔 false 处理（Boolean('false') === true 的坑）
+      isDefault: body.isDefault === true || c.req.query('isDefault') === 'true'
     });
 
     return c.json({ code: 200, playlist });
@@ -100,11 +106,17 @@ app.delete('/playlists/:id', (c) => {
   if (id === null) {
     return c.json({ code: 400, message: '无效的歌单 ID' }, 400);
   }
-  const deleted = deletePlaylist(id);
-  if (!deleted) {
-    return c.json({ code: 404, message: '歌单不存在' }, 404);
+  try {
+    // 先中止该歌单的活跃队列并清理任务文件，再删行——否则磁盘上留孤儿文件
+    deletePlaylistFiles(id);
+    const deleted = deletePlaylist(id);
+    if (!deleted) {
+      return c.json({ code: 404, message: '歌单不存在' }, 404);
+    }
+    return c.json({ code: 200, success: true });
+  } catch (error) {
+    return handleError(c, error, '[playlists/delete]');
   }
-  return c.json({ code: 200, success: true });
 });
 
 module.exports = app;

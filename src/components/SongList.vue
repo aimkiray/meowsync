@@ -159,18 +159,19 @@
           下载选项
         </div>
 
-        <!-- 获取源文件（浏览器下载） -->
+        <!-- 获取源文件（浏览器下载）。菜单跨分页时 paginatedSongs 里找不到目标，必须查全量 props.songs -->
         <div
           class="download-option"
-          @click="downloadSongDirect(paginatedSongs.find(s => s.id === showDownloadMenu), 320000)"
+          @click="downloadSongDirect(menuSong, 320000)"
         >
           📄 获取源文件 (320k)
         </div>
 
-        <!-- 下载到服务器 / 删除已下载 -->
+        <!-- 下载到服务器 / 删除已下载（临时单曲歌单没有服务端持久化意义，隐藏） -->
         <div
+          v-if="!isSingleSongPlaylist"
           class="download-option"
-          @click="toggleServerDownload(paginatedSongs.find(s => s.id === showDownloadMenu))"
+          @click="toggleServerDownload(menuSong)"
         >
           <span v-if="serverDownloadingStates[showDownloadMenu]">⏳ 处理中...</span>
           <span v-else-if="serverDownloadedStates[showDownloadMenu]">🗑️ 删除已下载文件</span>
@@ -235,7 +236,7 @@
 </style>
 
 <script>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import PaginationControls from './PaginationControls.vue'
@@ -373,6 +374,16 @@ export default {
       return filteredSongs.value.slice(start, end)
     })
 
+    // 菜单打开的目标歌曲：从全量 songs 里查——菜单跨分页/重渲染时 paginatedSongs 已换页会拿到 undefined
+    const menuSong = computed(() =>
+      props.songs.find(s => String(s.id) === String(showDownloadMenu.value)) || null
+    )
+
+    // 单曲分享生成的 single_song_* 是内存态临时歌单，服务端没有对应持久行，不提供服务器下载
+    const isSingleSongPlaylist = computed(() =>
+      String(props.selectedPlaylist?.id ?? '').startsWith('single_song_')
+    )
+
     // 切换下载菜单显示
     const toggleDownloadMenu = (songId, event) => {
       if (showDownloadMenu.value === songId) {
@@ -436,7 +447,10 @@ export default {
     // 批量查询所有歌曲的下载状态：一次 listTasks 拉回该歌单全部任务本地映射，
     // 避免逐曲 N+1 请求（歌单未导入时服务端返回空数组，天然无副作用）
     const checkAllSongsDownloadStatus = async () => {
-      if (!props.selectedPlaylist || !props.songs.length) return
+      if (!props.selectedPlaylist || !props.songs.length || isSingleSongPlaylist.value) {
+        serverDownloadedStates.value = {}
+        return
+      }
 
       try {
         const response = await downloadsApi.listTasks({ playlistId: props.selectedPlaylist.id })
@@ -448,6 +462,8 @@ export default {
           serverDownloadedStates.value[song.id] = downloadedIds.has(String(song.id))
         }
       } catch (error) {
+        // 查询失败必须清空旧状态：否则切歌单/服务重启后残留上一歌单的"已下载"标记
+        serverDownloadedStates.value = {}
         console.error('查询下载状态失败:', error)
       }
     }
@@ -502,7 +518,12 @@ export default {
       }
     }
 
-    // 监听歌曲列表变化，自动查询状态
+    // 监听歌曲列表/歌单变化，自动查询状态；切歌单先清旧状态防止串标
+    watch(() => props.selectedPlaylist?.id, () => {
+      serverDownloadedStates.value = {}
+      checkAllSongsDownloadStatus()
+    })
+
     watch(() => props.songs, () => {
       checkAllSongsDownloadStatus()
     }, { immediate: true })
@@ -511,10 +532,19 @@ export default {
       checkAllSongsDownloadStatus()
     })
 
+    // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌
+    if (typeof window !== 'undefined') {
+      const closeOnScroll = () => { showDownloadMenu.value = null }
+      window.addEventListener('scroll', closeOnScroll, true)
+      onBeforeUnmount(() => window.removeEventListener('scroll', closeOnScroll, true))
+    }
+
     return {
       filteredSongs,
       totalPages,
       paginatedSongs,
+      menuSong,
+      isSingleSongPlaylist,
       formatDuration,
       isVipSong,
       headerStyle,

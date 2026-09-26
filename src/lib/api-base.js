@@ -15,10 +15,11 @@ const isLocalHost = (host) => LOCAL_HOSTS.includes(host) || host.endsWith('.loca
 export function resolveApiBaseUrl() {
   const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
   const envPort = String(import.meta.env.VITE_API_PORT ?? '').trim()
-  // 端口必须是合法 TCP 端口：非数字、0、>65535（new URL 直接抛错、请求必失败）都回退默认
+  // 端口必须是合法 TCP 端口：非数字、0、>65535（new URL 直接抛错、请求必失败）都回退默认。
+  // 默认 3101 = 开发环境 API 端口（Docker 生产是构建期 PROD → 走同源，不依赖此兜底）
   const fallbackPort = /^\d{1,5}$/.test(envPort) && Number(envPort) >= 1 && Number(envPort) <= 65535
     ? envPort
-    : '3002'
+    : '3101'
   // 页面可能不是 http(s)（file://、扩展页、opaque origin），此时 origin 是 'null'、
   // protocol 也无法复用，只能退回 http://localhost:端口
   const pageIsHttp = /^https?:$/.test(window.location.protocol)
@@ -56,10 +57,11 @@ export function resolveApiBaseUrl() {
 
   const pagePort = window.location.port
   const standardPorts = ['', '80', '443']
-  // 单进程部署：前端与 API 同端口（或经反代标准端口）→ 同源请求
-  if (pageIsHttp && (standardPorts.includes(pagePort) || pagePort === fallbackPort)) {
+  // 单进程部署/反代：生产构建产物与 API 同源——Docker 里没有 VITE_API_PORT，
+  // 用 import.meta.env.PROD 区分（构建产物恒为 PROD），不能再靠端口反推
+  if (pageIsHttp && (import.meta.env.PROD || standardPorts.includes(pagePort) || pagePort === fallbackPort)) {
     return window.location.origin
   }
-  // 开发环境：vite 端口 + 独立 API 端口
+  // 开发环境：vite 端口 + 独立 API 端口（默认 3101）
   return devFallback()
 }

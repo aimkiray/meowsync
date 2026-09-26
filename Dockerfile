@@ -33,7 +33,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 # ---------- 阶段 3：单进程运行时 ----------
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production
+# API_PORT 必须显式设：镜像未设时服务回落到开发默认 3101，
+# 而 EXPOSE/compose 映射的都是 3002——裸 `docker run -p` 会暴露错误端口
+ENV NODE_ENV=production \
+    API_PORT=3002
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=frontend /app/dist ./dist

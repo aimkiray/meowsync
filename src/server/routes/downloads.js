@@ -15,11 +15,16 @@ function fail(c, status, message) {
 // 业务错误统一映射：err.status 由 download-manager 的 httpError() 标记；
 // 未标记的异常一律 500（并记录日志），不向前端泄漏内部细节之外的堆栈
 function handleError(c, error, tag) {
-  const status = Number.isInteger(error.status) ? error.status : 500;
+  // 只在 400-599 范围内信任 error.status——异常对象混入的整数（如 errno）不能当 HTTP 码；
+  // 5xx 不回传内部错误细节（路径/SQL 等），4xx 才带业务 message
+  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600
+    ? error.status
+    : 500;
   if (status >= 500) {
     console.error(`${tag}:`, error);
+    return fail(c, status, '服务器错误');
   }
-  return fail(c, status, error.message || '服务器错误');
+  return fail(c, status, error.message || '请求失败');
 }
 
 // 路由 :id 参数统一校验：拒绝 NaN 与 parseInt 截断（"12abc" → 12 这类脏输入）
@@ -48,7 +53,8 @@ async function readJsonBody(c) {
 function normalizeDownloadOptions(body) {
   const { bitrate, downloadAudio, downloadLyrics, downloadCover, concurrentLimit } = body;
   return {
-    bitrate: Number.isInteger(bitrate) && bitrate > 0 ? bitrate : 320000,
+    // 网易云端常见码率 128k-999k：超界值要么上游忽略要么产空文件，直接拒绝更诚实
+    bitrate: Number.isInteger(bitrate) && bitrate >= 64000 && bitrate <= 999000 ? bitrate : 320000,
     downloadAudio: downloadAudio !== false,
     downloadLyrics: downloadLyrics !== false,
     downloadCover: downloadCover !== false,
@@ -130,6 +136,19 @@ app.post('/downloads/queues/:id/resume', async (c) => {
     return c.json({ code: 200, data: queue });
   } catch (error) {
     return handleError(c, error, '恢复队列失败');
+  }
+});
+
+app.post('/downloads/queues/:id/cancel', async (c) => {
+  try {
+    const queueId = parseIdParam(c);
+    if (queueId === null) {
+      return fail(c, 400, '无效的队列 ID');
+    }
+    const queue = await downloadManager.cancelQueue(queueId);
+    return c.json({ code: 200, data: queue });
+  } catch (error) {
+    return handleError(c, error, '取消队列失败');
   }
 });
 
