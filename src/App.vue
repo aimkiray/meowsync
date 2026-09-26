@@ -1,6 +1,6 @@
 <template>
   <!-- 手机控制器模式 -->
-  <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteWsUrl" />
+  <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" />
 
   <div v-else id="app" class="min-h-screen lg:h-screen lg:overflow-hidden lg:flex lg:flex-col">
     <!-- 顶部导航 -->
@@ -14,7 +14,6 @@
             :active-tab="activeTab"
             v-model:search-query="searchQuery"
             :loading="loading"
-            :playlists="playlists"
             :selected-playlist="selectedPlaylist"
             :user-playlists="userPlaylists"
             :search-results="searchResults"
@@ -69,8 +68,6 @@
             :duration-warning="durationWarning"
             :collapsed="lyricsCollapsed"
             @toggle-auto-follow-lyrics="toggleAutoFollowLyrics"
-            @previous-song="previousSong"
-            @next-song="nextSong"
             @toggle-collapse="toggleLyricsCollapse"
           />
         </div>
@@ -91,7 +88,7 @@
         @seek-to="seekTo"
         @update-volume="updateVolume"
         @open-fullscreen="openFullscreenPlayer"
-        @update:player-hidden="val => playerHidden = val"
+        v-model:player-hidden="playerHidden"
       />
     </div>
 
@@ -122,10 +119,10 @@
 </template>
 
 <script>
-console.log('🎯 App.vue script 开始执行')
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { Howl } from 'howler'
 import { musicApi } from './api/music'
+import { resolveApiBaseUrl } from './lib/api-base'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import SongList from './components/SongList.vue'
@@ -134,7 +131,6 @@ import BottomPlayer from './components/BottomPlayer.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import Footer from './components/Footer.vue'
 import RemoteController from './components/RemoteController.vue'
-console.log('📦 所有导入完成，musicApi:', musicApi)
 
 export default {
   name: 'App',
@@ -156,10 +152,9 @@ export default {
     const searchResults = ref([]) // 搜索结果
     const userPlaylists = ref([]) // 用户添加的歌单
     const selectedPlaylist = ref(null)
-    const currentPlaylist = ref(null) // 当前播放的歌单
     const songs = ref([])
     const currentSong = ref(null)
-    const currentSongIndex = ref(0)
+    const currentSongIndex = ref(-1)
     const activeTab = ref('my') // 控制选项卡：'my' 或 'discover'
     const showVipSongs = ref(true) // 控制VIP歌曲显示，默认显示
     const playMode = ref('list') // 播放模式：'list'(列表播放), 'loop'(列表循环), 'single'(单曲循环)
@@ -178,13 +173,11 @@ export default {
     const fullscreenLyricMode = ref('original')
     const fullscreenInteractionMode = ref('auto')
     const PLAYER_STATE_STORAGE_KEY = 'meowsync-player-state'
+    const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
+    const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
     let restorePlayerState = null
     let lastSavedWholeSecond = -1
-    
-    // 歌词滚动相关
-    const lyricsContainer = ref(null)
-    const playerContainer = ref(null)
-    
+
     // 分页相关数据
     const currentPage = ref(1)
     const pageSize = ref(10)
@@ -200,47 +193,39 @@ export default {
     
     let howl = null
     let lyricTimer = null
+    let progressRafId = null
     let currentAbortController = null // 用于取消正在进行的网络请求
     let currentPlayingId = null // 当前正在播放的歌曲ID，用于防止竞态条件
+    let selectReqId = 0 // selectPlaylist 请求序号，防止慢响应覆盖新选择
 
     // 远程控制模式
     const urlParams = new URLSearchParams(window.location.search)
-    const remoteMode = ref(urlParams.get('mode') || 'off') // 'off' | 'host' | 'controller'
-    function resolveApiBase() {
-      const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
-      const fallbackPort = import.meta.env.VITE_API_PORT || import.meta.env.API_PORT || '3002'
+    const rawMode = urlParams.get('mode')
+    const remoteMode = ref(['host', 'controller'].includes(rawMode) ? rawMode : 'off') // 'off' | 'host' | 'controller'
 
-      if (configuredBase) {
-        try {
-          const configuredUrl = new URL(configuredBase, window.location.origin)
-          const configuredHost = configuredUrl.hostname
-          const currentHost = window.location.hostname
-          const isLocalConfigured = ['localhost', '127.0.0.1', '0.0.0.0'].includes(configuredHost)
-
-          if (!isLocalConfigured && currentHost && configuredHost !== currentHost) {
-            configuredUrl.protocol = window.location.protocol
-            configuredUrl.hostname = currentHost
-            configuredUrl.port = fallbackPort
-            return configuredUrl.toString().replace(/\/$/, '')
-          }
-
-          if (!configuredUrl.port) {
-            configuredUrl.port = fallbackPort
-          }
-
-          return configuredUrl.toString().replace(/\/$/, '')
-        } catch {
-          return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
-        }
-      }
-
-      return `${window.location.protocol}//${window.location.hostname || 'localhost'}:${fallbackPort}`
-    }
-
-    const apiBase = resolveApiBase()
+    const apiBase = resolveApiBaseUrl()
+    const remoteToken = import.meta.env.VITE_REMOTE_TOKEN || ''
+    const remoteTokenParam = remoteToken ? `&token=${encodeURIComponent(remoteToken)}` : ''
     const remoteWsUrl = apiBase.replace(/^http/, 'ws') + '/remote'
+    const remoteHostWsUrl = `${remoteWsUrl}?role=host${remoteTokenParam}`
+    const remoteControllerWsUrl = `${remoteWsUrl}?role=controller${remoteTokenParam}`
     let remoteWs = null
     let remoteStateTimer = null
+    let remoteReconnectTimer = null
+    let volumeSaveTimer = null
+
+    // state_update 只保留 controller 端用到的字段，避免整个 song 对象
+    // （含 alias/privilege 等大字段）每 2s 全量序列化并广播
+    function serializeRemoteSong(song) {
+      if (!song) return null
+      const artistList = song.ar || song.artists || []
+      return {
+        id: song.id,
+        name: song.name,
+        al: { picUrl: song.al?.picUrl ?? song.album?.picUrl ?? '' },
+        ar: artistList.map(a => ({ name: a?.name ?? '' }))
+      }
+    }
 
     function sendRemoteState() {
       if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) return
@@ -248,7 +233,7 @@ export default {
         type: 'state_update',
         payload: {
           isPlaying: isPlaying.value,
-          currentSong: currentSong.value,
+          currentSong: serializeRemoteSong(currentSong.value),
           currentTime: currentTime.value,
           duration: duration.value,
           volume: volume.value
@@ -256,45 +241,79 @@ export default {
       }))
     }
 
+    // 远端控制命令：play/pause 幂等执行（controller 端状态有延迟，不能用 toggle）
+    function handleRemoteMessage(msg) {
+      switch (msg.type) {
+        case 'play':
+          if (howl && !isPlaying.value) howl.play()
+          break
+        case 'pause':
+          if (howl && isPlaying.value) howl.pause()
+          break
+        case 'next':
+          nextSong()
+          break
+        case 'prev':
+          previousSong()
+          break
+        case 'seek': {
+          const t = Number(msg.payload)
+          if (howl && Number.isFinite(t)) {
+            const clamped = Math.max(0, Math.min(t, duration.value || 0))
+            howl.seek(clamped)
+            currentTime.value = clamped
+          }
+          break
+        }
+        case 'volume':
+          updateVolume(msg.payload)
+          break
+        case 'play_song': {
+          const targetIndex = filteredSongs.value.findIndex(s => String(s.id) === String(msg.payload))
+          if (targetIndex !== -1) playSong(filteredSongs.value[targetIndex], targetIndex)
+          break
+        }
+        case 'request_state':
+          sendRemoteState()
+          break
+      }
+    }
+
+    let remoteRetries = 0
     function connectRemoteHost() {
-      remoteWs = new WebSocket(remoteWsUrl + '?role=host')
+      if (remoteMode.value !== 'host') return
+      remoteWs = new WebSocket(remoteHostWsUrl)
       remoteWs.onopen = () => {
+        remoteRetries = 0
         console.log('[remote] host WS connected')
         remoteStateTimer = setInterval(sendRemoteState, 2000)
       }
       remoteWs.onmessage = (e) => {
         try {
-          const msg = JSON.parse(e.data)
-          if (msg.type === 'play') togglePlay()
-          else if (msg.type === 'pause') togglePlay()
-          else if (msg.type === 'next') nextSong()
-          else if (msg.type === 'prev') previousSong()
-          else if (msg.type === 'seek' && howl) { howl.seek(msg.payload); currentTime.value = msg.payload }
-          else if (msg.type === 'volume') updateVolume(msg.payload)
-          else if (msg.type === 'request_state') sendRemoteState()
-        } catch {}
+          handleRemoteMessage(JSON.parse(e.data))
+        } catch { /* 忽略畸形消息 */ }
       }
-      remoteWs.onclose = () => {
+      remoteWs.onclose = (e) => {
         clearInterval(remoteStateTimer)
-        setTimeout(connectRemoteHost, 3000)
+        remoteStateTimer = null
+        remoteWs = null
+        // 被新 host 顶替（服务端 close code 4000）：不再重连，
+        // 否则两端会反复互踢形成踢皮球循环
+        if (e && e.code === 4000) {
+          console.warn('[remote] 已有新的 host 接管，本端停止远程控制')
+          return
+        }
+        // 断线重连有上限：握手即被拒（token/Origin 不通过）时避免无限重试
+        remoteRetries++
+        if (remoteRetries > 5) {
+          console.warn('[remote] host 重连次数超限，停止重连（请检查 REMOTE_TOKEN/服务状态）')
+          return
+        }
+        remoteReconnectTimer = setTimeout(connectRemoteHost, 3000)
       }
-      remoteWs.onerror = () => remoteWs.close()
+      remoteWs.onerror = () => remoteWs && remoteWs.close()
     }
 
-    // 计算属性
-    const progressPercentage = computed(() => {
-      return duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
-    })
-    
-    // 合并的歌单列表（用户库 + 搜索结果）
-    const playlists = computed(() => {
-      if (activeTab.value === 'my') {
-        return userPlaylists.value
-      } else {
-        return searchResults.value
-      }
-    })
-    
     // 过滤后的歌曲列表（根据VIP显示设置）
     const filteredSongs = computed(() => {
       if (showVipSongs.value) {
@@ -308,11 +327,16 @@ export default {
     const totalPages = computed(() => {
       return Math.ceil(filteredSongs.value.length / pageSize.value)
     })
-    
-    const paginatedSongs = computed(() => {
-      const start = (currentPage.value - 1) * pageSize.value
-      const end = start + pageSize.value
-      return filteredSongs.value.slice(start, end)
+
+    // 列表缩短时页码收敛，避免空白页
+    watch(() => filteredSongs.value.length, () => {
+      const max = Math.max(1, totalPages.value)
+      if (currentPage.value > max) currentPage.value = max
+    })
+    watch([() => userPlaylists.value.length, () => searchResults.value.length], () => {
+      const list = activeTab.value === 'my' ? userPlaylists.value : searchResults.value
+      const max = Math.max(1, Math.ceil(list.length / playlistPageSize.value))
+      if (playlistCurrentPage.value > max) playlistCurrentPage.value = max
     })
 
     // 分页控制函数
@@ -359,42 +383,6 @@ export default {
       }
     }
 
-    // 歌单处理函数
-    const extractPlaylistId = (input) => {
-      if (!input) return null
-      
-      // 直接的数字ID
-      if (/^\d+$/.test(input.trim())) {
-        return input.trim()
-      }
-      
-      // 网易云音乐分享链接
-      const shareMatch = input.match(/id=(\d+)/)
-      if (shareMatch) {
-        return shareMatch[1]
-      }
-      
-      // 网易云音乐网页链接
-      const webMatch = input.match(/playlist\/(\d+)/)
-      if (webMatch) {
-        return webMatch[1]
-      }
-      
-      return null
-    }
-
-    const handleSearch = async () => {
-      const query = searchQuery.value.trim()
-      if (!query) return
-      
-      const playlistId = extractPlaylistId(query)
-      if (playlistId) {
-        await loadPlaylistByIdAndAdd(playlistId)
-      } else {
-        await searchPlaylists(query)
-      }
-    }
-
     const loadPlaylistByIdAndAdd = async (id) => {
       try {
         loading.value = true
@@ -409,13 +397,16 @@ export default {
         }
         
         const playlist = await musicApi.getPlaylistDetail(id)
-        if (playlist) {
+        // 接口对不存在的歌单返回无 id 的空壳对象（{ tracks: [] }），须校验后再入库
+        if (playlist && playlist.id != null) {
           console.log('✅ 歌单加载成功:', playlist.name)
           await addPlaylistToLibrary(playlist)
           console.log('✅ 歌单已添加到库中')
           
           // 清空搜索框
           searchQuery.value = ''
+        } else {
+          console.warn('⚠️ 未找到歌单或返回数据无效:', id)
         }
       } catch (error) {
         console.error('❌ 加载歌单失败:', error)
@@ -442,7 +433,8 @@ export default {
         
         const results = await musicApi.searchPlaylists(query)
         searchResults.value = results.playlists || []
-        
+        playlistCurrentPage.value = 1 // 新搜索结果重置歌单分页
+
         console.log('✅ 搜索完成，找到', searchResults.value.length, '个歌单')
       } catch (error) {
         console.error('❌ 搜索歌单失败:', error)
@@ -454,6 +446,12 @@ export default {
 
     const addPlaylistToLibrary = async (playlist) => {
       try {
+        // 防御无 id 的脏数据（如详情接口返回空壳对象/null）进入歌单库
+        if (!playlist || playlist.id == null) {
+          console.warn('⚠️ 歌单数据无效，跳过添加')
+          return
+        }
+
         // 检查是否已存在（确保ID类型一致）
         const exists = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
         if (exists) {
@@ -466,7 +464,9 @@ export default {
         if (!playlist.tracks || playlist.tracks.length === 0) {
           console.log('🔄 歌单缺少tracks数据，从服务器获取完整信息...')
           try {
-            fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
+            const detail = await musicApi.getPlaylistDetail(playlist.id)
+            // 详情可能为 null 或缺字段的空壳对象：与原始数据合并，保留原 id/name，杜绝 push(null)
+            fullPlaylist = detail ? { ...playlist, ...detail } : playlist
             console.log('✅ 获取完整歌单数据成功，歌曲数量:', fullPlaylist.tracks?.length || 0)
           } catch (error) {
             console.error('❌ 获取完整歌单数据失败，使用原始数据:', error)
@@ -483,48 +483,77 @@ export default {
     }
 
     const removePlaylistFromLibrary = (playlistId) => {
-      const index = userPlaylists.value.findIndex(p => p.id === playlistId)
+      const index = userPlaylists.value.findIndex(p => String(p.id) === String(playlistId))
       if (index > -1) {
         const playlist = userPlaylists.value[index]
         userPlaylists.value.splice(index, 1)
-        
-        // 如果是默认歌单，记录到已移除列表中
+
+        // 如果是默认歌单，记录到已移除列表中（统一存字符串，与 URL 参数类型一致）
         if (playlist.isDefault) {
           const removedIds = getRemovedDefaultPlaylists()
-          if (!removedIds.includes(playlistId)) {
-            removedIds.push(playlistId)
-            localStorage.setItem('removedDefaultPlaylists', JSON.stringify(removedIds))
+          if (!removedIds.includes(String(playlistId))) {
+            removedIds.push(String(playlistId))
+            writeJSON(REMOVED_DEFAULT_PLAYLISTS_KEY, removedIds)
           }
         }
-        
+
         savePlaylistsToStorage()
         console.log('✅ 歌单已移除:', playlist.name)
-        
+
+        // 列表缩短后收敛页码
+        const maxPages = Math.max(1, Math.ceil(userPlaylists.value.length / playlistPageSize.value))
+        if (playlistCurrentPage.value > maxPages) playlistCurrentPage.value = maxPages
+
         // 如果移除的是当前选中的歌单，清空选择
-        if (selectedPlaylist.value?.id === playlistId) {
+        if (String(selectedPlaylist.value?.id) === String(playlistId)) {
           selectedPlaylist.value = null
           songs.value = []
         }
       }
     }
 
-    // 本地存储操作
+    // 本地存储操作（全部带异常防护，脏数据不再阻断初始化）
+    const readJSON = (key, fallback = null) => {
+      try {
+        const raw = localStorage.getItem(key)
+        return raw === null ? fallback : JSON.parse(raw)
+      } catch (e) {
+        console.warn(`localStorage 读取 ${key} 失败，已重置:`, e.message)
+        return fallback
+      }
+    }
+
+    const writeJSON = (key, value) => {
+      try {
+        localStorage.setItem(key, JSON.stringify(value))
+      } catch (e) {
+        console.warn(`localStorage 写入 ${key} 失败:`, e.message)
+      }
+    }
+
     const getRemovedDefaultPlaylists = () => {
-      const removed = localStorage.getItem('removedDefaultPlaylists')
-      return removed ? JSON.parse(removed) : []
+      const removed = readJSON(REMOVED_DEFAULT_PLAYLISTS_KEY, [])
+      return Array.isArray(removed) ? removed.map(String) : []
     }
 
     const savePlaylistsToStorage = () => {
-      // 保存所有歌单，包括默认歌单
-      localStorage.setItem('userPlaylists', JSON.stringify(userPlaylists.value))
+      // 持久化时剥离大体积 tracks（selectedPlaylist 切回时会重新拉取详情），
+      // 仅保留单曲分享临时歌单的 tracks 供下次直接复用
+      const toStore = userPlaylists.value.map(p => {
+        if (String(p.id).startsWith('single_song_')) return p
+        const { tracks, ...rest } = p
+        return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
+      })
+      writeJSON(PLAYLISTS_STORAGE_KEY, toStore)
     }
 
     const loadPlaylistsFromStorage = () => {
-      const saved = localStorage.getItem('userPlaylists')
-      if (saved) {
-        const savedPlaylists = JSON.parse(saved)
-        userPlaylists.value.push(...savedPlaylists)
-        console.log('✅ 从本地存储加载歌单:', savedPlaylists.length, '个')
+      const savedPlaylists = readJSON(PLAYLISTS_STORAGE_KEY)
+      if (Array.isArray(savedPlaylists)) {
+        // 过滤 null/无 id 的脏条目，避免后续 String(p.id) 访问抛异常
+        const validPlaylists = savedPlaylists.filter(p => p && p.id != null)
+        userPlaylists.value.push(...validPlaylists)
+        console.log('✅ 从本地存储加载歌单:', validPlaylists.length, '个')
       }
     }
 
@@ -534,7 +563,7 @@ export default {
         currentSongId: currentSong.value?.id ?? null,
         currentSongIndex: currentSongIndex.value ?? 0,
         currentTime: Number.isFinite(currentTime.value) ? currentTime.value : 0,
-        volume: volume.value,
+        volume: Number.isFinite(volume.value) ? volume.value : 80,
         playMode: playMode.value,
         showVipSongs: showVipSongs.value,
         autoFollowLyrics: autoFollowLyrics.value,
@@ -547,20 +576,12 @@ export default {
         fullscreenInteractionMode: fullscreenInteractionMode.value
       }
 
-      localStorage.setItem(PLAYER_STATE_STORAGE_KEY, JSON.stringify(state))
+      writeJSON(PLAYER_STATE_STORAGE_KEY, state)
     }
 
     const loadPlayerStateFromStorage = () => {
-      const saved = localStorage.getItem(PLAYER_STATE_STORAGE_KEY)
-      if (!saved) return null
-
-      try {
-        const parsed = JSON.parse(saved)
-        return parsed && typeof parsed === 'object' ? parsed : null
-      } catch (error) {
-        console.error('❌ 播放器状态读取失败:', error)
-        return null
-      }
+      const parsed = readJSON(PLAYER_STATE_STORAGE_KEY)
+      return parsed && typeof parsed === 'object' ? parsed : null
     }
 
     const savePlaybackTimeIfNeeded = (force = false) => {
@@ -594,18 +615,20 @@ export default {
       const playlist = userPlaylists.value.find(p => String(p.id) === String(savedState.selectedPlaylistId))
       if (!playlist) return
 
-      await selectPlaylist(playlist)
+      const selected = await selectPlaylist(playlist)
+      if (!selected) return // 恢复被更新的选择抢占或歌单加载失败，不继续播放
 
       const restoredSongs = songs.value
       if (!restoredSongs.length) return
 
-      let restoredIndex = restoredSongs.findIndex(song => String(song.id) === String(savedState.currentSongId))
-      if (restoredIndex === -1 && Number.isInteger(savedState.currentSongIndex)) {
-        restoredIndex = savedState.currentSongIndex
+      // 仅按歌曲ID定位：索引兜底会在歌曲被移除后错播同位置的其他歌
+      const restoredIndex = restoredSongs.findIndex(song => String(song.id) === String(savedState.currentSongId))
+      if (restoredIndex === -1) {
+        console.log('⏭️ 上次播放的歌曲已不在该歌单中，放弃恢复播放')
+        return
       }
 
       const restoredSong = restoredSongs[restoredIndex]
-      if (!restoredSong) return
 
       await playSong(restoredSong, restoredIndex, {
         autoplay: false,
@@ -617,17 +640,20 @@ export default {
       }
     }
 
-    // 歌单选择
+    // 歌单选择（请求序号守卫：快速连点时丢弃过期响应）
+    // 返回 true=选择生效且歌曲已就绪，false=被更新的选择抢占/加载失败；供 restorePlaybackState 判断是否继续
     const selectPlaylist = async (playlist) => {
-      if (selectedPlaylist.value?.id === playlist.id) return
-      
+      if (!playlist || playlist.id == null) return false
+      if (String(selectedPlaylist.value?.id) === String(playlist.id)) return true
+
+      const myReq = ++selectReqId
       try {
         loadingSongs.value = true
         selectedPlaylist.value = playlist
         currentPage.value = 1 // 重置分页
-        
+
         console.log('🎵 加载歌单歌曲:', playlist.name)
-        
+
         // 检查是否为临时歌单（单曲分享）
         // 某些歌单ID为数字，直接调用 startsWith 会报错，先转换为字符串
         if (playlist.id && String(playlist.id).startsWith('single_song_')) {
@@ -638,228 +664,226 @@ export default {
           // 对于正常歌单，从服务器重新获取最新的歌单信息和歌曲数据
           console.log('🔄 从服务器获取最新歌单数据...')
           const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
-          songs.value = fullPlaylist.tracks || []
+          if (myReq !== selectReqId) return false // 已被更新的选择取代，丢弃过期数据
+          songs.value = fullPlaylist?.tracks || []
           console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
-          
+
           // 更新本地歌单库中的数据
-          const playlistIndex = userPlaylists.value.findIndex(p => p.id === playlist.id)
+          const playlistIndex = userPlaylists.value.findIndex(p => String(p.id) === String(playlist.id))
           if (playlistIndex !== -1) {
             userPlaylists.value[playlistIndex] = { ...userPlaylists.value[playlistIndex], ...fullPlaylist }
             savePlaylistsToStorage()
             console.log('✅ 已更新本地歌单数据')
           }
         }
+        return true
       } catch (error) {
+        if (myReq !== selectReqId) return false
         console.error('❌ 加载歌曲失败:', error)
         songs.value = []
+        return false
       } finally {
-        loadingSongs.value = false
+        // 仅最新请求负责复位 loading；过期请求直接跳过，loading 由新请求收尾
+        if (myReq === selectReqId) loadingSongs.value = false
       }
     }
 
     // 歌曲播放逻辑
-    const playSong = async (song, index, options = {}) => {
+    // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
+    // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
+    const playSong = async (song, index = 0, options = {}) => {
       const { autoplay = true, seekTime = 0 } = options
 
+      console.log('🎵 播放歌曲:', song.name)
+
+      // 设置当前播放的歌曲ID，用于防止竞态条件
+      currentPlayingId = song.id
+
+      // 取消上一个正在进行的网络请求
+      if (currentAbortController) {
+        console.log('🚫 取消上一个歌曲的网络请求')
+        currentAbortController.abort()
+      }
+      const myController = new AbortController()
+      currentAbortController = myController
+      const abortSignal = myController.signal
+
       try {
-        console.log('🎵 播放歌曲:', song.name)
-        
-        // 设置当前播放的歌曲ID，用于防止竞态条件
-        currentPlayingId = song.id
-        
-        // 取消上一个正在进行的网络请求
-        if (currentAbortController) {
-          console.log('🚫 取消上一个歌曲的网络请求')
-          currentAbortController.abort()
-          currentAbortController = null
-        }
-        
-        // 创建新的AbortController
-        currentAbortController = new AbortController()
-        const abortSignal = currentAbortController.signal
-        
         // 设置歌曲切换状态
         songSwitching.value = true
         durationWarning.value = ''
-        
+
         // 立即停止当前播放，防止多首歌同时播放
         if (howl) {
           howl.stop()
           howl.unload()
           howl = null
         }
-        
+
         // 清除歌词定时器
         if (lyricTimer) {
           clearInterval(lyricTimer)
           lyricTimer = null
         }
-        
+
         // 立即设置播放状态为false
         isPlaying.value = false
         currentTime.value = 0
         duration.value = 0
-        
+
         currentSong.value = song
-        currentSongIndex.value = index
-        
+        // 以当前过滤列表内的真实位置为准；调用方传入的 index 仅作兜底
+        const filteredIdx = filteredSongs.value.findIndex(s => String(s.id) === String(song.id))
+        currentSongIndex.value = filteredIdx !== -1 ? filteredIdx : index
+
         // 获取歌曲播放URL
         const songUrlData = await musicApi.getSongUrl(song.id, abortSignal)
-        
+
         // 检查请求是否被取消
         if (abortSignal.aborted) {
           console.log('🚫 歌曲加载被取消:', song.name)
           return
         }
-        
+
         if (!songUrlData || !songUrlData.url) {
           console.error('❌ 无法获取歌曲播放链接')
           songSwitching.value = false
-          currentAbortController = null
+          if (currentAbortController === myController) currentAbortController = null
           return
         }
-        
-        console.log('🔗 歌曲URL获取成功:', songUrlData.url)
-        
-        // 创建Howler实例
-        howl = new Howl({
+
+        // 判断本次加载是否已失效（被取消或已被更新的播放请求取代）
+        const isStale = () => abortSignal.aborted || currentPlayingId !== song.id || howl !== newHowl
+
+        // 创建Howler实例；回调一律操作局部 newHowl，绝不间接引用共享变量 howl，
+        // 否则过期回调会误销毁后来创建的实例
+        const newHowl = new Howl({
           src: [songUrlData.url],
           format: ['mp4', 'mp3', 'flac'],
           html5: true,
           preload: true,
           onload: () => {
-            // 检查请求是否已被取消
-            if (abortSignal.aborted) {
-              console.log('🚫 歌曲加载完成但请求已被取消，不开始播放')
-              if (howl) {
-                howl.unload()
-                howl = null
-              }
+            if (isStale()) {
+              console.log('🚫 歌曲加载完成但已被取消/切换，不开始播放:', song.name)
+              newHowl.unload()
               return
             }
-            
-            // 检查是否还是当前应该播放的歌曲（防止竞态条件）
-            if (currentPlayingId !== song.id) {
-              console.log('🚫 歌曲加载完成但已切换到其他歌曲，不开始播放:', song.name)
-              if (howl) {
-                howl.unload()
-                howl = null
-              }
-              return
-            }
-            
+
             console.log('✅ 歌曲加载完成')
-            duration.value = howl.duration()
-            
+            duration.value = newHowl.duration()
+
             // 检查时长
             const expectedDuration = (song.dt || song.duration) / 1000
-            const actualDuration = howl.duration()
-            
+            const actualDuration = newHowl.duration()
+
             if (Math.abs(expectedDuration - actualDuration) > 5) {
               durationWarning.value = `VIP 歌曲试听版本：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
             }
-            
+
             songSwitching.value = false
 
             const safeSeekTime = Math.max(0, Math.min(seekTime || 0, duration.value || 0))
             if (safeSeekTime > 0) {
-              howl.seek(safeSeekTime)
+              newHowl.seek(safeSeekTime)
               currentTime.value = safeSeekTime
             }
 
             if (autoplay) {
-              howl.play()
+              newHowl.play()
             }
           },
           onplay: () => {
-            // 再次检查是否还是当前应该播放的歌曲
-            if (currentPlayingId !== song.id) {
+            if (isStale()) {
               console.log('🚫 开始播放但已切换到其他歌曲，停止播放:', song.name)
-              if (howl) {
-                howl.stop()
-                howl.unload()
-                howl = null
-              }
+              newHowl.stop()
+              newHowl.unload()
+              if (howl === newHowl) howl = null
               return
             }
-            
-            console.log('▶️ 开始播放')
+
             isPlaying.value = true
-            updateProgress()
+            startProgressLoop()
           },
           onpause: () => {
-            console.log('⏸️ 暂停播放')
             isPlaying.value = false
             savePlaybackTimeIfNeeded(true)
           },
           onstop: () => {
-            console.log('⏹️ 停止播放')
             isPlaying.value = false
             currentTime.value = 0
             savePlaybackTimeIfNeeded(true)
           },
           onend: () => {
-            console.log('🔚 播放结束')
             handleSongEnd()
           },
           onloaderror: (id, error) => {
             console.error('❌ 歌曲加载错误:', error)
             songSwitching.value = false
-            currentAbortController = null
+            if (currentAbortController === myController) currentAbortController = null
+            if (howl === newHowl) howl = null
             savePlayerStateToStorage()
           },
           onplayerror: (id, error) => {
             console.error('❌ 播放错误:', error)
             songSwitching.value = false
-            currentAbortController = null
+            if (currentAbortController === myController) currentAbortController = null
+            if (howl === newHowl) howl = null
             savePlayerStateToStorage()
           }
         })
-        
-        // 设置音量
-        howl.volume(volume.value / 100)
-        
-        // 加载歌词
-        await loadLyrics(song.id)
-        
-        // 清除AbortController引用（请求已完成）
-        currentAbortController = null
+
+        howl = newHowl
+        newHowl.volume(volume.value / 100)
+
+        // 加载歌词（可随播放请求一起被取消）
+        await loadLyrics(song.id, abortSignal)
+
+        if (abortSignal.aborted) return
+
+        // 仅清除仍属于本次请求的 controller 引用
+        if (currentAbortController === myController) currentAbortController = null
         savePlayerStateToStorage()
-        
+
       } catch (error) {
         // 检查是否是因为请求被取消
-        if (error.name === 'AbortError') {
+        if (error.name === 'AbortError' || abortSignal.aborted) {
           console.log('🚫 歌曲加载请求被取消')
           return
         }
         console.error('❌ 播放歌曲失败:', error)
         songSwitching.value = false
-        currentAbortController = null
+        if (currentAbortController === myController) currentAbortController = null
         savePlayerStateToStorage()
       }
     }
 
-    // 歌词加载和同步
-    const loadLyrics = async (songId) => {
+    // 歌词加载和同步（支持取消 + 过期响应不落盘，防止旧歌歌词覆盖新歌）
+    const loadLyrics = async (songId, signal = null) => {
       try {
         loadingLyrics.value = true
         console.log('📝 加载歌词:', songId)
-        
-        const lyricsData = await musicApi.getLyrics(songId)
+
+        const lyricsData = await musicApi.getLyrics(songId, signal)
+        // 切歌/取消后直接丢弃，不写回共享状态
+        if (signal?.aborted || currentPlayingId !== songId) return
+
         lyrics.value = lyricsData?.lyrics || []
         currentLyricIndex.value = 0
-        
+
         console.log('✅ 歌词加载完成，共', lyrics.value.length, '行')
-        
+
         // 开始歌词同步
         if (lyrics.value.length > 0) {
           startLyricSync()
         }
       } catch (error) {
+        if (signal?.aborted || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
         console.error('❌ 加载歌词失败:', error)
-        lyrics.value = []
+        if (currentPlayingId === songId) lyrics.value = []
       } finally {
-        loadingLyrics.value = false
+        if (!signal?.aborted && currentPlayingId === songId) {
+          loadingLyrics.value = false
+        }
       }
     }
 
@@ -867,12 +891,12 @@ export default {
       if (lyricTimer) {
         clearInterval(lyricTimer)
       }
-      
+
       lyricTimer = setInterval(() => {
         if (!howl || !isPlaying.value || lyrics.value.length === 0) return
-        
+
         const currentTimeSeconds = howl.seek()
-        
+
         // 找到当前时间对应的歌词行
         let newIndex = 0
         for (let i = lyrics.value.length - 1; i >= 0; i--) {
@@ -881,18 +905,25 @@ export default {
             break
           }
         }
-        
+
         if (newIndex !== currentLyricIndex.value) {
           currentLyricIndex.value = newIndex
         }
       }, 100)
     }
 
-    // 播放进度更新
+    // 播放进度更新（单条 rAF 循环：startProgressLoop 幂等，避免重复并发循环）
     const updateProgress = () => {
+      progressRafId = null
       if (howl && isPlaying.value) {
         currentTime.value = howl.seek()
-        requestAnimationFrame(updateProgress)
+        progressRafId = requestAnimationFrame(updateProgress)
+      }
+    }
+
+    const startProgressLoop = () => {
+      if (progressRafId === null) {
+        progressRafId = requestAnimationFrame(updateProgress)
       }
     }
 
@@ -913,25 +944,31 @@ export default {
       }
     }
 
+    // 以歌曲ID实时定位索引，避免 VIP 过滤/换歌单导致 currentSongIndex 漂移
+    const currentFilteredIndex = () => {
+      if (!currentSong.value) return -1
+      return filteredSongs.value.findIndex(s => s.id === currentSong.value.id)
+    }
+
     const previousSong = () => {
       if (filteredSongs.value.length === 0) return
-      
-      let newIndex
-      if (playMode.value === 'single') {
+
+      const cur = currentFilteredIndex()
+      if (playMode.value === 'single' && cur >= 0) {
         // 单曲循环模式下，重新播放当前歌曲
-        newIndex = currentSongIndex.value
-      } else {
-        // 列表播放和列表循环模式
-        newIndex = currentSongIndex.value - 1
-        if (newIndex < 0) {
-          if (playMode.value === 'loop') {
-            newIndex = filteredSongs.value.length - 1
-          } else {
-            return // 列表播放模式下，到达第一首就停止
-          }
+        playSong(filteredSongs.value[cur], cur)
+        return
+      }
+
+      let newIndex = cur >= 0 ? cur - 1 : 0
+      if (cur >= 0 && newIndex < 0) {
+        if (playMode.value === 'loop') {
+          newIndex = filteredSongs.value.length - 1
+        } else {
+          return // 列表播放模式下，到达第一首就停止
         }
       }
-      
+
       const song = filteredSongs.value[newIndex]
       if (song) {
         playSong(song, newIndex)
@@ -940,23 +977,27 @@ export default {
 
     const nextSong = () => {
       if (filteredSongs.value.length === 0) return
-      
-      let newIndex
-      if (playMode.value === 'single') {
+
+      const cur = currentFilteredIndex()
+      if (playMode.value === 'single' && cur >= 0) {
         // 单曲循环模式下，重新播放当前歌曲
-        newIndex = currentSongIndex.value
-      } else {
-        // 列表播放和列表循环模式
-        newIndex = currentSongIndex.value + 1
-        if (newIndex >= filteredSongs.value.length) {
-          if (playMode.value === 'loop') {
-            newIndex = 0
-          } else {
-            return // 列表播放模式下，到达最后一首就停止
-          }
+        playSong(filteredSongs.value[cur], cur)
+        return
+      }
+
+      let newIndex = cur >= 0 ? cur + 1 : 0
+      if (newIndex >= filteredSongs.value.length) {
+        if (playMode.value === 'loop') {
+          newIndex = 0
+        } else {
+          // 列表播放到末尾：显式停止播放态，否则 isPlaying 残留 true、rAF 空转
+          isPlaying.value = false
+          currentTime.value = duration.value
+          savePlaybackTimeIfNeeded(true)
+          return
         }
       }
-      
+
       const song = filteredSongs.value[newIndex]
       if (song) {
         playSong(song, newIndex)
@@ -995,50 +1036,40 @@ export default {
       }
     }
 
-    const getPlayModeIcon = () => {
-      switch (playMode.value) {
-        case 'list': return '📋'
-        case 'loop': return '🔁'
-        case 'single': return '🔂'
-        default: return '📋'
-      }
-    }
+    // 进度条点击跳转（子组件传来归一化比例 0-1）
+    const seekTo = (ratio) => {
+      if (!howl || !duration.value || !Number.isFinite(ratio)) return
 
-    // 进度条点击跳转
-    const seekTo = (event) => {
-      if (!howl || !duration.value) return
-
-      const rect = event.currentTarget.getBoundingClientRect()
-      const clickX = event.clientX - rect.left
-      const percentage = clickX / rect.width
-      const seekTime = percentage * duration.value
+      const clamped = Math.max(0, Math.min(1, ratio))
+      const seekTime = clamped * duration.value
 
       howl.seek(seekTime)
       currentTime.value = seekTime
       savePlaybackTimeIfNeeded(true)
     }
 
-    // 音量控制
+    // 音量控制（拖动滑块高频触发，持久化做防抖）
     const updateVolume = (newVolume) => {
-      const volumeValue = Math.max(0, Math.min(100, Number(newVolume)))
+      const v = Number(newVolume)
+      if (!Number.isFinite(v)) return
+      const volumeValue = Math.max(0, Math.min(100, v))
       volume.value = volumeValue
 
       if (howl) {
         howl.volume(volumeValue / 100)
       }
 
-      savePlayerStateToStorage()
+      clearTimeout(volumeSaveTimer)
+      volumeSaveTimer = setTimeout(savePlayerStateToStorage, 300)
     }
 
     const openFullscreenPlayer = () => {
       if (!currentSong.value) return
-      isFullscreenPlayerOpen.value = true
-      savePlayerStateToStorage()
+      isFullscreenPlayerOpen.value = true // 由 watch 统一持久化
     }
 
     const closeFullscreenPlayer = () => {
       isFullscreenPlayerOpen.value = false
-      savePlayerStateToStorage()
     }
 
     // 时间格式化
@@ -1050,32 +1081,12 @@ export default {
       return `${mins}:${secs.toString().padStart(2, '0')}`
     }
 
-    const formatDuration = (ms) => {
-      if (!ms) return '0:00'
-      return formatTime(ms / 1000)
-    }
-
     // 歌词自动跟随切换
     const toggleAutoFollowLyrics = () => {
       autoFollowLyrics.value = !autoFollowLyrics.value
       console.log('🎯 歌词自动跟随:', autoFollowLyrics.value ? '开启' : '关闭')
       savePlayerStateToStorage()
     }
-
-    // 监听歌词索引变化，自动滚动
-    watch(currentLyricIndex, (newIndex) => {
-      if (!autoFollowLyrics.value || !lyricsContainer.value) return
-
-      nextTick(() => {
-        const lyricElement = lyricsContainer.value.querySelector(`[data-lyric-index="${newIndex}"]`)
-        if (lyricElement) {
-          lyricElement.scrollIntoView({
-            behavior: 'smooth',
-            block: 'center'
-          })
-        }
-      })
-    })
 
     watch(currentTime, () => {
       savePlaybackTimeIfNeeded()
@@ -1144,36 +1155,27 @@ export default {
       return getSongIdFromUrl() !== null
     }
 
-    // 检查是否为首次访问
-    const isFirstVisit = () => {
-      const saved = localStorage.getItem('userPlaylists')
-      const hasVisited = localStorage.getItem('hasVisited')
-      return !saved && !hasVisited
-    }
-
     // URL歌单加载
     const loadDefaultPlaylists = async () => {
       try {
         console.log('🎵 检查是否需要加载URL歌单...')
-        
+
         // 获取URL参数中的歌单ID
         const urlPlaylistIds = getPlaylistIdsFromUrl()
-        
+
         // 如果没有URL参数，跳过加载
         if (urlPlaylistIds.length === 0) {
           console.log('✅ 无URL歌单参数，跳过加载')
-          // 标记已访问
-          localStorage.setItem('hasVisited', 'true')
           return
         }
-        
+
         console.log('🔗 检测到URL歌单参数，加载指定歌单:', urlPlaylistIds)
         const defaultPlaylistIds = urlPlaylistIds
         
         const removedIds = getRemovedDefaultPlaylists()
         
-        // 过滤掉已移除的歌单ID和已存在的歌单ID
-        const validIds = defaultPlaylistIds.filter(id => {
+        // 过滤掉已移除的歌单ID和已存在的歌单ID；URL 内重复ID先去重，避免并行加载后重复push
+        const validIds = [...new Set(defaultPlaylistIds)].filter(id => {
           if (removedIds.includes(id)) {
             console.log('⏭️ 跳过已移除的默认歌单:', id)
             return false
@@ -1191,8 +1193,6 @@ export default {
         
         if (validIds.length === 0) {
           console.log('✅ 所有默认歌单都已被用户删除，跳过加载')
-          // 标记已访问
-          localStorage.setItem('hasVisited', 'true')
           return
         }
         
@@ -1217,8 +1217,9 @@ export default {
         const playlists = await Promise.all(playlistPromises)
         
         // 将成功加载的歌单添加到用户歌单列表
+        // push 前再查一次重：加载 await 期间用户可能已通过其他途径添加同一歌单
         playlists.forEach(playlist => {
-          if (playlist) {
+          if (playlist && !userPlaylists.value.some(p => String(p.id) === String(playlist.id))) {
             userPlaylists.value.push(playlist)
           }
         })
@@ -1227,10 +1228,7 @@ export default {
         if (playlists.some(p => p)) {
           savePlaylistsToStorage()
         }
-        
-        // 标记已访问
-        localStorage.setItem('hasVisited', 'true')
-        
+
         console.log('✅ URL歌单加载完成')
       } catch (error) {
         console.error('❌ 加载URL歌单失败:', error)
@@ -1257,17 +1255,23 @@ export default {
     onMounted(async () => {
       console.log('🚀 App组件挂载完成')
 
+      // 遥控器模式：不初始化播放器/歌单/播放状态恢复，纯控制端
+      if (remoteMode.value === 'controller') {
+        console.log('📱 遥控器模式，跳过播放器初始化')
+        return
+      }
+
       // 启动远程控制 host 连接
       if (remoteMode.value === 'host') {
         connectRemoteHost()
       }
-      
+
       // 检查是否为单首歌曲分享，如果是则默认折叠歌单面板（仅移动端）
       if (isSingleSongShare() && window.innerWidth < 1024) {
         playlistCollapsed.value = true
         console.log('📱 检测到单首歌曲分享，移动端默认折叠歌单面板')
       }
-      
+
       // 加载保存的歌单
       loadPlaylistsFromStorage()
       restorePlayerState = loadPlayerStateFromStorage()
@@ -1285,10 +1289,9 @@ export default {
           const tempPlaylistId = `single_song_${songId}`
           let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
 
-          if (existingPlaylist) {
+          if (existingPlaylist && existingPlaylist.tracks?.length) {
             console.log('🎵 找到已存在的单曲分享歌单，直接使用')
             // 使用已存在的歌单
-            currentPlaylist.value = existingPlaylist
             currentSong.value = existingPlaylist.tracks[0]
             songs.value = existingPlaylist.tracks || []
 
@@ -1313,8 +1316,7 @@ export default {
             // 添加到用户歌单列表
             userPlaylists.value.unshift(tempPlaylist)
 
-            // 设置当前歌单和歌曲
-            currentPlaylist.value = tempPlaylist
+            // 设置当前歌曲
             currentSong.value = songDetail
             songs.value = tempPlaylist.tracks || []
 
@@ -1331,15 +1333,47 @@ export default {
       }
 
       savePlayerStateToStorage()
-      
+
       console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
+    })
+
+    // 组件卸载：清理 WS/定时器/rAF/音频，避免泄漏与卸载后重连
+    onBeforeUnmount(() => {
+      remoteReconnectTimer && clearTimeout(remoteReconnectTimer)
+      remoteReconnectTimer = null
+      // onclose 被置 null 后不会再清 remoteStateTimer，这里必须手动清，否则 interval 泄漏
+      remoteStateTimer && clearInterval(remoteStateTimer)
+      remoteStateTimer = null
+      if (remoteWs) {
+        remoteWs.onclose = null
+        remoteWs.close()
+        remoteWs = null
+      }
+      if (currentAbortController) {
+        currentAbortController.abort()
+        currentAbortController = null
+      }
+      if (progressRafId !== null) {
+        cancelAnimationFrame(progressRafId)
+        progressRafId = null
+      }
+      if (lyricTimer) {
+        clearInterval(lyricTimer)
+        lyricTimer = null
+      }
+      clearTimeout(volumeSaveTimer)
+      if (howl) {
+        howl.stop()
+        howl.unload()
+        howl = null
+      }
     })
 
     return {
       // 响应式数据
       remoteMode,
       playerHidden,
-      remoteWsUrl,
+      remoteControllerWsUrl,
       searchQuery,
       loading,
       loadingSongs,
@@ -1365,21 +1399,16 @@ export default {
       fullscreenInteractionMode,
       durationWarning,
       loadingLyrics,
-      lyricsContainer,
-      playerContainer,
       currentPage,
       pageSize,
       playlistCurrentPage,
       playlistPageSize,
       playlistCollapsed,
-      
+
       // 计算属性
-      progressPercentage,
-      playlists,
       filteredSongs,
       totalPages,
-      paginatedSongs,
-      
+
       // 方法
       goToPage,
       prevPage,
@@ -1387,8 +1416,6 @@ export default {
       goToPlaylistPage,
       prevPlaylistPage,
       nextPlaylistPage,
-      extractPlaylistId,
-      handleSearch,
       loadPlaylistByIdAndAdd,
       loadPlaylistById,
       searchPlaylists,
@@ -1401,20 +1428,17 @@ export default {
       playSong,
       loadLyrics,
       startLyricSync,
-      updateProgress,
       togglePlay,
       previousSong,
       nextSong,
       handleSongEnd,
       togglePlayMode,
       getPlayModeText,
-      getPlayModeIcon,
       seekTo,
       updateVolume,
       openFullscreenPlayer,
       closeFullscreenPlayer,
       formatTime,
-      formatDuration,
       toggleAutoFollowLyrics,
       loadDefaultPlaylists,
       togglePlaylistCollapse,
