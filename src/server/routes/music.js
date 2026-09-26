@@ -74,7 +74,10 @@ function sendUpstreamResult(c, answer) {
   // answer.body 缺失时不能把整个 envelope（status/cookie）序列化出去——
   // cookie 明文会落进响应体。但也不能回 {}——那会破坏 {code,message} 契约，
   // 前端 extractErrorMessage 只得 undefined 回落到 axios 英文错误
-  let body = answer.body ?? { code: upstreamStatus, message: '上游请求失败' };
+  let body = answer.body ?? {
+    code: upstreamStatus >= 400 ? upstreamStatus : 500,
+    message: '上游请求失败'
+  };
   // body 本身若非 plain object（Error/AxiosError/数组/字符串错误页）：
   // AxiosError 的 toJSON 会把 stack 和 config.headers.Cookie（含转发的
   // MUSIC_U 登录态）序列化透出；字符串 body 可能是上游 HTML 错误页。

@@ -319,9 +319,10 @@ function initSchema(database) {
     ['idx_download_queues_status', 'download_queues', 'status']
   ];
   for (const [name, table, column] of INDEX_COLUMNS) {
-    // hasColumn 缺列场景不建（索引缺失可继续跑，比启动即崩可恢复）
+    // hasColumn 缺列场景不建（索引缺失可继续跑，比启动即崩可恢复）；
+    // IF NOT EXISTS 兜底多进程首启竞态（负者不该因 "index exists" 崩退出）
     if (!hasIndex(database, name) && hasColumn(database, table, column)) {
-      database.exec(`CREATE INDEX ${name} ON ${table}(${column})`);
+      database.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${column})`);
     }
   }
 }

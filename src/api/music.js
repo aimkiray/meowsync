@@ -65,7 +65,10 @@ function unwrapBody(response) {
     ? response.body
     : response
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    throw new Error('接口返回异常')
+    // 打标而非靠消息串匹配——catch 侧靠标记透出，改文案不会静默退化
+    const err = new Error('接口返回异常')
+    err.isShapeError = true
+    throw err
   }
   return data
 }
@@ -125,8 +128,8 @@ export const musicApi = {
       } catch (error) {
         // 形态校验错误（部署错配/反代 HTML）必须直接透出——吞掉换码率重试会
         // 把部署问题降级成误导性的"版权限制"
-        const msg = String(error?.message ?? '')
-        if (isAbortError(error) || msg.includes('版权限制') || msg === '接口返回异常') throw error
+        if (isAbortError(error) || error?.isShapeError
+            || String(error?.message ?? '').includes('版权限制')) throw error
         console.warn(`音质 ${br} 获取失败:`, error?.message)
       }
     }

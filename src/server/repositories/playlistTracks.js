@@ -56,13 +56,16 @@ function listTracksByPlaylistId(playlistId) {
     const rawObj = parseJsonColumn(row.raw_json, {});
     const raw = typeof rawObj === 'object' ? rawObj : {};
     const artists = Array.isArray(raw.ar) ? raw.ar : parseJsonColumn(row.artist_json, []);
-    const album = (raw.al && typeof raw.al === 'object') ? raw.al : parseJsonColumn(row.album_json, {});
+    const rawAlbum = (raw.al && typeof raw.al === 'object' && !Array.isArray(raw.al))
+      ? raw.al : parseJsonColumn(row.album_json, {});
+    const album = (rawAlbum && typeof rawAlbum === 'object' && !Array.isArray(rawAlbum))
+      ? rawAlbum : {};
     return {
       ...raw,
       id: raw.id ?? row.song_id,
       name: raw.name ?? row.name,
       ar: Array.isArray(artists) ? artists : [],
-      al: (album && typeof album === 'object') ? album : {},
+      al: album,
       dt: raw.dt ?? row.duration_ms
     };
   });
