@@ -1,8 +1,8 @@
 <template>
   <div class="remote-controller">
     <div v-if="!connected || hostDisconnected" class="rc-connecting">
-      <div class="rc-spinner"></div>
-      <p>{{ hostDisconnected ? '主机已断开，等待重连...' : '正在连接主机...' }}</p>
+      <div v-if="!gaveUp" class="rc-spinner"></div>
+      <p>{{ gaveUp ? '无法连接主机，请检查服务后刷新重试' : (hostDisconnected ? '主机已断开，等待重连...' : '正在连接主机...') }}</p>
     </div>
 
     <template v-else>
@@ -31,7 +31,11 @@
           :value="state.currentTime"
           :max="state.duration || 1"
           step="1"
+          @input="onSeekInput"
           @change="onSeek"
+          @pointerdown="seekDragging = true"
+          @pointerup="seekDragging = false"
+          @pointercancel="seekDragging = false"
         />
         <span class="rc-time">{{ formatTime(state.duration) }}</span>
       </div>
@@ -55,7 +59,11 @@
           min="0"
           max="100"
           step="1"
+          @input="onVolumeInput"
           @change="onVolume"
+          @pointerdown="volumeDragging = true"
+          @pointerup="volumeDragging = false"
+          @pointercancel="volumeDragging = false"
         />
         <span class="rc-vol-icon">🔊</span>
       </div>
@@ -74,6 +82,11 @@ const props = defineProps({
 
 const connected = ref(false)
 const hostDisconnected = ref(false)
+// 重连超限后给出可读的终态提示，而不是永远停在“正在连接”
+const gaveUp = ref(false)
+// 拖动滑块期间屏蔽本地推进/远端推送回写，防止 thumb 被拽回旧值
+const seekDragging = ref(false)
+const volumeDragging = ref(false)
 const state = ref({
   isPlaying: false,
   currentSong: null,
@@ -84,6 +97,7 @@ const state = ref({
 
 let ws = null
 let reconnectTimer = null
+let progressTickTimer = null
 let destroyed = false
 let retries = 0
 
@@ -102,7 +116,11 @@ function connect() {
       const msg = JSON.parse(e.data)
       if (msg.type === 'state_update') {
         hostDisconnected.value = false
-        state.value = { ...state.value, ...msg.payload }
+        const payload = msg.payload || {}
+        // 拖动中不回写对应字段，避免 thumb 被远端旧值拽回
+        if (seekDragging.value) delete payload.currentTime
+        if (volumeDragging.value) delete payload.volume
+        state.value = { ...state.value, ...payload }
       } else if (msg.type === 'host_disconnected') {
         hostDisconnected.value = true
       }
@@ -116,6 +134,7 @@ function connect() {
     // 重连上限：握手被 401/403 拒绝时避免无限重试
     if (++retries > 5) {
       console.warn('[remote] controller 重连次数超限，停止重连')
+      gaveUp.value = true
       return
     }
     reconnectTimer = setTimeout(connect, 3000)
@@ -132,12 +151,28 @@ function send(type, payload) {
   }
 }
 
+// 拖动中仅本地预览（不发包），松手 @change 时一次性提交并发送
+function onSeekInput(e) {
+  state.value.currentTime = Number(e.target.value)
+}
+
 function onSeek(e) {
-  send('seek', Number(e.target.value))
+  seekDragging.value = false
+  const t = Number(e.target.value)
+  // 本地立即提交：host 每 2s 才推送一次，不回写会闪回旧进度
+  state.value.currentTime = t
+  send('seek', t)
+}
+
+function onVolumeInput(e) {
+  state.value.volume = Number(e.target.value)
 }
 
 function onVolume(e) {
-  send('volume', Number(e.target.value))
+  volumeDragging.value = false
+  const v = Number(e.target.value)
+  state.value.volume = v
+  send('volume', v)
 }
 
 const artistName = computed(() => {
@@ -146,10 +181,20 @@ const artistName = computed(() => {
   return (song.ar || song.artists || []).map(a => a.name).join(' / ')
 })
 
-onMounted(connect)
+onMounted(() => {
+  connect()
+  // host 每 2s 才推送一次进度；期间本地按秒推进让进度条平滑，下一次推送会校准漂移
+  progressTickTimer = setInterval(() => {
+    const s = state.value
+    if (s.isPlaying && !seekDragging.value && s.duration > 0 && s.currentTime < s.duration) {
+      s.currentTime = Math.min(s.currentTime + 1, s.duration)
+    }
+  }, 1000)
+})
 onUnmounted(() => {
   destroyed = true
   clearTimeout(reconnectTimer)
+  clearInterval(progressTickTimer)
   if (ws) {
     ws.onclose = null // 阻止卸载后异步 close 触发重连
     ws.close()

@@ -14,6 +14,7 @@ require('dotenv').config();
 
 const children = new Set();
 let shuttingDown = false;
+let exitCode = 0; // shutdown(code) 的退出码，等子进程全部退出后原样传播
 
 const colors = {
   red: '\x1b[31m',
@@ -65,23 +66,26 @@ function stopChild(child, signal) {
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
+  exitCode = code;
   console.log('\n\n🛑 正在关闭服务...');
 
   for (const child of children) stopChild(child, 'SIGINT');
 
   setTimeout(() => {
     for (const child of children) stopChild(child, 'SIGKILL');
-    process.exit(code);
+    process.exit(exitCode);
   }, 1000).unref();
 
-  if (children.size === 0) process.exit(code);
+  if (children.size === 0) process.exit(exitCode);
 }
 
 // 信号处理必须在 spawn 之前注册，否则启动初期的 Ctrl+C 会漏杀子进程
 function registerSignalHandlers() {
   const onSignal = () => {
     if (shuttingDown) {
-      process.exit(130); // 第二次 Ctrl+C 强制退出
+      // 第二次 Ctrl+C：先强杀子进程再退，避免遗留孤儿进程
+      for (const child of children) stopChild(child, 'SIGKILL');
+      process.exit(130);
     }
     shutdown(0);
   };
@@ -114,7 +118,7 @@ function startProcess(args, name, color) {
       console.error('子进程异常退出，正在关闭其他服务...');
       shutdown(code ?? 1);
     } else if (shuttingDown && children.size === 0) {
-      process.exit(0);
+      process.exit(exitCode);
     }
   });
 

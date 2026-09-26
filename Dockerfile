@@ -49,7 +49,8 @@ EXPOSE 3002
 
 # 注意：node:22-alpine 的 wget 是 busybox 精简版，不支持 --no-verbose/--tries
 # （会报 unrecognized option 恒失败），改用 Node 内置 fetch 探活
+# 端口解析与服务端一致（API_PORT || PORT || 3002），docker run -e API_PORT=... 覆盖端口时探活仍正确
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:3002/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://localhost:'+(process.env.API_PORT||process.env.PORT||3002)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "netease-api-server.js"]

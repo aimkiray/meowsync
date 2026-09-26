@@ -46,6 +46,12 @@ if (!fs.existsSync(MIGU_PATH)) {
     const original = originalLoad.apply(this, arguments);
 
     try {
+      // track 非函数说明上游模块结构已变化（.then(undefined) 会把 search 出的
+      // 歌曲 id 错当成 track 结果透传），此时回退原版而非产出半坏补丁
+      if (!original || typeof original.track !== 'function') {
+        console.warn('[patch-migu] 原模块缺少 track()，结构已变化，补丁未生效');
+        return original;
+      }
       const request_ = require(path.join(PROVIDER_DIR, '../request.js'));
       const select = require(path.join(PROVIDER_DIR, 'select.js'));
       const { getManagedCacheStorage } = require(path.join(PROVIDER_DIR, '../cache.js'));

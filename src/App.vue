@@ -475,6 +475,12 @@ export default {
           }
         }
         
+        // await 期间同一歌单可能已被并行添加，push 前再查一次重（与 loadDefaultPlaylists 一致）
+        if (userPlaylists.value.some(p => String(p.id) === String(playlist.id))) {
+          console.log('ℹ️ 歌单已存在:', fullPlaylist.name)
+          return
+        }
+
         userPlaylists.value.push(fullPlaylist)
         savePlaylistsToStorage()
         console.log('✅ 歌单已添加:', fullPlaylist.name)
@@ -597,7 +603,8 @@ export default {
     const restoreUiState = (savedState) => {
       if (!savedState) return
 
-      if (typeof savedState.volume === 'number') volume.value = savedState.volume
+      // 拦截 Infinity/越界脏数据（如 1e999 经 JSON.parse 还原为 Infinity），避免 howl.volume() 抛异常
+      if (Number.isFinite(savedState.volume)) volume.value = Math.max(0, Math.min(100, savedState.volume))
       if (typeof savedState.playMode === 'string') playMode.value = savedState.playMode
       if (typeof savedState.showVipSongs === 'boolean') showVipSongs.value = savedState.showVipSongs
       if (typeof savedState.autoFollowLyrics === 'boolean') autoFollowLyrics.value = savedState.autoFollowLyrics
@@ -632,7 +639,7 @@ export default {
 
       await playSong(restoredSong, {
         autoplay: false,
-        seekTime: typeof savedState.currentTime === 'number' ? savedState.currentTime : 0
+        seekTime: Number.isFinite(savedState.currentTime) ? savedState.currentTime : 0
       })
 
       if (savedState.isFullscreenPlayerOpen) {
@@ -680,6 +687,8 @@ export default {
       } catch (error) {
         if (myReq !== selectReqId) return false
         console.error('❌ 加载歌曲失败:', error)
+        // 复位选中态：否则再次点击同一歌单会被“已选中”提前返回，永远无法重试
+        selectedPlaylist.value = null
         songs.value = []
         return false
       } finally {

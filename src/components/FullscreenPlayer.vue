@@ -173,9 +173,7 @@ export default {
     return {
       progressPercentage,
       formatTime,
-      onSeekClick,
-      lyricMode: computed(() => props.lyricMode),
-      interactionMode: computed(() => props.interactionMode)
+      onSeekClick
     }
   }
 }
@@ -262,12 +260,6 @@ export default {
 
 .fullscreen-player__controls {
   width: min(100%, 520px);
-}
-
-.fullscreen-player__mode-switch {
-  display: inline-flex;
-  gap: 8px;
-  margin-bottom: 16px;
 }
 
 .fullscreen-player__progress {
@@ -399,13 +391,6 @@ export default {
 .fullscreen-player__control-button--primary {
   background: rgba(196, 102, 145, 0.4);
   color: white;
-}
-
-.fullscreen-player__cover-card {
-  flex-shrink: 0;
-  padding: 14px;
-  background: rgba(255, 242, 246, 0.7);
-  backdrop-filter: blur(12px);
 }
 
 .fullscreen-player__cover {

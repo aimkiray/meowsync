@@ -131,7 +131,7 @@
     <button
       @click="toggleHidden"
       class="jirai-button p-1 text-xs w-6 h-6 flex items-center justify-center backdrop-blur-md"
-      :style="hideButtonStyle"
+      :style="toggleButtonStyle"
       title="隐藏播放器"
     >
       ▼
@@ -146,7 +146,7 @@
     <button
       @click="toggleHidden"
       class="jirai-button-primary p-2 text-sm w-10 h-10 flex items-center justify-center backdrop-blur-md"
-      :style="showButtonStyle"
+      :style="toggleButtonStyle"
       title="显示播放器"
     >
       ♪
@@ -199,37 +199,22 @@ export default {
       set: (v) => emit('update:player-hidden', v)
     })
     const { currentTheme } = useTheme()
-    
+
     // 动态样式（--jirai-pink 从未定义，原写法会让 border 失效 → 按钮无边框；
-    // 用各主题卡片同款粉边框色替代）
-    const hideButtonStyle = computed(() => {
+    // 用各主题卡片同款粉边框色替代）。隐藏/显示两个按钮共用同一样式
+    const toggleButtonStyle = computed(() => {
       if (currentTheme.value === 'pixel-retro') {
         return {
           background: 'rgba(240, 179, 192, 0.8)',
           border: '2px solid rgb(210, 100, 130)'
         }
-      } else {
-        return {
-          background: 'rgba(255, 192, 203, 0.8)',
-          border: '2px solid rgb(244, 114, 182)'
-        }
+      }
+      return {
+        background: 'rgba(255, 192, 203, 0.8)',
+        border: '2px solid rgb(244, 114, 182)'
       }
     })
 
-    const showButtonStyle = computed(() => {
-      if (currentTheme.value === 'pixel-retro') {
-        return {
-          background: 'rgba(240, 179, 192, 0.8)',
-          border: '2px solid rgb(210, 100, 130)'
-        }
-      } else {
-        return {
-          background: 'rgba(255, 192, 203, 0.8)',
-          border: '2px solid rgb(244, 114, 182)'
-        }
-      }
-    })
-    
     const toggleHidden = () => {
       isHidden.value = !isHidden.value
     }
@@ -250,8 +235,7 @@ export default {
       isHidden,
       toggleHidden,
       onSeekClick,
-      hideButtonStyle,
-      showButtonStyle
+      toggleButtonStyle
     }
   }
 }

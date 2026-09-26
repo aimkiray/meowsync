@@ -311,6 +311,22 @@
   border-color: rgb(200, 20, 80) !important;
 }
 
+/* 播放中封面动效（BottomPlayer/LyricsPanel/FullscreenPlayer 共用；封面为方形，用脉冲而非旋转） */
+@keyframes playingPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+
+.playing-animation {
+  animation: playingPulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playing-animation {
+    animation: none;
+  }
+}
+
 /* 歌曲列表：分页按钮 */
 :root[data-theme="pixel-retro"] .card-songlist .bg-purple-600 { background-color: rgb(200, 100, 140) !important; box-shadow: none !important; }
 :root[data-theme="pixel-retro"] .card-songlist .hover\:bg-purple-500:hover { background-color: rgb(180, 80, 120) !important; box-shadow: none !important; }

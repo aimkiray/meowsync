@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
@@ -9,7 +10,11 @@ const controllers = new Set();
 
 function send(ws, msg) {
   if (ws.readyState === ws.OPEN) {
-    ws.send(JSON.stringify(msg));
+    // 单个客户端 send 抛错（如 socket 正处于 CLOSING）不应中断广播循环、
+    // 更不应冒泡成 uncaughtException 打挂进程
+    try {
+      ws.send(JSON.stringify(msg));
+    } catch { /* 该客户端的失败由 close/error 事件接管清理 */ }
   }
 }
 
@@ -23,6 +28,23 @@ function notifyControllerCount() {
   if (hostSocket && hostSocket.readyState === hostSocket.OPEN) {
     send(hostSocket, { type: 'info', payload: { controllers: controllers.size } });
   }
+}
+
+/**
+ * 解析客户端消息：仅接受 JSON 对象。
+ * 关键：JSON.parse('null') 得到 null，直接读 msg.type 会抛 TypeError——
+ * ws 不捕获监听器异常，会冒泡成 uncaughtException 终止进程，
+ * 所以必须先做对象形态校验
+ */
+function parseMessage(data) {
+  let msg;
+  try {
+    msg = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return null;
+  return msg;
 }
 
 /**
@@ -41,6 +63,17 @@ function rejectUpgrade(socket, code, message) {
       '\r\n' +
       body
   );
+}
+
+/**
+ * token 比较：先 sha256 再 timingSafeEqual——摘要等长，既消除逐字节
+ * 时序差也避免长度差提前返回。握手拒绝路径本身对时序不敏感，
+ * 但该写法成本极低，顺带防御局域网内的时序侧信道探测
+ */
+function tokenMatches(provided, expected) {
+  const a = crypto.createHash('sha256').update(provided ?? '').digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 /**
@@ -92,19 +125,27 @@ function attachRemoteControl(server, options = {}) {
     }
 
     // Origin 校验：浏览器发起 WS 必带 Origin 头，可拦跨站劫持；
-    // 非浏览器客户端无 Origin 头则放行
+    // 非浏览器客户端无 Origin 头则放行。
+    // Host 头浏览器不可伪造（即实际拨号目标）；但 TRUST_PROXY 场景下反代
+    // 可能把 Host 重写为内部地址，此时同源比较应基于 X-Forwarded-Host
+    // （浏览器无法设置该头，仅代理想写入，采信是安全的）
     const origin = req.headers.origin;
+    const trustProxy = ['1', 'true'].includes((process.env.TRUST_PROXY || '').toLowerCase());
+    const fwdHost = trustProxy
+      ? (req.headers['x-forwarded-host'] || '').split(',')[0].trim()
+      : '';
+    const hostHeader = fwdHost || req.headers.host;
     if (
       origin &&
       allowedOrigins.length > 0 &&
-      !isOriginAllowed(origin, req.headers.host, allowedOrigins)
+      !isOriginAllowed(origin, hostHeader, allowedOrigins)
     ) {
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }
 
     // 可选 token 鉴权（REMOTE_TOKEN 未设置时保持开放，兼容局域网自用）
-    if (token && url.searchParams.get('token') !== token) {
+    if (token && !tokenMatches(url.searchParams.get('token'), token)) {
       rejectUpgrade(socket, 401, 'Unauthorized');
       return;
     }
@@ -114,6 +155,10 @@ function attachRemoteControl(server, options = {}) {
     });
   };
   server.on('upgrade', onUpgrade);
+
+  // noServer 模式下 wss 自身极少触发 error，但无监听器时一旦触发会
+  // 冒泡成 uncaughtException，挂个日志兜底
+  wss.on('error', (err) => console.error('[remote] WebSocketServer error:', err));
 
   // 心跳：每 30s ping 一次，清理半开连接（手机休眠/断网导致的僵尸 socket）
   const heartbeat = setInterval(() => {
@@ -158,13 +203,11 @@ function attachRemoteControl(server, options = {}) {
       send(ws, { type: 'info', payload: { controllers: controllers.size } });
 
       ws.on('message', (data) => {
-        let msg;
-        try {
-          msg = JSON.parse(data);
-        } catch { return; }
+        const msg = parseMessage(data);
         // host sends state_update → forward to all controllers
-        if (msg.type === 'state_update') {
-          broadcastToControllers(msg);
+        // 只转发白名单字段，防止 host 塞入多余键污染下游
+        if (msg && msg.type === 'state_update') {
+          broadcastToControllers({ type: 'state_update', payload: msg.payload });
         }
       });
 
@@ -189,13 +232,10 @@ function attachRemoteControl(server, options = {}) {
       }
 
       ws.on('message', (data) => {
-        let msg;
-        try {
-          msg = JSON.parse(data);
-        } catch { return; }
-        // Forward control commands to host
-        if (CONTROL_TYPES.has(msg.type) && hostSocket && hostSocket.readyState === hostSocket.OPEN) {
-          send(hostSocket, msg);
+        const msg = parseMessage(data);
+        // Forward control commands to host（只转发 {type, payload} 白名单形状）
+        if (msg && CONTROL_TYPES.has(msg.type) && hostSocket && hostSocket.readyState === hostSocket.OPEN) {
+          send(hostSocket, { type: msg.type, payload: msg.payload });
         }
       });
 

@@ -105,8 +105,8 @@ export const musicApi = {
           throw new Error('无法获取完整版播放链接，可能是版权限制')
         }
       } catch (error) {
-        if (isAbortError(error) || error.message.includes('版权限制')) throw error
-        console.warn(`音质 ${br} 获取失败:`, error.message)
+        if (isAbortError(error) || String(error?.message ?? '').includes('版权限制')) throw error
+        console.warn(`音质 ${br} 获取失败:`, error?.message)
       }
     }
     throw new Error('无法获取歌曲播放链接，可能是版权限制')

@@ -91,6 +91,28 @@ attachRemoteControl(server, {
   token: process.env.REMOTE_TOKEN || ''
 });
 
+// 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
+// 在途请求与 WS 连接给 3s 排空窗口后强推（server 'close' 触发 remote.js 的
+// 心跳清理），最迟 10s 强退兜底
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[api] 收到 ${signal}，正在优雅关闭...`);
+
+  const forceExit = setTimeout(() => {
+    console.error('[api] 优雅关闭超时，强制退出');
+    process.exit(1);
+  }, 10000);
+  forceExit.unref();
+
+  server.close(() => process.exit(0));
+  server.closeIdleConnections?.();
+  setTimeout(() => server.closeAllConnections?.(), 3000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 // 错误处理：uncaughtException 说明进程状态已不可信，记录后退出交由进程管理器重启
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);

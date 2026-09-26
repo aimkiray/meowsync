@@ -1,3 +1,4 @@
+const dns = require('dns').promises;
 const { Hono } = require('hono');
 
 const app = new Hono();
@@ -5,6 +6,11 @@ const app = new Hono();
 const ALLOWED_HOST = 'googlevideo.com';
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
+// DNS 检查缓存 TTL：googlevideo 子域有限，但播放会发大量 Range 请求，
+// 短缓存避免每条请求都多走一次 getaddrinfo 线程池
+const DNS_CACHE_TTL_OK_MS = 60000;
+const DNS_CACHE_TTL_ERR_MS = 5000;
+const DNS_CACHE_MAX = 256;
 
 // 只允许 googlevideo.com 及其子域（endsWith 前缀点避免误伤 xgooglevideo.com 这类域名）
 // 安全性依赖 URL parser 的规范化：hostname 已小写化、IPv4 数字形式（0x7f000001/2130706433）
@@ -12,6 +18,73 @@ const UPSTREAM_TIMEOUT_MS = 15000;
 // 必然是以 googlevideo.com 结尾的真实域名，其 DNS 由 Google 控制，攻击者无法借此打内网
 function isAllowedHost(hostname) {
   return hostname === ALLOWED_HOST || hostname.endsWith('.' + ALLOWED_HOST);
+}
+
+// 私有/保留/非路由地址段：合法 *.googlevideo.com 只应解析到 Google 公网地址。
+// 命中这些段说明 DNS 被劫持/投毒或 hosts 被篡改，拒绝代理
+function isPrivateIPv4(ip) {
+  const o = ip.split('.').map(Number);
+  const [a, b] = o;
+  return (
+    a === 0 || a === 10 || a === 127 || // 0/8 本机、10/8 RFC1918、127/8 loopback
+    (a === 100 && b >= 64 && b <= 127) || // 100.64/10 CGNAT
+    (a === 169 && b === 254) || // link-local
+    (a === 172 && b >= 16 && b <= 31) || // 172.16/12 RFC1918
+    (a === 192 && b === 0) || // 192.0/24（含 192.0.0/24 与 192.0.2/24 文档段）
+    (a === 192 && b === 168) || // RFC1918
+    (a === 198 && (b === 18 || b === 19)) || // 198.18/15 基准测试段
+    (a === 198 && b === 51 && o[2] === 100) || // 198.51.100/24 文档段
+    (a === 203 && b === 0 && o[2] === 113) || // 203.0.113/24 文档段
+    a >= 224 // 224/4 multicast、240/4 reserved（含 255 广播）
+  );
+}
+
+function isPrivateIPv6(ip) {
+  const s = ip.toLowerCase();
+  if (s === '::' || s === '::1') return true; // unspecified / loopback
+  const mapped = s.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) return isPrivateIPv4(mapped[1]); // IPv4-mapped 按内嵌 v4 判定
+  if (s.startsWith('::')) return true; // 其它 ::/96 兼容/映射形式一律拒绝（公网 v6 不以 :: 开头）
+  const first = parseInt(s.split(':')[0] || '0', 16);
+  return (
+    (first & 0xfe00) === 0xfc00 || // fc00::/7 unique-local
+    (first & 0xffc0) === 0xfe80 || // fe80::/10 link-local（覆盖 fe80–febf）
+    (first & 0xff00) === 0xff00 // ff00::/8 multicast
+  );
+}
+
+function isPrivateIp(address, family) {
+  return family === 6 ? isPrivateIPv6(address) : isPrivateIPv4(address);
+}
+
+// hostname → { ok, expires }；有界 Map 防长期运行内存膨胀
+const dnsCache = new Map();
+
+/**
+ * DNS 解析兜底校验：hostname 白名单已限定 *.googlevideo.com（Google 控制的 zone，
+ * 攻击者无法自创其子域），本检查防御的是 DNS rebinding/本地 hosts 篡改把
+ * 合法域名指到内网地址的场景——纵深防御。
+ * 注意 TOCTOU：fetch 会自行再解析一次，两次解析可能不同，本检查是缓解而非硬保证。
+ * fail closed：解析失败时 fetch 同样会失败，直接拒绝不改变可用性。
+ */
+async function resolvesToPublicIp(hostname) {
+  const cached = dnsCache.get(hostname);
+  if (cached && cached.expires > Date.now()) return cached.ok;
+
+  let ok = false;
+  try {
+    const addrs = await dns.lookup(hostname, { all: true });
+    ok = addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address, a.family));
+  } catch {
+    ok = false;
+  }
+
+  if (dnsCache.size >= DNS_CACHE_MAX) dnsCache.clear();
+  dnsCache.set(hostname, {
+    ok,
+    expires: Date.now() + (ok ? DNS_CACHE_TTL_OK_MS : DNS_CACHE_TTL_ERR_MS),
+  });
+  return ok;
 }
 
 // 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
@@ -38,6 +111,10 @@ app.get('/audio-proxy', async (c) => {
     // 拦截防止代理被用来探测 Google 主机上的任意端口
     if (parsed.port !== '') {
       return c.json({ error: 'forbidden port' }, 403);
+    }
+    // 域名解析出的地址必须是公网 IP（SSRF/DNS-rebinding 兜底，见 resolvesToPublicIp 注释）
+    if (!(await resolvesToPublicIp(parsed.hostname))) {
+      return c.json({ error: 'forbidden address' }, 403);
     }
     // 剥离 credentials：合法 host 内嵌 userinfo 会使 undici fetch 抛 TypeError，
     // 且相对重定向会从 base URL 继承 username/password，统一清除后再作为请求/解析基准
