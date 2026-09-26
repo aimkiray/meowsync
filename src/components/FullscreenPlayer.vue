@@ -81,6 +81,10 @@
           class="fullscreen-player__cover"
           :class="{ 'playing-animation': isPlaying }"
         />
+        <div
+          v-else
+          class="fullscreen-player__cover flex items-center justify-center text-4xl text-pink-300 border-2 border-pink-400"
+        >♪</div>
       </div>
 
       <div

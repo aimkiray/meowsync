@@ -12,6 +12,7 @@ const {
 } = require('../repositories/playlistTracks');
 const { httpError } = require('../lib/http-error');
 const { deletingPlaylists } = require('../lib/deletion-locks');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 
 // callNeteaseApi 对上游非 200 是 reject(answer{status,body,cookie})——不是 Error、
 // 不带 exposed 标记。冒泡到路由层会被一律压成 500"服务器错误"，丢失"上游拒绝/
@@ -24,8 +25,7 @@ async function callUpstream(apiName, params, options = {}) {
     // 字符串消息可能带服务器绝对路径（fs ENOENT 等）——剥掉再透出
     let upstreamMsg = error?.body?.msg || error?.body?.message || error?.message;
     if (upstreamMsg && typeof upstreamMsg === 'object') upstreamMsg = upstreamMsg.message;
-    upstreamMsg = String(upstreamMsg || '')
-      .replace(/(?:[A-Za-z]:[\\/]|\/)[\w.@%~+-]*(?:[\\/][\w.@%~+-]+)+/g, '<path>');
+    upstreamMsg = stripAbsolutePaths(upstreamMsg);
     const detail = upstreamMsg && upstreamMsg.length < 120 ? `：${upstreamMsg}` : '';
     throw httpError(502, `网易云接口请求失败${detail}`);
   }

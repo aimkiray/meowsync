@@ -2,6 +2,7 @@ const { Hono } = require('hono');
 const { apiModules, callNeteaseApi, resolveSongUrls } = require('../services/netease-api');
 // 流式限长读取：Content-Length 只是声明值，chunked 请求必须读流按字节截断
 const { readParamsBody } = require('../lib/http-body');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 
 const app = new Hono();
 
@@ -33,9 +34,6 @@ const MAX_BODY_BYTES = 1024 * 1024;
 // proxy 可把上游请求走私到攻击者代理，real_ip/realIP 可伪造客户端IP；
 // crypto='api' 会让上游走明文无签名通道、ua 允许篡改发往网易的 User-Agent、
 // e_r 改变上游响应形态——三者都是 createOption() 的 option 通道参数，前端从不下发，统一封禁
-// 错误消息里的绝对路径（POSIX /a/b/c 与 Windows C:\a\b）——透给客户端前剥掉
-const ABSOLUTE_PATH_RE = /(?:[A-Za-z]:[\\/]|\/)[\w.@%~+-]*(?:[\\/][\w.@%~+-]+)+/g;
-
 const BLOCKED_PARAMS = new Set([
   'proxy', 'real_ip', 'realip', 'crypto', 'ua', 'e_r',
   // request.js: options.ip 同样会写进 X-Real-IP/X-Forwarded-For（IP 伪造）
@@ -80,17 +78,25 @@ function sendUpstreamResult(c, answer) {
   // body 本身若非 plain object（Error/AxiosError/数组/字符串错误页）：
   // AxiosError 的 toJSON 会把 stack 和 config.headers.Cookie（含转发的
   // MUSIC_U 登录态）序列化透出；字符串 body 可能是上游 HTML 错误页。
-  // 一律收敛为 {code,message} 信封
+  // 一律收敛为 {code,message} 信封（code 不能是 200——前端会当正常数据渲染）。
+  // 用 getPrototypeOf 而非 constructor——上游 body 可能自带 constructor 键遮蔽
+  // 非 object（含 null/字符串）直接判非 plain；object 再比原型
   const isPlainObject = body !== null && typeof body === 'object'
-    && (body.constructor === Object || body.constructor === undefined);
+    && [Object.prototype, null].includes(Object.getPrototypeOf(body));
   if (!isPlainObject) {
-    body = { code: upstreamStatus, message: '上游请求失败' };
-  } else if (body.msg && typeof body.msg === 'object') {
-    // body.msg 是活的 AxiosError：同上收敛为 message 字符串
-    body = { ...body, msg: String(body.msg.message || '上游请求失败') };
-  } else if (typeof body.msg === 'string' && ABSOLUTE_PATH_RE.test(body.msg)) {
-    // 字符串 msg 也可能带服务器文件系统路径（fs ENOENT、tmpdir 读失败）——剥掉
-    body = { ...body, msg: body.msg.replace(ABSOLUTE_PATH_RE, '<path>') };
+    body = { code: upstreamStatus >= 400 ? upstreamStatus : 500, message: '上游请求失败' };
+  } else {
+    // msg 是活的 AxiosError 时取其 message；msg/message 字符串都可能带
+    // 服务器绝对路径（fs ENOENT、tmpdir 读失败）——统一剥离
+    const cleaned = {};
+    for (const key of ['msg', 'message']) {
+      if (body[key] && typeof body[key] === 'object') {
+        cleaned[key] = stripAbsolutePaths(String(body[key].message || '上游请求失败'));
+      } else if (typeof body[key] === 'string') {
+        cleaned[key] = stripAbsolutePaths(body[key]);
+      }
+    }
+    body = { ...body, ...cleaned };
   }
   return c.json(body);
 }
