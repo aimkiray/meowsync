@@ -2,11 +2,10 @@ const { Hono } = require('hono');
 const downloadManager = require('../services/download-manager');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
 const downloadTasksRepo = require('../repositories/downloadTasks');
+// 读流按字节硬截断：chunked/无 Content-Length 请求不会被声明值检查拦住
+const { readJsonBody } = require('../lib/http-body');
 
 const app = new Hono();
-
-// 请求体上限：下载接口只需小 JSON 配置，大包只会消耗内存（与 music.js 同策略）
-const MAX_BODY_BYTES = 1024 * 1024;
 
 function fail(c, status, message) {
   return c.json({ code: status, message }, status);
@@ -32,21 +31,7 @@ function parseIdParam(c, name = 'id') {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-// JSON body 容错解析 + 长度上限：声明超限直接 413；畸形 JSON 按空对象处理
-async function readJsonBody(c) {
-  const declaredLength = Number(c.req.header('content-length') || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-    const err = new Error('Payload Too Large');
-    err.status = 413;
-    throw err;
-  }
-  try {
-    const parsed = await c.req.json();
-    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+
 
 // 队列/单曲下载的可选参数规范化：脏值回落默认，concurrentLimit 限定 1-10
 function normalizeDownloadOptions(body) {
@@ -93,7 +78,11 @@ app.get('/downloads/queues/:id', async (c) => {
       return fail(c, 400, '无效的队列 ID');
     }
     const progress = downloadManager.getQueueProgress(queueId);
-    return c.json({ code: 200, data: progress });
+    // 任务对象的路径字段透出前相对化——见 download-manager.toPublicTask
+    return c.json({ code: 200, data: {
+      ...progress,
+      tasks: progress.tasks.map(downloadManager.toPublicTask)
+    } });
   } catch (error) {
     return handleError(c, error, '获取队列详情失败');
   }
@@ -170,7 +159,7 @@ app.delete('/downloads/queues/:id', async (c) => {
     if (queueId === null) {
       return fail(c, 400, '无效的队列 ID');
     }
-    downloadManager.deleteQueue(queueId);
+    await downloadManager.deleteQueue(queueId);
     return c.json({ code: 200, message: '队列已删除' });
   } catch (error) {
     return handleError(c, error, '删除队列失败');
@@ -182,7 +171,7 @@ app.get('/downloads/tasks', async (c) => {
     const { playlistId, queueId, status } = c.req.query();
     // playlistId 原样透传：download-manager 同时接受本地 id 与网易云 id
     const tasks = downloadManager.listTasks({ playlistId, queueId, status });
-    return c.json({ code: 200, data: tasks });
+    return c.json({ code: 200, data: tasks.map(downloadManager.toPublicTask) });
   } catch (error) {
     return handleError(c, error, '获取任务列表失败');
   }
@@ -200,7 +189,7 @@ app.get('/downloads/tasks/:id', async (c) => {
       return fail(c, 404, '任务不存在');
     }
 
-    return c.json({ code: 200, data: task });
+    return c.json({ code: 200, data: downloadManager.toPublicTask(task) });
   } catch (error) {
     return handleError(c, error, '获取任务详情失败');
   }
@@ -213,7 +202,7 @@ app.post('/downloads/tasks/:id/retry', async (c) => {
       return fail(c, 400, '无效的任务 ID');
     }
     const task = await downloadManager.retryTask(taskId);
-    return c.json({ code: 200, data: task });
+    return c.json({ code: 200, data: downloadManager.toPublicTask(task) });
   } catch (error) {
     return handleError(c, error, '重试任务失败');
   }
@@ -243,7 +232,7 @@ app.post('/downloads/songs/:songId', async (c) => {
     }
 
     const task = await downloadManager.downloadSingleSong(body.playlistId, songId, normalizeDownloadOptions(body));
-    return c.json({ code: 200, data: task });
+    return c.json({ code: 200, data: downloadManager.toPublicTask(task) });
   } catch (error) {
     return handleError(c, error, '下载歌曲失败');
   }

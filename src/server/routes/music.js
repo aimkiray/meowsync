@@ -1,5 +1,7 @@
 const { Hono } = require('hono');
 const { apiModules, callNeteaseApi, resolveSongUrls } = require('../services/netease-api');
+// 流式限长读取：Content-Length 只是声明值，chunked 请求必须读流按字节截断
+const { readParamsBody } = require('../lib/http-body');
 
 const app = new Hono();
 
@@ -95,20 +97,12 @@ app.all('/:apiName', async (c) => {
   // 合并 query 与 body 参数
   let body = {};
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
-    // 声明长度超限直接拒绝，避免 parseBody/json 把整个大包读进内存
-    // （无 Content-Length 的 chunked 请求仍会被解析，但不受此限——Node/代理层自行兜底）
-    const declaredLength = Number(c.req.header('content-length') || 0);
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-      return c.json({ code: 413, message: 'Payload Too Large' }, 413);
-    }
-    const contentType = c.req.header('content-type') || '';
     try {
-      const parsed = contentType.includes('json') ? await c.req.json() : await c.req.parseBody();
-      // 仅对象形态 body 可展开为参数；数组/原始值 JSON（如 "foo"、[1,2]）展开只会产生数字键垃圾参数
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        body = parsed;
+      body = await readParamsBody(c, MAX_BODY_BYTES);
+    } catch (error) {
+      if (error.status === 413) {
+        return c.json({ code: 413, message: 'Payload Too Large' }, 413);
       }
-    } catch {
       body = {};
     }
   }
@@ -149,3 +143,5 @@ app.all('/:apiName', async (c) => {
 });
 
 module.exports = app;
+// SPA 兜底需要知道哪些首段是 API 名（多段路径 /song_url/x 也要返回 JSON 404）
+module.exports.ALLOWED_APIS = ALLOWED_APIS;

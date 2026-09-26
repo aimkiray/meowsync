@@ -51,13 +51,21 @@ function isPrivateIp(address, family) {
   return family === 6 ? isPrivateIPv6(address) : isPrivateIPv4(address);
 }
 
-// net.isIp：URL hostname 已是 IP 字面量时无需 DNS（含 IPv6 括号已由 URL parser 去掉）
+// WHATWG URL parser 保留 IPv6 字面量的方括号（hostname === '[::1]'），
+// net.isIP 不认带括号形式——判段前先剥掉，否则 IPv6 字面量全走 DNS 必然 ENOTFOUND
+function stripIpv6Brackets(hostname) {
+  return hostname.replace(/^\[|\]$/g, '');
+}
+
+// net.isIp：URL hostname 已是 IP 字面量时无需 DNS
 function isIpLiteral(hostname) {
-  return net.isIP(hostname) !== 0;
+  return net.isIP(stripIpv6Brackets(hostname)) !== 0;
 }
 
 // hostname → { ok, expires }；有界 Map 防长期运行内存膨胀
-const DNS_CACHE_TTL_OK_MS = 60000;
+// ok 缓存只留 10s：校验与最终连接是两次独立解析（TOCTOU），缓存窗口越长
+// DNS rebinding 的缓解就越弱；短 TTL 只为削掉并发瞬时重复解析
+const DNS_CACHE_TTL_OK_MS = 10000;
 const DNS_CACHE_TTL_ERR_MS = 5000;
 const DNS_CACHE_MAX = 256;
 const dnsCache = new Map();
@@ -70,10 +78,11 @@ const dnsCache = new Map();
  * fail closed：解析失败时下游请求同样会失败，直接拒绝不改变可用性。
  */
 async function resolvesToPublicIp(hostname) {
-  // IP 字面量直接判段，不走 DNS
-  const literalFamily = net.isIP(hostname);
+  // IP 字面量直接判段，不走 DNS；先剥 WHATWG parser 保留的 IPv6 方括号
+  const bare = stripIpv6Brackets(hostname);
+  const literalFamily = net.isIP(bare);
   if (literalFamily !== 0) {
-    return !isPrivateIp(hostname, literalFamily);
+    return !isPrivateIp(bare, literalFamily);
   }
 
   const cached = dnsCache.get(hostname);
@@ -100,5 +109,6 @@ module.exports = {
   isPrivateIPv6,
   isPrivateIp,
   isIpLiteral,
+  stripIpv6Brackets,
   resolvesToPublicIp
 };

@@ -20,31 +20,31 @@ function isAllowedHost(hostname) {
 // 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
 app.get('/audio-proxy', async (c) => {
   let targetUrl = c.req.query('url');
-  if (!targetUrl) return c.json({ error: 'missing url' }, 400);
+  if (!targetUrl) return c.json({ code: 400, message: 'missing url' }, 400);
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
     let parsed;
     try {
       parsed = new URL(targetUrl);
     } catch {
-      return c.json({ error: 'invalid url' }, 400);
+      return c.json({ code: 400, message: 'invalid url' }, 400);
     }
 
     // googlevideo 正式 URL 本就是 https；禁掉 http 消除明文回源被链路篡改的残余面
     if (parsed.protocol !== 'https:') {
-      return c.json({ error: 'forbidden protocol' }, 403);
+      return c.json({ code: 403, message: 'forbidden protocol' }, 403);
     }
     if (!isAllowedHost(parsed.hostname)) {
-      return c.json({ error: 'forbidden host' }, 403);
+      return c.json({ code: 403, message: 'forbidden host' }, 403);
     }
     // 非默认端口（URL parser 会把 :443/:80 归一化为空）对 googlevideo 没有实际用途，
     // 拦截防止代理被用来探测 Google 主机上的任意端口
     if (parsed.port !== '') {
-      return c.json({ error: 'forbidden port' }, 403);
+      return c.json({ code: 403, message: 'forbidden port' }, 403);
     }
     // 域名解析出的地址必须是公网 IP（SSRF/DNS-rebinding 兜底，见 resolvesToPublicIp 注释）
     if (!(await resolvesToPublicIp(parsed.hostname))) {
-      return c.json({ error: 'forbidden address' }, 403);
+      return c.json({ code: 403, message: 'forbidden address' }, 403);
     }
     // 剥离 credentials：合法 host 内嵌 userinfo 会使 undici fetch 抛 TypeError，
     // 且相对重定向会从 base URL 继承 username/password，统一清除后再作为请求/解析基准
@@ -85,7 +85,7 @@ app.get('/audio-proxy', async (c) => {
     } catch {
       clearTimeout(timeout);
       const status = timeoutController.signal.aborted ? 504 : 502;
-      return c.json({ error: status === 504 ? 'upstream timeout' : 'upstream request failed' }, status);
+      return c.json({ code: status, message: status === 504 ? 'upstream timeout' : 'upstream request failed' }, status);
     }
     clearTimeout(timeout);
 
@@ -97,7 +97,7 @@ app.get('/audio-proxy', async (c) => {
       try {
         targetUrl = new URL(location, targetUrl).toString();
       } catch {
-        return c.json({ error: 'invalid redirect location' }, 502);
+        return c.json({ code: 502, message: 'invalid redirect location' }, 502);
       }
       continue;
     }
@@ -119,7 +119,7 @@ app.get('/audio-proxy', async (c) => {
     return c.body(upstream.body, upstream.status, resHeaders);
   }
 
-  return c.json({ error: 'too many redirects' }, 502);
+  return c.json({ code: 502, message: 'too many redirects' }, 502);
 });
 
 module.exports = app;

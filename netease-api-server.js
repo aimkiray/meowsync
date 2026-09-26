@@ -36,12 +36,22 @@ app.use('*', cors({
   credentials: true,
 }));
 
-// 健康检查：/ping 只探活（Docker HEALTHCHECK 用它）；/healthz 额外探 DB，
-// 磁盘满/DB 损坏时能暴露为 503 而不是"进程活着但功能全挂"
+// 健康检查：/ping 只探活（Docker HEALTHCHECK 用它）；/healthz 探 DB 写路径——
+// SELECT 1 是纯内存查询，磁盘满时照样通过；必须在事务里产生真实 WAL 写入，
+// 磁盘满/DB 损坏才暴露为 503 而不是"进程活着但功能全挂"
 app.get('/ping', (c) => c.json({ ok: true }));
 app.get('/healthz', (c) => {
   try {
-    getDb().prepare('SELECT 1').get();
+    const db = getDb();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('INSERT INTO _healthz (ts) VALUES (?)').run(Date.now());
+      db.exec('DELETE FROM _healthz');
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* 连接已坏 */ }
+      throw error;
+    }
     return c.json({ ok: true });
   } catch {
     return c.json({ ok: false, message: 'database unavailable' }, 503);
@@ -63,21 +73,46 @@ if (hasDist) {
   });
 }
 
+// 可选写操作鉴权：DOWNLOAD_TOKEN 设置后，/downloads 与 /playlists 的非 GET 请求
+// 必须携带匹配的 x-download-token 头——局域网部署时防止任意主机触发下载把磁盘写满
+const downloadToken = process.env.DOWNLOAD_TOKEN || '';
+if (downloadToken) {
+  const crypto = require('crypto');
+  const expected = Buffer.from(downloadToken);
+  app.use('*', async (c, next) => {
+    const p = c.req.path;
+    const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
+      || p === '/playlists' || p.startsWith('/playlists/'))
+      && c.req.method !== 'GET' && c.req.method !== 'HEAD';
+    if (!protectedWrite) return next();
+    const provided = Buffer.from(c.req.header('x-download-token') || '');
+    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+      return c.json({ code: 401, message: '未授权：缺少或错误的下载令牌' }, 401);
+    }
+    return next();
+  });
+}
+
 // 路由：音频代理 → 歌单/下载管理 → 受限的网易云API
 // Hono 路由中静态路径（/audio-proxy、/healthz、/playlists、/downloads/*）优先级高于参数路由（/:apiName）
 app.route('/', require('./src/server/routes/proxy'));
 app.route('/', require('./src/server/routes/playlists'));
 app.route('/', require('./src/server/routes/downloads'));
-app.route('/', require('./src/server/routes/music'));
+const musicRoutes = require('./src/server/routes/music');
+app.route('/', musicRoutes);
 
 // SPA 兜底：未被任何路由处理的 GET 返回 index.html；
 // API 前缀（downloads/playlists/audio-proxy/remote）不进兜底——
-// 未匹配的 API GET 必须返回 JSON 404，否则 axios 拿到 HTML 解析失败而非业务 404
+// 未匹配的 API GET 必须返回 JSON 404，否则 axios 拿到 HTML 解析失败而非业务 404。
+// 多段路径（/song_url/123）也要兜：首段命中白名单 API 名同样是 API 请求
 if (hasDist) {
   const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
   const API_PREFIXES = ['/downloads', '/playlists', '/audio-proxy', '/remote', '/ping', '/healthz'];
+  const apiNames = musicRoutes.ALLOWED_APIS || new Set();
   app.get('*', (c) => {
-    if (API_PREFIXES.some(p => c.req.path === p || c.req.path.startsWith(p + '/'))) {
+    const p = c.req.path;
+    const firstSegment = p.split('/')[1] || '';
+    if (API_PREFIXES.some(px => p === px || p.startsWith(px + '/')) || apiNames.has(firstSegment)) {
       return c.json({ code: 404, message: 'Not Found' }, 404);
     }
     return c.html(indexHtml);
@@ -92,6 +127,19 @@ app.onError((err, c) => {
   console.error(`[api] ${c.req.method} ${c.req.path} 处理失败:`, err);
   return c.json({ code: 500, message: 'Internal Server Error' }, 500);
 });
+
+const downloadManager = require('./src/server/services/download-manager');
+const { getDb } = require('./src/server/db/client');
+
+// 先初始化 DB（迁移 + 崩溃残留状态复位）再开监听——serve() 之后恢复会有一段
+// 窗口期：期间 startQueue 写入的 running 会被 recover 改回 pending，造成状态漂移
+try {
+  getDb();
+  downloadManager.recoverStaleStates();
+} catch (error) {
+  console.error('[db] 初始化/状态恢复失败:', error);
+  process.exit(1);
+}
 
 // 启动服务器（serve() 返回原生 http.Server，可挂 WebSocket upgrade）
 const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {
@@ -113,18 +161,6 @@ const remote = attachRemoteControl(server, {
   token: process.env.REMOTE_TOKEN || ''
 });
 
-const downloadManager = require('./src/server/services/download-manager');
-const { getDb } = require('./src/server/db/client');
-
-// 启动即初始化 DB（运行迁移）并恢复崩溃残留的 running/downloading 假死状态
-try {
-  getDb();
-  downloadManager.recoverStaleStates();
-} catch (error) {
-  console.error('[db] 初始化/状态恢复失败:', error);
-  process.exit(1);
-}
-
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
 // WS 连接由 remote.close() 立即 terminate（升级 socket 不归 close()/
 // closeAllConnections() 管，但计入 server._connections，不销毁则 'close'
@@ -141,15 +177,15 @@ function shutdown(signal) {
   }, 10000);
   forceExit.unref();
 
-  server.close(() => process.exit(0));
+  // abort 在途下载并排空（processTask 收尾/removePartial），否则强退窗口内
+  // 写了一半的文件会成永久孤儿。排空与连接关闭并行，谁慢等谁，10s 强退兜底
+  const downloadsDrained = Promise.resolve()
+    .then(() => downloadManager.shutdownAll())
+    .catch(error => console.error('[api] 停止下载队列失败:', error));
+
+  server.close(() => { downloadsDrained.finally(() => process.exit(0)); });
   server.closeIdleConnections?.();
   remote?.close?.();
-  // 取消运行中的下载队列并把 downloading 任务复位为 pending，避免重启后假状态
-  try {
-    downloadManager.shutdownAll();
-  } catch (error) {
-    console.error('[api] 停止下载队列失败:', error);
-  }
   setTimeout(() => server.closeAllConnections?.(), 3000).unref();
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

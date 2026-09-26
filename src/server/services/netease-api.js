@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const { resolvesToPublicIp } = require('../lib/net-guard');
 
 // NeteaseCloudMusicApi 安装路径经 require.resolve 解析，避免依赖 process.cwd()/__dirname 布局
 function resolvePackageDir(pkg) {
@@ -51,21 +52,36 @@ function estimateDuration(contentLength, br) {
   return Math.round((contentLength * 8) / br * 1000);
 }
 
-// HEAD 请求获取 Content-Length（跟随有限重定向；30x 响应体的 length 不是目标文件大小）
-function getContentLength(url, hops = 0) {
+// HEAD 请求获取 Content-Length（跟随有限重定向；30x 响应体的 length 不是目标文件大小）。
+// 与 fetchStream 同一威胁模型：每跳都过 resolvesToPublicIp——明文源站被 302 到内网/
+// 云元数据即成盲 SSRF（端口/存活探测侧信道）；userinfo 一并剥掉（相对重定向会继承
+// credentials，转发到异构主机即泄露）。探测失败一律降级 null = 跳过时长校验，不阻塞下载
+async function getContentLength(url, hops = 0) {
+  if (hops > 3) return null;
+  let current;
+  try {
+    current = new URL(url);
+  } catch {
+    return null;
+  }
+  if (current.protocol !== 'http:' && current.protocol !== 'https:') {
+    return null;
+  }
+  current.username = '';
+  current.password = '';
+  if (!(await resolvesToPublicIp(current.hostname))) {
+    return null;
+  }
+  const cleanUrl = current.toString();
   return new Promise((resolve) => {
-    if (hops > 3) {
-      resolve(null);
-      return;
-    }
-    const mod = url.startsWith('https') ? https : http;
-    const req = mod.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
+    const mod = cleanUrl.startsWith('https') ? https : http;
+    const req = mod.request(cleanUrl, { method: 'HEAD', timeout: 5000 }, (res) => {
       res.resume(); // 消费响应，及时释放 keep-alive socket
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         // 回调内同步执行——畸形 Location 必须吞掉，否则抛错穿透 emit 成 uncaughtException
         let next;
         try {
-          const u = new URL(res.headers.location, url);
+          const u = new URL(res.headers.location, cleanUrl);
           // 只允许 http/https 跳——file:///javascript: 之类直接放弃
           if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad scheme');
           next = u.toString();
