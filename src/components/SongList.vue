@@ -108,29 +108,6 @@
             </div>
             
             
-            <!-- 下载菜单 - 使用 Teleport 确保显示在外部 -->
-            <Teleport to="body">
-              <div
-                v-if="showDownloadMenu === song.id"
-                class="fixed bg-gray-900 border border-purple-400 shadow-lg z-[9999] w-[140px] max-w-[140px]"
-                style="border-radius: 0;"
-                :style="getMenuPosition(song.id)"
-              >
-                <div class="px-3 py-2 text-xs text-purple-300 border-b border-gray-700">
-                  选择码率
-                </div>
-                <button
-                  v-for="bitrate in bitrateOptions"
-                  :key="bitrate.value"
-                  @click.stop="downloadSong(song, bitrate.value)"
-                  class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate last:border-b-0"
-                  :disabled="downloadingStates[song.id]"
-                  :class="{ 'opacity-50 cursor-not-allowed': downloadingStates[song.id] }"
-                >
-                  {{ downloadingStates[song.id] ? '下载中...' : bitrate.label }}
-                </button>
-              </div>
-            </Teleport>
           </div>
         </div>
         
@@ -142,47 +119,15 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" :style="paginationStyle">
-          <button 
-            @click="$emit('go-to-page', 1)" 
-            :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ⇤
-          </button>
-          
-          <button 
-            @click="$emit('prev-page')" 
-            :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ←
-          </button>
-          
-          <span class="text-pink-300 text-xs px-2 py-1 min-w-[48px] text-center">
-            {{ currentPage }}/{{ totalPages }}
-          </span>
-          
-          <button 
-            @click="$emit('next-page')" 
-            :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            →
-          </button>
-          
-          <button 
-            @click="$emit('go-to-page', totalPages)" 
-            :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ⇥
-          </button>
-        </div>
+        <PaginationControls
+          v-if="totalPages > 1"
+          :current-page="currentPage"
+          :total-pages="totalPages"
+          :bar-style="paginationStyle"
+          @go-to-page="$emit('go-to-page', $event)"
+          @prev-page="$emit('prev-page')"
+          @next-page="$emit('next-page')"
+        />
         
         <!-- 当只有一页时的提示 -->
         <div v-else-if="filteredSongs.length > 0" class="text-center mt-4 mb-2">
@@ -235,13 +180,13 @@
   background: transparent;
 }
 
-/* 下载菜单 */
+/* 下载菜单（原先引用未定义的 --bg-color/--border-color 等变量导致透明背景，直接写死像素风配色） */
 .download-menu {
   position: fixed;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: #1a1a2e;
+  border: 1px solid #c084fc;
+  border-radius: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   z-index: 10000;
   min-width: 140px;
   overflow: hidden;
@@ -252,21 +197,35 @@
   cursor: pointer;
   transition: background-color 0.2s;
   font-size: 14px;
-  color: var(--text-color);
+  color: #d8b4fe;
+  border-bottom: 1px solid #374151;
+}
+
+.download-option:last-child {
+  border-bottom: none;
 }
 
 .download-option:hover {
-  background-color: var(--hover-color);
-  color: #ff69b4;
+  background-color: #6b21a8;
+  color: #fff;
 }
 </style>
 
 <script>
-import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { computed, ref } from 'vue'
 import { musicApi } from '../api/music.js'
+import PaginationControls from './PaginationControls.vue'
+import { useTheme } from '../composables/useTheme'
+import { useCollapseButton } from '../composables/useCollapseButton'
+import { useMediaQuery } from '../composables/useMediaQuery'
+import { formatDuration } from '../lib/format'
+import { shareOrCopy } from '../lib/share'
 
 export default {
   name: 'SongList',
+  components: {
+    PaginationControls
+  },
   props: {
     songs: {
       type: Array,
@@ -307,18 +266,14 @@ export default {
   },
   emits: ['play-song', 'toggle-play-mode', 'toggle-vip-songs', 'go-to-page', 'prev-page', 'next-page', 'toggle-collapse'],
   setup(props, { emit }) {
-    const currentTheme = ref('default')
+    const { currentTheme } = useTheme()
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})
     const menuPositions = ref({})
-    
+
     // 移动端检测
-    const isMobile = ref(false)
-    
-    const checkMobile = () => {
-      isMobile.value = window.innerWidth <= 768
-    }
-    
+    const isMobile = useMediaQuery()
+
     // 折叠功能
     const toggleCollapse = () => {
       emit('toggle-collapse')
@@ -326,34 +281,8 @@ export default {
 
     // 折叠按钮位置：折叠居中，展开保持固定像素
     const panelContainer = ref(null)
-    const collapseButtonRef = ref(null)
-    const fixedButtonTop = ref(null)
+    const { collapseButtonRef, fixedButtonTop } = useCollapseButton(panelContainer, () => props.collapsed)
 
-    const computeCollapsedCenterTop = () => {
-      nextTick(() => {
-        if (!collapseButtonRef.value) return
-        const buttonHeight = collapseButtonRef.value.offsetHeight || 24
-        const clone = document.createElement('div')
-        clone.className = 'jirai-card flex flex-col relative p-4 min-h-[3rem]'
-        clone.style.position = 'absolute'
-        clone.style.visibility = 'hidden'
-        clone.style.left = '-9999px'
-        clone.style.top = '-9999px'
-        if (panelContainer.value) {
-          clone.style.width = panelContainer.value.offsetWidth + 'px'
-        }
-        document.body.appendChild(clone)
-        const collapsedHeight = clone.offsetHeight
-        document.body.removeChild(clone)
-        const topValue = (collapsedHeight / 2) - (buttonHeight / 2)
-        fixedButtonTop.value = Math.round(topValue) + 'px'
-      })
-    }
-
-    const handleResizeForButton = () => {
-      computeCollapsedCenterTop()
-    }
-    
     // 码率选项
     const bitrateOptions = [
       { label: '320kbps (高品质)', value: 320000 },
@@ -361,12 +290,6 @@ export default {
       { label: '128kbps (普通)', value: 128000 },
       { label: '96kbps (节省流量)', value: 96000 }
     ]
-    
-    // 检测当前主题
-    const detectTheme = () => {
-      const root = document.documentElement
-      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
-    }
     
     // 动态样式
     const headerStyle = computed(() => {
@@ -401,41 +324,6 @@ export default {
       }
     })
     
-    // 监听主题变化
-    const observer = new MutationObserver(() => {
-      detectTheme()
-    })
-    
-    onMounted(() => {
-      detectTheme()
-      checkMobile()
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['data-theme']
-      })
-      // 添加点击外部事件监听
-      document.addEventListener('click', handleClickOutside)
-      // 添加窗口大小变化监听
-      window.addEventListener('resize', checkMobile)
-      window.addEventListener('resize', handleResizeForButton)
-
-      // 初始计算折叠居中位置，即使默认展开也避免首跳
-      computeCollapsedCenterTop()
-    })
-    
-    onUnmounted(() => {
-      observer.disconnect()
-      // 移除点击外部事件监听
-      document.removeEventListener('click', handleClickOutside)
-      // 移除窗口大小变化监听
-      window.removeEventListener('resize', checkMobile)
-      window.removeEventListener('resize', handleResizeForButton)
-    })
-
-    watch(() => props.collapsed, () => {
-      computeCollapsedCenterTop()
-    })
-    
     // 过滤后的歌曲列表（根据VIP显示设置）
     const filteredSongs = computed(() => {
       if (props.showVipSongs) {
@@ -456,13 +344,6 @@ export default {
       return filteredSongs.value.slice(start, end)
     })
 
-    const formatDuration = (ms) => {
-      const seconds = Math.floor(ms / 1000)
-      const mins = Math.floor(seconds / 60)
-      const secs = Math.floor(seconds % 60)
-      return `${mins}:${secs.toString().padStart(2, '0')}`
-    }
-    
     // 切换下载菜单显示
     const toggleDownloadMenu = (songId, event) => {
       if (showDownloadMenu.value === songId) {
@@ -493,42 +374,16 @@ export default {
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
       const shareUrl = `${window.location.origin}/?song=${song.id}`
-      const shareText = `🎵 ${song.name} - ${artistNames}`
-      
-      try {
-        // 尝试使用Web Share API（移动端支持更好）
-        if (navigator.share) {
-          await navigator.share({
-            title: shareText,
-            text: `来听听这首歌：${shareText}`,
-            url: shareUrl
-          })
-          console.log('歌曲分享成功')
-        } else {
-          // 降级到复制链接
-          await navigator.clipboard.writeText(shareUrl)
-          console.log('分享链接已复制到剪贴板:', shareUrl)
-          // 这里可以添加一个提示消息
-          alert('分享链接已复制到剪贴板！')
-        }
-      } catch (err) {
-        console.error('分享失败:', err)
-        // 最后的降级方案
-        try {
-          const textArea = document.createElement('textarea')
-          textArea.value = shareUrl
-          document.body.appendChild(textArea)
-          textArea.select()
-          document.execCommand('copy')
-          document.body.removeChild(textArea)
-          alert('分享链接已复制到剪贴板！')
-        } catch (copyErr) {
-          console.error('复制失败:', copyErr)
-          alert('分享失败，请手动复制链接')
-        }
-      }
+
+      const result = await shareOrCopy({
+        title: `🎵 ${song.name} - ${artistNames}`,
+        text: `来听听这首歌：${song.name} - ${artistNames}`,
+        url: shareUrl
+      })
+      if (result === 'copied') alert('分享链接已复制到剪贴板！')
+      else if (result === 'failed') alert('分享失败，请手动复制链接')
     }
-    
+
     // 下载歌曲
     const downloadSong = async (song, bitrate) => {
       try {
@@ -557,13 +412,6 @@ export default {
       }
     }
     
-    // 点击外部关闭下载菜单
-    const handleClickOutside = (event) => {
-      if (!event.target.closest('.relative')) {
-        showDownloadMenu.value = null
-      }
-    }
-
     return {
       filteredSongs,
       totalPages,
