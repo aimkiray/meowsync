@@ -81,7 +81,7 @@
             <div @click="$emit('select-playlist', playlist)" class="flex items-center space-x-3">
               <div class="relative">
                 <img
-                  :src="playlist.coverImgUrl"
+                  :src="httpsCover(playlist.coverImgUrl)"
                   :alt="playlist.name"
                   class="w-12 h-12 object-cover border-2 border-pink-400"
                   style="border-radius: 0; image-rendering: pixelated;"
@@ -205,7 +205,7 @@
               <div class="flex items-center space-x-3">
                 <div class="relative">
                   <img
-                    :src="playlist.coverImgUrl"
+                    :src="httpsCover(playlist.coverImgUrl)"
                     :alt="playlist.name"
                     class="w-12 h-12 object-cover border-2 border-pink-400"
                     style="border-radius: 0; image-rendering: pixelated;"
@@ -342,6 +342,9 @@ export default {
     const menuPositions = ref({})
     const addingPlaylists = ref(new Set()) // 正在添加的歌单ID集合
     const addingTimeouts = ref(new Map()) // 防抖定时器
+
+    // HTTPS 部署下 http: 封面会被浏览器混拦——网易图床均支持 TLS，显式升级
+    const httpsCover = (url) => String(url || '').replace(/^http:\/\//, 'https://')
 
     // 移动端检测（该面板用 lg 断点折叠）
     const isMobile = useMediaQuery('(max-width: 1023px)')
@@ -499,6 +502,7 @@ export default {
     }
 
     const closeMenu = () => {
+      if (openMenuId.value != null) delete menuPositions.value[openMenuId.value]
       openMenuId.value = null
     }
 
@@ -673,6 +677,7 @@ export default {
        getMenuPosition,
        handleAddPlaylist,
        isPlaylistAdding,
+       httpsCover,
        isMobile,
        toggleCollapse,
        panelContainer,

@@ -122,11 +122,13 @@ function withTimeout(promise, ms, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function callNeteaseApi(apiName, params) {
+async function callNeteaseApi(apiName, params, options = {}) {
   if (!apiModules[apiName]) {
     throw new Error(`API '${apiName}' not found`);
   }
-  return withTimeout(apiModules[apiName](params, request), UPSTREAM_TIMEOUT_MS, `上游接口 ${apiName}`);
+  // timeoutMs 可覆盖：千曲歌单的 playlist_detail/track_all 慢链路可超 30s
+  const timeoutMs = options.timeoutMs || UPSTREAM_TIMEOUT_MS;
+  return withTimeout(apiModules[apiName](params, request), timeoutMs, `上游接口 ${apiName}`);
 }
 
 // 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）

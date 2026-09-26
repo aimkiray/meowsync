@@ -334,6 +334,8 @@ function getProgress(queue) {
 }
 
 function getQueueCover(queue) {
-  return queue.coverImgUrl || queue.coverUrl || queue.cover_img_url || '';
+  const url = queue.coverImgUrl || queue.coverUrl || queue.cover_img_url || '';
+  // HTTPS 部署下 http: 封面会被混拦——网易图床均支持 TLS，显式升级
+  return String(url).replace(/^http:\/\//, 'https://');
 }
 </script>

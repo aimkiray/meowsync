@@ -70,9 +70,10 @@ function sendUpstreamResult(c, answer) {
 }
 
 // 判断 catch 到的是否为上游 answer 对象（区别于真正的 Error/字符串异常）。
-// body 可缺省——上游 reject({status:460}) 无 body 时也必须被识别，否则直接 500
+// body 可缺省——上游 reject({status:460}) 无 body 时也必须被识别，否则直接 500。
+// 排除 Error 实例：axios/fetch 错误可能带 status 字段，走 400 会丢错误详情
 function isUpstreamAnswer(err) {
-  return err != null && typeof err === 'object'
+  return err != null && typeof err === 'object' && !(err instanceof Error)
     && Number.isInteger(err.status);
 }
 

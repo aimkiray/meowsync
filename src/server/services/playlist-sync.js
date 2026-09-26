@@ -15,20 +15,27 @@ const { httpError } = require('../lib/http-error');
 // callNeteaseApi 对上游非 200 是 reject(answer{status,body,cookie})——不是 Error、
 // 不带 exposed 标记。冒泡到路由层会被一律压成 500"服务器错误"，丢失"上游拒绝/
 // 限流"的语义。归一化为 502 并带上 body.msg（注意不碰 body.cookie——那是登录态）
-async function callUpstream(apiName, params) {
+async function callUpstream(apiName, params, options = {}) {
   try {
-    return await callNeteaseApi(apiName, params);
+    return await callNeteaseApi(apiName, params, options);
   } catch (error) {
-    const upstreamMsg = error?.body?.msg || error?.body?.message || error?.message;
+    // body.msg 可能是 Error 对象（上游 axios 失败路径），只取其 message
+    let upstreamMsg = error?.body?.msg || error?.body?.message || error?.message;
+    if (upstreamMsg && typeof upstreamMsg === 'object') upstreamMsg = upstreamMsg.message;
     const detail = upstreamMsg && String(upstreamMsg).length < 120 ? `：${upstreamMsg}` : '';
     throw httpError(502, `网易云接口请求失败${detail}`);
   }
 }
 
 async function fetchRemotePlaylist(neteasePlaylistId) {
-  const detailResponse = await callUpstream('playlist_detail', { id: neteasePlaylistId });
+  // 大歌单（千曲级）上游往返慢于通用 30s 上限——detail/track_all 放宽到 120s
+  const detailResponse = await callUpstream('playlist_detail', { id: neteasePlaylistId }, { timeoutMs: 120000 });
   const playlist = detailResponse.body?.playlist;
-  // 上游对不存在的 id 也返回 200 + playlist:null——必须区分，否则向 DB 写空名字的脏行
+  // 上游对不存在的 id 也返回 200 + playlist:null——必须区分，否则向 DB 写空名字的脏行。
+  // code 非 200 的 resolve 路径同上：先判业务码再判对象，错误语义才不乱
+  if (detailResponse.body?.code !== undefined && detailResponse.body.code !== 200) {
+    throw httpError(502, `网易云歌单接口返回异常（code=${detailResponse.body.code}）`);
+  }
   if (!playlist || typeof playlist !== 'object' || !playlist.name) {
     throw httpError(404, '网易云歌单不存在');
   }
@@ -37,11 +44,19 @@ async function fetchRemotePlaylist(neteasePlaylistId) {
     id: neteasePlaylistId,
     limit: playlist.trackCount || 1000,
     offset: 0
-  });
+  }, { timeoutMs: 120000 });
+
+  // 上游对某些错误码（460/502 等被 request 层映射成 HTTP 200）走 resolve 而非
+  // reject——callUpstream 的 catch 拦不到。不校验 code 就 || [] 会把瞬时失败
+  // 写成"歌单有 0 首歌"并清空本地曲目（refresh 路径最危险）
+  const songs = trackResponse.body?.songs;
+  if (trackResponse.body?.code !== 200 || !Array.isArray(songs)) {
+    throw httpError(502, `网易云曲目接口返回异常（code=${trackResponse.body?.code ?? '未知'}）`);
+  }
 
   return {
     ...playlist,
-    tracks: trackResponse.body?.songs || []
+    tracks: songs
   };
 }
 

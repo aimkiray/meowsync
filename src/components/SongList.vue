@@ -389,6 +389,10 @@ export default {
       if (showDownloadMenu.value === songId) {
         closeDownloadMenu()
       } else {
+        // 切到另一首歌：旧歌的位置缓存即弃，直接删——否则 map 只增不减
+        if (showDownloadMenu.value !== null) {
+          delete menuPositions.value[showDownloadMenu.value]
+        }
         // 计算菜单位置：下方空间不足时翻到按钮上方，左右越界时收回视口内
         const button = event.target.closest('button')
         const rect = button.getBoundingClientRect()
@@ -497,6 +501,7 @@ export default {
       }
       if (!props.selectedPlaylist) {
         alert('请先选择歌单')
+        closeDownloadMenu()
         return
       }
 
@@ -510,6 +515,7 @@ export default {
       if (isDownloaded) {
         // 删除已下载文件
         if (!confirm(`确定要删除 "${song.name}" 的已下载文件吗？`)) {
+          closeDownloadMenu()
           return
         }
 
