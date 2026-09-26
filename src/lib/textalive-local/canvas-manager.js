@@ -118,16 +118,23 @@ export class CanvasManager {
       this._mouseY = this._sth / 2
     }
 
+    // 先更新 position 再绘制：否则本帧用的是上一帧的时间戳（seek 后首帧画旧位置）
+    this._position = position
+
     this._drawBg()
     this._drawLyrics()
-
-    this._position = position
   }
 
   resize() {
     const rect = this._container.getBoundingClientRect()
-    this._can.width = this._stw = Math.max(Math.floor(rect.width || window.innerWidth), 1)
-    this._can.height = this._sth = Math.max(Math.floor(rect.height || window.innerHeight), 1)
+    this._stw = Math.max(Math.floor(rect.width || window.innerWidth), 1)
+    this._sth = Math.max(Math.floor(rect.height || window.innerHeight), 1)
+    // devicePixelRatio：backing store 按 DPR 放大并用 setTransform 恢复逻辑像素，
+    // 否则高分屏/手机上文字全模糊（上限 2 控制显存占用）
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    this._can.width = Math.floor(this._stw * dpr)
+    this._can.height = Math.floor(this._sth * dpr)
+    this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     this._drawBg()
     this._drawLyrics()
   }
@@ -406,7 +413,8 @@ export class CanvasManager {
 
       if (lyric.startTime < position) {
         if (position < lyric.endTime) {
-          if (!Number.isNaN(this._mouseX) && !lyric.isDraw) {
+          // Number.isFinite 才能挡住 undefined（Number.isNaN(undefined) 为 false 会放行）
+          if (Number.isFinite(this._mouseX) && !lyric.isDraw) {
             const nx = Math.floor((-this._px + this._mouseX) / space)
             const ny = Math.floor((-this._py + this._mouseY) / space)
 
