@@ -78,25 +78,27 @@ const dnsCache = new Map();
 const dnsInflight = new Map();
 
 /**
- * hostname → 公网 IP 校验。防御两类场景：
- * - 代理/下载的域名指向被篡改到内网（DNS rebinding、hosts 投毒）
- * - URL 直接是内网 IP 字面量（绕过域名白名单的场景）
- * TOCTOU：实际连接会再解析一次，两次解析可能不同，本检查是缓解而非硬保证。
- * fail closed：解析失败时下游请求同样会失败，直接拒绝不改变可用性。
+ * 主机公网性判定的唯一核心：返回三态 'ok'（公网可放行）/ 'blocked'（解析到
+ * 私网，确定性拦截）/ 'error'（DNS 瞬时故障）。所有封装必须基于三态——
+ * 布尔接口只答应回答 "=== 'ok'"，三态直接混进布尔上下文会同时造成
+ * fail-open（'blocked' 是 truthy）与误拒（true !== 'ok'）。
+ *
+ * 防御两类场景：代理/下载的域名指向被篡改到内网（DNS rebinding、hosts 投毒）、
+ * URL 直接是内网 IP 字面量。TOCTOU：实际连接会再解析一次，两次解析可能不同，
+ * 本检查是缓解而非硬保证。布尔封装 fail closed：解析失败时下游请求同样会失败。
  */
-async function resolvesToPublicIp(hostname) {
-  // IP 字面量直接判段，不走 DNS；先剥 WHATWG parser 保留的 IPv6 方括号
+async function resolveHostState(hostname) {
   const bare = stripIpv6Brackets(hostname);
   const literalFamily = net.isIP(bare);
   if (literalFamily !== 0) {
-    return !isPrivateIp(bare, literalFamily);
+    return isPrivateIp(bare, literalFamily) ? 'blocked' : 'ok';
   }
 
   // hostname 归一化小写做 key：EXAMPLE.com 与 example.com 是同一查询
   const key = hostname.toLowerCase();
   const cached = dnsCache.get(key);
   if (cached) {
-    if (cached.expires > Date.now()) return cached.ok;
+    if (cached.expires > Date.now()) return cached.result;
     dnsCache.delete(key); // 过期即删，避免陈旧值滞留
   }
 
@@ -112,7 +114,6 @@ async function resolvesToPublicIp(hostname) {
       } catch {
         result = 'error';
       }
-      const ok = result === 'ok';
       // 满时淘汰最旧条目而非全清——突发多 host 时全清会造成缓存抖动；
       // delete+set 刷新插入序，热点 host 不被反复校验后仍按首次位置淘汰
       if (dnsCache.size >= DNS_CACHE_MAX) {
@@ -120,9 +121,9 @@ async function resolvesToPublicIp(hostname) {
       }
       dnsCache.delete(key);
       dnsCache.set(key, {
-        ok,
         result,
-        expires: Date.now() + (ok ? DNS_CACHE_TTL_OK_MS : DNS_CACHE_TTL_ERR_MS),
+        expires: Date.now()
+          + (result === 'ok' ? DNS_CACHE_TTL_OK_MS : DNS_CACHE_TTL_ERR_MS),
       });
       return result;
     })().finally(() => dnsInflight.delete(key));
@@ -131,23 +132,18 @@ async function resolvesToPublicIp(hostname) {
   return pending;
 }
 
-/**
- * 三态版本：'ok' 公网可放行 / 'blocked' 解析到私网（确定性拦截）/ 'error' 解析失败
- * （瞬时故障）。file-downloader 用三态区分"私网（fatal 不重试）"与"DNS 抖动
- * （可重试）"；proxy 等只关心放行的用布尔封装。
- * IP 字面量无 DNS 概念：私网字面量返回 'blocked'，公网返回 'ok'。
- */
-async function checkHostPublic(hostname) {
-  const bare = stripIpv6Brackets(hostname);
-  if (net.isIP(bare) !== 0) {
-    return isPrivateIp(bare, net.isIP(bare)) ? 'blocked' : 'ok';
-  }
-  return resolvesToPublicIp(hostname);
+// 布尔封装：调用方只需要"是否为公网"时用这个（fail closed：error 同样拒绝）
+async function resolvesToPublicIp(hostname) {
+  return (await resolveHostState(hostname)) === 'ok';
 }
 
-// 布尔封装：调用方只需要"是否为公网"时用这个（fail closed：error 同样拒绝）
+// 三态版本：file-downloader 用它区分"私网（fatal 不重试）"与"DNS 抖动（可重试）"
+async function checkHostPublic(hostname) {
+  return resolveHostState(hostname);
+}
+
 async function isPublicHost(hostname) {
-  return (await checkHostPublic(hostname)) === 'ok';
+  return (await resolveHostState(hostname)) === 'ok';
 }
 
 module.exports = {

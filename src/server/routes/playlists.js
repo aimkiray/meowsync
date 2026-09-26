@@ -48,9 +48,10 @@ app.get('/playlists/:id', (c) => {
 app.post('/playlists/import', async (c) => {
   try {
     const body = await readJsonBody(c);
-    const neteasePlaylistId = body.neteasePlaylistId || c.req.query('neteasePlaylistId');
-    if (!neteasePlaylistId) {
-      return c.json({ code: 400, message: '缺少 neteasePlaylistId' }, 400);
+    const neteasePlaylistId = String(body.neteasePlaylistId || c.req.query('neteasePlaylistId') || '');
+    // 只收纯数字：脏输入打一次无效上游往返才失败，前置拦截
+    if (!/^\d+$/.test(neteasePlaylistId)) {
+      return c.json({ code: 400, message: '无效的 neteasePlaylistId' }, 400);
     }
 
     const playlist = await importPlaylistFromNetease(String(neteasePlaylistId), {

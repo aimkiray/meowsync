@@ -123,7 +123,9 @@ if (hasDist) {
     // 注意：apiFirstSegments 覆盖全量上游模块名（login/search/album/... 约 300 个），
     // 前端如果将来引入 vue-router，新增路由必须避开这些名字，否则会被判成 API 404
     const firstSegment = (p.split('/')[1] || '').toLowerCase();
-    if (API_PREFIXES.some(px => p === px || p.startsWith(px + '/'))
+    // 前缀匹配同样按小写：/Downloads/x、/Api/xxx 之类部署层误配不该喂 HTML
+    const lowerPath = p.toLowerCase();
+    if (API_PREFIXES.some(px => lowerPath === px || lowerPath.startsWith(px + '/'))
       || apiFirstSegments.has(firstSegment)
       || p.startsWith('/assets/')
       || /\.[a-z0-9]+$/i.test(p)) {

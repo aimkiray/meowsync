@@ -26,6 +26,10 @@ const standaloneRunning = new Map();
 // 已 cancel 但协程仍在排空收尾的控制器：deleteQueue/deletePlaylistFiles/shutdownAll
 // 必须连它们一起排空——否则 cancel 后立即 delete 会跳过排空，"删后落盘"留孤儿文件
 const drainingQueues = new Map();
+// 超时兜底把 draining 条目提前释放后，协程本身可能还在跑（卡在不可中止阶段）——
+// 从两个 Map 中消失即"僵尸"：没有任何机制能再定位它在途的流，删除/停机排空
+// 都会漏掉它。timeout 释放时入列追踪，done settle 时出列
+const zombieControllers = new Set();
 // 正在做文件级联删除的歌单：删除窗口内拒绝新建下载，否则排空竞态产生孤儿文件
 const deletingPlaylists = new Set();
 // 停机期间拒绝新建/启动下载，避免半途任务留下脏状态
@@ -280,10 +284,13 @@ async function startQueue(queueId) {
   downloadQueuesRepo.updateQueue(queueId, { status: 'running' });
 
   const controller = {
+    queueId,
+    playlistId: queue.playlistId,
     paused: false,
     cancelled: false,
     abort: new AbortController(),
-    done: null
+    done: null,
+    settled: false
   };
   activeQueues.set(queueId, controller);
 
@@ -296,6 +303,8 @@ async function startQueue(queueId) {
       downloadQueuesRepo.updateQueue(queueId, { status: 'failed' });
     } catch { /* 行可能已删 */ }
   }).finally(() => {
+    controller.settled = true;
+    zombieControllers.delete(controller); // 超时被入列的僵尸在这里回收
     if (activeQueues.get(queueId) === controller) {
       activeQueues.delete(queueId);
     }
@@ -322,31 +331,40 @@ async function processQueue(queueId, controller) {
   // deferredSince 记录首次延迟时间——锁泄漏/不可中止的卡死任务会让队列永远
   // 空转不收尾，超过上限按失败处理
   const deferred = new Set();
-  // deferredSince 只覆盖"连续等锁"区间：任务被取去执行时清除（见下方 push 前），
-  // 否则已完成/在途的任务会被过期逻辑误伤覆写成 failed
+  // deferredSince 记录"连续等锁"的首次 409 时刻——派发前不得清：等锁空转
+  // 每轮都会重捞重试撞 409，删了它时间戳永不可达。只有锁释放（放行重试）
+  // 与硬顶判失败两条出路；行离开 pending 后条目由 expireDeferred 复查清理
   const deferredSince = new Map();
-  const DEFER_LIMIT_MS = 5 * 60 * 1000;
+  // 记录 409 时真实冲突的锁键——siblings 快照会漂移（兄弟任务删除后重算出的
+  // 碰撞键会变），用重算的键判 activePaths 会把"锁已释放"误判成"仍持有"
+  const deferredKeys = new Map();
+  // 硬顶：正常持锁有物理上限（解锁60s×2 + 取链30s + 流300s ≈ 460s），
+  // 连续持锁超 15min 大概率是锁泄漏（activePaths 残留无人释放）——判失败收敛
+  const DEFER_HARD_LIMIT_MS = 15 * 60 * 1000;
   const expireDeferred = () => {
     const now = Date.now();
-    // 只迭代当前真正在等锁的 deferred（deferredSince 里的历史条目不算数），
-    // 且判失败前复查行仍 pending、锁仍被持有——持锁方若还活着就续期，
-    // 锁已不在则按失败收敛（锁泄漏场景兜底）
     for (const taskId of deferred) {
       const since = deferredSince.get(taskId);
-      if (!since || now - since <= DEFER_LIMIT_MS) continue;
-      const row = downloadTasksRepo.findTaskById(taskId);
-      if (!row || row.status !== 'pending') {
-        deferredSince.delete(taskId);
+      if (!since) {
         deferred.delete(taskId);
+        deferredKeys.delete(taskId);
         continue;
       }
-      const keys = taskLockKeys(row);
-      if (keys.some(k => activePaths.has(k))) {
-        deferredSince.set(taskId, now); // 锁仍被持有：续期，不误杀正常等待
+      const keys = deferredKeys.get(taskId) || [];
+      const stillHeld = keys.some(k => activePaths.has(k));
+      if (!stillHeld) {
+        // 锁已释放：立即放行，下一轮自然重试——锁空闲时判失败是误杀
+        deferred.delete(taskId);
+        deferredSince.delete(taskId);
+        deferredKeys.delete(taskId);
         continue;
       }
-      deferredSince.delete(taskId);
+      if (now - since <= DEFER_HARD_LIMIT_MS) continue; // 持锁未到硬顶：继续等
+      const row = downloadTasksRepo.findTaskById(taskId);
       deferred.delete(taskId);
+      deferredSince.delete(taskId);
+      deferredKeys.delete(taskId);
+      if (!row || row.status !== 'pending') continue; // 已离开等锁状态，纯清理
       try {
         downloadTasksRepo.updateTask(taskId, {
           status: 'failed',
@@ -359,9 +377,17 @@ async function processQueue(queueId, controller) {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   const waitWhilePaused = async () => {
-    // 取消在暂停等待中也要生效——否则 cancelled 队列的协程永久自旋
+    // 取消在暂停等待中也要生效——否则 cancelled 队列的协程永久自旋。
+    // 暂停期间 deferredSince 不能继续老化：暂停一夜后恢复，等锁时长里
+    // 混进了冻结时间，硬顶会把全部等锁任务误杀——恢复时把时间戳整体后移
+    let pausedAt = null;
     while (controller.paused && !controller.cancelled) {
+      if (pausedAt === null) pausedAt = Date.now();
       await sleep(1000);
+    }
+    if (pausedAt !== null) {
+      const frozenFor = Date.now() - pausedAt;
+      for (const [k, v] of deferredSince) deferredSince.set(k, v + frozenFor);
     }
   };
 
@@ -404,9 +430,6 @@ async function processQueue(queueId, controller) {
       }
       if (controller.cancelled) break;
 
-      // 取去执行即离开"等锁"状态——清掉首次延迟时间戳，否则完成后会被
-      // expireDeferred 按旧时间戳误伤（覆写 completed → failed）
-      deferredSince.delete(task.id);
       const taskPromise = processTask(task, queueId, controller.abort.signal)
         .catch(error => {
           // processTask 内部已自吞常规失败；走到这里的是 try 之前的早期抛错。
@@ -417,6 +440,9 @@ async function processQueue(queueId, controller) {
             if (!deferredSince.has(task.id)) {
               deferredSince.set(task.id, Date.now());
             }
+            // 记录真实冲突键：过期检查据此判"锁是否仍被持有"，
+            // 不能用 taskLockKeys 重算（siblings 快照漂移会让碰撞键变化）
+            deferredKeys.set(task.id, error.lockKeys || []);
             return;
           }
           console.error(`任务 ${task.id} 启动失败:`, error.message);
@@ -509,7 +535,6 @@ const taskLockKeys = (task) => {
 };
 
 async function processTask(task, queueId, signal) {
-  const outputDir = path.join(DOWNLOAD_BASE_DIR, task.playlistId.toString());
   const lockKeys = taskLockKeys(task);
   const audioPath = task.downloadAudio
     ? lockKeys.find(k => k.endsWith('.mp3'))
@@ -523,7 +548,9 @@ async function processTask(task, queueId, signal) {
 
   // 同路径并发写锁：两个写者同时 createWriteStream 会交错 truncate 写坏文件
   if (lockKeys.some(key => activePaths.has(key))) {
-    throw httpError(409, '该歌曲已有下载任务进行中');
+    const err = httpError(409, '该歌曲已有下载任务进行中');
+    err.lockKeys = lockKeys; // 带真值给调用方记录——重算会因 siblings 漂移而失准
+    throw err;
   }
   lockKeys.forEach(key => activePaths.add(key));
 
@@ -742,9 +769,13 @@ async function cancelQueue(queueId) {
       }
     };
     Promise.resolve(controller.done).finally(release).catch(() => {});
-    // done 若卡死在不可中止的上游调用永不 settle——超时兜底清理，
-    // 否则条目永久残留，deleteTask 对相关任务永久 409
-    setTimeout(release, DRAIN_TIMEOUT_MS + 5000).unref?.();
+    // done 若卡死在不可中止的上游调用永不 settle——超时兜底释放条目，
+    // 否则永久残留；但协程本身可能还在跑——追进僵尸集，让删除/停机
+    // 路径仍能 abort 并排空它在途的流
+    setTimeout(() => {
+      if (!controller.settled) zombieControllers.add(controller);
+      release();
+    }, DRAIN_TIMEOUT_MS + 5000).unref?.();
   }
 
   // 终态队列不应被改写为 cancelled（completed/failed 是有意义的终态）
@@ -768,11 +799,15 @@ async function deleteQueue(queueId) {
   // 排空覆盖 activeQueues 与 drainingQueues（刚 cancel 的队列协程还在收尾，
   // 跳过排空会漏"写完未记档"的落盘）；排空有时限——不可中止的上游调用
   // 不能让整个 HTTP 请求死等。
-  // cancel→start→delete 会让两个 Map 各持一个控制器——必须全部排空而非 || 取一
+  // cancel→start→delete 会让两个 Map 各持一个控制器——必须全部排空而非 || 取一；
+  // 僵尸控制器同排：超时从 draining 释放后仍在跑的旧协程不扫会漏排空
   const controllers = new Set();
   for (const map of [activeQueues, drainingQueues]) {
     const c = map.get(queueId);
     if (c) controllers.add(c);
+  }
+  for (const z of zombieControllers) {
+    if (z.queueId === queueId) controllers.add(z);
   }
   for (const c of controllers) abortController(c);
   await Promise.all(
@@ -842,7 +877,8 @@ function deleteTask(taskId) {
   // 里的是残留行（下次启动 recoverStaleStates 才复位），不应永远挡住删除
   if (standaloneRunning.has(task.id)
     || (task.status === 'downloading' && task.queueId
-        && (activeQueues.has(task.queueId) || drainingQueues.has(task.queueId)))) {
+        && (activeQueues.has(task.queueId) || drainingQueues.has(task.queueId)
+            || [...zombieControllers].some(z => z.queueId === task.queueId)))) {
     throw httpError(409, '任务正在下载中，请先取消所在队列');
   }
 
@@ -940,7 +976,11 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       status: 'pending',
       progress: 0,
       errorMessage: null,
-      retryCount: 0
+      retryCount: 0,
+      audioPath: null,
+      lyricsPath: null,
+      coverPath: null,
+      fileSize: null
     });
     return runStandaloneTask(downloadTasksRepo.findTaskById(queueTask.id));
   }
@@ -1110,6 +1150,13 @@ async function deletePlaylistFiles(playlistId) {
         await drainWithTimeout(entry.done);
       }
     }
+    // 僵尸协程兜底：timeout-release 后不在任何 Map 但可能还在写本歌单的文件
+    for (const z of zombieControllers) {
+      if (z.playlistId === playlistId) {
+        abortController(z);
+        await drainWithTimeout(z.done);
+      }
+    }
 
     // 排空后再取一次任务快照：窗口内漏网的新建行也一并清文件
     const finalTasks = downloadTasksRepo.listTasksByPlaylist(playlistId);
@@ -1143,6 +1190,10 @@ async function deletePlaylistFiles(playlistId) {
 // 否则锁释放到行删除之间的窗口里 downloadSingleSong/createDownloadQueue 可过检查
 // 建新行，行随即被级联删掉，在途流成孤儿。路由只调本函数，不单独调 deletePlaylist
 async function deletePlaylistCascade(playlistId) {
+  // 可重入防护：两个并发 DELETE 会重复排空 + 第二个拿到误导性的 404
+  if (deletingPlaylists.has(playlistId)) {
+    throw httpError(409, '该歌单正在删除中');
+  }
   deletingPlaylists.add(playlistId);
   try {
     await deletePlaylistFiles(playlistId);
@@ -1183,7 +1234,12 @@ async function retryTask(taskId) {
     progress: 0,
     errorMessage: null,
     completedAt: null,
-    retryCount: 0
+    retryCount: 0,
+    // 与收养重置对齐：残留的旧路径可能已指向别的任务的文件，重跑前清空
+    audioPath: null,
+    lyricsPath: null,
+    coverPath: null,
+    fileSize: null
   });
 
   if (queue) {
@@ -1193,6 +1249,13 @@ async function retryTask(taskId) {
         status: 'pending',
         completedAt: null
       });
+    }
+    // 队列置回 pending 后没有消费者——"重试"语义上应当即跑，
+    // 否则任务永远停在"等待中"直到用户手动启动
+    try {
+      await startQueue(queue.id);
+    } catch {
+      // 排空窗口内（draining）启动会 409——任务仍 pending，等下一次启动接管
     }
     return downloadTasksRepo.findTaskById(taskId);
   }
@@ -1234,7 +1297,11 @@ async function retryQueue(queueId) {
       progress: 0,
       errorMessage: null,
       completedAt: null,
-      retryCount: 0  // 重置次数，否则 retryCount=3 的任务重试一次又判死
+      retryCount: 0,  // 重置次数，否则 retryCount=3 的任务重试一次又判死
+      audioPath: null,
+      lyricsPath: null,
+      coverPath: null,
+      fileSize: null
     });
   }
 
@@ -1244,6 +1311,13 @@ async function retryQueue(queueId) {
     failedTasks: 0,
     completedAt: null
   });
+
+  // 重试即启动：pending 队列没有消费者，用户预期"重试"是直接跑起来
+  try {
+    await startQueue(queueId);
+  } catch {
+    // 理论不可达（active/draining 已前置拦截）——保守起见仍返回重置后的队列
+  }
 
   return downloadQueuesRepo.findQueueById(queueId);
 }
@@ -1264,6 +1338,12 @@ async function shutdownAll() {
   }
   activeQueues.clear();
   drainingQueues.clear();
+
+  // 僵尸协程也中止排空——它们已不在任何 Map，不扫就会漏掉在途的流
+  for (const z of zombieControllers) {
+    abortController(z);
+    drains.push(z.done);
+  }
 
   for (const entry of standaloneRunning.values()) {
     entry.abort.abort();

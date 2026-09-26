@@ -64,11 +64,17 @@ function migrateDownloadTasks(database) {
   const hasCorrectUniqueIndex = database.prepare(
     `PRAGMA index_list('download_tasks')`
   ).all().some((index) => {
-    if (!index.unique) return false;
-    const cols = database.prepare(
-      `PRAGMA index_info('${index.name}')`
-    ).all().map(col => col.name);
-    return cols.length === 2 && cols[0] === 'playlist_id' && cols[1] === 'song_id';
+    // partial 索引的唯一性只覆盖 WHERE 子集，全表约束未落实；列序不敏感——
+    // UNIQUE(a,b) 与 UNIQUE(b,a) 语义等价，sqlite_autoindex 列序可能与手写不同
+    if (!index.unique || index.partial) return false;
+    // PRAGMA 不支持绑定参数——index.name 来自 sqlite_master 属可信源，
+    // 仍按字符串字面量转义兜底
+    const cols = new Set(
+      database.prepare(
+        `PRAGMA index_info('${String(index.name).replace(/'/g, "''")}')`
+      ).all().map(col => col.name)
+    );
+    return cols.size === 2 && cols.has('playlist_id') && cols.has('song_id');
   });
   if (!hasCorrectUniqueIndex) {
     // 约束缺失才跑去重（约束已在时数学上不可能有重复，全表 DELETE 是纯浪费）。

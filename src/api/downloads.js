@@ -13,10 +13,11 @@ const http = axios.create({
   headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
 });
 
-// 同步阻塞型操作（单曲下载原地跑完、standalone 重试）：服务端最多 4 次尝试
-// （首次 + 3 次重试），每次最坏 = 响应头超时 300s + 流总时长硬顶 300s + 歌词/封面，
-// 最坏尾部 ≈ 20-25min。超时到点时服务端仍在后台跑完——重试会撞 409"正在下载"，
-// 并非真失败。给一个能覆盖最坏尾部的值
+// 同步阻塞型操作（单曲下载原地跑完、standalone 重试）：服务端最多 4 次尝试，
+// 每次最坏 = 取链/解锁/HEAD/逐跳重定向 + 流 300s + 歌词封面——理论尾部可超 40min。
+// 30min 是 UX 上限而非保证覆盖：超时到点后服务端仍在后台跑完，结果以任务
+// 状态轮询为准（重试只会撞 409"正在下载"）。注意反代层（nginx 默认 60s、
+// 常见配置 300s）可能先于本值切断——部署文档已写明需调 proxy_read_timeout
 const httpLong = axios.create({
   timeout: 30 * 60 * 1000,
   headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
