@@ -60,7 +60,7 @@
             <div @click="$emit('play-song', song)" class="flex items-center space-x-3">
               <div class="relative">
                 <img
-                  :src="song.al?.picUrl || song.album?.picUrl"
+                  :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
                   :alt="song.name"
                   class="w-12 h-12 object-cover border-2 border-pink-400"
                   style="border-radius: 0; image-rendering: pixelated;"
@@ -167,9 +167,10 @@
           📄 获取源文件 (320k)
         </div>
 
-        <!-- 下载到服务器 / 删除已下载（临时单曲歌单没有服务端持久化意义，隐藏） -->
+        <!-- 下载到服务器 / 删除已下载（临时单曲歌单没有服务端持久化意义，隐藏；
+             未选歌单时选了也只会 alert，同样不渲染） -->
         <div
-          v-if="!isSingleSongPlaylist"
+          v-if="!isSingleSongPlaylist && selectedPlaylist"
           class="download-option"
           @click="toggleServerDownload(menuSong)"
         >
@@ -239,6 +240,7 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
+import { httpsCover } from '../lib/url'
 import PaginationControls from './PaginationControls.vue'
 import { useTheme } from '../composables/useTheme'
 import { useCollapseButton } from '../composables/useCollapseButton'
@@ -478,7 +480,12 @@ export default {
       try {
         const response = await downloadsApi.listTasks({ playlistId })
         if (seq !== statusCheckSeq) return // 已有更新的请求在飞，丢弃本次结果
-        const tasks = response.data?.data || []
+        // 畸形响应（如反代把 API 误指到静态服返回 HTML 200）必须当失败处理，
+        // 否则 || [] 会把全部"已下载"标记静默清成未下载
+        const tasks = response.data?.data
+        if (!Array.isArray(tasks)) {
+          throw new Error('任务列表响应格式异常')
+        }
         const downloadedIds = new Set(
           tasks.filter(t => t.status === 'completed').map(t => String(t.songId))
         )
@@ -496,6 +503,12 @@ export default {
     // 下载到服务器或删除
     const toggleServerDownload = async (song) => {
       if (!song) {
+        closeDownloadMenu()
+        return
+      }
+      // 在途守卫：处理中再点会发出重复请求撞服务端 409，
+      // 用户看到的却是"下载失败"——直接关菜单静默返回
+      if (song && serverDownloadingStates.value[song.id]) {
         closeDownloadMenu()
         return
       }
@@ -605,6 +618,7 @@ export default {
       toggleServerDownload,
       getMenuPosition,
       closeDownloadMenu,
+      httpsCover,
       isMobile,
       toggleCollapse,
       panelContainer,

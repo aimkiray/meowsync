@@ -291,6 +291,7 @@ import { useTheme } from '../composables/useTheme'
 import { useCollapseButton } from '../composables/useCollapseButton'
 import { useMediaQuery } from '../composables/useMediaQuery'
 import { copyText, shareOrCopy } from '../lib/share'
+import { httpsCover as sharedHttpsCover } from '../lib/url'
 
 export default {
   name: 'PlaylistPanel',
@@ -344,7 +345,8 @@ export default {
     const addingTimeouts = ref(new Map()) // 防抖定时器
 
     // HTTPS 部署下 http: 封面会被浏览器混拦——网易图床均支持 TLS，显式升级
-    const httpsCover = (url) => String(url || '').replace(/^http:\/\//, 'https://')
+    // （共享 helper 见 lib/url.js，歌曲封面/歌单封面/任务封面同一来源）
+    const httpsCover = sharedHttpsCover
 
     // 移动端检测（该面板用 lg 断点折叠）
     const isMobile = useMediaQuery('(max-width: 1023px)')
@@ -472,8 +474,10 @@ export default {
     // 菜单相关方法
     const toggleMenu = (playlistId, event) => {
       if (openMenuId.value === playlistId) {
-        openMenuId.value = null
+        closeMenu()
       } else {
+        // 切到另一个歌单：旧菜单位置缓存即弃，否则 map 只增不减
+        if (openMenuId.value != null) delete menuPositions.value[openMenuId.value]
         // 计算菜单位置（event.target 可能是内部 svg/path，须定位到按钮本身）；
         // 下方空间不足翻到上方、左侧越界收回视口内——面板可滚动而菜单 fixed，
         // 开出视口后 scroll-close 又挡住滚动，菜单就永远不可达

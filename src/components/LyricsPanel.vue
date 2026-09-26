@@ -44,7 +44,7 @@
             
             <div class="relative mx-auto w-32 h-32">
               <img
-                :src="currentSong.al?.picUrl || currentSong.album?.picUrl"
+                :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
                 :alt="currentSong.name"
                 class="w-full h-full object-cover border-4 border-pink-400"
                 :class="{ 'playing-animation': isPlaying }"
@@ -95,6 +95,7 @@ import { ref, watch, nextTick, computed } from 'vue'
 import { useTheme } from '../composables/useTheme'
 import { useCollapseButton } from '../composables/useCollapseButton'
 import { useMediaQuery } from '../composables/useMediaQuery'
+import { httpsCover } from '../lib/url'
 
 export default {
   name: 'LyricsPanel',
@@ -198,6 +199,7 @@ export default {
     return {
       playerContainer,
       headerStyle,
+      httpsCover,
       isMobile,
       toggleCollapse,
       collapseButtonRef,
