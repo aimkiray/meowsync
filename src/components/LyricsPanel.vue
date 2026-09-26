@@ -91,7 +91,10 @@
 </template>
 
 <script>
-import { ref, watch, nextTick, computed, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, computed } from 'vue'
+import { useTheme } from '../composables/useTheme'
+import { useCollapseButton } from '../composables/useCollapseButton'
+import { useMediaQuery } from '../composables/useMediaQuery'
 
 export default {
   name: 'LyricsPanel',
@@ -137,53 +140,19 @@ export default {
   setup(props, { emit }) {
     const playerContainer = ref(null)
     const lyricsContainer = ref(null)
-    const currentTheme = ref('default')
-    const collapseButtonRef = ref(null)
-    const fixedButtonTop = ref(null)
-    
+    const { currentTheme } = useTheme()
+
     // 移动端检测
-    const isMobile = ref(false)
-    const checkMobile = () => {
-      isMobile.value = window.innerWidth <= 768
-    }
-    
+    const isMobile = useMediaQuery()
+
     // 折叠功能
     const toggleCollapse = () => {
       emit('toggle-collapse')
     }
 
     // 计算折叠态居中像素，用于展开时固定位置
-    const computeCollapsedCenterTop = () => {
-      nextTick(() => {
-        if (!collapseButtonRef.value) return
-        const buttonHeight = collapseButtonRef.value.offsetHeight || 24
-        const clone = document.createElement('div')
-        clone.className = 'jirai-card flex flex-col relative p-4 min-h-[3rem]'
-        clone.style.position = 'absolute'
-        clone.style.visibility = 'hidden'
-        clone.style.left = '-9999px'
-        clone.style.top = '-9999px'
-        if (playerContainer.value) {
-          clone.style.width = playerContainer.value.offsetWidth + 'px'
-        }
-        document.body.appendChild(clone)
-        const collapsedHeight = clone.offsetHeight
-        document.body.removeChild(clone)
-        const topValue = (collapsedHeight / 2) - (buttonHeight / 2)
-        fixedButtonTop.value = Math.round(topValue) + 'px'
-      })
-    }
+    const { collapseButtonRef, fixedButtonTop } = useCollapseButton(playerContainer, () => props.collapsed)
 
-    const handleResizeForButton = () => {
-      computeCollapsedCenterTop()
-    }
-    
-    // 检测当前主题
-    const detectTheme = () => {
-      const root = document.documentElement
-      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
-    }
-    
     // 动态样式
     const headerStyle = computed(() => {
       if (currentTheme.value === 'pixel-retro') {
@@ -201,35 +170,6 @@ export default {
       }
     })
     
-    // 监听主题变化
-    const observer = new MutationObserver(() => {
-      detectTheme()
-    })
-    
-    onMounted(() => {
-      detectTheme()
-      checkMobile()
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['data-theme']
-      })
-      window.addEventListener('resize', checkMobile)
-      window.addEventListener('resize', handleResizeForButton)
-
-      // 初始计算折叠居中位置，避免首屏展开位置跳变
-      computeCollapsedCenterTop()
-    })
-    
-    onUnmounted(() => {
-      observer.disconnect()
-      window.removeEventListener('resize', checkMobile)
-      window.removeEventListener('resize', handleResizeForButton)
-    })
-
-    watch(() => props.collapsed, () => {
-      computeCollapsedCenterTop()
-    })
-
     // 监听当前歌词索引变化，实现自动滚动
     watch(() => props.currentLyricIndex, async (newIndex) => {
       if (newIndex >= 0 && playerContainer.value && props.autoFollowLyrics) {

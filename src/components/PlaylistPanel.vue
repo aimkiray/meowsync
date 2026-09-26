@@ -122,7 +122,7 @@
             <Teleport to="body">
               <div
                 v-if="openMenuId === playlist.id"
-                class="fixed bg-gray-900 border border-purple-400 shadow-lg z-[9999] w-[140px] max-w-[140px]"
+                class="playlist-menu fixed bg-gray-900 border border-purple-400 shadow-lg z-[9999] w-[140px] max-w-[140px]"
                 style="border-radius: 0;"
                 :style="getMenuPosition(playlist.id)"
               >
@@ -157,48 +157,16 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" :style="paginationStyle">
-          <button 
-            @click="$emit('go-to-page', 1)" 
-            :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ⇤
-          </button>
-          
-          <button 
-            @click="$emit('prev-page')" 
-            :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ←
-          </button>
-          
-          <span class="text-pink-300 text-xs px-2 py-1 min-w-[48px] text-center">
-            {{ currentPage }}/{{ totalPages }}
-          </span>
-          
-          <button 
-            @click="$emit('next-page')" 
-            :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            →
-          </button>
-          
-          <button 
-            @click="$emit('go-to-page', totalPages)" 
-            :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ⇥
-          </button>
-        </div>
-        
+        <PaginationControls
+          v-if="totalPages > 1"
+          :current-page="currentPage"
+          :total-pages="totalPages"
+          :bar-style="paginationStyle"
+          @go-to-page="$emit('go-to-page', $event)"
+          @prev-page="$emit('prev-page')"
+          @next-page="$emit('next-page')"
+        />
+
         <!-- 当只有一页时的提示 -->
         <div v-else-if="userPlaylists.length > 0" class="text-center mt-4 mb-2">
           <span class="text-pink-300 text-sm">
@@ -277,48 +245,16 @@
         </div>
         
         <!-- 分页控件 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center space-x-1 mt-4 mb-4 p-3 backdrop-blur-md" :style="paginationStyle">
-          <button 
-            @click="$emit('go-to-page', 1)" 
-            :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ⇤
-          </button>
-          
-          <button 
-            @click="$emit('prev-page')" 
-            :disabled="currentPage === 1"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === 1 ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ←
-          </button>
-          
-          <span class="text-pink-300 text-xs px-2 py-1 min-w-[48px] text-center">
-            {{ currentPage }}/{{ totalPages }}
-          </span>
-          
-          <button 
-            @click="$emit('next-page')" 
-            :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            →
-          </button>
-          
-          <button 
-            @click="$emit('go-to-page', totalPages)" 
-            :disabled="currentPage === totalPages"
-            class="pixel-button text-xs px-2 py-1 text-white font-bold flex items-center justify-center min-w-[32px]"
-            :class="currentPage === totalPages ? 'opacity-50 cursor-not-allowed bg-gray-600' : 'bg-purple-600 hover:bg-purple-500'"
-          >
-            ⇥
-          </button>
-        </div>
-        
+        <PaginationControls
+          v-if="totalPages > 1"
+          :current-page="currentPage"
+          :total-pages="totalPages"
+          :bar-style="paginationStyle"
+          @go-to-page="$emit('go-to-page', $event)"
+          @prev-page="$emit('prev-page')"
+          @next-page="$emit('next-page')"
+        />
+
         <!-- 当只有一页时的提示 -->
         <div v-else-if="searchResults.length > 0" class="text-center mt-4 mb-2">
           <span class="text-pink-300 text-sm">
@@ -332,10 +268,18 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import PaginationControls from './PaginationControls.vue'
+import { useTheme } from '../composables/useTheme'
+import { useCollapseButton } from '../composables/useCollapseButton'
+import { useMediaQuery } from '../composables/useMediaQuery'
+import { copyText, shareOrCopy } from '../lib/share'
 
 export default {
   name: 'PlaylistPanel',
+  components: {
+    PaginationControls
+  },
   props: {
     activeTab: {
       type: String,
@@ -361,10 +305,6 @@ export default {
       type: Boolean,
       default: false
     },
-    playlists: {
-      type: Array,
-      default: () => []
-    },
     currentPage: {
       type: Number,
       default: 1
@@ -380,66 +320,24 @@ export default {
   },
   emits: ['select-playlist', 'add-playlist', 'remove-playlist', 'search', 'search-by-id', 'update:searchQuery', 'update:activeTab', 'go-to-page', 'prev-page', 'next-page', 'toggle-collapse'],
   setup(props, { emit }) {
-    const currentTheme = ref('default')
+    const { currentTheme } = useTheme()
     const openMenuId = ref(null)
     const menuPositions = ref({})
     const addingPlaylists = ref(new Set()) // 正在添加的歌单ID集合
     const addingTimeouts = ref(new Map()) // 防抖定时器
-    
-    // 移动端检测
-    const isMobile = ref(false)
-    
-    const checkMobile = () => {
-      isMobile.value = window.innerWidth < 1024 // lg断点
-    }
+
+    // 移动端检测（该面板用 lg 断点折叠）
+    const isMobile = useMediaQuery('(max-width: 1023px)')
 
     // 折叠按钮位置计算：折叠时居中，展开后保持同一像素位置
     const panelContainer = ref(null)
-    const collapseButtonRef = ref(null)
-    const fixedButtonTop = ref(null)
+    const { collapseButtonRef, fixedButtonTop } = useCollapseButton(panelContainer, () => props.collapsed)
 
-    // 精确计算折叠态的垂直居中像素位置：通过隐藏克隆节点测量真实高度
-    const computeCollapsedCenterTop = () => {
-      nextTick(() => {
-        if (!collapseButtonRef.value) return
-        const buttonHeight = collapseButtonRef.value.offsetHeight || 24
-
-        // 创建一个隐藏的克隆容器，应用折叠态的样式以获得真实高度
-        const clone = document.createElement('div')
-        clone.className = 'jirai-card flex flex-col relative p-4 min-h-[3rem]'
-        clone.style.position = 'absolute'
-        clone.style.visibility = 'hidden'
-        clone.style.left = '-9999px'
-        clone.style.top = '-9999px'
-        // 宽度与实际容器一致，避免某些样式因宽度不同影响垂直尺寸（尽管通常无影响）
-        if (panelContainer.value) {
-          clone.style.width = panelContainer.value.offsetWidth + 'px'
-        }
-        document.body.appendChild(clone)
-        const collapsedHeight = clone.offsetHeight
-        document.body.removeChild(clone)
-
-        const topValue = (collapsedHeight / 2) - (buttonHeight / 2)
-        fixedButtonTop.value = Math.round(topValue) + 'px'
-      })
-    }
-
-    const handleResizeForButton = () => {
-      // 任意窗口尺寸变化都重新计算，保证展开初始位置稳定
-      computeCollapsedCenterTop()
-    }
-    
     // 折叠功能
     const toggleCollapse = () => {
       emit('toggle-collapse')
     }
-    
-    // 检测当前主题
-    const detectTheme = () => {
-      const root = document.documentElement
-      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
-    }
-    
+
     // 动态样式
     const paginationStyle = computed(() => {
       if (currentTheme.value === 'pixel-retro') {
@@ -465,42 +363,19 @@ export default {
       }
     })
     
-    // 监听主题变化
-    const observer = new MutationObserver(() => {
-      detectTheme()
-    })
-    
     onMounted(() => {
-      detectTheme()
-      checkMobile()
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['data-theme']
-      })
-      window.addEventListener('resize', checkMobile)
-      window.addEventListener('resize', handleResizeForButton)
       document.addEventListener('click', handleClickOutside)
-
-      // 初始计算：无论是否折叠，都先计算一个“折叠居中”的像素位置，
-      // 以便初始为展开时也能使用固定像素，避免首次跳变
-      computeCollapsedCenterTop()
+      // 菜单是 fixed 定位，面板滚动后位置脱节——滚动时直接关闭
+      window.addEventListener('scroll', closeMenu, true)
     })
 
     onUnmounted(() => {
-      observer.disconnect()
-      window.removeEventListener('resize', checkMobile)
-      window.removeEventListener('resize', handleResizeForButton)
       document.removeEventListener('click', handleClickOutside)
+      window.removeEventListener('scroll', closeMenu, true)
       // 清理所有定时器
       addingTimeouts.value.forEach(timeoutId => clearTimeout(timeoutId))
       addingTimeouts.value.clear()
       addingPlaylists.value.clear()
-    })
-
-    // 当切换到折叠状态时，记录按钮的居中像素位置，用于展开后保持不变
-    watch(() => props.collapsed, () => {
-      // 每次进入折叠态都重新计算一次，用于后续展开复用
-      computeCollapsedCenterTop()
     })
 
     const showAddPlaylist = computed(() => props.activeTab === 'discover')
@@ -601,25 +476,17 @@ export default {
 
     const openInNetease = (playlist) => {
       const url = `https://music.163.com/#/playlist?id=${playlist.id}`
-      window.open(url, '_blank')
+      window.open(url, '_blank', 'noopener')
       closeMenu()
     }
 
     const copyShareLink = async (playlist) => {
       const url = `${window.location.origin}/?playlist=${playlist.id}`
-      try {
-        await navigator.clipboard.writeText(url)
-        // 这里可以添加一个提示消息
+      const ok = await copyText(url)
+      if (ok) {
         console.log('分享链接已复制到剪贴板')
-      } catch (err) {
-        console.error('复制失败:', err)
-        // 降级方案
-        const textArea = document.createElement('textarea')
-        textArea.value = url
-        document.body.appendChild(textArea)
-        textArea.select()
-        document.execCommand('copy')
-        document.body.removeChild(textArea)
+      } else {
+        alert('复制失败，请手动复制链接')
       }
       closeMenu()
     }
@@ -627,35 +494,13 @@ export default {
     // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
     const sharePlaylist = async (playlist) => {
       const shareUrl = `${window.location.origin}/?playlist=${playlist.id}`
-      const shareText = `🎵 歌单：${playlist.name}`
-      try {
-        if (navigator.share) {
-          await navigator.share({
-            title: shareText,
-            text: `来看看这个歌单：${playlist.name}`,
-            url: shareUrl
-          })
-          console.log('歌单分享成功')
-        } else {
-          await navigator.clipboard.writeText(shareUrl)
-          console.log('分享链接已复制到剪贴板:', shareUrl)
-          alert('分享链接已复制到剪贴板！')
-        }
-      } catch (err) {
-        console.error('分享失败:', err)
-        try {
-          const textArea = document.createElement('textarea')
-          textArea.value = shareUrl
-          document.body.appendChild(textArea)
-          textArea.select()
-          document.execCommand('copy')
-          document.body.removeChild(textArea)
-          alert('分享链接已复制到剪贴板！')
-        } catch (copyErr) {
-          console.error('复制失败:', copyErr)
-          alert('分享失败，请手动复制链接')
-        }
-      }
+      const result = await shareOrCopy({
+        title: `🎵 歌单：${playlist.name}`,
+        text: `来看看这个歌单：${playlist.name}`,
+        url: shareUrl
+      })
+      if (result === 'copied') alert('分享链接已复制到剪贴板！')
+      else if (result === 'failed') alert('分享失败，请手动复制链接')
     }
 
     const removePlaylist = (playlistId) => {
@@ -675,7 +520,7 @@ export default {
       const playlistId = playlist.id
       
       // 如果已经在添加中或已经添加过，直接返回
-      if (addingPlaylists.value.has(playlistId) || props.userPlaylists.find(p => p.id === playlistId)) {
+      if (addingPlaylists.value.has(playlistId) || props.userPlaylists.find(p => String(p.id) === String(playlistId))) {
         return
       }
       

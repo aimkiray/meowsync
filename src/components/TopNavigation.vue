@@ -15,6 +15,7 @@
               v-if="remoteMode === 'host'"
               :href="controllerUrl"
               target="_blank"
+              rel="noopener"
               class="pixel-button"
               title="在新标签页打开手机控制器"
               style="font-size:12px;padding:4px 8px;"
@@ -53,7 +54,8 @@ export default {
   setup() {
     const currentTheme = ref('pixel-retro')
     const urlParams = new URLSearchParams(window.location.search)
-    const remoteMode = ref(urlParams.get('mode') || 'off')
+    const rawMode = urlParams.get('mode')
+    const remoteMode = ref(['host', 'controller'].includes(rawMode) ? rawMode : 'off')
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     
     // 从localStorage加载主题

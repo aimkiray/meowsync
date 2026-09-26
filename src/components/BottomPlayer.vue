@@ -8,7 +8,7 @@
     <!-- 顶部进度条（兼作上边框） -->
     <div
       class="player-progress-bar cursor-pointer absolute top-0 left-0 right-0"
-      @click="$emit('seek-to', $event)"
+      @click="onSeekClick"
     >
       <div
         class="player-progress-fill"
@@ -155,7 +155,9 @@
 </template>
 
 <script>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed } from 'vue'
+import { useTheme } from '../composables/useTheme'
+import { formatTime } from '../lib/format'
 
 export default {
   name: 'BottomPlayer',
@@ -183,18 +185,20 @@ export default {
     songSwitching: {
       type: Boolean,
       default: false
+    },
+    playerHidden: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:player-hidden', 'open-fullscreen'],
   setup(props, { emit }) {
-    const isHidden = ref(false)
-    const currentTheme = ref('default')
-    
-    // 检测当前主题
-    const detectTheme = () => {
-      const root = document.documentElement
-      currentTheme.value = root.getAttribute('data-theme') === 'pixel-retro' ? 'pixel-retro' : 'default'
-    }
+    // 受控隐藏状态（v-model:player-hidden），与父组件保持同步，remount 不再丢失
+    const isHidden = computed({
+      get: () => props.playerHidden,
+      set: (v) => emit('update:player-hidden', v)
+    })
+    const { currentTheme } = useTheme()
     
     // 动态样式
     const hideButtonStyle = computed(() => {
@@ -225,43 +229,26 @@ export default {
       }
     })
     
-    // 监听主题变化
-    const observer = new MutationObserver(() => {
-      detectTheme()
-    })
-    
-    onMounted(() => {
-      detectTheme()
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['data-theme']
-      })
-    })
-    
-    onUnmounted(() => {
-      observer.disconnect()
-    })
-
     const toggleHidden = () => {
       isHidden.value = !isHidden.value
-      emit('update:player-hidden', isHidden.value)
     }
+
+    // 进度条点击 → 归一化比例 0-1（父组件负责换算为秒）
+    const onSeekClick = (event) => {
+      const rect = event.currentTarget.getBoundingClientRect()
+      emit('seek-to', (event.clientX - rect.left) / rect.width)
+    }
+
     const progressPercentage = computed(() => {
       return props.duration > 0 ? (props.currentTime / props.duration) * 100 : 0
     })
-
-    // 格式化时间
-    const formatTime = (seconds) => {
-      const mins = Math.floor(seconds / 60)
-      const secs = Math.floor(seconds % 60)
-      return `${mins}:${secs.toString().padStart(2, '0')}`
-    }
 
     return {
       progressPercentage,
       formatTime,
       isHidden,
       toggleHidden,
+      onSeekClick,
       hideButtonStyle,
       showButtonStyle
     }

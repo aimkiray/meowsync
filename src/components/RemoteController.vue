@@ -1,6 +1,6 @@
 <template>
   <div class="remote-controller">
-    <div v-if="!connected" class="rc-connecting">
+    <div v-if="!connected || hostDisconnected" class="rc-connecting">
       <div class="rc-spinner"></div>
       <p>{{ hostDisconnected ? '主机已断开，等待重连...' : '正在连接主机...' }}</p>
     </div>
@@ -67,6 +67,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const props = defineProps({
+  // 完整 WS URL，须已包含 ?role=controller 及可选 &token=（由 App.vue 构建）
   wsUrl: { type: String, required: true }
 })
 
@@ -82,11 +83,15 @@ const state = ref({
 
 let ws = null
 let reconnectTimer = null
+let destroyed = false
+let retries = 0
 
 function connect() {
-  ws = new WebSocket(props.wsUrl + '?role=controller')
+  if (destroyed) return
+  ws = new WebSocket(props.wsUrl)
 
   ws.onopen = () => {
+    retries = 0
     connected.value = true
     hostDisconnected.value = false
   }
@@ -95,6 +100,7 @@ function connect() {
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'state_update') {
+        hostDisconnected.value = false
         state.value = { ...state.value, ...msg.payload }
       } else if (msg.type === 'host_disconnected') {
         hostDisconnected.value = true
@@ -104,11 +110,18 @@ function connect() {
 
   ws.onclose = () => {
     connected.value = false
+    ws = null
+    if (destroyed) return
+    // 重连上限：握手被 401/403 拒绝时避免无限重试
+    if (++retries > 5) {
+      console.warn('[remote] controller 重连次数超限，停止重连')
+      return
+    }
     reconnectTimer = setTimeout(connect, 3000)
   }
 
   ws.onerror = () => {
-    ws.close()
+    ws?.close()
   }
 }
 
@@ -141,8 +154,13 @@ const artistName = computed(() => {
 
 onMounted(connect)
 onUnmounted(() => {
+  destroyed = true
   clearTimeout(reconnectTimer)
-  ws?.close()
+  if (ws) {
+    ws.onclose = null // 阻止卸载后异步 close 触发重连
+    ws.close()
+    ws = null
+  }
 })
 </script>
 

@@ -85,7 +85,7 @@
 
       <div
         class="player-progress-bar fullscreen-player__progress"
-        @click="$emit('seek-to', $event)"
+        @click="onSeekClick"
       >
         <div class="player-progress-fill" :style="{ width: progressPercentage + '%' }"></div>
       </div>
@@ -96,6 +96,7 @@
 <script>
 import { computed, onMounted, onUnmounted } from 'vue'
 import TextAliveLyricCanvas from './TextAliveLyricCanvas.vue'
+import { formatTime } from '../lib/format'
 
 export default {
   name: 'FullscreenPlayer',
@@ -147,10 +148,10 @@ export default {
       return props.duration > 0 ? (props.currentTime / props.duration) * 100 : 0
     })
 
-    const formatTime = (seconds) => {
-      const mins = Math.floor((seconds || 0) / 60)
-      const secs = Math.floor((seconds || 0) % 60)
-      return `${mins}:${secs.toString().padStart(2, '0')}`
+    // 进度条点击 → 归一化比例 0-1（父组件负责换算为秒）
+    const onSeekClick = (event) => {
+      const rect = event.currentTarget.getBoundingClientRect()
+      emit('seek-to', (event.clientX - rect.left) / rect.width)
     }
 
     const handleKeydown = (event) => {
@@ -172,6 +173,7 @@ export default {
     return {
       progressPercentage,
       formatTime,
+      onSeekClick,
       lyricMode: computed(() => props.lyricMode),
       interactionMode: computed(() => props.interactionMode)
     }

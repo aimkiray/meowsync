@@ -5,7 +5,7 @@
         <div class="text-center text-sm text-gray-600">
           <p>© 2025 MeowSync (´｡• ᵕ •｡`) ♡</p>
           <p class="mt-1">
-            <span class="text-pink-300">Built with Vue.js · <a href="https://github.com/aimkiray/meowsync" target="_blank">GitHub</a></span>
+            <span class="text-pink-300">Built with Vue.js · <a href="https://github.com/aimkiray/meowsync" target="_blank" rel="noopener">GitHub</a></span>
           </p>
         </div>
       </div>
