@@ -11,6 +11,7 @@ const {
   listTracksByPlaylistId
 } = require('../repositories/playlistTracks');
 const { httpError } = require('../lib/http-error');
+const { deletingPlaylists } = require('../lib/deletion-locks');
 
 // callNeteaseApi 对上游非 200 是 reject(answer{status,body,cookie})——不是 Error、
 // 不带 exposed 标记。冒泡到路由层会被一律压成 500"服务器错误"，丢失"上游拒绝/
@@ -63,7 +64,10 @@ async function fetchRemotePlaylist(neteasePlaylistId) {
 async function importPlaylistFromNetease(neteasePlaylistId, options = {}) {
   const remotePlaylist = await fetchRemotePlaylist(neteasePlaylistId);
 
-  // 歌单行 + 曲目表两写同事务：中途失败不留"有歌单没曲目"的半导入数据
+  // 歌单行 + 曲目表两写同事务：中途失败不留"有歌单没曲目"的半导入数据。
+  // 删除锁在事务内复查：路由层的前置检查与本写之间隔了上游往返（秒级），
+  // 删除可能在此期间开始——upsert 会把已删歌单复活。单线程下本事务与级联
+  // 的删除事务天然串行，这里看到锁说明级联已启动，放弃写入
   const savedPlaylist = getDb().transaction(() => {
     const row = upsertPlaylist({
       neteasePlaylistId,
@@ -74,6 +78,9 @@ async function importPlaylistFromNetease(neteasePlaylistId, options = {}) {
       source: 'netease',
       isDefault: Boolean(options.isDefault)
     });
+    if (deletingPlaylists.has(row.id)) {
+      throw httpError(409, '该歌单正在删除中');
+    }
     replaceTracksForPlaylist(row.id, remotePlaylist.tracks || []);
     return row;
   })();

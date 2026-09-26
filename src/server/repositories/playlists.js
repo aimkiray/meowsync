@@ -75,8 +75,14 @@ function upsertPlaylist(input) {
 
 function deletePlaylist(id) {
   const db = getDb();
-  const result = db.prepare('DELETE FROM playlists WHERE id = ?').run(id);
-  return result.changes > 0;
+  // 显式删 playlist_tracks：FK 级联依赖建表期声明，老库可能没带 REFERENCES——
+  // 不能把行删除押在 schema 史上（AUTOINCREMENT 不复用 id，孤儿行永久残留）。
+  // 两条 DELETE 同事务：半途失败回滚，不留"曲目已删歌单还在"的不一致
+  return db.transaction(() => {
+    db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(id);
+    const result = db.prepare('DELETE FROM playlists WHERE id = ?').run(id);
+    return result.changes > 0;
+  })();
 }
 
 module.exports = {

@@ -4,10 +4,11 @@ const {
   getPlaylistDetail,
   listSavedPlaylists
 } = require('../services/playlist-sync');
-const { findPlaylistById } = require('../repositories/playlists');
+const { findPlaylistById, findPlaylistByNeteaseId } = require('../repositories/playlists');
 const { deletePlaylistCascade } = require('../services/download-manager');
 const { readJsonBody } = require('../lib/http-body');
 const { fail, handleError } = require('../lib/http-error');
+const { deletingPlaylists } = require('../lib/deletion-locks');
 
 const app = new Hono();
 
@@ -57,6 +58,13 @@ app.post('/playlists/import', async (c) => {
       return c.json({ code: 400, message: '无效的 neteasePlaylistId' }, 400);
     }
 
+    // 导入对已存在的本地歌单是 upsert——若该歌单正在级联删除，upsert 会在
+    // 行删除后把它复活（先查锁再写，窗口内的导入直接拒）
+    const existingRow = findPlaylistByNeteaseId(neteasePlaylistId);
+    if (existingRow && deletingPlaylists.has(existingRow.id)) {
+      return c.json({ code: 409, message: '该歌单正在删除中，请稍后再导入' }, 409);
+    }
+
     const playlist = await importPlaylistFromNetease(neteasePlaylistId, {
       // 字符串 'false'/'0' 按布尔 false 处理（Boolean('false') === true 的坑）
       isDefault: body.isDefault === true || c.req.query('isDefault') === 'true'
@@ -77,6 +85,11 @@ app.post('/playlists/:id/refresh', async (c) => {
     const existing = findPlaylistById(id);
     if (!existing) {
       return c.json({ code: 404, message: '歌单不存在' }, 404);
+    }
+    // 删除窗口内的刷新会复活行（事务交错：refresh 的 upsert 在 cascade 的
+    // delete 后提交）——前置拒绝；窗口外的并发仍由事务序列化兜底
+    if (deletingPlaylists.has(id)) {
+      return c.json({ code: 409, message: '该歌单正在删除中' }, 409);
     }
 
     const playlist = await importPlaylistFromNetease(existing.neteasePlaylistId, {

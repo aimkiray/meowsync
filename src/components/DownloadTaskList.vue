@@ -140,6 +140,7 @@
 
 <script setup>
 import { computed, h, ref, watch } from 'vue';
+import { httpsCover } from '../lib/url';
 
 const props = defineProps({
   tasks: {
@@ -224,7 +225,6 @@ const TaskRow = {
   },
   emits: ['retry-task'],
   setup(rowProps, { emit }) {
-    rowProps.emit = emit;
     return () => h('div', { class: 'flex items-start gap-2.5' }, [
       h('div', {
         class: 'w-10 h-10 border-2 border-pink-400 bg-gray-900 overflow-hidden flex-shrink-0',
@@ -234,7 +234,7 @@ const TaskRow = {
           // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底。
           // coverUrl 是上游 http 明文 CDN 地址：HTTPS 部署下被动混合内容
           // 会被浏览器拦截，显式升级 https（*.music.126.net 均支持 TLS）
-          src: String(rowProps.task.coverUrl).replace(/^http:\/\//, 'https://'),
+          src: httpsCover(rowProps.task.coverUrl),
           alt: rowProps.task.songName,
           class: 'w-full h-full object-cover',
           style: 'image-rendering: pixelated;'
@@ -282,7 +282,7 @@ const TaskRow = {
               class: 'mt-1 text-[11px] px-2 py-1 border bg-orange-700 text-white border-orange-500 hover:bg-orange-600 transition-colors',
               style: 'border-radius: 0;',
               disabled: rowProps.retryingTaskId === rowProps.task.id,
-              onClick: () => rowProps.emit('retry-task', rowProps.task.id)
+              onClick: () => emit('retry-task', rowProps.task.id)
             }, rowProps.retryingTaskId === rowProps.task.id ? '重试中...' : '重试任务')
           ].filter(Boolean))
           : null,

@@ -33,7 +33,14 @@ const MAX_BODY_BYTES = 1024 * 1024;
 // proxy 可把上游请求走私到攻击者代理，real_ip/realIP 可伪造客户端IP；
 // crypto='api' 会让上游走明文无签名通道、ua 允许篡改发往网易的 User-Agent、
 // e_r 改变上游响应形态——三者都是 createOption() 的 option 通道参数，前端从不下发，统一封禁
-const BLOCKED_PARAMS = new Set(['proxy', 'real_ip', 'realip', 'crypto', 'ua', 'e_r']);
+const BLOCKED_PARAMS = new Set([
+  'proxy', 'real_ip', 'realip', 'crypto', 'ua', 'e_r',
+  // request.js: options.ip 同样会写进 X-Real-IP/X-Forwarded-For（IP 伪造）
+  'ip',
+  // Enhanced 分叉识别的扩展参数——本版本不存在但封上没坏处：
+  // domain 可整包重定向上游请求（连带转发的登录 Cookie 一起漏给攻击者主机）
+  'domain', 'checktoken', 'randomcnip'
+]);
 
 // 由请求推导对外访问源
 // x-forwarded-* 头仅在 TRUST_PROXY=1/true 时采信——否则客户端可伪造该头，污染下发给前端的 audio-proxy 地址
