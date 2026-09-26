@@ -22,15 +22,15 @@
 - **样式框架**: TailwindCSS
 - **音频播放**: Howler.js
 - **HTTP客户端**: Axios
-- **工具库**: @vueuse/core
-- **后端API**: NeteaseCloudMusicApi + Express.js
+- **后端API**: NeteaseCloudMusicApi + Hono（单进程托管前端静态资源）
+- **实时通信**: WebSocket（远程遥控 host/controller）
 - **字体**: Fusion Pixel
 
 ## 快速开始
 
 ### 环境要求
-- Node.js 16.0 或更高版本
-- npm 或 yarn 包管理器
+- Node.js 18.0 或更高版本（推荐 22.x）
+- npm 包管理器
 
 ### 安装依赖
 ```bash
@@ -148,15 +148,15 @@ npm install
 npm start
 ```
 
-#### 生产环境部署
+#### 生产环境部署（单进程）
 ```bash
 # 构建生产版本
 npm run build:prod
 
-# 使用静态文件服务器部署
-npm install -g serve
-serve -s dist -l 3000
+# 启动后端（自动托管 dist 静态资源 + SPA fallback）
+NODE_ENV=production node netease-api-server.js
 ```
+应用与 API 均在 **3002** 端口提供访问。
 
 ### Docker部署
 
@@ -171,42 +171,29 @@ docker-compose up -d
 # 构建镜像
 docker build -t meowsync .
 
-# 运行容器
-docker run -d -p 3000:3000 -p 3002:3002 meowsync
+# 运行容器（单端口，前端+API+WebSocket 同进程）
+docker run -d -p 3002:3002 meowsync
 ```
 
-### 云平台部署
-
-#### Vercel部署
-1. Fork本项目到你的GitHub
-2. 在Vercel中导入项目
-3. 配置环境变量
-4. 部署完成
-
-#### Netlify部署
-1. 连接GitHub仓库
-2. 设置构建命令：`npm run build:prod`
-3. 设置发布目录：`dist`
-4. 配置环境变量并部署
+> **注意**：本项目依赖服务端代理播放与 WebSocket 遥控，需 Node.js 运行时，不适用于纯静态托管平台（Vercel/Netlify）。请使用 Docker 或 VPS 部署。
 
 ### 环境变量配置
 
-#### 前端环境变量
+#### 前端环境变量（构建期）
 ```bash
-VITE_PORT=3000
-VITE_API_BASE_URL=http://localhost:3002
-VITE_BACKUP_API_URL=https://your-backup-api.com
+VITE_API_BASE_URL=http://localhost:3002   # 生产单进程部署留空 = 同源自动推断
 VITE_API_TIMEOUT=10000
 VITE_BASE_PATH=/
+VITE_REMOTE_TOKEN=                        # 与后端 REMOTE_TOKEN 配对（可选）
 ```
 
-#### 后端环境变量
+#### 后端环境变量（运行期）
 ```bash
 API_PORT=3002
-HOST=localhost
-CORS_ORIGINS=http://localhost:3000
-ENABLE_REQUEST_LOG=true
-API_TIMEOUT=30000
+HOST=0.0.0.0
+CORS_ORIGINS=http://localhost:3002        # 逗号分隔多个来源；留空 = 同源
+REMOTE_TOKEN=                             # 可选：/remote WebSocket 访问令牌
+TRUST_PROXY=                              # 可选：设为 1 时采信 X-Forwarded-* 头
 ```
 
 ## 配置说明
