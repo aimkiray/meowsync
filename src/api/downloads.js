@@ -13,9 +13,12 @@ const http = axios.create({
   headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
 });
 
-// 同步阻塞型操作（单曲下载原地跑完、standalone 重试）：单曲最坏要数分钟
+// 同步阻塞型操作（单曲下载原地跑完、standalone 重试）：服务端最多 4 次尝试
+// （首次 + 3 次重试），每次最坏 = 响应头超时 300s + 流总时长硬顶 300s + 歌词/封面，
+// 最坏尾部 ≈ 20-25min。超时到点时服务端仍在后台跑完——重试会撞 409"正在下载"，
+// 并非真失败。给一个能覆盖最坏尾部的值
 const httpLong = axios.create({
-  timeout: 10 * 60 * 1000,
+  timeout: 30 * 60 * 1000,
   headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
 });
 

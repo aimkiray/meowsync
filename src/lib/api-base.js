@@ -47,11 +47,17 @@ export function resolveApiBaseUrl() {
         configuredUrl.search = ''
         configuredUrl.hash = ''
       }
+      // 非根路径保留（反代子路径部署是合法特性）但值得提示：误粘路径会静默
+      // 让所有 API 请求打到 /foo/downloads/... 再被 SPA 兜底吃掉
+      if (configuredUrl.pathname !== '/') {
+        console.warn('[api] VITE_API_BASE_URL 包含子路径，API 请求将以它为前缀:', configuredUrl.pathname)
+      }
       const configuredHost = configuredUrl.hostname
       const currentHost = window.location.hostname
-      // 显式写了默认端口（:80/:443）时 URL.port 归一化为空——只有原串没写
-      // 端口时才补 fallbackPort，别把用户显式配置吞掉
-      const hasExplicitPort = /^https?:\/\/[^/]*:\d+/i.test(configuredBase)
+      // 显式写了端口（:80/:443 会被 URL.port 归一化吞掉）才不在后面补 fallbackPort。
+      // 正则必须剥掉 userinfo（http://user:8080@host 里的数字口令不是端口）、
+      // 跳过括号化 IPv6（[::1] 里的 :1 会被误当端口）
+      const hasExplicitPort = /^https?:\/\/(?:[^@/]*@)?(?:\[[^\]]*\]|[^:/?#]*):\d+/i.test(configuredBase)
 
       // 配置了本机地址但页面从其他主机打开 → 替换主机为页面主机（保留端口），支持局域网访问
       if (isLocalHost(configuredHost) && currentHost && !isLocalHost(currentHost)) {
@@ -72,7 +78,6 @@ export function resolveApiBaseUrl() {
   }
 
   const pagePort = window.location.port
-  const standardPorts = ['', '80', '443']
   // vite preview 服务的是生产产物（PROD 已烘焙）但监听 VITE_PORT，API 在独立端口——
   // 必须排除，否则 preview 模式下所有 API 请求打到静态服务器拿 HTML。
   // 收窄到 localhost：生产部署若恰好也跑在 3100（如 docker -p 3100:3002），
@@ -89,8 +94,9 @@ export function resolveApiBaseUrl() {
     console.warn(`[api] 页面端口 ${pagePort} 与 vite preview 端口相同：若这是 vite preview --host 的局域网访问，API 请求会打到静态服务器；若是生产部署请忽略（可用 VITE_API_BASE_URL 显式指定）`)
   }
   // 单进程部署/反代：生产构建产物与 API 同源——Docker 里没有 VITE_API_PORT，
-  // 用 import.meta.env.PROD 区分（构建产物恒为 PROD），不能再靠端口反推
-  if (pageIsHttp && !isVitePreview && (import.meta.env.PROD || standardPorts.includes(pagePort) || pagePort === fallbackPort)) {
+  // 用 import.meta.env.PROD 区分（构建产物恒为 PROD）。vite dev 没有任何 API
+  // 代理，DEV 下同源只会把请求打到 dev server——开发环境永远走独立 API 端口
+  if (pageIsHttp && !isVitePreview && import.meta.env.PROD) {
     return window.location.origin
   }
   // 开发环境：vite 端口 + 独立 API 端口（默认 3101）

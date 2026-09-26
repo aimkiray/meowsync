@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
-const { resolvesToPublicIp } = require('../lib/net-guard');
+const { checkHostPublic } = require('../lib/net-guard');
 
 // 下载 URL 来自上游 API/歌单元数据（网易云/解锁源），不是直接用户输入——但明文 http 源站
 // 可被链路篡改成 302 到内网/云元数据地址，与 proxy.js 同一威胁模型：每跳都做公网校验
@@ -77,17 +77,31 @@ function toDownloadUrl(raw) {
 // "响应头之后停流"的上游会无限期占住并发工位。data 事件刷新时间戳，
 // 超过 stallMs 无数据即毁流（错误冒泡到 pipeline，走正常失败路径）
 const STALL_MS = 30000;
-function watchStall(stream, stallMs = STALL_MS) {
+function watchStall(stream, stallMs = STALL_MS, maxTotalMs = 0) {
   let lastData = Date.now();
+  const started = Date.now();
   const onData = () => { lastData = Date.now(); };
   const timer = setInterval(() => {
     if (Date.now() - lastData > stallMs) {
       stream.destroy(new Error('下载流停滞超时'));
+      return;
+    }
+    // 总时长兜底：滴流（每 <stallMs 发 1 字节）能无限刷新停滞计时，
+    // 配合 512MiB 上限可无限期占住工位——加个硬顶
+    if (maxTotalMs > 0 && Date.now() - started > maxTotalMs) {
+      stream.destroy(new Error('下载总时长超限'));
     }
   }, Math.min(stallMs, 10000));
   timer.unref();
   stream.on('data', onData);
   stream.on('close', () => clearInterval(timer));
+}
+
+// content-encoding 判定：identity 是 RFC 7231 合法 token（显式声明无编码），
+// 部分 CDN/IIS 链路会下发——与 decompress:false 配合下它不影响字节对账，放行
+function hasNonIdentityEncoding(headers) {
+  const enc = String(headers?.['content-encoding'] || '').trim().toLowerCase();
+  return enc !== '' && enc !== 'identity';
 }
 
 // 手动逐跳跟随重定向：axios maxRedirects 内部跟随、每跳不再过校验，
@@ -96,10 +110,14 @@ async function fetchStream(rawUrl, { timeout, signal }) {
   let url = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const parsed = toDownloadUrl(url);
-    // IP 字面量判段、域名走 DNS 解析：任一落入私网/保留段即拒（fail closed）。
-    // SSRF 拒绝是确定性的——标 fatal 不浪费重试
-    if (!(await resolvesToPublicIp(parsed.hostname))) {
+    // 三态判定：'blocked'（解析到私网）是确定性拦截→fatal；'error'（DNS 瞬时故障：
+    // SERVFAIL/临时断网）保持可重试，否则一次抖动就永久剥夺重试机会
+    const hostCheck = await checkHostPublic(parsed.hostname);
+    if (hostCheck === 'blocked') {
       throw fatalError('下载地址解析到非公网地址');
+    }
+    if (hostCheck !== 'ok') {
+      throw new Error('下载地址 DNS 解析失败');
     }
 
     let response;
@@ -122,6 +140,11 @@ async function fetchStream(rawUrl, { timeout, signal }) {
     } catch (error) {
       // 4xx/5xx 的响应流无人消费会悬挂 keep-alive socket——显式销毁
       error.response?.data?.destroy?.();
+      // 4xx（除 429）对该 URL 是确定性失败：重试三次白打上游。5xx/429/超时保留可重试
+      const status = error.response?.status;
+      if (status >= 400 && status < 500 && status !== 429) {
+        throw fatalError(`上游返回 ${status}`);
+      }
       throw error;
     }
 
@@ -173,7 +196,8 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     }
     await resolveSongUrls(items, { purpose: 'download' });
 
-    const songData = items[0];
+    // items[0] 可能解锁失败但后续条目有 url——选第一个可用的，而不是永远盯着第一个
+    const songData = items.find(i => i.url && !i.unlockFailed) || items[0];
     if (songData.unlockFailed) {
       throw fatalError('解锁失败，所有可用源均无匹配');
     }
@@ -192,9 +216,9 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       audioResponse.data.destroy();
       throw fatalError(`上游返回 ${audioResponse.status}`);
     }
-    // decompress:false 下 content-encoding 可见：上游违背 identity 声明，
+    // decompress:false 下 content-encoding 可见：上游回非 identity 编码，
     // 此时 content-length 与落盘字节不可对账——确定性违规，不浪费时间传完
-    if (audioResponse.headers['content-encoding']) {
+    if (hasNonIdentityEncoding(audioResponse.headers)) {
       audioResponse.data.destroy();
       throw fatalError('上游返回了压缩内容，无法校验完整性');
     }
@@ -208,7 +232,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     let downloadedLength = 0;
     let lastProgress = -1;
 
-    watchStall(audioResponse.data);
+    watchStall(audioResponse.data, STALL_MS, 300000); // 总时长与头超时对齐 5min
     audioResponse.data.on('data', (chunk) => {
       downloadedLength += chunk.length;
       // 超限即毁流——pipeline 会把该错误冒泡，removePartial 清残片
@@ -255,6 +279,8 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
   } catch (error) {
     removePartial(outputPath);
     const err = new Error(`下载音频失败: ${describeError(error)}`);
+    // aborted 标记与歌词路径对称透传：processTask 靠它区分取消与可重试失败
+    err.aborted = Boolean(error.aborted);
     err.fatal = Boolean(error.fatal);
     throw err;
   }
@@ -325,7 +351,7 @@ async function downloadCover(coverUrl, outputPath, signal) {
       response.data.destroy();
       throw fatalError(`上游返回 ${response.status}`);
     }
-    if (response.headers['content-encoding']) {
+    if (hasNonIdentityEncoding(response.headers)) {
       response.data.destroy();
       throw fatalError('上游返回了压缩内容，无法校验完整性');
     }
@@ -336,7 +362,7 @@ async function downloadCover(coverUrl, outputPath, signal) {
       throw fatalError(`封面超过大小上限 ${MAX_COVER_BYTES}`);
     }
     let coverBytes = 0;
-    watchStall(response.data);
+    watchStall(response.data, STALL_MS, 60000); // 与头超时对齐 60s
     response.data.on('data', (chunk) => {
       coverBytes += chunk.length;
       if (coverBytes > MAX_COVER_BYTES) {
@@ -361,6 +387,7 @@ async function downloadCover(coverUrl, outputPath, signal) {
   } catch (error) {
     removePartial(outputPath);
     const err = new Error(`下载封面失败: ${describeError(error)}`);
+    err.aborted = Boolean(error.aborted);
     err.fatal = Boolean(error.fatal);
     throw err;
   }

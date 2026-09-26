@@ -10,23 +10,30 @@ const {
   replaceTracksForPlaylist,
   listTracksByPlaylistId
 } = require('../repositories/playlistTracks');
+const { httpError } = require('../lib/http-error');
 
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  err.exposed = true; // 路由层按此标记透传业务消息（axios .status 不算数）
-  return err;
+// callNeteaseApi 对上游非 200 是 reject(answer{status,body,cookie})——不是 Error、
+// 不带 exposed 标记。冒泡到路由层会被一律压成 500"服务器错误"，丢失"上游拒绝/
+// 限流"的语义。归一化为 502 并带上 body.msg（注意不碰 body.cookie——那是登录态）
+async function callUpstream(apiName, params) {
+  try {
+    return await callNeteaseApi(apiName, params);
+  } catch (error) {
+    const upstreamMsg = error?.body?.msg || error?.body?.message || error?.message;
+    const detail = upstreamMsg && String(upstreamMsg).length < 120 ? `：${upstreamMsg}` : '';
+    throw httpError(502, `网易云接口请求失败${detail}`);
+  }
 }
 
 async function fetchRemotePlaylist(neteasePlaylistId) {
-  const detailResponse = await callNeteaseApi('playlist_detail', { id: neteasePlaylistId });
+  const detailResponse = await callUpstream('playlist_detail', { id: neteasePlaylistId });
   const playlist = detailResponse.body?.playlist;
   // 上游对不存在的 id 也返回 200 + playlist:null——必须区分，否则向 DB 写空名字的脏行
   if (!playlist || typeof playlist !== 'object' || !playlist.name) {
     throw httpError(404, '网易云歌单不存在');
   }
 
-  const trackResponse = await callNeteaseApi('playlist_track_all', {
+  const trackResponse = await callUpstream('playlist_track_all', {
     id: neteasePlaylistId,
     limit: playlist.trackCount || 1000,
     offset: 0

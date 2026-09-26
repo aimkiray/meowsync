@@ -107,11 +107,26 @@ async function getContentLength(url, hops = 0) {
   });
 }
 
+// 上游模块/解锁调用没有 AbortSignal 概念，且无内建超时——一个挂死的 upstream
+// 请求会让队列排空（drain）无限等待、任务卡在不可中止阶段。race 一个总时限兜底
+const UPSTREAM_TIMEOUT_MS = 30000;
+const UNBLOCK_TIMEOUT_MS = 60000; // unblockmatch 内部串行试多个源站，给得宽一些
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} 超时`)), ms);
+      timer.unref();
+    })
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function callNeteaseApi(apiName, params) {
   if (!apiModules[apiName]) {
     throw new Error(`API '${apiName}' not found`);
   }
-  return apiModules[apiName](params, request);
+  return withTimeout(apiModules[apiName](params, request), UPSTREAM_TIMEOUT_MS, `上游接口 ${apiName}`);
 }
 
 // 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）
@@ -128,7 +143,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   const originalDurations = {};
   if (ids && apiModules['song_detail']) {
     try {
-      const detail = await apiModules['song_detail']({ ids }, request);
+      const detail = await withTimeout(
+        apiModules['song_detail']({ ids }, request),
+        UPSTREAM_TIMEOUT_MS, '上游接口 song_detail'
+      );
       (detail.body?.songs || []).forEach(s => { originalDurations[s.id] = s.dt; });
     } catch (e) { /* 获取失败不阻塞 */ }
   }
@@ -143,7 +161,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
       let unlocked = false;
       for (const source of sources) {
         try {
-          const unblocked = await unblockmatch(item.id, [source]);
+          const unblocked = await withTimeout(
+            unblockmatch(item.id, [source]),
+            UNBLOCK_TIMEOUT_MS, `解锁源 ${source}`
+          );
           if (!unblocked?.url) continue;
 
           const validateDuration = !(purpose === 'download' && source === 'kuwo');

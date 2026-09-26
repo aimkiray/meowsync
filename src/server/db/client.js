@@ -56,33 +56,45 @@ function migrateDownloadTasks(database) {
       CREATE INDEX idx_download_tasks_queue ON download_tasks(queue_id)
     `);
   }
-  // (playlist_id, song_id) 唯一约束：新库由 CREATE TABLE 声明；老库可能只有旧索引
-  // 或完全没有——先删重复行，再补唯一索引统一收敛。
-  // 去重保留优先级：completed 行带文件路径，删了它文件会变孤儿；同级保留最小 id
-  database.exec(`
-    DELETE FROM download_tasks
-    WHERE id NOT IN (
-      SELECT id FROM (
-        SELECT id, ROW_NUMBER() OVER (
-          PARTITION BY playlist_id, song_id
-          ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, id
-        ) AS rn FROM download_tasks
-      ) WHERE rn = 1
-    )
-  `);
-  // IF NOT EXISTS 只认名字：同名但非唯一的旧索引会静默跳过 → 约束落空。
-  // 校验 sql 里确实带 UNIQUE 才算数，否则先删旧索引再建
-  const idx = database.prepare(`
-    SELECT sql FROM sqlite_master
-    WHERE type = 'index' AND name = 'idx_download_tasks_playlist_song'
-  `).get();
-  if (idx && !/unique/i.test(idx.sql || '')) {
-    database.exec('DROP INDEX idx_download_tasks_playlist_song');
+  // (playlist_id, song_id) 唯一约束：新库由 CREATE TABLE 的 UNIQUE(...) 生成
+  // sqlite_autoindex_*（sqlite_master.sql 为 NULL，必须走 PRAGMA 查）；老库可能
+  // 只有非唯一旧索引或完全没有——约束缺失才跑去重+补索引。
+  // 判定条件：存在任一 unique 索引且列恰好是 (playlist_id, song_id)——同名但列
+  // 不同的唯一索引（如只在 song_id 上）也会让约束落空
+  const hasCorrectUniqueIndex = database.prepare(
+    `PRAGMA index_list('download_tasks')`
+  ).all().some((index) => {
+    if (!index.unique) return false;
+    const cols = database.prepare(
+      `PRAGMA index_info('${index.name}')`
+    ).all().map(col => col.name);
+    return cols.length === 2 && cols[0] === 'playlist_id' && cols[1] === 'song_id';
+  });
+  if (!hasCorrectUniqueIndex) {
+    // 约束缺失才跑去重（约束已在时数学上不可能有重复，全表 DELETE 是纯浪费）。
+    // 去重保留优先级：completed 行带文件路径，删了它文件会变孤儿；同级保留最小 id。
+    // DROP+CREATE 放同一事务：中间崩溃留无索引状态，下次启动自愈重建
+    database.transaction(() => {
+      if (hasIndex(database, 'idx_download_tasks_playlist_song')) {
+        database.exec('DROP INDEX idx_download_tasks_playlist_song');
+      }
+      database.exec(`
+        DELETE FROM download_tasks
+        WHERE id NOT IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY playlist_id, song_id
+              ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, id
+            ) AS rn FROM download_tasks
+          ) WHERE rn = 1
+        )
+      `);
+      database.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_playlist_song
+        ON download_tasks(playlist_id, song_id)
+      `);
+    })();
   }
-  database.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_playlist_song
-    ON download_tasks(playlist_id, song_id)
-  `);
 }
 
 function initSchema(database) {

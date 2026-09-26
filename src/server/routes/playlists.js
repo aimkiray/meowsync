@@ -4,9 +4,10 @@ const {
   getPlaylistDetail,
   listSavedPlaylists
 } = require('../services/playlist-sync');
-const { deletePlaylist, findPlaylistById } = require('../repositories/playlists');
-const { deletePlaylistFiles } = require('../services/download-manager');
+const { findPlaylistById } = require('../repositories/playlists');
+const { deletePlaylistCascade } = require('../services/download-manager');
 const { readJsonBody } = require('../lib/http-body');
+const { fail, handleError } = require('../lib/http-error');
 
 const app = new Hono();
 
@@ -18,35 +19,30 @@ function parsePlaylistId(c) {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
-
-
-function handleError(c, error, tag) {
-  // err.exposed 标记的是业务层自撰消息，可回传（含 5xx 业务错误如导入上游失败）；
-  // 未标记的内部异常一律 500 且不带细节（axios .status 不视为业务标记）
-  const marked = error.exposed === true
-    && Number.isInteger(error.status) && error.status >= 400 && error.status < 600;
-  if (marked) {
-    if (error.status >= 500) console.error(`${tag}:`, error);
-    return c.json({ code: error.status, message: error.message || '请求失败' }, error.status);
-  }
-  console.error(`${tag}:`, error);
-  return c.json({ code: 500, message: '服务器错误' }, 500);
-}
-
 app.get('/playlists', (c) => {
-  return c.json({ code: 200, playlists: listSavedPlaylists() });
+  // 同步 better-sqlite3 调用也会抛（SQLITE_BUSY/IOERR）——无 catch 会冒泡到
+  // app.onError 返回英文 'Internal Server Error'，与本文件错误契约不一致
+  try {
+    return c.json({ code: 200, playlists: listSavedPlaylists() });
+  } catch (error) {
+    return handleError(c, error, '[playlists/list]');
+  }
 });
 
 app.get('/playlists/:id', (c) => {
   const id = parsePlaylistId(c);
   if (id === null) {
-    return c.json({ code: 400, message: '无效的歌单 ID' }, 400);
+    return fail(c, 400, '无效的歌单 ID');
   }
-  const playlist = getPlaylistDetail(id);
-  if (!playlist) {
-    return c.json({ code: 404, message: '歌单不存在' }, 404);
+  try {
+    const playlist = getPlaylistDetail(id);
+    if (!playlist) {
+      return fail(c, 404, '歌单不存在');
+    }
+    return c.json({ code: 200, playlist });
+  } catch (error) {
+    return handleError(c, error, '[playlists/detail]');
   }
-  return c.json({ code: 200, playlist });
 });
 
 app.post('/playlists/import', async (c) => {
@@ -95,9 +91,8 @@ app.delete('/playlists/:id', async (c) => {
     return c.json({ code: 400, message: '无效的歌单 ID' }, 400);
   }
   try {
-    // 先中止该歌单的活跃队列/单曲任务并排空清理文件，再删行——否则磁盘上留孤儿文件
-    await deletePlaylistFiles(id);
-    const deleted = deletePlaylist(id);
+    // 级联删除：deletingPlaylists 锁持有到行删除之后才释放，排空清理也在锁内
+    const deleted = await deletePlaylistCascade(id);
     if (!deleted) {
       return c.json({ code: 404, message: '歌单不存在' }, 404);
     }

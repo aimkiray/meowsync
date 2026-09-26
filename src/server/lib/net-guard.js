@@ -47,7 +47,7 @@ function isPrivateIPv6(ip) {
     (first === 0x2001 && second === 0x0002) || // 2001:2::/48 基准测试段
     (first === 0x2001 && (second & 0xfff0) === 0x0010) || // 2001:10::/28 ORCHIDv1
     (first === 0x2001 && (second & 0xfff0) === 0x0020) || // 2001:20::/28 ORCHIDv2
-    (first & 0xfff0) === 0x3ff0 || // 3fff::/20 文档段（RFC 9637）
+    (first === 0x3fff && (second & 0xf000) === 0) || // 3fff::/20 文档段（RFC 9637）
     (first === 0x64 && second === 0xff9b) // 64:ff9b::/96 + 64:ff9b:1::/48 NAT64（内嵌 v4）
   );
 }
@@ -92,32 +92,62 @@ async function resolvesToPublicIp(hostname) {
     return !isPrivateIp(bare, literalFamily);
   }
 
-  const cached = dnsCache.get(hostname);
-  if (cached && cached.expires > Date.now()) return cached.ok;
+  // hostname 归一化小写做 key：EXAMPLE.com 与 example.com 是同一查询
+  const key = hostname.toLowerCase();
+  const cached = dnsCache.get(key);
+  if (cached) {
+    if (cached.expires > Date.now()) return cached.ok;
+    dnsCache.delete(key); // 过期即删，避免陈旧值滞留
+  }
 
-  let pending = dnsInflight.get(hostname);
+  let pending = dnsInflight.get(key);
   if (!pending) {
     pending = (async () => {
-      let ok = false;
+      let result = 'error';
       try {
-        const addrs = await dns.lookup(hostname, { all: true });
-        ok = addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address, a.family));
+        const addrs = await dns.lookup(key, { all: true });
+        if (addrs.length > 0) {
+          result = addrs.every((a) => !isPrivateIp(a.address, a.family)) ? 'ok' : 'blocked';
+        }
       } catch {
-        ok = false;
+        result = 'error';
       }
-      // 满时淘汰最旧条目而非全清——突发多 host 时全清会造成缓存抖动
+      const ok = result === 'ok';
+      // 满时淘汰最旧条目而非全清——突发多 host 时全清会造成缓存抖动；
+      // delete+set 刷新插入序，热点 host 不被反复校验后仍按首次位置淘汰
       if (dnsCache.size >= DNS_CACHE_MAX) {
         dnsCache.delete(dnsCache.keys().next().value);
       }
-      dnsCache.set(hostname, {
+      dnsCache.delete(key);
+      dnsCache.set(key, {
         ok,
+        result,
         expires: Date.now() + (ok ? DNS_CACHE_TTL_OK_MS : DNS_CACHE_TTL_ERR_MS),
       });
-      return ok;
-    })().finally(() => dnsInflight.delete(hostname));
-    dnsInflight.set(hostname, pending);
+      return result;
+    })().finally(() => dnsInflight.delete(key));
+    dnsInflight.set(key, pending);
   }
   return pending;
+}
+
+/**
+ * 三态版本：'ok' 公网可放行 / 'blocked' 解析到私网（确定性拦截）/ 'error' 解析失败
+ * （瞬时故障）。file-downloader 用三态区分"私网（fatal 不重试）"与"DNS 抖动
+ * （可重试）"；proxy 等只关心放行的用布尔封装。
+ * IP 字面量无 DNS 概念：私网字面量返回 'blocked'，公网返回 'ok'。
+ */
+async function checkHostPublic(hostname) {
+  const bare = stripIpv6Brackets(hostname);
+  if (net.isIP(bare) !== 0) {
+    return isPrivateIp(bare, net.isIP(bare)) ? 'blocked' : 'ok';
+  }
+  return resolvesToPublicIp(hostname);
+}
+
+// 布尔封装：调用方只需要"是否为公网"时用这个（fail closed：error 同样拒绝）
+async function isPublicHost(hostname) {
+  return (await checkHostPublic(hostname)) === 'ok';
 }
 
 module.exports = {
@@ -126,5 +156,7 @@ module.exports = {
   isPrivateIp,
   isIpLiteral,
   stripIpv6Brackets,
-  resolvesToPublicIp
+  resolvesToPublicIp,
+  checkHostPublic,
+  isPublicHost
 };

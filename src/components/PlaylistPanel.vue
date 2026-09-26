@@ -478,9 +478,10 @@ export default {
         const rect = button.getBoundingClientRect()
         const menuWidth = 140
         // 菜单高度按可见项数算：临时歌单隐藏 4 项只剩"删除歌单"，
-        // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空
+        // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空。
+        // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 5 项悬空更安全
         const currentPlaylist = currentPlaylists.value.find(p => p.id === playlistId)
-        const itemCount = isTempPlaylist(currentPlaylist) ? 1 : 5
+        const itemCount = !currentPlaylist || isTempPlaylist(currentPlaylist) ? 1 : 5
         const menuHeight = itemCount * 38 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -563,7 +564,9 @@ export default {
     }
 
     const deletePlaylistDownloads = async (playlist) => {
+      // confirm 取消分支与 removePlaylist 行为一致：也关菜单
       if (!confirm(`确定要删除歌单 "${playlist.name}" 的已下载歌曲吗？`)) {
+        closeMenu()
         return
       }
 

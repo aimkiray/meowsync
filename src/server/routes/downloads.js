@@ -4,27 +4,9 @@ const downloadQueuesRepo = require('../repositories/downloadQueues');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 // 读流按字节硬截断：chunked/无 Content-Length 请求不会被声明值检查拦住
 const { readJsonBody } = require('../lib/http-body');
+const { fail, handleError } = require('../lib/http-error');
 
 const app = new Hono();
-
-function fail(c, status, message) {
-  return c.json({ code: status, message }, status);
-}
-
-// 业务错误统一映射：err.exposed 由 download-manager 的 httpError() 与 body 解析的
-// 413 显式标记；未标记的异常一律 500（并记录日志），不向前端泄漏内部细节之外的堆栈。
-// 不能只看 err.status——axios 的 AxiosError 自带 .status（上游响应码），透传其
-// message 会把上游错误细节当业务消息漏给客户端
-function handleError(c, error, tag) {
-  const marked = error.exposed === true
-    && Number.isInteger(error.status) && error.status >= 400 && error.status < 600;
-  if (marked) {
-    if (error.status >= 500) console.error(`${tag}:`, error);
-    return fail(c, error.status, error.message || '请求失败');
-  }
-  console.error(`${tag}:`, error);
-  return fail(c, 500, '服务器错误');
-}
 
 // 路由 :id 参数统一校验：只收纯十进制数字——Number() 会放过 '1e5'/'0x10'/' 3 '
 // 这类脏输入，parseInt 又会截断 '12abc'，两者都得拦

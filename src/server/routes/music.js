@@ -64,14 +64,16 @@ function sendUpstreamResult(c, answer) {
     : 200;
   c.status(upstreamStatus);
   // answer.body 缺失时不能把整个 envelope（status/cookie）序列化出去——
-  // cookie 明文会落进响应体。回落到空对象，状态码仍按 answer.status 透传
-  return c.json(answer.body ?? {});
+  // cookie 明文会落进响应体。但也不能回 {}——那会破坏 {code,message} 契约，
+  // 前端 extractErrorMessage 只得 undefined 回落到 axios 英文错误
+  return c.json(answer.body ?? { code: upstreamStatus, message: '上游请求失败' });
 }
 
-// 判断 catch 到的是否为上游 answer 对象（区别于真正的 Error/字符串异常）
+// 判断 catch 到的是否为上游 answer 对象（区别于真正的 Error/字符串异常）。
+// body 可缺省——上游 reject({status:460}) 无 body 时也必须被识别，否则直接 500
 function isUpstreamAnswer(err) {
   return err != null && typeof err === 'object'
-    && Number.isInteger(err.status) && err.body !== undefined;
+    && Number.isInteger(err.status);
 }
 
 app.get('/', (c) => {
@@ -102,7 +104,8 @@ app.all('/:apiName', async (c) => {
     try {
       body = await readParamsBody(c, MAX_BODY_BYTES);
     } catch (error) {
-      if (error.status === 413) {
+      // 只认显式标记的 body 超限：裸 .status 不可信（axios 错误也带 status）
+      if (error.exposed === true && error.status === 413) {
         return c.json({ code: 413, message: 'Payload Too Large' }, 413);
       }
       // 慢速/断流上传的非 413 读流错误：静默回落会把"客户端异常"打成正常上游请求，
