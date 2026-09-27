@@ -1,7 +1,7 @@
 const { Hono } = require('hono');
 // 私网/保留段判定与 DNS 解析校验抽在 src/server/lib/net-guard.js，
 // 与 file-downloader 的下载地址校验共用同一份实现
-const { resolvesToPublicIp } = require('../lib/net-guard');
+const { resolvesToPublicIp, normalizeOutboundUrl } = require('../lib/net-guard');
 
 const app = new Hono();
 
@@ -29,37 +29,25 @@ app.get('/audio-proxy', async (c) => {
   if (!targetUrl) return c.json({ code: 400, message: 'missing url' }, 400);
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
-    let parsed;
-    try {
-      parsed = new URL(targetUrl);
-    } catch {
-      return c.json({ code: 400, message: 'invalid url' }, 400);
+    // 协议/端口/credentials/FQDN 尾点与下载路径共用同一归一化（net-guard）：
+    // http/https 都放——HTTP 部署下 kuwo/官方链多是 http，浏览器直连又死在
+    // CORS，代理是唯一通道；明文回源的篡改面是音频内容本身（本来就不可信）
+    const checked = normalizeOutboundUrl(targetUrl);
+    if (!checked.ok) {
+      // 语法错误是客户端参数错误(400)，协议/端口违例是策略拒绝(403)
+      const status = checked.code === 'BAD_URL' ? 400 : 403;
+      const message = { BAD_URL: 'invalid url', BAD_SCHEME: 'forbidden protocol', BAD_PORT: 'forbidden port' }[checked.code];
+      return c.json({ code: status, message }, status);
     }
-
-    // http/https 都放：HTTP 部署下 kuwo/官方链多是 http——浏览器直连又死在
-    // CORS，代理是唯一通道；明文回源的篡改面是音频内容本身（本来就不可信），
-    // SSRF 仍由域名白名单+逐跳公网 IP 校验兜底
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return c.json({ code: 403, message: 'forbidden protocol' }, 403);
-    }
-    // FQDN 尾点归一化：'kuwo.cn.' 是合法写法但 endsWith 后缀匹配会误拒
-    const hostname = parsed.hostname.replace(/\.$/, '');
+    const parsed = checked.url;
+    const hostname = parsed.hostname;
     if (!isAllowedHost(hostname)) {
       return c.json({ code: 403, message: 'forbidden host' }, 403);
-    }
-    // 非默认端口（URL parser 会把 :443/:80 归一化为空）对 googlevideo 没有实际用途，
-    // 拦截防止代理被用来探测 Google 主机上的任意端口
-    if (parsed.port !== '') {
-      return c.json({ code: 403, message: 'forbidden port' }, 403);
     }
     // 域名解析出的地址必须是公网 IP（SSRF/DNS-rebinding 兜底，见 resolvesToPublicIp 注释）
     if (!(await resolvesToPublicIp(hostname))) {
       return c.json({ code: 403, message: 'forbidden address' }, 403);
     }
-    // 剥离 credentials：合法 host 内嵌 userinfo 会使 undici fetch 抛 TypeError，
-    // 且相对重定向会从 base URL 继承 username/password，统一清除后再作为请求/解析基准
-    parsed.username = '';
-    parsed.password = '';
     targetUrl = parsed.href;
 
     const proxyHeaders = {

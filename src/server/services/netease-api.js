@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
-const { resolvesToPublicIp } = require('../lib/net-guard');
+const { resolvesToPublicIp, normalizeOutboundUrl } = require('../lib/net-guard');
 
 // NeteaseCloudMusicApi 安装路径经 require.resolve 解析，避免依赖 process.cwd()/__dirname 布局
 function resolvePackageDir(pkg) {
@@ -63,31 +63,22 @@ function estimateDuration(contentLength, br) {
 // credentials，转发到异构主机即泄露）。探测失败一律降级 null = 跳过时长校验，不阻塞下载
 async function getContentLength(url, hops = 0) {
   if (hops > 3) return null;
-  let current;
-  try {
-    current = new URL(url);
-  } catch {
-    return null;
-  }
-  if (current.protocol !== 'http:' && current.protocol !== 'https:') {
-    return null;
-  }
-  // 与 fetchStream/proxy.js 同一收口：非标准端口探测降级跳过
-  const port = current.port === ''
-    ? (current.protocol === 'http:' ? 80 : 443)
-    : Number(current.port);
-  if (port !== 80 && port !== 443) {
-    return null;
-  }
-  current.username = '';
-  current.password = '';
+  // 与 fetchStream/proxy.js 同一收口：协议/端口/credentials 判定共用
+  // normalizeOutboundUrl，任何一项不过都降级跳过探测
+  const checked = normalizeOutboundUrl(url);
+  if (!checked.ok) return null;
+  const current = checked.url;
   if (!(await resolvesToPublicIp(current.hostname))) {
     return null;
   }
   const cleanUrl = current.toString();
   return new Promise((resolve) => {
     const mod = cleanUrl.startsWith('https') ? https : http;
-    const req = mod.request(cleanUrl, { method: 'HEAD', timeout: 5000 }, (res) => {
+    let req;
+    try {
+      // "一切失败 → null"是函数契约：http.request 对畸形 URL/选项会同步抛，
+      // 不能让 reject 漏给调用方
+      req = mod.request(cleanUrl, { method: 'HEAD', timeout: 5000 }, (res) => {
       // res 在 drain 期间仍可能收 socket 错误（对端 RST）——IncomingMessage 无
       // error 监听会抛 uncaughtException 打崩进程（上游 URL 可被 302 投毒，远程可触发）
       res.on('error', () => resolve(null));
@@ -112,7 +103,11 @@ async function getContentLength(url, hops = 0) {
       resolve(res.statusCode >= 200 && res.statusCode < 300
         ? (parseInt(res.headers['content-length']) || null)
         : null);
-    });
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
     req.on('error', () => resolve(null));
     req.on('timeout', () => { req.destroy(); resolve(null); });
     req.end();
@@ -145,8 +140,8 @@ async function callNeteaseApi(apiName, params, options = {}) {
 
 // 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）
 // - url 为空或为试听片段的条目尝试 unblockmatch 回退源
-// - purpose='download' 时：源顺序 kuwo 优先；kuwo 链接跳过时长校验（其元数据不可靠）；
-//   且不走 /audio-proxy（代理是给浏览器用的，服务端下载直连源站）
+// - 时长校验对所有源生效（kuwo 已退化为预览剪辑，校验即识别机制）；
+//   purpose='download' 走 DOWNLOAD_SOURCES 顺序且不经 /audio-proxy（直连源站）
 // - purpose='playback' 时：ytdlp 命中经 proxyOrigin 拼 /audio-proxy 回链
 async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null } = {}) {
   if (!Array.isArray(items)) return items;
@@ -179,7 +174,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             unblockmatch(item.id, [source]),
             UNBLOCK_TIMEOUT_MS, `解锁源 ${source}`
           );
-          if (!unblocked?.url) continue;
+          // 选源期就排除协议/端口不合规的回链——否则选中即 break，下载端才
+          // fatal，其他可用源被白白跳过（下载校验与 normalizeOutboundUrl 同规则）
+          if (!unblocked?.url || !normalizeOutboundUrl(unblocked.url).ok) continue;
 
           // 时长校验对所有源生效——kuwo 现退化为 ~11s 预览剪辑，校验正是
           // 识别并拒收它的机制（残片下发会被当完整曲播放/落盘，危害更大）
@@ -208,6 +205,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             : unblocked.url;
           item.unblocked = true;
           item.unblockedSource = source;
+          // 解锁文件的真实码率（item.br 仍是网易声明值）：下载端落盘后时长
+          // 对账以它为分母，直接用声明值会把低码率解锁误判成剪辑
+          item.unblockedBr = unblocked.br || null;
           item.usedAudioProxy = useProxy;
           item.freeTrialInfo = null;
           unlocked = true;
@@ -230,4 +230,4 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   return items;
 }
 
-module.exports = { callNeteaseApi, apiModules, request, resolveSongUrls };
+module.exports = { callNeteaseApi, apiModules, request, resolveSongUrls, estimateDuration };
