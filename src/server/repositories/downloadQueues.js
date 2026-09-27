@@ -65,18 +65,9 @@ function updateQueue(id, updates) {
     fields.push('status = @status');
     params.status = updates.status;
   }
-  if (updates.totalTasks !== undefined) {
-    fields.push('total_tasks = @total_tasks');
-    params.total_tasks = updates.totalTasks;
-  }
-  if (updates.completedTasks !== undefined) {
-    fields.push('completed_tasks = @completed_tasks');
-    params.completed_tasks = updates.completedTasks;
-  }
-  if (updates.failedTasks !== undefined) {
-    fields.push('failed_tasks = @failed_tasks');
-    params.failed_tasks = updates.failedTasks;
-  }
+  // 计数列刻意不接受写入：total/completed/failed 一律由
+  // download-manager 的 recountQueueCounters 从任务行状态派生，
+  // 手工写计数正是这批重构消除的漂移面
   if (updates.completedAt !== undefined) {
     fields.push('completed_at = @completed_at');
     params.completed_at = updates.completedAt;
@@ -135,66 +126,8 @@ function deleteQueuesByPlaylist(playlistId) {
   db.prepare('DELETE FROM download_queues WHERE playlist_id = ?').run(playlistId);
 }
 
-function decrementCompleted(id, amount = 1) {
-  const db = getDb();
-  const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE download_queues
-    SET completed_tasks = MAX(completed_tasks - ?, 0),
-        updated_at = ?
-    WHERE id = ?
-  `).run(amount, now, id);
-  return findQueueById(id);
-}
-
-function decrementTotal(id, amount = 1) {
-  const db = getDb();
-  const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE download_queues
-    SET total_tasks = MAX(total_tasks - ?, 0),
-        updated_at = ?
-    WHERE id = ?
-  `).run(amount, now, id);
-  return findQueueById(id);
-}
-
-function incrementCompleted(id) {
-  const db = getDb();
-  const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE download_queues
-    SET completed_tasks = completed_tasks + 1,
-        updated_at = ?
-    WHERE id = ?
-  `).run(now, id);
-  return findQueueById(id);
-}
-
-function incrementFailed(id) {
-  const db = getDb();
-  const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE download_queues
-    SET failed_tasks = failed_tasks + 1,
-        updated_at = ?
-    WHERE id = ?
-  `).run(now, id);
-  return findQueueById(id);
-}
-
-function decrementFailed(id, amount = 1) {
-  const db = getDb();
-  const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE download_queues
-    SET failed_tasks = MAX(failed_tasks - ?, 0),
-        updated_at = ?
-    WHERE id = ?
-  `).run(amount, now, id);
-  return findQueueById(id);
-}
-
+// 任务计数器无手工增减 API：一律由 download-manager 的 recountQueueCounters
+// 用状态派生的子查询重算（手工配对增减在任何异常路径漏配即永久漂移）
 module.exports = {
   createQueue,
   updateQueue,
@@ -202,10 +135,5 @@ module.exports = {
   listQueues,
   listQueuesByPlaylist,
   deleteQueue,
-  deleteQueuesByPlaylist,
-  incrementCompleted,
-  decrementCompleted,
-  decrementTotal,
-  incrementFailed,
-  decrementFailed
+  deleteQueuesByPlaylist
 };
