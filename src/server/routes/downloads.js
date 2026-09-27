@@ -146,7 +146,7 @@ app.delete('/downloads/queues/:id', async (c) => {
       return fail(c, 400, '无效的队列 ID');
     }
     await downloadManager.deleteQueue(queueId);
-    return c.json({ code: 200, message: '队列已删除' });
+    return c.json({ code: 200, data: { success: true } });
   } catch (error) {
     return handleError(c, error, '删除队列失败');
   }
@@ -200,8 +200,8 @@ app.delete('/downloads/tasks/:id', async (c) => {
     if (taskId === null) {
       return fail(c, 400, '无效的任务 ID');
     }
-    downloadManager.deleteTask(taskId);
-    return c.json({ code: 200, message: '任务已删除' });
+    const result = downloadManager.deleteTask(taskId);
+    return c.json({ code: 200, data: result });
   } catch (error) {
     return handleError(c, error, '删除任务失败');
   }

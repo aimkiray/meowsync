@@ -179,6 +179,9 @@ function hasTaskChanged(currentTask, nextTask) {
     || currentTask.downloadCover !== nextTask.downloadCover
     || currentTask.audioPath !== nextTask.audioPath
     || currentTask.lyricsPath !== nextTask.lyricsPath
+    // filesIntact/fileSize 是完成态唯二的"文件变了"信号——不比会让幻影行永久滞留
+    || currentTask.filesIntact !== nextTask.filesIntact
+    || currentTask.fileSize !== nextTask.fileSize
     || currentTask.completedAt !== nextTask.completedAt
     || currentTask.updatedAt !== nextTask.updatedAt;
 }
@@ -269,17 +272,24 @@ async function loadTasks(queueId, options = {}) {
     if (!silent && !hasLoadedTasks.value) {
       loadingTasks.value = true;
     }
-    const response = await downloadsApi.listTasks({ queueId });
+    // 单端点拿 队列+任务 原子快照——队列行与任务列表同一时刻，不会出现
+    // "队列显示完成而任务还在下载中"的中间帧（分离请求各自的延迟会交错）
+    const response = await downloadsApi.getQueue(queueId);
     // 响应可能属于上一个选中队列（并发 selectQueue 交错）——归属校验防错写
     if (String(selectedQueue.value?.id) !== String(queueId)) return;
     // 与 loadQueues 对齐：打错部署（静态服务器返回 HTML）不能让任务面板
     // 永远显示"还没有任务"
-    if (!response.data || !Array.isArray(response.data.data)) {
+    if (!response.data || !Array.isArray(response.data.data?.tasks)) {
       throw new Error('任务列表响应格式异常');
     }
-    const nextTasks = response.data.data;
+    const nextTasks = response.data.data.tasks;
     if (hasCollectionChanged(tasks.value, nextTasks, hasTaskChanged)) {
       tasks.value = nextTasks;
+    }
+    // 顺手用同一快照刷新选中队列行（避免等下一轮 listQueues 才更新状态）
+    const freshQueue = response.data.data.queue;
+    if (freshQueue && selectedQueue.value) {
+      selectedQueue.value = freshQueue;
     }
     hasLoadedTasks.value = true;
   } catch (error) {

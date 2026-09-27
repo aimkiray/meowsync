@@ -170,16 +170,6 @@ function listTasksByQueue(queueId) {
   return rows.map(mapTaskRow);
 }
 
-function listStandaloneTasksByPlaylist(playlistId) {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT * FROM download_tasks
-    WHERE playlist_id = ? AND queue_id IS NULL
-    ORDER BY id ASC
-  `).all(playlistId);
-  return rows.map(mapTaskRow);
-}
-
 function listTasksByStatus(status) {
   const db = getDb();
   const rows = db.prepare(`
@@ -193,29 +183,6 @@ function listTasksByStatus(status) {
 function deleteTask(id) {
   const db = getDb();
   db.prepare('DELETE FROM download_tasks WHERE id = ?').run(id);
-}
-
-function deleteTasksByQueue(queueId) {
-  const db = getDb();
-  db.prepare('DELETE FROM download_tasks WHERE queue_id = ?').run(queueId);
-}
-
-function findTaskByQueueAndSongId(queueId, songId) {
-  const db = getDb();
-  const row = db.prepare(`
-    SELECT * FROM download_tasks
-    WHERE queue_id = ? AND song_id = ?
-  `).get(queueId, songId);
-  return mapTaskRow(row);
-}
-
-function findTaskByPlaylistAndSongId(playlistId, songId) {
-  const db = getDb();
-  const row = db.prepare(`
-    SELECT * FROM download_tasks
-    WHERE playlist_id = ? AND queue_id IS NULL AND song_id = ?
-  `).get(playlistId, songId);
-  return mapTaskRow(row);
 }
 
 // (playlist_id, song_id) 上有唯一约束——不限 queue_id 查那一行，
@@ -257,13 +224,9 @@ module.exports = {
   updateTask,
   findTaskById,
   listTasksByPlaylist,
-  listStandaloneTasksByPlaylist,
   listTasksByQueue,
   listTasksByStatus,
   deleteTask,
-  deleteTasksByQueue,
-  findTaskByQueueAndSongId,
-  findTaskByPlaylistAndSongId,
   findAnyTaskByPlaylistAndSongId,
   countTasksByQueueAndStatus
 };
