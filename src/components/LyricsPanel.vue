@@ -41,6 +41,10 @@
             <div v-if="durationWarning" class="mb-3 p-2 bg-yellow-100 border-2 border-yellow-400 text-yellow-800 text-xs">
               ⚠️ {{ durationWarning }}
             </div>
+            <!-- 播放错误提示 -->
+            <div v-if="playbackError" class="mb-3 p-2 bg-red-100 border-2 border-red-400 text-red-800 text-xs">
+              ❌ {{ playbackError }}
+            </div>
             
             <div class="relative mx-auto w-32 h-32">
               <img
@@ -131,6 +135,10 @@ export default {
       default: false
     },
     durationWarning: {
+      type: String,
+      default: ''
+    },
+    playbackError: {
       type: String,
       default: ''
     },

@@ -74,6 +74,7 @@
             :loading-lyrics="loadingLyrics"
             :song-switching="songSwitching"
             :duration-warning="durationWarning"
+            :playback-error="playbackError"
             :collapsed="lyricsCollapsed"
             @toggle-auto-follow-lyrics="toggleAutoFollowLyrics"
             @toggle-collapse="toggleLyricsCollapse"
@@ -133,6 +134,7 @@ import { musicApi } from './api/music'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
 import { isVipSong } from './lib/song'
+import { httpsCover } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import SongList from './components/SongList.vue'
@@ -180,7 +182,15 @@ export default {
     const duration = ref(0)
     const volume = ref(80)
     const durationWarning = ref('')
+    const playbackError = ref('') // 播放失败的可见错误（解锁失败/加载超时/被自动播放策略拦截）
     const loadingLyrics = ref(false)
+    // 播放上下文快照：播 A 歌单时浏览 B 歌单不应劫持上一首/下一首/播完接续。
+    // playSong 默认把当时的 filteredSongs 定格为播放队列，歌单内导航传 preserveContext 复用
+    const playingSongs = ref([])
+    const playingPlaylistId = ref(null) // 快照所属歌单 id——持久化恢复用它而非浏览态 id
+    // Howler 加载看门狗：CDN 黑洞时 onload/onloaderror 都不会触发，
+    // 没有它 songSwitching 会永久卡住播放键
+    const PLAYBACK_LOAD_TIMEOUT_MS = 20000
     const fullscreenLyricMode = ref('original')
     const fullscreenInteractionMode = ref('auto')
     const PLAYER_STATE_STORAGE_KEY = 'meowsync-player-state'
@@ -207,6 +217,7 @@ export default {
     let howl = null
     let lyricTimer = null
     let progressRafId = null
+    let howlWatchdog = null // 加载看门狗定时器（随每个新 Howl 重置）
     let currentAbortController = null // 用于取消正在进行的网络请求
     let currentPlayingId = null // 当前正在播放的歌曲ID，用于防止竞态条件
     let selectReqId = 0 // selectPlaylist 请求序号，防止慢响应覆盖新选择
@@ -263,7 +274,15 @@ export default {
     function handleRemoteMessage(msg) {
       switch (msg.type) {
         case 'play':
-          if (howl && !isPlaying.value) howl.play()
+          // 与 togglePlay 同款的恢复路径：实例已被错误处理销毁时重走 playSong，
+          // 否则远端 play 在加载失败后静默失效
+          if (!howl) {
+            if (currentSong.value && !songSwitching.value) {
+              playSong(currentSong.value, { preserveContext: true, seekTime: currentTime.value })
+            }
+          } else if (!isPlaying.value) {
+            howl.play()
+          }
           break
         case 'pause':
           if (howl && isPlaying.value) howl.pause()
@@ -288,8 +307,21 @@ export default {
           updateVolume(msg.payload)
           break
         case 'play_song': {
-          const targetIndex = filteredSongs.value.findIndex(s => String(s.id) === String(msg.payload))
-          if (targetIndex !== -1) playSong(filteredSongs.value[targetIndex])
+          // 先在播放快照中定位（队列内导航）；命中浏览列表则视为用户跨歌单点歌，
+          // 拍新快照；两边都没有则记录日志便于排查，不静默吞掉
+          let list = playbackList()
+          let targetIndex = list.findIndex(s => String(s.id) === String(msg.payload))
+          if (targetIndex !== -1) {
+            playSong(list[targetIndex], { preserveContext: true })
+          } else {
+            list = filteredSongs.value
+            targetIndex = list.findIndex(s => String(s.id) === String(msg.payload))
+            if (targetIndex !== -1) {
+              playSong(list[targetIndex])
+            } else {
+              console.warn('[remote] play_song 目标不在播放队列或当前列表:', msg.payload)
+            }
+          }
           break
         }
         case 'request_state':
@@ -600,6 +632,9 @@ export default {
     const savePlayerStateToStorage = () => {
       const state = {
         selectedPlaylistId: selectedPlaylist.value?.id ?? null,
+        // 播放队列归属歌单：播 A 浏览 B 时刷新恢复应回到 A，
+        // 存浏览态 id 会让恢复在 B 里找不到这首歌而静默放弃
+        playingPlaylistId: playingPlaylistId.value ?? selectedPlaylist.value?.id ?? null,
         currentSongId: currentSong.value?.id ?? null,
         currentTime: Number.isFinite(currentTime.value) ? currentTime.value : 0,
         volume: Number.isFinite(volume.value) ? volume.value : 80,
@@ -650,21 +685,26 @@ export default {
     }
 
     const restorePlaybackState = async (savedState) => {
-      if (!savedState?.selectedPlaylistId || !savedState?.currentSongId) return
+      // 优先按播放队列所属歌单恢复（播 A 浏览 B 的场景），兼容旧存档回落浏览态
+      const targetPlaylistId = savedState?.playingPlaylistId ?? savedState?.selectedPlaylistId
+      if (!targetPlaylistId || !savedState?.currentSongId) return
 
-      const playlist = userPlaylists.value.find(p => String(p.id) === String(savedState.selectedPlaylistId))
+      const playlist = userPlaylists.value.find(p => String(p.id) === String(targetPlaylistId))
       if (!playlist) return
 
       const selected = await selectPlaylist(playlist)
       if (!selected) return // 恢复被更新的选择抢占或歌单加载失败，不继续播放
 
-      const restoredSongs = songs.value
+      // 在 filteredSongs（= 将要被拍进播放快照的列表）中定位，保证恢复的
+      // 歌曲一定在播放队列里；用 songs 会漏掉 VIP 过滤，导致快照里没有当前歌、
+      // 下一首跳回队首
+      const restoredSongs = filteredSongs.value
       if (!restoredSongs.length) return
 
       // 仅按歌曲ID定位：索引兜底会在歌曲被移除后错播同位置的其他歌
       const restoredIndex = restoredSongs.findIndex(song => String(song.id) === String(savedState.currentSongId))
       if (restoredIndex === -1) {
-        console.log('⏭️ 上次播放的歌曲已不在该歌单中，放弃恢复播放')
+        console.log('⏭️ 上次播放的歌曲已不在该歌单中（或被 VIP 过滤隐藏），放弃恢复播放')
         return
       }
 
@@ -730,11 +770,26 @@ export default {
       }
     }
 
+    const clearHowlWatchdog = () => {
+      if (howlWatchdog) {
+        clearTimeout(howlWatchdog)
+        howlWatchdog = null
+      }
+    }
+
+    // 当前生效的播放队列：优先播放快照（播放中浏览其他歌单不串台），
+    // 无快照时回退当前浏览列表（播放前导航路径）
+    const playbackList = () =>
+      playingSongs.value.length > 0 ? playingSongs.value : filteredSongs.value
+
     // 歌曲播放逻辑
     // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
     // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
+    // preserveContext=true 表示本次切歌属于播放队列内导航（上一首/下一首/远端点歌），
+    // 沿用已有快照；默认则从当前浏览列表拍新快照。
     const playSong = async (song, options = {}) => {
-      const { autoplay = true, seekTime = 0 } = options
+      if (!song || song.id == null) return
+      const { autoplay = true, seekTime = 0, preserveContext = false } = options
 
       console.log('🎵 播放歌曲:', song.name)
 
@@ -754,6 +809,15 @@ export default {
         // 设置歌曲切换状态
         songSwitching.value = true
         durationWarning.value = ''
+        playbackError.value = ''
+
+        // 拍播放队列快照：之后用户浏览/切换歌单不影响上一首/下一首/播完接续。
+        // 快照为空时即使 preserveContext 也要补拍——否则远端点歌作为首次播放
+        // 会让队列永远退化成 live filteredSongs，浏览切单照样劫持接续
+        if (!preserveContext || playingSongs.value.length === 0) {
+          playingSongs.value = filteredSongs.value.slice()
+          playingPlaylistId.value = selectedPlaylist.value?.id ?? null
+        }
 
         // 立即停止当前播放，防止多首歌同时播放
         if (howl) {
@@ -761,6 +825,7 @@ export default {
           howl.unload()
           howl = null
         }
+        clearHowlWatchdog()
 
         // 清除歌词定时器
         if (lyricTimer) {
@@ -790,6 +855,7 @@ export default {
         if (!songUrlData || !songUrlData.url) {
           console.error('❌ 无法获取歌曲播放链接')
           songSwitching.value = false
+          playbackError.value = '无法获取播放链接（所有音源均未命中），请稍后重试或换一首'
           if (currentAbortController === myController) currentAbortController = null
           return
         }
@@ -806,11 +872,13 @@ export default {
           preload: true,
           onload: () => {
             if (isStale()) {
+              // 过期回调不清共享看门狗——它现在属于更新的那次播放
               console.log('🚫 歌曲加载完成但已被取消/切换，不开始播放:', song.name)
               newHowl.unload()
               if (howl === newHowl) howl = null
               return
             }
+            clearHowlWatchdog()
 
             console.log('✅ 歌曲加载完成')
             duration.value = newHowl.duration()
@@ -847,6 +915,7 @@ export default {
             }
 
             isPlaying.value = true
+            playbackError.value = '' // 重试成功后清掉"播放被阻止"等提示
             startProgressLoop()
           },
           onpause: () => {
@@ -869,27 +938,71 @@ export default {
           },
           onloaderror: (id, error) => {
             console.error('❌ 歌曲加载错误:', error)
-            // 无论是否过期都回收实例；过期时不得触碰新歌的共享状态
+            // 无论是否过期都回收实例；过期时不得触碰新歌的共享状态（含看门狗）
             newHowl.unload()
             if (isStale()) return
+            clearHowlWatchdog()
+            // 'error' 事件也可能在播放中途触发（CDN 断流），isPlaying 必须复位，
+            // 否则 UI/MediaSession/远端都停在假播放态
+            isPlaying.value = false
             songSwitching.value = false
+            playbackError.value = '音频加载失败，点击播放键或重新点歌可重试'
             if (currentAbortController === myController) currentAbortController = null
             if (howl === newHowl) howl = null
             savePlayerStateToStorage()
           },
           onplayerror: (id, error) => {
+            // 常见于移动端自动播放被拦。绝不 unload：保留实例后用户手势点击
+            // 播放键即可重试（unload 会让 howl=null、播放键只剩重建路径），
+            // 这也是分享链接首访曾经的死锁根因
             console.error('❌ 播放错误:', error)
-            newHowl.unload()
-            if (isStale()) return
+            if (isStale()) {
+              // 与其他过期分支一致回收自己的实例（不碰新歌共享状态/看门狗）
+              newHowl.unload()
+              if (howl === newHowl) howl = null
+              return
+            }
+            clearHowlWatchdog()
             songSwitching.value = false
+            isPlaying.value = false
+            playbackError.value = '播放被阻止，点击播放键重试'
             if (currentAbortController === myController) currentAbortController = null
-            if (howl === newHowl) howl = null
             savePlayerStateToStorage()
           }
         })
 
         howl = newHowl
         newHowl.volume(volume.value / 100)
+
+        // CDN 黑洞/握手挂死时 onload/onloaderror 均不触发，songSwitching 会永久
+        // 卡死播放键——看门狗兜底：超时按加载失败收尾（仅未过期时动共享状态）。
+        // 必须在 howl 赋值后武装，否则 Howl 构造同步抛错时计时器会撞上 newHowl TDZ
+        howlWatchdog = setTimeout(() => {
+          howlWatchdog = null
+          if (isStale()) return
+          // 移动端首次访问：在用户手势之前 node.load() 根本不会真正发起——
+          // 这不是挂死。保留实例+松开切换锁，用户点播放键即可完成手势加载。
+          // 注意绝不能 abort myController：signal.aborted 会让后续 onload 被判
+          // 过期而销毁实例，手势白等
+          if (navigator.userActivation && !navigator.userActivation.hasBeenActive) {
+            console.log('⏸️ 等待用户手势后再加载音频（移动端自动播放限制）')
+            songSwitching.value = false
+            isPlaying.value = false
+            playbackError.value = '点击播放键开始播放'
+            if (currentAbortController === myController) currentAbortController = null
+            return
+          }
+          // 真挂死：中止尾随的歌词请求（写共享态有 currentPlayingId 守卫，只为省请求）
+          myController.abort()
+          console.error('❌ 歌曲加载超时:', song.name)
+          newHowl.unload()
+          if (howl === newHowl) howl = null
+          songSwitching.value = false
+          isPlaying.value = false
+          loadingLyrics.value = false
+          playbackError.value = '歌曲加载超时，请检查网络后重试'
+          if (currentAbortController === myController) currentAbortController = null
+        }, PLAYBACK_LOAD_TIMEOUT_MS)
 
         // 加载歌词（可随播放请求一起被取消）
         await loadLyrics(song.id, abortSignal)
@@ -908,6 +1021,7 @@ export default {
         }
         console.error('❌ 播放歌曲失败:', error)
         songSwitching.value = false
+        playbackError.value = '播放请求失败，请稍后重试'
         // 清掉上一首歌的残留歌词，避免在新歌标题下渲染旧歌词
         lyrics.value = []
         currentLyricIndex.value = 0
@@ -989,14 +1103,24 @@ export default {
 
     // 播放控制
     const togglePlay = () => {
-      if (!howl) return
-      
+      // 实例已销毁（加载失败/超时后）但歌曲仍在：原地重走 playSong 恢复，
+      // 不再让播放键变成永久摆设
+      if (!howl) {
+        if (currentSong.value && !songSwitching.value) {
+          playSong(currentSong.value, {
+            preserveContext: true,
+            seekTime: currentTime.value
+          })
+        }
+        return
+      }
+
       // 检查当前Howler实例是否对应当前歌曲
       if (currentSong.value && currentPlayingId !== currentSong.value.id) {
         console.log('🚫 播放控制被忽略，当前Howler实例不匹配当前歌曲')
         return
       }
-      
+
       if (isPlaying.value) {
         howl.pause()
       } else {
@@ -1004,61 +1128,76 @@ export default {
       }
     }
 
-    // 以歌曲ID实时定位索引，避免 VIP 过滤/换歌单导致 currentSongIndex 漂移
-    const currentFilteredIndex = () => {
+    // 以歌曲ID在播放快照中实时定位，避免 VIP 过滤/浏览切单导致索引漂移
+    const currentPlayingIndex = () => {
       if (!currentSong.value) return -1
       // 与 playSong 一致用 String 比较：不同接口返回的 id 可能是 number 或 string
-      return filteredSongs.value.findIndex(s => String(s.id) === String(currentSong.value.id))
+      return playbackList().findIndex(s => String(s.id) === String(currentSong.value.id))
     }
 
     const previousSong = () => {
-      if (filteredSongs.value.length === 0) {
+      const list = playbackList()
+      if (list.length === 0) {
         // 兜底：列表为空且音频确已停止时复位播放态（正常播放中则保持 true）
         if (!howl || !howl.playing()) isPlaying.value = false
         return
       }
 
-      const cur = currentFilteredIndex()
+      const cur = currentPlayingIndex()
       if (playMode.value === 'single' && cur >= 0) {
-        // 单曲循环模式下，重新播放当前歌曲
-        playSong(filteredSongs.value[cur])
+        // 单曲循环重播：实例还在就直接 seek 重播，不必重走 getSongUrl+加载全流程
+        if (howl && currentSong.value && String(currentSong.value.id) === String(list[cur].id)) {
+          howl.seek(0)
+          if (!howl.playing()) howl.play()
+        } else {
+          playSong(list[cur], { preserveContext: true })
+        }
         return
       }
 
       let newIndex = cur >= 0 ? cur - 1 : 0
       if (cur >= 0 && newIndex < 0) {
         if (playMode.value === 'loop') {
-          newIndex = filteredSongs.value.length - 1
+          newIndex = list.length - 1
         } else {
           return // 列表播放模式下，到达第一首就停止
         }
       }
 
-      const song = filteredSongs.value[newIndex]
+      const song = list[newIndex]
       if (song) {
-        playSong(song)
+        playSong(song, { preserveContext: true })
       }
     }
 
     const nextSong = () => {
-      if (filteredSongs.value.length === 0) {
+      const list = playbackList()
+      if (list.length === 0) {
         if (!howl || !howl.playing()) isPlaying.value = false
         return
       }
 
-      const cur = currentFilteredIndex()
+      const cur = currentPlayingIndex()
       if (playMode.value === 'single' && cur >= 0) {
-        // 单曲循环模式下，重新播放当前歌曲
-        playSong(filteredSongs.value[cur])
+        // 与 previousSong 同款：实例存活则就地重播
+        if (howl && currentSong.value && String(currentSong.value.id) === String(list[cur].id)) {
+          howl.seek(0)
+          if (!howl.playing()) howl.play()
+        } else {
+          playSong(list[cur], { preserveContext: true })
+        }
         return
       }
 
       let newIndex = cur >= 0 ? cur + 1 : 0
-      if (newIndex >= filteredSongs.value.length) {
+      if (newIndex >= list.length) {
         if (playMode.value === 'loop') {
           newIndex = 0
         } else {
-          // 列表播放到末尾：显式停止播放态，否则 isPlaying 残留 true、rAF 空转
+          // 列表播放到末尾：显式停止播放态，否则 isPlaying 残留 true、rAF 空转。
+          // 手动点下一首到末尾时音频其实还在响——必须真停 howl，
+          // 否则 UI/MediaSession 显示暂停但声音继续（自然播完路径的 stop 无害空转）
+          if (howl?.playing()) howl.pause()
           isPlaying.value = false
           currentTime.value = duration.value
           savePlaybackTimeIfNeeded(true)
@@ -1066,9 +1205,9 @@ export default {
         }
       }
 
-      const song = filteredSongs.value[newIndex]
+      const song = list[newIndex]
       if (song) {
-        playSong(song)
+        playSong(song, { preserveContext: true })
       }
     }
 
@@ -1076,7 +1215,7 @@ export default {
       if (playMode.value === 'single') {
         // 单曲循环：延迟到下一拍再重播。Howler 的 _ended 在 emit('end') 之后还会
         // 对当前 sound 执行内部 stop()，若在此同步 seek+play，刚发起的 play()
-        // Promise 会被内部 stop 打断并触发 playerror（把 howl 置空），单曲循环失效。
+        // Promise 会被内部 stop 打断并触发 playerror，单曲循环失效。
         const endedHowl = howl
         const endedSongId = currentPlayingId
         setTimeout(() => {
@@ -1158,6 +1297,69 @@ export default {
       savePlaybackTimeIfNeeded()
     })
 
+    // MediaSession：锁屏/耳机线控/系统媒体键。action handler 在挂载时注册一次，
+    // 元数据与 playbackState 随播放状态同步；不支持的环境静默跳过
+    const updateMediaSession = () => {
+      if (!('mediaSession' in navigator)) return
+      const song = currentSong.value
+      if (song) {
+        const artists = (song.ar || song.artists || [])
+          .map(a => a?.name).filter(Boolean).join(', ')
+        const pic = song.al?.picUrl || song.album?.picUrl || ''
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: song.name || '',
+            artist: artists,
+            album: song.al?.name || song.album?.name || '',
+            artwork: pic ? [{ src: httpsCover(pic), sizes: '512x512' }] : []
+          })
+        } catch { /* 旧浏览器 MediaMetadata 构造可能抛错，忽略 */ }
+      } else {
+        // 歌曲清空时同步清元数据，否则锁屏残留上一首的标题/封面
+        navigator.mediaSession.metadata = null
+      }
+      navigator.mediaSession.playbackState =
+        isPlaying.value ? 'playing' : (song ? 'paused' : 'none')
+    }
+
+    const setupMediaSessionHandlers = () => {
+      if (!('mediaSession' in navigator)) return
+      const handlers = {
+        play: () => togglePlay(),
+        pause: () => { if (howl && isPlaying.value) howl.pause() },
+        previoustrack: () => previousSong(),
+        nexttrack: () => nextSong(),
+        seekto: (d) => {
+          if (howl && typeof d?.seekTime === 'number' && Number.isFinite(d.seekTime)) {
+            const t = Math.max(0, Math.min(d.seekTime, duration.value || 0))
+            howl.seek(t)
+            currentTime.value = t
+          }
+        }
+      }
+      for (const [action, handler] of Object.entries(handlers)) {
+        try { navigator.mediaSession.setActionHandler(action, handler) } catch { /* 个别动作不受支持 */ }
+      }
+    }
+
+    const teardownMediaSession = () => {
+      if (!('mediaSession' in navigator)) return
+      for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto']) {
+        try { navigator.mediaSession.setActionHandler(action, null) } catch { /* 忽略 */ }
+      }
+      navigator.mediaSession.metadata = null
+      navigator.mediaSession.playbackState = 'none'
+    }
+
+    watch([currentSong, isPlaying], updateMediaSession)
+
+    // 后台标签页 rAF 冻结，watch(currentTime) 停转 → 进度持久化滞后；
+    // 切回前台/离开前补一次强制落盘
+    const onVisibilityFlush = () => {
+      if (document.visibilityState === 'hidden') savePlaybackTimeIfNeeded(true)
+    }
+    document.addEventListener('visibilitychange', onVisibilityFlush)
+
     watch([
       showVipSongs,
       playerHidden,
@@ -1219,6 +1421,20 @@ export default {
     // 检查是否为单首歌曲分享
     const isSingleSongShare = () => {
       return getSongIdFromUrl() !== null
+    }
+
+    // 消费掉一次性 URL 参数：不清理的话每次刷新都会重新劫持恢复逻辑
+    // （?song= 会永久抢占 restorePlaybackState；?playlists= 会重复尝试导入）
+    const consumeUrlShareParams = () => {
+      const url = new URL(window.location.href)
+      let changed = false
+      for (const key of ['song', 'playlist', 'playlists']) {
+        if (url.searchParams.has(key)) {
+          url.searchParams.delete(key)
+          changed = true
+        }
+      }
+      if (changed) window.history.replaceState(null, '', url.toString())
     }
 
     // URL歌单加载
@@ -1331,6 +1547,8 @@ export default {
         return
       }
 
+      setupMediaSessionHandlers()
+
       // 启动远程控制 host 连接
       if (remoteMode.value === 'host') {
         connectRemoteHost()
@@ -1352,6 +1570,8 @@ export default {
       
       // 如果有单首歌曲ID，尝试加载并播放
       const songId = getSongIdFromUrl()
+      // 所有参数读取已完毕——消费掉，避免下次刷新重新劫持恢复逻辑
+      consumeUrlShareParams()
       if (songId) {
         console.log('🎵 检测到单首歌曲分享，歌曲ID:', songId)
         try {
@@ -1362,6 +1582,7 @@ export default {
           if (existingPlaylist && existingPlaylist.tracks?.length) {
             console.log('🎵 找到已存在的单曲分享歌单，直接使用')
             // 使用已存在的歌单
+            selectedPlaylist.value = existingPlaylist
             currentSong.value = existingPlaylist.tracks[0]
             songs.value = existingPlaylist.tracks || []
 
@@ -1383,10 +1604,21 @@ export default {
               tracks: [songDetail]
             }
 
-            // 添加到用户歌单列表
+            // 添加到用户歌单列表；临时分享歌单数量设上限，每分享一首
+            // 永久长一个歌单会把列表无限撑长——保留最近 10 个
             userPlaylists.value.unshift(tempPlaylist)
+            const tempIndexes = userPlaylists.value
+              .map((p, i) => String(p.id).startsWith('single_song_') ? i : -1)
+              .filter(i => i !== -1)
+            // 倒序删除：升序 splice 会让后续下标前移错位
+            for (const i of tempIndexes.slice(10).reverse()) {
+              userPlaylists.value.splice(i, 1)
+            }
+            savePlaylistsToStorage()
 
-            // 设置当前歌曲
+            // 设置当前歌曲（selectedPlaylist 同步指向临时歌单：
+            // 播放快照与刷新恢复都靠它定位队列归属）
+            selectedPlaylist.value = tempPlaylist
             currentSong.value = songDetail
             songs.value = tempPlaylist.tracks || []
 
@@ -1431,7 +1663,10 @@ export default {
         clearInterval(lyricTimer)
         lyricTimer = null
       }
+      clearHowlWatchdog()
       clearTimeout(volumeSaveTimer)
+      document.removeEventListener('visibilitychange', onVisibilityFlush)
+      teardownMediaSession()
       if (howl) {
         howl.stop()
         howl.unload()
@@ -1467,6 +1702,7 @@ export default {
       fullscreenLyricMode,
       fullscreenInteractionMode,
       durationWarning,
+      playbackError,
       loadingLyrics,
       currentPage,
       pageSize,

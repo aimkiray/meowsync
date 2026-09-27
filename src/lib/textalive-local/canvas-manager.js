@@ -23,8 +23,6 @@ export class CanvasManager {
     this._container = container
     this._px = 0
     this._py = 0
-    this._rx = 0
-    this._ry = 0
     this._space = 160
     this._speed = AUTO_DRIFT_SPEED
     this._position = 0
@@ -125,8 +123,10 @@ export class CanvasManager {
       const maxRotation = DRIFT_ROTATION_RATE * dt
       this._driftAngle += Math.max(-maxRotation, Math.min(maxRotation, angleDiff))
 
-      this._px += Math.cos(this._driftAngle) * AUTO_DRIFT_SPEED * dt
-      this._py += Math.sin(this._driftAngle) * AUTO_DRIFT_SPEED * dt
+      // 触屏设备 _speed 已按 TOUCH_DRIFT_SPEED_MULTIPLIER 折半（构造器），
+      // 这里必须读实例值而非常量，否则触屏漂移与桌面同速
+      this._px += Math.cos(this._driftAngle) * this._speed * dt
+      this._py += Math.sin(this._driftAngle) * this._speed * dt
 
       this._mouseX = this._stw / 2
       this._mouseY = this._sth / 2
@@ -182,8 +182,6 @@ export class CanvasManager {
     const rect = this._container.getBoundingClientRect()
     this._mouseX = mx - rect.left
     this._mouseY = my - rect.top
-    this._rx = (this._mouseX / this._stw) * 2 - 1
-    this._ry = (this._mouseY / this._sth) * 2 - 1
     this._isOver = this._mouseX >= 0 && this._mouseX <= this._stw && this._mouseY >= 0 && this._mouseY <= this._sth
   }
 
@@ -263,85 +261,6 @@ export class CanvasManager {
     }
 
     return { start, end: end + 1 }
-  }
-
-  _getIdleCameraOffset(position, strength = 1) {
-    return {
-      x: Math.sin(position * CAMERA_IDLE_SPEED_X) * CAMERA_IDLE_AMPLITUDE_X * strength,
-      y: Math.cos(position * CAMERA_IDLE_SPEED_Y) * CAMERA_IDLE_AMPLITUDE_Y * strength
-    }
-  }
-
-  _findCameraTarget(position) {
-    const { start, end } = this._getVisibleLyricRange(position)
-    if (start >= end) {
-      return null
-    }
-
-    let settledTarget = null
-
-    for (let i = start; i < end; i++) {
-      const lyric = this._lyrics[i]
-      if (!lyric.isDraw || lyric.glyphPositions.length === 0) {
-        continue
-      }
-
-      const wordCenter = this._getWordCenter(lyric)
-      const lyricVisibleUntil = lyric.endTime + LYRIC_PERSIST_MS
-
-      if (position <= lyric.endTime) {
-        for (let g = 0; g < lyric.glyphs.length; g++) {
-          const glyphPos = lyric.glyphPositions[g]
-          if (!glyphPos) {
-            continue
-          }
-
-          const timing = this._getGlyphTiming(lyric, g)
-          const progress = this._getGlyphProgress(position, timing)
-
-          if (progress > 0 && progress < 1) {
-            const nextGlyphPos = lyric.glyphPositions[g + 1] || glyphPos
-            const leadX = lerp(glyphPos.x, nextGlyphPos.x, CAMERA_LOOKAHEAD * progress)
-            const leadY = lerp(glyphPos.y, nextGlyphPos.y, CAMERA_LOOKAHEAD * progress)
-
-            return {
-              x: lerp(leadX, wordCenter.x, CAMERA_WORD_CENTER_PULL),
-              y: lerp(leadY, wordCenter.y, CAMERA_WORD_CENTER_PULL),
-              revealStrength: progress * 0.6,
-              idleStrength: 0.2
-            }
-          }
-        }
-      }
-
-      if (position <= lyricVisibleUntil) {
-        const settleProgress = clamp((position - lyric.endTime) / LYRIC_PERSIST_MS, 0, 1)
-        const settleStrength = 1 - settleProgress
-
-        settledTarget = {
-          x: wordCenter.x,
-          y: wordCenter.y,
-          revealStrength: 0.12 * settleStrength,
-          idleStrength: 0.35 * settleProgress
-        }
-      }
-    }
-
-    return settledTarget
-  }
-
-  _getWordCenter(lyric) {
-    const first = lyric.glyphPositions[0]
-    const last = lyric.glyphPositions[lyric.glyphPositions.length - 1]
-
-    if (!first || !last) {
-      return { x: 0, y: 0 }
-    }
-
-    return {
-      x: (first.x + last.x) / 2,
-      y: (first.y + last.y) / 2
-    }
   }
 
   _getGlyphTiming(lyric, glyphIndex) {
