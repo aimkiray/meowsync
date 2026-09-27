@@ -481,6 +481,9 @@ async function processQueue(queueId, controller) {
         // race 补超时兜底：在途全卡不可中止上游段时 expireDeferred 与循环
         // 会同步饿死（与上方空-pending 分支的 race+sleep 同一写法对齐）
         await Promise.race([...runningTasks, sleep(60000)]);
+        // 容量满的等待期间 deferred 硬顶也在老化——与空-pending 分支对齐，
+        // 否则硬顶判失败要拖到下次排到空快照轮才执行
+        expireDeferred();
         deferred.clear(); // 有任务 settle = 可能有锁释放，给 deferred 再试机会
       }
       if (controller.cancelled) break;
@@ -1618,9 +1621,11 @@ function reapOrphanFiles() {
     // 目录的 referenced 都为空集——按"未登记=孤儿"会把全部在册文件删光，
     // 与空 playlists 库是同一类 DB 丢失信号；若磁盘上确有内容，跳过要留痕
     if (getDb().prepare('SELECT COUNT(*) AS c FROM download_tasks').get().c === 0) {
-      // 下载目录也为空是常态（歌单在、还没下载过）——只有磁盘确有内容时
-      // 才是"任务表疑似丢失"信号
-      if (fs.readdirSync(DOWNLOAD_BASE_DIR).length > 0) {
+      // 下载目录也为空是常态（歌单在、还没下载过）——只有磁盘确有规范歌单
+      // 目录时才是"任务表疑似丢失"信号；.DS_Store/lost+found 之类不算内容
+      const hasContent = fs.readdirSync(DOWNLOAD_BASE_DIR)
+        .some(n => /^\d+$/.test(n) && n === String(Number(n)) && Number(n) > 0);
+      if (hasContent) {
         console.warn('[downloads] 任务表为空但歌单与下载文件存在（疑似任务表丢失），跳过孤儿文件清扫');
       }
       return { removedDirs, removedFiles };
@@ -1639,11 +1644,19 @@ function reapOrphanFiles() {
           removedDirs += 1;
           continue;
         }
+        // Windows 的 path.relative 大小写不敏感（isUnderDownloadDir 对
+        // 'D:\Data' vs 'd:\data' 判"内"），但 Set 比对是大小写敏感的纯
+        // 字符串相等——盘符/大小写写法变更会打穿护栏把全部在册文件当孤儿删。
+        // win32 下双端统一小写归一
+        const normalizePath = p => {
+          const r = path.resolve(p);
+          return process.platform === 'win32' ? r.toLowerCase() : r;
+        };
         const referenced = new Set(
           downloadTasksRepo.listTasksByPlaylist(playlistId)
             .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath])
             .filter(Boolean)
-            .map(p => path.resolve(p))
+            .map(normalizePath)
         );
         // 搬迁特征：DATA_DIR/DOWNLOAD_DIR 改路径或卷整体移动后，存量登记路径
         // 指向旧位置——此时按"未登记=孤儿"会把仍在册的文件全删光，留幻影
@@ -1660,7 +1673,7 @@ function reapOrphanFiles() {
           for (const f of fs.readdirSync(subDir)) {
             const fp = path.join(subDir, f);
             try {
-              if (!referenced.has(path.resolve(fp)) && fs.lstatSync(fp).isFile()) {
+              if (!referenced.has(normalizePath(fp)) && fs.lstatSync(fp).isFile()) {
                 fs.rmSync(fp, { force: true });
                 removedFiles += 1;
               }
