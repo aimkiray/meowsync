@@ -104,6 +104,7 @@ export const musicApi = {
 
   getSongUrl: async (id, abortSignal = null) => {
     const bitrates = [320000, 192000]
+    let lastError = null
     for (const br of bitrates) {
       abortSignal?.throwIfAborted?.()
 
@@ -130,10 +131,13 @@ export const musicApi = {
         // 把部署问题降级成误导性的"版权限制"
         if (isAbortError(error) || error?.isShapeError
             || String(error?.message ?? '').includes('版权限制')) throw error
+        lastError = error
         console.warn(`音质 ${br} 获取失败:`, error?.message)
       }
     }
-    throw new Error('无法获取歌曲播放链接，可能是版权限制')
+    // 真实错误优先透出：全部码率失败时把 5xx/超时归因塌缩成"版权限制"
+    // 会误导排障方向
+    throw lastError || new Error('无法获取歌曲播放链接，可能是版权限制')
   },
 
   getDownloadUrl: async (id, bitrate = 320000, abortSignal = null) => {
@@ -155,23 +159,28 @@ export const musicApi = {
     const fileName = `${artists} - ${song.name}.${downloadData.type}`
       .replace(/[\\/:*?"<>|]/g, '_')
 
-    // 跨域 URL 的 download 属性会被浏览器忽略，需拉取为 blob 后触发本地下载
-    const blobResponse = await fetch(downloadData.url)
+    // 跨域 URL 的 download 属性会被浏览器忽略，需拉取为 blob 后触发本地下载。
+    // 解锁源 CDN（kuwo/googlevideo 等）基本不带 ACAO，fetch 会被 CORS 拒——
+    // https 目标一律走同源 /audio-proxy 中转（服务端允许重定向跟随+公网校验）；
+    // http 目标代理端拒收只能直连，尽力而为
+    const fetchUrl = /^https:\/\//i.test(downloadData.url)
+      ? `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
+      : downloadData.url
+    const blobResponse = await fetch(fetchUrl)
     if (!blobResponse.ok) throw new Error(`下载失败: HTTP ${blobResponse.status}`)
     const blob = await blobResponse.blob()
     const objectUrl = URL.createObjectURL(blob)
 
-    try {
-      const link = document.createElement('a')
-      link.href = objectUrl
-      link.download = fileName
-      link.style.display = 'none'
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-    } finally {
-      URL.revokeObjectURL(objectUrl)
-    }
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = fileName
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    // 吊销必须延迟：click 同步触发但浏览器取流是异步的，立即 revoke 在
+    // Safari/旧 Firefox 上会取消刚启动的下载
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
     return { success: true, fileName, bitrate: downloadData.bitrate, size: downloadData.size }
   },
 

@@ -44,12 +44,18 @@
             
             <div class="relative mx-auto w-32 h-32">
               <img
+                v-if="currentSong.al?.picUrl || currentSong.album?.picUrl"
                 :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
                 :alt="currentSong.name"
                 class="w-full h-full object-cover border-4 border-pink-400"
                 :class="{ 'playing-animation': isPlaying }"
                 style="border-radius: 0; image-rendering: pixelated;"
               />
+              <div
+                v-else
+                class="w-full h-full flex items-center justify-center border-4 border-pink-400 text-3xl text-pink-300"
+                style="border-radius: 0;"
+              >♪</div>
             </div>
             <h3 class="mt-3 text-lg font-bold text-pink-300">{{ currentSong.name }}</h3>
             <p class="text-purple-300">

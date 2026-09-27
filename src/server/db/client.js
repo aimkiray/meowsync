@@ -74,11 +74,20 @@ const DOWNLOAD_TASK_COLUMNS = {
   updated_at: 'TEXT'
 };
 
+// 多进程首启竞态：hasColumn 检查与 ALTER 之间对方可能已加列——
+// duplicate column 按"列已就绪"对待而不是启动即崩
+function addColumnIfMissing(database, table, column, definition) {
+  if (hasColumn(database, table, column)) return;
+  try {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (error) {
+    if (!String(error?.message || '').includes('duplicate column')) throw error;
+  }
+}
+
 function migrateDownloadTasks(database) {
   for (const [column, type] of Object.entries(DOWNLOAD_TASK_COLUMNS)) {
-    if (!hasColumn(database, 'download_tasks', column)) {
-      database.exec(`ALTER TABLE download_tasks ADD COLUMN ${column} ${type}`);
-    }
+    addColumnIfMissing(database, 'download_tasks', column, type);
   }
   if (!hasIndex(database, 'idx_download_tasks_queue')) {
     database.exec(`
@@ -169,9 +178,7 @@ const LEGACY_TABLE_COLUMNS = {
 function migrateLegacyTables(database) {
   for (const [table, columns] of Object.entries(LEGACY_TABLE_COLUMNS)) {
     for (const [column, type] of Object.entries(columns)) {
-      if (!hasColumn(database, table, column)) {
-        database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-      }
+      addColumnIfMissing(database, table, column, type);
     }
   }
 

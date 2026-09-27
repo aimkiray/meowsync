@@ -23,12 +23,18 @@
           <!-- 歌曲信息 -->
           <div class="flex items-center space-x-3 flex-1 min-w-0 mr-2">
             <img
+              v-if="currentSong.al?.picUrl || currentSong.album?.picUrl"
               :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
               :alt="currentSong.name"
               class="w-12 h-12 object-cover flex-shrink-0 border-2 border-pink-400"
               :class="{ 'playing-animation': isPlaying }"
               style="border-radius: 0; image-rendering: pixelated;"
             />
+            <div
+              v-else
+              class="w-12 h-12 flex items-center justify-center flex-shrink-0 border-2 border-pink-400 text-pink-300"
+              style="border-radius: 0;"
+            >♪</div>
             <div class="min-w-0 flex-1">
               <h4 class="font-medium text-pink-300 truncate text-sm">{{ currentSong.name }}</h4>
               <p class="text-xs text-purple-300 truncate">
@@ -65,12 +71,18 @@
               <!-- 左：歌曲信息 -->
               <div class="flex items-center space-x-3 min-w-0 flex-1">
                 <img
+                  v-if="currentSong.al?.picUrl || currentSong.album?.picUrl"
                   :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
                   :alt="currentSong.name"
                   class="w-12 h-12 object-cover border-2 border-pink-400 flex-shrink-0"
                   :class="{ 'playing-animation': isPlaying }"
                   style="border-radius: 0; image-rendering: pixelated;"
                 />
+                <div
+                  v-else
+                  class="w-12 h-12 flex items-center justify-center border-2 border-pink-400 flex-shrink-0 text-pink-300"
+                  style="border-radius: 0;"
+                >♪</div>
                 <div class="min-w-0 flex-1">
                   <h4 class="font-medium text-pink-300 truncate">{{ currentSong.name }}</h4>
                   <p class="text-sm text-purple-300 truncate">
@@ -227,7 +239,9 @@ export default {
     }
 
     const progressPercentage = computed(() => {
-      return props.duration > 0 ? (props.currentTime / props.duration) * 100 : 0
+      return props.duration > 0
+        ? Math.max(0, Math.min(100, (props.currentTime / props.duration) * 100))
+        : 0
     })
 
     return {

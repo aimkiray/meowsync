@@ -9,7 +9,7 @@ const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || '';
 // 默认超时：轮询/查询类请求挂起时必须能 settle——裸 axios 无超时会让
 // AdminPanel 的 pollInFlight 标志永久卡住、轮询停摆
 const http = axios.create({
-  timeout: Number(import.meta.env.VITE_API_TIMEOUT) || 15000,
+  timeout: Number(import.meta.env.VITE_API_TIMEOUT) || 10000,
   headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
 });
 

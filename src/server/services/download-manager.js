@@ -10,6 +10,7 @@ const fileDownloader = require('./file-downloader');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
 const { deletingPlaylists, deletingQueues } = require('../lib/deletion-locks');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 
 // 下载文件根目录：<dataDir>/downloads，可用 DOWNLOAD_DIR 覆盖（容器内指到挂载卷）
 // resolve 归一化：路径安全比较依赖绝对路径
@@ -84,9 +85,13 @@ function isUnderDownloadDir(filePath) {
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
-// errorMessage 会经 API 透出——剥掉下载根目录绝对路径，避免把服务器文件系统布局暴露给客户端
+// errorMessage 会经 API 透出——剥掉绝对路径，避免把服务器文件系统布局暴露
+// 给客户端：先保留 <downloads> 可读标记，其余绝对路径（tmpdir/dbPath 相关
+// fs 错误）用通用剥离兜底
 function sanitizeErrorMessage(message) {
-  return String(message || '').split(DOWNLOAD_BASE_DIR).join('<downloads>');
+  return stripAbsolutePaths(
+    String(message || '').split(DOWNLOAD_BASE_DIR).join('<downloads>')
+  );
 }
 
 // 任务对象经 API 透出前把绝对路径相对化（audio/xxx.mp3）：与 sanitizeErrorMessage 同一
@@ -860,8 +865,10 @@ async function cancelQueue(queueId) {
     // 否则永久残留；但协程本身可能还在跑——追进僵尸集，让删除/停机
     // 路径仍能 abort 并排空它在途的流
     setTimeout(() => {
-      if (!controller.settled) zombieControllers.add(controller);
-      release();
+      try {
+        if (!controller.settled) zombieControllers.add(controller);
+        release(); // recountQueueCounters 可能踩已删行——不能让 timer 回调炸进程
+      } catch { /* 尽力而为 */ }
     }, DRAIN_TIMEOUT_MS + 5000).unref?.();
   }
 
@@ -925,12 +932,15 @@ async function deleteQueue(queueId) {
 
   const tasks = downloadTasksRepo.listTasksByQueue(queueId);
   // 行先删、文件后删（理由同 deleteTask）；显式删行不依赖 FK——老库的
-  // queue_id 列是 ALTER 补的、没有级联声明
+  // queue_id 列是 ALTER 补的、没有级联声明。事务化：半途 SQLITE_BUSY/IOERR
+  // 不留"子行删一半、队列行还在"的不一致
   const filePaths = tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath]);
-  for (const task of tasks) {
-    downloadTasksRepo.deleteTask(task.id);
-  }
-  downloadQueuesRepo.deleteQueue(queueId);
+  getDb().transaction(() => {
+    for (const task of tasks) {
+      downloadTasksRepo.deleteTask(task.id);
+    }
+    downloadQueuesRepo.deleteQueue(queueId);
+  })();
   // 在途任务的流已被 abort：正在写的那段残片由 downloader 的 removePartial 清，
   // 已落盘的前段（如 audio 已完成、歌词在途）仍要删；空目录骨架顺手剪掉
   // （目录非空时 rmdirSync 安全跳过——同歌单 standalone/其他队列文件不受影响）
@@ -995,6 +1005,14 @@ function deleteTask(taskId) {
         && (activeQueues.has(task.queueId) || drainingQueues.has(task.queueId)
             || [...zombieControllers].some(z => z.queueId === task.queueId)))) {
     throw httpError(409, '任务正在下载中，请先取消所在队列');
+  }
+  // 删除窗口锁：级联排空会先把控制器移出 Map 再 await——窗口内"在跑"判定
+  // 失效，行删后协程继续写盘成孤儿文件
+  if (task.queueId && deletingQueues.has(task.queueId)) {
+    throw httpError(409, '所在队列正在删除中');
+  }
+  if (deletingPlaylists.has(task.playlistId)) {
+    throw httpError(409, '该歌单正在删除中');
   }
 
   // 行先删、文件后删：崩溃窗口反过来留的是"行还在但文件没了"的幻影
@@ -1195,6 +1213,11 @@ async function deleteSongFiles(playlistId, songId) {
             || [...zombieControllers].some(z => z.queueId === t.queueId))))) {
     throw httpError(409, '任务正在下载中，请先取消所在队列');
   }
+  // 删除窗口锁（理由同 deleteTask）：排空期间在跑判定会失效
+  if (deletingPlaylists.has(resolvedPlaylistId)
+      || tasks.some(t => t.queueId && deletingQueues.has(t.queueId))) {
+    throw httpError(409, '该歌单或队列正在删除中');
+  }
 
   // 行先删、文件后删（理由同 deleteTask：幻影 completed 行比孤儿文件危害大）
   for (const task of tasks) {
@@ -1216,7 +1239,15 @@ async function deletePlaylistDownloadedFiles(playlistId) {
   if (resolvedPlaylistId === null) {
     throw httpError(404, '歌单不存在');
   }
+  // 删除窗口锁（理由同 deleteTask）：cascade/队列排空期间控制器已移出 Map，
+  // 窗口内下载中的任务会被错判为"未在跑"而删行——协程继续写盘成孤儿
+  if (deletingPlaylists.has(resolvedPlaylistId)) {
+    throw httpError(409, '该歌单正在删除中');
+  }
   const tasks = downloadTasksRepo.listTasksByPlaylist(resolvedPlaylistId);
+  if (tasks.some(t => t.queueId && deletingQueues.has(t.queueId))) {
+    throw httpError(409, '该歌单下有队列正在删除中');
+  }
   const downloadedTasks = tasks.filter(
     task => !standaloneRunning.has(task.id)
       && !(task.status === 'downloading' && task.queueId
@@ -1552,6 +1583,57 @@ async function shutdownAll() {
   }
 }
 
+// 启动期孤儿文件清扫：崩溃/SIGKILL/OOM 截断在途流会把半成品留在最终文件名
+// 上而路径从未落库（FD pipeline 完成与 updateTask 之间、行删与 unlink 之间）。
+// DB 是唯一事实源——歌单目录在 playlists 表里无行的整棵删除；歌单还在的，
+// audio/lyrics/covers 子目录里未被任何任务行引用的文件删除。
+// 保守边界：只动 downloads/<纯数字目录>/{audio,lyrics,covers} 下的文件——
+// 目录名非纯数字或子目录外的内容（用户手放的任何东西）一律不碰
+function reapOrphanFiles() {
+  let removedDirs = 0;
+  let removedFiles = 0;
+  try {
+    if (!fs.existsSync(DOWNLOAD_BASE_DIR)) return { removedDirs, removedFiles };
+    for (const entry of fs.readdirSync(DOWNLOAD_BASE_DIR, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+      const playlistId = Number(entry.name);
+      const playlistDir = path.join(DOWNLOAD_BASE_DIR, entry.name);
+      if (!playlistsRepo.findPlaylistById(playlistId)) {
+        fs.rmSync(playlistDir, { recursive: true, force: true });
+        removedDirs += 1;
+        continue;
+      }
+      const referenced = new Set(
+        downloadTasksRepo.listTasksByPlaylist(playlistId)
+          .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath])
+          .filter(Boolean)
+          .map(p => path.resolve(p))
+      );
+      for (const sub of ['audio', 'lyrics', 'covers']) {
+        const subDir = path.join(playlistDir, sub);
+        if (!fs.existsSync(subDir)) continue;
+        for (const f of fs.readdirSync(subDir)) {
+          const fp = path.join(subDir, f);
+          try {
+            if (!referenced.has(path.resolve(fp)) && fs.statSync(fp).isFile()) {
+              fs.rmSync(fp, { force: true });
+              removedFiles += 1;
+            }
+          } catch { /* 单个文件失败不阻塞整体清扫 */ }
+        }
+      }
+      // 空目录骨架复用现有剪枝（参数为空数组即只剪不删文件）
+      cleanupPlaylistFilesAndDirs(playlistId, []);
+    }
+  } catch (error) {
+    console.warn('[downloads] 孤儿文件清扫失败:', error?.message || error);
+  }
+  if (removedDirs > 0 || removedFiles > 0) {
+    console.log(`[downloads] 孤儿清理: ${removedDirs} 个目录, ${removedFiles} 个文件`);
+  }
+  return { removedDirs, removedFiles };
+}
+
 // 启动恢复：上次崩溃/强杀残留的 running/paused 队列与 downloading 任务
 // 没有任何内存控制器了，复位为 pending 让用户可再次启动
 function recoverStaleStates() {
@@ -1589,5 +1671,6 @@ module.exports = {
   deleteSongFiles,
   deletePlaylistDownloadedFiles,
   recoverStaleStates,
+  reapOrphanFiles,
   shutdownAll
 };
