@@ -9,6 +9,14 @@ const SPAWN_RADIUS_Y = 2
 const DRIFT_DIRECTION_CHANGE_MIN_MS = 2000
 const DRIFT_DIRECTION_CHANGE_MAX_MS = 6000
 const DRIFT_ROTATION_RATE = 0.8
+// 行轴方向：每句歌词抽一个，同句词块沿该轴链式排布（随机感靠句间切换）。
+// 只收可读方向：右/下/斜下——逆行（←↑↖）在格点上排布会破坏阅读顺序
+const LINE_DIRECTIONS = [
+  { x: 1, y: 0 },
+  { x: 0, y: 1 },
+  { x: 1, y: 1 }
+]
+const GLYPH_SLIDE_IN_CELLS = 0.55
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
@@ -34,6 +42,8 @@ export class CanvasManager {
     this._driftAngle = Math.random() * Math.PI * 2
     this._driftTargetAngle = this._driftAngle
     this._nextDriftChange = 0
+    // lineId -> { dir, tailX, tailY }：行轴方向与该句已排布链的末端
+    this._lineState = new Map()
 
     this._can = document.createElement('canvas')
     this._ctx = this._can.getContext('2d')
@@ -78,11 +88,13 @@ export class CanvasManager {
     this._py = 0
     this._position = 0
     this._activeLyricIndex = -1
+    this._lineState.clear()
     this._lyrics.forEach((lyric) => {
       lyric.anchorX = 0
       lyric.anchorY = 0
       lyric.lastGlyphX = 0
       lyric.lastGlyphY = 0
+      lyric.dir = null
       lyric.isDraw = false
       lyric.slotKeys = []
       lyric.glyphPositions = []
@@ -327,10 +339,10 @@ export class CanvasManager {
       return candidates
     }
 
-    const tryPlaceWord = (startX, startY, lyric) => {
+    const tryPlaceWord = (startX, startY, lyric, dir) => {
       const positions = []
       for (let i = 0; i < lyric.glyphs.length; i++) {
-        positions.push({ x: startX + i, y: startY })
+        positions.push({ x: startX + dir.x * i, y: startY + dir.y * i })
       }
 
       const slotKeys = getSlotKeys(positions)
@@ -342,6 +354,33 @@ export class CanvasManager {
       return null
     }
 
+    const lineStateOf = (lyric) => {
+      let state = this._lineState.get(lyric.lineId)
+      if (!state) {
+        state = {
+          dir: LINE_DIRECTIONS[Math.floor(Math.random() * LINE_DIRECTIONS.length)],
+          tailX: null,
+          tailY: null
+        }
+        this._lineState.set(lyric.lineId, state)
+      }
+      return state
+    }
+
+    const commitPlacement = (lyric, state, result, anchorX, anchorY) => {
+      lyric.glyphPositions = result.positions
+      lyric.slotKeys = result.slotKeys
+      lyric.anchorX = anchorX
+      lyric.anchorY = anchorY
+      lyric.dir = state.dir
+      lyric.lastGlyphX = result.positions[result.positions.length - 1].x
+      lyric.lastGlyphY = result.positions[result.positions.length - 1].y
+      // 链尾 = 末字格沿行轴再延一格：下一块从这里接着排，同句连成字链
+      state.tailX = lyric.lastGlyphX + state.dir.x
+      state.tailY = lyric.lastGlyphY + state.dir.y
+      lyric.isDraw = true
+    }
+
     for (let i = start; i < end; i += 1) {
       const lyric = this._lyrics[i]
 
@@ -349,22 +388,34 @@ export class CanvasManager {
         if (position < lyric.endTime) {
           // Number.isFinite 才能挡住 undefined（Number.isNaN(undefined) 为 false 会放行）
           if (Number.isFinite(this._mouseX) && !lyric.isDraw) {
-            const nx = Math.floor((-this._px + this._mouseX) / space)
-            const ny = Math.floor((-this._py + this._mouseY) / space)
+            const state = lineStateOf(lyric)
+            const dir = state.dir
+            // 行轴是单向延伸的（→↓↘），以焦点为锚点会让长句尾部探出屏幕。
+            // 锚点沿行轴反推半个"行长"（非块长），让整句大致以焦点为中心展开；
+            // 链式候选不受影响（tailX 已是精确链尾）
+            const backstep = Math.min(Math.floor((lyric.lineLength || lyric.glyphs.length) / 2), 8)
+            const nx = Math.floor((-this._px + this._mouseX) / space) - dir.x * backstep
+            const ny = Math.floor((-this._py + this._mouseY) / space) - dir.y * backstep
 
-            const candidates = buildSpawnCandidates(nx, ny)
+            // 链式候选优先：同句下一块从上一块链尾沿行轴延伸（含垂直向
+            // 折行备选），占满才退回焦点散布——阅读顺序由相邻性保持
+            const candidates = []
+            if (state.tailX !== null) {
+              const perpX = -dir.y
+              const perpY = dir.x
+              candidates.push(
+                { x: state.tailX, y: state.tailY },
+                { x: state.tailX + perpX, y: state.tailY + perpY },
+                { x: state.tailX - perpX, y: state.tailY - perpY }
+              )
+            }
+            candidates.push(...buildSpawnCandidates(nx, ny))
+
             let placed = false
-
             for (const candidate of candidates) {
-              const result = tryPlaceWord(candidate.x, candidate.y, lyric)
+              const result = tryPlaceWord(candidate.x, candidate.y, lyric, dir)
               if (result) {
-                lyric.glyphPositions = result.positions
-                lyric.slotKeys = result.slotKeys
-                lyric.anchorX = candidate.x
-                lyric.anchorY = candidate.y
-                lyric.lastGlyphX = result.positions[result.positions.length - 1].x
-                lyric.lastGlyphY = result.positions[result.positions.length - 1].y
-                lyric.isDraw = true
+                commitPlacement(lyric, state, result, candidate.x, candidate.y)
                 placed = true
                 break
               }
@@ -379,15 +430,9 @@ export class CanvasManager {
                 const rn = n === 0 ? 1 : n * 4
 
                 for (let r = 0; r < rn; r += 1) {
-                  const result = tryPlaceWord(nx + tx, ny + ty, lyric)
+                  const result = tryPlaceWord(nx + tx, ny + ty, lyric, dir)
                   if (result) {
-                    lyric.glyphPositions = result.positions
-                    lyric.slotKeys = result.slotKeys
-                    lyric.anchorX = nx + tx
-                    lyric.anchorY = ny + ty
-                    lyric.lastGlyphX = result.positions[result.positions.length - 1].x
-                    lyric.lastGlyphY = result.positions[result.positions.length - 1].y
-                    lyric.isDraw = true
+                    commitPlacement(lyric, state, result, nx + tx, ny + ty)
                     break hitcheck
                   }
 
@@ -405,7 +450,7 @@ export class CanvasManager {
 
         if (lyric.isDraw && isVisible) {
           if (!lyric.slotKeys?.length) {
-            const result = tryPlaceWord(lyric.anchorX, lyric.anchorY, lyric)
+            const result = tryPlaceWord(lyric.anchorX, lyric.anchorY, lyric, lyric.dir || LINE_DIRECTIONS[0])
             if (result) {
               lyric.glyphPositions = result.positions
               lyric.slotKeys = result.slotKeys
@@ -452,12 +497,20 @@ export class CanvasManager {
             const settledAlpha = 1 - settleProgress * 0.82
             const scale = 0.82 + 0.18 * easedIntro
             const alpha = (0.42 + 0.58 * easedIntro) * settledAlpha
-            const verticalOffset = (1 - easedIntro) * space * 0.02
+            // 吐字：单字从行轴反方向滑入落位——像被逐字"吐"出来，
+            // 阅读顺序由滑入方向显式表达，斜排也能跟上
+            const dir = lyric.dir || LINE_DIRECTIONS[0]
+            const slide = (1 - easedIntro) * space * GLYPH_SLIDE_IN_CELLS
             const fontSize = space * 0.5 * scale
 
             ctx.save()
             ctx.globalAlpha = alpha
-            ctx.translate(px, py + fontSize * 0.37 + verticalOffset)
+            ctx.translate(
+              px - dir.x * slide,
+              py - dir.y * slide + fontSize * 0.37
+            )
+            // 微旋转收敛：交替 ±，弱化机械感
+            ctx.rotate((1 - easedIntro) * 0.18 * (g % 2 ? 1 : -1))
             ctx.font = `bold ${fontSize}px Fusion Pixel, Noto Sans SC, sans-serif`
             ctx.fillText(glyph, 0, 0)
             ctx.restore()
