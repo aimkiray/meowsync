@@ -478,7 +478,9 @@ async function processQueue(queueId, controller) {
       if (controller.cancelled) break;
 
       while (runningTasks.length >= concurrentLimit && !controller.cancelled) {
-        await Promise.race(runningTasks);
+        // race 补超时兜底：在途全卡不可中止上游段时 expireDeferred 与循环
+        // 会同步饿死（与上方空-pending 分支的 race+sleep 同一写法对齐）
+        await Promise.race([...runningTasks, sleep(60000)]);
         deferred.clear(); // 有任务 settle = 可能有锁释放，给 deferred 再试机会
       }
       if (controller.cancelled) break;
@@ -494,7 +496,9 @@ async function processQueue(queueId, controller) {
           // processTask 内部已自吞常规失败；走到这里的是 try 之前的早期抛错。
           // 路径锁冲突(409)是瞬时态（另一任务正在写同路径），任务保持 pending 留给下一轮重试，
           // 只有真正的启动失败才标 failed——否则会让 Promise.all 砸掉整个队列
-          if (error.status === 409) {
+          // 409 但无 lockKeys：锁冲突必然带命中键——空键集是未知 409 来源，
+          // 当 deferred 会立即被 expireDeferred 放行→重派→再 409 空转死循环
+          if (error.status === 409 && error.lockKeys?.length > 0) {
             deferred.add(task.id);
             // "同一段等待"才延续计时：上次冲突记录的锁键仍被持有 = 连续等锁；
             // 键已释放（化石或旧冲突已解）= 新一轮冲突，重置计时起点
@@ -1260,7 +1264,9 @@ async function deletePlaylistDownloadedFiles(playlistId) {
       && !(task.status === 'downloading' && task.queueId
           && (activeQueues.has(task.queueId) || drainingQueues.has(task.queueId)
               || [...zombieControllers].some(z => z.queueId === task.queueId)))
-      && (task.status === 'completed' || task.audioPath || task.lyricsPath || task.coverPath)
+      // pending 行可能携已完成分段的路径（abort/重试复位不清路径字段）——
+      // 那些文件属于待续跑的任务，删了会缺歌；只收终态行
+      && (task.status === 'completed' || task.status === 'failed')
   );
 
   let deletedSongs = 0;
@@ -1608,6 +1614,17 @@ function reapOrphanFiles() {
     // 为空，若无护栏整棵 downloads 树都会被当作"无歌单"删掉。新装不会有
     // downloads 内容，跳过清扫零代价
     if (playlistsRepo.listPlaylists().length === 0) return { removedDirs, removedFiles };
+    // 对称护栏：playlists 非空但任务表为空/被清空（部分备份恢复）时，每个歌单
+    // 目录的 referenced 都为空集——按"未登记=孤儿"会把全部在册文件删光，
+    // 与空 playlists 库是同一类 DB 丢失信号；若磁盘上确有内容，跳过要留痕
+    if (getDb().prepare('SELECT COUNT(*) AS c FROM download_tasks').get().c === 0) {
+      // 下载目录也为空是常态（歌单在、还没下载过）——只有磁盘确有内容时
+      // 才是"任务表疑似丢失"信号
+      if (fs.readdirSync(DOWNLOAD_BASE_DIR).length > 0) {
+        console.warn('[downloads] 任务表为空但歌单与下载文件存在（疑似任务表丢失），跳过孤儿文件清扫');
+      }
+      return { removedDirs, removedFiles };
+    }
     for (const entry of fs.readdirSync(DOWNLOAD_BASE_DIR, { withFileTypes: true })) {
       try { // 单个坏条目（EPERM/ENOTDIR/BUSY）不中止后续歌单目录的清扫
         // isDirectory 不跟随 symlink（顶层安全）；目录名必须是规范数字形式——
@@ -1615,6 +1632,7 @@ function reapOrphanFiles() {
         if (!entry.isDirectory() || !/^\d+$/.test(entry.name)
             || entry.name !== String(Number(entry.name))) continue;
         const playlistId = Number(entry.name);
+        if (playlistId <= 0) continue; // '0' 规范但绝非本应用产物
         const playlistDir = path.join(DOWNLOAD_BASE_DIR, entry.name);
         if (!playlistsRepo.findPlaylistById(playlistId)) {
           fs.rmSync(playlistDir, { recursive: true, force: true });
@@ -1628,11 +1646,11 @@ function reapOrphanFiles() {
             .map(p => path.resolve(p))
         );
         // 搬迁特征：DATA_DIR/DOWNLOAD_DIR 改路径或卷整体移动后，存量登记路径
-        // 全落在当前 base 外——此时按"未登记=孤儿"会把仍在册的文件全删光，
-        // 留幻影 completed 行指向已删文件。宁可不扫
-        if (referenced.size > 0
-            && [...referenced].every(p => !isUnderDownloadDir(p))) {
-          console.warn(`[downloads] 歌单 ${playlistId} 登记路径均在下载根之外（疑似目录搬迁），跳过清扫`);
+        // 指向旧位置——此时按"未登记=孤儿"会把仍在册的文件全删光，留幻影
+        // completed 行指向已删文件。只要有任一登记路径落在 base 外就是异常
+        // 信号（混合新旧路径正是"搬迁后又下过新歌"的形态），宁可不扫
+        if ([...referenced].some(p => !isUnderDownloadDir(p))) {
+          console.warn(`[downloads] 歌单 ${playlistId} 存在下载根之外的登记路径（疑似目录搬迁/脏行），跳过清扫`);
           continue;
         }
         for (const sub of ['audio', 'lyrics', 'covers']) {
@@ -1680,11 +1698,18 @@ function recoverStaleStates() {
     });
   }
   // 老库 playlist_id/queue_id 是 ALTER 补列、无 FK 级联——父行已删的子行残留
-  // 会成幻影 completed（指向已删文件），孤儿行在启动时清理
-  const db = getDb();
-  db.prepare('DELETE FROM download_tasks WHERE playlist_id NOT IN (SELECT id FROM playlists)').run();
-  db.prepare('DELETE FROM download_tasks WHERE queue_id IS NOT NULL AND queue_id NOT IN (SELECT id FROM download_queues)').run();
-  db.prepare('DELETE FROM download_queues WHERE playlist_id NOT IN (SELECT id FROM playlists)').run();
+  // 会成幻影 completed（指向已删文件），孤儿行在启动时清理。
+  // 顺序：孤儿队列先删（其 playlist 缺失），再按 queue/playlist 维度清任务——
+  // 否则任务先清 playlist 维度会留下"queue 指向已删孤儿队列"的悬空行；
+  // NULL 补列残留（老库 ALTER 默认 NULL，不可经任何接口触达）一并清；
+  // playlist_tracks 孤儿行同样不可达，同一事务内收敛
+  getDb().transaction(() => {
+    const db = getDb();
+    db.prepare('DELETE FROM download_queues WHERE playlist_id IS NULL OR playlist_id NOT IN (SELECT id FROM playlists)').run();
+    db.prepare('DELETE FROM download_tasks WHERE queue_id IS NOT NULL AND queue_id NOT IN (SELECT id FROM download_queues)').run();
+    db.prepare('DELETE FROM download_tasks WHERE playlist_id IS NULL OR playlist_id NOT IN (SELECT id FROM playlists)').run();
+    db.prepare('DELETE FROM playlist_tracks WHERE playlist_id IS NULL OR playlist_id NOT IN (SELECT id FROM playlists)').run();
+  })();
 }
 
 module.exports = {
