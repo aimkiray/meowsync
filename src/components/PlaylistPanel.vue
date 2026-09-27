@@ -81,11 +81,17 @@
             <div @click="$emit('select-playlist', playlist)" class="flex items-center space-x-3">
               <div class="relative">
                 <img
+                  v-if="playlist.coverImgUrl"
                   :src="httpsCover(playlist.coverImgUrl)"
                   :alt="playlist.name"
                   class="w-12 h-12 object-cover border-2 border-pink-400"
                   style="border-radius: 0; image-rendering: pixelated;"
                 />
+                <div
+                  v-else
+                  class="w-12 h-12 flex items-center justify-center border-2 border-pink-400 text-pink-300"
+                  style="border-radius: 0;"
+                >♪</div>
               </div>
               <div class="flex-1 min-w-0">
                 <h3 class="font-semibold text-pink-300 truncate">{{ playlist.name }}</h3>
@@ -205,11 +211,17 @@
               <div class="flex items-center space-x-3">
                 <div class="relative">
                   <img
+                    v-if="playlist.coverImgUrl"
                     :src="httpsCover(playlist.coverImgUrl)"
                     :alt="playlist.name"
                     class="w-12 h-12 object-cover border-2 border-pink-400"
                     style="border-radius: 0; image-rendering: pixelated;"
                   />
+                  <div
+                    v-else
+                    class="w-12 h-12 flex items-center justify-center border-2 border-pink-400 text-pink-300"
+                    style="border-radius: 0;"
+                  >♪</div>
                   <div class="absolute -top-1 -right-1 text-xs flex items-center justify-center">🌟</div>
                 </div>
                 <div class="flex-1 min-w-0">
@@ -586,7 +598,8 @@ export default {
           throw new Error('接口返回异常')
         }
         alert(deletedSongs > 0 ? `已删除 ${deletedSongs} 首已下载歌曲` : '这个歌单没有可删除的已下载歌曲')
-        emit('playlist-downloads-deleted', playlist.id)
+        // 0 首时不必触发父组件刷新——只会多发一轮无效任务轮询
+        if (deletedSongs > 0) emit('playlist-downloads-deleted', playlist.id)
       } catch (error) {
         console.error('批量删除已下载歌曲失败:', error)
         const message = error.response?.data?.message || error.message

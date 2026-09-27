@@ -150,7 +150,10 @@ export default {
   setup(props, { emit }) {
 
     const progressPercentage = computed(() => {
-      return props.duration > 0 ? (props.currentTime / props.duration) * 100 : 0
+      // seek 漂移/duration 修正会让 currentTime 短暂越过 duration——钳制
+      return props.duration > 0
+        ? Math.max(0, Math.min(100, (props.currentTime / props.duration) * 100))
+        : 0
     })
 
     // 进度条点击 → 归一化比例 0-1（父组件负责换算为秒）

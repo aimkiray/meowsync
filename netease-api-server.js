@@ -172,6 +172,13 @@ try {
   console.error('[db] 初始化/状态恢复失败:', error);
   process.exit(1);
 }
+// 孤儿文件清扫放在 serve() 之前同步跑——崩溃残片/未落库写盘此刻无协程引用，
+// DB 是唯一事实源；失败只告警不阻塞启动（不把它押进上面的致命分支）
+try {
+  downloadManager.reapOrphanFiles();
+} catch (error) {
+  console.warn('[downloads] 孤儿文件清扫失败:', error?.message || error);
+}
 
 // 启动服务器（serve() 返回原生 http.Server，可挂 WebSocket upgrade）。
 // autoCleanupIncoming 显式声明：多条路由故意不读 body（401/400 早退、纯触发型 POST

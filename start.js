@@ -71,10 +71,12 @@ function shutdown(code = 0) {
 
   for (const child of children) stopChild(child, 'SIGINT');
 
+  // 宽限必须 ≥ 服务端排空预算（shutdownAll 5s + server.close 收尾）——
+  // 1s 就 SIGKILL 会让下载排空 sweep 永远跑不到，全靠下次启动 recover 兜底
   setTimeout(() => {
     for (const child of children) stopChild(child, 'SIGKILL');
     process.exit(exitCode);
-  }, 1000).unref();
+  }, 7000).unref();
 
   if (children.size === 0) process.exit(exitCode);
 }

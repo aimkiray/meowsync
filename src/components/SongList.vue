@@ -405,7 +405,9 @@ export default {
         const button = event.target.closest('button')
         const rect = button.getBoundingClientRect()
         const menuWidth = 140
-        const menuHeight = 120 // 3 个选项的大致高度，用于翻转判断
+        // 菜单高度按实际项数算：临时/未选歌单时"下载到服务器"项不渲染，
+        // 少一项（40px）的菜单按 120 翻转会在底部 80-120px 区间误判放不下
+        const menuHeight = (!isSingleSongPlaylist.value && props.selectedPlaylist) ? 120 : 80
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh

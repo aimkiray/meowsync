@@ -5,7 +5,9 @@
 // 合法 http 地址，对只讲 HTTP 的源做 TLS 会握手失败；http 页面本就没有混拦
 export function httpsCover(url) {
   const s = String(url || '');
-  if (typeof window !== 'undefined' && window.location?.protocol !== 'https:') {
+  // 非浏览器环境（worker/测试/SSR 复用）同样不升级——对只讲 HTTP 的源做
+  // TLS 必然握手失败，未知协议环境下保持原样是更安全的默认
+  if (typeof window === 'undefined' || window.location?.protocol !== 'https:') {
     return s;
   }
   return s.replace(/^http:\/\//i, 'https://');

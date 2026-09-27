@@ -49,6 +49,17 @@ function fatalError(message) {
   return err;
 }
 
+// 不可中止的上游阶段（解锁/取链）最多拖住协程 ~200s，远超删除/停机排空预算——
+// abort 生效前最后一个落盘副作用是 mkdirSync：已 abort 的协程若在排空清扫后
+// 跑到这里，会把刚被 rmdirSync 剪掉的目录骨架复活（歌单/队列已删而目录重现）
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    const err = new Error('已取消');
+    err.aborted = true;
+    throw err;
+  }
+}
+
 // 上游 callNeteaseApi 对非 200 是 reject(answer 对象)——不是 Error，没有 .message
 function describeError(error) {
   if (error?.message) return error.message;
@@ -208,6 +219,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       throw fatalError('无法获取歌曲链接');
     }
 
+    throwIfAborted(signal);
     const dir = path.dirname(outputPath);
     fs.mkdirSync(dir, { recursive: true });
 
@@ -311,6 +323,7 @@ async function downloadLyrics(songId, outputPath, signal) {
       throw new Error('歌词不存在');
     }
 
+    throwIfAborted(signal);
     const dir = path.dirname(outputPath);
     fs.mkdirSync(dir, { recursive: true });
 
@@ -343,6 +356,7 @@ async function downloadCover(coverUrl, outputPath, signal) {
       throw fatalError('封面链接不存在');
     }
 
+    throwIfAborted(signal);
     const dir = path.dirname(outputPath);
     fs.mkdirSync(dir, { recursive: true });
 
