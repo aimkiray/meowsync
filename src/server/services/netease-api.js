@@ -67,6 +67,13 @@ async function getContentLength(url, hops = 0) {
   if (current.protocol !== 'http:' && current.protocol !== 'https:') {
     return null;
   }
+  // 与 fetchStream/proxy.js 同一收口：非标准端口探测降级跳过
+  const port = current.port === ''
+    ? (current.protocol === 'http:' ? 80 : 443)
+    : Number(current.port);
+  if (port !== 80 && port !== 443) {
+    return null;
+  }
   current.username = '';
   current.password = '';
   if (!(await resolvesToPublicIp(current.hostname))) {

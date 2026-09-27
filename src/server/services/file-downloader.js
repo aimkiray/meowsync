@@ -121,6 +121,14 @@ async function fetchStream(rawUrl, { timeout, signal }) {
   let url = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const parsed = toDownloadUrl(url);
+    // 与 proxy.js 同一收口：明文 http 源被 302 投毒成 http://公网IP:任意端口/
+    // 的探测面——每跳只放标准端口
+    const port = parsed.port === ''
+      ? (parsed.protocol === 'http:' ? 80 : 443)
+      : Number(parsed.port);
+    if (port !== 80 && port !== 443) {
+      throw fatalError('下载地址端口不受支持');
+    }
     // 三态判定：'blocked'（解析到私网）是确定性拦截→fatal；'error'（DNS 瞬时故障：
     // SERVFAIL/临时断网）保持可重试，否则一次抖动就永久剥夺重试机会
     const hostCheck = await checkHostPublic(parsed.hostname);

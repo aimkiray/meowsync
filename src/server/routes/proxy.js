@@ -5,11 +5,13 @@ const { resolvesToPublicIp } = require('../lib/net-guard');
 
 const app = new Hono();
 
-// 可代理的上行域白名单：googlevideo（ytdlp 解锁回链）、126.net（官方曲库 CDN
-// m*.music.126.net 等）、kuwo.cn/kuwo.com（kuwo 解锁源）——前端"获取源文件"的
-// 解锁链 CDN 不带 ACAO 必须走同源代理。白名单只决定"能代理谁"，SSRF 防线
-// 由下方逐跳 resolvesToPublicIp 兜底
-const ALLOWED_HOSTS = ['googlevideo.com', '126.net', 'kuwo.cn', 'kuwo.com'];
+// 可代理的上行域白名单（收窄到实际 CDN 子域，整棵后缀域放行会把网易 NOS
+// 对象存储等用户可控内容面也纳入可代理范围）：googlevideo（ytdlp 解锁回链）、
+// music.126.net（官方曲库 CDN m*/p* 子域）、kuwo.cn（kuwo 解锁源，sycdn/kwcdn
+// 等 CDN 子域均在其下——域属酷我自营音乐平台）——前端"获取源文件"的解锁链
+// CDN 不带 ACAO 必须走同源代理。白名单只决定"能代理谁"，SSRF 防线由下方
+// 逐跳 resolvesToPublicIp 兜底
+const ALLOWED_HOSTS = ['googlevideo.com', 'music.126.net', 'kuwo.cn'];
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
 
@@ -34,11 +36,15 @@ app.get('/audio-proxy', async (c) => {
       return c.json({ code: 400, message: 'invalid url' }, 400);
     }
 
-    // googlevideo 正式 URL 本就是 https；禁掉 http 消除明文回源被链路篡改的残余面
-    if (parsed.protocol !== 'https:') {
+    // http/https 都放：HTTP 部署下 kuwo/官方链多是 http——浏览器直连又死在
+    // CORS，代理是唯一通道；明文回源的篡改面是音频内容本身（本来就不可信），
+    // SSRF 仍由域名白名单+逐跳公网 IP 校验兜底
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return c.json({ code: 403, message: 'forbidden protocol' }, 403);
     }
-    if (!isAllowedHost(parsed.hostname)) {
+    // FQDN 尾点归一化：'kuwo.cn.' 是合法写法但 endsWith 后缀匹配会误拒
+    const hostname = parsed.hostname.replace(/\.$/, '');
+    if (!isAllowedHost(hostname)) {
       return c.json({ code: 403, message: 'forbidden host' }, 403);
     }
     // 非默认端口（URL parser 会把 :443/:80 归一化为空）对 googlevideo 没有实际用途，
@@ -47,7 +53,7 @@ app.get('/audio-proxy', async (c) => {
       return c.json({ code: 403, message: 'forbidden port' }, 403);
     }
     // 域名解析出的地址必须是公网 IP（SSRF/DNS-rebinding 兜底，见 resolvesToPublicIp 注释）
-    if (!(await resolvesToPublicIp(parsed.hostname))) {
+    if (!(await resolvesToPublicIp(hostname))) {
       return c.json({ code: 403, message: 'forbidden address' }, 403);
     }
     // 剥离 credentials：合法 host 内嵌 userinfo 会使 undici fetch 抛 TypeError，
@@ -110,6 +116,10 @@ app.get('/audio-proxy', async (c) => {
       'Content-Type': upstream.headers.get('content-type') || 'audio/mp4',
       'Accept-Ranges': upstream.headers.get('accept-ranges') || 'bytes',
       'Access-Control-Allow-Origin': '*',
+      // 白名单域回 text/html 时会以本服务 origin 渲染（借可信域钓鱼）——
+      // nosniff 阻 MIME 猜测，sandbox 阻脚本执行
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': 'sandbox',
     };
     // 上游若无视 identity 仍返回压缩响应，undici 已解压 body——此时
     // Content-Length/Content-Range 描述编码字节流，与实际不符，丢弃交给
