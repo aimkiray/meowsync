@@ -43,6 +43,14 @@ const BLOCKED_PARAMS = new Set([
   'domain', 'checktoken', 'randomcnip'
 ]);
 
+// Cookie 转发上游的白名单：仅网易登录态相关键（MUSIC_U 全系/CSRF/NMTID 等）。
+// 客户端 Cookie 头里可能混着本站域的 SSO/网关凭据——整包转发即外泄
+const NETEASE_COOKIE_KEYS = new Set([
+  'MUSIC_U', 'MUSIC_U_T', 'MUSIC_U_E', 'MUSIC_A', 'MUSIC_A_T',
+  '__csrf', '__remember_me', 'NMTID', 'NTES_PASSPORT', 'P_INFO',
+  'ntes_kaola_ad', 'sDeviceId', 'WM_NI', 'WM_NIKE', 'WM_TID'
+]);
+
 // 由请求推导对外访问源
 // x-forwarded-* 头仅在 TRUST_PROXY=1/true 时采信——否则客户端可伪造该头，污染下发给前端的 audio-proxy 地址
 // c.req.url 由 @hono/node-server 基于 Host 头与 socket 加密状态构建（Host 是客户端实际拨号的地址）
@@ -157,21 +165,52 @@ app.all('/:apiName', async (c) => {
   // 内部参数：purpose 只影响服务端解锁后处理，不透传给上游模块
   const purpose = params.purpose === 'download' ? 'download' : 'playback';
   delete params.purpose;
-  // Cookie 双向透传：客户端显式携带的 Cookie 转发给上游（登录态支持）
-  // 显式 cookie 参数优先；空字符串视为未提供，回落到 Cookie 头
+  // Cookie 双向透传：客户端显式携带的 Cookie 转发给上游（登录态支持）。
+  // 白名单收敛到网易登录态键——整包转发会把本站域下的其他凭据
+  // （SSO 网关的 CF_Authorization/oauth2-proxy 会话等）一并泄给第三方
   const clientCookie = c.req.header('cookie');
   if (clientCookie && !params.cookie) {
-    params.cookie = clientCookie;
+    params.cookie = clientCookie.split(';')
+      .map(part => part.trim())
+      .filter(part => {
+        const name = part.split('=', 1)[0];
+        return NETEASE_COOKIE_KEYS.has(name);
+      })
+      .join('; ');
+    if (!params.cookie) delete params.cookie;
   }
+  // 注意：body/query 显式携带的 params.cookie 不过滤是有意为之——白名单防的
+  // 是浏览器自动附带的本域 ambient 凭据（SSO/网关头）外泄；显式 cookie 参数
+  // 是调用方自填值，等价于他直连网易，不构成凭据泄露
+  // JSON body 传来的数值参数（id/ids/uid 等）会让上游模块的 .split 抛
+  // TypeError——所有安全整数统一转字符串（逗号多 id 串本身原样放行）
+  for (const key of Object.keys(params)) {
+    const v = params[key];
+    if (typeof v === 'number' && Number.isSafeInteger(v)) {
+      params[key] = String(v);
+    }
+  }
+  // 上游慢链路（千曲歌单 detail/track_all 常超 30s 默认）放宽到 120s，
+  // 与 playlist-sync 同口径——否则 UI 加载大歌单必死且每次重试另起上游请求
+  const upstreamOptions = ['playlist_detail', 'playlist_track_all'].includes(apiName)
+    ? { timeoutMs: 120000 }
+    : {};
 
   try {
-    const result = await callNeteaseApi(apiName, params);
+    const result = await callNeteaseApi(apiName, params, upstreamOptions);
 
     // 对 song_url 接口：若 url 为空或为试听版则尝试 UnblockNeteaseMusic fallback
-    if (apiName === 'song_url' && Array.isArray(result.body?.data)) {
+    if (['song_url', 'song_url_v1'].includes(apiName) && Array.isArray(result.body?.data)) {
+      const count = result.body.data.length;
+      if (count > 20) {
+        return c.json({ code: 400, message: `一次最多处理 20 首歌曲的解锁（收到 ${count}）` }, 400);
+      }
       await resolveSongUrls(result.body.data, {
         purpose,
         proxyOrigin: requestOrigin(c),
+        // 客户端断开/超时即中断逐源试错——不传播的 abort 会让每条超时请求
+        // 都留一整条解锁链在后台跑完，重试只会叠加僵尸
+        signal: c.req.raw.signal,
       });
     }
 
@@ -181,7 +220,14 @@ app.all('/:apiName', async (c) => {
     if (isUpstreamAnswer(error)) {
       return sendUpstreamResult(c, error);
     }
-    console.error(`Error in /${apiName}:`, error);
+    // 客户端主动断开（resolveSongUrls 透传 signal 中止）：响应已无法送达，
+    // 按 499 语义返回且不打 error 级日志（正常断流不是服务故障）
+    if (c.req.raw.signal?.aborted) {
+      return c.body(null, 499);
+    }
+    // 只记 message：AxiosError 直接 dump 会把 config.headers.Cookie
+    // （客户端转发的登录态）写进服务日志
+    console.error(`Error in /${apiName}:`, error?.message || error);
     return c.json({ code: 500, message: 'Internal Server Error' }, 500);
   }
 });

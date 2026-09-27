@@ -1,6 +1,6 @@
 <template>
   <!-- 手机控制器模式 -->
-  <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" />
+  <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" :ws-protocols="remoteWsProtocols" />
 
   <div v-else id="app" class="min-h-screen lg:h-screen lg:flex lg:flex-col">
     <!-- 顶部导航 -->
@@ -218,7 +218,12 @@ export default {
 
     const apiBase = resolveApiBaseUrl()
     const remoteToken = import.meta.env.VITE_REMOTE_TOKEN || ''
-    const remoteTokenParam = remoteToken ? `&token=${encodeURIComponent(remoteToken)}` : ''
+    // token 优先走 Sec-WebSocket-Protocol 子协议——?token= 会落进反代 access log
+    // 与浏览器历史。协议值须为 RFC7230 token 字符集，含其他字符时回退 URL 参数
+    const tokenSafeForProto = /^[A-Za-z0-9._~-]+$/.test(remoteToken)
+    const remoteWsProtocols = remoteToken && tokenSafeForProto ? [`remote.${remoteToken}`] : undefined
+    const remoteTokenParam = remoteToken && !tokenSafeForProto
+      ? `&token=${encodeURIComponent(remoteToken)}` : ''
     const remoteWsUrl = apiBase.replace(/^http/, 'ws') + '/remote'
     const remoteHostWsUrl = `${remoteWsUrl}?role=host${remoteTokenParam}`
     const remoteControllerWsUrl = `${remoteWsUrl}?role=controller${remoteTokenParam}`
@@ -298,7 +303,7 @@ export default {
       if (remoteMode.value !== 'host') return
       // 回调一律操作局部 ws：迟到的 onerror/onclose 若引用共享 remoteWs，
       // 会把已被取代的新 socket 误关/清空
-      const ws = remoteWs = new WebSocket(remoteHostWsUrl)
+      const ws = remoteWs = new WebSocket(remoteHostWsUrl, remoteWsProtocols)
       ws.onopen = () => {
         remoteRetries = 0
         console.log('[remote] host WS connected')
@@ -314,9 +319,11 @@ export default {
         clearInterval(remoteStateTimer)
         remoteStateTimer = null
         // 被新 host 顶替（服务端 close code 4000）：不再重连，
-        // 否则两端会反复互踢形成踢皮球循环
+        // 否则两端会反复互踢形成踢皮球循环。这是夺权事件——静默停在 console
+        // 会让用户以为遥控还在生效，必须可见提示
         if (e && e.code === 4000) {
           console.warn('[remote] 已有新的 host 接管，本端停止远程控制')
+          alert('远程控制已被另一设备接管，本端已退出主机模式（刷新页面可重新接管）')
           return
         }
         // 该 socket 已被更新的连接取代，不重连（新连接自己负责）
@@ -324,7 +331,9 @@ export default {
         // 断线重连有上限：握手即被拒（token/Origin 不通过）时避免无限重试
         remoteRetries++
         if (remoteRetries > 5) {
+          // 与 4000 顶替路径对称：遥控静默失效会让用户误以为还在生效
           console.warn('[remote] host 重连次数超限，停止重连（请检查 REMOTE_TOKEN/服务状态）')
+          alert('远程控制连接多次失败，已停止重连（刷新页面可重试）')
           return
         }
         remoteReconnectTimer = setTimeout(connectRemoteHost, 3000)
@@ -1435,6 +1444,7 @@ export default {
       remoteMode,
       playerHidden,
       remoteControllerWsUrl,
+      remoteWsProtocols,
       searchQuery,
       loading,
       loadingSongs,

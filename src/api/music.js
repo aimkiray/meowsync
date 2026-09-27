@@ -86,8 +86,10 @@ export const musicApi = {
   },
 
   getPlaylistDetail: async (id, abortSignal = null) => {
+    // 千曲歌单的上游链路已放宽到 120s，前端超时必须对齐——10s 先断只是
+    // 让服务端继续跑僵尸上游请求，用户看到的仍是失败
     const response = await withRetry(() =>
-      api.get('/playlist_detail', { params: { id }, signal: abortSignal })
+      api.get('/playlist_detail', { params: { id }, signal: abortSignal, timeout: 120000 })
     )
     const data = unwrapBody(response)
     if (!data.playlist || typeof data.playlist !== 'object') {
@@ -98,7 +100,8 @@ export const musicApi = {
     const tracksResponse = await withRetry(() =>
       api.get('/playlist_track_all', {
         params: { id, limit: playlist.trackCount || 1000, offset: 0 },
-        signal: abortSignal
+        signal: abortSignal,
+        timeout: 120000
       })
     )
     const tracksData = unwrapBody(tracksResponse)
@@ -113,7 +116,13 @@ export const musicApi = {
 
       try {
         const response = await withRetry(() =>
-          api.get('/song_url', { params: { id, br, purpose: 'playback' }, signal: abortSignal })
+          // 解锁链最坏路径（4 源串行试错+HEAD 探测）远超 10s 默认超时——
+          // 客户端先断会让服务端继续跑僵尸链，必须给足窗口
+          api.get('/song_url', {
+            params: { id, br, purpose: 'playback' },
+            signal: abortSignal,
+            timeout: 90000
+          })
         )
         const data = unwrapBody(response)
         const songData = data.data?.[0] || {}
@@ -145,7 +154,11 @@ export const musicApi = {
 
   getDownloadUrl: async (id, bitrate = 320000, abortSignal = null) => {
     const response = await withRetry(() =>
-      api.get('/song_url', { params: { id, br: bitrate, purpose: 'download' }, signal: abortSignal })
+      api.get('/song_url', {
+        params: { id, br: bitrate, purpose: 'download' },
+        signal: abortSignal,
+        timeout: 90000
+      })
     )
     const data = unwrapBody(response)
     const songData = data.data?.[0] || {}

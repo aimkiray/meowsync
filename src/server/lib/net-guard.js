@@ -1,4 +1,6 @@
 const dns = require('dns').promises;
+// 回调版 dns.lookup 单独引入：socket 层的自定义 lookup 是回调签名
+const dnsCb = require('dns');
 const net = require('net');
 
 // 私有/保留/非路由地址段判定。被 proxy.js（音频代理）与 file-downloader.js（下载落盘）共用：
@@ -188,8 +190,86 @@ function normalizeOutboundUrl(raw) {
   return { ok: true, url: parsed };
 }
 
+/**
+ * 防 DNS 重绑定的 socket 层守卫：生成一个可传给 http.Agent/https.request
+ * 的 lookup 函数。同一个调用方（一次代理请求/一次下载及其全部重定向跳）
+ * 共享一个 pin 表——首次解析得到的地址集必须全公网且被钉住；之后同主机
+ * 名的每次建连只允许落在钉住集合的交集中，答案漂移即拒绝连接。
+ *
+ * 这是真正的强制点：URL 阶段的 checkHostPublic 只做"放行前预检"，而每一次
+ * socket connect 的域名解析都走这里——重定向跳到私网解析域名、校验时刻与
+ * 连接时刻的解析漂移（TOCTOU），都会在建连时被拦下。
+ */
+function makeGuardedLookup() {
+  // hostname → [{address, family}] 钉住表：首次解析验证全公网后钉住，
+  // 之后同主机名的每次建连直接复用钉住集——不再发新 DNS 查询，校验时刻
+  // 与连接时刻共用同一批答案，TOCTOU 窗口在结构上消除（比对交集更严格
+  // 且无合法轮询误杀）。pin 表随调用方请求生命周期 GC
+  const pins = new Map();
+  const guardedError = (msg) => {
+    const err = new Error(msg);
+    err.code = 'ERR_DNS_GUARD_BLOCKED';
+    return err;
+  };
+  return (hostname, options, callback) => {
+    if (typeof options === 'function') {
+      callback = options;
+      options = {};
+    } else if (typeof options === 'number') {
+      options = { family: options };
+    }
+    options = options || {};
+    const wantAll = Boolean(options.all);
+    const wantFamily = options.family || 0;
+    const key = hostname.toLowerCase();
+
+    const pick = (list) => {
+      const filtered = wantFamily ? list.filter(r => r.family === wantFamily) : list;
+      const usable = filtered.length ? filtered : list;
+      return wantAll
+        ? [null, usable]
+        : [null, usable[0].address, usable[0].family];
+    };
+
+    const pinned = pins.get(key);
+    if (pinned) {
+      return callback(...pick(pinned));
+    }
+
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      callback(guardedError(`DNS 查询超时: ${hostname}`));
+    }, DNS_LOOKUP_TIMEOUT_MS);
+    timer.unref?.();
+
+    dnsCb.lookup(hostname, options, (err, result, family) => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      if (err) return callback(err);
+      const list = wantAll ? result : [{ address: result, family }];
+      if (list.length === 0) {
+        return callback(guardedError(`DNS 空结果: ${hostname}`));
+      }
+      // 解析结果理应是 IP；出现非 IP 值按私网同等拒绝（fail closed）
+      if (list.some(r => net.isIP(r.address) === 0 || isPrivateIp(r.address, r.family))) {
+        return callback(guardedError(`DNS 解析到非公网地址: ${hostname}`));
+      }
+      pins.set(key, list);
+      callback(...pick(list));
+    });
+  };
+}
+
 module.exports = {
   resolvesToPublicIp,
   checkHostPublic,
-  normalizeOutboundUrl
+  normalizeOutboundUrl,
+  makeGuardedLookup,
+  // 给补丁层做同步字面量判定：net.connect 对 IP 字面量跳过自定义 lookup，
+  // socket 层守卫管不到它——调用方必须在发请求前自己判
+  isPrivateIp,
+  stripIpv6Brackets
 };

@@ -9,6 +9,7 @@ ensureAnonymousToken();
 
 // 补丁：修复 migu 源（必须在 require unblockneteasemusic 之前）
 require('./src/lib/patch-migu');
+require('./src/lib/patch-unm-request');
 
 const { serve } = require('@hono/node-server');
 const { serveStatic } = require('@hono/node-server/serve-static');
@@ -42,7 +43,25 @@ const HOST = process.env.HOST || '0.0.0.0';
 const corsOrigins = (process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',')
   : ['http://localhost:3100', 'http://127.0.0.1:3100', 'http://localhost:3101', 'http://127.0.0.1:3101']
-).map(o => o.trim()).filter(Boolean);
+).map(o => o.trim()).filter(Boolean)
+  // 归一化到 origin：'https://x.com/' 尾斜杠永不匹配 Origin 头，
+  // 不规整等于该项静默失效（WS 同源兜底救不了跨源配置项）
+  .map(o => {
+    try {
+      const u = new URL(o);
+      // 只收 http(s)：file:/data:/chrome-extension: 等非标 scheme 的
+      // URL.origin 是字符串 'null'——进了白名单等于放行 Origin:null
+      // 的请求（sandboxed iframe/file:// 页面都发它），credentials:true 下成洞
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        console.warn(`[config] CORS_ORIGINS 项 '${o}' 不是 http(s) origin（也不支持通配符），已忽略`);
+        return null;
+      }
+      return u.origin;
+    } catch {
+      console.warn(`[config] CORS_ORIGINS 项 '${o}' 不是合法 URL，已忽略`);
+      return null;
+    }
+  }).filter(Boolean);
 
 // 中间件
 app.use('*', cors({
@@ -50,15 +69,20 @@ app.use('*', cors({
   credentials: true,
 }));
 
-// 健康检查：/ping 只探活（Docker HEALTHCHECK 用它）；/healthz 探 DB 写路径——
+// 健康检查：/ping 只探活；/healthz 探 DB 写路径（Docker HEALTHCHECK 用它）——
 // SELECT 1 是纯内存查询，磁盘满时照样通过；必须在事务里产生真实 WAL 写入，
 // 磁盘满/DB 损坏才暴露为 503 而不是"进程活着但功能全挂"
 app.get('/ping', (c) => c.json({ ok: true }));
 app.get('/healthz', (c) => {
   try {
     const db = getDb();
-    db.exec('BEGIN IMMEDIATE');
+    // 共享连接正在跑别的写事务时 BEGIN IMMEDIATE 会抛嵌套事务错——
+    // 此时 DB 显然是活的，误报 503 会造成容器健康检查抖动/幻影重启。
+    // 用连接状态预检（而非捕获后回滚）：异常路径里的 ROLLBACK 会误伤
+    // 人家在跑的事务
+    if (db.inTransaction) return c.json({ ok: true });
     try {
+      db.exec('BEGIN IMMEDIATE');
       db.prepare('INSERT INTO _healthz (ts) VALUES (?)').run(Date.now());
       db.exec('DELETE FROM _healthz');
       db.exec('COMMIT');
@@ -143,7 +167,7 @@ if (hasDist) {
     const lowerPath = p.toLowerCase();
     if (API_PREFIXES.some(px => lowerPath === px || lowerPath.startsWith(px + '/'))
       || apiFirstSegments.has(firstSegment)
-      || p.startsWith('/assets/')
+      || lowerPath.startsWith('/assets/')
       || /\.[a-z0-9]+$/i.test(p)) {
       return c.json({ code: 404, message: 'Not Found' }, 404);
     }
@@ -154,9 +178,14 @@ if (hasDist) {
 // 未匹配的其余请求（非 GET、无 dist 时的 GET）返回 JSON 404，与 API 错误格式一致
 app.notFound((c) => c.json({ code: 404, message: 'Not Found' }, 404));
 
-// 统一 JSON 错误处理
+// 统一 JSON 错误处理：exposed httpError 透传其状态码与消息（路由 catch 未兜到的
+// 部分——如未来中间件抛错）；其余一律压成 500，不透内部细节
 app.onError((err, c) => {
-  console.error(`[api] ${c.req.method} ${c.req.path} 处理失败:`, err);
+  if (err?.exposed === true && Number.isInteger(err.status)
+    && err.status >= 400 && err.status < 600) {
+    return c.json({ code: err.status, message: String(err.message || '请求失败') }, err.status);
+  }
+  console.error(`[api] ${c.req.method} ${c.req.path} 处理失败:`, err?.message || err);
   return c.json({ code: 500, message: 'Internal Server Error' }, 500);
 });
 
@@ -207,6 +236,12 @@ const remote = attachRemoteControl(server, {
   allowedOrigins: corsOrigins,
   token: process.env.REMOTE_TOKEN || ''
 });
+// 开放监听 + 无遥控令牌：同网段任意主机都能接管 host 角色/操控播放——
+// 局域网自用可忽略，公网/共享网络部署必须设 REMOTE_TOKEN。
+// 覆盖所有"监听全网卡"写法：0.0.0.0/::/::0/[::]/0（Node 对这些都绑定全网卡）
+if (!process.env.REMOTE_TOKEN && ['0.0.0.0', '::', '::0', '[::]', '0'].includes(HOST.trim())) {
+  console.warn('[remote] REMOTE_TOKEN 未设置且监听所有网卡：任何可达客户端都能控制播放。公网部署请配置 REMOTE_TOKEN');
+}
 
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
 // WS 连接由 remote.close() 立即 terminate（升级 socket 不归 close()/
