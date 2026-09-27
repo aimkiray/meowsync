@@ -31,8 +31,17 @@ const standaloneRunning = new Map();
 const drainingQueues = new Map();
 // 超时兜底把 draining 条目提前释放后，协程本身可能还在跑（卡在不可中止阶段）——
 // 从两个 Map 中消失即"僵尸"：没有任何机制能再定位它在途的流，删除/停机排空
-// 都会漏掉它。timeout 释放时入列追踪，done settle 时出列
+// 都会漏掉它。timeout 释放时入列追踪，done settle 时出列。
+// 注意不并入 drainingQueues：Map<queueId,controller> 单值结构放不下同一队列的
+// 多个旧协程（cancel→start→cancel→delete 边沿），Set 才够
 const zombieControllers = new Set();
+// "队列是否有活着的协程"的唯一判据：DB status 不可信（cancelled 行可能仍在排空/
+// 僵尸）。所有调度/删除/收养决策走这一个入口，禁止复制三 Map 表达式
+function queueHasLiveController(queueId) {
+  if (activeQueues.has(queueId) || drainingQueues.has(queueId)) return true;
+  for (const z of zombieControllers) if (z.queueId === queueId) return true;
+  return false;
+}
 // deletingPlaylists/deletingQueues 来自 lib/deletion-locks（共享给 playlist-sync
 // 的刷新路径用——直接 import 本模块会成环）
 // 停机期间拒绝新建/启动下载，避免半途任务留下脏状态
@@ -41,8 +50,8 @@ let shuttingDown = false;
 // 可重试失败的下次派发时刻：taskId -> epochMs。瞬时错误（网络抖动/429/5xx）
 // 立即重捞等于全速空转打上游；指数退避让任务在 pending 里"等待"而不被派发。
 // 进程内状态即可——重启后天然清表，正好立即重试。
-// 删除路径（deleteTask/deleteQueue/级联）不清本表：taskId 是 AUTOINCREMENT
-// 不复用，陈旧条目到期自然失效，另有 >1024 惰性清扫兜底
+// 行删除路径（deleteTask/deleteQueue/deleteSongFiles/级联）都在提交后清对应条目；
+// 漏网条目也无害：taskId 是 AUTOINCREMENT 不复用，到期自然失效，另有 >1024 惰性清扫兜底
 const retryAfter = new Map();
 const retryDelayMs = (retryCount) => Math.min(2000 * (2 ** retryCount), 30000);
 
@@ -62,7 +71,11 @@ const DRAIN_TIMEOUT_MS = 30000;
 function drainWithTimeout(promise, ms = DRAIN_TIMEOUT_MS) {
   return Promise.race([
     Promise.resolve(promise).catch(() => {}),
-    new Promise(resolve => setTimeout(resolve, ms))
+    // unref：drain 早已 settle 的兜底计时器不该拖住进程退出
+    new Promise(resolve => {
+      const t = setTimeout(resolve, ms);
+      t.unref?.();
+    })
   ]);
 }
 
@@ -184,6 +197,8 @@ async function createDownloadQueue(playlistId, options = {}) {
   // 队列行 + 全部任务行在同一个事务里写入：半途抛错不留"有队列没任务"的脏数据
   const db = getDb();
   const oldOwnerQueueIds = new Set(); // 收养搬走任务后待回调计数的旧属主队列
+  const adoptedPaths = []; // 收养重置清掉的旧文件路径——提交后才删（txn 内 unlink 会留回滚窗口）
+  const adoptedTaskIds = [];
   const createWithTasks = db.transaction(() => {
     const queue = downloadQueuesRepo.createQueue({
       playlistId: resolvedPlaylistId,
@@ -196,10 +211,8 @@ async function createDownloadQueue(playlistId, options = {}) {
       concurrentLimit: options.concurrentLimit || 3
     });
 
-    // 歌单内可能重复含同一首歌：按 songId 去重，totalTasks 以实际任务数为准
+    // 歌单内可能重复含同一首歌：按 songId 去重；计数在末尾由任务行重算
     const seen = new Set();
-    let taskCount = 0;
-    let adoptedCompleted = 0;
     for (const track of tracks) {
       const songId = String(track.id);
       if (seen.has(songId)) continue;
@@ -222,45 +235,43 @@ async function createDownloadQueue(playlistId, options = {}) {
         // 跑（不可中止上游调用超 DRAIN_TIMEOUT）——此时收养会让新旧协程对同一
         // 批行双调度，僵尸的 abort 复位还会把"已取消"写进新队列的行
         const ownerBusy = existing.queueId != null
-          && (activeQueues.has(existing.queueId)
-            || drainingQueues.has(existing.queueId)
-            || [...zombieControllers].some(z => z.queueId === existing.queueId));
+          && queueHasLiveController(existing.queueId);
+        // 属主队列行已终态但协程仍活着（draining/僵尸）：跳过收养会让新队列
+        // 静默缺歌——宁可 409 让调用方等收尾后重建
+        if (ownerBusy) {
+          throw httpError(409, '该歌单有下载任务仍在收尾，请稍后再试');
+        }
         const ownerActive = ownerBusy
           || (owner && ['pending', 'running', 'paused'].includes(owner.status));
         // owner 为 null = queue_id 指向已消失队列的孤儿行，同样收养
         if (!standaloneActive && (existing.queueId == null || !ownerActive)) {
           const keepCompleted = existing.status === 'completed';
-          downloadTasksRepo.updateTask(existing.id, {
-            queueId: queue.id,
-            status: keepCompleted ? 'completed' : 'pending',
-            progress: keepCompleted ? existing.progress : 0,
-            errorMessage: null,
-            retryCount: 0,
-            // 重置重跑的任务同步新队列的下载选项——否则按旧行开关/码率跑，
-            // "completed" 的歌可能实际没有音频/封面
-            ...(keepCompleted ? {} : {
+          // 重置重跑的任务同步新队列的下载选项——否则按旧行开关/码率跑，
+          // "completed" 的歌可能实际没有音频/封面；旧路径字段一并清掉：
+          // 残留的路径可能已指向别的任务的文件，后续删除会按它误删
+          downloadTasksRepo.updateTask(existing.id, keepCompleted
+            ? {
+              queueId: queue.id,
+              status: 'completed',
+              progress: existing.progress,
+              errorMessage: null,
+              retryCount: 0
+            }
+            : resetTaskFields({
+              queueId: queue.id,
               bitrate: queue.bitrate,
               downloadAudio: queue.downloadAudio,
               downloadLyrics: queue.downloadLyrics,
-              downloadCover: queue.downloadCover,
-              // 旧路径字段一并清掉：残留的路径可能已指向别的任务的文件，
-              // 后续 deleteTask/deleteSongFiles 会按它误删
-              audioPath: null,
-              lyricsPath: null,
-              coverPath: null,
-              fileSize: null,
-              completedAt: null
-            })
-          });
+              downloadCover: queue.downloadCover
+            }));
           // 重跑前清路径同时也要清旧文件：行先清、文件后删（崩溃留孤儿文件
           // 由 reap 兜底，比幻影登记路径安全）。扩展名现已随源浮动，不删会
-          // 让不同扩展名的旧文件以未登记状态无限期滞留
+          // 让不同扩展名的旧文件以未登记状态无限期滞留。文件 unlink 收集后
+          // 推迟到事务提交——txn 内删文件遇回滚会留"路径还在但文件没了"
           if (!keepCompleted) {
-            deleteFiles([existing.audioPath, existing.lyricsPath, existing.coverPath]);
-            retryAfter.delete(existing.id); // 收养即时入队——陈旧退避不该拖住新队列
+            adoptedPaths.push(existing.audioPath, existing.lyricsPath, existing.coverPath);
+            adoptedTaskIds.push(existing.id);
           }
-          taskCount += 1;
-          if (keepCompleted) adoptedCompleted += 1;
           // 旧属主队列的计数器虚高（任务被搬走后不再重算）——记录待回调
           if (existing.queueId) oldOwnerQueueIds.add(existing.queueId);
         }
@@ -287,18 +298,18 @@ async function createDownloadQueue(playlistId, options = {}) {
         downloadLyrics: queue.downloadLyrics,
         downloadCover: queue.downloadCover
       });
-      taskCount += 1;
     }
 
-    // 收养的 completed 任务直接计入完成数——否则队列启动前进度显示 0/N
-    downloadQueuesRepo.updateQueue(queue.id, {
-      totalTasks: taskCount,
-      completedTasks: adoptedCompleted
-    });
+    // 计数从任务行状态派生：收养的 completed 任务自动计入完成数，
+    // 手工记数会让"跳过活跃属主"等分支漏配漂移
+    recountQueueCounters(queue.id);
     return downloadQueuesRepo.findQueueById(queue.id);
   });
 
   const created = createWithTasks();
+  // 事务提交后才动文件与内存态：收养即时入队——陈旧退避不该拖住新队列
+  for (const id of adoptedTaskIds) retryAfter.delete(id);
+  deleteFiles(adoptedPaths);
   // 事务提交后回调旧属主计数：死队列不会自己走收尾重算，不重算则永久虚高
   for (const qid of oldOwnerQueueIds) {
     recountQueueCounters(qid);
@@ -319,14 +330,11 @@ async function startQueue(queueId) {
   if (activeQueues.has(queueId)) {
     throw httpError(409, '队列已在运行中');
   }
-  // 旧控制器还在排空（cancel 后的收尾窗口）——此时 start 会让新旧协程对同一批
-  // 任务双重调度，且 deleteQueue 的双 Map 排空语义被破坏；要求等排空结束
-  if (drainingQueues.has(queueId)) {
-    throw httpError(409, '队列正在收尾，请稍后再试');
-  }
-  // 排空超时后协程可能还在跑（僵尸集）——起新协程会与僵尸对同一批任务双调度。
-  // 路径锁能串行化文件写，但零锁键任务（只要封面且无 coverUrl）无任何互斥
-  if ([...zombieControllers].some(z => z.queueId === queueId)) {
+  // 旧控制器还在排空（cancel 后的收尾窗口）或排空超时仍在跑（僵尸集）——
+  // 此时 start 会让新旧协程对同一批任务双重调度，deleteQueue 的排空语义
+  // 也被破坏。路径锁能串行化文件写，但零锁键任务（只要封面且无 coverUrl）
+  // 无任何互斥。active/draining/zombie 三态合一判定走 queueHasLiveController
+  if (queueHasLiveController(queueId)) {
     throw httpError(409, '队列正在收尾，请稍后再试');
   }
   // 队列删除窗口内不许起新协程：行删后协程还在跑会成为永久失联的孤儿
@@ -373,6 +381,9 @@ async function startQueue(queueId) {
   }).finally(() => {
     controller.settled = true;
     zombieControllers.delete(controller); // 超时被入列的僵尸在这里回收
+    // 僵尸协程可能在 timeout-release 的 recount 之后仍翻转了任务行（在途写
+    // 的完成/失败落库晚于重算）——settle 时补一次幂等重算收掉这段漂移
+    recountQueueCounters(queueId);
     if (activeQueues.get(queueId) === controller) {
       activeQueues.delete(queueId);
     }
@@ -396,49 +407,38 @@ async function processQueue(queueId, controller) {
   // 路径锁 409 的延迟重试集合：持锁方（其他任务/standalone 下载）可能写几十秒，
   // 每轮立即重捞重试等于全速空转打 DB。记入 deferred 本轮跳过重试；
   // 任一在途任务 settle（说明有锁释放）或全卡死时 sleep 退避后清空重试。
-  // deferredSince 记录首次延迟时间——锁泄漏/不可中止的卡死任务会让队列永远
-  // 空转不收尾，超过上限按失败处理
-  const deferred = new Set();
-  // deferredSince 记录"连续等锁"的首次 409 时刻——派发前不得清：等锁空转
-  // 每轮都会重捞重试撞 409，删了它时间戳永不可达。只有锁释放（放行重试）
-  // 与硬顶判失败两条出路；行离开 pending 后条目由 expireDeferred 复查清理
-  const deferredSince = new Map();
-  // 记录 409 时真实冲突的锁键——siblings 快照会漂移（兄弟任务删除后重算出的
-  // 碰撞键会变），用重算的键判 activePaths 会把"锁已释放"误判成"仍持有"
-  const deferredKeys = new Map();
+  // since 记录首次延迟时间——锁泄漏/不可中止的卡死任务会让队列永远
+  // 空转不收尾，超过上限按失败处理。
+  // 等锁延迟任务表：taskId -> { since, keys }（三平行 Map 合一——同生同死，
+  // 三处分别 delete 的写法既啰嗦又容易漏配）
+  // - since：连续等锁的首次 409 时刻——派发前不得清：等锁空转每轮都会重捞
+  //   重试撞 409，删了它时间戳永不可达。只有锁释放（放行重试）与硬顶判失败
+  //   两条出路；行离开 pending 后条目由 expireDeferred 复查清理
+  // - keys：409 时真实冲突的锁键——siblings 快照会漂移（兄弟任务删除后重算出
+  //   的碰撞键会变），用重算的键判 activePaths 会把"锁已释放"误判成"仍持有"
+  const deferred = new Map();
   // 硬顶：正常持锁有物理上限（解锁60s×2 + 取链30s + 流300s ≈ 460s），
   // 连续持锁超 15min 大概率是锁泄漏（activePaths 残留无人释放）——判失败收敛
   const DEFER_HARD_LIMIT_MS = 15 * 60 * 1000;
   const expireDeferred = () => {
     const now = Date.now();
-    for (const taskId of deferred) {
-      const since = deferredSince.get(taskId);
-      if (!since) {
-        deferred.delete(taskId);
-        deferredKeys.delete(taskId);
-        continue;
-      }
-      const keys = deferredKeys.get(taskId) || [];
-      const stillHeld = keys.some(k => activePaths.has(k));
+    for (const [taskId, entry] of deferred) {
+      const stillHeld = (entry.keys || []).some(k => activePaths.has(k));
       if (!stillHeld) {
         // 锁已释放：立即放行，下一轮自然重试——锁空闲时判失败是误杀
         deferred.delete(taskId);
-        deferredSince.delete(taskId);
-        deferredKeys.delete(taskId);
         continue;
       }
       if (now - since <= DEFER_HARD_LIMIT_MS) continue; // 持锁未到硬顶：继续等
       const row = downloadTasksRepo.findTaskById(taskId);
       deferred.delete(taskId);
-      deferredSince.delete(taskId);
-      deferredKeys.delete(taskId);
       if (!row || row.status !== 'pending') continue; // 已离开等锁状态，纯清理
       try {
         downloadTasksRepo.updateTask(taskId, {
           status: 'failed',
           errorMessage: '等待文件写入锁超时'
         });
-        downloadQueuesRepo.incrementFailed(queueId);
+        recountQueueCounters(queueId);
       } catch { /* 任务行可能已被删 */ }
     }
   };
@@ -450,7 +450,7 @@ async function processQueue(queueId, controller) {
 
   const waitWhilePaused = async () => {
     // 取消在暂停等待中也要生效——否则 cancelled 队列的协程永久自旋。
-    // 暂停期间 deferredSince 不能继续老化：暂停一夜后恢复，等锁时长里
+    // 暂停期间 since 不能继续老化：暂停一夜后恢复，等锁时长里
     // 混进了冻结时间，硬顶会把全部等锁任务误杀——恢复时把时间戳整体后移
     let pausedAt = null;
     while (controller.paused && !controller.cancelled) {
@@ -459,7 +459,7 @@ async function processQueue(queueId, controller) {
     }
     if (pausedAt !== null) {
       const frozenFor = Date.now() - pausedAt;
-      for (const [k, v] of deferredSince) deferredSince.set(k, v + frozenFor);
+      for (const entry of deferred.values()) entry.since += frozenFor;
     }
   };
 
@@ -493,8 +493,10 @@ async function processQueue(queueId, controller) {
           await sleep(Math.min(Math.max(Math.min(...backoffAt) - Date.now(), 50), 1000));
           continue;
         }
-        // 全部剩余任务都在等路径锁：退避后重试一轮
-        deferred.clear();
+        // 全部剩余任务都在等路径锁：退避后重试一轮。
+        // 不得 deferred.clear()——clear 会销毁 since 时间戳，锁泄漏场景下
+        // 每轮重建即"全新冲突"，15min 硬顶永不可达；expireDeferred 已放行
+        // 锁释放的条目，仍持锁的必须留住计时
         await sleep(400);
         continue;
       }
@@ -502,8 +504,7 @@ async function processQueue(queueId, controller) {
       // race 加超时：在途任务全卡在不可中止的上游调用（解锁/取链无超时）时
       // race 永不返回，expireDeferred 会被饿死
       await Promise.race([...runningTasks, sleep(60000)]);
-      expireDeferred();
-      deferred.clear();
+      expireDeferred(); // 锁已释放的条目放行；仍持锁的保留 since 继续老化
       continue;
     }
 
@@ -517,9 +518,9 @@ async function processQueue(queueId, controller) {
         // 会同步饿死（与上方空-pending 分支的 race+sleep 同一写法对齐）
         await Promise.race([...runningTasks, sleep(60000)]);
         // 容量满的等待期间 deferred 硬顶也在老化——与空-pending 分支对齐，
-        // 否则硬顶判失败要拖到下次排到空快照轮才执行
+        // 否则硬顶判失败要拖到下次排到空快照轮才执行。不 clear：
+        // expireDeferred 已放行锁释放的条目，持锁条目的 since 必须保住
         expireDeferred();
-        deferred.clear(); // 有任务 settle = 可能有锁释放，给 deferred 再试机会
       }
       if (controller.cancelled) break;
       // 容量等待期间收到 pause：循环只看 cancelled，槽位一释放就会在暂停态
@@ -531,8 +532,7 @@ async function processQueue(queueId, controller) {
         .then(() => {
           // 正常收尾（含内部自吞的失败）：本轮等锁结束——清掉时间戳化石，
           // 否则下次全新冲突会继承旧 since，被硬顶无等待秒杀
-          deferredSince.delete(task.id);
-          deferredKeys.delete(task.id);
+          deferred.delete(task.id);
         })
         .catch(error => {
           // processTask 内部已自吞常规失败；走到这里的是 try 之前的早期抛错。
@@ -541,28 +541,21 @@ async function processQueue(queueId, controller) {
           // 409 但无 lockKeys：锁冲突必然带命中键——空键集是未知 409 来源，
           // 当 deferred 会立即被 expireDeferred 放行→重派→再 409 空转死循环
           if (error.status === 409 && error.lockKeys?.length > 0) {
-            deferred.add(task.id);
-            // "同一段等待"才延续计时：上次冲突记录的锁键仍被持有 = 连续等锁；
-            // 键已释放（化石或旧冲突已解）= 新一轮冲突，重置计时起点
-            const prevKeys = deferredKeys.get(task.id);
-            const continuous = prevKeys && prevKeys.some(k => activePaths.has(k));
-            if (!continuous) {
-              deferredSince.set(task.id, Date.now());
-            }
-            // 记录本次 409 实际命中的锁键：过期检查据此判"锁是否仍被持有"，
-            // 不能用 taskLockKeys 重算——siblings 快照漂移会让键集变化
-            deferredKeys.set(task.id, error.lockKeys || []);
+            // 能走到这里条目必然已被放行（deferred 条目拦截派发）——即上次记的
+            // 锁键已释放，本轮是全新冲突，记新计时起点。记录本次实际命中的锁键：
+            // 过期检查据此判"锁是否仍被持有"，不能用 taskLockKeys 重算——
+            // siblings 快照漂移会让键集变化
+            deferred.set(task.id, { since: Date.now(), keys: error.lockKeys });
             return;
           }
-          deferredSince.delete(task.id);
-          deferredKeys.delete(task.id);
+          deferred.delete(task.id);
           console.error(`任务 ${task.id} 启动失败:`, error.message);
           try {
             downloadTasksRepo.updateTask(task.id, {
               status: 'failed',
               errorMessage: sanitizeErrorMessage(error.message)
             });
-            downloadQueuesRepo.incrementFailed(queueId);
+            recountQueueCounters(queueId);
           } catch {
             // 任务行可能已随队列删除
           }
@@ -592,20 +585,21 @@ async function processQueue(queueId, controller) {
     return;
   }
 
-  const allTasks = downloadTasksRepo.listTasksByQueue(queueId);
-  const completedCount = allTasks.filter(t => t.status === 'completed').length;
-  const failedCount = allTasks.filter(t => t.status === 'failed').length;
+  const failedCount = downloadTasksRepo.listTasksByQueue(queueId)
+    .filter(t => t.status === 'failed').length;
 
   // 有失败任务的队列不应标 completed——"完成但缺歌"会掩盖失败痕迹，
-  // failed 终态让前端露出"重试"入口（retryQueue 正是为它设计的）
-  downloadQueuesRepo.updateQueue(queueId, controller.cancelled
-    ? { status: 'cancelled', completedTasks: completedCount, failedTasks: failedCount }
-    : {
-        status: failedCount > 0 ? 'failed' : 'completed',
-        completedTasks: completedCount,
-        failedTasks: failedCount,
-        completedAt: new Date().toISOString()
-      });
+  // failed 终态让前端露出"重试"入口（retryQueue 正是为它设计的）。
+  // 状态写与计数重算同事务：终态落库的瞬间计数即对齐，无中间漂移窗口
+  getDb().transaction(() => {
+    downloadQueuesRepo.updateQueue(queueId, controller.cancelled
+      ? { status: 'cancelled' }
+      : {
+          status: failedCount > 0 ? 'failed' : 'completed',
+          completedAt: new Date().toISOString()
+        });
+    recountQueueCounters(queueId);
+  })();
 
   activeQueues.delete(queueId);
 }
@@ -617,20 +611,34 @@ const getSafeSongId = (task) => {
   return /^\d+$/.test(raw) ? raw.slice(0, 40) : `task-${task.id}`;
 };
 
+// sanitizeFilename 是纯函数；兄弟扫描为每个任务重复消毒全歌单名字（O(N²) CPU）。
+// 有界 memo 去掉大头；超限整体清空（清比重排实现简单，命中率在歌单尺度下已足够）
+const sanitizeMemo = new Map();
+const memoSanitize = (name, maxBytes) => {
+  const key = `${maxBytes}:${name}`;
+  let out = sanitizeMemo.get(key);
+  if (out === undefined) {
+    out = fileDownloader.sanitizeFilename(name, maxBytes);
+    if (sanitizeMemo.size > 4096) sanitizeMemo.clear();
+    sanitizeMemo.set(key, out);
+  }
+  return out;
+};
+
 // 计算一个任务会占用的写路径——processTask 用它取锁，expireDeferred 用它判断
 // 锁是否仍被持有（续期 vs 判失败）。两处必须用同一套逻辑，否则判定不一致
 const taskLockKeys = (task) => {
   const outputDir = path.join(DOWNLOAD_BASE_DIR, task.playlistId.toString());
   // 每段各留预算：文件名总长（含 ' - '/songId 后缀/扩展名）不得超 ext4 的 255B
-  const sanitizedArtist = fileDownloader.sanitizeFilename(task.artist, 90);
-  const sanitizedSongName = fileDownloader.sanitizeFilename(task.songName, 110);
+  const sanitizedArtist = memoSanitize(task.artist, 90);
+  const sanitizedSongName = memoSanitize(task.songName, 110);
   // 同歌单内不同 songId 可能消毒后撞名：原始名不同（如 "x?" vs "x<"、"x." vs "x"）
   // 会被 sanitizeFilename 坍缩成同一文件名互相覆盖——碰撞检测必须比较消毒后的名字
   const siblings = downloadTasksRepo.listTasksByPlaylist(task.playlistId);
   const nameCollision = siblings.some(
     t => t.id !== task.id
-      && fileDownloader.sanitizeFilename(t.artist, 90) === sanitizedArtist
-      && fileDownloader.sanitizeFilename(t.songName, 110) === sanitizedSongName
+      && memoSanitize(t.artist, 90) === sanitizedArtist
+      && memoSanitize(t.songName, 110) === sanitizedSongName
   );
   const safeSongId = getSafeSongId(task);
   const baseFilename = nameCollision
@@ -760,10 +768,15 @@ async function processTask(task, queueId, signal) {
       if (!existingLyrics) {
         try {
           const lrcResult = await fileDownloader.downloadLyrics(task.songId, lyricsPath, signal);
-          downloadTasksRepo.updateTask(task.id, {
+          const lrcRow = downloadTasksRepo.updateTask(task.id, {
             lyricsPath: lrcResult.path,
             progress: totalProgress + weights.lyrics
           });
+          // 行在写盘窗口被删：新文件永不登记——就地回收（同音频段处理）
+          if (!lrcRow) {
+            try { fs.unlinkSync(lrcResult.path); } catch { /* 留给 reap */ }
+            return;
+          }
         } catch (error) {
           // NO_LYRICS 是上游确定性"无词"，不算任务失败；其余错误照常冒泡
           if (error.code !== 'NO_LYRICS') {
@@ -781,10 +794,14 @@ async function processTask(task, queueId, signal) {
       if (!existingCover) {
         try {
           const coverResult = await fileDownloader.downloadCover(task.coverUrl, coverPath, signal);
-          downloadTasksRepo.updateTask(task.id, {
+          const coverRow = downloadTasksRepo.updateTask(task.id, {
             coverPath: coverResult.path,
             progress: totalProgress + weights.cover
           });
+          if (!coverRow) {
+            try { fs.unlinkSync(coverResult.path); } catch { /* 留给 reap */ }
+            return;
+          }
         } catch (error) {
           if (signal?.aborted) throw error;
           console.warn(`封面下载失败 (${task.songId}):`, error.message);
@@ -807,14 +824,14 @@ async function processTask(task, queueId, signal) {
     }
 
     if (queueId !== null && queueId !== undefined) {
-      try {
-        downloadQueuesRepo.incrementCompleted(queueId);
-      } catch { /* 队列行可能已删，收尾重算兜底 */ }
+      recountQueueCounters(queueId);
     }
 
   } catch (error) {
-    // 路径锁冲突(409)不是任务失败——透传给外层走 deferred/退避重试
-    if (error.status === 409) {
+    // 路径锁冲突(409)不是任务失败——透传给外层走 deferred/退避重试。
+    // 必须带 lockKeys：无键 409 是未知来源（如下游 AxiosError 漏出），
+    // 走正常失败路径拿 retryCount 兜底而非绕过重试
+    if (error.status === 409 && error.lockKeys?.length > 0) {
       throw error;
     }
     if (signal?.aborted || error.aborted) {
@@ -863,9 +880,7 @@ async function processTask(task, queueId, signal) {
         });
       } catch { /* 行已删 */ }
       if (queueId !== null && queueId !== undefined) {
-        try {
-          downloadQueuesRepo.incrementFailed(queueId);
-        } catch { /* 队列行已删，收尾重算兜底 */ }
+        recountQueueCounters(queueId);
       }
     }
   } finally {
@@ -914,20 +929,58 @@ function abortController(controller) {
   controller.abort?.abort();
 }
 
-// 取消路径跳过 processQueue 收尾 recount，draining 收尾时补算计数器
+// 任务行"复位重跑"的公共字段形状：状态/计数/路径整体清零——残留的旧路径
+// 可能已指向别的任务的文件（逐站点手写 updateTask 易漏字段且漂移）
+const resetTaskFields = (extra = {}) => ({
+  status: 'pending',
+  progress: 0,
+  errorMessage: null,
+  completedAt: null,
+  retryCount: 0,
+  audioPath: null,
+  lyricsPath: null,
+  coverPath: null,
+  fileSize: null,
+  ...extra
+});
+
+// 计数器唯一真相来源：状态派生的先读后写（子查询 COUNT 替代手工增减）。
+// 手工 increment/decrement 在任何异常/并发路径漏配即永久漂移——全部调用方
+// 一律走这个收口，漂移面归零。idx_download_tasks_queue 覆盖 queue_id 维度，
+// status 在索引内过滤——歌单规模下 COUNT 成本可忽略
 function recountQueueCounters(queueId) {
-  const q = downloadQueuesRepo.findQueueById(queueId);
-  if (!q) return;
   try {
-    const tasks = downloadTasksRepo.listTasksByQueue(queueId);
-    downloadQueuesRepo.updateQueue(queueId, {
-      // total 也要重算：收养/接管/级联清理会搬走或删掉行，decrement 漏网时
-      // 不靠重算会永久漂移
-      totalTasks: tasks.length,
-      completedTasks: tasks.filter(t => t.status === 'completed').length,
-      failedTasks: tasks.filter(t => t.status === 'failed').length
-    });
-  } catch { /* 队列行可能已删 */ }
+    const db = getDb();
+    // 先读后写：计数没变时不动 updated_at——前端按 updatedAt diff 刷新，
+    // 幂等空写会让 UI 把"无变化"当变更且淹没真正的配置更新时间
+    const row = db.prepare(`
+      SELECT
+        total_tasks AS storedTotal,
+        completed_tasks AS storedCompleted,
+        failed_tasks AS storedFailed,
+        (SELECT COUNT(*) FROM download_tasks WHERE queue_id = @q) AS total,
+        (SELECT COUNT(*) FROM download_tasks WHERE queue_id = @q AND status = 'completed') AS completed,
+        (SELECT COUNT(*) FROM download_tasks WHERE queue_id = @q AND status = 'failed') AS failed
+      FROM download_queues WHERE id = @q
+    `).get({ q: queueId });
+    if (!row) return;
+    if (row.total === row.storedTotal
+        && row.completed === row.storedCompleted
+        && row.failed === row.storedFailed) return;
+    db.prepare(`
+      UPDATE download_queues SET
+        total_tasks = @total,
+        completed_tasks = @completed,
+        failed_tasks = @failed,
+        updated_at = @now
+      WHERE id = @q
+    `).run({ ...row, now: new Date().toISOString(), q: queueId });
+  } catch (error) {
+    // 事务内失败必须冒泡让外层回滚——吞掉会变成"行删了计数没动"的半提交。
+    // 事务外（settle 回调/排空兜底）吞掉合理：队列行已删时读为空 return
+    // 本就不写，能进 catch 的都是一次性读写失败
+    if (getDb().inTransaction) throw error;
+  }
 }
 
 async function cancelQueue(queueId) {
@@ -951,7 +1004,7 @@ async function cancelQueue(queueId) {
       // 身份校验：cancel→start→cancel 会让旧控制器的 done 回调抹掉新条目
       if (drainingQueues.get(queueId) === controller) drainingQueues.delete(queueId);
       // 若无新控制器接管（未重启/未删除），补一次计数重算——取消路径跳过
-      // processQueue 收尾 recount，incrementFailed 漂移会长期残留
+      // processQueue 收尾 recount 兜底，这里的失败计数漂移不会长期残留
       if (!activeQueues.has(queueId) && !drainingQueues.has(queueId)) {
         recountQueueCounters(queueId);
       }
@@ -1037,6 +1090,7 @@ async function deleteQueue(queueId) {
     }
     downloadQueuesRepo.deleteQueue(queueId);
   })();
+  for (const task of tasks) retryAfter.delete(task.id);
   // 在途任务的流已被 abort：正在写的那段残片由 downloader 的 removePartial 清，
   // 已落盘的前段（如 audio 已完成、歌词在途）仍要删；空目录骨架顺手剪掉
   // （目录非空时 rmdirSync 安全跳过——同歌单 standalone/其他队列文件不受影响）
@@ -1059,8 +1113,7 @@ function getQueueProgress(queueId) {
     queue,
     tasks,
     statusCounts,
-    isActive: activeQueues.has(queueId) || drainingQueues.has(queueId)
-      || [...zombieControllers].some(z => z.queueId === queueId)
+    isActive: queueHasLiveController(queueId)
   };
 }
 
@@ -1098,8 +1151,7 @@ function deleteTask(taskId) {
   // 里的是残留行（下次启动 recoverStaleStates 才复位），不应永远挡住删除
   if (standaloneRunning.has(task.id)
     || (task.status === 'downloading' && task.queueId
-        && (activeQueues.has(task.queueId) || drainingQueues.has(task.queueId)
-            || [...zombieControllers].some(z => z.queueId === task.queueId)))) {
+        && queueHasLiveController(task.queueId))) {
     throw httpError(409, '任务正在下载中，请先取消所在队列');
   }
   // 删除窗口锁：级联排空会先把控制器移出 Map 再 await——窗口内"在跑"判定
@@ -1112,16 +1164,14 @@ function deleteTask(taskId) {
   }
 
   // 行先删、文件后删：崩溃窗口反过来留的是"行还在但文件没了"的幻影
-  // completed（收养时计成已下载、静默缺歌），比孤儿文件危害大
-  downloadTasksRepo.deleteTask(taskId);
+  // completed（收养时计成已下载、静默缺歌），比孤儿文件危害大。
+  // 行删+计数重算同事务：半途 SQLITE_BUSY 不留"行没了计数没动"的漂移
+  getDb().transaction(() => {
+    downloadTasksRepo.deleteTask(taskId);
+    if (task.queueId) recountQueueCounters(task.queueId);
+  })();
+  retryAfter.delete(taskId); // 行已不存在，退避条目失去意义
   const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]);
-  // 计数对齐：行被物理删除——任何状态都要减 totalTasks（recount 的
-  // totalTasks=存活行数），completed/failed 还要减对应状态计数
-  if (task.queueId) {
-    downloadQueuesRepo.decrementTotal(task.queueId);
-    if (task.status === 'completed') downloadQueuesRepo.decrementCompleted(task.queueId);
-    else if (task.status === 'failed') downloadQueuesRepo.decrementFailed(task.queueId);
-  }
   return { success: true, deletedFiles };
 }
 
@@ -1217,38 +1267,30 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     const owner = downloadQueuesRepo.findQueueById(queueTask.queueId);
     // 内存控制器是真判据：队列 status 已 cancelled 但协程仍在排空/僵尸集里跑
     // 时（不可中止上游调用超 DRAIN_TIMEOUT），接管会双调度同批文件
-    const ownerBusy = activeQueues.has(queueTask.queueId)
-      || drainingQueues.has(queueTask.queueId)
-      || [...zombieControllers].some(z => z.queueId === queueTask.queueId);
+    const ownerBusy = queueHasLiveController(queueTask.queueId);
     const ownerActive = ownerBusy
       || (owner && ['pending', 'running', 'paused'].includes(owner.status));
     if (ownerActive) {
       throw httpError(409, '该歌曲已在下载队列中');
     }
     // 属主队列已终结（cancelled/failed）或行已消失：接管该行原地重跑——
-    // 否则被弃队列的歌从此永远无法单曲下载。置回 standalone 语义，不给死队列写计数
-    downloadTasksRepo.updateTask(queueTask.id, {
-      queueId: null,
-      status: 'pending',
-      progress: 0,
-      errorMessage: null,
-      retryCount: 0,
-      completedAt: null,
-      // 同步本次请求的下载选项——否则按旧行开关/码率跑，可能"completed 却没音频"
-      bitrate: options.bitrate || 320000,
-      downloadAudio: options.downloadAudio !== false,
-      downloadLyrics: options.downloadLyrics !== false,
-      downloadCover: options.downloadCover !== false,
-      audioPath: null,
-      lyricsPath: null,
-      coverPath: null,
-      fileSize: null
-    });
+    // 否则被弃队列的歌从此永远无法单曲下载。置回 standalone 语义，不给死队列写计数。
+    // 同步本次请求的下载选项——否则按旧行开关/码率跑，可能"completed 却没音频"
+    // 接管复位+死队列计数回调同事务：半途失败不留"行摘走了旧队列计数还虚高"
+    getDb().transaction(() => {
+      downloadTasksRepo.updateTask(queueTask.id, resetTaskFields({
+        queueId: null,
+        bitrate: options.bitrate || 320000,
+        downloadAudio: options.downloadAudio !== false,
+        downloadLyrics: options.downloadLyrics !== false,
+        downloadCover: options.downloadCover !== false
+      }));
+      // 死队列不再走收尾重算：接管会让其计数器永久虚高，顺手回调对齐
+      recountQueueCounters(queueTask.queueId);
+    })();
     retryAfter.delete(queueTask.id);
     // 行清后删文件：清路径却不删文件会让旧文件（可能不同扩展名）成运行期孤儿
     deleteFiles([queueTask.audioPath, queueTask.lyricsPath, queueTask.coverPath]);
-    // 死队列不再走收尾重算：接管会让其计数器永久虚高，顺手回调对齐
-    recountQueueCounters(queueTask.queueId);
     return runStandaloneTask(downloadTasksRepo.findTaskById(queueTask.id));
   }
 
@@ -1317,8 +1359,7 @@ async function deleteSongFiles(playlistId, songId) {
   // 僵尸协程同样算在跑——它还在写这个队列的文件
   if (tasks.some(t => standaloneRunning.has(t.id)
     || (t.status === 'downloading' && t.queueId
-        && (activeQueues.has(t.queueId) || drainingQueues.has(t.queueId)
-            || [...zombieControllers].some(z => z.queueId === t.queueId))))) {
+        && queueHasLiveController(t.queueId)))) {
     throw httpError(409, '任务正在下载中，请先取消所在队列');
   }
   // 删除窗口锁（理由同 deleteTask）：排空期间在跑判定会失效
@@ -1327,14 +1368,17 @@ async function deleteSongFiles(playlistId, songId) {
     throw httpError(409, '该歌单或队列正在删除中');
   }
 
-  // 行先删、文件后删（理由同 deleteTask：幻影 completed 行比孤儿文件危害大）
-  for (const task of tasks) {
-    downloadTasksRepo.deleteTask(task.id);
-    if (!task.queueId) continue;
-    downloadQueuesRepo.decrementTotal(task.queueId);
-    if (task.status === 'completed') downloadQueuesRepo.decrementCompleted(task.queueId);
-    else if (task.status === 'failed') downloadQueuesRepo.decrementFailed(task.queueId);
-  }
+  // 行先删、文件后删（理由同 deleteTask：幻影 completed 行比孤儿文件危害大）。
+  // 行删+计数重算同事务——半途失败不留"删了一半/计数漂移"
+  getDb().transaction(() => {
+    const affectedQueues = new Set();
+    for (const task of tasks) {
+      downloadTasksRepo.deleteTask(task.id);
+      if (task.queueId) affectedQueues.add(task.queueId);
+    }
+    for (const qid of affectedQueues) recountQueueCounters(qid);
+  })();
+  for (const task of tasks) retryAfter.delete(task.id);
   const allPaths = [...new Set(tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath]))];
   const deletedFiles = deleteFiles(allPaths);
 
@@ -1359,30 +1403,30 @@ async function deletePlaylistDownloadedFiles(playlistId) {
   const downloadedTasks = tasks.filter(
     task => !standaloneRunning.has(task.id)
       && !(task.status === 'downloading' && task.queueId
-          && (activeQueues.has(task.queueId) || drainingQueues.has(task.queueId)
-              || [...zombieControllers].some(z => z.queueId === task.queueId)))
+          && queueHasLiveController(task.queueId))
       // pending 行可能携已完成分段的路径（abort/重试复位不清路径字段）——
       // 那些文件属于待续跑的任务，删了会缺歌；只收终态行
       && (task.status === 'completed' || task.status === 'failed')
   );
 
-  let deletedSongs = 0;
-  let deletedFiles = 0;
-
-  for (const task of downloadedTasks) {
-    // 行先删、文件后删（理由同 deleteTask）
-    downloadTasksRepo.deleteTask(task.id);
-    deletedFiles += deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]);
-    deletedSongs += 1; // standalone 任务也是一次"已下载歌曲"的删除，不该漏计
-    if (!task.queueId) continue;
-    downloadQueuesRepo.decrementTotal(task.queueId);
-    if (task.status === 'completed') downloadQueuesRepo.decrementCompleted(task.queueId);
-    else if (task.status === 'failed') downloadQueuesRepo.decrementFailed(task.queueId);
-  }
+  // 行先删、文件后删（理由同 deleteTask）；行删+计数重算同事务
+  getDb().transaction(() => {
+    const affectedQueues = new Set();
+    for (const task of downloadedTasks) {
+      downloadTasksRepo.deleteTask(task.id);
+      if (task.queueId) affectedQueues.add(task.queueId);
+    }
+    for (const qid of affectedQueues) recountQueueCounters(qid);
+  })();
+  for (const task of downloadedTasks) retryAfter.delete(task.id);
+  const allPaths = [...new Set(
+    downloadedTasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath])
+  )];
+  const deletedFiles = deleteFiles(allPaths);
 
   return {
     success: true,
-    deletedSongs,
+    deletedSongs: downloadedTasks.length,
     deletedFiles
   };
 }
@@ -1427,15 +1471,18 @@ async function deletePlaylistFiles(playlistId) {
     }
 
     // 等待窗口内漏网者重扫：并发 cancelQueue 会把控制器新搬进 drainingQueues，
-    // startQueue/retryTask 虽已拦 deletingPlaylists，仍兜底重扫三个 Map
+    // startQueue/retryTask 虽已拦 deletingPlaylists，仍兜底重扫三个 Map。
+    // 并行排空——串行 await 会让 k 个卡死控制器拖累成 k×DRAIN_TIMEOUT
+    const rescan = [];
     for (const map of [activeQueues, drainingQueues]) {
       for (const [queueId, controller] of map) {
         const queue = downloadQueuesRepo.findQueueById(queueId);
         if (queue && queue.playlistId === playlistId) {
           abortController(controller);
           map.delete(queueId);
-          await drainWithTimeout(controller.done);
-          if (!controller.settled) zombieControllers.add(controller);
+          rescan.push(drainWithTimeout(controller.done).then(() => {
+            if (!controller.settled) zombieControllers.add(controller);
+          }));
         }
       }
     }
@@ -1445,16 +1492,17 @@ async function deletePlaylistFiles(playlistId) {
     for (const [taskId, entry] of standaloneRunning) {
       if (freshTaskIds.has(taskId)) {
         entry.abort.abort();
-        await drainWithTimeout(entry.done);
+        rescan.push(drainWithTimeout(entry.done));
       }
     }
     // 僵尸协程兜底：timeout-release 后不在任何 Map 但可能还在写本歌单的文件
     for (const z of zombieControllers) {
       if (z.playlistId === playlistId) {
         abortController(z);
-        await drainWithTimeout(z.done);
+        rescan.push(drainWithTimeout(z.done));
       }
     }
+    await Promise.all(rescan);
 
     // 排空后再取一次任务快照：窗口内漏网的新建行也一并清文件。
     // 只收集不删——文件 unlink 推迟到行删除事务提交后（行先删、文件后删：
@@ -1496,16 +1544,19 @@ async function deletePlaylistCascade(playlistId) {
   deletingPlaylists.add(playlistId);
   try {
     const pendingFiles = await deletePlaylistFiles(playlistId);
+    // 排空后快照任务 id——提交后清对应退避条目（事务内清会留回滚不一致）
+    const taskIds = downloadTasksRepo.listTasksByPlaylist(playlistId).map(t => t.id);
     // 显式删子表行：FK 级联依赖建表期声明，老库 ALTER 补的列可能没带
     // REFERENCES/ON DELETE CASCADE——不能把行删除押在 schema 史上。
     // 三条 DELETE 同事务：半途失败整体回滚，不留子表已删父表还在的不一致
     const deleted = getDb().transaction(() => {
-      for (const task of downloadTasksRepo.listTasksByPlaylist(playlistId)) {
-        downloadTasksRepo.deleteTask(task.id);
+      for (const id of taskIds) {
+        downloadTasksRepo.deleteTask(id);
       }
       downloadQueuesRepo.deleteQueuesByPlaylist(playlistId);
       return playlistsRepo.deletePlaylist(playlistId);
     })();
+    for (const id of taskIds) retryAfter.delete(id);
     // 行删提交后再清文件与目录骨架（见 deletePlaylistFiles 尾注）
     cleanupPlaylistFilesAndDirs(playlistId, pendingFiles);
     return deleted;
@@ -1547,32 +1598,25 @@ async function retryTask(taskId) {
 
   const queue = task.queueId ? downloadQueuesRepo.findQueueById(task.queueId) : null;
 
-  downloadTasksRepo.updateTask(taskId, {
-    status: 'pending',
-    progress: 0,
-    errorMessage: null,
-    completedAt: null,
-    retryCount: 0,
-    // 与收养重置对齐：残留的旧路径可能已指向别的任务的文件，重跑前清空。
-    // queueId 指向已不存在的队列（孤儿行）时一并归位 standalone——
-    // 否则任务永远绑着死队列
-    ...(queue ? {} : { queueId: null }),
-    audioPath: null,
-    lyricsPath: null,
-    coverPath: null,
-    fileSize: null
-  });
+  // queueId 指向已不存在的队列（孤儿行）时一并归位 standalone——
+  // 否则任务永远绑着死队列。复位+计数重算+队列状态回 pending 同事务：
+  // 半途失败不留"任务复位了队列还在 failed"（failed 队列拒绝 start）
+  getDb().transaction(() => {
+    downloadTasksRepo.updateTask(taskId, resetTaskFields(queue ? {} : { queueId: null }));
+    if (queue) {
+      recountQueueCounters(queue.id);
+      if (queue.status === 'failed' || queue.status === 'completed' || queue.status === 'cancelled') {
+        downloadQueuesRepo.updateQueue(queue.id, {
+          status: 'pending',
+          completedAt: null
+        });
+      }
+    }
+  })();
   retryAfter.delete(taskId); // 人工重试即用户明确再等——退避不该挡它
   deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]); // 行先清文件后删
 
   if (queue) {
-    downloadQueuesRepo.decrementFailed(queue.id);
-    if (queue.status === 'failed' || queue.status === 'completed' || queue.status === 'cancelled') {
-      downloadQueuesRepo.updateQueue(queue.id, {
-        status: 'pending',
-        completedAt: null
-      });
-    }
     // 队列置回 pending 后没有消费者——"重试"语义上应当即跑，
     // 否则任务永远停在"等待中"直到用户手动启动
     try {
@@ -1606,8 +1650,7 @@ async function retryQueue(queueId) {
   // 运行中队列重置 failed→pending 会产生两套调度来源（活控制器与新协程），
   // 且 status=pending 覆写 running 造成状态漂移——要求先取消再重试。
   // draining 同理：排空协程的 abort-reset 会与新调度来源交错
-  if (activeQueues.has(queueId) || drainingQueues.has(queueId)
-      || [...zombieControllers].some(z => z.queueId === queueId)) {
+  if (queueHasLiveController(queueId)) {
     throw httpError(409, '队列正在运行中，请先取消');
   }
   if (deletingQueues.has(queueId)) {
@@ -1624,34 +1667,29 @@ async function retryQueue(queueId) {
     throw httpError(400, '没有可重试的失败任务');
   }
 
-  for (const task of failedTasks) {
-    downloadTasksRepo.updateTask(task.id, {
+  // 行更新+队列状态同事务：半途失败不留"部分任务复位、队列还停在 failed"。
+  // retryCount 必须重置——否则 retryCount=3 的任务重试一次又判死
+  const resetPaths = [];
+  getDb().transaction(() => {
+    for (const task of failedTasks) {
+      downloadTasksRepo.updateTask(task.id, resetTaskFields());
+      resetPaths.push(task.audioPath, task.lyricsPath, task.coverPath);
+    }
+    // completedTasks 不动：失败任务从未计入完成数；复位后的计数由任务行重算
+    downloadQueuesRepo.updateQueue(queueId, {
       status: 'pending',
-      progress: 0,
-      errorMessage: null,
-      completedAt: null,
-      retryCount: 0,  // 重置次数，否则 retryCount=3 的任务重试一次又判死
-      audioPath: null,
-      lyricsPath: null,
-      coverPath: null,
-      fileSize: null
+      completedAt: null
     });
-    retryAfter.delete(task.id);
-    deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]); // 行先清文件后删
-  }
-
-  // completedTasks 不动：失败任务从未计入完成数
-  downloadQueuesRepo.updateQueue(queueId, {
-    status: 'pending',
-    failedTasks: 0,
-    completedAt: null
-  });
+    recountQueueCounters(queueId);
+  })();
+  for (const task of failedTasks) retryAfter.delete(task.id);
+  deleteFiles(resetPaths); // 行先清、文件后删
 
   // 重试即启动：pending 队列没有消费者，用户预期"重试"是直接跑起来
   try {
     await startQueue(queueId);
   } catch {
-    // 理论不可达（active/draining 已前置拦截）——保守起见仍返回重置后的队列
+    // 理论不可达（活体控制器已前置拦截）——保守起见仍返回重置后的队列
   }
 
   return downloadQueuesRepo.findQueueById(queueId);
@@ -1662,10 +1700,12 @@ async function retryQueue(queueId) {
 async function shutdownAll() {
   shuttingDown = true;
   const drains = [];
+  const tracked = new Set(); // 排空超时仍在跑的要追进僵尸集——Map clear 后就摸不到了
   for (const map of [activeQueues, drainingQueues]) {
     for (const [queueId, controller] of map) {
       abortController(controller);
       drains.push(controller.done);
+      tracked.add(controller);
       try {
         downloadQueuesRepo.updateQueue(queueId, { status: 'cancelled' });
       } catch { /* 停机路径尽力而为 */ }
@@ -1688,6 +1728,12 @@ async function shutdownAll() {
   // 停机排空预算必须小于进程强退窗口（server 端 10s 强退兜底）——
   // 用默认 30s 排空会让强退永远先触发，半成品文件照样成孤儿
   await Promise.all(drains.map(d => drainWithTimeout(d, 5000)));
+
+  // 排空超时仍在跑的协程追进僵尸集——与其他排空路径同一处理：
+  // 进程强退前它们还可能翻转任务行，settle 时的幂等 recount 收掉漂移
+  for (const controller of tracked) {
+    if (!controller.settled) zombieControllers.add(controller);
+  }
 
   for (const task of downloadTasksRepo.listTasksByStatus('downloading')) {
     downloadTasksRepo.updateTask(task.id, {
@@ -1825,6 +1871,11 @@ function recoverStaleStates() {
     db.prepare('DELETE FROM download_tasks WHERE playlist_id IS NULL OR playlist_id NOT IN (SELECT id FROM playlists)').run();
     db.prepare('DELETE FROM playlist_tracks WHERE playlist_id IS NULL OR playlist_id NOT IN (SELECT id FROM playlists)').run();
   })();
+  // 全量计数重算：迁移期去重删行、崩溃窗口漏配等历史漂移在启动时一次性收敛——
+  // recount 幂等且空变化不写 updated_at，成本可以忽略
+  for (const queue of downloadQueuesRepo.listQueues()) {
+    recountQueueCounters(queue.id);
+  }
 }
 
 module.exports = {
