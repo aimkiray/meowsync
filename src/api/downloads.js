@@ -7,19 +7,10 @@ const API_BASE_URL = resolveApiBaseUrl();
 const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || '';
 
 // 默认超时：轮询/查询类请求挂起时必须能 settle——裸 axios 无超时会让
-// AdminPanel 的 pollInFlight 标志永久卡住、轮询停摆
+// AdminPanel 的 pollInFlight 标志永久卡住、轮询停摆。单曲下载/任务重试
+// 都是"提交即返回"的异步语义，终态由状态轮询确认——不再需要长超时通道
 const http = axios.create({
   timeout: Number(import.meta.env.VITE_API_TIMEOUT) || 10000,
-  headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
-});
-
-// 同步阻塞型操作（单曲下载原地跑完、standalone 重试）：服务端最多 4 次尝试，
-// 每次最坏 = 取链/解锁/HEAD/逐跳重定向 + 流 300s + 歌词封面——理论尾部可超 40min。
-// 30min 是 UX 上限而非保证覆盖：超时到点后服务端仍在后台跑完，结果以任务
-// 状态轮询为准（重试只会撞 409"正在下载"）。注意反代层（nginx 默认 60s、
-// 常见配置 300s）可能先于本值切断——部署文档已写明需调 proxy_read_timeout
-const httpLong = axios.create({
-  timeout: 30 * 60 * 1000,
   headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
 });
 
@@ -77,28 +68,22 @@ export const downloadsApi = {
     return http.get(`${API_BASE_URL}/downloads/tasks`, { params });
   },
 
-  getTask: (id) => {
-    return http.get(`${API_BASE_URL}/downloads/tasks/${id}`);
-  },
-
   retryTask: (id) => {
-    // standalone 任务重试是同步跑完的（阻塞到下载结束），必须长超时
-    return httpLong.post(`${API_BASE_URL}/downloads/tasks/${id}/retry`);
+    // 重试即提交即返回（后台协程跑），终态由任务轮询确认
+    return http.post(`${API_BASE_URL}/downloads/tasks/${id}/retry`);
   },
 
-  deleteTask: (id) => {
-    return http.delete(`${API_BASE_URL}/downloads/tasks/${id}`);
-  },
-
-  // 下载单首歌曲到服务器（同步阻塞到下载完成，长超时）
+  // 提交单曲下载到服务器（返回 pending/completed 任务行，不阻塞等下载完成——
+  // 终态用 getSongDownloadStatus 轮询；completed 行是幂等短路返回）。
+  // 超时仍要给足：歌单未导入时服务端先走两次上游往返才提交任务
   downloadSongToServer: (playlistId, songId, options = {}) => {
-    return httpLong.post(`${API_BASE_URL}/downloads/songs/${songId}`, {
+    return http.post(`${API_BASE_URL}/downloads/songs/${songId}`, {
       playlistId,
       bitrate: options.bitrate || 320000,
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false
-    });
+    }, { timeout: 60000 });
   },
 
   // 查询歌曲下载状态

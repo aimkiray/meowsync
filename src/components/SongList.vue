@@ -316,6 +316,9 @@ export default {
     // 服务器下载状态
     const serverDownloadedStates = ref({})  // 是否已下载
     const serverDownloadingStates = ref({}) // 是否正在下载
+    // 组件卸载标志：单曲下载轮询挂在 v-if 挂载的组件上，切到管理面板即卸载——
+    // props 卸载后仍持旧值，stillCurrent 永真会让孤儿轮询空转 10min 还跨视图弹窗
+    let viewDisposed = false
 
     // 移动端检测
     const isMobile = useMediaQuery()
@@ -495,7 +498,10 @@ export default {
           throw new Error('任务列表响应格式异常')
         }
         const downloadedIds = new Set(
-          tasks.filter(t => t.status === 'completed').map(t => String(t.songId))
+          // completed 但文件已被外部删除的行（filesIntact=false）不算已下载——
+          // 与单曲状态口径一致，重新露出下载入口走自愈重跑
+          tasks.filter(t => t.status === 'completed' && t.filesIntact !== false)
+            .map(t => String(t.songId))
         )
         for (const song of props.songs) {
           serverDownloadedStates.value[song.id] = downloadedIds.has(String(song.id))
@@ -531,7 +537,8 @@ export default {
       // （状态 map 是"当前歌单"的视图，写前必须确认归属未变）
       const ownerPlaylistId = props.selectedPlaylist.id
       const stillCurrent = () =>
-        String(props.selectedPlaylist?.id) === String(ownerPlaylistId)
+        !viewDisposed
+        && String(props.selectedPlaylist?.id) === String(ownerPlaylistId)
 
       if (isDownloaded) {
         // 删除已下载文件
@@ -555,20 +562,63 @@ export default {
           closeDownloadMenu()
         }
       } else {
-        // 下载到服务器
+        // 下载到服务器：提交即返回任务行，终态靠状态轮询（不再同步挂起 HTTP——
+        // 长下载不会被反代/浏览器超时切断，重试也不会撞出脏响应）
         try {
           serverDownloadingStates.value[song.id] = true
-          await downloadsApi.downloadSongToServer(ownerPlaylistId, song.id, {
+          const response = await downloadsApi.downloadSongToServer(ownerPlaylistId, song.id, {
             bitrate: 320000,
             downloadAudio: true,
             downloadLyrics: true,
             downloadCover: true
           })
-          if (stillCurrent()) serverDownloadedStates.value[song.id] = true
+          const submittedTask = response.data?.data
+          // completed 短路（幂等返回）才跳过轮询；pending/downloading 进入轮询
+          if (submittedTask?.status !== 'completed') {
+            // 轮询窗口封顶 10min：超时只报"仍在后台"，任务在服务端继续跑
+            const deadline = Date.now() + 10 * 60 * 1000
+            let terminal = null
+            // 单次轮询失败（网络抖动/超时）不该判死下载——容忍连续 3 次再放弃，
+            // 服务端任务不受影响
+            let pollErrors = 0
+            while (stillCurrent() && Date.now() < deadline) {
+              await new Promise(resolve => setTimeout(resolve, 1500))
+              let stData
+              try {
+                const st = await downloadsApi.getSongDownloadStatus(ownerPlaylistId, song.id)
+                stData = st.data?.data
+                pollErrors = 0
+              } catch (pollErr) {
+                if (++pollErrors >= 3) throw pollErr
+                continue
+              }
+              if (stData?.downloaded) {
+                terminal = 'completed'
+                break
+              }
+              const taskStatus = stData?.task?.status
+              if (taskStatus === 'failed') {
+                throw new Error(stData.task.errorMessage || '下载失败')
+              }
+              // 任务行被外部删掉（管理面板清理）：没有可等的目标，快速退出
+              if (stData && stData.task === null) {
+                throw new Error('下载任务已不存在（可能在下载管理中被清理）')
+              }
+            }
+            // 用户已切走歌单：静默结束（状态不属于当前视图，不该弹窗打扰）
+            if (!stillCurrent()) return
+            if (terminal !== 'completed') {
+              // 非失败语义的提示单独弹窗——混进"下载失败:"前缀是误导
+              alert('下载仍在后台进行中，可稍后在下载管理里查看结果')
+              return
+            }
+          }
+          if (!stillCurrent()) return // 幂等命中也走同一出口：视图已换即静默
+          serverDownloadedStates.value[song.id] = true
           alert('下载成功！')
         } catch (error) {
           console.error('下载失败:', error)
-          alert('下载失败: ' + extractErrorMessage(error))
+          if (stillCurrent()) alert('下载失败: ' + extractErrorMessage(error))
         } finally {
           if (stillCurrent()) {
             serverDownloadingStates.value[song.id] = false
@@ -601,6 +651,7 @@ export default {
       window.addEventListener('scroll', closeOnScroll, true)
       window.addEventListener('keydown', closeOnEscape)
       onBeforeUnmount(() => {
+        viewDisposed = true // 终止下载轮询并屏蔽其状态写/弹窗
         window.removeEventListener('scroll', closeOnScroll, true)
         window.removeEventListener('keydown', closeOnEscape)
       })

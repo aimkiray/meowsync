@@ -89,7 +89,14 @@ function updateQueue(id, updates) {
 
 function findQueueById(id) {
   const db = getDb();
-  const row = db.prepare('SELECT * FROM download_queues WHERE id = ?').get(id);
+  // 与 listQueues 同形 JOIN：selectedQueue 快照若缺 cover_img_url，
+  // AdminPanel 轮询刷新会把队列卡的封面冲成空串
+  const row = db.prepare(`
+    SELECT q.*, p.cover_img_url
+    FROM download_queues q
+    LEFT JOIN playlists p ON p.id = q.playlist_id
+    WHERE q.id = ?
+  `).get(id);
   return mapQueueRow(row);
 }
 
@@ -109,18 +116,6 @@ function deleteQueue(id) {
   db.prepare('DELETE FROM download_queues WHERE id = ?').run(id);
 }
 
-function listQueuesByPlaylist(playlistId) {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT q.*, p.cover_img_url
-    FROM download_queues q
-    LEFT JOIN playlists p ON p.id = q.playlist_id
-    WHERE q.playlist_id = ?
-    ORDER BY datetime(q.created_at) DESC
-  `).all(playlistId);
-  return rows.map(mapQueueRow);
-}
-
 function deleteQueuesByPlaylist(playlistId) {
   const db = getDb();
   db.prepare('DELETE FROM download_queues WHERE playlist_id = ?').run(playlistId);
@@ -133,7 +128,6 @@ module.exports = {
   updateQueue,
   findQueueById,
   listQueues,
-  listQueuesByPlaylist,
   deleteQueue,
   deleteQueuesByPlaylist
 };

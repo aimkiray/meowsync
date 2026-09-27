@@ -323,7 +323,9 @@ function initSchema(database) {
     ['idx_playlist_tracks_song_id', 'playlist_tracks', 'song_id'],
     ['idx_download_tasks_playlist', 'download_tasks', 'playlist_id'],
     ['idx_download_tasks_status', 'download_tasks', 'status'],
-    ['idx_download_queues_status', 'download_queues', 'status']
+    ['idx_download_queues_status', 'download_queues', 'status'],
+    // cascade/建队列查重/属主判定都按 playlist_id 过滤——队列表全表扫
+    ['idx_download_queues_playlist', 'download_queues', 'playlist_id']
   ];
   for (const [name, table, column] of INDEX_COLUMNS) {
     // hasColumn 缺列场景不建（索引缺失可继续跑，比启动即崩可恢复）；

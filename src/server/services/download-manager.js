@@ -139,6 +139,9 @@ function toPublicTask(task) {
   );
   return {
     ...task,
+    // completed 行但登记文件被外部删除 → filesIntact:false——前端据此不把
+    // 它当"已下载"展示（下载入口重新露出，点了会自愈重跑）
+    filesIntact: task.status !== 'completed' || taskFilesIntact(task),
     audioPath: rel(task.audioPath),
     lyricsPath: rel(task.lyricsPath),
     coverPath: rel(task.coverPath)
@@ -196,6 +199,14 @@ async function createDownloadQueue(playlistId, options = {}) {
 
   // 队列行 + 全部任务行在同一个事务里写入：半途抛错不留"有队列没任务"的脏数据
   const db = getDb();
+  // 完整性 stat 预热放在事务外：txn 内跑文件 I/O 会把 SQLite 写锁摁在整个
+  // stat 风暴上（挂载卷每个 stat 一个 RTT）。TTL 缓存让 txn 内同款调用全部
+  // 命中——预热与事务在同一同步段，无并发窗口使缓存过期失真
+  for (const track of tracks) {
+    const existing = downloadTasksRepo.findAnyTaskByPlaylistAndSongId(
+      resolvedPlaylistId, String(track.id));
+    if (existing && existing.status === 'completed') taskFilesIntact(existing);
+  }
   const oldOwnerQueueIds = new Set(); // 收养搬走任务后待回调计数的旧属主队列
   const adoptedPaths = []; // 收养重置清掉的旧文件路径——提交后才删（txn 内 unlink 会留回滚窗口）
   const adoptedTaskIds = [];
@@ -241,11 +252,12 @@ async function createDownloadQueue(playlistId, options = {}) {
         if (ownerBusy) {
           throw httpError(409, '该歌单有下载任务仍在收尾，请稍后再试');
         }
-        const ownerActive = ownerBusy
-          || (owner && ['pending', 'running', 'paused'].includes(owner.status));
+        const ownerActive = owner
+          && ['pending', 'running', 'paused'].includes(owner.status);
         // owner 为 null = queue_id 指向已消失队列的孤儿行，同样收养
         if (!standaloneActive && (existing.queueId == null || !ownerActive)) {
-          const keepCompleted = existing.status === 'completed';
+          // completed 但文件已被外部删掉的行是幻影——按未完成收养重跑补回
+          const keepCompleted = existing.status === 'completed' && taskFilesIntact(existing);
           // 重置重跑的任务同步新队列的下载选项——否则按旧行开关/码率跑，
           // "completed" 的歌可能实际没有音频/封面；旧路径字段一并清掉：
           // 残留的路径可能已指向别的任务的文件，后续删除会按它误删
@@ -429,7 +441,7 @@ async function processQueue(queueId, controller) {
         deferred.delete(taskId);
         continue;
       }
-      if (now - since <= DEFER_HARD_LIMIT_MS) continue; // 持锁未到硬顶：继续等
+      if (now - entry.since <= DEFER_HARD_LIMIT_MS) continue; // 持锁未到硬顶：继续等
       const row = downloadTasksRepo.findTaskById(taskId);
       deferred.delete(taskId);
       if (!row || row.status !== 'pending') continue; // 已离开等锁状态，纯清理
@@ -610,6 +622,42 @@ const getSafeSongId = (task) => {
   const raw = String(task.songId);
   return /^\d+$/.test(raw) ? raw.slice(0, 40) : `task-${task.id}`;
 };
+
+// "completed 行"的真实校验：登记过的文件必须还在盘上。音频启用时 audioPath
+// 缺失直接判不完整；歌词/封面只查"登记过却被外部删掉"（NO_LYRICS/封面失败
+// 本就不登记路径，不能当缺失判）。幂等返回/收养前都要过这道闸——文件被
+// 外部删掉的 completed 行是幻影，应回退到重跑而不是继续报"已下载"
+const pathPresent = (p) => {
+  try {
+    fs.statSync(p);
+    return true;
+  } catch (e) {
+    // ENOENT/ENOTDIR = 文件确实不在；EPERM/EIO/挂载卷抖动一律判"在"——
+    // 反向判会把瞬时 IO 故障放大成全量重置重下，误删/虚报方向相反更安全
+    return e?.code !== 'ENOENT' && e?.code !== 'ENOTDIR';
+  }
+};
+// TTL 缓存：listTasks/getQueue 轮询对每行 completed 打 3 次同步 stat，
+// 挂载卷上每个 stat 一个 RTT——队列卡 2s 轮询 × N 行会把事件循环摁死。
+// 指纹含全部路径字段：行被重置/改写后缓存自然失效，TTL 只是"外部删文件"
+// 这一信号的探测延迟上限
+const INTACT_CACHE_TTL_MS = 3000;
+const intactCache = new Map(); // taskId -> { fp, result, at }
+function taskFilesIntact(task) {
+  if (!task || task.status !== 'completed') return false;
+  const fp = `${task.audioPath}|${task.lyricsPath}|${task.coverPath}`;
+  const hit = intactCache.get(task.id);
+  if (hit && hit.fp === fp && Date.now() - hit.at < INTACT_CACHE_TTL_MS) {
+    return hit.result;
+  }
+  const result =
+    !(task.downloadAudio && !(task.audioPath && pathPresent(task.audioPath)))
+    && !(task.lyricsPath && !pathPresent(task.lyricsPath))
+    && !(task.coverPath && !pathPresent(task.coverPath));
+  if (intactCache.size > 4096) intactCache.clear();
+  intactCache.set(task.id, { fp, result, at: Date.now() });
+  return result;
+}
 
 // sanitizeFilename 是纯函数；兄弟扫描为每个任务重复消毒全歌单名字（O(N²) CPU）。
 // 有界 memo 去掉大头；超限整体清空（清比重排实现简单，命中率在歌单尺度下已足够）
@@ -1226,7 +1274,47 @@ async function runStandaloneTask(task) {
   return entry.done;
 }
 
-// 下载单首歌曲到服务器
+// 提交即返回：下载在后台协程跑，调用方拿 pending 任务行，终态由
+// GET /songs/:id/status 轮询。catch 兜底防 unhandled rejection——
+// 行级失败已由 processTask 落库，这里只为日志可见
+const dispatchStandalone = (task) => {
+  // completed-残缺/failed 行的原地重跑带着旧 status 进协程——先翻回 pending：
+  // 响应体若声称旧终态，前端会当幂等完成跳过轮询而文件实际还在下；
+  // retryCount 也必须清零——failed 行带着 retryCount>=MAX 直接派活，
+  // 首个瞬态错误就再次落 failed。路径字段保留：分段幂等靠它只补缺失段
+  if (task.status !== 'pending') {
+    downloadTasksRepo.updateTask(task.id, {
+      status: 'pending',
+      progress: 0,
+      errorMessage: null,
+      retryCount: 0
+    });
+    retryAfter.delete(task.id);
+  }
+  // 翻行后必须重捞再派：processTask 的重试判定读的是传入对象的 retryCount，
+  // 把旧快照（retryCount>=MAX 的 failed 行）递进去会让首个瞬态错误直接判死
+  const fresh = downloadTasksRepo.findTaskById(task.id) || task;
+  runStandaloneTask(fresh).catch(error => {
+    // 只有带 lockKeys 的 409 才是路径锁冲突（standalone 无队列 deferred
+    // 重试机制，静默放着行会永远挂 pending）。"已在下载/已取消/停机"的
+    // 409 是幂等语义，行归在跑的协程管——标 failed 会污染别人的任务
+    if (error?.status === 409 && Array.isArray(error?.lockKeys)) {
+      try {
+        downloadTasksRepo.updateTask(task.id, {
+          status: 'failed',
+          errorMessage: '输出路径被其他下载任务占用，请稍后重试'
+        });
+      } catch { /* 行可能已被删 */ }
+      return;
+    }
+    if (error?.status !== 409) {
+      console.error(`单曲任务 ${task.id} 后台执行失败:`, error?.message || error);
+    }
+  });
+  return downloadTasksRepo.findTaskById(task.id) || task;
+};
+
+// 下载单首歌曲到服务器（提交任务即返回任务行；调用方轮询 status 接口等终态）
 async function downloadSingleSong(playlistId, songId, options = {}) {
   if (shuttingDown) {
     throw httpError(409, '服务正在停机');
@@ -1261,8 +1349,10 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     if (deletingQueues.has(queueTask.queueId)) {
       throw httpError(409, '所在队列正在删除中');
     }
-    if (queueTask.status === 'completed') {
-      return queueTask; // 幂等：队列已下载，直接返回
+    // 幂等返回只认"completed 且文件还在"——登记路径被外部删掉的行回退到
+    // 接管/重跑分支补回文件（否则客户端拿到的是指向已删文件的"已下载"）
+    if (queueTask.status === 'completed' && taskFilesIntact(queueTask)) {
+      return queueTask;
     }
     const owner = downloadQueuesRepo.findQueueById(queueTask.queueId);
     // 内存控制器是真判据：队列 status 已 cancelled 但协程仍在排空/僵尸集里跑
@@ -1271,7 +1361,7 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     const ownerActive = ownerBusy
       || (owner && ['pending', 'running', 'paused'].includes(owner.status));
     if (ownerActive) {
-      throw httpError(409, '该歌曲已在下载队列中');
+      throw httpError(409, '该歌曲所属下载队列仍在运行，请等队列结束后再重试');
     }
     // 属主队列已终结（cancelled/failed）或行已消失：接管该行原地重跑——
     // 否则被弃队列的歌从此永远无法单曲下载。置回 standalone 语义，不给死队列写计数。
@@ -1291,12 +1381,15 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     retryAfter.delete(queueTask.id);
     // 行清后删文件：清路径却不删文件会让旧文件（可能不同扩展名）成运行期孤儿
     deleteFiles([queueTask.audioPath, queueTask.lyricsPath, queueTask.coverPath]);
-    return runStandaloneTask(downloadTasksRepo.findTaskById(queueTask.id));
+    return dispatchStandalone(downloadTasksRepo.findTaskById(queueTask.id) || queueTask);
   }
 
-  let task = existing.find(t => !t.queueId && t.status === 'completed') || existing.find(t => !t.queueId);
+  // completed 但文件缺失的行跳过 completed 短路——落回下方重跑补回缺失段
+  // （processTask 的分段幂等会只补不存在的文件，不重下还在的）
+  let task = existing.find(t => !t.queueId && t.status === 'completed' && taskFilesIntact(t))
+    || existing.find(t => !t.queueId);
 
-  if (task && task.status === 'completed') {
+  if (task && task.status === 'completed' && taskFilesIntact(task)) {
     return task;
   }
   // 只看内存态：DB 里残留的 downloading 孤儿行不在 standaloneRunning 里，
@@ -1322,7 +1415,7 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     });
   }
 
-  return runStandaloneTask(task);
+  return dispatchStandalone(task);
 }
 
 // 查询歌曲下载状态（读操作：歌单未导入时返回未下载，不触发远端导入；
@@ -1336,7 +1429,9 @@ async function getSongDownloadStatus(playlistId, songId) {
   const task = all.find(t => t.status === 'completed') || all[0] || null;
 
   return {
-    downloaded: Boolean(task && task.status === 'completed'),
+    // completed 行但文件被外部删掉 → 如实报未下载，让前端重新露出下载入口
+    // （行不预改：下次下载走幂等校验/收养路径会自愈重跑）
+    downloaded: Boolean(task && task.status === 'completed' && taskFilesIntact(task)),
     task: toPublicTask(task || null)
   };
 }
@@ -1629,12 +1724,13 @@ async function retryTask(taskId) {
     return downloadTasksRepo.findTaskById(taskId);
   }
 
-  // 独立任务没有队列消费 pending——就地重跑；并发删除窗口内行可能已消失
+  // 独立任务没有队列消费 pending——就地起后台协程；并发删除窗口内行可能已消失。
+  // 提交即返回（与单曲下载同一异步语义），调用方轮询任务状态看终态
   const fresh = downloadTasksRepo.findTaskById(taskId);
   if (!fresh) {
     throw httpError(404, '任务不存在');
   }
-  return runStandaloneTask(fresh);
+  return dispatchStandalone(fresh);
 }
 
 async function retryQueue(queueId) {

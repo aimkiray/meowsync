@@ -95,10 +95,13 @@ curl -X DELETE http://localhost:3101/downloads/playlists/1/files       # 清空�
 ### 单曲下载与状态查询
 
 ```bash
+# 提交即返回任务行（不阻塞等下载完成）；已下载的歌曲幂等返回 completed 任务
 curl -X POST http://localhost:3101/downloads/songs/{songId} \
   -H "Content-Type: application/json" \
   -d '{"playlistId":1,"bitrate":320000,"downloadLyrics":true,"downloadCover":true}'
 
+# 轮询终态以下载态为准：downloaded=true 即成功，task.status='failed' 即失败
+# （completed 但 downloaded=false 说明文件被外部删过，属未完成态，继续等或重下）
 curl 'http://localhost:3101/downloads/songs/{songId}/status?playlistId=1'
 ```
 
