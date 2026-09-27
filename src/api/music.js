@@ -161,12 +161,16 @@ export const musicApi = {
 
     // 跨域 URL 的 download 属性会被浏览器忽略，需拉取为 blob 后触发本地下载。
     // 解锁源 CDN（kuwo/googlevideo 等）基本不带 ACAO，fetch 会被 CORS 拒——
-    // https 目标一律走同源 /audio-proxy 中转（服务端允许重定向跟随+公网校验）；
-    // http 目标代理端拒收只能直连，尽力而为
-    const fetchUrl = /^https:\/\//i.test(downloadData.url)
-      ? `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
-      : downloadData.url
-    const blobResponse = await fetch(fetchUrl)
+    // 一律先走同源 /audio-proxy 中转（白名单域 http/https 都放、逐跳公网校验）；
+    // 白名单外目标或代理上游失败回退直连（官方 CDN 带 ACAO 的能直连成功，
+    // 无 ACAO 的也只是与代理相同的失败，不回退体验）
+    const proxyUrl = `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
+    let blobResponse = await fetch(proxyUrl).catch(() => null)
+    if (!blobResponse || !blobResponse.ok) {
+      blobResponse = await fetch(downloadData.url).catch(error => {
+        throw new Error(`下载失败: ${error.message || '网络错误'}`)
+      })
+    }
     if (!blobResponse.ok) throw new Error(`下载失败: HTTP ${blobResponse.status}`)
     const blob = await blobResponse.blob()
     const objectUrl = URL.createObjectURL(blob)
