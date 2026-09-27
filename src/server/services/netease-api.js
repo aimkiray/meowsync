@@ -42,9 +42,14 @@ const unblockmatch = require('@unblockneteasemusic/server');
 const TRIAL_MAX_DURATION_MS = 60000;
 // 解锁结果的时长校验容差（估算时长与原始时长偏差占比）
 const DURATION_TOLERANCE = { ytdlp: 0.4, default: 0.2 };
-// 播放走 ytdlp 优先（音质稳定）；下载走 kuwo 优先（ytdlp 直连源站对服务端下载无增益且慢）
-const PLAYBACK_SOURCES = ['ytdlp', 'kuwo'];
-const DOWNLOAD_SOURCES = ['kuwo', 'ytdlp'];
+// 源优先级（2026-09 实测）：
+// - pyncmd：网易自家 m801.music.126.net，一次 API 调用出完整文件，最快最稳
+// - bodian：bd-er.kuwo.cn 完整文件（与 kuwo 不同的 CDN 路径）
+// - ytdlp：googlevideo 完整文件，但需本机 yt-dlp 且解析有秒级延迟
+// - kuwo：antiserver/trackmedia 现已退化为 ~11s 预览剪辑，只作兜底——
+//   时长校验会识别剪辑并跳过，不会把残片当完整曲下发
+const PLAYBACK_SOURCES = ['pyncmd', 'ytdlp', 'bodian', 'kuwo'];
+const DOWNLOAD_SOURCES = ['pyncmd', 'bodian', 'ytdlp', 'kuwo'];
 
 // 通过 Content-Length + 码率估算音频时长（毫秒）
 function estimateDuration(contentLength, br) {
@@ -176,10 +181,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           );
           if (!unblocked?.url) continue;
 
-          // kuwo 元数据不可靠（br/size 常是占位值，估算时长必然误判），
-          // 任何用途下都不做时长校验——实测播放路径校验会把唯一可用源误杀
-          const validateDuration = source !== 'kuwo';
-          if (originalDt && unblocked.br && validateDuration) {
+          // 时长校验对所有源生效——kuwo 现退化为 ~11s 预览剪辑，校验正是
+          // 识别并拒收它的机制（残片下发会被当完整曲播放/落盘，危害更大）
+          if (originalDt && unblocked.br) {
             // match() 内部 check() 已发过 range 请求并解析出 size——优先复用，少发一次 HEAD
             const size = Number.isFinite(unblocked.size) && unblocked.size > 0
               ? unblocked.size
@@ -194,7 +198,11 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             }
           }
 
-          const useProxy = purpose === 'playback' && source === 'ytdlp' && !!proxyOrigin;
+          // 走代理的情形：ytdlp 的 googlevideo URL 带 ip= 绑定（浏览器直连
+          // 必然 403），或上游回 http 链（HTTPS 页面直连会被混合内容拦截）。
+          // 白名单已覆盖 googlevideo/kuwo.cn/music.126.net 三个域
+          const useProxy = purpose === 'playback' && !!proxyOrigin
+            && (source === 'ytdlp' || unblocked.url.startsWith('http:'));
           item.url = useProxy
             ? `${proxyOrigin}/audio-proxy?url=${encodeURIComponent(unblocked.url)}`
             : unblocked.url;
