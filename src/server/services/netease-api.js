@@ -176,7 +176,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           );
           if (!unblocked?.url) continue;
 
-          const validateDuration = !(purpose === 'download' && source === 'kuwo');
+          // kuwo 元数据不可靠（br/size 常是占位值，估算时长必然误判），
+          // 任何用途下都不做时长校验——实测播放路径校验会把唯一可用源误杀
+          const validateDuration = source !== 'kuwo';
           if (originalDt && unblocked.br && validateDuration) {
             // match() 内部 check() 已发过 range 请求并解析出 size——优先复用，少发一次 HEAD
             const size = Number.isFinite(unblocked.size) && unblocked.size > 0
