@@ -43,7 +43,7 @@ cp .env.example .env
 | PORT | - | `API_PORT` 的备用变量（Heroku/Railway 等 PaaS 自动注入；`API_PORT` 优先） |
 | HOST | 0.0.0.0 | 绑定地址 |
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
-| REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 必须带 `?token=` |
+| REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 须带令牌（子协议 `remote.<token>` 优先，`?token=` 兼容兜底）。公网/共享网络部署务必配置——未设时任何可达客户端都能接管主机端 |
 | DOWNLOAD_TOKEN | - | 可选：设置后非 GET 的 `/downloads`、`/playlists` 请求须带 `x-download-token`；前端需同时设置 `VITE_DOWNLOAD_TOKEN` |
 | TRUST_PROXY | - | 可选：设为 `1`/`true` 时采信 `X-Forwarded-Proto/Host` |
 | NODE_ENV | development | 环境标识（约定变量，服务代码不直接读取；镜像与 compose 已内置 `production`） |
@@ -157,9 +157,11 @@ server {
 ## 远程遥控
 
 - 主机端：`http://<host>:3101/?mode=host`
-- 遥控端：扫描主机端二维码或访问 `/?mode=controller&host=<地址>`
-- 设置 `REMOTE_TOKEN`（后端）与 `VITE_REMOTE_TOKEN`（构建期）启用令牌校验
-- WebSocket 校验 Origin：默认同源或 `CORS_ORIGINS` 白名单内来源
+- 遥控端：扫描主机端二维码，或直接访问同一服务的 `/?mode=controller`
+  （遥控页从当前页面推导 WS 地址，无需额外参数；跨域分离部署时靠 `VITE_API_BASE_URL` 指定 API 地址）
+- 设置 `REMOTE_TOKEN`（后端）与 `VITE_REMOTE_TOKEN`（构建期）启用令牌校验；
+  未设置时遥控通道对该服务地址的任何可达者开放，仅适合受信任的局域网自用
+- WebSocket 校验 Origin：默认同源或 `CORS_ORIGINS` 白名单内来源；controller 连接数上限 32，逐连接消息限流
 
 ## 故障排除
 

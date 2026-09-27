@@ -1,9 +1,11 @@
 const axios = require('axios');
+const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
-const { checkHostPublic, normalizeOutboundUrl } = require('../lib/net-guard');
+const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
 
 // 下载 URL 来自上游 API/歌单元数据（网易云/解锁源），不是直接用户输入——但明文 http 源站
 // 可被链路篡改成 302 到内网/云元数据地址，与 proxy.js 同一威胁模型：每跳都做公网校验
@@ -62,7 +64,9 @@ const FATAL_ERRNOS = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'ENAMETOOLONG', 'EISD
 // POSIX 上 EACCES 是真权限拒绝（确定性），Windows 上它常与 EPERM 同义瞬时
 if (process.platform !== 'win32') FATAL_ERRNOS.add('EACCES');
 function errnoToFatal(error) {
-  if (error && FATAL_ERRNOS.has(error.code)) {
+  // ERR_DNS_GUARD_BLOCKED：guarded lookup 拦下私网/空结果/超时——
+  // 对该 URL 是确定性拦截，重试必然同果
+  if (error && (FATAL_ERRNOS.has(error.code) || error.code === 'ERR_DNS_GUARD_BLOCKED')) {
     error.fatal = true;
   }
   return error;
@@ -128,6 +132,16 @@ function hasNonIdentityEncoding(headers) {
 // 302→http://169.254.169.254 之类的重定向投毒必须逐跳拦截
 async function fetchStream(rawUrl, { timeout, signal }) {
   let url = rawUrl;
+  // 整次请求（含全部重定向跳）共享一张 pin 表：URL 阶段 checkHostPublic 与
+  // 实际建连是两次独立解析（TOCTOU），socket 层 lookup 强制每次建连只能落
+  // 在已验证的公网 IP 集上——见 net-guard.makeGuardedLookup
+  const lookup = makeGuardedLookup();
+  // keepAlive:false：下载是一次性长流，不留 keep-alive 复用；响应流 close
+  // 时 socket 即关，agent 本体随 pin 表一起 GC 即可
+  const agents = {
+    httpAgent: new http.Agent({ lookup, keepAlive: false }),
+    httpsAgent: new https.Agent({ lookup, keepAlive: false }),
+  };
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const checked = normalizeOutboundUrl(url);
     if (!checked.ok) {
@@ -153,6 +167,9 @@ async function fetchStream(rawUrl, { timeout, signal }) {
         timeout,
         maxRedirects: 0,
         signal,
+        // socket 层强制解析钉扎：跳与跳之间的建连都经 guarded lookup
+        httpAgent: agents.httpAgent,
+        httpsAgent: agents.httpsAgent,
         // identity + decompress:false：axios 默认透明解压且删掉 content-encoding 头，
         // 落盘字节与声明 content-length 不一致会让对账确定性误判"下载不完整"。
         // 关掉解压后若上游仍回编码内容，响应头里能看到——按上游违规判 fatal
@@ -321,7 +338,10 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     if (!Array.isArray(items) || items.length === 0) {
       throw fatalError('无法获取歌曲信息');
     }
-    await resolveSongUrls(items, { purpose: 'download' });
+    // signal 透传进解锁链：任务取消/排空时逐源中止——否则已 abort 的任务
+    // 仍要把整条解锁链（song_detail + 4源试错 + HEAD 探测，最坏分钟级）
+    // 跑完才在下方 throwIfAborted 被发现
+    await resolveSongUrls(items, { purpose: 'download', signal });
 
     // items[0] 可能解锁失败但后续条目有 url——选第一个可用的，而不是永远盯着第一个
     const songData = items.find(i => i.url && !i.unlockFailed) || items[0];

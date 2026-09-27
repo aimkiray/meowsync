@@ -3,7 +3,24 @@ const { WebSocketServer } = require('ws');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
+const MAX_CONTROLLERS = 32;
+// 每连接消息限流：controller 只在点按时发消息；host 峰值在音量拖动——
+// watch 逐帧推 state_update，高刷屏下可达 ~144/s，host 桶取 200 留足余量
+const HOST_MSG_PER_SEC = 200;
+const CONTROLLER_MSG_PER_SEC = 30;
 const CONTROL_TYPES = new Set(['play', 'pause', 'next', 'prev', 'seek', 'volume', 'play_song']);
+// controller→host 的 payload 形状校验：type 白名单之外再核形状，畸形直接丢
+// （host 端的 seek/volume 数值校验是最终防线，但先把垃圾挡在转发路径上）
+const CONTROL_PAYLOAD_GUARDS = {
+  play: (p) => p === undefined || p === null,
+  pause: (p) => p === undefined || p === null,
+  next: (p) => p === undefined || p === null,
+  prev: (p) => p === undefined || p === null,
+  seek: (p) => typeof p === 'number' && Number.isFinite(p),
+  volume: (p) => typeof p === 'number' && Number.isFinite(p),
+  play_song: (p) => (typeof p === 'string' && p.length <= 128)
+    || (typeof p === 'number' && Number.isSafeInteger(p))
+};
 
 let hostSocket = null;
 const controllers = new Set();
@@ -30,6 +47,49 @@ function notifyControllerCount() {
   }
 }
 
+const clampStr = (v, max) => typeof v === 'string' ? v.slice(0, max) : undefined;
+const clampNum = (v) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+
+/**
+ * state_update payload 的服务端白名单序列化：host 不是可信端——局域网开放模式下
+ * 任何人都能抢 host 角色，畸形 currentSong（如 ar 是字符串）会在每个 controller
+ * 的渲染 computed 里抛 TypeError 崩掉页面。只透 controller 真正消费的字段，
+ * 逐字段类型收敛；整体不合法则整条丢（比转发一半安全）
+ */
+function sanitizeStatePayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const song = payload.currentSong;
+  let currentSong = null;
+  if (song !== null && song !== undefined) {
+    if (typeof song !== 'object' || Array.isArray(song)) return null;
+    const artists = Array.isArray(song.ar) ? song.ar : [];
+    // picUrl 只收 http(s)——恶意 host 能广播任意 URL，至少封掉 javascript:/
+    // data: 之类会在 <img> 上下文语义异常的 scheme（外链本身即指 roplatform）
+    const picRaw = clampStr(song.al?.picUrl, 500);
+    const picUrl = picRaw && /^https?:/i.test(picRaw) ? picRaw : '';
+    currentSong = {
+      id: clampNum(song.id) ?? clampStr(song.id, 64) ?? null,
+      name: clampStr(song.name, 300) ?? '',
+      al: { picUrl },
+      ar: artists.slice(0, 20).map(a => ({ name: clampStr(a?.name, 200) ?? '' }))
+    };
+  }
+  // 数值除 isFinite 外再做语义钳制：负时长/负进度/超大音量会让 controller
+  // 的 :max 绑定与滑块渲染异常
+  const clampNonNeg = (v) => {
+    const n = clampNum(v);
+    return n === undefined ? undefined : Math.max(0, n);
+  };
+  const volume = clampNonNeg(payload.volume);
+  return {
+    isPlaying: payload.isPlaying === true,
+    currentSong,
+    currentTime: clampNonNeg(payload.currentTime) ?? 0,
+    duration: clampNonNeg(payload.duration) ?? 0,
+    volume: volume === undefined ? 0 : Math.min(volume, 100)
+  };
+}
+
 /**
  * 解析客户端消息：仅接受 JSON 对象。
  * 关键：JSON.parse('null') 得到 null，直接读 msg.type 会抛 TypeError——
@@ -45,6 +105,17 @@ function parseMessage(data) {
   }
   if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return null;
   return msg;
+}
+
+// 每连接滑动窗口限流：返回 false 表示超限（调用方掐断连接）。
+// 1s 窗口内的宽松阈值足以覆盖音量逐帧推送，又挡住泛洪脚本
+function allowMessage(ws, perSec) {
+  const now = Date.now();
+  if (now - (ws.msgWindowStart || 0) >= 1000) {
+    ws.msgWindowStart = now;
+    ws.msgWindowCount = 0;
+  }
+  return ++ws.msgWindowCount <= perSec;
 }
 
 /**
@@ -96,15 +167,40 @@ function isOriginAllowed(origin, hostHeader, allowedOrigins) {
 }
 
 /**
+ * 从 Sec-WebSocket-Protocol 头提取 remote.<token> 凭据：
+ * ?token= 走 URL 会落进反代/浏览器历史日志，子协议头则不会——
+ * 客户端优先用子协议通道，URL 参数仅为兼容保留
+ */
+function tokenFromProtocols(req) {
+  const header = req.headers['sec-websocket-protocol'] || '';
+  const proto = header.split(',').map(s => s.trim())
+    .find(s => s.startsWith('remote.'));
+  return proto ? proto.slice('remote.'.length) : null;
+}
+
+/**
  * Attach WebSocket remote control to an existing HTTP server.
  * @param {import('http').Server} server
  * @param {{ allowedOrigins?: string[], token?: string }} options
  *   allowedOrigins: Origin 白名单（浏览器跨站劫持防护；非浏览器客户端无 Origin 头则放行）
- *   token: 设置后客户端必须通过 ?token= 提供相同令牌
+ *   token: 设置后客户端必须通过 ?token= 或 Sec-WebSocket-Protocol: remote.<token> 提供相同令牌
  */
 function attachRemoteControl(server, options = {}) {
   const { allowedOrigins = [], token = '' } = options;
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_PAYLOAD_BYTES,
+    // 音频遥控消息小且低频，PMD 的 zlib 上下文是纯粹的 CPU 放大面
+    perMessageDeflate: false,
+    // 回显 remote.<token> 子协议完成握手；不匹配则不协商（等效不带）
+    handleProtocols: (protocols) => {
+      if (!token) return false;
+      for (const p of protocols) {
+        if (p.startsWith('remote.') && tokenMatches(p.slice(7), token)) return p;
+      }
+      return false;
+    }
+  });
 
   const onUpgrade = (req, socket, head) => {
     // 握手完成前 socket 出错也要兜底销毁，避免未处理的 'error' 事件抛出
@@ -144,9 +240,22 @@ function attachRemoteControl(server, options = {}) {
       return;
     }
 
-    // 可选 token 鉴权（REMOTE_TOKEN 未设置时保持开放，兼容局域网自用）
-    if (token && !tokenMatches(url.searchParams.get('token'), token)) {
+    // 可选 token 鉴权：子协议优先（不落 URL 日志），?token= 兼容旧客户端。
+    // 先于容量检查——未认证客户端不应能经 401/503 差异探测连接数状态
+    // （REMOTE_TOKEN 未设置时保持开放，兼容局域网自用——公网部署务必配置，
+    // 入口有启动 warning）
+    const provided = tokenFromProtocols(req) ?? url.searchParams.get('token');
+    if (token && !tokenMatches(provided, token)) {
       rejectUpgrade(socket, 401, 'Unauthorized');
+      return;
+    }
+
+    // controller 容量上限在升级阶段拒——handleUpgrade 后再踢仍会完成握手，
+    // 观感是"连上即断"，提前拒语义更准确。注意判定必须与 connection 阶段
+    // 一致：非 'host' 一律计入 controller 容量（role=x 不得绕过上限）
+    if (url.searchParams.get('role') !== 'host'
+      && controllers.size >= MAX_CONTROLLERS) {
+      rejectUpgrade(socket, 503, 'Service Unavailable');
       return;
     }
 
@@ -205,21 +314,35 @@ function attachRemoteControl(server, options = {}) {
     const role = url.searchParams.get('role') || 'controller';
 
     if (role === 'host') {
-      // Only one host allowed at a time
-      if (hostSocket && hostSocket !== ws && hostSocket.readyState === hostSocket.OPEN) {
+      // Only one host allowed at a time。判活用 !== CLOSED 而非 === OPEN：
+      // 老 host 正处 CLOSING 时跳过顶替逻辑会让它按时序"正常关闭→触发重连"
+      // 把新 host 反踢，形成踢皮球循环
+      if (hostSocket && hostSocket !== ws && hostSocket.readyState !== hostSocket.CLOSED) {
         hostSocket.close(4000, 'replaced by new host');
       }
       hostSocket = ws;
       console.log('[remote] host connected');
+      // controllers 需要知道 host 就位（区别于从未有过 host 的空态）
+      broadcastToControllers({ type: 'host_joined' });
+      // 新 host 可能刚接管：主动要一次状态，controller 立即拿到当前曲目
+      send(ws, { type: 'request_state' });
 
       send(ws, { type: 'info', payload: { controllers: controllers.size } });
 
       ws.on('message', (data) => {
+        if (!allowMessage(ws, HOST_MSG_PER_SEC)) {
+          ws.close(1008, 'rate limited');
+          return;
+        }
         const msg = parseMessage(data);
-        // host sends state_update → forward to all controllers
-        // 只转发白名单字段，防止 host 塞入多余键污染下游
+        // host sends state_update → forward to all controllers。
+        // payload 经服务端白名单序列化——host 不可信，畸形对象会崩掉
+        // 所有 controller 的渲染（artistName computed 对 song.ar 无守卫）
         if (msg && msg.type === 'state_update') {
-          broadcastToControllers({ type: 'state_update', payload: msg.payload });
+          const payload = sanitizeStatePayload(msg.payload);
+          if (payload) {
+            broadcastToControllers({ type: 'state_update', payload });
+          }
         }
       });
 
@@ -238,15 +361,24 @@ function attachRemoteControl(server, options = {}) {
       console.log(`[remote] controller connected (total: ${controllers.size})`);
       notifyControllerCount();
 
-      // If host is connected, ask it to send current state
+      // If host is connected, ask it to send current state；无 host 时明示空态
+      // （controller UI 靠 host_disconnected/host_absent 区分"断了"与"从未有过"）
       if (hostSocket && hostSocket.readyState === hostSocket.OPEN) {
         send(hostSocket, { type: 'request_state' });
+      } else {
+        send(ws, { type: 'host_absent' });
       }
 
       ws.on('message', (data) => {
+        if (!allowMessage(ws, CONTROLLER_MSG_PER_SEC)) {
+          ws.close(1008, 'rate limited');
+          return;
+        }
         const msg = parseMessage(data);
-        // Forward control commands to host（只转发 {type, payload} 白名单形状）
-        if (msg && CONTROL_TYPES.has(msg.type) && hostSocket && hostSocket.readyState === hostSocket.OPEN) {
+        // Forward control commands to host（type+payload 双层白名单形状）
+        if (msg && CONTROL_TYPES.has(msg.type)
+          && CONTROL_PAYLOAD_GUARDS[msg.type]?.(msg.payload)
+          && hostSocket && hostSocket.readyState === hostSocket.OPEN) {
           send(hostSocket, { type: msg.type, payload: msg.payload });
         }
       });

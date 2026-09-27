@@ -2,7 +2,8 @@
   <div class="remote-controller">
     <div v-if="!connected || hostDisconnected" class="rc-connecting">
       <div v-if="!gaveUp" class="rc-spinner"></div>
-      <p>{{ gaveUp ? '无法连接主机，请检查服务后刷新重试' : (hostDisconnected ? '主机已断开，等待重连...' : '正在连接主机...') }}</p>
+      <p>{{ gaveUp ? '无法连接主机' : (hostDisconnected ? '主机已断开，等待重连...' : '正在连接主机...') }}</p>
+      <button v-if="gaveUp" class="rc-btn rc-retry" @click="retry">重新连接</button>
     </div>
 
     <template v-else>
@@ -79,8 +80,10 @@ import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 
 const props = defineProps({
-  // 完整 WS URL，须已包含 ?role=controller 及可选 &token=（由 App.vue 构建）
-  wsUrl: { type: String, required: true }
+  // 完整 WS URL，须已包含 ?role=controller（由 App.vue 构建）
+  wsUrl: { type: String, required: true },
+  // token 经 Sec-WebSocket-Protocol 携带（不落 URL 日志）；空/undefined 即无凭据
+  wsProtocols: { type: Array, default: undefined }
 })
 
 const connected = ref(false)
@@ -110,7 +113,7 @@ let retries = 0
 
 function connect() {
   if (destroyed) return
-  ws = new WebSocket(props.wsUrl)
+  ws = new WebSocket(props.wsUrl, props.wsProtocols)
 
   ws.onopen = () => {
     retries = 0
@@ -129,10 +132,14 @@ function connect() {
         if (seekDragging.value) delete payload.currentTime
         if (volumeDragging.value) delete payload.volume
         state.value = { ...state.value, ...payload }
-      } else if (msg.type === 'host_disconnected') {
+      } else if (msg.type === 'host_disconnected' || msg.type === 'host_absent') {
+        // 断开与"从未有 host"共用空态 UI
         hostDisconnected.value = true
         // v-if 会摘除滑块元素，悬挂的拖动标志（pointerup 可能不再派发）必须复位
         resetDragState()
+      } else if (msg.type === 'host_joined') {
+        // host 就位（含顶替旧 host 后新主接管）：等它的 state_update，先摘掉空态遮罩
+        hostDisconnected.value = false
       }
     } catch {}
   }
@@ -151,9 +158,18 @@ function connect() {
     reconnectTimer = setTimeout(connect, 3000)
   }
 
+  // 用闭包局部 sock 而非共享 ws——与未来多 socket 场景对齐 App.vue 的纪律
+  const sock = ws
   ws.onerror = () => {
-    ws?.close()
+    sock.close()
   }
+}
+
+// 重连超限后的手动重试：复位计数重新走 connect
+function retry() {
+  retries = 0
+  gaveUp.value = false
+  connect()
 }
 
 function send(type, payload) {
@@ -222,7 +238,10 @@ function onVolume(e) {
 const artistName = computed(() => {
   const song = state.value.currentSong
   if (!song) return ''
-  return (song.ar || song.artists || []).map(a => a.name).join(' / ')
+  // host 上游不可信：服务端虽已白名单序列化，渲染端仍守卫类型
+  const list = song.ar || song.artists
+  if (!Array.isArray(list)) return ''
+  return list.map(a => a?.name ?? '').filter(Boolean).join(' / ')
 })
 
 onMounted(() => {
@@ -236,6 +255,9 @@ onMounted(() => {
   }, 1000)
   window.addEventListener('pointerup', onDragPointerEnd)
   window.addEventListener('pointercancel', onDragPointerEnd)
+  // 指针在窗口外松开时 pointerup/cancel 都不派发——blur/隐藏兜底清拖动标志
+  window.addEventListener('blur', resetDragState)
+  document.addEventListener('visibilitychange', resetDragState)
 })
 onUnmounted(() => {
   destroyed = true
@@ -243,6 +265,8 @@ onUnmounted(() => {
   clearInterval(progressTickTimer)
   window.removeEventListener('pointerup', onDragPointerEnd)
   window.removeEventListener('pointercancel', onDragPointerEnd)
+  window.removeEventListener('blur', resetDragState)
+  document.removeEventListener('visibilitychange', resetDragState)
   if (ws) {
     ws.onclose = null // 阻止卸载后异步 close 触发重连
     ws.close()
@@ -389,6 +413,13 @@ onUnmounted(() => {
 
 .rc-btn:active {
   background: rgba(255,255,255,0.1);
+}
+
+.rc-retry {
+  font-size: 15px;
+  padding: 10px 24px;
+  background: #e74c3c;
+  border-radius: 20px;
 }
 
 .rc-btn-main {
