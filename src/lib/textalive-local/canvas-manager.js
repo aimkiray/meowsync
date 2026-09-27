@@ -17,6 +17,8 @@ const LINE_DIRECTIONS = [
   { x: 1, y: 1 }
 ]
 const GLYPH_SLIDE_IN_CELLS = 0.55
+// 可视区安全边距（格）：歌词锚点与吐字头都约束在屏幕内缩这个范围内
+const VIEW_MARGIN_CELLS = 0.8
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
@@ -44,6 +46,8 @@ export class CanvasManager {
     this._nextDriftChange = 0
     // lineId -> { dir, tailX, tailY }：行轴方向与该句已排布链的末端
     this._lineState = new Map()
+    // 当前激活歌词的吐字头格坐标：相机漂移的软牵引目标
+    this._focusCell = null
 
     this._can = document.createElement('canvas')
     this._ctx = this._can.getContext('2d')
@@ -139,6 +143,17 @@ export class CanvasManager {
       // 这里必须读实例值而非常量，否则触屏漂移与桌面同速
       this._px += Math.cos(this._driftAngle) * this._speed * dt
       this._py += Math.sin(this._driftAngle) * this._speed * dt
+
+      // 相机软牵引：漂移不得把当前歌词的吐字头拖出屏幕安全区。
+      // 只回拉越界量（不吸附），保持漫游感的同时保住可读性
+      if (this._focusCell) {
+        const space = this._space
+        const pad = space * VIEW_MARGIN_CELLS
+        const fx = this._px + this._focusCell.x * space + space / 2
+        const fy = this._py + this._focusCell.y * space + space / 2
+        this._px += clamp(fx, pad, this._stw - pad) - fx
+        this._py += clamp(fy, pad, this._sth - pad) - fy
+      }
 
       this._mouseX = this._stw / 2
       this._mouseY = this._sth / 2
@@ -311,6 +326,7 @@ export class CanvasManager {
 
     const position = this._position
     const { start, end } = this._getVisibleLyricRange(position)
+    this._focusCell = null
     if (start >= end) return
 
     const space = this._space
@@ -339,14 +355,25 @@ export class CanvasManager {
       return candidates
     }
 
-    const tryPlaceWord = (startX, startY, lyric, dir) => {
+    // 视口安全区：歌词落位只允许在屏幕内缩 VIEW_MARGIN_CELLS 的范围内，
+    // 否则长句尾部会被排进永远看不见的位置
+    const viewPad = space * VIEW_MARGIN_CELLS
+    const inView = (pos) => {
+      const sx = this._px + pos.x * space + space / 2
+      const sy = this._py + pos.y * space + space / 2
+      return sx >= viewPad && sx <= this._stw - viewPad &&
+        sy >= viewPad && sy <= this._sth - viewPad
+    }
+
+    const tryPlaceWord = (startX, startY, lyric, dir, strict = true) => {
       const positions = []
       for (let i = 0; i < lyric.glyphs.length; i++) {
         positions.push({ x: startX + dir.x * i, y: startY + dir.y * i })
       }
 
       const slotKeys = getSlotKeys(positions)
-      const isOk = slotKeys.every(key => !occupiedSlots.has(key))
+      const isOk = slotKeys.every(key => !occupiedSlots.has(key)) &&
+        (!strict || positions.every(inView))
 
       if (isOk) {
         return { positions, slotKeys }
@@ -443,6 +470,22 @@ export class CanvasManager {
                 }
               }
             }
+
+            // 兜底：行比视口长或候选全撞时，放宽视口约束（保留占位检查）
+            // 把锚点钳进安全区，宁可部分出屏也不让整句消失
+            if (!lyric.isDraw) {
+              const len = lyric.glyphs.length - 1
+              const cx0 = Math.ceil((viewPad - this._px - space / 2) / space)
+              const cx1 = Math.floor((this._stw - viewPad - this._px - space / 2) / space)
+              const cy0 = Math.ceil((viewPad - this._py - space / 2) / space)
+              const cy1 = Math.floor((this._sth - viewPad - this._py - space / 2) / space)
+              const ax = clamp(nx, Math.min(cx0, cx1 - dir.x * len), Math.max(cx0, cx1 - dir.x * len))
+              const ay = clamp(ny, Math.min(cy0, cy1 - dir.y * len), Math.max(cy0, cy1 - dir.y * len))
+              const result = tryPlaceWord(ax, ay, lyric, dir, false)
+              if (result) {
+                commitPlacement(lyric, state, result, ax, ay)
+              }
+            }
           }
         }
 
@@ -450,7 +493,8 @@ export class CanvasManager {
 
         if (lyric.isDraw && isVisible) {
           if (!lyric.slotKeys?.length) {
-            const result = tryPlaceWord(lyric.anchorX, lyric.anchorY, lyric, lyric.dir || LINE_DIRECTIONS[0])
+            // 重建走原锚点不验视口：落位时已验过，漂移途中重验会误杀
+            const result = tryPlaceWord(lyric.anchorX, lyric.anchorY, lyric, lyric.dir || LINE_DIRECTIONS[0], false)
             if (result) {
               lyric.glyphPositions = result.positions
               lyric.slotKeys = result.slotKeys
@@ -480,6 +524,10 @@ export class CanvasManager {
             const revealProgress = this._getGlyphProgress(position, timing)
             const isSettledGlyph = position > lyric.endTime && position <= lyric.endTime + LYRIC_PERSIST_MS
             if (revealProgress <= 0 && !isSettledGlyph) continue
+
+            // 吐字头 = 激活歌词最远已揭示的格：相机软牵引的目标。
+            // 含淡出期（isSettledGlyph），让整句在消散前都留在屏内
+            this._focusCell = glyphPos
 
             let px = glyphPos.x * space
             let py = glyphPos.y * space
