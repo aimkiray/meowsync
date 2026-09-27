@@ -5,16 +5,20 @@ const { resolvesToPublicIp } = require('../lib/net-guard');
 
 const app = new Hono();
 
-const ALLOWED_HOST = 'googlevideo.com';
+// 可代理的上行域白名单：googlevideo（ytdlp 解锁回链）、126.net（官方曲库 CDN
+// m*.music.126.net 等）、kuwo.cn/kuwo.com（kuwo 解锁源）——前端"获取源文件"的
+// 解锁链 CDN 不带 ACAO 必须走同源代理。白名单只决定"能代理谁"，SSRF 防线
+// 由下方逐跳 resolvesToPublicIp 兜底
+const ALLOWED_HOSTS = ['googlevideo.com', '126.net', 'kuwo.cn', 'kuwo.com'];
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
 
-// 只允许 googlevideo.com 及其子域（endsWith 前缀点避免误伤 xgooglevideo.com 这类域名）
+// endsWith 前缀点避免误伤 xgooglevideo.com 这类域名。
 // 安全性依赖 URL parser 的规范化：hostname 已小写化、IPv4 数字形式（0x7f000001/2130706433）
 // 归一化为点分十进制、IDN 转 punycode、Unicode 点（。）归一化为 '.'——因此通过校验的
-// 必然是以 googlevideo.com 结尾的真实域名，其 DNS 由 Google 控制，攻击者无法借此打内网
+// 必然是以白名单域结尾的真实域名；最终仍由每跳公网 IP 校验兜底
 function isAllowedHost(hostname) {
-  return hostname === ALLOWED_HOST || hostname.endsWith('.' + ALLOWED_HOST);
+  return ALLOWED_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
 }
 
 // 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
