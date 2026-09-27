@@ -487,6 +487,10 @@ async function processQueue(queueId, controller) {
         deferred.clear(); // 有任务 settle = 可能有锁释放，给 deferred 再试机会
       }
       if (controller.cancelled) break;
+      // 容量等待期间收到 pause：循环只看 cancelled，槽位一释放就会在暂停态
+      // 漏派一个任务——派发前复查暂停态
+      await waitWhilePaused();
+      if (controller.cancelled) break;
 
       const taskPromise = processTask(task, queueId, controller.abort.signal)
         .then(() => {
