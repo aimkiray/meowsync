@@ -450,7 +450,14 @@ async function processQueue(queueId, controller) {
     if (pendingTasks.length === 0) {
       if (runningTasks.length === 0) {
         expireDeferred();
-        if (deferred.size === 0) break;
+        // 收尾的唯一条件是"库里没有 pending 行"：expireDeferred 放行等锁任务的
+        // 瞬间 deferred 会清空，但行仍是 pending 待派发——按 deferred.size 判断
+        // 会提前 break，队列标 completed 而歌单缺歌（且无恢复入口：startQueue 拒
+        // completed、retryQueue 要 failed）。反过来行已离开 pending 而 deferred
+        // 残留（外部删行/改状态）也必须放行退出，不能空转
+        const hasPendingRows = downloadTasksRepo.listTasksByQueue(queueId)
+          .some(t => t.status === 'pending');
+        if (!hasPendingRows) break;
         // 全部剩余任务都在等路径锁：退避后重试一轮
         deferred.clear();
         await sleep(400);
@@ -1019,12 +1026,12 @@ function deleteTask(taskId) {
   // completed（收养时计成已下载、静默缺歌），比孤儿文件危害大
   downloadTasksRepo.deleteTask(taskId);
   const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]);
-  // 计数对齐：completed 任务删了要减 completedTasks；failed 同理；
-  // pending 被删则总任务数也要减——否则队列进度永远差一格
+  // 计数对齐：行被物理删除——任何状态都要减 totalTasks（recount 的
+  // totalTasks=存活行数），completed/failed 还要减对应状态计数
   if (task.queueId) {
+    downloadQueuesRepo.decrementTotal(task.queueId);
     if (task.status === 'completed') downloadQueuesRepo.decrementCompleted(task.queueId);
     else if (task.status === 'failed') downloadQueuesRepo.decrementFailed(task.queueId);
-    else downloadQueuesRepo.decrementTotal(task.queueId);
   }
   return { success: true, deletedFiles };
 }
@@ -1223,9 +1230,9 @@ async function deleteSongFiles(playlistId, songId) {
   for (const task of tasks) {
     downloadTasksRepo.deleteTask(task.id);
     if (!task.queueId) continue;
+    downloadQueuesRepo.decrementTotal(task.queueId);
     if (task.status === 'completed') downloadQueuesRepo.decrementCompleted(task.queueId);
     else if (task.status === 'failed') downloadQueuesRepo.decrementFailed(task.queueId);
-    else downloadQueuesRepo.decrementTotal(task.queueId);
   }
   const allPaths = [...new Set(tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath]))];
   const deletedFiles = deleteFiles(allPaths);
@@ -1265,9 +1272,9 @@ async function deletePlaylistDownloadedFiles(playlistId) {
     deletedFiles += deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]);
     deletedSongs += 1; // standalone 任务也是一次"已下载歌曲"的删除，不该漏计
     if (!task.queueId) continue;
+    downloadQueuesRepo.decrementTotal(task.queueId);
     if (task.status === 'completed') downloadQueuesRepo.decrementCompleted(task.queueId);
     else if (task.status === 'failed') downloadQueuesRepo.decrementFailed(task.queueId);
-    else downloadQueuesRepo.decrementTotal(task.queueId);
   }
 
   return {
@@ -1583,47 +1590,70 @@ async function shutdownAll() {
   }
 }
 
-// 启动期孤儿文件清扫：崩溃/SIGKILL/OOM 截断在途流会把半成品留在最终文件名
-// 上而路径从未落库（FD pipeline 完成与 updateTask 之间、行删与 unlink 之间）。
+// 启动期孤儿文件清扫（仅限启动调用：运行期"文件写完未落库"窗口会误删在途落盘）。
+// 崩溃/SIGKILL/OOM 截断在途流会把半成品留在最终文件名上而路径从未落库
+// （FD pipeline 完成与 updateTask 之间、行删与 unlink 之间）。
 // DB 是唯一事实源——歌单目录在 playlists 表里无行的整棵删除；歌单还在的，
 // audio/lyrics/covers 子目录里未被任何任务行引用的文件删除。
-// 保守边界：只动 downloads/<纯数字目录>/{audio,lyrics,covers} 下的文件——
-// 目录名非纯数字或子目录外的内容（用户手放的任何东西）一律不碰
+// 保守边界：只动 downloads/<规范数字目录名>/{audio,lyrics,covers} 下的文件；
+// 空库（DB 丢失/新建）不判任何目录为孤儿——丢一个 DB 文件不该抹掉下载库；
+// symlink 一律跳过（lstat 不跟随）——downloads/<id>/audio 链到大盘时不得
+// 顺着链接删光目标目录；目录搬迁特征（登记路径全在 base 外）跳过并告警
 function reapOrphanFiles() {
   let removedDirs = 0;
   let removedFiles = 0;
   try {
     if (!fs.existsSync(DOWNLOAD_BASE_DIR)) return { removedDirs, removedFiles };
+    // 空库护栏：getDb 会对缺失/损坏的 sqlite 自动建空库——此时 playlists 表
+    // 为空，若无护栏整棵 downloads 树都会被当作"无歌单"删掉。新装不会有
+    // downloads 内容，跳过清扫零代价
+    if (playlistsRepo.listPlaylists().length === 0) return { removedDirs, removedFiles };
     for (const entry of fs.readdirSync(DOWNLOAD_BASE_DIR, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
-      const playlistId = Number(entry.name);
-      const playlistDir = path.join(DOWNLOAD_BASE_DIR, entry.name);
-      if (!playlistsRepo.findPlaylistById(playlistId)) {
-        fs.rmSync(playlistDir, { recursive: true, force: true });
-        removedDirs += 1;
-        continue;
-      }
-      const referenced = new Set(
-        downloadTasksRepo.listTasksByPlaylist(playlistId)
-          .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath])
-          .filter(Boolean)
-          .map(p => path.resolve(p))
-      );
-      for (const sub of ['audio', 'lyrics', 'covers']) {
-        const subDir = path.join(playlistDir, sub);
-        if (!fs.existsSync(subDir)) continue;
-        for (const f of fs.readdirSync(subDir)) {
-          const fp = path.join(subDir, f);
-          try {
-            if (!referenced.has(path.resolve(fp)) && fs.statSync(fp).isFile()) {
-              fs.rmSync(fp, { force: true });
-              removedFiles += 1;
-            }
-          } catch { /* 单个文件失败不阻塞整体清扫 */ }
+      try { // 单个坏条目（EPERM/ENOTDIR/BUSY）不中止后续歌单目录的清扫
+        // isDirectory 不跟随 symlink（顶层安全）；目录名必须是规范数字形式——
+        // '007' 这类非规范名不是本应用产物，跳过而不是按 playlist 7 处理
+        if (!entry.isDirectory() || !/^\d+$/.test(entry.name)
+            || entry.name !== String(Number(entry.name))) continue;
+        const playlistId = Number(entry.name);
+        const playlistDir = path.join(DOWNLOAD_BASE_DIR, entry.name);
+        if (!playlistsRepo.findPlaylistById(playlistId)) {
+          fs.rmSync(playlistDir, { recursive: true, force: true });
+          removedDirs += 1;
+          continue;
         }
+        const referenced = new Set(
+          downloadTasksRepo.listTasksByPlaylist(playlistId)
+            .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath])
+            .filter(Boolean)
+            .map(p => path.resolve(p))
+        );
+        // 搬迁特征：DATA_DIR/DOWNLOAD_DIR 改路径或卷整体移动后，存量登记路径
+        // 全落在当前 base 外——此时按"未登记=孤儿"会把仍在册的文件全删光，
+        // 留幻影 completed 行指向已删文件。宁可不扫
+        if (referenced.size > 0
+            && [...referenced].every(p => !isUnderDownloadDir(p))) {
+          console.warn(`[downloads] 歌单 ${playlistId} 登记路径均在下载根之外（疑似目录搬迁），跳过清扫`);
+          continue;
+        }
+        for (const sub of ['audio', 'lyrics', 'covers']) {
+          const subDir = path.join(playlistDir, sub);
+          // lstat 不跟随：symlink 子目录整段跳过——顺着链接会删到目标目录的真文件
+          if (!fs.existsSync(subDir) || !fs.lstatSync(subDir).isDirectory()) continue;
+          for (const f of fs.readdirSync(subDir)) {
+            const fp = path.join(subDir, f);
+            try {
+              if (!referenced.has(path.resolve(fp)) && fs.lstatSync(fp).isFile()) {
+                fs.rmSync(fp, { force: true });
+                removedFiles += 1;
+              }
+            } catch { /* 单个文件失败不阻塞整体清扫 */ }
+          }
+        }
+        // 空目录骨架复用现有剪枝（参数为空数组即只剪不删文件）
+        cleanupPlaylistFilesAndDirs(playlistId, []);
+      } catch (error) {
+        console.warn(`[downloads] 清扫歌单目录 ${entry.name} 失败:`, error?.message || error);
       }
-      // 空目录骨架复用现有剪枝（参数为空数组即只剪不删文件）
-      cleanupPlaylistFilesAndDirs(playlistId, []);
     }
   } catch (error) {
     console.warn('[downloads] 孤儿文件清扫失败:', error?.message || error);
@@ -1649,6 +1679,12 @@ function recoverStaleStates() {
       errorMessage: '服务重启中断'
     });
   }
+  // 老库 playlist_id/queue_id 是 ALTER 补列、无 FK 级联——父行已删的子行残留
+  // 会成幻影 completed（指向已删文件），孤儿行在启动时清理
+  const db = getDb();
+  db.prepare('DELETE FROM download_tasks WHERE playlist_id NOT IN (SELECT id FROM playlists)').run();
+  db.prepare('DELETE FROM download_tasks WHERE queue_id IS NOT NULL AND queue_id NOT IN (SELECT id FROM download_queues)').run();
+  db.prepare('DELETE FROM download_queues WHERE playlist_id NOT IN (SELECT id FROM playlists)').run();
 }
 
 module.exports = {
