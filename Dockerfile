@@ -40,6 +40,9 @@ WORKDIR /app
 ENV NODE_ENV=production \
     API_PORT=3002
 
+# yt-dlp 是播放解锁的第一优先级源（缺装时静默退化到 kuwo）
+RUN apk add --no-cache yt-dlp
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=frontend /app/dist ./dist
 COPY package.json netease-api-server.js ./
