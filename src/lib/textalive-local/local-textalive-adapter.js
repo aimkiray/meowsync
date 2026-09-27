@@ -38,12 +38,14 @@ function getSegmentit() {
   return segmentit
 }
 
-function createCharNode(text, startTime, endTime) {
+function createCharNode(text, startTime, endTime, lineId, lineLength) {
   return {
     text,
     startTime,
     endTime,
     duration: Math.max(endTime - startTime, 1),
+    lineId,
+    lineLength,
     next: null
   }
 }
@@ -437,7 +439,11 @@ export function createLocalTextAliveVideo(lines = [], durationSeconds = 0) {
       const node = createCharNode(
         typeof group === 'string' ? group : group.text,
         startTime,
-        endTime
+        endTime,
+        // 行标识 + 行总长：画布按行标识把同一句词块沿同一方向链式排布，
+        // 行总长用于锚点反推——长句以焦点为中心展开而非单向探出屏幕
+        index,
+        Array.from(text).length
       )
       chars.push(node)
     })
