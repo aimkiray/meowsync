@@ -118,12 +118,14 @@ curl -X POST http://localhost:3101/downloads/playlists/{playlistId}/quick
 data/downloads/
 └── {playlist_id}/
     ├── audio/
-    │   └── {艺术家} - {歌名}.mp3
+    │   └── {艺术家} - {歌名}.{mp3|m4a|flac|...}   # 扩展名跟随实际音频源格式
     ├── lyrics/
     │   └── {艺术家} - {歌名}.lrc
     └── covers/
-        └── {song_id}.jpg
+        └── {song_id}.{jpg|png|webp}
 ```
+
+下载中的文件以 `*.part` 后缀暂存，校验通过后才重命名为最终名。
 
 ## 数据库表结构
 

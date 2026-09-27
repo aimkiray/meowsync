@@ -7,6 +7,7 @@ const playlistsRepo = require('../repositories/playlists');
 const { dataDir } = require('../db/client');
 const { importPlaylistFromNetease } = require('./playlist-sync');
 const fileDownloader = require('./file-downloader');
+const { estimateDuration } = require('./netease-api');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
 const { deletingPlaylists, deletingQueues } = require('../lib/deletion-locks');
@@ -36,6 +37,24 @@ const zombieControllers = new Set();
 // 的刷新路径用——直接 import 本模块会成环）
 // 停机期间拒绝新建/启动下载，避免半途任务留下脏状态
 let shuttingDown = false;
+
+// 可重试失败的下次派发时刻：taskId -> epochMs。瞬时错误（网络抖动/429/5xx）
+// 立即重捞等于全速空转打上游；指数退避让任务在 pending 里"等待"而不被派发。
+// 进程内状态即可——重启后天然清表，正好立即重试。
+// 删除路径（deleteTask/deleteQueue/级联）不清本表：taskId 是 AUTOINCREMENT
+// 不复用，陈旧条目到期自然失效，另有 >1024 惰性清扫兜底
+const retryAfter = new Map();
+const retryDelayMs = (retryCount) => Math.min(2000 * (2 ** retryCount), 30000);
+
+// 落盘后时长对账：HEAD 探测失败会跳过解锁端的时长校验，预览剪辑就此溜过——
+// 用真实字节数+真实码率（解锁源用 unblockedBr）估算时长，显著短于元数据即是
+// 剪辑（只查"短"，不查"长"：
+// VBR/码率虚标只会让估算偏大，而偏大不构成剪辑证据）
+function durationLooksTruncated(sizeBytes, br, durationMs) {
+  if (!sizeBytes || !br || !durationMs) return false;
+  const estimated = estimateDuration(sizeBytes, br);
+  return estimated !== null && estimated < durationMs * 0.8;
+}
 
 // 排空等待上限：上游解锁/取链等不可中止阶段可能卡住（无 signal 无超时），
 // 排空不能无限等——超时后放行清扫，残余写入由后续孤儿文件清理兜底
@@ -233,6 +252,13 @@ async function createDownloadQueue(playlistId, options = {}) {
               completedAt: null
             })
           });
+          // 重跑前清路径同时也要清旧文件：行先清、文件后删（崩溃留孤儿文件
+          // 由 reap 兜底，比幻影登记路径安全）。扩展名现已随源浮动，不删会
+          // 让不同扩展名的旧文件以未登记状态无限期滞留
+          if (!keepCompleted) {
+            deleteFiles([existing.audioPath, existing.lyricsPath, existing.coverPath]);
+            retryAfter.delete(existing.id); // 收养即时入队——陈旧退避不该拖住新队列
+          }
           taskCount += 1;
           if (keepCompleted) adoptedCompleted += 1;
           // 旧属主队列的计数器虚高（任务被搬走后不再重算）——记录待回调
@@ -446,7 +472,8 @@ async function processQueue(queueId, controller) {
     if (controller.cancelled) break;
 
     const pendingTasks = downloadTasksRepo.listTasksByQueue(queueId)
-      .filter(t => t.status === 'pending' && !deferred.has(t.id));
+      .filter(t => t.status === 'pending' && !deferred.has(t.id)
+        && !(retryAfter.get(t.id) > Date.now())); // 退避期任务按 pending 留行但不派发
     if (pendingTasks.length === 0) {
       if (runningTasks.length === 0) {
         expireDeferred();
@@ -455,9 +482,17 @@ async function processQueue(queueId, controller) {
         // 会提前 break，队列标 completed 而歌单缺歌（且无恢复入口：startQueue 拒
         // completed、retryQueue 要 failed）。反过来行已离开 pending 而 deferred
         // 残留（外部删行/改状态）也必须放行退出，不能空转
-        const hasPendingRows = downloadTasksRepo.listTasksByQueue(queueId)
-          .some(t => t.status === 'pending');
-        if (!hasPendingRows) break;
+        const pendingRows = downloadTasksRepo.listTasksByQueue(queueId)
+          .filter(t => t.status === 'pending');
+        if (pendingRows.length === 0) break;
+        // 剩余 pending 全部是退避中任务时睡到最近到期点——400ms 忙轮询
+        // 会在长退避窗内空扫几十次 listTasksByQueue
+        const backoffAt = pendingRows.map(t => retryAfter.get(t.id) || 0)
+          .filter(at => at > Date.now());
+        if (backoffAt.length === pendingRows.length && backoffAt.length > 0) {
+          await sleep(Math.min(Math.max(Math.min(...backoffAt) - Date.now(), 50), 1000));
+          continue;
+        }
         // 全部剩余任务都在等路径锁：退避后重试一轮
         deferred.clear();
         await sleep(400);
@@ -626,6 +661,8 @@ async function processTask(task, queueId, signal) {
   };
 
   try {
+    // 派发即视为"退避已到期"：后续失败会重新记账；完成/失败/删除路径另清
+    retryAfter.delete(task.id);
     lockKeys = taskLockKeys(task);
 
     // 同路径并发写锁：两个写者同时 createWriteStream 会交错 truncate 写坏文件
@@ -678,19 +715,40 @@ async function processTask(task, queueId, signal) {
     };
 
     if (audioPath) {
-      const result = await fileDownloader.downloadAudio(
-        task.songId,
-        audioPath,
-        task.bitrate,
-        (progress) => reportProgress(totalProgress + Math.floor(progress * weights.audio / 100)),
-        signal
-      );
+      // 分阶段幂等：上次尝试已完成的分段（abort/重试复位不清路径字段）跳过重下——
+      // 登记过的路径意味着文件已通过完整性对账，重试只补缺失阶段，10MB 音频
+      // 不因歌词抖动而重下
+      const existingAudio = current.audioPath && fs.existsSync(current.audioPath);
+      if (!existingAudio) {
+        const result = await fileDownloader.downloadAudio(
+          task.songId,
+          audioPath,
+          task.bitrate,
+          (progress) => reportProgress(totalProgress + Math.floor(progress * weights.audio / 100)),
+          signal
+        );
+        // 落盘后时长对账：HEAD 探测失败时解锁端校验会漏放预览剪辑——
+        // 真实字节数+真实码率是最后一道闸门（只查"短"，见 durationLooksTruncated）
+        if (durationLooksTruncated(result.size, result.br, task.durationMs)) {
+          // 剪辑已 rename 就位但永不登记——就地删掉，否则每次重试换扩展名
+          // 时旧剪辑以未登记文件无限期滞留（reap 只在启动期跑）
+          try { fs.unlinkSync(result.path); } catch { /* 删失败留给 reap */ }
+          throw new Error(`下载内容与歌曲时长不符（${result.size} 字节 vs 预期 ${task.durationMs}ms）`);
+        }
+        // 真实落盘路径入库：扩展名由解锁源 URL 决定（ytdlp 常回 m4a），
+        // 占位锁键只承担互斥语义
+        const audioRow = downloadTasksRepo.updateTask(task.id, {
+          audioPath: result.path,
+          fileSize: result.size,
+          progress: totalProgress + weights.audio
+        });
+        // 行在此窗口被删：新文件永不登记——就地回收（等同剪辑处理路径）
+        if (!audioRow) {
+          try { fs.unlinkSync(result.path); } catch { /* 留给 reap */ }
+          return;
+        }
+      }
       totalProgress += weights.audio;
-      downloadTasksRepo.updateTask(task.id, {
-        audioPath,
-        fileSize: result.size,
-        progress: totalProgress
-      });
     }
 
     // 段间补一次显式 signal 检查：上一段完成后队列可能已被取消，
@@ -698,34 +756,41 @@ async function processTask(task, queueId, signal) {
     throwIfAborted();
 
     if (lyricsPath) {
-      try {
-        await fileDownloader.downloadLyrics(task.songId, lyricsPath, signal);
-        totalProgress += weights.lyrics;
-        downloadTasksRepo.updateTask(task.id, {
-          lyricsPath,
-          progress: totalProgress
-        });
-      } catch (error) {
-        if (error.message !== '歌词不存在') {
-          throw error;
+      const existingLyrics = current.lyricsPath && fs.existsSync(current.lyricsPath);
+      if (!existingLyrics) {
+        try {
+          const lrcResult = await fileDownloader.downloadLyrics(task.songId, lyricsPath, signal);
+          downloadTasksRepo.updateTask(task.id, {
+            lyricsPath: lrcResult.path,
+            progress: totalProgress + weights.lyrics
+          });
+        } catch (error) {
+          // NO_LYRICS 是上游确定性"无词"，不算任务失败；其余错误照常冒泡
+          if (error.code !== 'NO_LYRICS') {
+            throw error;
+          }
         }
       }
+      totalProgress += weights.lyrics;
     }
 
     throwIfAborted();
 
     if (coverPath) {
-      try {
-        await fileDownloader.downloadCover(task.coverUrl, coverPath, signal);
-        totalProgress += weights.cover;
-        downloadTasksRepo.updateTask(task.id, {
-          coverPath,
-          progress: totalProgress
-        });
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        console.warn(`封面下载失败 (${task.songId}):`, error.message);
+      const existingCover = current.coverPath && fs.existsSync(current.coverPath);
+      if (!existingCover) {
+        try {
+          const coverResult = await fileDownloader.downloadCover(task.coverUrl, coverPath, signal);
+          downloadTasksRepo.updateTask(task.id, {
+            coverPath: coverResult.path,
+            progress: totalProgress + weights.cover
+          });
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          console.warn(`封面下载失败 (${task.songId}):`, error.message);
+        }
       }
+      totalProgress += weights.cover;
     }
 
     try {
@@ -736,6 +801,7 @@ async function processTask(task, queueId, signal) {
       });
       // updateTask 对不存在行返回 null 而非抛错——行已删时不再给队列计数
       if (!done) return;
+      retryAfter.delete(task.id);
     } catch {
       return;
     }
@@ -753,6 +819,7 @@ async function processTask(task, queueId, signal) {
     }
     if (signal?.aborted || error.aborted) {
       // 取消/停机中止：残文件由 downloader 清理；任务复位 pending 供下次重跑
+      retryAfter.delete(task.id); // 取消即清退避，恢复后应可立即重跑
       try {
         downloadTasksRepo.updateTask(task.id, {
           status: 'pending',
@@ -776,8 +843,19 @@ async function processTask(task, queueId, signal) {
           status: 'pending',
           errorMessage: sanitizeErrorMessage(error.message)
         });
+        // 指数退避记账：瞬时错误立即重捞=全速空转打上游；pendingTasks 过滤会
+        // 跳过到期前任务，进程重启后表空即立即重试。基数用递增后的新次数
+        // （与 standalone 路径读到的行值同相位）。条目膨胀护栏：只清已到期项
+        retryAfter.set(task.id, Date.now() + retryDelayMs(task.retryCount + 1));
+        if (retryAfter.size > 1024) {
+          const now = Date.now();
+          for (const [id, at] of retryAfter) {
+            if (at <= now) retryAfter.delete(id);
+          }
+        }
       } catch { /* 行已删 */ }
     } else {
+      retryAfter.delete(task.id);
       try {
         downloadTasksRepo.updateTask(task.id, {
           status: 'failed',
@@ -1066,7 +1144,16 @@ async function runStandaloneTask(task) {
     let current = task;
     do {
       if (current !== task) {
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // 与队列路径同一退避：行内 retryCount 已被 processTask 递增。
+        // abort 立即打断（不睡满退避）+ unref 不拖进程退出
+        await new Promise(resolve => {
+          const t = setTimeout(resolve, retryDelayMs(current.retryCount));
+          t.unref?.();
+          entry.abort.signal.addEventListener('abort', () => {
+            clearTimeout(t);
+            resolve();
+          }, { once: true });
+        });
       }
       // abort 后不把复位 pending 的任务再跑一遍——那是取消语义不是重试
       if (entry.abort.signal.aborted) break;
@@ -1157,6 +1244,9 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       coverPath: null,
       fileSize: null
     });
+    retryAfter.delete(queueTask.id);
+    // 行清后删文件：清路径却不删文件会让旧文件（可能不同扩展名）成运行期孤儿
+    deleteFiles([queueTask.audioPath, queueTask.lyricsPath, queueTask.coverPath]);
     // 死队列不再走收尾重算：接管会让其计数器永久虚高，顺手回调对齐
     recountQueueCounters(queueTask.queueId);
     return runStandaloneTask(downloadTasksRepo.findTaskById(queueTask.id));
@@ -1435,7 +1525,7 @@ async function retryTask(taskId) {
   }
   // 失败任务可重试；standalone 崩溃残留的 pending（无人消费）也允许就地重跑；
   // queue_id 指向已删队列的 pending 孤儿行同此——没有消费者会捞它。
-  // 在跑任务排除——standalone 协程的 300ms 重试间隙 status 恰为 pending，
+  // 在跑任务排除——standalone 协程的重试退避间隙 status 恰为 pending，
   // 放行会先动行再被 runStandaloneTask 409，状态已被污染
   const orphanedPending = task.status === 'pending'
     && (!task.queueId || !downloadQueuesRepo.findQueueById(task.queueId));
@@ -1472,6 +1562,8 @@ async function retryTask(taskId) {
     coverPath: null,
     fileSize: null
   });
+  retryAfter.delete(taskId); // 人工重试即用户明确再等——退避不该挡它
+  deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]); // 行先清文件后删
 
   if (queue) {
     downloadQueuesRepo.decrementFailed(queue.id);
@@ -1544,6 +1636,8 @@ async function retryQueue(queueId) {
       coverPath: null,
       fileSize: null
     });
+    retryAfter.delete(task.id);
+    deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]); // 行先清文件后删
   }
 
   // completedTasks 不动：失败任务从未计入完成数
@@ -1677,10 +1771,14 @@ function reapOrphanFiles() {
           for (const f of fs.readdirSync(subDir)) {
             const fp = path.join(subDir, f);
             try {
-              if (!referenced.has(normalizePath(fp)) && fs.lstatSync(fp).isFile()) {
-                fs.rmSync(fp, { force: true });
-                removedFiles += 1;
-              }
+              if (referenced.has(normalizePath(fp)) || !fs.lstatSync(fp).isFile()) continue;
+              // 新鲜文件不删：共享 DATA_DIR 的多实例/重叠拉起场景下，另一进程
+              // 可能正在写这个 .part 或刚 rename 未登记——mtime 在 60s 内的
+              // 文件留给下一轮启动清扫（单实例下该护栏不生效：启动时没有在写者）
+              const st = fs.statSync(fp);
+              if (Date.now() - st.mtimeMs < 60000) continue;
+              fs.rmSync(fp, { force: true });
+              removedFiles += 1;
             } catch { /* 单个文件失败不阻塞整体清扫 */ }
           }
         }

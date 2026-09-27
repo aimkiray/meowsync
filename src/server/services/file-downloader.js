@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
-const { checkHostPublic } = require('../lib/net-guard');
+const { checkHostPublic, normalizeOutboundUrl } = require('../lib/net-guard');
 
 // 下载 URL 来自上游 API/歌单元数据（网易云/解锁源），不是直接用户输入——但明文 http 源站
 // 可被链路篡改成 302 到内网/云元数据地址，与 proxy.js 同一威胁模型：每跳都做公网校验
@@ -15,10 +15,15 @@ const MAX_COVER_BYTES = 32 * 1024 * 1024;
 // Windows 保留名：即便在 mac/linux 生成，用户最终可能在 Windows 上操作这些文件
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
+// 解锁源实际回的非 mp3 格式白名单——URL path 后缀不在名单内一律回退 mp3/jpg，
+// 防止上游注入怪异扩展名（.php/.html）落盘
+const AUDIO_EXTS = new Set(['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wav', 'webm']);
+const COVER_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+
 function sanitizeFilename(filename, maxBytes = MAX_FILENAME_BYTES) {
   let cleaned = String(filename || '')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
-    // 只剥孤立代理项（截断半个 UTF-8 字符/脏数据的产物）：[\uD800-\uDFFF] 全量匹配
+    // 只剥孤立代理项（截断半个 UTF-8 字符/脏数据的产物）：D800-DFFF 全量匹配
     // 会把合法 surrogate pair（emoji、CJK 扩展 B）两半都删掉
     .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
     .replace(/\s+/g, ' ')
@@ -42,14 +47,28 @@ function sanitizeFilename(filename, maxBytes = MAX_FILENAME_BYTES) {
   return cleaned;
 }
 
-// 确定性失败（版权限制/解锁失败/空文件声明）：标 fatal，上层不再重试白打上游
+// 确定性失败（版权限制/解锁失败/空文件声明/磁盘满）：标 fatal，上层不再重试白打上游
 function fatalError(message) {
   const err = new Error(message);
   err.fatal = true;
   return err;
 }
 
-// 不可中止的上游阶段（解锁/取链）最多拖住协程 ~200s，远超删除/停机排空预算——
+// 本地确定性失败 errno：磁盘满/配额满/只读文件系统/路径形态冲突/路径超长——
+// 重试 N 次结果必然相同，全部映射成 fatal 终止重试。
+// 不在列的：EPERM/EACCES（Windows 上杀软扫描、句柄释放延迟是瞬时的）、
+// EMFILE/ENFILE（fd 压力随并发释放自愈）——这些重试可能成功
+const FATAL_ERRNOS = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'ENAMETOOLONG', 'EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'ELOOP', 'EFBIG']);
+// POSIX 上 EACCES 是真权限拒绝（确定性），Windows 上它常与 EPERM 同义瞬时
+if (process.platform !== 'win32') FATAL_ERRNOS.add('EACCES');
+function errnoToFatal(error) {
+  if (error && FATAL_ERRNOS.has(error.code)) {
+    error.fatal = true;
+  }
+  return error;
+}
+
+// 不可中止的上游阶段（解锁/取链）拖住协程可达数分钟，远超删除/停机排空预算——
 // abort 生效前最后一个落盘副作用是 mkdirSync：已 abort 的协程若在排空清扫后
 // 跑到这里，会把刚被 rmdirSync 剪掉的目录骨架复活（歌单/队列已删而目录重现）
 function throwIfAborted(signal) {
@@ -62,37 +81,25 @@ function throwIfAborted(signal) {
 
 // 上游 callNeteaseApi 对非 200 是 reject(answer 对象)——不是 Error，没有 .message
 function describeError(error) {
+  if (typeof error === 'string') return error;
   if (error?.message) return error.message;
   if (error?.body?.msg) return String(error.body.msg);
   if (error?.body?.code) return `上游错误 code=${error.body.code}`;
   return '未知错误';
 }
 
-// 下载地址校验：只允许 http/https，剥离内嵌 credentials（确定性错误标 fatal）
-function toDownloadUrl(raw) {
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw fatalError('无效的下载链接');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw fatalError('仅支持 http/https 下载');
-  }
-  parsed.username = '';
-  parsed.password = '';
-  return parsed;
-}
-
-// 流停滞看门狗：axios 的 timeout 在拿到响应头后经 settle 就失效——一个
-// "响应头之后停流"的上游会无限期占住并发工位。data 事件刷新时间戳，
-// 超过 stallMs 无数据即毁流（错误冒泡到 pipeline，走正常失败路径）
+// 流停滞看门狗：上游"响应头之后停流"会无限期占住并发工位（axios 的 timeout 是
+// socket 空闲超时，与这里双保险）。data 事件刷新时间戳，超过 stallMs 无数据即毁流
+// （错误冒泡到 pipeline，走正常失败路径）。停滞不标 fatal：重试会重跑取链/
+// 解锁流程，可能换到健康源——TCP 拥塞性停滞不该一次判死任务。
+// 已知盲区：写端背压（慢盘）与上游停滞都会停发 'data'，极端慢盘会被误判停滞
 const STALL_MS = 30000;
 function watchStall(stream, stallMs = STALL_MS, maxTotalMs = 0) {
   let lastData = Date.now();
   const started = Date.now();
   const onData = () => { lastData = Date.now(); };
   const timer = setInterval(() => {
+    if (stream.destroyed) return;
     if (Date.now() - lastData > stallMs) {
       stream.destroy(new Error('下载流停滞超时'));
       return;
@@ -105,6 +112,8 @@ function watchStall(stream, stallMs = STALL_MS, maxTotalMs = 0) {
   }, Math.min(stallMs, 10000));
   timer.unref();
   stream.on('data', onData);
+  // 兜底吸收 destroy 后的迟到 'error'：不依赖 axios 内部监听，防 uncaughtException
+  stream.on('error', () => {});
   stream.on('close', () => clearInterval(timer));
 }
 
@@ -120,15 +129,11 @@ function hasNonIdentityEncoding(headers) {
 async function fetchStream(rawUrl, { timeout, signal }) {
   let url = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const parsed = toDownloadUrl(url);
-    // 与 proxy.js 同一收口：明文 http 源被 302 投毒成 http://公网IP:任意端口/
-    // 的探测面——每跳只放标准端口
-    const port = parsed.port === ''
-      ? (parsed.protocol === 'http:' ? 80 : 443)
-      : Number(parsed.port);
-    if (port !== 80 && port !== 443) {
-      throw fatalError('下载地址端口不受支持');
+    const checked = normalizeOutboundUrl(url);
+    if (!checked.ok) {
+      throw fatalError(checked.reason);
     }
+    const parsed = checked.url;
     // 三态判定：'blocked'（解析到私网）是确定性拦截→fatal；'error'（DNS 瞬时故障：
     // SERVFAIL/临时断网）保持可重试，否则一次抖动就永久剥夺重试机会
     const hostCheck = await checkHostPublic(parsed.hostname);
@@ -164,7 +169,7 @@ async function fetchStream(rawUrl, { timeout, signal }) {
       if (status >= 400 && status < 500 && status !== 429) {
         throw fatalError(`上游返回 ${status}`);
       }
-      throw error;
+      throw errnoToFatal(error);
     }
 
     if (response.status >= 300 && response.status < 400) {
@@ -172,6 +177,8 @@ async function fetchStream(rawUrl, { timeout, signal }) {
       const location = response.headers.location;
       if (!location) throw fatalError(`上游重定向缺少 Location (${response.status})`);
       try {
+        // 相对 Location（/path、//host/path）必须按当前跳为基解析——
+        // 裸传给 normalizeOutboundUrl 会被判成无效 URL 误杀
         url = new URL(location, parsed.toString()).toString();
       } catch {
         throw fatalError('上游重定向地址无效');
@@ -184,19 +191,120 @@ async function fetchStream(rawUrl, { timeout, signal }) {
   throw fatalError('重定向次数过多');
 }
 
-function removePartial(outputPath) {
+// 半成品文件一律以 outputPath+'.part' 落盘，完成后 renameSync 就位：
+// - 下载中/崩溃残留永远是 .part，最终路径上不会出现半截文件；
+// - 重试不再 truncate 已完成的同名文件（旧文件只在新文件完整校验后被替换）；
+// - 崩溃残留的 .part 永不入库登记，启动期 reapOrphanFiles"未登记即删"必然收走
+function removePartial(partPath) {
   try {
-    if (fs.existsSync(outputPath)) {
-      fs.unlinkSync(outputPath);
+    if (fs.existsSync(partPath)) {
+      fs.unlinkSync(partPath);
     }
   } catch {
-    // Windows 下句柄未释放时 unlink 会失败——残留文件下次清理路径兜底
+    // Windows 下句柄未释放时 unlink 会失败——残留 .part 由清扫路径兜底
   }
+}
+
+// 音频/封面共用的"响应流 → .part → 校验 → rename 就位"骨架
+// 返回 {path(最终路径), size}
+async function streamToFile(response, outputPath, { maxBytes, onProgress, maxTotalMs }) {
+  const partPath = `${outputPath}.part`;
+  try {
+    // decompress:false 下 content-encoding 可见：上游回非 identity 编码时
+    // content-length 与落盘字节不可对账——确定性违规，不浪费时间传完
+    if (hasNonIdentityEncoding(response.headers)) {
+      response.data.destroy();
+      throw fatalError('上游返回了压缩内容，无法校验完整性');
+    }
+    const totalLength = parseInt(response.headers['content-length'], 10);
+    // 声明就已超限：headers 到手即拒，不把上限先流一遍
+    if (totalLength > maxBytes) {
+      response.data.destroy();
+      throw fatalError(`文件超过大小上限 ${maxBytes}`);
+    }
+
+    let downloadedLength = 0;
+    let lastProgress = -1;
+    // 顺序前提：watchStall/计数监听与 pipeline 必须在同一同步 tick 附着——
+    // 'data' 监听让流进入 flowing，中间插 await 会丢 chunk
+    watchStall(response.data, STALL_MS, maxTotalMs);
+    response.data.on('data', (chunk) => {
+      downloadedLength += chunk.length;
+      // 超限即毁流——pipeline 会把该错误冒泡，removePartial 清残片
+      if (downloadedLength > maxBytes) {
+        response.data.destroy(fatalError(`文件超过大小上限 ${maxBytes}`));
+        return;
+      }
+      if (onProgress && totalLength > 0) {
+        // 上游低报 content-length 时进度可能超 100——钳位到 100
+        const progress = Math.min(Math.round((downloadedLength / totalLength) * 100), 100);
+        if (progress !== lastProgress) {
+          lastProgress = progress;
+          try {
+            onProgress(progress);
+          } catch {
+            // 回调异常不得穿透 'data' 监听器成 uncaughtException
+          }
+        }
+      }
+    });
+
+    // pipeline 任一端出错都会销毁两侧流（abort 时 axios 流 reject → writer 同步销毁）
+    await pipeline(response.data, fs.createWriteStream(partPath));
+
+    const stats = fs.statSync(partPath);
+    if (stats.size === 0) {
+      // 上游 200 但空 body 对该 URL 是确定性失败——标 fatal 不浪费重试
+      throw fatalError('下载内容为空');
+    }
+    // content-length 与落盘大小对账：
+    // - 小于声明 = 服务端截断（瞬时传输问题，可重试）
+    // - 大于声明 = 上游虚报 length（确定性违规，重试结果相同）→ fatal
+    if (totalLength > 0 && stats.size > totalLength) {
+      throw fatalError(`上游虚报长度（${stats.size}/${totalLength} 字节）`);
+    }
+    if (totalLength > 0 && stats.size !== totalLength) {
+      throw new Error(`下载不完整（${stats.size}/${totalLength} 字节）`);
+    }
+    // 校验全部通过才替换就位——半途失败留下的是 .part 残片，旧完整文件不动
+    fs.renameSync(partPath, outputPath);
+    return { path: outputPath, size: stats.size };
+  } catch (error) {
+    removePartial(partPath);
+    throw errnoToFatal(error);
+  }
+}
+
+// googlevideo 等 URL path 无后缀，扩展名藏在 mime=audio/mp4 查询参数里
+const MIME_EXT = { 'audio/mp4': 'm4a', 'video/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/webm': 'webm', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' };
+
+// 从已解析的下载 URL 推断落盘扩展名：优先 path 后缀（白名单过滤），
+// 其次 mime= 查询参数（googlevideo 系），都不在名单内一律回默认——
+// 防止上游注入怪异扩展名（.php/.html）落盘
+function extFromUrl(rawUrl, allowed, fallback) {
+  try {
+    const u = new URL(rawUrl);
+    const m = u.pathname.match(/\.([a-z0-9]{2,5})$/i);
+    const ext = m && m[1].toLowerCase();
+    if (ext && allowed.has(ext)) return ext;
+    const mime = (u.searchParams.get('mime') || '').toLowerCase();
+    const mimeExt = mime && MIME_EXT[mime];
+    return mimeExt && allowed.has(mimeExt) ? mimeExt : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// outputPath 是锁键占位路径（.mp3/.jpg 后缀参与并发互斥）——真实扩展名取决于
+// 解锁后 URL（ytdlp 的 itag=140 是 m4a 等），实际文件按 extFromUrl 换后缀落盘，
+// 返回的 path 才是写库/清理要用的真实路径
+function pathWithExt(outputPath, ext) {
+  return outputPath.replace(/\.[a-z0-9]+$/i, `.${ext}`);
 }
 
 async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal) {
   try {
-    // 进程内直调上游模块 + 共享解锁后处理（purpose=download：kuwo 优先、不走 audio-proxy），
+    // 进程内直调上游模块 + 共享解锁后处理（purpose=download：不走 audio-proxy），
     // 不经过 HTTP 自调——避免依赖服务端口配置，也省去一圈 loopback 开销
     let result;
     try {
@@ -228,79 +336,39 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     }
 
     throwIfAborted(signal);
-    const dir = path.dirname(outputPath);
-    fs.mkdirSync(dir, { recursive: true });
+    // 扩展名按真实来源修正（ytdlp→m4a 等）：路径互斥锁仍挂在占位 .mp3 键上，
+    // 互斥语义不变（同一歌单同曲永远同键），只是落盘文件名更诚实
+    const finalPath = pathWithExt(outputPath, extFromUrl(songData.url, AUDIO_EXTS, 'mp3'));
+    fs.mkdirSync(path.dirname(finalPath), { recursive: true });
 
     const audioResponse = await fetchStream(songData.url, { timeout: 300000, signal });
     if (audioResponse.status !== 200 && audioResponse.status !== 206) {
       audioResponse.data.destroy();
       throw fatalError(`上游返回 ${audioResponse.status}`);
     }
-    // decompress:false 下 content-encoding 可见：上游回非 identity 编码，
-    // 此时 content-length 与落盘字节不可对账——确定性违规，不浪费时间传完
-    if (hasNonIdentityEncoding(audioResponse.headers)) {
-      audioResponse.data.destroy();
-      throw fatalError('上游返回了压缩内容，无法校验完整性');
-    }
 
-    const totalLength = parseInt(audioResponse.headers['content-length'], 10);
-    // 声明就已超限：headers 到手即拒，不把 512MiB 先流一遍
-    if (totalLength > MAX_AUDIO_BYTES) {
-      audioResponse.data.destroy();
-      throw fatalError(`文件超过大小上限 ${MAX_AUDIO_BYTES}`);
-    }
-    let downloadedLength = 0;
-    let lastProgress = -1;
-
-    watchStall(audioResponse.data, STALL_MS, 300000); // 总时长与头超时对齐 5min
-    audioResponse.data.on('data', (chunk) => {
-      downloadedLength += chunk.length;
-      // 超限即毁流——pipeline 会把该错误冒泡，removePartial 清残片
-      if (downloadedLength > MAX_AUDIO_BYTES) {
-        audioResponse.data.destroy(fatalError(`文件超过大小上限 ${MAX_AUDIO_BYTES}`));
-        return;
-      }
-      if (onProgress && totalLength > 0) {
-        // 上游低报 content-length 时进度可能超 100——钳位到 100
-        const progress = Math.min(Math.round((downloadedLength / totalLength) * 100), 100);
-        if (progress !== lastProgress) {
-          lastProgress = progress;
-          try {
-            onProgress(progress);
-          } catch {
-            // 回调异常不得穿透 'data' 监听器成 uncaughtException
-          }
-        }
-      }
+    const saved = await streamToFile(audioResponse, finalPath, {
+      maxBytes: MAX_AUDIO_BYTES,
+      onProgress,
+      maxTotalMs: 300000 // 总时长与头超时对齐 5min
     });
-
-    // pipeline 任一端出错都会销毁两侧流（abort 时 axios 流 reject → writer 同步销毁），
-    // 不再手写 finish/error 监听——原先 finish 里同步 statSync 抛错会穿透成 uncaughtException
-    await pipeline(audioResponse.data, fs.createWriteStream(outputPath));
-
-    const stats = fs.statSync(outputPath);
-    if (stats.size === 0) {
-      // 上游 200 但空 body 对该 URL 是确定性失败——标 fatal 不浪费重试
-      throw fatalError('下载内容为空');
-    }
-    // content-length 与落盘大小对账：framing 完整但服务端截断的残文件不能当完成
-    // （截断是传输瞬时问题，保持可重试）
-    if (totalLength > 0 && stats.size !== totalLength) {
-      throw new Error(`下载不完整（${stats.size}/${totalLength} 字节）`);
-    }
     return {
-      path: outputPath,
-      size: stats.size,
+      path: saved.path,
+      size: saved.size,
       url: songData.url,
+      // 落盘后时长对账需要**文件真实码率**：解锁源的 item.br 仍是网易声明值
+      // （请求 320k 时恒 320000），真实码率在 unblockedBr（ytdlp 常 128k）——
+      // 用错分母会把完整文件误判成剪辑
+      br: songData.unblockedBr ?? songData.br ?? null,
       unblocked: songData.unblocked || false,
-      unblockedSource: songData.unblockedSource || null,
-      usedAudioProxy: songData.usedAudioProxy || false
+      unblockedSource: songData.unblockedSource || null
     };
   } catch (error) {
-    removePartial(outputPath);
+    errnoToFatal(error);
     const err = new Error(`下载音频失败: ${describeError(error)}`);
-    // aborted 标记与歌词路径对称透传：processTask 靠它区分取消与可重试失败
-    err.aborted = Boolean(error.aborted);
+    err.code = error.code;
+    // aborted/fatal 标记对称透传：processTask 靠它们区分取消/可重试/确定性失败
+    err.aborted = Boolean(error.aborted) || error.code === 'ERR_CANCELED';
     err.fatal = Boolean(error.fatal);
     throw err;
   }
@@ -327,18 +395,23 @@ async function downloadLyrics(songId, outputPath, signal) {
     }
 
     const lrc = response.body.lrc;
-    if (!lrc || !lrc.lyric) {
-      throw new Error('歌词不存在');
+    if (!lrc || typeof lrc.lyric !== 'string' || !lrc.lyric) {
+      // code 契约而非消息串匹配——下游按 NO_LYRICS 判定"缺词不算失败"；
+      // 非字符串 lyric 是上游畸形数据，与缺词同待遇（确定性，不该重试）
+      const err = new Error('歌词不存在');
+      err.code = 'NO_LYRICS';
+      throw err;
     }
 
     throwIfAborted(signal);
-    const dir = path.dirname(outputPath);
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
+    const partPath = `${outputPath}.part`;
     try {
-      fs.writeFileSync(outputPath, lrc.lyric, 'utf-8');
+      fs.writeFileSync(partPath, lrc.lyric, 'utf-8');
+      fs.renameSync(partPath, outputPath);
     } catch (writeError) {
-      removePartial(outputPath); // 写一半失败不留孤儿 .lrc
+      removePartial(partPath); // 写一半失败不留孤儿 .lrc.part
       throw writeError;
     }
 
@@ -347,12 +420,14 @@ async function downloadLyrics(songId, outputPath, signal) {
       size: Buffer.byteLength(lrc.lyric, 'utf-8')
     };
   } catch (error) {
-    if (error.message === '歌词不存在') {
+    if (error.code === 'NO_LYRICS') {
       throw error;
     }
+    errnoToFatal(error);
     const err = new Error(`下载歌词失败: ${describeError(error)}`);
+    err.code = error.code;
     // 取消语义不得被包装吞掉——processTask 靠 aborted 标记区分取消与失败
-    err.aborted = Boolean(error.aborted);
+    err.aborted = Boolean(error.aborted) || error.code === 'ERR_CANCELED';
     err.fatal = Boolean(error.fatal);
     throw err;
   }
@@ -365,51 +440,25 @@ async function downloadCover(coverUrl, outputPath, signal) {
     }
 
     throwIfAborted(signal);
-    const dir = path.dirname(outputPath);
-    fs.mkdirSync(dir, { recursive: true });
+    const finalPath = pathWithExt(outputPath, extFromUrl(coverUrl, COVER_EXTS, 'jpg'));
+    fs.mkdirSync(path.dirname(finalPath), { recursive: true });
 
     const response = await fetchStream(coverUrl, { timeout: 60000, signal });
     if (response.status !== 200) {
       response.data.destroy();
       throw fatalError(`上游返回 ${response.status}`);
     }
-    if (hasNonIdentityEncoding(response.headers)) {
-      response.data.destroy();
-      throw fatalError('上游返回了压缩内容，无法校验完整性');
-    }
 
-    const coverLength = parseInt(response.headers['content-length'], 10);
-    if (coverLength > MAX_COVER_BYTES) {
-      response.data.destroy();
-      throw fatalError(`封面超过大小上限 ${MAX_COVER_BYTES}`);
-    }
-    let coverBytes = 0;
-    watchStall(response.data, STALL_MS, 60000); // 与头超时对齐 60s
-    response.data.on('data', (chunk) => {
-      coverBytes += chunk.length;
-      if (coverBytes > MAX_COVER_BYTES) {
-        response.data.destroy(fatalError(`封面超过大小上限 ${MAX_COVER_BYTES}`));
-      }
+    const saved = await streamToFile(response, finalPath, {
+      maxBytes: MAX_COVER_BYTES,
+      maxTotalMs: 60000 // 与头超时对齐 60s
     });
-
-    await pipeline(response.data, fs.createWriteStream(outputPath));
-
-    const stats = fs.statSync(outputPath);
-    if (stats.size === 0) {
-      throw fatalError('下载内容为空');
-    }
-    // 封面同音频：服务端截断的残图不能当完成（截断瞬时，可重试）
-    if (coverLength > 0 && stats.size !== coverLength) {
-      throw new Error(`下载不完整（${stats.size}/${coverLength} 字节）`);
-    }
-    return {
-      path: outputPath,
-      size: stats.size
-    };
+    return { path: saved.path, size: saved.size };
   } catch (error) {
-    removePartial(outputPath);
+    errnoToFatal(error);
     const err = new Error(`下载封面失败: ${describeError(error)}`);
-    err.aborted = Boolean(error.aborted);
+    err.code = error.code;
+    err.aborted = Boolean(error.aborted) || error.code === 'ERR_CANCELED';
     err.fatal = Boolean(error.fatal);
     throw err;
   }

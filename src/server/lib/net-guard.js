@@ -62,10 +62,6 @@ function stripIpv6Brackets(hostname) {
   return hostname.replace(/^\[|\]$/g, '');
 }
 
-// net.isIp：URL hostname 已是 IP 字面量时无需 DNS
-function isIpLiteral(hostname) {
-  return net.isIP(stripIpv6Brackets(hostname)) !== 0;
-}
 
 // hostname → { ok, expires }；有界 Map 防长期运行内存膨胀
 // ok 缓存只留 10s：校验与最终连接是两次独立解析（TOCTOU），缓存窗口越长
@@ -156,17 +152,44 @@ async function checkHostPublic(hostname) {
   return resolveHostState(hostname);
 }
 
-async function isPublicHost(hostname) {
-  return (await resolveHostState(hostname)) === 'ok';
+/**
+ * 出站 URL 卫生归一化（proxy.js / fetchStream / getContentLength 三处共用）：
+ * 只放 http/https、剥离内嵌 credentials、端口只收 80/443（含缺省端口）、
+ * FQDN 尾点归一化（'example.com.' ≡ 'example.com'）。
+ * 返回 { ok: true, url: URL } 或 { ok: false, code, reason }——
+ * code 是机读契约（BAD_URL/BAD_SCHEME/BAD_PORT），reason 是给人看的中文消息；
+ * 调用方按自己的错误体系决定 fatal/403/null 降级。
+ */
+function normalizeOutboundUrl(raw) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { ok: false, code: 'BAD_URL', reason: '无效的链接' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, code: 'BAD_SCHEME', reason: '仅支持 http/https 链接' };
+  }
+  // 尾点FQDN与裸名解析到同一主机——不去掉会让白名单后缀匹配漏判
+  if (parsed.hostname.endsWith('.')) {
+    parsed.hostname = parsed.hostname.slice(0, -1);
+  }
+  parsed.username = '';
+  parsed.password = '';
+  // 明文 http 源可被 302 投毒到 http://公网IP:任意端口/——只放标准端口。
+  // 有意放宽跨 scheme 显式端口（https://h:80、http://h:443）：仍被 {80,443}
+  // 上界约束，跨 scheme 连接必然失败，无探测放大面
+  const port = parsed.port === ''
+    ? (parsed.protocol === 'http:' ? 80 : 443)
+    : Number(parsed.port);
+  if (port !== 80 && port !== 443) {
+    return { ok: false, code: 'BAD_PORT', reason: '目标端口不受支持' };
+  }
+  return { ok: true, url: parsed };
 }
 
 module.exports = {
-  isPrivateIPv4,
-  isPrivateIPv6,
-  isPrivateIp,
-  isIpLiteral,
-  stripIpv6Brackets,
   resolvesToPublicIp,
   checkHostPublic,
-  isPublicHost
+  normalizeOutboundUrl
 };
