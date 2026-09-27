@@ -91,7 +91,7 @@ function migrateDownloadTasks(database) {
   }
   if (!hasIndex(database, 'idx_download_tasks_queue')) {
     database.exec(`
-      CREATE INDEX idx_download_tasks_queue ON download_tasks(queue_id)
+      CREATE INDEX IF NOT EXISTS idx_download_tasks_queue ON download_tasks(queue_id)
     `);
   }
   // (playlist_id, song_id) 唯一约束：新库由 CREATE TABLE 的 UNIQUE(...) 生成
@@ -191,8 +191,10 @@ function migrateLegacyTables(database) {
         database.exec('DROP INDEX idx_playlists_netease_id');
       }
       // FK ON 下删有子行的重复歌单会违例崩启动——老库子表 REFERENCES 可能
-      // 没声明 ON DELETE CASCADE；先查出弃留行，显式清掉子表再删父行
-      const doomed = database.prepare(`
+      // 没声明 ON DELETE CASCADE；显式按"弃留行集"清掉子表再删父行。
+      // 弃留集用子查询内联而非 IN (?,...) 参数列表——病态库的超量重复行
+      // 会撞 SQLITE_MAX_VARIABLE_NUMBER 崩启动
+      const doomedIds = `
         SELECT id FROM playlists
         WHERE netease_playlist_id IS NOT NULL
           AND id NOT IN (
@@ -203,25 +205,43 @@ function migrateLegacyTables(database) {
               WHERE netease_playlist_id IS NOT NULL
             ) WHERE rn = 1
           )
-      `).all().map(r => r.id);
-      if (doomed.length > 0) {
-        const marks = doomed.map(() => '?').join(',');
-        // download_tasks 同时引用 queues——必须先删孙行再删子行
-        database.prepare(`DELETE FROM download_tasks WHERE playlist_id IN (${marks})`).run(...doomed);
-        database.prepare(
-          `DELETE FROM download_tasks WHERE queue_id IN
-             (SELECT id FROM download_queues WHERE playlist_id IN (${marks}))`
-        ).run(...doomed);
-        database.prepare(`DELETE FROM download_queues WHERE playlist_id IN (${marks})`).run(...doomed);
-        database.prepare(`DELETE FROM playlist_tracks WHERE playlist_id IN (${marks})`).run(...doomed);
-        database.prepare(`DELETE FROM playlists WHERE id IN (${marks})`).run(...doomed);
-      }
+      `;
+      // download_tasks 同时引用 queues——必须先删孙行再删子行
+      database.exec(`DELETE FROM download_tasks WHERE playlist_id IN (${doomedIds})`);
+      database.exec(
+        `DELETE FROM download_tasks WHERE queue_id IN
+           (SELECT id FROM download_queues WHERE playlist_id IN (${doomedIds}))`
+      );
+      database.exec(`DELETE FROM download_queues WHERE playlist_id IN (${doomedIds})`);
+      database.exec(`DELETE FROM playlist_tracks WHERE playlist_id IN (${doomedIds})`);
+      database.exec(`DELETE FROM playlists WHERE id IN (${doomedIds})`);
       database.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_playlists_netease_id
         ON playlists(netease_playlist_id)
       `);
     })();
   }
+
+  // is_default 全局唯一：老库可能并存多个默认歌单（历史上 upsert 只加不清），
+  // 保留最近更新的那个，其余清零
+  database.exec(`
+    UPDATE playlists SET is_default = 0
+    WHERE is_default = 1
+      AND id NOT IN (
+        SELECT id FROM playlists
+        WHERE is_default = 1
+        ORDER BY datetime(updated_at) DESC, id DESC
+        LIMIT 1
+      )
+  `);
+
+  // track_count 展示计数与实际行数可能漂移（历史截断导入/崩溃窗口）——
+  // 启动时收敛为真实行数，前端"已下载 x/y"分母才可信
+  database.exec(`
+    UPDATE playlists SET track_count = (
+      SELECT COUNT(*) FROM playlist_tracks WHERE playlist_tracks.playlist_id = playlists.id
+    )
+  `);
 }
 
 function initSchema(database) {

@@ -210,7 +210,9 @@ export const musicApi = {
     )
     const data = unwrapBody(response)
     const lyrics = parseLyrics(data.lrc?.lyric || '')
-    const translations = parseLyrics(data.tlyric?.lyric || '')
+    // 翻译文件常缺自己的 [offset:] 标签——用主歌词的 offset 兜底对齐，
+    // 否则主词已偏移、翻译未偏移，0.5s 合并窗永远配不上对而全部丢弃
+    const translations = parseLyrics(data.tlyric?.lyric || '', getLrcOffsetSec(data.lrc?.lyric))
     return {
       lyrics: mergeTranslations(lyrics, translations)
     }
@@ -242,21 +244,36 @@ function mergeTranslations(lyrics, translations) {
   })
 }
 
-function parseLyrics(lyricText) {
+// [offset:±ms] LRC 全局偏移：约定正值=歌词整体提前（显示时间 = 标签时间 - offset）。
+// 锚定行首——正文里恰好出现的 "[offset:xxx]" 不该污染全局时序。
+// 返回 null 表示文件未声明（调用方用主歌词的 offset 兜底）
+function getLrcOffsetSec(lyricText) {
+  if (!lyricText) return null
+  const offsetMatch = lyricText.match(/^\s*\[offset:\s*([+-]?\d+)\s*\]/im)
+  return offsetMatch ? parseInt(offsetMatch[1]) / 1000 : null
+}
+
+function parseLyrics(lyricText, fallbackOffsetSec = null) {
   if (!lyricText) return []
-  return lyricText.split('\n')
-    .map(line => {
-      const match = line.match(/\[(\d+):(\d{1,2})(?:[.:](\d{1,3}))?\](.*)/)
-      if (!match) return null
-      // 去除增强LRC的行内时间标签 <mm:ss.xx> 和残留的重复时间戳
-      const text = match[4]
-        .replace(/<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g, '')
-        .replace(/^\s*(?:\[\d+:\d{1,2}(?:[.:]\d{1,3})?\]\s*)+/, '')
-        .trim()
-      const ms = match[3] ? parseInt(match[3].padEnd(3, '0')) : 0
-      const time = parseInt(match[1]) * 60 + parseInt(match[2]) + ms / 1000
-      return text ? { time, text } : null
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.time - b.time)
+  const offsetSec = getLrcOffsetSec(lyricText) ?? fallbackOffsetSec ?? 0
+  // /g 是承重墙：matchAll 对非 global 正则直接 TypeError
+  const timeTag = /\[(\d+):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
+
+  const result = []
+  for (const line of lyricText.split('\n')) {
+    const tags = [...line.matchAll(timeTag)]
+    if (!tags.length) continue
+    // 多时间戳行（[t1][t2]text）= 同一文本在多个时间点出现——展开成多条；
+    // 文本=去掉所有行首时间戳与增强 LRC 行内 <mm:ss.xx> 标签
+    const text = line.replace(timeTag, '')
+      .replace(/<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g, '')
+      .trim()
+    if (!text) continue
+    for (const m of tags) {
+      const ms = m[3] ? parseInt(m[3].padEnd(3, '0')) : 0
+      const time = parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000 - offsetSec
+      result.push({ time: Math.max(0, time), text })
+    }
+  }
+  return result.sort((a, b) => a.time - b.time)
 }

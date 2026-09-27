@@ -3,7 +3,6 @@ const { getDb } = require('../db/client');
 const {
   upsertPlaylist,
   findPlaylistById,
-  findPlaylistByNeteaseId,
   listPlaylists
 } = require('../repositories/playlists');
 const {
@@ -11,7 +10,7 @@ const {
   listTracksByPlaylistId
 } = require('../repositories/playlistTracks');
 const { httpError } = require('../lib/http-error');
-const { deletingPlaylists } = require('../lib/deletion-locks');
+const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 
 // callNeteaseApi 对上游非 200 是 reject(answer{status,body,cookie})——不是 Error、
@@ -44,22 +43,66 @@ async function fetchRemotePlaylist(neteasePlaylistId) {
     throw httpError(404, '网易云歌单不存在');
   }
 
-  const trackResponse = await callUpstream('playlist_track_all', {
-    id: neteasePlaylistId,
-    limit: playlist.trackCount || 1000,
-    offset: 0
-  }, { timeoutMs: 120000 });
+  // trackIds 是上游返回的完整曲目清单（含付费/无版权曲目的 id），trackCount
+  // 只是展示计数（会滞后）。playlist_track_all 内部实现是 trackIds.slice(
+  // offset, offset+limit) 后单次 song/detail——limit 传大值会把上千 id 塞进
+  // 一个请求被上游 400 拒掉，传 trackCount 又会在漂移时截断尾部。
+  // 因此这里直接用 trackIds 自己按 500/批走 song_detail：长度无上限、
+  // 顺序权威、天然无缺失
+  const trackIds = Array.isArray(playlist.trackIds)
+    ? playlist.trackIds.map(t => t?.id).filter(id => Number.isInteger(id))
+    : null;
 
-  // 上游对某些错误码（460/502 等被 request 层映射成 HTTP 200）走 resolve 而非
-  // reject——callUpstream 的 catch 拦不到。不校验 code 就 || [] 会把瞬时失败
-  // 写成"歌单有 0 首歌"并清空本地曲目（refresh 路径最危险）
-  const songs = trackResponse.body?.songs;
-  if (trackResponse.body?.code !== 200 || !Array.isArray(songs)) {
-    throw httpError(502, `网易云曲目接口返回异常（code=${trackResponse.body?.code ?? '未知'}）`);
+  let songs;
+  if (trackIds && trackIds.length === 0) {
+    // 空歌单：trackIds 权威为空就不必再跑 track_all 的上游往返
+    songs = [];
+  } else if (trackIds) {
+    const byId = new Map();
+    for (let i = 0; i < trackIds.length; i += 500) {
+      const chunkResp = await callUpstream('song_detail', {
+        ids: trackIds.slice(i, i + 500).join(',')
+      }, { timeoutMs: 120000 });
+      const chunkSongs = chunkResp.body?.songs;
+      // 与 track_all 同款的 resolve-200 陷阱：不校验 code 会把瞬时失败
+      // 写成"这些歌不存在"并清空对应曲目（refresh 路径最危险）
+      if (chunkResp.body?.code !== 200 || !Array.isArray(chunkSongs)) {
+        throw httpError(502, `网易云曲目接口返回异常（第 ${i / 500 + 1} 批，code=${chunkResp.body?.code ?? '未知'}）`);
+      }
+      for (const s of chunkSongs) {
+        if (s && s.id != null && !byId.has(s.id)) byId.set(s.id, s);
+      }
+    }
+    // 按 trackIds 权威顺序重建；被版权过滤的歌在上游 detail 里缺席，保持缺席
+    songs = trackIds.map(id => byId.get(id)).filter(Boolean);
+    // code:200 但全空/大比例缺失更像上游瞬时故障而非版权剔除——全空直接
+    // 判失败（否则 refresh 会把整个歌单清成 0 行），部分缺失仅告警
+    if (songs.length === 0) {
+      throw httpError(502, '网易云曲目接口返回空列表（疑似上游故障）');
+    }
+    if (songs.length < trackIds.length) {
+      console.warn(`[playlist] 曲目对账缺失: 歌单 ${neteasePlaylistId} 应有 ${trackIds.length} 首，实际 ${songs.length} 首`);
+    }
+  } else {
+    // trackIds 缺失的兼容路径：退回 track_all。limit 是内部 slice 上限——
+    // 大值会把全部 id 塞进单个 song/detail 请求被上游 400 拒，保持默认页大小
+    const trackResponse = await callUpstream('playlist_track_all', {
+      id: neteasePlaylistId,
+      limit: 1000,
+      offset: 0
+    }, { timeoutMs: 120000 });
+
+    songs = trackResponse.body?.songs;
+    if (trackResponse.body?.code !== 200 || !Array.isArray(songs)) {
+      throw httpError(502, `网易云曲目接口返回异常（code=${trackResponse.body?.code ?? '未知'}）`);
+    }
   }
 
   return {
     ...playlist,
+    // track_count 反映实际落库行数而非上游展示计数——两者漂移时
+    // 本地统计才是前端"已下载 x/y"的分母真值
+    trackCount: songs.length,
     tracks: songs
   };
 }
@@ -69,9 +112,14 @@ async function importPlaylistFromNetease(neteasePlaylistId, options = {}) {
 
   // 歌单行 + 曲目表两写同事务：中途失败不留"有歌单没曲目"的半导入数据。
   // 删除锁在事务内复查：路由层的前置检查与本写之间隔了上游往返（秒级），
-  // 删除可能在此期间开始——upsert 会把已删歌单复活。单线程下本事务与级联
-  // 的删除事务天然串行，这里看到锁说明级联已启动，放弃写入
+  // 删除可能在此期间开始——upsert 会把已删歌单复活。deletingPlaylists 按本地
+  // id（行还在时有效），deletingNeteasePlaylists 按网易云 id（行删后新行也拦）
   const savedPlaylist = getDb().transaction(() => {
+    // 墓碑复查必须在 upsert 之前：删除锁按本地 id 记，而 upsert 以
+    // netease_playlist_id 冲突键复活新行——先查 netease 墓碑再写
+    if (isNeteasePlaylistDeleting(neteasePlaylistId)) {
+      throw httpError(409, '该歌单正在删除中');
+    }
     const row = upsertPlaylist({
       neteasePlaylistId,
       name: remotePlaylist.name,
@@ -88,7 +136,13 @@ async function importPlaylistFromNetease(neteasePlaylistId, options = {}) {
     return row;
   })();
 
-  return getPlaylistDetail(savedPlaylist.id);
+  const detail = getPlaylistDetail(savedPlaylist.id);
+  // 提交后与回读之间可能插入级联删除（墓碑生命周期不覆盖此窗口）——
+  // 行已不在时返回 404 而非 200 + playlist:null
+  if (!detail) {
+    throw httpError(404, '歌单在导入后被删除');
+  }
+  return detail;
 }
 
 function getPlaylistDetail(id) {
@@ -100,12 +154,6 @@ function getPlaylistDetail(id) {
   };
 }
 
-function getPlaylistDetailByNeteaseId(neteasePlaylistId) {
-  const playlist = findPlaylistByNeteaseId(neteasePlaylistId);
-  if (!playlist) return null;
-  return getPlaylistDetail(playlist.id);
-}
-
 function listSavedPlaylists() {
   return listPlaylists();
 }
@@ -113,6 +161,5 @@ function listSavedPlaylists() {
 module.exports = {
   importPlaylistFromNetease,
   getPlaylistDetail,
-  getPlaylistDetailByNeteaseId,
   listSavedPlaylists
 };

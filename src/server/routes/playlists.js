@@ -8,7 +8,7 @@ const { findPlaylistById, findPlaylistByNeteaseId } = require('../repositories/p
 const { deletePlaylistCascade } = require('../services/download-manager');
 const { readJsonBody } = require('../lib/http-body');
 const { fail, handleError } = require('../lib/http-error');
-const { deletingPlaylists } = require('../lib/deletion-locks');
+const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
 
 const app = new Hono();
 
@@ -59,7 +59,11 @@ app.post('/playlists/import', async (c) => {
     }
 
     // 导入对已存在的本地歌单是 upsert——若该歌单正在级联删除，upsert 会在
-    // 行删除后把它复活（先查锁再写，窗口内的导入直接拒）
+    // 行删除后把它复活。两道闸：本地行还在时按本地 id 锁查；行已删则按
+    // 网易云 id 墓碑查（upsert 会以新本地 id 复活，本地锁查不到）
+    if (isNeteasePlaylistDeleting(neteasePlaylistId)) {
+      return c.json({ code: 409, message: '该歌单正在删除中，请稍后再导入' }, 409);
+    }
     const existingRow = findPlaylistByNeteaseId(neteasePlaylistId);
     if (existingRow && deletingPlaylists.has(existingRow.id)) {
       return c.json({ code: 409, message: '该歌单正在删除中，请稍后再导入' }, 409);
