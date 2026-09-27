@@ -42,6 +42,12 @@ function findPlaylistByNeteaseId(neteasePlaylistId) {
 function upsertPlaylist(input) {
   const db = getDb();
   const now = new Date().toISOString();
+  // is_default 全局唯一：设为默认前先清其他默认标记，否则多次
+  // 带 isDefault 的导入会并存多个"默认歌单"。调用方已包事务
+  // （playlist-sync import），独立调用时本函数自身不保证原子
+  if (input.isDefault) {
+    db.prepare('UPDATE playlists SET is_default = 0 WHERE is_default = 1').run();
+  }
   db.prepare(`
     INSERT INTO playlists (
       netease_playlist_id, name, cover_img_url, creator_nickname, track_count, source, is_default, updated_at, last_synced_at

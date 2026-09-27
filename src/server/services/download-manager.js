@@ -10,7 +10,7 @@ const fileDownloader = require('./file-downloader');
 const { estimateDuration } = require('./netease-api');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
-const { deletingPlaylists, deletingQueues } = require('../lib/deletion-locks');
+const { deletingPlaylists, deletingQueues, deletingNeteasePlaylists, isNeteasePlaylistDeleting, markNeteasePlaylistDeleted } = require('../lib/deletion-locks');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 
 // 下载文件根目录：<dataDir>/downloads，可用 DOWNLOAD_DIR 覆盖（容器内指到挂载卷）
@@ -89,7 +89,11 @@ function findExistingPlaylistId(playlistId) {
     const byLocalId = playlistsRepo.findPlaylistById(numericId);
     if (byLocalId) return byLocalId.id;
   }
-  const byNeteaseId = playlistsRepo.findPlaylistByNeteaseId(str);
+  // 与 resolvePlaylistId 同一前导零归一化：'000123' 命中已存 '123' 行，
+  // 不为等价 id 多烧一次上游往返
+  const byNeteaseId = playlistsRepo.findPlaylistByNeteaseId(
+    str.replace(/^0+(?=\d)/, '')
+  );
   return byNeteaseId ? byNeteaseId.id : null;
 }
 
@@ -102,6 +106,11 @@ async function resolvePlaylistId(playlistId) {
   // 长度上限防超长数字串被拼进上游 URL
   if (!/^\d{1,20}$/.test(str)) {
     throw httpError(400, '无效的歌单 ID');
+  }
+  // 墓碑快速失败：导入事务内的复查能兜底正确性，这里省掉一次最长
+  // ~120s 的上游往返才发现该歌单正在删除
+  if (isNeteasePlaylistDeleting(str)) {
+    throw httpError(409, '该歌单正在删除中');
   }
   const imported = await importPlaylistFromNetease(str);
   if (imported?.id) {
@@ -1637,7 +1646,18 @@ async function deletePlaylistCascade(playlistId) {
     throw httpError(409, '该歌单正在删除中');
   }
   deletingPlaylists.add(playlistId);
+  // tombstoneRow 的读取必须在 try 内：findPlaylistById 抛瞬时 DB 错时若锁已
+  // 登记而 finally 不执行 → 该歌单被"正在删除中"封禁到进程重启
+  let tombstoneNeteaseId = null;
   try {
+    // 按网易云 id 记墓碑：级联删除期间到达的导入 upsert 会以同一
+    // netease_playlist_id 重建新行（本地 id 全新，deletingPlaylists 拦不住）
+    const tombstoneRow = playlistsRepo.findPlaylistById(playlistId);
+    if (tombstoneRow?.neteasePlaylistId) {
+      tombstoneNeteaseId = String(tombstoneRow.neteasePlaylistId);
+      // 级联进行中 = Infinity（在途墓碑），见 deletion-locks.js 生命周期说明
+      deletingNeteasePlaylists.set(tombstoneNeteaseId, Infinity);
+    }
     const pendingFiles = await deletePlaylistFiles(playlistId);
     // 排空后快照任务 id——提交后清对应退避条目（事务内清会留回滚不一致）
     const taskIds = downloadTasksRepo.listTasksByPlaylist(playlistId).map(t => t.id);
@@ -1657,6 +1677,12 @@ async function deletePlaylistCascade(playlistId) {
     return deleted;
   } finally {
     deletingPlaylists.delete(playlistId);
+    if (tombstoneNeteaseId) {
+      // 不立即删墓碑：级联毫秒级完成而导入的 upstream fetch 最长 ~120s——
+      // 立即释放会让"删除先于在途 fetch 返回"的导入照样复活行。
+      // TTL 化成短期墓碑，窗口内再导入收到可重试的 409
+      markNeteasePlaylistDeleted(tombstoneNeteaseId);
+    }
   }
 }
 
