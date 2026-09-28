@@ -18,6 +18,8 @@ const LINE_DIRECTIONS = [
 ]
 // 可视区安全边距（格）：歌词锚点与吐字头都约束在屏幕内缩这个范围内
 const VIEW_MARGIN_CELLS = 0.8
+// 主动拐弯概率：链尾直行可放时也有几率换方向，让字链长出折线
+const BEND_CHANCE = 0.15
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
@@ -399,17 +401,19 @@ export class CanvasManager {
       return state
     }
 
-    const commitPlacement = (lyric, state, result, anchorX, anchorY) => {
+    const commitPlacement = (lyric, state, result, anchorX, anchorY, dir) => {
       lyric.glyphPositions = result.positions
       lyric.slotKeys = result.slotKeys
       lyric.anchorX = anchorX
       lyric.anchorY = anchorY
-      lyric.dir = state.dir
+      lyric.dir = dir
       lyric.lastGlyphX = result.positions[result.positions.length - 1].x
       lyric.lastGlyphY = result.positions[result.positions.length - 1].y
+      // 拐弯后行轴更新为新方向，后续块沿新轴继续链式延伸
+      state.dir = dir
       // 链尾 = 末字格沿行轴再延一格：下一块从这里接着排，同句连成字链
-      state.tailX = lyric.lastGlyphX + state.dir.x
-      state.tailY = lyric.lastGlyphY + state.dir.y
+      state.tailX = lyric.lastGlyphX + dir.x
+      state.tailY = lyric.lastGlyphY + dir.y
       lyric.isDraw = true
     }
 
@@ -429,25 +433,36 @@ export class CanvasManager {
             const nx = Math.floor((-this._px + this._mouseX) / space) - dir.x * backstep
             const ny = Math.floor((-this._py + this._mouseY) / space) - dir.y * backstep
 
-            // 链式候选优先：同句下一块从上一块链尾沿行轴延伸（含垂直向
-            // 折行备选），占满才退回焦点散布——阅读顺序由相邻性保持
+            // 链式候选优先：同句下一块从上一块链尾延伸。先直行，
+            // 碰壁（占位/靠边）就换方向在同点续排——字链长出折线；
+            // 另有小概率主动拐弯增加随机感。全败退回焦点散布
             const candidates = []
             if (state.tailX !== null) {
+              const altDirs = LINE_DIRECTIONS.filter(d => d !== dir)
+              for (let i = altDirs.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1))
+                ;[altDirs[i], altDirs[j]] = [altDirs[j], altDirs[i]]
+              }
+              const dirOrder = Math.random() < BEND_CHANCE ? [...altDirs, dir] : [dir, ...altDirs]
+              for (const d of dirOrder) {
+                candidates.push({ x: state.tailX, y: state.tailY, dir: d })
+              }
               const perpX = -dir.y
               const perpY = dir.x
               candidates.push(
-                { x: state.tailX, y: state.tailY },
-                { x: state.tailX + perpX, y: state.tailY + perpY },
-                { x: state.tailX - perpX, y: state.tailY - perpY }
+                { x: state.tailX + perpX, y: state.tailY + perpY, dir },
+                { x: state.tailX - perpX, y: state.tailY - perpY, dir }
               )
             }
-            candidates.push(...buildSpawnCandidates(nx, ny))
+            for (const c of buildSpawnCandidates(nx, ny)) {
+              candidates.push({ x: c.x, y: c.y, dir })
+            }
 
             let placed = false
             for (const candidate of candidates) {
-              const result = tryPlaceWord(candidate.x, candidate.y, lyric, dir)
+              const result = tryPlaceWord(candidate.x, candidate.y, lyric, candidate.dir)
               if (result) {
-                commitPlacement(lyric, state, result, candidate.x, candidate.y)
+                commitPlacement(lyric, state, result, candidate.x, candidate.y, candidate.dir)
                 placed = true
                 break
               }
@@ -464,7 +479,7 @@ export class CanvasManager {
                 for (let r = 0; r < rn; r += 1) {
                   const result = tryPlaceWord(nx + tx, ny + ty, lyric, dir)
                   if (result) {
-                    commitPlacement(lyric, state, result, nx + tx, ny + ty)
+                    commitPlacement(lyric, state, result, nx + tx, ny + ty, dir)
                     break hitcheck
                   }
 
@@ -488,7 +503,7 @@ export class CanvasManager {
               const ay = clamp(ny, Math.min(cy0, cy1 - dir.y * len), Math.max(cy0, cy1 - dir.y * len))
               const result = tryPlaceWord(ax, ay, lyric, dir, false)
               if (result) {
-                commitPlacement(lyric, state, result, ax, ay)
+                commitPlacement(lyric, state, result, ax, ay, dir)
               }
             }
           }
