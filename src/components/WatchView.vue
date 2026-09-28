@@ -1,5 +1,6 @@
 <template>
-  <!-- YTM /watch 播放页：左栏 封面+信息+操作+走带+进度，右栏 待播/歌词/相关 tab -->
+  <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
+       走带/进度/音量不重复渲染——底部播放条已覆盖 -->
   <div class="watch-view">
     <header class="watch-header">
       <button class="pixel-button watch-header-btn" @click="$emit('back')" title="返回上一页">← 返回</button>
@@ -28,74 +29,6 @@
 
         <div class="watch-actions">
           <button class="pixel-button watch-action" @click="shareSong" :disabled="!currentSong">🔗 分享歌曲</button>
-        </div>
-
-        <!-- 走带：YTM 顺序 随机/上一首/播放/下一首/循环 + 时间 + 音量 -->
-        <div class="watch-transport">
-          <button
-            class="watch-transport-btn"
-            :class="{ 'watch-transport-btn--active': shuffleOn }"
-            @click="$emit('toggle-shuffle')"
-            :title="shuffleOn ? '关闭随机播放' : '随机播放'"
-            :aria-label="shuffleOn ? '关闭随机播放' : '随机播放'"
-            :aria-pressed="shuffleOn"
-          >🔀</button>
-          <button class="watch-transport-btn" @click="$emit('previous-song')" title="上一首" aria-label="上一首">◀◀</button>
-          <button
-            class="watch-transport-btn watch-transport-btn--primary"
-            @click="$emit('toggle-play')"
-            :disabled="songSwitching"
-            :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-            :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-            :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-          >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
-          <button
-            class="watch-transport-btn"
-            @click="$emit('next-song')"
-            :disabled="atQueueEnd"
-            :class="{ 'opacity-40 cursor-not-allowed': atQueueEnd }"
-            :title="atQueueEnd ? '已是队列末尾' : '下一首'"
-            :aria-label="atQueueEnd ? '已是队列末尾' : '下一首'"
-          >▶▶</button>
-          <button
-            class="watch-transport-btn"
-            :class="{ 'watch-transport-btn--active': playMode !== 'list' }"
-            @click="$emit('toggle-repeat')"
-            :title="`循环：${playModeText}`"
-            :aria-label="`循环模式：${playModeText}`"
-            :aria-pressed="playMode !== 'list'"
-          >{{ playMode === 'single' ? '↻1' : (playMode === 'loop' ? '↻' : '→') }}</button>
-
-          <span class="watch-time">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
-
-          <div class="watch-volume">
-            <button
-              class="watch-transport-btn"
-              @click="$emit('toggle-mute')"
-              :title="volume === 0 ? '取消静音' : '静音'"
-              :aria-label="volume === 0 ? '取消静音' : '静音'"
-            >{{ volume === 0 ? '🔇' : '🔊' }}</button>
-            <input
-              :value="Number(volume)"
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              class="jirai-slider watch-volume-slider"
-              aria-label="音量"
-              @input="$emit('update-volume', Number($event.target.value))"
-            />
-          </div>
-        </div>
-
-        <div
-          ref="progressBar"
-          class="player-progress-bar watch-progress"
-          :class="{ 'player-progress-bar--dragging': seeking }"
-          @pointerdown="onSeekStart"
-        >
-          <div class="player-progress-fill" :style="{ '--p': progressPercentage }"></div>
-          <div class="player-progress-thumb" :style="{ left: progressPercentage + '%' }"></div>
         </div>
       </div>
 
@@ -297,9 +230,7 @@ export default {
   props: {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },
-    currentTime: { type: Number, default: 0 },
     duration: { type: Number, default: 0 },
-    volume: { type: Number, default: 80 },
     songSwitching: { type: Boolean, default: false },
     queue: { type: Array, default: () => [] },
     queueTitle: { type: String, default: '' },
@@ -309,22 +240,15 @@ export default {
     playbackError: { type: String, default: '' },
     durationWarning: { type: String, default: '' },
     tab: { type: String, default: 'queue' },
-    playMode: { type: String, default: 'list' },
-    playModeText: { type: String, default: '顺序' },
-    shuffleOn: { type: Boolean, default: false },
     autoplay: { type: Boolean, default: false }
   },
   emits: [
     'back', 'open-fullscreen',
-    'toggle-play', 'previous-song', 'next-song', 'seek-to',
-    'update-volume', 'toggle-mute', 'toggle-shuffle', 'toggle-repeat',
     'update:tab', 'update:autoplay',
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
     'play-song'
   ],
   setup(props, { emit }) {
-    const progressBar = ref(null)
-    const seeking = ref(false)
     const queueContainer = ref(null)
     const lyricContainer = ref(null)
     const dragIndex = ref(-1)
@@ -340,19 +264,6 @@ export default {
       props.currentSong?.al?.name || props.currentSong?.album?.name || ''
     )
 
-    const progressPercentage = computed(() =>
-      props.duration > 0
-        ? Math.max(0, Math.min(100, (props.currentTime / props.duration) * 100))
-        : 0
-    )
-
-    // 当前曲是队列最后一首且 list 模式：「下一首」无处可去——禁用而不是停播
-    const atQueueEnd = computed(() => {
-      if (!props.queue.length || !props.currentSong || props.playMode === 'loop') return false
-      const last = props.queue[props.queue.length - 1]
-      return String(last?.id) === String(props.currentSong.id)
-    })
-
     const songArtist = (song) =>
       (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/') || '未知艺人'
 
@@ -360,51 +271,6 @@ export default {
 
     const setTab = (t) => emit('update:tab', t)
     const jumpTo = (index) => emit('queue-jump', index)
-
-    // ── 进度条拖拽（与 BottomPlayer 同款的加固实现）──
-    const ratioFromEvent = (event) => {
-      const rect = progressBar.value?.getBoundingClientRect()
-      if (!rect || rect.width === 0) return null
-      return (event.clientX - rect.left) / rect.width
-    }
-
-    const onSeekStart = (event) => {
-      if (event.button !== undefined && event.button !== 0) return
-      const bar = progressBar.value
-      if (!bar) return
-      const pid = event.pointerId
-      seeking.value = true
-      const ratio = ratioFromEvent(event)
-      if (ratio !== null) emit('seek-to', ratio)
-      bar.setPointerCapture?.(pid)
-
-      const onMove = (e) => {
-        if (e.pointerId !== pid) return
-        const r = ratioFromEvent(e)
-        if (r !== null) emit('seek-to', r)
-      }
-      const onEnd = (e) => {
-        if (e?.pointerId !== undefined && e.pointerId !== pid) return
-        seeking.value = false
-        bar.removeEventListener('pointermove', onMove)
-        bar.removeEventListener('pointerup', onEnd)
-        bar.removeEventListener('pointercancel', onEnd)
-        bar.removeEventListener('lostpointercapture', onEnd)
-        window.removeEventListener('pointerup', onEnd)
-        window.removeEventListener('pointercancel', onEnd)
-        window.removeEventListener('blur', onEnd)
-        document.removeEventListener('visibilitychange', onVisibility)
-      }
-      const onVisibility = () => { if (document.hidden) onEnd() }
-      bar.addEventListener('pointermove', onMove)
-      bar.addEventListener('pointerup', onEnd)
-      bar.addEventListener('pointercancel', onEnd)
-      bar.addEventListener('lostpointercapture', onEnd)
-      window.addEventListener('pointerup', onEnd)
-      window.addEventListener('pointercancel', onEnd)
-      window.addEventListener('blur', onEnd)
-      document.addEventListener('visibilitychange', onVisibility)
-    }
 
     // ── 队列拖拽排序（YTM UP NEXT：握把按下后拖动实时换位）──
     const startDrag = (index, event) => {
@@ -512,23 +378,18 @@ export default {
     }
 
     return {
-      progressBar,
-      seeking,
       queueContainer,
       lyricContainer,
       dragIndex,
       coverUrl,
       artistText,
       albumText,
-      progressPercentage,
       songArtist,
       formatDuration,
-      atQueueEnd,
       formatTime,
       httpsCover,
       setTab,
       jumpTo,
-      onSeekStart,
       startDrag,
       relatedSongs,
       relatedLoading,
@@ -577,6 +438,7 @@ export default {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center; /* 走带已移除（底栏承担），信息面板垂直居中 */
   padding: 8px 8px 24px;
   text-align: center;
 }
@@ -626,109 +488,6 @@ export default {
 .watch-action {
   font-size: 12px;
   padding: 5px 14px;
-}
-
-.watch-transport {
-  margin-top: auto;
-  padding-top: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.watch-transport-btn {
-  width: 42px;
-  height: 42px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 17px;
-  color: var(--pixel-text);
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border, rgba(240, 179, 192, 0.6));
-  cursor: pointer;
-  transition: background 0.12s, transform 0.1s;
-}
-
-.watch-transport-btn:hover {
-  background: rgba(236, 72, 153, 0.15);
-}
-
-.watch-transport-btn:active {
-  transform: translate(1px, 1px);
-}
-
-.watch-transport-btn--primary {
-  width: 52px;
-  height: 52px;
-  font-size: 22px;
-  background: var(--pixel-accent-fg, #f472b6);
-  color: #fff;
-}
-
-.watch-transport-btn--active {
-  background: rgba(236, 72, 153, 0.25);
-  border-color: var(--pixel-accent-fg, #f472b6);
-}
-
-.watch-time {
-  font-size: 12px;
-  color: var(--pixel-text-dim);
-  white-space: nowrap;
-}
-
-.watch-volume {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.watch-volume .watch-transport-btn {
-  width: 34px;
-  height: 34px;
-  font-size: 14px;
-}
-
-.watch-volume-slider {
-  width: 90px;
-}
-
-.watch-progress {
-  position: relative;
-  width: 100%;
-  max-width: 720px;
-  height: 14px;
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-}
-
-.watch-progress .player-progress-fill {
-  position: relative;
-}
-
-/* 像素世界里按钮要有硬边框存在感——默认主题下 --pixel-border 深紫近乎隐形 */
-.watch-transport-btn {
-  border-color: var(--pixel-text-dim);
-}
-
-.watch-progress .player-progress-thumb {
-  position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  transform: translate(-50%, -50%);
-  background: var(--pixel-accent-fg, #f472b6);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s;
-}
-
-.watch-progress:hover .player-progress-thumb,
-.watch-progress.player-progress-bar--dragging .player-progress-thumb {
-  opacity: 1;
 }
 
 /* ── 右栏 ── */
@@ -924,10 +683,6 @@ export default {
 
   .watch-side-body {
     max-height: 60vh;
-  }
-
-  .watch-transport {
-    margin-top: 18px;
   }
 }
 </style>
