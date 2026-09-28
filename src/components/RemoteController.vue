@@ -12,6 +12,7 @@
         <img
           v-if="state.currentSong?.al?.picUrl || state.currentSong?.album?.picUrl"
           :src="httpsCover(state.currentSong?.al?.picUrl || state.currentSong?.album?.picUrl)"
+          :alt="state.currentSong?.name || '专辑封面'"
           class="rc-cover"
           :class="{ spinning: state.isPlaying }"
         />
@@ -29,6 +30,7 @@
         <input
           type="range"
           class="rc-slider"
+          aria-label="播放进度"
           :value="state.currentTime"
           :max="state.duration || 1"
           step="1"
@@ -44,11 +46,11 @@
 
       <!-- 控制按钮 -->
       <div class="rc-controls">
-        <button class="rc-btn" @click="send('prev')" title="上一首">⏮</button>
-        <button class="rc-btn rc-btn-main" @click="send(state.isPlaying ? 'pause' : 'play')" :title="state.isPlaying ? '暂停' : '播放'">
+        <button class="rc-btn" @click="send('prev')" title="上一首" aria-label="上一首">⏮</button>
+        <button class="rc-btn rc-btn-main" @click="send(state.isPlaying ? 'pause' : 'play')" :title="state.isPlaying ? '暂停' : '播放'" :aria-label="state.isPlaying ? '暂停' : '播放'">
           {{ state.isPlaying ? '⏸' : '▶' }}
         </button>
-        <button class="rc-btn" @click="send('next')" title="下一首">⏭</button>
+        <button class="rc-btn" @click="send('next')" title="下一首" aria-label="下一首">⏭</button>
       </div>
 
       <!-- 音量 -->
@@ -57,6 +59,7 @@
         <input
           type="range"
           class="rc-slider"
+          aria-label="音量"
           :value="state.volume"
           min="0"
           max="100"
@@ -310,6 +313,15 @@ onUnmounted(() => {
 
 <style scoped>
 .remote-controller {
+  --rc-bg: #0f0f0f;
+  --rc-surface: #222;
+  --rc-line: #333;
+  --rc-text: #fff;
+  --rc-text-2: #ddd;
+  --rc-dim: #888;
+  --rc-dim-2: #aaa;
+  --rc-accent: #e74c3c;
+  --rc-accent-dark: #c0392b;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -317,8 +329,8 @@ onUnmounted(() => {
   min-height: 100vh;
   min-height: 100dvh;
   padding: 24px 20px;
-  background: #0f0f0f;
-  color: #fff;
+  background: var(--rc-bg);
+  color: var(--rc-text);
   gap: 20px;
   box-sizing: border-box;
 }
@@ -328,14 +340,14 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  color: #888;
+  color: var(--rc-dim);
 }
 
 .rc-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #333;
-  border-top-color: #e74c3c;
+  border: 3px solid var(--rc-line);
+  border-top-color: var(--rc-accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -362,7 +374,7 @@ onUnmounted(() => {
 @keyframes rotate { to { transform: rotate(360deg); } }
 
 .rc-cover-placeholder {
-  background: #222;
+  background: var(--rc-surface);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -385,7 +397,7 @@ onUnmounted(() => {
 
 .rc-artist {
   font-size: 14px;
-  color: #888;
+  color: var(--rc-dim);
 }
 
 .rc-progress-wrap,
@@ -399,7 +411,7 @@ onUnmounted(() => {
 
 .rc-time {
   font-size: 12px;
-  color: #888;
+  color: var(--rc-dim);
   min-width: 36px;
   text-align: center;
 }
@@ -413,7 +425,7 @@ onUnmounted(() => {
   -webkit-appearance: none;
   height: 4px;
   border-radius: 2px;
-  background: #333;
+  background: var(--rc-line);
   outline: none;
   cursor: pointer;
 }
@@ -423,7 +435,7 @@ onUnmounted(() => {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #e74c3c;
+  background: var(--rc-accent);
   cursor: pointer;
 }
 
@@ -436,7 +448,7 @@ onUnmounted(() => {
 .rc-btn {
   background: none;
   border: none;
-  color: #fff;
+  color: var(--rc-text);
   font-size: 28px;
   cursor: pointer;
   padding: 8px;
@@ -452,13 +464,13 @@ onUnmounted(() => {
 .rc-retry {
   font-size: 15px;
   padding: 10px 24px;
-  background: #e74c3c;
+  background: var(--rc-accent);
   border-radius: 20px;
 }
 
 .rc-btn-main {
   font-size: 40px;
-  background: #e74c3c;
+  background: var(--rc-accent);
   width: 72px;
   height: 72px;
   display: flex;
@@ -467,7 +479,7 @@ onUnmounted(() => {
 }
 
 .rc-btn-main:active {
-  background: #c0392b;
+  background: var(--rc-accent-dark);
 }
 
 /* 待播队列 */
@@ -479,7 +491,7 @@ onUnmounted(() => {
 .rc-queue-title {
   font-size: 13px;
   font-weight: 600;
-  color: #aaa;
+  color: var(--rc-dim-2);
   margin-bottom: 8px;
 }
 
@@ -497,7 +509,7 @@ onUnmounted(() => {
   background: none;
   border: none;
   border-left: 3px solid transparent;
-  color: #ddd;
+  color: var(--rc-text-2);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
@@ -508,20 +520,20 @@ onUnmounted(() => {
 }
 
 .rc-queue-row--current {
-  border-left-color: #e74c3c;
-  color: #fff;
+  border-left-color: var(--rc-accent);
+  color: var(--rc-text);
 }
 
 .rc-queue-idx {
   width: 18px;
   flex-shrink: 0;
   font-size: 11px;
-  color: #888;
+  color: var(--rc-dim);
   text-align: center;
 }
 
 .rc-queue-row--current .rc-queue-idx {
-  color: #e74c3c;
+  color: var(--rc-accent);
 }
 
 .rc-queue-name {
@@ -536,7 +548,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   max-width: 40%;
   font-size: 11px;
-  color: #888;
+  color: var(--rc-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

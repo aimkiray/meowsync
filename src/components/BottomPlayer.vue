@@ -12,7 +12,7 @@
     >
       <div
         class="player-progress-fill"
-        :style="{ width: progressPercentage + '%' }"
+        :style="{ '--p': progressPercentage }"
       ></div>
       <div
         class="player-progress-thumb"
@@ -54,26 +54,30 @@
               class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
               :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'queue' }"
               title="待播队列"
+              aria-label="待播队列"
             >☰</button>
             <button
               @click="$emit('toggle-side-panel', 'lyrics')"
               class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
               :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'lyrics' }"
               title="歌词"
+              aria-label="歌词"
             >词</button>
-            <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏">
+            <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏" aria-label="全屏">
               <svg class="bottom-player__icon bottom-player__icon--mobile" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
               </svg>
             </button>
-            <button @click="$emit('previous-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center">◀◀</button>
+            <button @click="$emit('previous-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="上一首" aria-label="上一首">◀◀</button>
             <button
               @click="$emit('toggle-play')"
               :disabled="songSwitching"
               class="jirai-button-primary p-1 text-sm w-8 h-8 flex items-center justify-center"
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-            >{{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}</button>
-            <button @click="$emit('next-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center">▶▶</button>
+              :title="isPlaying ? '暂停' : '播放'"
+              :aria-label="isPlaying ? '暂停' : '播放'"
+            >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
+            <button @click="$emit('next-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="下一首" aria-label="下一首">▶▶</button>
             <span class="text-xs text-pink-300 ml-2 whitespace-nowrap max-[420px]:hidden">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
           </div>
         </div>
@@ -111,14 +115,16 @@
               <div class="flex items-center space-x-4 flex-shrink-0">
                 <!-- 播放控制 -->
                 <div class="flex items-center space-x-3">
-                  <button @click="$emit('previous-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center">◀◀</button>
+                  <button @click="$emit('previous-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center" title="上一首" aria-label="上一首">◀◀</button>
                   <button
                     @click="$emit('toggle-play')"
                     :disabled="songSwitching"
                     class="jirai-button-primary p-3 text-xl w-12 h-12 flex items-center justify-center"
                     :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-                  >{{ songSwitching ? '⏳' : (isPlaying ? '■' : '▶') }}</button>
-                  <button @click="$emit('next-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center">▶▶</button>
+                    :title="isPlaying ? '暂停' : '播放'"
+                    :aria-label="isPlaying ? '暂停' : '播放'"
+                  >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
+                  <button @click="$emit('next-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center" title="下一首" aria-label="下一首">▶▶</button>
                 </div>
 
                 <!-- 时间 + 音量 + 辅助控制（YTM 右簇顺序） -->
@@ -130,6 +136,7 @@
                       @click="$emit('toggle-mute')"
                       class="jirai-button bottom-player__icon-button p-1 w-8 h-8 flex items-center justify-center"
                       :title="volume === 0 ? '取消静音' : '静音'"
+                      :aria-label="volume === 0 ? '取消静音' : '静音'"
                     >
                       <svg v-if="volume === 0" class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M3 9v6h4l5 5V4L7 9H3zm13.59 3l2.7-2.7-1.41-1.42-2.71 2.71-2.7-2.71-1.42 1.42 2.71 2.7-2.71 2.71 1.42 1.41 2.7-2.7 2.71 2.7 1.41-1.41z"/>
@@ -145,6 +152,7 @@
                       max="100"
                       step="1"
                       class="w-20 jirai-slider"
+                      aria-label="音量"
                       @input="$emit('update-volume', Number($event.target.value))"
                     />
                   </div>
@@ -154,26 +162,32 @@
                     class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
                     :class="{ 'bottom-player__toggle--active': playMode !== 'list' }"
                     :title="`循环：${playModeText}`"
+                    :aria-label="`循环模式：${playModeText}`"
+                    :aria-pressed="playMode !== 'list'"
                   >{{ playMode === 'single' ? '↻1' : (playMode === 'loop' ? '↻' : '→') }}</button>
                   <button
                     @click="$emit('toggle-shuffle')"
                     class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
                     :class="{ 'bottom-player__toggle--active': shuffleOn }"
                     :title="shuffleOn ? '关闭随机播放' : '随机播放'"
+                    :aria-label="shuffleOn ? '关闭随机播放' : '随机播放'"
+                    :aria-pressed="shuffleOn"
                   >🔀</button>
                   <button
                     @click="$emit('toggle-side-panel', 'queue')"
                     class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
                     :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'queue' }"
                     title="待播队列"
+                    aria-label="待播队列"
                   >☰</button>
                   <button
                     @click="$emit('toggle-side-panel', 'lyrics')"
                     class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
                     :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'lyrics' }"
                     title="歌词"
+                    aria-label="歌词"
                   >词</button>
-                  <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏">
+                  <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏" aria-label="全屏">
                     <svg class="bottom-player__icon bottom-player__icon--desktop" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
                     </svg>

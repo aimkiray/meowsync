@@ -62,7 +62,15 @@
           'opacity-50 grayscale': isVipSong(song)
         }"
       >
-        <div @click="$emit('play-song', song)" class="flex items-center space-x-3">
+        <div
+          @click="$emit('play-song', song)"
+          @keydown.enter="$emit('play-song', song)"
+          @keydown.space.prevent="$emit('play-song', song)"
+          class="flex items-center space-x-3"
+          tabindex="0"
+          role="button"
+          :aria-label="`播放 ${song.name}`"
+        >
           <!-- 曲序号：悬停时换成播放符号（YTM 行首交互） -->
           <span class="song-row-index">
             <span class="song-row-index-num">{{ (currentPage - 1) * pageSize + index + 1 }}</span>
@@ -303,6 +311,13 @@
   opacity: 1;
 }
 
+/* 触屏无 hover——隐形但可点的 ⋯ 键会误触，常显 */
+@media (hover: none) {
+  .song-menu-btn {
+    opacity: 1;
+  }
+}
+
 .song-rows {
   scrollbar-gutter: stable;
 }
@@ -392,6 +407,7 @@ import { useTheme } from '../composables/useTheme'
 import { formatDuration } from '../lib/format'
 import { isVipSong, isLocalPlaylistId } from '../lib/song'
 import { shareOrCopy } from '../lib/share'
+import { toast, pixelConfirm } from '../lib/feedback'
 
 export default {
   name: 'SongList',
@@ -567,8 +583,8 @@ export default {
         text: `来听听这首歌：${song.name} - ${artistNames}`,
         url: shareUrl
       })
-      if (result === 'copied') alert('分享链接已复制到剪贴板！')
-      else if (result === 'failed') alert('分享失败，请手动复制链接')
+      if (result === 'copied') toast('分享链接已复制到剪贴板', 'success')
+      else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
     // 服务端错误统一返回 { code, message }，优先取 message 展示
@@ -591,7 +607,7 @@ export default {
         await musicApi.downloadSong(song, bitrate)
       } catch (error) {
         console.error('下载失败:', error)
-        alert('下载失败: ' + extractErrorMessage(error))
+        toast('下载失败: ' + extractErrorMessage(error), 'error')
       } finally {
         downloadingStates.value[song.id] = false
       }
@@ -649,7 +665,7 @@ export default {
         return
       }
       if (!props.selectedPlaylist) {
-        alert('请先选择歌单')
+        toast('请先选择歌单', 'error')
         closeDownloadMenu()
         return
       }
@@ -664,7 +680,7 @@ export default {
 
       if (isDownloaded) {
         // 删除已下载文件
-        if (!confirm(`确定要删除 "${song.name}" 的已下载文件吗？`)) {
+        if (!await pixelConfirm(`确定要删除 "${song.name}" 的已下载文件吗？`, { confirmText: '删除', danger: true })) {
           closeDownloadMenu()
           return
         }
@@ -673,10 +689,10 @@ export default {
           serverDownloadingStates.value[song.id] = true
           await downloadsApi.deleteSongDownload(ownerPlaylistId, song.id)
           if (stillCurrent()) serverDownloadedStates.value[song.id] = false
-          alert('删除成功！')
+          toast('删除成功', 'success')
         } catch (error) {
           console.error('删除失败:', error)
-          alert('删除失败: ' + extractErrorMessage(error))
+          toast('删除失败: ' + extractErrorMessage(error), 'error')
         } finally {
           if (stillCurrent()) {
             serverDownloadingStates.value[song.id] = false
@@ -730,17 +746,17 @@ export default {
             // 用户已切走歌单：静默结束（状态不属于当前视图，不该弹窗打扰）
             if (!stillCurrent()) return
             if (terminal !== 'completed') {
-              // 非失败语义的提示单独弹窗——混进"下载失败:"前缀是误导
-              alert('下载仍在后台进行中，可稍后在下载管理里查看结果')
+              // 非失败语义的提示单独提示——混进"下载失败:"前缀是误导
+              toast('下载仍在后台进行中，可稍后在下载管理里查看结果')
               return
             }
           }
           if (!stillCurrent()) return // 幂等命中也走同一出口：视图已换即静默
           serverDownloadedStates.value[song.id] = true
-          alert('下载成功！')
+          toast('下载成功', 'success')
         } catch (error) {
           console.error('下载失败:', error)
-          if (stillCurrent()) alert('下载失败: ' + extractErrorMessage(error))
+          if (stillCurrent()) toast('下载失败: ' + extractErrorMessage(error), 'error')
         } finally {
           if (stillCurrent()) {
             serverDownloadingStates.value[song.id] = false

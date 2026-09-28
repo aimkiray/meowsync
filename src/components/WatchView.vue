@@ -37,20 +37,32 @@
             :class="{ 'watch-transport-btn--active': shuffleOn }"
             @click="$emit('toggle-shuffle')"
             :title="shuffleOn ? '关闭随机播放' : '随机播放'"
+            :aria-label="shuffleOn ? '关闭随机播放' : '随机播放'"
+            :aria-pressed="shuffleOn"
           >🔀</button>
-          <button class="watch-transport-btn" @click="$emit('previous-song')" title="上一首">◀◀</button>
+          <button class="watch-transport-btn" @click="$emit('previous-song')" title="上一首" aria-label="上一首">◀◀</button>
           <button
             class="watch-transport-btn watch-transport-btn--primary"
             @click="$emit('toggle-play')"
             :disabled="songSwitching"
             :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
+            :aria-label="isPlaying ? '暂停' : '播放'"
           >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
-          <button class="watch-transport-btn" @click="$emit('next-song')" title="下一首">▶▶</button>
+          <button
+            class="watch-transport-btn"
+            @click="$emit('next-song')"
+            :disabled="atQueueEnd"
+            :class="{ 'opacity-40 cursor-not-allowed': atQueueEnd }"
+            :title="atQueueEnd ? '已是队列末尾' : '下一首'"
+            :aria-label="atQueueEnd ? '已是队列末尾' : '下一首'"
+          >▶▶</button>
           <button
             class="watch-transport-btn"
             :class="{ 'watch-transport-btn--active': playMode !== 'list' }"
             @click="$emit('toggle-repeat')"
             :title="`循环：${playModeText}`"
+            :aria-label="`循环模式：${playModeText}`"
+            :aria-pressed="playMode !== 'list'"
           >{{ playMode === 'single' ? '↻1' : (playMode === 'loop' ? '↻' : '→') }}</button>
 
           <span class="watch-time">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
@@ -60,6 +72,7 @@
               class="watch-transport-btn"
               @click="$emit('toggle-mute')"
               :title="volume === 0 ? '取消静音' : '静音'"
+              :aria-label="volume === 0 ? '取消静音' : '静音'"
             >{{ volume === 0 ? '🔇' : '🔊' }}</button>
             <input
               :value="Number(volume)"
@@ -68,6 +81,7 @@
               max="100"
               step="1"
               class="jirai-slider watch-volume-slider"
+              aria-label="音量"
               @input="$emit('update-volume', Number($event.target.value))"
             />
           </div>
@@ -79,13 +93,17 @@
           :class="{ 'player-progress-bar--dragging': seeking }"
           @pointerdown="onSeekStart"
         >
-          <div class="player-progress-fill" :style="{ width: progressPercentage + '%' }"></div>
+          <div class="player-progress-fill" :style="{ '--p': progressPercentage }"></div>
           <div class="player-progress-thumb" :style="{ left: progressPercentage + '%' }"></div>
         </div>
       </div>
 
       <!-- ══ 右栏：待播 / 歌词 / 相关 ══ -->
       <aside class="watch-side">
+        <!-- 播放错误/警告在 tab 条上方——全 tab 共享可见，不能藏在歌词页里静默失败 -->
+        <div v-if="durationWarning" class="watch-banner watch-banner--warn" role="status">⚠️ {{ durationWarning }}</div>
+        <div v-if="playbackError" class="watch-banner watch-banner--error" role="alert">❌ {{ playbackError }}</div>
+
         <div class="panel-tabs watch-tabs" role="tablist">
           <button
             class="panel-tab"
@@ -131,6 +149,7 @@
               :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--dragging': dragIndex === index }"
               @click="jumpTo(index)"
               @keydown.enter="jumpTo(index)"
+              @keydown.space.prevent="jumpTo(index)"
               tabindex="0"
               role="button"
             >
@@ -197,9 +216,6 @@
         >
           <div v-if="!currentSong" class="watch-empty">选择一首歌开始播放喵~</div>
           <template v-else>
-            <div v-if="durationWarning" class="watch-banner watch-banner--warn">⚠️ {{ durationWarning }}</div>
-            <div v-if="playbackError" class="watch-banner watch-banner--error">❌ {{ playbackError }}</div>
-
             <div v-if="songSwitching" class="watch-empty">
               <div class="pixel-loading mx-auto mb-4"></div>
               <p>正在切换歌曲喵...</p>
@@ -243,6 +259,7 @@
             class="queue-row watch-related-row"
             @click="$emit('play-song', song)"
             @keydown.enter="$emit('play-song', song)"
+            @keydown.space.prevent="$emit('play-song', song)"
             tabindex="0"
             role="button"
             :title="`播放 ${song.name}`"
@@ -270,6 +287,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music'
 import { shareOrCopy } from '../lib/share'
+import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 
@@ -326,6 +344,13 @@ export default {
         ? Math.max(0, Math.min(100, (props.currentTime / props.duration) * 100))
         : 0
     )
+
+    // 当前曲是队列最后一首且 list 模式：「下一首」无处可去——禁用而不是停播
+    const atQueueEnd = computed(() => {
+      if (!props.queue.length || !props.currentSong || props.playMode === 'loop') return false
+      const last = props.queue[props.queue.length - 1]
+      return String(last?.id) === String(props.currentSong.id)
+    })
 
     const songArtist = (song) =>
       (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/') || '未知艺人'
@@ -481,8 +506,8 @@ export default {
         text: `来听听这首歌：${song.name} - ${artistText.value}`,
         url: shareUrl
       })
-      if (result === 'copied') alert('分享链接已复制到剪贴板！')
-      else if (result === 'failed') alert('分享失败，请手动复制链接')
+      if (result === 'copied') toast('分享链接已复制到剪贴板', 'success')
+      else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
     return {
@@ -497,6 +522,7 @@ export default {
       progressPercentage,
       songArtist,
       formatDuration,
+      atQueueEnd,
       formatTime,
       httpsCover,
       setTab,
@@ -682,6 +708,11 @@ export default {
   position: relative;
 }
 
+/* 像素世界里按钮要有硬边框存在感——默认主题下 --pixel-border 深紫近乎隐形 */
+.watch-transport-btn {
+  border-color: var(--pixel-text-dim);
+}
+
 .watch-progress .player-progress-thumb {
   position: absolute;
   top: 50%;
@@ -810,15 +841,30 @@ export default {
 }
 
 .watch-banner--warn {
-  background: rgba(254, 240, 138, 0.25);
+  background: rgba(234, 179, 8, 0.15);
   border-color: #eab308;
-  color: #a16207;
+  color: #fde68a;
 }
 
 .watch-banner--error {
-  background: rgba(254, 202, 202, 0.25);
+  background: rgba(239, 68, 68, 0.15);
   border-color: #ef4444;
+  color: #fca5a5;
+}
+
+/* retro 浅色主题：横幅文字要压深才达标 */
+:root[data-theme="pixel-retro"] .watch-banner--warn {
+  color: #a16207;
+}
+
+:root[data-theme="pixel-retro"] .watch-banner--error {
   color: #b91c1c;
+}
+
+.watch-autoplay input[type="checkbox"] {
+  accent-color: var(--pixel-accent-fg, #f472b6);
+  width: 14px;
+  height: 14px;
 }
 
 .watch-lyric-list {
