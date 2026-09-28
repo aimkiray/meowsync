@@ -143,14 +143,14 @@ export class CanvasManager {
       this._px += Math.cos(this._driftAngle) * this._speed * dt
       this._py += Math.sin(this._driftAngle) * this._speed * dt
 
-      // 相机弹簧牵引：越出安全区的量按指数平滑回拉（~4/s 收敛），
+      // 相机弹簧牵引：越出安全区的量按指数平滑回拉（~2.5/s 收敛），
       // 视觉上是被轻轻推回而非硬拽；冲出屏幕硬边才瞬时钳制兜底
       if (this._focusCell) {
         const space = this._space
         const pad = space * VIEW_MARGIN_CELLS
         const fx = this._px + this._focusCell.x * space + space / 2
         const fy = this._py + this._focusCell.y * space + space / 2
-        const ease = 1 - Math.exp(-dt * 4)
+        const ease = 1 - Math.exp(-dt * 2.5)
         this._px += (clamp(fx, pad, this._stw - pad) - fx) * ease
         this._py += (clamp(fy, pad, this._sth - pad) - fy) * ease
         const edge = space * 0.3
