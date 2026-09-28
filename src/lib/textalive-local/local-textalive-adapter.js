@@ -362,15 +362,31 @@ function mergePunctuationSegments(segments) {
   }, [])
 }
 
+// 归并只在同文种内进行：拉丁词与 CJK 直接 join 会产生 "you我的" 这种
+// 无空格粘连，先把分组切成同文种 run，再在 run 内按步数上限归并
+const isLatinGroup = (group) => /[A-Za-z0-9]/.test(group)
+
 function limitRevealSteps(groups) {
   if (groups.length <= MAX_REVEAL_STEPS) {
     return groups
   }
 
+  const runs = []
+  for (const group of groups) {
+    const last = runs[runs.length - 1]
+    if (last && isLatinGroup(last[0]) === isLatinGroup(group)) {
+      last.push(group)
+    } else {
+      runs.push([group])
+    }
+  }
+
   const merged = []
   const mergeSize = Math.ceil(groups.length / MAX_REVEAL_STEPS)
-  for (let i = 0; i < groups.length; i += mergeSize) {
-    merged.push(groups.slice(i, i + mergeSize).join(''))
+  for (const run of runs) {
+    for (let i = 0; i < run.length; i += mergeSize) {
+      merged.push(run.slice(i, i + mergeSize).join(''))
+    }
   }
   return merged
 }
