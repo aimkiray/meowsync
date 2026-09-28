@@ -1,5 +1,5 @@
 <template>
-  <div class="fullscreen-player fixed inset-0 z-[70]">
+  <div class="fullscreen-player fixed inset-0 z-[var(--z-fullscreen)]">
     <TextAliveLyricCanvas
       class="fullscreen-player__canvas"
       :lyrics="lyrics"

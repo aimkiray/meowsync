@@ -197,7 +197,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 9999;
+  z-index: var(--z-overlay);
   background: transparent;
 }
 
@@ -208,7 +208,7 @@
   border: 1px solid #c084fc;
   border-radius: 0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  z-index: 10000;
+  z-index: var(--z-menu);
   min-width: 140px;
   overflow: hidden;
 }

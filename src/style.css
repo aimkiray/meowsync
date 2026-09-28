@@ -1,7 +1,5 @@
-/* Google Fonts 导入 */
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
+/* Google Fonts 经 index.html <link> 加载（@import 阻塞渲染）；
+   Silkscreen 已从依赖中移除（从未使用） */
 
 /* Fusion Pixel 字体定义 */
 @font-face {
@@ -38,6 +36,11 @@
   --pixel-text-dim: #cccccc;
   --pixel-dark: #000000;
   --pixel-highlight: rgba(255, 255, 255, 0.3);
+  /* 层级刻度：全屏播放器 < 底部播放器 < 点击捕手 < 悬浮菜单 */
+  --z-fullscreen: 70;
+  --z-player: 900;
+  --z-overlay: 950;
+  --z-menu: 1000;
 }
 
 /* 像素风格主题 - 用户指定的4色配色 */
@@ -62,20 +65,8 @@
 @tailwind utilities;
 
 /* 4色配色方案背景色覆盖，仅在pixel-retro主题下生效 */
-:root[data-theme="pixel-retro"] .bg-pink-900 {
-  background-color: rgba(120, 90, 100, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .bg-gray-900 {
-  background-color: rgba(80, 60, 70, 0.9) !important;
-}
-
 :root[data-theme="pixel-retro"] .bg-pink-950 {
   background-color: rgba(100, 70, 80, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .bg-pink-800\/20 {
-  background-color: rgba(240, 179, 192, 0.18) !important; /* 20% * 90% = 18% */
 }
 
 :root[data-theme="pixel-retro"] .bg-red-600 {
@@ -120,10 +111,6 @@
 
 :root[data-theme="pixel-retro"] .hover\:bg-pink-500:hover {
   background-color: rgba(240, 179, 192, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:bg-pink-950:hover {
-  background-color: rgba(100, 70, 80, 0.9) !important;
 }
 
 :root[data-theme="pixel-retro"] .hover\:bg-gray-600:hover {
@@ -322,9 +309,43 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .playing-animation {
+  html {
+    scroll-behavior: auto;
+  }
+  .playing-animation,
+  .play-button::before,
+  .lyric-active,
+  .glow-text {
     animation: none;
   }
+}
+
+/* 平滑滚动（锚点/程序化 scrollIntoView 都受益） */
+html {
+  scroll-behavior: smooth;
+}
+
+/* 键盘焦点可见性（像素风焦点环——方块 outline 贴合 8bit 语言） */
+.pixel-button:focus-visible,
+.jirai-button:focus-visible,
+.jirai-button-primary:focus-visible,
+.play-button:focus-visible,
+.jirai-slider:focus-visible,
+.pixel-volume:focus-visible,
+.music-card:focus-visible {
+  outline: 2px solid var(--pixel-secondary);
+  outline-offset: 2px;
+}
+
+:root[data-theme="pixel-retro"] .pixel-button:focus-visible,
+:root[data-theme="pixel-retro"] .jirai-button:focus-visible,
+:root[data-theme="pixel-retro"] .jirai-button-primary:focus-visible,
+:root[data-theme="pixel-retro"] .play-button:focus-visible,
+:root[data-theme="pixel-retro"] .jirai-slider:focus-visible,
+:root[data-theme="pixel-retro"] .pixel-volume:focus-visible,
+:root[data-theme="pixel-retro"] .music-card:focus-visible {
+  outline: 2px solid var(--pixel-primary);
+  outline-offset: 2px;
 }
 
 /* 歌曲列表：分页按钮 */
@@ -459,6 +480,7 @@ body {
 @media (min-width: 1024px) {
   .desktop-fullscreen {
     height: 100vh;
+    height: 100dvh; /* iOS Safari 视口高度抖动修复 */
     overflow: hidden;
   }
   
@@ -859,10 +881,6 @@ body {
 }
 
 /* 隐藏滚动条但保持滚动功能 */
-body {
-  overflow-x: hidden;
-}
-
 body::-webkit-scrollbar {
   width: 0px;
   background: transparent;
@@ -882,7 +900,7 @@ body::-webkit-scrollbar {
   left: 0 !important;
   right: 0 !important;
   width: 100vw !important;
-  z-index: 9999 !important;
+  z-index: var(--z-player) !important;
 }
 
 /* 像素风格主题下的底部播放器样式 */
@@ -917,7 +935,7 @@ body::-webkit-scrollbar {
   box-shadow: 
     1px 1px 0px var(--pixel-dark),
     inset 1px 1px 0 rgba(0, 0, 0, 0.2);
-  transform: translateY(0px);
+  transform: translate(1px, 1px); /* 与按钮一致的按压缩进手感 */
   background: var(--pixel-secondary);
 }
 
@@ -1018,11 +1036,6 @@ body::-webkit-scrollbar {
   border-radius: 0;
   box-shadow: inset 1px 1px 0 var(--pixel-highlight);
   image-rendering: pixelated;
-}
-
-@keyframes progressFlow {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
 }
 
 /* 8bit歌词样式 */
@@ -1127,11 +1140,6 @@ body::-webkit-scrollbar {
       4px 4px 0px rgba(0, 0, 0, 0.5),
       0 0 8px var(--pixel-secondary);
   }
-}
-
-@keyframes titleFlow {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
 }
 
 /* pixel音量控制 */
@@ -1268,17 +1276,6 @@ body::-webkit-scrollbar {
   }
   100% { 
     transform: translate(-50%, -50%) rotate(360deg);
-  }
-}
-
-@keyframes pixelCorePulse {
-  0% { 
-    transform: translate(-50%, -50%) scale(0.5);
-    opacity: 0.7;
-  }
-  100% { 
-    transform: translate(-50%, -50%) scale(1.2);
-    opacity: 1;
   }
 }
 
