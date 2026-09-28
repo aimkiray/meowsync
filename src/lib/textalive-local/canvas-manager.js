@@ -16,7 +16,6 @@ const LINE_DIRECTIONS = [
   { x: 0, y: 1 },
   { x: 1, y: 1 }
 ]
-const GLYPH_SLIDE_IN_CELLS = 0.55
 // 可视区安全边距（格）：歌词锚点与吐字头都约束在屏幕内缩这个范围内
 const VIEW_MARGIN_CELLS = 0.8
 
@@ -548,23 +547,13 @@ export class CanvasManager {
             const introProgress = clamp((position - timing.startTime) / Math.max(introDuration, 1), 0, 1)
             const easedIntro = this._easeOutCubic(introProgress)
             const settleProgress = clamp((position - lyric.endTime) / LYRIC_PERSIST_MS, 0, 1)
-            const settledAlpha = 1 - settleProgress * 0.82
-            const scale = 0.82 + 0.18 * easedIntro
-            const alpha = (0.42 + 0.58 * easedIntro) * settledAlpha
-            // 吐字：单字从行轴反方向滑入落位——像被逐字"吐"出来，
-            // 阅读顺序由滑入方向显式表达，斜排也能跟上
-            const dir = lyric.dir || LINE_DIRECTIONS[0]
-            const slide = (1 - easedIntro) * space * GLYPH_SLIDE_IN_CELLS
-            const fontSize = space * 0.5 * scale
+            // 淡入淡出：入场 alpha 0→1，存续尾段整体渐隐到 0
+            const alpha = easedIntro * (1 - settleProgress)
+            const fontSize = space * 0.5
 
             ctx.save()
             ctx.globalAlpha = alpha
-            ctx.translate(
-              px - dir.x * slide,
-              py - dir.y * slide + fontSize * 0.37
-            )
-            // 微旋转收敛：交替 ±，弱化机械感
-            ctx.rotate((1 - easedIntro) * 0.18 * (g % 2 ? 1 : -1))
+            ctx.translate(px, py + fontSize * 0.37)
             ctx.font = `bold ${fontSize}px Fusion Pixel, Noto Sans SC, sans-serif`
             ctx.fillText(glyph, 0, 0)
             ctx.restore()
