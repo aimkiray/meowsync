@@ -15,25 +15,30 @@
         <p class="playlist-hero-sub">
           {{ selectedPlaylist.creator?.nickname || '神秘创建者' }} · {{ selectedPlaylist.trackCount || songs.length }} 首
         </p>
-      </div>
-      <div class="playlist-hero-actions">
-        <button
-          @click="$emit('toggle-play-mode')"
-          class="text-xs px-2 py-1 border transition-colors bg-pink-600 text-white border-pink-400 hover:bg-pink-500"
-          style="border-radius: 0;"
-          :title="playModeText"
-        >
-          {{ playModeText }}
-        </button>
-        <button
-          @click="$emit('toggle-vip-songs')"
-          class="text-xs px-2 py-1 border transition-colors"
-          :class="showVipSongs ? 'bg-pink-500 text-white border-pink-400' : 'bg-gray-700 text-gray-300 border-gray-500 hover:bg-gray-600'"
-          style="border-radius: 0;"
-          title="切换VIP歌曲显示"
-        >
-          {{ showVipSongs ? '隐藏VIP' : '显示VIP' }}
-        </button>
+        <!-- YTM hero 主按钮组：播放全部 + 随机；VIP 过滤收敛为次级开关 -->
+        <div class="playlist-hero-actions">
+          <button
+            @click="$emit('play-all')"
+            class="jirai-button-primary text-sm px-4 py-2 flex items-center gap-1"
+            style="border-radius: 0;"
+            title="播放全部"
+          >▶ 播放</button>
+          <button
+            @click="$emit('play-shuffle')"
+            class="jirai-button text-sm px-4 py-2"
+            style="border-radius: 0;"
+            title="随机播放"
+          >🔀 随机</button>
+          <button
+            @click="$emit('toggle-vip-songs')"
+            class="text-xs px-2 py-1 border transition-colors"
+            :class="showVipSongs ? 'bg-pink-500 text-white border-pink-400' : 'bg-gray-700 text-gray-300 border-gray-500 hover:bg-gray-600'"
+            style="border-radius: 0;"
+            title="切换VIP歌曲显示"
+          >
+            {{ showVipSongs ? '隐藏VIP' : '显示VIP' }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -49,15 +54,20 @@
 
     <div v-else class="flex-1 min-h-0 overflow-y-auto song-rows">
       <div
-        v-for="song in paginatedSongs"
+        v-for="(song, index) in paginatedSongs"
         :key="song.id"
         class="music-card cursor-pointer p-3 jirai-card transition-all w-full relative group"
         :class="{
-          'playing-song': currentSong?.id === song.id,
+          'playing-song': isCurrent(song),
           'opacity-50 grayscale': isVipSong(song)
         }"
       >
         <div @click="$emit('play-song', song)" class="flex items-center space-x-3">
+          <!-- 曲序号：悬停时换成播放符号（YTM 行首交互） -->
+          <span class="song-row-index">
+            <span class="song-row-index-num">{{ (currentPage - 1) * pageSize + index + 1 }}</span>
+            <span class="song-row-index-play">▶</span>
+          </span>
           <div class="relative">
             <img
               v-if="song.al?.picUrl || song.album?.picUrl"
@@ -71,13 +81,13 @@
               class="w-12 h-12 border-2 border-pink-400 flex items-center justify-center text-pink-300"
               style="border-radius: 0;"
             >♪</div>
-            <div v-if="currentSong?.id === song.id && isPlaying" class="absolute inset-0 flex items-center justify-center">
+            <div v-if="isCurrent(song) && isPlaying" class="absolute inset-0 flex items-center justify-center">
               <div class="text-pink-300 text-sm animate-pulse flex items-center justify-center">♡</div>
             </div>
           </div>
           <div class="flex-1 min-w-0">
             <h4 class="font-medium truncate flex items-center"
-              :class="currentSong?.id === song.id ? 'text-pink-500 font-bold' : 'text-pink-300'"
+              :class="isCurrent(song) ? 'text-pink-500 font-bold' : 'text-pink-300'"
             >
               {{ song.name }}
               <span v-if="isVipSong(song)" class="ml-2 text-xs bg-yellow-500 text-black px-1 rounded">VIP</span>
@@ -86,30 +96,21 @@
               {{ song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') }}
             </p>
           </div>
-          <div class="text-xs text-gray-400">
+          <div class="text-xs text-gray-400 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
             {{ formatDuration(song.dt || song.duration) }}
           </div>
         </div>
 
-        <!-- 操作按钮组 - 右上角 -->
+        <!-- 操作按钮组 - 右上角：合并为 YTM 式 ⋯ 溢出菜单，悬停/聚焦时露出 -->
         <div class="absolute top-0 right-0 flex">
-          <!-- 分享按钮 -->
           <button
-            class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
-            @click.stop="shareSong(song)"
-            title="分享歌曲"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M9 15H8v-1H7v-1h1v-1h1v-1h1v-1h1V9H8V7h7v7h-2v-3h-1v1h-1v1h-1v1H9m9 6H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1m-1-1v-1h1V5h-1V4H5v1H4v12h1v1Z"/></svg>
-          </button>
-
-          <!-- 下载按钮 -->
-          <button
-            class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
+            class="song-menu-btn p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
             @click.stop="toggleDownloadMenu(song.id, $event)"
-            :disabled="downloadingStates[song.id]"
-            title="下载歌曲"
+            title="更多操作"
+            aria-label="更多操作"
+            aria-haspopup="menu"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 22 22"><path fill="currentColor" d="M15 21H8v-1H7v-1H6V3h1V2h1V1h4v1h1v1h1v14h-1v1h-3v-1H9V5h2v11h1V4h-1V3H9v1H8v14h1v1h5v-1h1V5h2v14h-1v1h-1Z"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 22 22"><path fill="currentColor" d="M10 6h2v2h-2V6zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z"/></svg>
           </button>
         </div>
       </div>
@@ -140,17 +141,50 @@
       >
         <div
           class="download-menu"
+          role="menu"
           :style="getMenuPosition(showDownloadMenu)"
           @click.stop
         >
           <div class="download-option download-option-header">
-            下载选项
+            {{ menuSong?.name || '歌曲操作' }}
+          </div>
+
+          <!-- YTM 行内 ⋯ 菜单：队列操作与分享/下载合一 -->
+          <div
+            class="download-option"
+            role="menuitem"
+            tabindex="0"
+            @click="playNextFromMenu"
+            @keydown.enter="playNextFromMenu"
+          >
+            ⏭ 下一首播放
+          </div>
+          <div
+            class="download-option"
+            role="menuitem"
+            tabindex="0"
+            @click="addToQueueFromMenu"
+            @keydown.enter="addToQueueFromMenu"
+          >
+            📋 加入队列末尾
+          </div>
+          <div
+            class="download-option"
+            role="menuitem"
+            tabindex="0"
+            @click="shareFromMenu"
+            @keydown.enter="shareFromMenu"
+          >
+            🔗 分享歌曲
           </div>
 
           <!-- 获取源文件（浏览器下载）。菜单跨分页时 paginatedSongs 里找不到目标，必须查全量 props.songs -->
           <div
             class="download-option"
+            role="menuitem"
+            tabindex="0"
             @click="downloadSongDirect(menuSong, 320000)"
+            @keydown.enter="downloadSongDirect(menuSong, 320000)"
           >
             📄 获取源文件 (320k)
           </div>
@@ -160,7 +194,10 @@
           <div
             v-if="!isSingleSongPlaylist && selectedPlaylist"
             class="download-option"
+            role="menuitem"
+            tabindex="0"
             @click="toggleServerDownload(menuSong)"
+            @keydown.enter="toggleServerDownload(menuSong)"
           >
             <span v-if="serverDownloadingStates[showDownloadMenu]">⏳ 处理中...</span>
             <span v-else-if="serverDownloadedStates[showDownloadMenu]">🗑️ 删除已下载文件</span>
@@ -189,8 +226,8 @@
 }
 
 .playlist-hero-cover {
-  width: 64px;
-  height: 64px;
+  width: 112px;
+  height: 112px;
   object-fit: cover;
   border: 2px solid #f472b6;
   flex-shrink: 0;
@@ -226,8 +263,44 @@
 
 .playlist-hero-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  align-items: center;
+}
+
+/* 行首序号：常态显示数字，悬停换 ▶（YTM 同款） */
+.song-row-index {
+  width: 24px;
   flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--pixel-text-dim);
+  position: relative;
+}
+
+.song-row-index-play {
+  display: none;
+  color: var(--pixel-accent-fg, #f472b6);
+}
+
+.music-card:hover .song-row-index-num {
+  display: none;
+}
+
+.music-card:hover .song-row-index-play {
+  display: inline;
+}
+
+/* ⋯ 菜单键：悬停/聚焦才露出，常显时保持行面干净（键盘可达性保留 focus-visible） */
+.song-menu-btn {
+  opacity: 0;
+}
+
+.music-card:hover .song-menu-btn,
+.song-menu-btn:focus-visible,
+.music-card:focus-within .song-menu-btn {
+  opacity: 1;
 }
 
 .song-rows {
@@ -346,10 +419,6 @@ export default {
       type: Boolean,
       default: false
     },
-    playModeText: {
-      type: String,
-      default: '顺序播放'
-    },
     currentPage: {
       type: Number,
       default: 1
@@ -367,7 +436,7 @@ export default {
       default: 0
     }
   },
-  emits: ['play-song', 'toggle-play-mode', 'toggle-vip-songs', 'go-to-page', 'prev-page', 'next-page'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'toggle-vip-songs', 'go-to-page', 'prev-page', 'next-page'],
   setup(props, { emit }) {
     const { currentTheme } = useTheme()
     const showDownloadMenu = ref(null)
@@ -441,9 +510,9 @@ export default {
         const button = event.target.closest('button')
         const rect = button.getBoundingClientRect()
         const menuWidth = 140
-        // 菜单高度按实际项数算：临时/未选歌单时"下载到服务器"项不渲染，
-        // 少一项（40px）的菜单按 120 翻转会在底部 80-120px 区间误判放不下
-        const menuHeight = (!isSingleSongPlaylist.value && props.selectedPlaylist) ? 120 : 80
+        // 菜单高度按实际项数算：固定项=头部+下一首+队尾+分享+源文件 5 项；
+        // 临时/未选歌单时"下载到服务器"项不渲染少一项（~42px/项，偏小会被裁）
+        const menuHeight = (!isSingleSongPlaylist.value && props.selectedPlaylist) ? 252 : 212
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh
@@ -468,10 +537,30 @@ export default {
       showDownloadMenu.value = null
     }
 
+    // ⋯ 菜单操作：下一首播放 / 队尾追加 / 分享——先关菜单再派发给父组件
+    const playNextFromMenu = () => {
+      const song = menuSong.value
+      closeDownloadMenu()
+      if (song) emit('play-next', song)
+    }
+
+    const addToQueueFromMenu = () => {
+      const song = menuSong.value
+      closeDownloadMenu()
+      if (song) emit('add-to-queue', song)
+    }
+
+    const shareFromMenu = () => {
+      const song = menuSong.value
+      closeDownloadMenu()
+      if (song) shareSong(song)
+    }
+
     // 分享歌曲
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
-      const shareUrl = `${window.location.origin}/?song=${song.id}`
+      // 带 view=songs：冷启动打开分享链后主区直接落在歌曲视图，不是首页
+      const shareUrl = `${window.location.origin}/?song=${song.id}&view=songs`
 
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistNames}`,
@@ -690,6 +779,9 @@ export default {
       })
     }
 
+    // 歌曲 id 类型混用（数字/字符串）——统一 String 比较，否则当前曲高亮会丢
+    const isCurrent = (song) => String(song.id) === String(props.currentSong?.id)
+
     return {
       filteredSongs,
       totalPages,
@@ -698,12 +790,16 @@ export default {
       isSingleSongPlaylist,
       formatDuration,
       isVipSong,
+      isCurrent,
       paginationStyle,
       showDownloadMenu,
       downloadingStates,
       serverDownloadedStates,
       serverDownloadingStates,
       toggleDownloadMenu,
+      playNextFromMenu,
+      addToQueueFromMenu,
+      shareFromMenu,
       shareSong,
       downloadSongDirect,
       toggleServerDownload,

@@ -12,16 +12,52 @@
 
       <h1 class="jirai-title topnav-title">MeowSync</h1>
 
-      <!-- YTM 式居中搜索：歌单名 / 歌单ID / 分享URL 三合一 -->
+      <!-- YTM 式居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
       <div class="topnav-search">
-        <input
-          :value="searchQuery"
-          @input="$emit('update:searchQuery', $event.target.value)"
-          @keyup.enter="onSearchEnter"
-          type="text"
-          placeholder="搜索歌单或粘贴歌单ID/链接"
-          class="pixel-input topnav-search-input"
-        />
+        <div class="topnav-search-field">
+          <input
+            ref="searchInput"
+            :value="searchQuery"
+            @input="onInput"
+            @keydown="onKeydown"
+            @focus="onSearchFocus"
+            @blur="onSearchBlur"
+            type="text"
+            placeholder="搜索歌曲、歌单，或粘贴ID/链接"
+            class="pixel-input topnav-search-input"
+            autocomplete="off"
+            spellcheck="false"
+            role="combobox"
+            aria-autocomplete="list"
+            :aria-expanded="suggestOpen && suggestions.length > 0"
+            :aria-activedescendant="activeIndex >= 0 ? `suggest-item-${activeIndex}` : undefined"
+            aria-controls="topnav-suggest-list"
+          />
+          <button
+            v-if="searchQuery"
+            class="topnav-search-clear"
+            title="清除"
+            @mousedown.prevent="clearQuery"
+          >✕</button>
+          <!-- typeahead 下拉：搜索建议（文本+实体名），↑↓ 可选 -->
+          <div v-if="suggestOpen && suggestions.length" class="topnav-suggest" id="topnav-suggest-list" role="listbox">
+            <div
+              v-for="(item, i) in suggestions"
+              :key="`${i}-${item.label}`"
+              :id="`suggest-item-${i}`"
+              class="topnav-suggest-item"
+              :class="{ 'topnav-suggest-item--active': i === activeIndex }"
+              role="option"
+              :aria-selected="i === activeIndex"
+              @mousedown.prevent="pickSuggestion(item)"
+              @mousemove="activeIndex = i"
+            >
+              <span class="topnav-suggest-icon">{{ item.icon }}</span>
+              <span class="topnav-suggest-text">{{ item.label }}</span>
+              <span v-if="item.kindText" class="topnav-suggest-kind">{{ item.kindText }}</span>
+            </div>
+          </div>
+        </div>
         <button
           @click="handleSearch"
           class="pixel-button topnav-search-btn"
@@ -72,7 +108,8 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { musicApi } from '../api/music.js'
 
 export default {
   name: 'TopNavigation',
@@ -139,14 +176,149 @@ export default {
       emit(playlistId ? 'search-by-id' : 'search', playlistId || query)
     }
 
+    // ── 搜索建议（YTM typeahead） ──
+    const searchInput = ref(null)
+    const suggestions = ref([])
+    const suggestOpen = ref(false)
+    const activeIndex = ref(-1)
+    let suggestTimer = null
+    let suggestAbort = null
+    let suggestSeq = 0
+
+    // 各实体组的标签与图标；allMatch 文本建议置顶
+    const SUGGEST_KINDS = [
+      ['songs', '歌曲', '🎵', 'name'],
+      ['artists', '艺人', '🎤', 'name'],
+      ['albums', '专辑', '💿', 'name'],
+      ['playlists', '歌单', '📻', 'name']
+    ]
+
+    const mapSuggestions = (result) => {
+      const items = []
+      if (Array.isArray(result?.allMatch)) {
+        for (const m of result.allMatch.slice(0, 6)) {
+          if (m?.keyword) items.push({ label: m.keyword, icon: '🔍', kindText: '' })
+        }
+      }
+      for (const [key, kindText, icon, field] of SUGGEST_KINDS) {
+        if (!Array.isArray(result?.[key])) continue
+        for (const e of result[key].slice(0, 3)) {
+          const label = e?.[field]
+          if (label && !items.some(it => it.label === label)) {
+            items.push({ label, icon, kindText })
+          }
+        }
+      }
+      return items.slice(0, 8)
+    }
+
+    // 建议取消闸：清定时器 + 断在途请求 + 序号+1——
+    // clear/submit/ID输入后，在途响应不得再把下拉弹回来
+    const cancelSuggest = () => {
+      clearTimeout(suggestTimer)
+      suggestAbort?.abort()
+      suggestAbort = null
+      suggestSeq++
+      activeIndex.value = -1
+    }
+
+    const fetchSuggestions = async (query) => {
+      suggestAbort?.abort()
+      const seq = ++suggestSeq
+      const ctrl = new AbortController()
+      suggestAbort = ctrl
+      try {
+        const result = await musicApi.searchSuggest(query, ctrl.signal)
+        if (seq !== suggestSeq) return
+        suggestions.value = mapSuggestions(result)
+        activeIndex.value = -1
+        suggestOpen.value = suggestions.value.length > 0
+      } catch {
+        if (seq === suggestSeq) suggestions.value = []
+      }
+    }
+
+    const onInput = (e) => {
+      emit('update:searchQuery', e.target.value)
+      const q = e.target.value.trim()
+      cancelSuggest()
+      // 纯数字/链接走"添加歌单"路径，不弹建议
+      if (!q || extractPlaylistId(q)) {
+        suggestions.value = []
+        suggestOpen.value = false
+        return
+      }
+      suggestTimer = setTimeout(() => fetchSuggestions(q), 250)
+    }
+
+    const onSearchFocus = () => {
+      if (suggestions.value.length) suggestOpen.value = true
+    }
+
+    // blur 延迟由 @mousedown.prevent 承担——mousedown 先于 blur 且不转移焦点
+    const onSearchBlur = () => {
+      suggestOpen.value = false
+    }
+
+    const pickSuggestion = (item) => {
+      cancelSuggest()
+      suggestions.value = []
+      suggestOpen.value = false
+      emit('update:searchQuery', item.label)
+      emit('search', item.label)
+    }
+
+    const clearQuery = () => {
+      cancelSuggest()
+      emit('update:searchQuery', '')
+      suggestions.value = []
+      suggestOpen.value = false
+      searchInput.value?.focus()
+    }
+
+    const focusSearch = () => searchInput.value?.focus()
+
     // IME 合成中（拼音选词）按 Enter 不应触发搜索
     const onSearchEnter = (e) => {
       if (e.isComposing || e.keyCode === 229) return
+      cancelSuggest()
+      suggestOpen.value = false
       handleSearch()
+    }
+
+    // combobox 键盘交互：↓↑ 在建议间移动，Enter 选中或搜索，Esc 关下拉
+    const onKeydown = (e) => {
+      if (suggestOpen.value && suggestions.value.length) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          activeIndex.value = (activeIndex.value + 1) % suggestions.value.length
+          return
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          activeIndex.value = (activeIndex.value - 1 + suggestions.value.length) % suggestions.value.length
+          return
+        }
+        if (e.key === 'Enter' && activeIndex.value >= 0 && suggestions.value[activeIndex.value]) {
+          e.preventDefault()
+          pickSuggestion(suggestions.value[activeIndex.value])
+          return
+        }
+      }
+      if (e.key === 'Enter') onSearchEnter(e)
+      else if (e.key === 'Escape') {
+        suggestOpen.value = false
+        activeIndex.value = -1
+      }
     }
 
     onMounted(() => {
       loadTheme()
+    })
+
+    onBeforeUnmount(() => {
+      clearTimeout(suggestTimer)
+      suggestAbort?.abort()
     })
 
     return {
@@ -156,7 +328,17 @@ export default {
       controllerUrl,
       extractPlaylistId,
       handleSearch,
-      onSearchEnter
+      onKeydown,
+      activeIndex,
+      searchInput,
+      suggestions,
+      suggestOpen,
+      onInput,
+      onSearchFocus,
+      onSearchBlur,
+      pickSuggestion,
+      clearQuery,
+      focusSearch
     }
   }
 }
@@ -207,11 +389,91 @@ export default {
   min-width: 0;
 }
 
-.topnav-search-input {
+/* 输入框 + 清除键 + 建议下拉的定位容器 */
+.topnav-search-field {
+  position: relative;
   width: min(480px, 100%);
+}
+
+.topnav-search-input {
+  width: 100%;
   height: 34px;
-  padding: 0 10px;
+  padding: 0 32px 0 10px;
   font-size: 13px;
+}
+
+.topnav-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  padding: 2px 6px;
+  color: var(--pixel-text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.topnav-search-clear:hover {
+  color: var(--pixel-text);
+}
+
+/* typeahead 下拉 */
+.topnav-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: var(--z-menu);
+  background: #1a1a2e;
+  border: 1px solid #c084fc;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+:root[data-theme="pixel-retro"] .topnav-suggest {
+  background: #fff7f8;
+  border-color: #d26482;
+  box-shadow: 4px 4px 0 rgba(210, 100, 130, 0.3);
+}
+
+.topnav-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #e9d5ff;
+}
+
+.topnav-suggest-item:hover,
+.topnav-suggest-item--active {
+  background: rgba(236, 72, 153, 0.18);
+}
+
+:root[data-theme="pixel-retro"] .topnav-suggest-item {
+  color: #831843;
+}
+
+.topnav-suggest-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.topnav-suggest-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topnav-suggest-kind {
+  flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.6;
 }
 
 .topnav-search-btn {

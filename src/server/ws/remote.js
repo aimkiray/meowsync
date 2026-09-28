@@ -56,24 +56,38 @@ const clampNum = (v) => typeof v === 'number' && Number.isFinite(v) ? v : undefi
  * 的渲染 computed 里抛 TypeError 崩掉页面。只透 controller 真正消费的字段，
  * 逐字段类型收敛；整体不合法则整条丢（比转发一半安全）
  */
+function sanitizeRemoteSong(song) {
+  if (!song || typeof song !== 'object' || Array.isArray(song)) return undefined;
+  const artists = Array.isArray(song.ar) ? song.ar : [];
+  // picUrl 只收 http(s)——恶意 host 能广播任意 URL，至少封掉 javascript:/
+  // data: 之类会在 <img> 上下文语义异常的 scheme（外链本身即指 roplatform）
+  const picRaw = clampStr(song.al?.picUrl, 500);
+  const picUrl = picRaw && /^https?:/i.test(picRaw) ? picRaw : '';
+  return {
+    id: clampNum(song.id) ?? clampStr(song.id, 64) ?? null,
+    name: clampStr(song.name, 300) ?? '',
+    al: { picUrl },
+    ar: artists.slice(0, 20).map(a => ({ name: clampStr(a?.name, 200) ?? '' }))
+  };
+}
+
 function sanitizeStatePayload(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
   const song = payload.currentSong;
   let currentSong = null;
   if (song !== null && song !== undefined) {
     if (typeof song !== 'object' || Array.isArray(song)) return null;
-    const artists = Array.isArray(song.ar) ? song.ar : [];
-    // picUrl 只收 http(s)——恶意 host 能广播任意 URL，至少封掉 javascript:/
-    // data: 之类会在 <img> 上下文语义异常的 scheme（外链本身即指 roplatform）
-    const picRaw = clampStr(song.al?.picUrl, 500);
-    const picUrl = picRaw && /^https?:/i.test(picRaw) ? picRaw : '';
-    currentSong = {
-      id: clampNum(song.id) ?? clampStr(song.id, 64) ?? null,
-      name: clampStr(song.name, 300) ?? '',
-      al: { picUrl },
-      ar: artists.slice(0, 20).map(a => ({ name: clampStr(a?.name, 200) ?? '' }))
-    };
+    currentSong = sanitizeRemoteSong(song);
   }
+  // 待播队列：封顶 50 条，与 currentSong 同款形状校验；
+  // 无效条目被丢弃而非整条作废——队列是辅助 UI，一首脏数据不该清空广播
+  const queue = Array.isArray(payload.queue)
+    ? payload.queue.slice(0, 50).map(sanitizeRemoteSong).filter(s => s && s.id !== null)
+    : undefined;
+  const queueIndexRaw = clampNum(payload.queueIndex);
+  const queueIndex = queueIndexRaw === undefined
+    ? -1
+    : Math.min(Math.max(Math.trunc(queueIndexRaw), -1), 49);
   // 数值除 isFinite 外再做语义钳制：负时长/负进度/超大音量会让 controller
   // 的 :max 绑定与滑块渲染异常
   const clampNonNeg = (v) => {
@@ -86,7 +100,9 @@ function sanitizeStatePayload(payload) {
     currentSong,
     currentTime: clampNonNeg(payload.currentTime) ?? 0,
     duration: clampNonNeg(payload.duration) ?? 0,
-    volume: volume === undefined ? 0 : Math.min(volume, 100)
+    volume: volume === undefined ? 0 : Math.min(volume, 100),
+    queue,
+    queueIndex
   };
 }
 

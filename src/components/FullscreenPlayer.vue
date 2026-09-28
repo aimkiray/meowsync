@@ -18,7 +18,7 @@
           <p class="fullscreen-player__eyebrow">Now Playing</p>
           <h2 class="fullscreen-player__title">{{ currentSong?.name || '未播放' }}</h2>
           <p class="fullscreen-player__artist">
-            {{ currentSong?.ar?.map(artist => artist.name).join(', ') || '未知艺术家' }}
+            {{ (currentSong?.ar || currentSong?.artists)?.map(artist => artist.name).join(', ') || '未知艺术家' }}
           </p>
         </div>
 

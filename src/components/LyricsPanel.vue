@@ -1,15 +1,34 @@
 <template>
-  <!-- 歌词抽屉：YTM 式按需浮层——不占常驻栏位，底部播放条「歌词」键呼出 -->
+  <!-- 右侧面板抽屉：YTM「待播 | 歌词」双 tab——不占常驻栏位，播放条呼出 -->
   <div
     class="lyrics-drawer jirai-card card-lyrics"
     :class="{ 'lyrics-drawer--open': open }"
     role="complementary"
-    aria-label="歌词面板"
+    aria-label="待播与歌词面板"
   >
     <div class="lyrics-drawer-header">
-      <span class="lyrics-drawer-title">歌词</span>
+      <!-- YTM 式 tab 条：待播(UP NEXT) / 歌词(LYRICS) -->
+      <div class="panel-tabs" role="tablist">
+        <button
+          class="panel-tab"
+          :class="{ 'panel-tab--active': panelTab === 'queue' }"
+          role="tab"
+          aria-controls="panel-queue"
+          :aria-selected="panelTab === 'queue'"
+          @click="setTab('queue')"
+        >待播</button>
+        <button
+          class="panel-tab"
+          :class="{ 'panel-tab--active': panelTab === 'lyrics' }"
+          role="tab"
+          aria-controls="panel-lyrics"
+          :aria-selected="panelTab === 'lyrics'"
+          @click="setTab('lyrics')"
+        >歌词</button>
+      </div>
       <div class="flex items-center gap-2">
         <button
+          v-if="panelTab === 'lyrics'"
           @click="$emit('toggle-auto-follow-lyrics')"
           class="text-xs px-2 py-1 border transition-colors"
           :class="{
@@ -23,12 +42,55 @@
         <button
           @click="$emit('close')"
           class="text-xs px-2 py-1 border border-gray-500 bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
-          title="关闭歌词"
+          title="关闭面板"
         >✕</button>
       </div>
     </div>
 
-    <div ref="playerContainer" class="lyrics-drawer-body">
+    <!-- ── 待播队列 ── -->
+    <div id="panel-queue" role="tabpanel" v-show="panelTab === 'queue'" class="lyrics-drawer-body queue-body" ref="queueContainer">
+      <div v-if="!currentSong" class="text-center py-8">
+        <p class="text-gray-600">选择一首歌开始播放喵~</p>
+      </div>
+      <template v-else>
+        <p class="queue-source">正在播放：{{ queueTitle }}</p>
+        <div v-if="queue.length === 0" class="text-center py-8">
+          <p class="text-gray-600">队列为空喵~</p>
+        </div>
+        <div v-else>
+          <div
+            v-for="(song, index) in queue"
+            :key="`${song.id}-${index}`"
+            class="queue-row"
+            :class="{ 'queue-row--current': String(song.id) === String(currentSong.id) }"
+            @click="jumpTo(song, index)"
+            @keydown.enter="jumpTo(song, index)"
+            tabindex="0"
+            role="button"
+          >
+            <span class="queue-row-index">
+              <template v-if="String(song.id) === String(currentSong.id)">▶</template>
+              <template v-else>{{ index + 1 }}</template>
+            </span>
+            <div class="queue-row-info">
+              <p class="queue-row-title">{{ song.name }}</p>
+              <p class="queue-row-artist">{{ songArtist(song) }}</p>
+            </div>
+            <span class="queue-row-duration">{{ formatDuration(song) }}</span>
+            <button
+              v-if="String(song.id) !== String(currentSong.id)"
+              class="queue-row-remove"
+              title="从队列移除"
+              aria-label="从队列移除"
+              @click.stop="$emit('queue-remove', index)"
+            >✕</button>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ── 歌词 ── -->
+    <div id="panel-lyrics" role="tabpanel" v-show="panelTab === 'lyrics'" ref="playerContainer" class="lyrics-drawer-body">
       <div v-if="!currentSong" class="text-center py-8">
         <p class="text-gray-600">选择一首歌开始播放喵~</p>
       </div>
@@ -77,6 +139,7 @@
 
 <script>
 import { ref, watch, nextTick } from 'vue'
+import { formatTime } from '../lib/format'
 
 export default {
   name: 'LyricsPanel',
@@ -85,9 +148,22 @@ export default {
       type: Boolean,
       default: false
     },
+    // 受控 tab：'queue' | 'lyrics'（父组件决定按钮呼出到哪个 tab）
+    panelTab: {
+      type: String,
+      default: 'queue'
+    },
     currentSong: {
       type: Object,
       default: null
+    },
+    queue: {
+      type: Array,
+      default: () => []
+    },
+    queueTitle: {
+      type: String,
+      default: ''
     },
     lyrics: {
       type: Array,
@@ -118,12 +194,27 @@ export default {
       default: true
     }
   },
-  emits: ['toggle-auto-follow-lyrics', 'close'],
-  setup(props) {
+  emits: ['toggle-auto-follow-lyrics', 'close', 'queue-jump', 'queue-remove', 'update:panelTab'],
+  setup(props, { emit }) {
     const playerContainer = ref(null)
+    const queueContainer = ref(null)
+
+    const setTab = (tab) => emit('update:panelTab', tab)
+
+    // 队列点歌：当前行即重播同曲？点击当前行无操作（已在播）
+    const jumpTo = (song, index) => {
+      if (String(song.id) === String(props.currentSong?.id)) return
+      emit('queue-jump', index)
+    }
+
+    const songArtist = (song) =>
+      (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/') || '未知艺人'
+
+    const formatDuration = (song) => formatTime((song.dt || song.duration || 0) / 1000)
 
     // 监听当前歌词索引变化，实现自动滚动
     watch(() => props.currentLyricIndex, async (newIndex) => {
+      if (props.panelTab !== 'lyrics') return
       if (newIndex >= 0 && playerContainer.value && props.autoFollowLyrics) {
         await nextTick()
         const container = playerContainer.value
@@ -139,27 +230,39 @@ export default {
           const lyricCenter = lyricRect.top - containerRect.top + lyricRect.height / 2
           const scrollOffset = lyricCenter - containerCenter
 
-          // 平滑滚动到目标位置
+          // 平滑滚动到目标位置（reduced-motion 用户直接跳，JS smooth 不吃 CSS 的 auto 降级）
+          const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
           container.scrollTo({
             top: container.scrollTop + scrollOffset,
-            behavior: 'smooth'
+            behavior: smooth ? 'smooth' : 'auto'
           })
         }
       }
     })
 
-    // 打开抽屉时把当前行滚到中间（否则永远停在顶部）
-    watch(() => props.open, async (isOpen) => {
-      if (isOpen) {
-        await nextTick()
-        const container = playerContainer.value
-        const el = container?.querySelector(`[data-lyric-index="${props.currentLyricIndex}"]`)
+    // 打开抽屉/切 tab 时把当前行滚到中间（否则永远停在顶部）
+    const centerCurrentRow = async () => {
+      if (!props.open) return
+      await nextTick()
+      if (props.panelTab === 'lyrics') {
+        const el = playerContainer.value?.querySelector(`[data-lyric-index="${props.currentLyricIndex}"]`)
+        el?.scrollIntoView({ block: 'center' })
+      } else {
+        const el = queueContainer.value?.querySelector('.queue-row--current')
         el?.scrollIntoView({ block: 'center' })
       }
-    })
+    }
+
+    watch(() => props.open, (isOpen) => { if (isOpen) centerCurrentRow() })
+    watch(() => props.panelTab, centerCurrentRow)
 
     return {
-      playerContainer
+      playerContainer,
+      queueContainer,
+      setTab,
+      jumpTo,
+      songArtist,
+      formatDuration
     }
   }
 }
@@ -172,7 +275,7 @@ export default {
   position: fixed;
   top: 0;
   right: 0;
-  bottom: 80px;
+  bottom: calc(88px + env(safe-area-inset-bottom));
   width: min(400px, 100vw);
   z-index: var(--z-drawer);
   display: flex;
@@ -207,16 +310,35 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: 10px 16px;
   border-bottom: 2px solid rgba(240, 179, 192, 0.2);
   flex-shrink: 0;
+  gap: 8px;
 }
 
-.lyrics-drawer-title {
-  font-size: 15px;
+/* YTM 式 tab 条：文字 tab + 激活下划线 */
+.panel-tabs {
+  display: flex;
+  gap: 14px;
+}
+
+.panel-tab {
+  font-size: 13px;
   font-weight: bold;
-  /* 跟随主题变量而非硬编码粉——pixel-retro 浅色底下 #f9a8d4 对比度不够 */
+  padding: 4px 2px;
+  color: var(--pixel-text-dim);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.panel-tab:hover {
   color: var(--pixel-text);
+}
+
+.panel-tab--active {
+  color: var(--pixel-text);
+  border-bottom-color: var(--pixel-accent-fg, #f472b6);
 }
 
 .lyrics-drawer-body {
@@ -225,5 +347,103 @@ export default {
   overflow-y: auto;
   padding: 14px 16px;
   scrollbar-gutter: stable;
+}
+
+/* ── 待播队列 ── */
+.queue-source {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  margin-bottom: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-body {
+  padding-top: 10px;
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.12s;
+}
+
+.queue-row:hover {
+  background: rgba(236, 72, 153, 0.08);
+}
+
+.queue-row--current {
+  border-left-color: var(--pixel-accent-fg, #f472b6);
+  background: rgba(236, 72, 153, 0.12);
+}
+
+.queue-row-index {
+  width: 18px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  text-align: center;
+}
+
+.queue-row--current .queue-row-index {
+  color: var(--pixel-accent-fg, #f472b6);
+}
+
+.queue-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-row-title {
+  font-size: 12px;
+  color: var(--pixel-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-row-artist {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-row-duration {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  flex-shrink: 0;
+}
+
+.queue-row-remove {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 5px;
+  color: var(--pixel-text-dim);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.queue-row:hover .queue-row-remove,
+.queue-row:focus-within .queue-row-remove,
+.queue-row-remove:focus-visible {
+  opacity: 1;
+}
+
+/* 触屏设备无 hover——隐藏但可点的移除键会误删，直接常显 */
+@media (hover: none) {
+  .queue-row-remove {
+    opacity: 1;
+  }
+}
+
+.queue-row-remove:hover {
+  color: #f87171;
 }
 </style>

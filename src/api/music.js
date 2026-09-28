@@ -85,6 +85,49 @@ export const musicApi = {
     return data.result || {}
   },
 
+  // 搜索建议（typeahead）：返回按类型分组的建议（songs/artists/albums/playlists）
+  searchSuggest: async (keywords, abortSignal = null) => {
+    const response = await api.get('/search_suggest', {
+      params: { keywords },
+      signal: abortSignal,
+      timeout: 5000 // typeahead 要快——超时就别弹了
+    })
+    const data = unwrapBody(response)
+    return data.result || {}
+  },
+
+  // 歌曲搜索（type=1）：结果直接可播，点击即播
+  searchSongs: async (keywords, limit = 30, abortSignal = null) => {
+    const response = await withRetry(() =>
+      api.get('/search', { params: { keywords, type: 1, limit }, signal: abortSignal })
+    )
+    const data = unwrapBody(response)
+    return data.result?.songs || []
+  },
+
+  // 首页发现流：排行榜（toplist）+ 推荐歌单（personalized）+ 热搜词
+  getToplists: async (abortSignal = null) => {
+    const response = await api.get('/toplist', { signal: abortSignal, timeout: 15000 })
+    const data = unwrapBody(response)
+    return data.list || []
+  },
+
+  getPersonalized: async (limit = 12, abortSignal = null) => {
+    const response = await api.get('/personalized', {
+      params: { limit },
+      signal: abortSignal,
+      timeout: 15000
+    })
+    const data = unwrapBody(response)
+    return data.result || []
+  },
+
+  getSearchHot: async (abortSignal = null) => {
+    const response = await api.get('/search_hot', { signal: abortSignal, timeout: 8000 })
+    const data = unwrapBody(response)
+    return data.result?.hots || []
+  },
+
   getPlaylistDetail: async (id, abortSignal = null) => {
     // 千曲歌单的上游链路已放宽到 120s，前端超时必须对齐——10s 先断只是
     // 让服务端继续跑僵尸上游请求，用户看到的仍是失败
