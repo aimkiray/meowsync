@@ -3,18 +3,19 @@
     <div class="topnav-inner">
       <!-- 移动端：汉堡键呼出歌单库抽屉 -->
       <button
-        class="pixel-button topnav-hamburger lg:hidden"
+        class="pg-icobtn pg-icobtn--bare topnav-hamburger lg:hidden"
         @click="$emit('toggle-sidebar')"
         :aria-expanded="sidebarOpen"
         aria-label="歌单库"
         title="打开歌单库"
       >☰</button>
 
-      <h1 class="jirai-title topnav-title">MeowSync</h1>
+      <h1 class="topnav-title">MeowSync<span class="topnav-ver">MS.OS1</span></h1>
 
-      <!-- YTM 式居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
+      <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
       <div class="topnav-search">
-        <div class="topnav-search-field">
+        <div class="pg-field topnav-search-field">
+          <PixelIcon name="search" :size="14" class="topnav-search-icon" />
           <input
             ref="searchInput"
             :value="searchQuery"
@@ -24,7 +25,7 @@
             @blur="onSearchBlur"
             type="text"
             placeholder="搜索歌曲、歌单，或粘贴ID/链接"
-            class="pixel-input topnav-search-input"
+            class="topnav-search-input"
             autocomplete="off"
             spellcheck="false"
             role="combobox"
@@ -37,6 +38,7 @@
             v-if="searchQuery"
             class="topnav-search-clear"
             title="清除"
+            aria-label="清除搜索"
             @mousedown.prevent="clearQuery"
           >✕</button>
           <!-- typeahead 下拉：搜索建议（文本+实体名），↑↓ 可选 -->
@@ -52,7 +54,6 @@
               @mousedown.prevent="pickSuggestion(item)"
               @mousemove="activeIndex = i"
             >
-              <span class="topnav-suggest-icon">{{ item.icon }}</span>
               <span class="topnav-suggest-text">{{ item.label }}</span>
               <span v-if="item.kindText" class="topnav-suggest-kind">{{ item.kindText }}</span>
             </div>
@@ -60,7 +61,7 @@
         </div>
         <button
           @click="handleSearch"
-          class="pixel-button topnav-search-btn"
+          class="ink-btn topnav-search-btn"
           :disabled="!searchQuery.trim()"
         >{{ extractPlaylistId(searchQuery.trim()) ? '添加' : '搜索' }}</button>
       </div>
@@ -70,9 +71,9 @@
         <button
           v-if="remoteMode === 'off'"
           @click="$emit('toggle-center-view')"
-          class="pixel-button topnav-action"
+          class="pg-link topnav-action"
           :title="isDownloadsView ? '返回歌曲列表' : '打开下载管理'"
-        >{{ isDownloadsView ? '🎵 歌曲' : '⚙️ 管理' }}</button>
+        >{{ isDownloadsView ? '歌曲' : '管理' }}</button>
 
         <!-- 远程控制模式指示 -->
         <a
@@ -80,28 +81,14 @@
           :href="controllerUrl"
           target="_blank"
           rel="noopener"
-          class="pixel-button topnav-action"
+          class="pg-link topnav-action"
           title="在新标签页打开手机控制器"
-        >📱 控制器</a>
+        >控制器</a>
         <span
           v-else-if="remoteMode === 'off'"
-          class="topnav-remote-hint"
+          class="pg-label pg-label--dim topnav-remote-hint"
           title="添加 ?mode=host 启用远程控制"
-        >远程:关</span>
-        <button
-          @click="toggleTheme"
-          class="pixel-button theme-toggle-btn"
-          :title="currentTheme === 'pixel-retro' ? '切换到默认主题' : '切换到像素风格'"
-        >
-          <!-- 默认主题图标 -->
-          <svg v-if="currentTheme === 'pixel-retro'" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-            <path fill="currentColor" d="M6 2h8v2h-2v2h-2V4H6zM4 6V4h2v2zm0 10H2V6h2zm2 2H4v-2h2zm2 2H6v-2h2zm10 0v2H8v-2zm2-2v2h-2v-2zm-2-4h2v4h2v-8h-2v2h-2zm-6 0v2h6v-2zm-2-2h2v2h-2zm0 0V6H8v6z"/>
-          </svg>
-          <!-- 像素主题图标 -->
-          <svg v-else xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-            <path fill="currentColor" d="M17 10v4h-1v1h-1v1h-1v1h-4v-1H9v-1H8v-1H7v-4h1V9h1V8h1V7h4v1h1v1h1v1z"/><path fill="currentColor" d="M21 11v-1h1V9h1V7h-3V6h-2V4h-1V1h-2v1h-1v1h-1v1h-2V3h-1V2H9V1H7v3H6v2H4v1H1v2h1v1h1v1h1v2H3v1H2v1H1v2h3v1h2v2h1v3h2v-1h1v-1h1v-1h2v1h1v1h1v1h2v-3h1v-2h2v-1h3v-2h-1v-1h-1v-1h-1v-2zm-3 4h-1v1h-1v1h-1v1H9v-1H8v-1H7v-1H6V9h1V8h1V7h4v1h1v1h1v1h1z"/>
-          </svg>
-        </button>
+        >remote: off</span>
       </div>
     </div>
   </nav>
@@ -110,9 +97,11 @@
 <script>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
+import PixelIcon from './PixelIcon.vue'
 
 export default {
   name: 'TopNavigation',
+  components: { PixelIcon },
   props: {
     isDownloadsView: {
       type: Boolean,
@@ -129,35 +118,18 @@ export default {
   },
   emits: ['toggle-center-view', 'toggle-sidebar', 'search', 'search-by-id', 'update:searchQuery'],
   setup(props, { emit }) {
-    const currentTheme = ref('pixel-retro')
     const urlParams = new URLSearchParams(window.location.search)
     const rawMode = urlParams.get('mode')
     const remoteMode = ref(['host', 'controller'].includes(rawMode) ? rawMode : 'off')
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
 
-    // 从localStorage加载主题
-    const loadTheme = () => {
-      const savedTheme = localStorage.getItem('pixel-theme') || 'pixel-retro'
-      currentTheme.value = savedTheme
-      applyTheme(savedTheme)
-    }
-
-    // 应用主题
-    const applyTheme = (theme) => {
-      const root = document.documentElement
-      if (theme === 'pixel-retro') {
-        root.setAttribute('data-theme', 'pixel-retro')
+    // data-theme 只剩 FullscreenPlayer 沉浸歌词页消费——开机应用上次选择即可
+    const bootTheme = () => {
+      if (localStorage.getItem('pixel-theme') === 'pixel-retro') {
+        document.documentElement.setAttribute('data-theme', 'pixel-retro')
       } else {
-        root.removeAttribute('data-theme')
+        document.documentElement.removeAttribute('data-theme')
       }
-    }
-
-    // 切换主题
-    const toggleTheme = () => {
-      const newTheme = currentTheme.value === 'default' ? 'pixel-retro' : 'default'
-      currentTheme.value = newTheme
-      localStorage.setItem('pixel-theme', newTheme)
-      applyTheme(newTheme)
     }
 
     // 从URL或文本中提取歌单ID：网易云 ?id= / 本站分享链 ?playlist(s)=|?song= / 纯数字
@@ -189,27 +161,27 @@ export default {
     let suggestAbort = null
     let suggestSeq = 0
 
-    // 各实体组的标签与图标；allMatch 文本建议置顶
+    // 各实体组的标签（纯文本——印刷稿里图标让位给字排）
     const SUGGEST_KINDS = [
-      ['songs', '歌曲', '🎵', 'name'],
-      ['artists', '艺人', '🎤', 'name'],
-      ['albums', '专辑', '💿', 'name'],
-      ['playlists', '歌单', '📻', 'name']
+      ['songs', '歌曲', 'name'],
+      ['artists', '艺人', 'name'],
+      ['albums', '专辑', 'name'],
+      ['playlists', '歌单', 'name']
     ]
 
     const mapSuggestions = (result) => {
       const items = []
       if (Array.isArray(result?.allMatch)) {
         for (const m of result.allMatch.slice(0, 6)) {
-          if (m?.keyword) items.push({ label: m.keyword, icon: '🔍', kindText: '' })
+          if (m?.keyword) items.push({ label: m.keyword, kindText: '' })
         }
       }
-      for (const [key, kindText, icon, field] of SUGGEST_KINDS) {
+      for (const [key, kindText, field] of SUGGEST_KINDS) {
         if (!Array.isArray(result?.[key])) continue
         for (const e of result[key].slice(0, 3)) {
           const label = e?.[field]
           if (label && !items.some(it => it.label === label)) {
-            items.push({ label, icon, kindText })
+            items.push({ label, kindText })
           }
         }
       }
@@ -318,7 +290,7 @@ export default {
     }
 
     onMounted(() => {
-      loadTheme()
+      bootTheme()
     })
 
     onBeforeUnmount(() => {
@@ -327,8 +299,6 @@ export default {
     })
 
     return {
-      currentTheme,
-      toggleTheme,
       remoteMode,
       controllerUrl,
       extractPlaylistId,
@@ -350,60 +320,72 @@ export default {
 </script>
 
 <style scoped>
-/* 细顶栏：一行高度，无卡片包装（YTM 式） */
+/* 纸面 masthead：一行高度 + 墨色发丝下缘 */
 .topnav {
   flex-shrink: 0;
-  padding: 0 12px;
-  border-bottom: 2px solid rgba(240, 179, 192, 0.25);
-  background: rgba(20, 16, 28, 0.72);
-  backdrop-filter: blur(8px);
-}
-
-:root[data-theme="pixel-retro"] .topnav {
-  border-bottom-color: rgba(210, 100, 130, 0.5);
-  background: rgba(240, 179, 192, 0.28);
+  padding: 0 16px;
+  border-bottom: var(--hairline);
+  background: var(--paper);
 }
 
 .topnav-inner {
   max-width: 1440px;
   margin: 0 auto;
-  height: 52px;
+  height: 56px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
 
 .topnav-hamburger {
-  padding: 4px 10px;
-  font-size: 16px;
   flex-shrink: 0;
 }
 
 .topnav-title {
-  font-size: 18px;
-  font-weight: bold;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  color: var(--ink);
   white-space: nowrap;
   flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* 版本戳小牌（构建清单签名） */
+.topnav-ver {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  color: var(--ink-64);
+  letter-spacing: .05em;
 }
 
 .topnav-search {
   flex: 1;
   display: flex;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
-/* 输入框 + 清除键 + 建议下拉的定位容器 */
+/* 输入框 + 图标 + 清除键 + 建议下拉的定位容器 */
 .topnav-search-field {
   position: relative;
   width: min(480px, 100%);
 }
 
+.topnav-search-icon {
+  margin-left: 10px;
+  color: var(--ink-64);
+  pointer-events: none;
+}
+
 .topnav-search-input {
   width: 100%;
-  height: 34px;
-  padding: 0 32px 0 10px;
+  height: 36px;
+  padding: 0 30px 0 8px;
   font-size: 13px;
 }
 
@@ -414,57 +396,42 @@ export default {
   transform: translateY(-50%);
   font-size: 12px;
   padding: 2px 6px;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
   background: transparent;
   border: none;
   cursor: pointer;
+  transition: color .2s;
 }
 
-.topnav-search-clear:hover {
-  color: var(--pixel-text);
-}
+.topnav-search-clear:hover { color: var(--ink); }
 
-/* typeahead 下拉 */
+/* typeahead 下拉：纸面发丝盒（pg-menu 同族，绝对定位版） */
 .topnav-suggest {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   right: 0;
   z-index: var(--z-menu);
-  background: #1a1a2e;
-  border: 1px solid #c084fc;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+  background: var(--paper);
+  border: var(--hairline);
   overflow: hidden;
-}
-
-:root[data-theme="pixel-retro"] .topnav-suggest {
-  background: #fff7f8;
-  border-color: #d26482;
-  box-shadow: 4px 4px 0 rgba(210, 100, 130, 0.3);
 }
 
 .topnav-suggest-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 9px 12px;
   cursor: pointer;
   font-size: 12px;
-  color: #e9d5ff;
+  color: var(--ink);
+  border-bottom: 1.2px solid var(--ink-10);
 }
+.topnav-suggest-item:last-child { border-bottom: none; }
 
 .topnav-suggest-item:hover,
 .topnav-suggest-item--active {
-  background: rgba(236, 72, 153, 0.18);
-}
-
-:root[data-theme="pixel-retro"] .topnav-suggest-item {
-  color: #831843;
-}
-
-.topnav-suggest-icon {
-  flex-shrink: 0;
-  font-size: 12px;
+  background: var(--ink-06);
 }
 
 .topnav-suggest-text {
@@ -477,43 +444,40 @@ export default {
 
 .topnav-suggest-kind {
   flex-shrink: 0;
+  font-family: var(--font-mono);
   font-size: 10px;
-  opacity: 0.6;
+  letter-spacing: .05em;
+  color: var(--ink-64);
+  border: 1.2px solid var(--ink-30);
+  padding: 1px 6px;
 }
 
 .topnav-search-btn {
-  height: 34px;
-  padding: 0 14px;
-  font-size: 12px;
+  height: 36px;
   flex-shrink: 0;
 }
 
 .topnav-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 14px;
   flex-shrink: 0;
 }
 
 .topnav-action {
-  font-size: 12px;
-  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .topnav-remote-hint {
-  font-size: 11px;
-  opacity: 0.5;
   cursor: default;
   white-space: nowrap;
 }
 
 /* 窄屏：标题让位给搜索框（移动端搜索仍是主入口） */
 @media (max-width: 640px) {
-  .topnav-title {
-    display: none;
-  }
-  .topnav-remote-hint {
-    display: none;
-  }
+  .topnav { padding: 0 10px; }
+  .topnav-title { display: none; }
+  .topnav-remote-hint { display: none; }
 }
 </style>

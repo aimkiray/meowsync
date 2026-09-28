@@ -3,8 +3,10 @@
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
   <div class="watch-view">
     <header class="watch-header">
-      <button class="pixel-button watch-header-btn" @click="$emit('back')" title="返回上一页">← 返回</button>
-      <button class="pixel-button watch-header-btn" @click="$emit('open-fullscreen')" title="全屏歌词模式">⛶ 沉浸</button>
+      <button class="ink-btn ink-btn--ghost watch-header-btn" @click="$emit('back')" title="返回上一页">← 返回</button>
+      <button class="ink-btn ink-btn--ghost watch-header-btn" @click="$emit('open-fullscreen')" title="全屏歌词模式">
+        <PixelIcon name="expand" :size="13" /> 沉浸
+      </button>
     </header>
 
     <div class="watch-layout">
@@ -28,47 +30,40 @@
         </p>
 
         <div class="watch-actions">
-          <button class="pixel-button watch-action" @click="shareSong" :disabled="!currentSong">🔗 分享歌曲</button>
+          <button class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
+            <PixelIcon name="share" :size="14" /> 分享歌曲
+          </button>
         </div>
       </div>
 
       <!-- ══ 右栏：待播 / 歌词 / 相关 ══ -->
-      <aside class="watch-side">
+      <aside class="watch-side" aria-label="待播与歌词">
         <!-- 播放错误/警告在 tab 条上方——全 tab 共享可见，不能藏在歌词页里静默失败 -->
-        <div v-if="durationWarning" class="watch-banner watch-banner--warn" role="status">⚠️ {{ durationWarning }}</div>
-        <div v-if="playbackError" class="watch-banner watch-banner--error" role="alert">❌ {{ playbackError }}</div>
+        <div v-if="durationWarning" class="watch-banner" role="status"><span class="watch-banner-tag">warn:</span> {{ durationWarning }}</div>
+        <div v-if="playbackError" class="watch-banner" role="alert"><span class="watch-banner-tag">error:</span> {{ playbackError }}</div>
 
-        <div class="panel-tabs watch-tabs" role="tablist">
+        <div class="pg-tabs watch-tabs" role="tablist" aria-label="播放页侧栏面板">
           <button
-            class="panel-tab"
-            :class="{ 'panel-tab--active': tab === 'queue' }"
+            v-for="t in TABS"
+            :key="t.key"
+            :id="`watch-tab-${t.key}`"
+            class="pg-tab"
+            :class="{ 'pg-tab--active': tab === t.key }"
             role="tab"
-            aria-controls="watch-panel-queue"
-            :aria-selected="tab === 'queue'"
-            @click="setTab('queue')"
-          >待播</button>
-          <button
-            class="panel-tab"
-            :class="{ 'panel-tab--active': tab === 'lyrics' }"
-            role="tab"
-            aria-controls="watch-panel-lyrics"
-            :aria-selected="tab === 'lyrics'"
-            @click="setTab('lyrics')"
-          >歌词</button>
-          <button
-            class="panel-tab"
-            :class="{ 'panel-tab--active': tab === 'related' }"
-            role="tab"
-            aria-controls="watch-panel-related"
-            :aria-selected="tab === 'related'"
-            @click="setTab('related')"
-          >相关</button>
+            :aria-controls="`watch-panel-${t.key}`"
+            :aria-selected="tab === t.key"
+            :tabindex="tab === t.key ? 0 : -1"
+            @click="setTab(t.key)"
+            @keydown.left.prevent="moveTab(-1)"
+            @keydown.right.prevent="moveTab(1)"
+          >{{ t.label }}</button>
         </div>
 
         <!-- 待播队列 -->
         <div
           id="watch-panel-queue"
           role="tabpanel"
+          aria-labelledby="watch-tab-queue"
           v-show="tab === 'queue'"
           class="watch-side-body"
           ref="queueContainer"
@@ -81,18 +76,25 @@
               :key="`${song.id}-${index}`"
               class="queue-row"
               :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--dragging': dragIndex === index }"
-              @click="jumpTo(index)"
-              @keydown.enter="jumpTo(index)"
-              @keydown.space.prevent="jumpTo(index)"
-              tabindex="0"
-              role="button"
             >
-              <span
+              <button
+                type="button"
                 class="watch-grip"
-                title="拖拽排序"
+                title="拖拽排序 · ↑↓ 键移动"
+                aria-label="调整队列顺序"
                 @pointerdown.stop="startDrag(index, $event)"
+                @keydown.up.prevent.stop="moveRow(index, -1)"
+                @keydown.down.prevent.stop="moveRow(index, 1)"
                 @click.stop
-              >⠿</span>
+              ><PixelIcon name="grip" :size="11" /></button>
+              <div
+                class="queue-row-main"
+                role="button"
+                tabindex="0"
+                @click="jumpTo(index)"
+                @keydown.enter="jumpTo(index)"
+                @keydown.space.prevent="jumpTo(index)"
+              >
               <span class="queue-row-index">
                 <template v-if="String(song.id) === String(currentSong?.id)">▶</template>
                 <template v-else>{{ index + 1 }}</template>
@@ -109,6 +111,7 @@
                 <p class="queue-row-artist">{{ songArtist(song) }}</p>
               </div>
               <span class="queue-row-duration">{{ formatDuration(song) }}</span>
+              </div>
               <button
                 v-if="String(song.id) !== String(currentSong?.id)"
                 class="queue-row-remove"
@@ -120,19 +123,22 @@
           </template>
 
           <div class="watch-queue-foot" v-if="queue.length">
-            <button class="watch-foot-btn" @click="$emit('save-queue')" title="把当前队列存成新歌单">💾 存为歌单</button>
+            <button class="watch-foot-btn" @click="$emit('save-queue')" title="把当前队列存成新歌单">
+              <PixelIcon name="save" :size="12" /> 存为歌单
+            </button>
             <button
               class="watch-foot-btn"
               :disabled="queue.length < 2"
               @click="$emit('clear-queue')"
               title="清空队列（保留当前播放）"
-            >🧹 清空</button>
+            >清空队列</button>
           </div>
 
           <!-- YTM UP NEXT 底部：自动播放开关 -->
           <label class="watch-autoplay">
             <input
               type="checkbox"
+              class="pg-check"
               :checked="autoplay"
               @change="$emit('update:autoplay', $event.target.checked)"
             />
@@ -144,6 +150,7 @@
         <div
           id="watch-panel-lyrics"
           role="tabpanel"
+          aria-labelledby="watch-tab-lyrics"
           v-show="tab === 'lyrics'"
           class="watch-side-body"
           ref="lyricContainer"
@@ -178,6 +185,7 @@
         <div
           id="watch-panel-related"
           role="tabpanel"
+          aria-labelledby="watch-tab-related"
           v-show="tab === 'related'"
           class="watch-side-body"
         >
@@ -220,6 +228,7 @@
 <script>
 import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music'
+import PixelIcon from './PixelIcon.vue'
 import { shareOrCopy } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
@@ -227,6 +236,7 @@ import { httpsCover } from '../lib/url'
 
 export default {
   name: 'WatchView',
+  components: { PixelIcon },
   props: {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },
@@ -269,8 +279,25 @@ export default {
 
     const formatDuration = (song) => formatTime((song.dt || song.duration || 0) / 1000)
 
+    const TABS = [
+      { key: 'queue', label: '待播' },
+      { key: 'lyrics', label: '歌词' },
+      { key: 'related', label: '相关' },
+    ]
     const setTab = (t) => emit('update:tab', t)
+    const moveTab = (dir) => {
+      const i = TABS.findIndex(t => t.key === props.tab)
+      const next = TABS[(i + dir + TABS.length) % TABS.length]
+      setTab(next.key)
+      document.getElementById(`watch-tab-${next.key}`)?.focus()
+    }
     const jumpTo = (index) => emit('queue-jump', index)
+    // 键盘排序等价路径：握把聚焦时 ↑↓ 移动该行
+    const moveRow = (index, dir) => {
+      const to = index + dir
+      if (to < 0 || to >= props.queue.length) return
+      emit('queue-move', { from: index, to })
+    }
 
     // ── 队列拖拽排序（YTM UP NEXT：握把按下后拖动实时换位）──
     const startDrag = (index, event) => {
@@ -388,8 +415,11 @@ export default {
       formatDuration,
       formatTime,
       httpsCover,
+      TABS,
       setTab,
+      moveTab,
       jumpTo,
+      moveRow,
       startDrag,
       relatedSongs,
       relatedLoading,
@@ -400,7 +430,7 @@ export default {
 </script>
 
 <style scoped>
-/* 主区页内视图（非覆盖层）——不占 fixed 位，随 .main-view 滚动容器排版 */
+/* 主区页内视图（青纸画布）——走带已移除（底栏承担），信息面板垂直居中 */
 .watch-view {
   display: flex;
   flex-direction: column;
@@ -419,7 +449,7 @@ export default {
 
 .watch-header-btn {
   font-size: 12px;
-  padding: 4px 12px;
+  padding: 7px 12px;
 }
 
 .watch-layout {
@@ -431,14 +461,14 @@ export default {
   padding: 0 20px 20px;
 }
 
-/* ── 左栏 ── */
+/* ── 左栏：封面 + 信息 + 操作 ── */
 .watch-main {
   min-width: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center; /* 走带已移除（底栏承担），信息面板垂直居中 */
+  justify-content: center;
   padding: 8px 8px 24px;
   text-align: center;
 }
@@ -447,9 +477,9 @@ export default {
   width: min(46vh, 420px, 100%);
   aspect-ratio: 1;
   object-fit: cover;
-  border: 4px solid rgba(255, 255, 255, 0.9);
+  border: var(--hairline);
   image-rendering: pixelated;
-  box-shadow: 0 12px 32px rgba(80, 40, 60, 0.25);
+  display: block;
 }
 
 .watch-cover--fallback {
@@ -457,16 +487,17 @@ export default {
   align-items: center;
   justify-content: center;
   font-size: 64px;
-  color: var(--pixel-text-dim);
-  background: var(--pixel-card-bg);
+  color: var(--ink-64);
+  background: var(--paper);
 }
 
 .watch-title {
   margin-top: 20px;
-  font-size: clamp(22px, 2.6vw, 36px);
-  font-weight: bold;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
   line-height: 1.15;
-  color: var(--pixel-text);
+  color: var(--ink);
   max-width: 34ch;
   overflow-wrap: anywhere;
 }
@@ -474,36 +505,48 @@ export default {
 .watch-meta {
   margin-top: 8px;
   font-size: 13px;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
 }
 
 .watch-actions {
-  margin-top: 14px;
+  margin-top: 16px;
   display: flex;
   gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
 }
 
-.watch-action {
-  font-size: 12px;
-  padding: 5px 14px;
-}
+.watch-action { font-size: 12px; }
 
-/* ── 右栏 ── */
+/* ── 右栏：发丝线分栏的 tab 面板 ── */
 .watch-side {
   min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: 2px solid rgba(240, 179, 192, 0.25);
+  border-left: var(--hairline);
   padding-left: 16px;
 }
 
-.watch-tabs {
+/* 状态横幅：纸面发丝盒 + 等宽标签（warn:/error:） */
+.watch-banner {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  font-size: 11px;
+  background: var(--paper);
+  border: var(--hairline);
+  color: var(--ink);
   flex-shrink: 0;
-  padding-bottom: 6px;
 }
+
+.watch-banner-tag {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: .05em;
+  color: var(--accent-magenta-ink);
+}
+
+.watch-tabs { flex-shrink: 0; }
 
 .watch-side-body {
   flex: 1;
@@ -517,27 +560,33 @@ export default {
   text-align: center;
   padding: 32px 8px;
   font-size: 12px;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
 }
 
 .watch-grip {
   flex-shrink: 0;
-  width: 16px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--pixel-text-dim);
+  width: 20px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--ink-86);
   cursor: grab;
   touch-action: none;
-  opacity: 0.6;
 }
 
-.queue-row:hover .watch-grip {
-  opacity: 1;
+/* 触屏下半透明把手 1.99:1 不可见——直接常显 */
+@media (hover: none){
+  .watch-grip { color: var(--ink); }
 }
 
 .queue-row--dragging {
-  outline: 2px dashed var(--pixel-accent-fg, #f472b6);
-  background: rgba(236, 72, 153, 0.08);
+  outline: 1.2px dashed var(--accent-magenta);
+  outline-offset: -4px;
+  background: var(--paper);
 }
 
 .watch-queue-thumb {
@@ -545,7 +594,7 @@ export default {
   height: 30px;
   object-fit: cover;
   flex-shrink: 0;
-  border: 1px solid rgba(240, 179, 192, 0.6);
+  border: var(--hairline);
   image-rendering: pixelated;
 }
 
@@ -554,7 +603,8 @@ export default {
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
+  background: var(--paper);
 }
 
 .watch-queue-foot {
@@ -564,22 +614,20 @@ export default {
 }
 
 .watch-foot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
-  padding: 4px 10px;
-  color: var(--pixel-text);
-  background: var(--pixel-card-bg);
-  border: 1px solid rgba(240, 179, 192, 0.6);
+  padding: 6px 10px;
+  color: var(--ink);
+  background: var(--paper);
+  border: var(--hairline);
   cursor: pointer;
+  transition: color .2s;
 }
 
-.watch-foot-btn:hover:not(:disabled) {
-  background: rgba(236, 72, 153, 0.15);
-}
-
-.watch-foot-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
+.watch-foot-btn:hover:not(:disabled) { color: var(--ink); text-decoration: underline; }
+.watch-foot-btn:disabled { opacity: .45; cursor: default; }
 
 .watch-autoplay {
   display: flex;
@@ -587,46 +635,13 @@ export default {
   gap: 8px;
   padding: 10px 4px 4px;
   font-size: 12px;
-  color: var(--pixel-text);
+  color: var(--ink-86);
   cursor: pointer;
-  border-top: 1px solid rgba(240, 179, 192, 0.2);
+  border-top: 1.2px solid var(--ink-10);
   margin-top: 4px;
 }
 
-.watch-banner {
-  margin-bottom: 10px;
-  padding: 6px 8px;
-  font-size: 11px;
-  border: 2px solid;
-}
-
-.watch-banner--warn {
-  background: rgba(234, 179, 8, 0.15);
-  border-color: #eab308;
-  color: #fde68a;
-}
-
-.watch-banner--error {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: #ef4444;
-  color: #fca5a5;
-}
-
-/* retro 浅色主题：横幅文字要压深才达标 */
-:root[data-theme="pixel-retro"] .watch-banner--warn {
-  color: #a16207;
-}
-
-:root[data-theme="pixel-retro"] .watch-banner--error {
-  color: #b91c1c;
-}
-
-.watch-autoplay input[type="checkbox"] {
-  accent-color: var(--pixel-accent-fg, #f472b6);
-  width: 14px;
-  height: 14px;
-}
-
+/* 歌词行：当前行墨色加粗放大，其余 ink-64 */
 .watch-lyric-list {
   display: flex;
   flex-direction: column;
@@ -638,26 +653,25 @@ export default {
   text-align: center;
   padding: 3px 4px;
   font-size: 13px;
-  color: var(--pixel-text-dim);
-  transition: color 0.25s;
+  color: var(--ink-64);
+  transition: color .25s;
 }
 
 .watch-lyric-line--current {
-  color: var(--pixel-accent-fg, #f472b6);
-  font-weight: bold;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 15px;
 }
 
 .watch-lyric-translation {
   margin-top: 2px;
   font-size: 11px;
-  opacity: 0.75;
+  opacity: .75;
 }
 
-/* 窄屏：单列——YTM 移动端同样是 封面→信息→控制 在上、tab 区在下 */
+/* 窄屏：单列——封面→信息 在上、tab 区在下 */
 @media (max-width: 900px) {
-  .watch-view {
-    overflow-y: auto;
-  }
+  .watch-view { overflow-y: auto; }
 
   .watch-layout {
     display: flex;
@@ -666,23 +680,16 @@ export default {
     overflow: visible;
   }
 
-  .watch-main {
-    overflow: visible;
-  }
-
-  .watch-cover {
-    width: min(64vw, 320px);
-  }
+  .watch-main { overflow: visible; }
+  .watch-cover { width: min(64vw, 320px); }
 
   .watch-side {
     border-left: none;
-    border-top: 2px solid rgba(240, 179, 192, 0.25);
+    border-top: var(--hairline);
     padding-left: 0;
     padding-top: 10px;
   }
 
-  .watch-side-body {
-    max-height: 60vh;
-  }
+  .watch-side-body { max-height: 60vh; }
 }
 </style>

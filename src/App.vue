@@ -2,8 +2,8 @@
   <!-- 手机控制器模式 -->
   <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" :ws-protocols="remoteWsProtocols" />
 
-  <!-- YTM 式应用壳：细顶栏 / 左库侧栏+全宽主区 / 底部播放条；歌词为按需右侧抽屉 -->
-  <div v-else class="app-shell">
+  <!-- 应用壳：纸面顶栏 / 左库侧栏+全宽主区（每视图一张饱和纸色） / 墨色底条 -->
+  <div v-else class="app-shell" :data-view="centerView">
     <!-- 顶部导航（含歌单搜索） -->
     <TopNavigation
       ref="topNavRef"
@@ -21,7 +21,7 @@
       <div v-if="sidebarOpen" class="sidebar-scrim lg:hidden" @click="sidebarOpen = false"></div>
 
       <!-- 左侧：歌单库（桌面常驻 / 移动端抽屉） -->
-      <aside class="app-sidebar" :class="{ 'app-sidebar--open': sidebarOpen }">
+      <aside class="app-sidebar" :class="{ 'app-sidebar--open': sidebarOpen }" aria-label="歌单库">
         <PlaylistPanel
           :loading="loading"
           :selected-playlist="selectedPlaylist"
@@ -108,30 +108,34 @@
       </main>
     </div>
 
-    <!-- 底部播放器（文档流内嵌） -->
+    <!-- 底部播放器（文档流内嵌；无歌曲时渲染待机墨条，全屏沉浸时隐藏） -->
     <BottomPlayer
-      v-if="currentSong && !isFullscreenPlayerOpen"
+      v-if="!isFullscreenPlayerOpen"
       :current-song="currentSong"
       :is-playing="isPlaying"
       :current-time="currentTime"
       :duration="duration"
       :volume="volume"
+      :muted="volume === 0"
       :song-switching="songSwitching"
+      :playback-list="playingSongs"
+      :current-index="currentPlayingIndex()"
+      :is-temp-playlist="playerIsTemp"
       :side-panel-open="centerView === 'watch'"
       :panel-tab="watchTab"
       :play-mode="playMode"
       :play-mode-text="getPlayModeText()"
       :shuffle-on="shuffleOn"
       @toggle-play="togglePlay"
-      @previous-song="previousSong"
-      @next-song="nextSong"
-      @seek-to="seekTo"
+      @previous="previousSong"
+      @next="nextSong"
+      @seek="seekTo"
       @update-volume="updateVolume"
       @toggle-mute="toggleMute"
-      @toggle-repeat="togglePlayMode"
+      @toggle-play-mode="togglePlayMode"
       @toggle-shuffle="toggleShuffle"
-      @toggle-side-panel="openWatchPanel"
-      @open-fullscreen="openFullscreenPlayer"
+      @open-watch="openWatchPanel"
+      @enter-fullscreen="openFullscreenPlayer"
     />
 
 
@@ -1035,6 +1039,9 @@ export default {
       if (owner) return owner.name
       return playingPlaylistId.value ? '未知歌单' : '当前队列'
     })
+
+    // 队列归属本地临时歌单（单曲分享/saved_queue_*）——底栏据此禁用随机键
+    const playerIsTemp = computed(() => isLocalPlaylistId(playingPlaylistId.value))
 
     // 播放条 ☰/词 开关 → 打开 watch 页对应 tab（YTM：UP NEXT/歌词都是页内栏位）
     const openWatchPanel = (tab) => {
@@ -2241,6 +2248,8 @@ export default {
       nextSong,
       togglePlayMode,
       getPlayModeText,
+      currentPlayingIndex,
+      playerIsTemp,
       seekTo,
       updateVolume,
       openFullscreenPlayer,

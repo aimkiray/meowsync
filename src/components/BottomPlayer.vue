@@ -1,217 +1,164 @@
 <template>
-  <div
-    v-if="currentSong"
-    class="jirai-card card-player bottom-player"
-  >
-    <!-- 顶部进度条：点击 + 拖拽 seek（pointer capture） -->
-    <div
-      ref="progressBar"
-      class="player-progress-bar absolute top-0 left-0 right-0"
-      :class="{ 'player-progress-bar--dragging': seeking }"
-      @pointerdown="onSeekStart"
-    >
+  <div class="bottom-player" role="region" aria-label="播放器">
+    <!-- 当前播放歌曲的迷你信息与走带（仅在有歌曲时显示完整控制区） -->
+    <div class="player-content" v-if="currentSong">
+      <!-- 进度条：沉在墨条顶缘，按下即 seek + 拖拽（按 .1s 量化读数） -->
       <div
-        class="player-progress-fill"
-        :style="{ '--p': progressPercentage }"
-      ></div>
-      <div
-        class="player-progress-thumb"
-        :style="{ left: progressPercentage + '%' }"
-      ></div>
-    </div>
-    <div class="px-3 sm:px-6 lg:px-8">
-      <!-- 移动端布局（lg 以下都用紧凑行——768~1023 桌面簇会把歌名挤没） -->
-      <div class="block lg:hidden">
-        <!-- 控制区域（含时间） -->
-        <div class="flex items-center justify-between py-3">
-          <!-- 歌曲信息 -->
-          <div class="flex items-center space-x-3 flex-1 min-w-0 mr-2">
+        class="player-progress-bar bp-progress"
+        @click="seekTo"
+        role="slider"
+        aria-label="播放进度"
+        :aria-valuenow="Math.round((currentTime / (duration || 1)) * 100)"
+        :aria-valuetext="`${formatTime(currentTime)} / ${formatTime(duration)}`"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        tabindex="0"
+        @keydown.arrow-right.prevent="nudgeSeek(5)"
+        @keydown.arrow-left.prevent="nudgeSeek(-5)"
+        @keydown.home.prevent="seekToPosition(0)"
+        @keydown.end.prevent="seekToPosition(1)"
+        @keydown.enter.prevent="$emit('toggle-play')"
+        @keydown.space.prevent="$emit('toggle-play')"
+        @pointerdown="onProgressPointerDown"
+        @pointermove="onProgressPointerMove"
+        @pointerup="onProgressPointerUp"
+        @pointercancel="onProgressPointerUp"
+        @lostpointercapture="onProgressPointerUp"
+      >
+        <div class="player-progress-fill bp-progress-fill" :style="{ '--p': seekProgress }"></div>
+      </div>
+
+      <div class="player-inner">
+        <!-- 当前歌曲缩略信息（左列） -->
+        <div class="track-meta">
+          <div class="cover-wrap">
             <img
-              v-if="currentSong.al?.picUrl || currentSong.album?.picUrl"
-              :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
-              :alt="currentSong.name"
-              class="w-12 h-12 object-cover flex-shrink-0 border-2 border-pink-400"
+              v-if="coverUrl"
+              :src="httpsCover(coverUrl)"
+              :alt="`封面：${currentSong.name}`"
+              class="track-cover"
               :class="{ 'playing-animation': isPlaying }"
-              style="border-radius: 0; image-rendering: pixelated;"
             />
-            <div
-              v-else
-              class="w-12 h-12 flex items-center justify-center flex-shrink-0 border-2 border-pink-400 text-pink-300"
-              style="border-radius: 0;"
-            >♪</div>
-            <div class="min-w-0 flex-1">
-              <h4 class="font-medium text-pink-300 truncate text-sm">{{ currentSong.name }}</h4>
-              <p class="text-xs text-purple-300 truncate">
-                {{ (currentSong.ar || currentSong.artists)?.map(artist => artist.name).join(', ') }}
-              </p>
-            </div>
+            <div v-else class="track-cover track-cover--fallback">♪</div>
           </div>
-
-          <!-- 播放控制 + 时间 -->
-          <div class="flex items-center space-x-1 flex-shrink-0">
-            <button
-              @click="$emit('toggle-side-panel', 'queue')"
-              class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-              :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'queue' }"
-              title="待播队列"
-              aria-label="待播队列"
-              :aria-pressed="sidePanelOpen && panelTab === 'queue'"
-            >☰</button>
-            <button
-              @click="$emit('toggle-side-panel', 'lyrics')"
-              class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-              :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'lyrics' }"
-              title="歌词"
-              aria-label="歌词"
-              :aria-pressed="sidePanelOpen && panelTab === 'lyrics'"
-            >词</button>
-            <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏" aria-label="全屏">
-              <svg class="bottom-player__icon bottom-player__icon--mobile" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
-              </svg>
-            </button>
-            <button @click="$emit('previous-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="上一首" aria-label="上一首">◀◀</button>
-            <button
-              @click="$emit('toggle-play')"
-              :disabled="songSwitching"
-              class="jirai-button-primary p-1 text-sm w-8 h-8 flex items-center justify-center"
-              :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-              :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-              :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-            >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
-            <button @click="$emit('next-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="下一首" aria-label="下一首">▶▶</button>
-            <span class="text-xs text-pink-300 ml-2 whitespace-nowrap max-[420px]:hidden">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
+          <div class="track-text">
+            <p class="track-name">{{ currentSong.name }}</p>
+            <p class="track-artist">{{ songArtists(currentSong) }} · {{ currentSong.al?.name || '未知专辑' }}</p>
           </div>
         </div>
-      </div>
 
-      <!-- 桌面端布局：YTM 右簇 音量→循环→随机→队列→歌词→全屏 -->
-      <div class="hidden lg:block py-4">
-        <div class="max-w-[1440px] px-4 sm:px-6 lg:px-8 mx-auto">
-            <!-- 主要控制区域（含时间） -->
-            <div class="flex items-center justify-between">
-              <!-- 左：歌曲信息 -->
-              <div class="flex items-center space-x-3 min-w-0 flex-1">
-                <img
-                  v-if="currentSong.al?.picUrl || currentSong.album?.picUrl"
-                  :src="httpsCover(currentSong.al?.picUrl || currentSong.album?.picUrl)"
-                  :alt="currentSong.name"
-                  class="w-12 h-12 object-cover border-2 border-pink-400 flex-shrink-0"
-                  :class="{ 'playing-animation': isPlaying }"
-                  style="border-radius: 0; image-rendering: pixelated;"
-                />
-                <div
-                  v-else
-                  class="w-12 h-12 flex items-center justify-center border-2 border-pink-400 flex-shrink-0 text-pink-300"
-                  style="border-radius: 0;"
-                >♪</div>
-                <div class="min-w-0 flex-1">
-                  <h4 class="font-medium text-pink-300 truncate">{{ currentSong.name }}</h4>
-                  <p class="text-sm text-purple-300 truncate">
-                    {{ (currentSong.ar || currentSong.artists)?.map(artist => artist.name).join(', ') }}
-                  </p>
-                </div>
-              </div>
+        <!-- 走带控制（中列）：YTM 顺序 —— 随机/上一首/播放/下一首/循环 -->
+        <div class="player-controls">
+          <button
+            @click="$emit('toggle-shuffle')"
+            class="transport"
+            :class="{ 'transport--active': shuffleOn }"
+            :aria-pressed="shuffleOn"
+            :disabled="isTempPlaylist"
+            aria-label="随机播放"
+            title="随机播放"
+          ><PixelIcon name="shuffle" :size="16" /></button>
+          <button
+            @click="$emit('previous')"
+            class="transport"
+            aria-label="上一首"
+            title="上一首"
+          ><PixelIcon name="prev" :size="16" /></button>
+          <button
+            @click="$emit('toggle-play')"
+            class="transport transport--play"
+            :aria-label="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
+            :title="songSwitching ? '切换歌曲中…' : (isPlaying ? '暂停' : '播放')"
+          ><PixelIcon v-if="!songSwitching" :name="isPlaying ? 'pause' : 'play'" :size="18" /><span v-else class="switching-glyph">…</span></button>
+          <button
+            @click="$emit('next')"
+            class="transport"
+            :disabled="atQueueEnd"
+            aria-label="下一首"
+            title="下一首"
+          ><PixelIcon name="next" :size="16" /></button>
+          <button
+            @click="$emit('toggle-play-mode')"
+            class="transport"
+            :aria-label="`切换播放模式，当前：${playModeText || playModeIcon}`"
+            :title="`播放模式：${playModeText || '列表循环'}`"
+          ><span class="mode-glyph">{{ playModeIcon }}</span></button>
+        </div>
 
-              <!-- 右侧控制区域 -->
-              <div class="flex items-center space-x-4 flex-shrink-0">
-                <!-- 播放控制 -->
-                <div class="flex items-center space-x-3">
-                  <button @click="$emit('previous-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center" title="上一首" aria-label="上一首">◀◀</button>
-                  <button
-                    @click="$emit('toggle-play')"
-                    :disabled="songSwitching"
-                    class="jirai-button-primary p-3 text-xl w-12 h-12 flex items-center justify-center"
-                    :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-                    :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-                    :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-                  >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
-                  <button @click="$emit('next-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center" title="下一首" aria-label="下一首">▶▶</button>
-                </div>
-
-                <!-- 时间 + 音量 + 辅助控制（YTM 右簇顺序） -->
-                <div class="flex items-center space-x-3">
-                  <span class="text-xs text-pink-300 whitespace-nowrap">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
-                  <!-- 音量：点击喇叭静音/恢复，滑块调量 -->
-                  <div class="flex items-center space-x-2">
-                    <button
-                      @click="$emit('toggle-mute')"
-                      class="jirai-button bottom-player__icon-button p-1 w-8 h-8 flex items-center justify-center"
-                      :title="volume === 0 ? '取消静音' : '静音'"
-                      :aria-label="volume === 0 ? '取消静音' : '静音'"
-                    >
-                      <svg v-if="volume === 0" class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M3 9v6h4l5 5V4L7 9H3zm13.59 3l2.7-2.7-1.41-1.42-2.71 2.71-2.7-2.71-1.42 1.42 2.71 2.7-2.71 2.71 1.42 1.41 2.7-2.7 2.71 2.7 1.41-1.41z"/>
-                      </svg>
-                      <svg v-else class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
-                      </svg>
-                    </button>
-                    <input
-                      :value="Number(volume)"
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="1"
-                      class="w-20 jirai-slider"
-                      aria-label="音量"
-                      @input="$emit('update-volume', Number($event.target.value))"
-                    />
-                  </div>
-
-                  <button
-                    @click="$emit('toggle-repeat')"
-                    class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-                    :class="{ 'bottom-player__toggle--active': playMode !== 'list' }"
-                    :title="`循环：${playModeText}`"
-                    :aria-label="`循环模式：${playModeText}`"
-                    :aria-pressed="playMode !== 'list'"
-                  >{{ playMode === 'single' ? '↻1' : (playMode === 'loop' ? '↻' : '→') }}</button>
-                  <button
-                    @click="$emit('toggle-shuffle')"
-                    class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-                    :class="{ 'bottom-player__toggle--active': shuffleOn }"
-                    :title="shuffleOn ? '关闭随机播放' : '随机播放'"
-                    :aria-label="shuffleOn ? '关闭随机播放' : '随机播放'"
-                    :aria-pressed="shuffleOn"
-                  >🔀</button>
-                  <button
-                    @click="$emit('toggle-side-panel', 'queue')"
-                    class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-                    :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'queue' }"
-                    title="待播队列"
-                    aria-label="待播队列"
-                    :aria-pressed="sidePanelOpen && panelTab === 'queue'"
-                  >☰</button>
-                  <button
-                    @click="$emit('toggle-side-panel', 'lyrics')"
-                    class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
-                    :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'lyrics' }"
-                    title="歌词"
-                    aria-label="歌词"
-                    :aria-pressed="sidePanelOpen && panelTab === 'lyrics'"
-                  >词</button>
-                  <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏" aria-label="全屏">
-                    <svg class="bottom-player__icon bottom-player__icon--desktop" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </div>
+        <!-- 时间与右簇（音量 + watch/词/沉浸入口） -->
+        <div class="player-right">
+          <span class="player-time hidden lg:inline">
+            {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+          </span>
+          <div class="vol-wrap">
+            <button
+              @click="$emit('toggle-mute')"
+              class="transport"
+              :aria-label="muted ? '取消静音' : '静音'"
+              :title="muted ? '取消静音' : '静音'"
+            ><PixelIcon :name="muted ? 'vol-mute' : 'vol'" :size="15" /></button>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              :value="volume"
+              @input="$emit('update-volume', parseFloat($event.target.value))"
+              class="pg-range pg-range--on-ink vol-range"
+              aria-label="音量"
+            />
+          </div>
+          <button
+            class="pg-icobtn pg-icobtn--on-ink"
+            :class="{ 'pg-icobtn--pressed': sidePanelOpen && panelTab === 'queue' }"
+            :aria-pressed="sidePanelOpen && panelTab === 'queue'"
+            @click="$emit('open-watch', 'queue')"
+            aria-label="待播队列"
+            title="待播队列"
+          >
+            <span class="queue-glyph">☰</span>
+          </button>
+          <button
+            class="pg-icobtn pg-icobtn--on-ink bp-xtra"
+            :class="{ 'pg-icobtn--pressed': sidePanelOpen && panelTab === 'lyrics' }"
+            :aria-pressed="sidePanelOpen && panelTab === 'lyrics'"
+            @click="$emit('open-watch', 'lyrics')"
+            aria-label="歌词"
+            title="歌词"
+          >
+            <PixelIcon name="note" :size="14" />
+          </button>
+          <button
+            class="pg-icobtn pg-icobtn--on-ink bp-xtra"
+            @click="$emit('enter-fullscreen')"
+            aria-label="沉浸模式"
+            title="沉浸模式"
+          >
+            <PixelIcon name="expand" :size="14" />
+          </button>
         </div>
       </div>
+    </div>
+
+    <!-- 无歌曲时的待机条：品牌戳 + 进度占位 -->
+    <div class="player-idle" v-else>
+      <span class="pg-label pg-label--on-ink">meowsync</span>
+      <span class="pg-label pg-label--on-ink player-idle-hint">选择歌曲开始播放</span>
+      <span class="pg-label pg-label--on-ink player-idle-ver">ms.os1</span>
     </div>
   </div>
 </template>
 
 <script>
-import { computed, ref } from 'vue'
+import { ref, computed } from 'vue'
 import { formatTime } from '../lib/format'
+import { songArtists } from '../lib/song'
 import { httpsCover } from '../lib/url'
+import PixelIcon from './PixelIcon.vue'
 
 export default {
   name: 'BottomPlayer',
+  components: { PixelIcon },
   props: {
     currentSong: {
       type: Object,
@@ -231,20 +178,27 @@ export default {
     },
     volume: {
       type: Number,
-      default: 80
+      default: 0.5
     },
-    songSwitching: {
+    muted: {
       type: Boolean,
       default: false
     },
-    // 右侧面板状态（待播/歌词 tab 各自高亮）
-    sidePanelOpen: {
+    playbackList: {
+      type: Array,
+      default: () => []
+    },
+    currentIndex: {
+      type: Number,
+      default: -1
+    },
+    isTempPlaylist: {
       type: Boolean,
       default: false
     },
-    panelTab: {
-      type: String,
-      default: 'queue'
+    shuffleOn: {
+      type: Boolean,
+      default: false
     },
     playMode: {
       type: String,
@@ -252,148 +206,294 @@ export default {
     },
     playModeText: {
       type: String,
-      default: '顺序'
+      default: ''
     },
-    shuffleOn: {
+    songSwitching: {
       type: Boolean,
       default: false
+    },
+    sidePanelOpen: {
+      type: Boolean,
+      default: false
+    },
+    panelTab: {
+      type: String,
+      default: 'queue'
     }
   },
-  emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'open-fullscreen', 'toggle-side-panel', 'toggle-repeat', 'toggle-shuffle', 'toggle-mute'],
+  emits: ['toggle-play', 'previous', 'next', 'update-volume', 'toggle-mute', 'toggle-shuffle', 'toggle-play-mode', 'open-watch', 'enter-fullscreen', 'seek'],
   setup(props, { emit }) {
-    const progressBar = ref(null)
-    const seeking = ref(false)
+    // 搜索结果曲目常无 picUrl（字段在 al/album 上）——三路兜底防裂图
+    const coverUrl = computed(() =>
+      props.currentSong?.picUrl || props.currentSong?.al?.picUrl || props.currentSong?.album?.picUrl || ''
+    )
 
-    const ratioFromEvent = (event) => {
-      const rect = progressBar.value?.getBoundingClientRect()
-      if (!rect || rect.width === 0) return null
-      return (event.clientX - rect.left) / rect.width
-    }
+    // 进度条拖拽状态：按下期间 UI 播放在这里走，不跟随 props.currentTime 抢
+    const dragActive = ref(false)
+    const dragProgress = ref(0)
 
-    // 按下即 seek + 捕获指针进入拖拽；拖动中持续 seek，松手收尾。
-    // window 级兜底 + lostpointercapture + blur/隐藏页清理——元素捕获失败
-    // 或指针在元素外松手时 seeking 不会卡死
-    const onSeekStart = (event) => {
-      if (event.button !== undefined && event.button !== 0) return
-      const bar = progressBar.value
-      if (!bar) return
-      const pid = event.pointerId
-      seeking.value = true
-      const ratio = ratioFromEvent(event)
-      if (ratio !== null) emit('seek-to', ratio)
-      bar.setPointerCapture?.(pid)
-
-      const onMove = (e) => {
-        if (e.pointerId !== pid) return
-        const r = ratioFromEvent(e)
-        if (r !== null) emit('seek-to', r)
-      }
-      const onEnd = (e) => {
-        if (e?.pointerId !== undefined && e.pointerId !== pid) return
-        seeking.value = false
-        bar.removeEventListener('pointermove', onMove)
-        bar.removeEventListener('pointerup', onEnd)
-        bar.removeEventListener('pointercancel', onEnd)
-        bar.removeEventListener('lostpointercapture', onEnd)
-        window.removeEventListener('pointerup', onEnd)
-        window.removeEventListener('pointercancel', onEnd)
-        window.removeEventListener('blur', onEnd)
-        document.removeEventListener('visibilitychange', onVisibility)
-      }
-      const onVisibility = () => { if (document.hidden) onEnd() }
-      bar.addEventListener('pointermove', onMove)
-      bar.addEventListener('pointerup', onEnd)
-      bar.addEventListener('pointercancel', onEnd)
-      bar.addEventListener('lostpointercapture', onEnd)
-      window.addEventListener('pointerup', onEnd)
-      window.addEventListener('pointercancel', onEnd)
-      window.addEventListener('blur', onEnd)
-      document.addEventListener('visibilitychange', onVisibility)
-    }
-
-    const progressPercentage = computed(() => {
-      return props.duration > 0
-        ? Math.max(0, Math.min(100, (props.currentTime / props.duration) * 100))
-        : 0
+    const seekProgress = computed(() => {
+      if (dragActive.value) return dragProgress.value * 100
+      return props.duration ? (props.currentTime / props.duration) * 100 : 0
     })
 
+    // 队尾判定：仅 list 顺序模式在队尾时禁「下一首」——loop 回卷 / single 自循环始终有效
+    const atQueueEnd = computed(() =>
+      !props.isTempPlaylist &&
+      props.playMode === 'list' &&
+      props.playbackList.length > 0 &&
+      props.currentIndex >= props.playbackList.length - 1
+    )
+
+    const playModeIcon = computed(() =>
+      ({ list: '→', loop: '∞', single: '↻' })[props.playMode] || '→'
+    )
+
+    const positionFromEvent = (e, bar) => {
+      const rect = bar.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      return Math.min(1, Math.max(0, x / rect.width))
+    }
+
+    // seek 契约：emit 归一化比例 0-1（App.seekTo 负责换算秒）
+    const seekTo = (e) => {
+      emit('seek', positionFromEvent(e, e.currentTarget))
+    }
+
+    const seekToPosition = (pos) => {
+      emit('seek', pos)
+    }
+
+    const nudgeSeek = (sec) => {
+      const target = Math.max(0, Math.min(props.duration || 0, props.currentTime + sec))
+      emit('seek', props.duration ? target / props.duration : 0)
+    }
+
+    const onProgressPointerDown = (e) => {
+      if (e.button !== 0) return
+      const bar = e.currentTarget
+      bar.setPointerCapture?.(e.pointerId)
+      dragActive.value = true
+      dragProgress.value = positionFromEvent(e, bar)
+    }
+
+    const onProgressPointerMove = (e) => {
+      if (!dragActive.value) return
+      dragProgress.value = positionFromEvent(e, e.currentTarget)
+    }
+
+    const onProgressPointerUp = (e) => {
+      if (!dragActive.value) return
+      dragActive.value = false
+      emit('seek', dragProgress.value)
+    }
+
     return {
-      progressBar,
-      seeking,
-      progressPercentage,
       formatTime,
+      songArtists,
       httpsCover,
-      onSeekStart
+      coverUrl,
+      seekProgress,
+      atQueueEnd,
+      playModeIcon,
+      seekTo,
+      seekToPosition,
+      nudgeSeek,
+      onProgressPointerDown,
+      onProgressPointerMove,
+      onProgressPointerUp
     }
   }
 }
 </script>
 
 <style scoped>
-/* 文档流内嵌：应用壳 flex 列的最后一个子项，不再 fixed */
+/* ── 墨条（底栏唯一配色：ink 面 + paper 字）── */
 .bottom-player {
   position: relative;
   flex-shrink: 0;
-  z-index: var(--z-player);
-  margin: 0;
-  border-radius: 0;
-  border-bottom: none;
-  border-left: none;
-  border-right: none;
-  border-top: none;
-  /* 底色由全局 .card-player 提供（!important），scoped 再写是死代码 */
+  background: var(--ink);
+  color: var(--paper);
+  border-top: var(--hairline);
 }
 
-.bottom-player__icon-button {
-  padding-left: 0;
-  padding-right: 0;
-}
-
-/* 歌词/队列抽屉开关的激活态 */
-.bottom-player__toggle--active {
-  background: #f472b6;
-  color: #1a1a2e;
-}
-
-.bottom-player__icon {
-  display: block;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: square;
-  stroke-linejoin: miter;
-}
-
-.bottom-player__icon--mobile {
-  width: 14px;
-  height: 14px;
-}
-
-.bottom-player__icon--desktop {
-  width: 18px;
-  height: 18px;
-}
-
-/* 进度条拖拽旋钮：平时细线，悬停/拖拽时露头（YTM 同款交互） */
-.player-progress-thumb {
+.bp-progress {
   position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  transform: translate(-50%, -50%);
-  background: var(--pixel-accent-fg, #f472b6);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s;
-}
-
-.player-progress-bar:hover .player-progress-thumb,
-.player-progress-bar--dragging .player-progress-thumb {
-  opacity: 1;
-}
-
-.player-progress-bar {
+  top: -1px;
+  left: 0;
+  right: 0;
+  background: var(--white-16);
   cursor: pointer;
-  touch-action: none; /* 拖拽时不让浏览器接管滚动手势 */
+  z-index: 2;
+}
+.bp-progress-fill { background: var(--paper); }
+
+.player-content { position: relative; }
+
+.player-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* 左列：封面 + 文字 */
+.track-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.cover-wrap { width: 40px; height: 40px; flex-shrink: 0; }
+.track-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: 1.2px solid var(--white-40);
+  image-rendering: pixelated;
+  display: block;
+}
+.track-cover--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--label-grey);
+  font-size: 15px;
+}
+.track-text { min-width: 0; }
+.track-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.track-artist {
+  font-size: 11px;
+  color: var(--label-grey);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+/* 中列：走带 */
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.transport {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--paper);
+  border: 1.2px solid transparent;
+  cursor: pointer;
+  transition: color .2s, border-color .2s;
+}
+.transport:hover:not(:disabled) { color: var(--accent-magenta); }
+.transport:disabled { opacity: .35; cursor: default; }
+.transport--active { color: var(--accent-magenta); }
+.transport--play {
+  border-color: var(--paper);
+  width: 40px;
+  height: 40px;
+}
+.transport--play:hover:not(:disabled) { border-color: var(--accent-magenta); }
+
+.mode-glyph {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.switching-glyph {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 1;
+  animation: bpBlink 1s steps(2) infinite;
+}
+@keyframes bpBlink { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) {
+  .switching-glyph { animation: none; }
+}
+
+/* watch 页已打开对应 tab 时的按下态（纸面反白） */
+.pg-icobtn--pressed {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* 右列：时间 + 音量 + watch/沉浸入口 */
+.player-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.player-time {
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 12px;
+  color: var(--label-grey);
+  white-space: nowrap;
+}
+
+.vol-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.vol-range { width: 76px; }
+
+/* 墨条上的图标键：透明底白字（无发丝盒——墨条自身即是铬） */
+.pg-icobtn--on-ink {
+  border-color: transparent;
+  color: var(--paper);
+}
+.pg-icobtn--on-ink:hover:not(:disabled) { color: var(--accent-magenta); }
+
+.queue-glyph {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* 待机条 */
+.player-idle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+.pg-label--on-ink { color: var(--label-grey); }
+.player-idle-hint { color: var(--white-80); }
+
+@media (max-width: 639px) {
+  .player-inner { gap: 10px; padding: 8px 10px; }
+  .vol-wrap, .player-time { display: none; }
+}
+
+/* ≤420px：墨条塞不下全簇——词/沉浸键收进 watch 页路径可达，保队列入口 */
+@media (max-width: 420px) {
+  .bp-xtra { display: none; }
+  .transport { width: 30px; height: 30px; }
+  .transport--play { width: 36px; height: 36px; }
+  .player-controls { gap: 2px; }
+  .player-inner { gap: 6px; padding: 8px; }
+  .track-text { max-width: 34vw; }
 }
 </style>
