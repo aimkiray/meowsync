@@ -23,7 +23,7 @@
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
         </div>
 
-        <h2 class="watch-title">{{ currentSong?.name || '未播放' }}</h2>
+        <h2 class="watch-title" data-nosnippet>{{ currentSong?.name || '未播放' }}</h2>
         <p class="watch-meta">
           {{ artistText }}<template v-if="albumText"> · {{ albumText }}</template>
           <template v-if="duration"> · {{ formatTime(duration) }}</template>

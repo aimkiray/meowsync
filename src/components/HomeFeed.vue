@@ -6,7 +6,7 @@
 
     <header class="home-head">
       <p class="pg-label">home · discover</p>
-      <h2 class="home-title">发现音乐</h2>
+      <h2 class="home-title" data-nosnippet>发现音乐</h2>
     </header>
 
     <!-- 热搜 chips（点击直接搜） -->
