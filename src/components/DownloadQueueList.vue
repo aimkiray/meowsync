@@ -232,7 +232,18 @@ function toggleMenu(queueId, event) {
 
   const rect = event.currentTarget.getBoundingClientRect();
   const menuWidth = 132;
-  const menuHeight = 180; // 5 项约 180px，不足时上翻避免出视口底
+  // 按该队列实际渲染的菜单项数估高（每项约 33px）——写死 180px 会让短菜单无谓上翻
+  const queue = props.queues?.find(q => q.id === queueId);
+  const itemCount = queue
+    ? 1
+      + (['pending', 'cancelled'].includes(queue.status) ? 1 : 0)
+      + (queue.status === 'running' ? 1 : 0)
+      + (queue.status === 'paused' ? 1 : 0)
+      + (['pending', 'running', 'paused'].includes(queue.status) ? 1 : 0)
+      + (canRetry(queue) ? 1 : 0)
+      + (canDelete(queue) ? 1 : 0)
+    : 6;
+  const menuHeight = itemCount * 33 + 4; // 不足时上翻避免出视口底
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));

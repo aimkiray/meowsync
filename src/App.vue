@@ -148,6 +148,9 @@
     />
 
 
+    <!-- 全局 toast + 确认模态宿主（替代原生 alert/confirm） -->
+    <FeedbackHost />
+
     <FullscreenPlayer
       v-if="isFullscreenPlayerOpen && currentSong"
       :current-song="currentSong"
@@ -178,6 +181,7 @@ import { musicApi } from './api/music'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId } from './lib/song'
+import { toast } from './lib/feedback'
 import { httpsCover } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
@@ -185,6 +189,7 @@ import PlaylistGrid from './components/PlaylistGrid.vue'
 import HomeFeed from './components/HomeFeed.vue'
 import SongList from './components/SongList.vue'
 import WatchView from './components/WatchView.vue'
+import FeedbackHost from './components/FeedbackHost.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import RemoteController from './components/RemoteController.vue'
@@ -199,6 +204,7 @@ export default {
     HomeFeed,
     SongList,
     WatchView,
+    FeedbackHost,
     BottomPlayer,
     FullscreenPlayer,
     RemoteController,
@@ -412,7 +418,7 @@ export default {
         // 会让用户以为遥控还在生效，必须可见提示
         if (e && e.code === 4000) {
           console.warn('[remote] 已有新的 host 接管，本端停止远程控制')
-          alert('远程控制已被另一设备接管，本端已退出主机模式（刷新页面可重新接管）')
+          toast('远程控制已被另一设备接管，本端已退出主机模式（刷新页面可重新接管）', 'error', 5000)
           return
         }
         // 该 socket 已被更新的连接取代，不重连（新连接自己负责）
@@ -422,7 +428,7 @@ export default {
         if (remoteRetries > 5) {
           // 与 4000 顶替路径对称：遥控静默失效会让用户误以为还在生效
           console.warn('[remote] host 重连次数超限，停止重连（请检查 REMOTE_TOKEN/服务状态）')
-          alert('远程控制连接多次失败，已停止重连（刷新页面可重试）')
+          toast('远程控制连接多次失败，已停止重连（刷新页面可重试）', 'error', 5000)
           return
         }
         remoteReconnectTimer = setTimeout(connectRemoteHost, 3000)
@@ -496,7 +502,8 @@ export default {
       const url = buildNavUrl(playlist)
       // 同视图重复操作（重搜/重点同一歌单）不堆历史，否则 Back 显得失灵
       if (url.toString() === window.location.href) return
-      window.history.pushState(null, '', url.toString())
+      // 打标记供 watchBack 判断：冷启动直达页（无站内历史）按「返回」应回首页而非退站
+      window.history.pushState({ meowsyncNav: 1 }, '', url.toString())
     }
 
     // popstate → 按 URL 还原视图；view=songs&pl= 时回选对应歌单
@@ -1077,7 +1084,9 @@ export default {
     }
 
     const watchBack = () => {
-      window.history.back()
+      // 当前条目是我们 push 的 → 站内还有上一页可回；否则（分享链冷启动）回首页
+      if (window.history.state?.meowsyncNav) window.history.back()
+      else centerView.value = 'home'
     }
 
     // 队列拖拽排序：from→to 实时移动；原序备份做同构移动（关随机后顺序不回弹）
@@ -1122,7 +1131,7 @@ export default {
       }
       userPlaylists.value.unshift(pl)
       savePlaylistsToStorage()
-      alert(`已存为歌单「${pl.name}」`)
+      toast(`已存为歌单「${pl.name}」`, 'success')
     }
 
     // 相关 tab 点歌：单曲独立成队（与搜索结果点歌同构）
@@ -1600,6 +1609,9 @@ export default {
           // YTM 自动播放：队列耗尽时接相关歌曲续播；拉不到才落到停止分支
           continueWithRelated().then(ok => { if (!ok) stopAtQueueEnd() })
           return
+        } else if (!opts.autoplay) {
+          // 手动点「下一首」但已在队尾（list 模式）：静默无效——该键不该变成"停止"键
+          return
         } else {
           stopAtQueueEnd()
           return
@@ -1776,10 +1788,13 @@ export default {
         return
       }
       const el = e.target
+      if (e.defaultPrevented) return // 组件已处理（如 role=button 行的 space.prevent）
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
       if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return
       switch (e.key) {
         case ' ':
+          // 焦点在原生按钮/role=button/链接上时空格属于它自己的激活语义，不抢
+          if (el?.tagName === 'BUTTON' || el?.closest?.('[role="button"], [role="tab"], [role="menuitem"], [role="option"], a[href]')) return
           e.preventDefault() // 阻止页面滚动
           togglePlay()
           break

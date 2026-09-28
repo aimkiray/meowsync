@@ -26,6 +26,7 @@
           :class="{ 'song-result-row--playing': String(currentSong?.id) === String(song.id) }"
           @click="$emit('play-song', song)"
           @keydown.enter="$emit('play-song', song)"
+          @keydown.space.prevent="$emit('play-song', song)"
           tabindex="0"
           role="button"
           :title="`播放 ${song.name}`"
@@ -59,6 +60,7 @@
         class="grid-card jirai-card"
         @click="$emit('open', playlist)"
         @keydown.enter="$emit('open', playlist)"
+        @keydown.space.prevent="$emit('open', playlist)"
         tabindex="0"
         role="button"
         :title="`打开《${playlist.name}》`"
@@ -103,6 +105,7 @@
 <script>
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { shareOrCopy } from '../lib/share'
+import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
 import { formatTime } from '../lib/format'
 
@@ -176,8 +179,8 @@ export default {
         text: `来看看这个歌单：${playlist.name}`,
         url: shareUrl
       })
-      if (result === 'copied') alert('分享链接已复制到剪贴板！')
-      else if (result === 'failed') alert('分享失败，请手动复制链接')
+      if (result === 'copied') toast('分享链接已复制到剪贴板', 'success')
+      else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
     const songArtist = (song) =>

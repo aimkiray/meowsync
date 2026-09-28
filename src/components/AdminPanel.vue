@@ -39,6 +39,7 @@
 
 <script setup>
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
+import { toast, pixelConfirm } from '../lib/feedback'
 import { downloadsApi } from '../api/downloads';
 import DownloadQueueList from './DownloadQueueList.vue';
 import DownloadTaskList from './DownloadTaskList.vue';
@@ -300,7 +301,7 @@ async function startQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('启动队列失败:', error);
-    alert('启动队列失败: ' + (error.response?.data?.message || error.message));
+    toast('启动队列失败: ' + (error.response?.data?.message || error.message), 'error');
   }
 }
 
@@ -310,7 +311,7 @@ async function pauseQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('暂停队列失败:', error);
-    alert('暂停队列失败: ' + (error.response?.data?.message || error.message));
+    toast('暂停队列失败: ' + (error.response?.data?.message || error.message), 'error');
   }
 }
 
@@ -320,7 +321,7 @@ async function resumeQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('恢复队列失败:', error);
-    alert('恢复队列失败: ' + (error.response?.data?.message || error.message));
+    toast('恢复队列失败: ' + (error.response?.data?.message || error.message), 'error');
   }
 }
 
@@ -338,14 +339,14 @@ async function retryTask(taskId) {
     }
   } catch (error) {
     console.error('重试任务失败:', error);
-    alert('重试任务失败: ' + (error.response?.data?.message || error.message));
+    toast('重试任务失败: ' + (error.response?.data?.message || error.message), 'error');
   } finally {
     retryingTaskId.value = null;
   }
 }
 
 async function cancelQueue(queueId) {
-  if (!confirm('确定要取消这个队列吗？未完成的任务将停止下载')) return;
+  if (!await pixelConfirm('确定要取消这个队列吗？未完成的任务将停止下载', { confirmText: '取消队列', danger: true })) return;
 
   try {
     await downloadsApi.cancelQueue(queueId);
@@ -355,7 +356,7 @@ async function cancelQueue(queueId) {
     }
   } catch (error) {
     console.error('取消队列失败:', error);
-    alert('取消队列失败: ' + (error.response?.data?.message || error.message));
+    toast('取消队列失败: ' + (error.response?.data?.message || error.message), 'error');
   }
 }
 
@@ -368,12 +369,12 @@ async function retryQueue(queueId) {
     }
   } catch (error) {
     console.error('重试队列失败:', error);
-    alert('重试队列失败: ' + (error.response?.data?.message || error.message));
+    toast('重试队列失败: ' + (error.response?.data?.message || error.message), 'error');
   }
 }
 
 async function deleteQueue(queueId) {
-  if (!confirm('确定要删除这个队列吗？')) return;
+  if (!await pixelConfirm('确定要删除这个队列吗？', { confirmText: '删除', danger: true })) return;
 
   try {
     await downloadsApi.deleteQueue(queueId);
@@ -385,7 +386,7 @@ async function deleteQueue(queueId) {
     }
   } catch (error) {
     console.error('删除队列失败:', error);
-    alert('删除队列失败: ' + (error.response?.data?.message || error.message));
+    toast('删除队列失败: ' + (error.response?.data?.message || error.message), 'error');
   }
 }
 

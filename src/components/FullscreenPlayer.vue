@@ -42,14 +42,16 @@
       <div class="fullscreen-player__bottom">
         <div class="fullscreen-player__controls">
           <div class="fullscreen-player__buttons">
-            <button @click="$emit('previous-song')" class="fullscreen-player__control-button">◀◀</button>
+            <button @click="$emit('previous-song')" class="fullscreen-player__control-button" title="上一首" aria-label="上一首">◀◀</button>
             <button
               @click="$emit('toggle-play')"
               :disabled="songSwitching"
               class="fullscreen-player__control-button fullscreen-player__control-button--primary"
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
+              :title="isPlaying ? '暂停' : '播放'"
+              :aria-label="isPlaying ? '暂停' : '播放'"
             ><span class="fullscreen-player__control-icon" :class="{ 'fullscreen-player__control-icon--pause': isPlaying && !songSwitching, 'fullscreen-player__control-icon--loading': songSwitching }">{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</span></button>
-            <button @click="$emit('next-song')" class="fullscreen-player__control-button">▶▶</button>
+            <button @click="$emit('next-song')" class="fullscreen-player__control-button" title="下一首" aria-label="下一首">▶▶</button>
           </div>
 
           <div class="fullscreen-player__info-row">
@@ -68,6 +70,7 @@
                 max="100"
                 step="1"
                 class="w-full jirai-slider"
+                aria-label="音量"
                 @input="$emit('update-volume', Number($event.target.value))"
               />
             </div>
@@ -91,7 +94,7 @@
         class="player-progress-bar fullscreen-player__progress"
         @click="onSeekClick"
       >
-        <div class="player-progress-fill" :style="{ width: progressPercentage + '%' }"></div>
+        <div class="player-progress-fill" :style="{ '--p': progressPercentage }"></div>
       </div>
     </div>
   </div>
@@ -334,7 +337,6 @@ export default {
 .fullscreen-player__close:hover,
 .fullscreen-player__close:active,
 .fullscreen-player__progress,
-.fullscreen-player__progress :deep(.player-progress-fill),
 .fullscreen-player__volume :deep(.jirai-slider),
 .fullscreen-player__volume :deep(.jirai-slider:hover),
 .fullscreen-player__volume :deep(.jirai-slider:active),
@@ -348,6 +350,13 @@ export default {
   transform: none !important;
   appearance: none;
   -webkit-appearance: none;
+}
+
+/* 进度填充不在上面的 transform 重置里——scaleX 就是它的进度值 */
+.fullscreen-player__progress :deep(.player-progress-fill) {
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
 }
 
 .fullscreen-player__control-button {

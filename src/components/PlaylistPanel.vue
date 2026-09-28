@@ -31,7 +31,15 @@
         class="music-card cursor-pointer p-3 jirai-card transition-all w-full relative group"
         :class="{ 'border-purple-400': String(selectedPlaylist?.id) === String(playlist.id) }"
       >
-        <div @click="$emit('select-playlist', playlist)" class="flex items-center space-x-3">
+        <div
+          @click="$emit('select-playlist', playlist)"
+          @keydown.enter="$emit('select-playlist', playlist)"
+          @keydown.space.prevent="$emit('select-playlist', playlist)"
+          class="flex items-center space-x-3"
+          tabindex="0"
+          role="button"
+          :aria-label="`打开歌单 ${playlist.name}`"
+        >
           <div class="relative">
             <img
               v-if="playlist.coverImgUrl"
@@ -144,6 +152,7 @@ import { downloadsApi } from '../api/downloads'
 import { copyText, shareOrCopy } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId } from '../lib/song'
+import { toast, pixelConfirm } from '../lib/feedback'
 
 export default {
   name: 'PlaylistPanel',
@@ -240,7 +249,7 @@ export default {
       const url = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
       const ok = await copyText(url)
       if (!ok) {
-        alert('复制失败，请手动复制链接')
+        toast('复制失败，请手动复制链接', 'error')
       }
       closeMenu()
     }
@@ -253,13 +262,13 @@ export default {
         text: `来看看这个歌单：${playlist.name}`,
         url: shareUrl
       })
-      if (result === 'copied') alert('分享链接已复制到剪贴板！')
-      else if (result === 'failed') alert('分享失败，请手动复制链接')
+      if (result === 'copied') toast('分享链接已复制到剪贴板', 'success')
+      else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
-    const removePlaylist = (playlistId) => {
+    const removePlaylist = async (playlistId) => {
       // 与其他删除项保持一致的确认（本地库移除，误删可重加但易误触）
-      if (!confirm('确定要从库中移除该歌单吗？')) {
+      if (!await pixelConfirm('确定要从库中移除该歌单吗？', { confirmText: '移除', danger: true })) {
         closeMenu()
         return
       }
@@ -281,11 +290,11 @@ export default {
           concurrentLimit: 3
         })
 
-        alert('下载队列已创建！正在后台下载...')
+        toast('下载队列已创建，正在后台下载', 'success')
       } catch (error) {
         console.error('创建下载队列失败:', error)
         const message = error.response?.data?.message || error.message
-        alert('下载失败: ' + message)
+        toast('下载失败: ' + message, 'error')
       } finally {
         closeMenu() // 失败也要关菜单——否则菜单挂着看似还能点
       }
@@ -293,7 +302,7 @@ export default {
 
     const deletePlaylistDownloads = async (playlist) => {
       // confirm 取消分支与 removePlaylist 行为一致：也关菜单
-      if (!confirm(`确定要删除歌单 "${playlist.name}" 的已下载歌曲吗？`)) {
+      if (!await pixelConfirm(`确定要删除歌单 "${playlist.name}" 的已下载歌曲吗？`, { confirmText: '删除', danger: true })) {
         closeMenu()
         return
       }
@@ -305,13 +314,13 @@ export default {
         if (typeof deletedSongs !== 'number') {
           throw new Error('接口返回异常')
         }
-        alert(deletedSongs > 0 ? `已删除 ${deletedSongs} 首已下载歌曲` : '这个歌单没有可删除的已下载歌曲')
+        toast(deletedSongs > 0 ? `已删除 ${deletedSongs} 首已下载歌曲` : '这个歌单没有可删除的已下载歌曲', deletedSongs > 0 ? 'success' : 'info')
         // 0 首时不必触发父组件刷新——只会多发一轮无效任务轮询
         if (deletedSongs > 0) emit('playlist-downloads-deleted', playlist.id)
       } catch (error) {
         console.error('批量删除已下载歌曲失败:', error)
         const message = error.response?.data?.message || error.message
-        alert('删除失败: ' + message)
+        toast('删除失败: ' + message, 'error')
       } finally {
         closeMenu()
       }
@@ -413,7 +422,15 @@ export default {
 }
 
 .music-card:hover .playlist-play-overlay,
+.music-card:focus-within .playlist-play-overlay,
 .playlist-play-overlay:focus-visible {
   opacity: 1;
+}
+
+/* 触屏无 hover——隐形可点的播放键会误触，常显（半透明遮罩版） */
+@media (hover: none) {
+  .playlist-play-overlay {
+    opacity: 0.85;
+  }
 }
 </style>

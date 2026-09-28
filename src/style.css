@@ -2,7 +2,7 @@
    Silkscreen 已从依赖中移除（从未使用） */
 
 /* Fusion Pixel 字体定义 */
-@font-face {
+@font-face{
   font-family: 'Fusion Pixel';
   src: url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2'),
        url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff') format('woff');
@@ -11,7 +11,7 @@
   font-display: swap;
 }
 
-@font-face {
+@font-face{
   font-family: 'Fusion Pixel';
   src: url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff2') format('woff2'),
        url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff') format('woff');
@@ -93,7 +93,7 @@
   z-index: var(--z-overlay);
 }
 
-@media (max-width: 1023px) {
+@media (max-width: 1023px){
   .app-sidebar {
     position: fixed;
     /* top 避让 54px 细顶栏：抽屉不盖住汉堡键，它本身就是关闭入口 */
@@ -122,7 +122,7 @@
   }
 }
 
-@media (max-width: 1023px) and (prefers-reduced-motion: reduce) {
+@media (max-width: 1023px) and (prefers-reduced-motion: reduce){
   .app-sidebar {
     transition: none;
   }
@@ -147,7 +147,7 @@
   --pixel-success: rgb(173, 215, 230); /* Light Blue */
   --pixel-border: rgb(240, 179, 192); /* Pale Pink */
   --pixel-text: rgb(120, 90, 100); /* Darker tone for text readability */
-  --pixel-text-dim: rgb(140, 105, 118); /* Muted tone for secondary text（深一档保 AA 对比度） */
+  --pixel-text-dim: rgb(125, 90, 103); /* Muted tone for secondary text（深一档保 AA 对比度） */
   --pixel-dark: rgb(80, 60, 70); /* Dark tone for shadows */
   --pixel-box-shadow: rgb(200, 160, 170); /* Muted pink for shadows */
   --pixel-highlight: rgba(240, 179, 192, 0.3); /* Pale Pink highlight */
@@ -306,14 +306,11 @@
   animation: playingPulse 1.6s ease-in-out infinite;
 }
 
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce){
   html {
     scroll-behavior: auto;
   }
-  .playing-animation,
-  .play-button::before,
-  .lyric-active,
-  .glow-text {
+  .playing-animation {
     animation: none;
   }
 }
@@ -327,9 +324,7 @@ html {
 .pixel-button:focus-visible,
 .jirai-button:focus-visible,
 .jirai-button-primary:focus-visible,
-.play-button:focus-visible,
 .jirai-slider:focus-visible,
-.pixel-volume:focus-visible,
 .music-card:focus-visible,
 .panel-tab:focus-visible,
 .queue-row-remove:focus-visible,
@@ -350,9 +345,7 @@ html {
 :root[data-theme="pixel-retro"] .pixel-button:focus-visible,
 :root[data-theme="pixel-retro"] .jirai-button:focus-visible,
 :root[data-theme="pixel-retro"] .jirai-button-primary:focus-visible,
-:root[data-theme="pixel-retro"] .play-button:focus-visible,
 :root[data-theme="pixel-retro"] .jirai-slider:focus-visible,
-:root[data-theme="pixel-retro"] .pixel-volume:focus-visible,
 :root[data-theme="pixel-retro"] .music-card:focus-visible,
 :root[data-theme="pixel-retro"] .panel-tab:focus-visible,
 :root[data-theme="pixel-retro"] .queue-row-remove:focus-visible,
@@ -416,19 +409,36 @@ html {
 
 /* 侧栏 ⋯ 菜单 teleport 到 body，脱离 .playlist-panel 作用域——retro 下
    全局 .bg-gray900→浅黄 映射会让紫字不可读，给它自己的主题对照 */
-:root[data-theme="pixel-retro"] .playlist-menu {
+:root[data-theme="pixel-retro"] .playlist-menu,
+:root[data-theme="pixel-retro"] .download-menu,
+:root[data-theme="pixel-retro"] .queue-menu {
   background: var(--pixel-card-bg) !important;
   border-color: rgb(210, 120, 160) !important;
 }
 
-:root[data-theme="pixel-retro"] .playlist-menu button {
+:root[data-theme="pixel-retro"] .playlist-menu button,
+:root[data-theme="pixel-retro"] .download-menu button,
+:root[data-theme="pixel-retro"] .queue-menu button {
   color: var(--pixel-text) !important;
   border-bottom-color: rgba(210, 120, 160, 0.3) !important;
 }
 
-:root[data-theme="pixel-retro"] .playlist-menu button:hover {
+:root[data-theme="pixel-retro"] .playlist-menu button:hover,
+:root[data-theme="pixel-retro"] .download-menu button:hover,
+:root[data-theme="pixel-retro"] .queue-menu button:hover {
   background: rgba(210, 120, 160, 0.25) !important;
   color: var(--pixel-text) !important;
+}
+
+/* retro 下 Tailwind 粉色文字在象牙/浅蓝底上 ≈1.2:1 隐形——body 级兜底映射到深色 mauve */
+:root[data-theme="pixel-retro"] .text-pink-100,
+:root[data-theme="pixel-retro"] .text-pink-200,
+:root[data-theme="pixel-retro"] .text-pink-300 {
+  color: rgb(175, 55, 95) !important;
+}
+
+:root[data-theme="pixel-retro"] .text-pink-400 {
+  color: rgb(185, 60, 105) !important;
 }
 
 /* 面板 tab 条 + 待播队列行（LyricsPanel 抽屉与 FullscreenPlayer watch 侧栏共用） */
@@ -463,10 +473,6 @@ html {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.queue-body {
-  padding-top: 10px;
 }
 
 .queue-row {
@@ -543,7 +549,7 @@ html {
 }
 
 /* 触屏设备无 hover——隐藏但可点的移除键会误删，直接常显 */
-@media (hover: none) {
+@media (hover: none){
   .queue-row-remove {
     opacity: 1;
   }
@@ -557,15 +563,6 @@ html {
 :root[data-theme="pixel-retro"] .card-songlist .bg-purple-600 { background-color: rgb(200, 100, 140) !important; box-shadow: none !important; }
 :root[data-theme="pixel-retro"] .card-songlist .hover\:bg-purple-500:hover { background-color: rgb(180, 80, 120) !important; box-shadow: none !important; }
 :root[data-theme="pixel-retro"] .card-songlist .pixel-button { box-shadow: none !important; }
-
-:root[data-theme="pixel-retro"] .card-lyrics .text-pink-300 { color: rgb(120, 60, 180) !important; }
-:root[data-theme="pixel-retro"] .card-lyrics .text-purple-300 { color: rgb(140, 80, 200) !important; }
-:root[data-theme="pixel-retro"] .card-lyrics .text-gray-400,
-:root[data-theme="pixel-retro"] .card-lyrics .text-gray-600 { color: rgb(160, 130, 200) !important; }
-:root[data-theme="pixel-retro"] .card-lyrics .border-pink-400 { border-color: rgb(160, 110, 210) !important; }
-:root[data-theme="pixel-retro"] .card-lyrics .border-yellow-400 { border-color: rgb(180, 140, 220) !important; }
-:root[data-theme="pixel-retro"] .card-lyrics .text-yellow-800 { color: rgb(100, 60, 150) !important; }
-:root[data-theme="pixel-retro"] .card-lyrics .bg-yellow-100 { background-color: rgba(230, 220, 248, 0.9) !important; }
 
 /* 底部播放器（玫瑰红系） */
 :root[data-theme="pixel-retro"] .card-player .text-pink-300 { color: rgb(180, 50, 80) !important; }
@@ -642,12 +639,6 @@ body {
 .card-songlist ::-webkit-scrollbar-thumb:hover { background: rgb(240, 160, 80); box-shadow: inset 0 0 0 1px rgb(210, 130, 60); }
 
 /* 歌词面板（紫色系） */
-.card-lyrics::-webkit-scrollbar-track,
-.card-lyrics ::-webkit-scrollbar-track { background: rgba(22, 10, 38, 0.95); border-color: rgb(110, 70, 160); }
-.card-lyrics::-webkit-scrollbar-thumb,
-.card-lyrics ::-webkit-scrollbar-thumb { background: rgb(150, 90, 210); border-color: rgb(90, 50, 150); box-shadow: inset 0 0 0 1px rgb(200, 150, 240); }
-.card-lyrics::-webkit-scrollbar-thumb:hover,
-.card-lyrics ::-webkit-scrollbar-thumb:hover { background: rgb(180, 120, 240); box-shadow: inset 0 0 0 1px rgb(150, 90, 210); }
 
 /* 旧三栏卡片布局（max-h-96/desktop-content）已随 YTM 应用壳移除——
    各栏滚动由 .app-sidebar/.app-main/组件自身 overflow 接管 */
@@ -822,13 +813,6 @@ body {
 }
 
 /* 歌词面板：紫色点线 */
-.card-lyrics {
-  border: 3px dotted rgb(170, 120, 210);
-  background: rgba(35, 18, 55, 0.92) !important;
-  box-shadow:
-    3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
 
 /* 底部播放器：无边框，进度条充当上边框 */
 .card-player {
@@ -868,23 +852,6 @@ body {
 }
 
 /* 歌词面板：紫色像素边框 */
-:root[data-theme="pixel-retro"] .card-lyrics {
-  border: none;
-  background-color: rgba(240, 230, 252, 0.97) !important;
-  box-shadow:
-    0 -2px 0 0 rgba(240, 230, 252, 0.97),
-    2px 0 0 0 rgba(240, 230, 252, 0.97),
-    0 2px 0 0 rgba(240, 230, 252, 0.97),
-    -2px 0 0 0 rgba(240, 230, 252, 0.97),
-    0 0 0 2px rgb(180, 140, 210),
-    0 -4px 0 0 rgb(180, 140, 210),
-    4px 0 0 0 rgb(180, 140, 210),
-    0 4px 0 0 rgb(180, 140, 210),
-    -4px 0 0 0 rgb(180, 140, 210);
-  filter: drop-shadow(4px 4px 0 rgb(200, 170, 225));
-}
-
-
 
 /* 隐藏滚动条但保持滚动功能 */
 body::-webkit-scrollbar {
@@ -929,59 +896,12 @@ body::-webkit-scrollbar {
 }
 
 /* 8bit播放按钮 */
-.play-button {
-  width: 60px;
-  height: 60px;
-  background: var(--pixel-primary);
-  border: 4px solid var(--pixel-text);
-  border-radius: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.1s ease;
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-  position: relative;
-  image-rendering: pixelated;
-}
 
-.play-button::before {
-  content: '';
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border-radius: 0;
-  background: linear-gradient(45deg, transparent 30%, var(--pixel-highlight) 50%, transparent 70%);
-  animation: shimmer 3s linear infinite;
-}
-
-@keyframes shimmer {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.play-button:hover {
-  background: var(--pixel-secondary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-.play-button:active {
-  background: var(--pixel-accent);
-  box-shadow: 
-    1px 1px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(0, 0, 0, 0.3);
-  transform: scale(0.95);
-}
-
-/* 播放器顶部进度条（兼作上边框） */
+/* 播放器顶部进度条（兼作上边框）。填充用 transform 而非 width——
+   width/height 过渡每帧触发布局（detector layout-transition），合成层动画免费 */
 .player-progress-bar {
   height: 4px;
   background: rgba(236, 72, 153, 0.2);
-  transition: height 0.2s ease;
   z-index: 1;
 }
 
@@ -991,8 +911,11 @@ body::-webkit-scrollbar {
 
 .player-progress-fill {
   height: 100%;
+  width: 100%;
+  transform: scaleX(calc(var(--p, 0) / 100));
+  transform-origin: left;
   background: rgb(190, 24, 93);
-  transition: width 0.1s linear;
+  transition: transform 0.1s linear;
 }
 
 :root[data-theme="pixel-retro"] .player-progress-bar {
@@ -1005,61 +928,8 @@ body::-webkit-scrollbar {
 }
 
 /* pixel进度条 */
-.pixel-progress {
-  height: 12px;
-  background: var(--pixel-dark);
-  border: 2px solid var(--pixel-text);
-  border-radius: 0;
-  overflow: hidden;
-  position: relative;
-  box-shadow: 
-    inset 1px 1px 0px rgba(0, 0, 0, 0.5),
-    1px 1px 0px var(--pixel-highlight);
-  image-rendering: pixelated;
-}
-
-.pixel-progress-fill {
-  height: 100%;
-  background: var(--pixel-primary);
-  transition: width 0.1s ease;
-  border-radius: 0;
-  box-shadow: inset 1px 1px 0 var(--pixel-highlight);
-  image-rendering: pixelated;
-}
 
 /* 8bit歌词样式 */
-.lyric-line {
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  font-size: 12px;
-  padding: 8px 0;
-  transition: all 0.2s ease;
-  color: var(--pixel-text-dim);
-  text-shadow: 1px 1px 0px var(--pixel-dark);
-}
-
-.lyric-active {
-  color: var(--pixel-primary);
-  font-weight: normal;
-  transform: scale(1.02);
-  text-shadow: 
-    1px 1px 0px var(--pixel-dark),
-    2px 2px 0px rgba(0, 0, 0, 0.3);
-  animation: lyricGlow 2s ease-in-out infinite alternate;
-}
-
-@keyframes lyricGlow {
-  0% { 
-    text-shadow: 
-      1px 1px 0px var(--pixel-dark),
-      2px 2px 0px rgba(0, 0, 0, 0.3);
-  }
-  100% { 
-    text-shadow: 
-      1px 1px 0px var(--pixel-dark),
-      2px 2px 0px rgba(0, 0, 0, 0.5),
-      0 0 4px var(--pixel-primary);
-  }
-}
 
 /* pixel输入框 */
 .pixel-input {
@@ -1108,64 +978,7 @@ body::-webkit-scrollbar {
   text-align: center;
 }
 
-.glow-text {
-  text-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    4px 4px 0px rgba(0, 0, 0, 0.3),
-    0 0 4px var(--pixel-primary);
-  animation: textGlow 3s ease-in-out infinite alternate;
-}
-
-@keyframes textGlow {
-  0% { 
-    text-shadow: 
-      2px 2px 0px var(--pixel-dark),
-      4px 4px 0px rgba(0, 0, 0, 0.3),
-      0 0 4px var(--pixel-primary);
-  }
-  100% { 
-    text-shadow: 
-      2px 2px 0px var(--pixel-dark),
-      4px 4px 0px rgba(0, 0, 0, 0.5),
-      0 0 8px var(--pixel-secondary);
-  }
-}
-
 /* pixel音量控制 */
-.pixel-volume {
-  width: 100px;
-  height: 12px;
-  background: var(--pixel-dark);
-  border: 2px solid var(--pixel-text);
-  border-radius: 0;
-  outline: none;
-  cursor: pointer;
-  box-shadow: 
-    inset 1px 1px 0px rgba(0, 0, 0, 0.5),
-    1px 1px 0px var(--pixel-highlight);
-  image-rendering: pixelated;
-}
-
-.pixel-volume::-webkit-slider-thumb {
-  appearance: none;
-  width: 20px;
-  height: 20px;
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-text);
-  border-radius: 0;
-  cursor: pointer;
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-  image-rendering: pixelated;
-}
-
-.pixel-volume::-webkit-slider-thumb:hover {
-  background: var(--pixel-secondary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
 
 /* pixel滑块控制 */
 .jirai-slider {
@@ -1233,8 +1046,6 @@ body::-webkit-scrollbar {
   border-radius: 0;
 }
 
-
-
 /* pixel加载动画 - 圆圈旋转 */
 .pixel-loading {
   display: inline-block;
@@ -1296,7 +1107,7 @@ body::-webkit-scrollbar {
 :root[data-theme="pixel-retro"] .theme-toggle-btn {
   background: var(--pixel-accent);
   border: 2px solid var(--pixel-border);
-  color: var(--pixel-card-bg);
+  color: var(--pixel-text);
   box-shadow: 
     2px 2px 0px var(--pixel-dark),
     inset 1px 1px 0 var(--pixel-highlight);
@@ -1316,7 +1127,8 @@ body::-webkit-scrollbar {
 :root[data-theme="pixel-retro"] .pixel-button {
   background: var(--pixel-accent);
   border: 2px solid var(--pixel-border);
-  color: var(--pixel-primary);
+  /* --pixel-primary 浅粉配浅黄底 ≈1.8:1 不可读——retro 按钮文字用正文深色 */
+  color: var(--pixel-text);
 }
 
 :root[data-theme="pixel-retro"] .jirai-button:hover,
@@ -1332,20 +1144,6 @@ body::-webkit-scrollbar {
   text-shadow: 0 0 4px var(--pixel-primary);
 }
 
-:root[data-theme="pixel-retro"] .glow-text {
-  text-shadow: 0 0 4px var(--pixel-primary);
-  animation: pixelTextGlow 3s ease-in-out infinite alternate;
-}
-
-@keyframes pixelTextGlow {
-  0% { 
-    text-shadow: 0 0 4px var(--pixel-primary);
-  }
-  100% { 
-    text-shadow: 0 0 8px var(--pixel-secondary);
-  }
-}
-
 /* 像素风格主题下的输入框样式 */
 :root[data-theme="pixel-retro"] .pixel-input {
   background: var(--pixel-card-bg);
@@ -1359,23 +1157,6 @@ body::-webkit-scrollbar {
 }
 
 /* 像素风格主题下的歌词样式 */
-:root[data-theme="pixel-retro"] .lyric-line {
-  text-shadow: none;
-}
-
-:root[data-theme="pixel-retro"] .lyric-active {
-  text-shadow: 0 0 4px var(--pixel-primary);
-  animation: pixelLyricGlow 2s ease-in-out infinite alternate;
-}
-
-@keyframes pixelLyricGlow {
-  0% { 
-    text-shadow: 0 0 4px var(--pixel-primary);
-  }
-  100% { 
-    text-shadow: 0 0 8px var(--pixel-secondary);
-  }
-}
 
 /* 像素风格主题下的歌单选项卡样式 */
 :root[data-theme="pixel-retro"] .bg-pink-900 {
@@ -1460,24 +1241,6 @@ body::-webkit-scrollbar {
     inset 1px 1px 0 rgba(173, 215, 230, 0.3);
 }
 
-:root[data-theme="pixel-retro"] .play-button {
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .play-button:hover {
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .play-button:active {
-  box-shadow: 
-    1px 1px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 rgba(255, 251, 209, 0.3);
-}
-
 /* 像素风格主题下的滚动条覆盖 */
 :root[data-theme="pixel-retro"] ::-webkit-scrollbar-track {
   background: var(--pixel-card-bg);
@@ -1505,12 +1268,6 @@ body::-webkit-scrollbar {
 :root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-thumb:hover { background: rgb(180, 70, 115); box-shadow: none; }
 
 /* 歌词面板（紫色系） */
-:root[data-theme="pixel-retro"] .card-lyrics::-webkit-scrollbar-track,
-:root[data-theme="pixel-retro"] .card-lyrics ::-webkit-scrollbar-track { background: rgba(240, 230, 252, 0.97); border-color: rgb(180, 140, 210); }
-:root[data-theme="pixel-retro"] .card-lyrics::-webkit-scrollbar-thumb,
-:root[data-theme="pixel-retro"] .card-lyrics ::-webkit-scrollbar-thumb { background: rgb(160, 110, 200); border-color: rgb(130, 80, 170); box-shadow: none; }
-:root[data-theme="pixel-retro"] .card-lyrics::-webkit-scrollbar-thumb:hover,
-:root[data-theme="pixel-retro"] .card-lyrics ::-webkit-scrollbar-thumb:hover { background: rgb(130, 80, 170); box-shadow: none; }
 
 /* 底部播放器（玫瑰红系） */
 :root[data-theme="pixel-retro"] .card-player::-webkit-scrollbar-track,
@@ -1521,42 +1278,8 @@ body::-webkit-scrollbar {
 :root[data-theme="pixel-retro"] .card-player ::-webkit-scrollbar-thumb:hover { background: rgb(170, 60, 95); box-shadow: none; }
 
 /* 像素风格主题下的进度条覆盖 */
-:root[data-theme="pixel-retro"] .pixel-progress {
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 
-    inset 1px 1px 0px rgba(200, 160, 170, 0.5),
-    1px 1px 0px var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .pixel-progress-fill {
-  background: var(--pixel-primary);
-  box-shadow: inset 1px 1px 0 var(--pixel-highlight);
-}
 
 /* 像素风格主题下的音量控制覆盖 */
-:root[data-theme="pixel-retro"] .pixel-volume {
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 
-    inset 1px 1px 0px rgba(200, 160, 170, 0.5),
-    1px 1px 0px var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .pixel-volume::-webkit-slider-thumb {
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .pixel-volume::-webkit-slider-thumb:hover {
-  background: var(--pixel-secondary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
 
 /* 像素风格主题下的滑块控制覆盖 */
 :root[data-theme="pixel-retro"] .jirai-slider {
@@ -1603,7 +1326,7 @@ body::-webkit-scrollbar {
 }
 
 /* 响应式设计 */
-@media (max-width: 768px) {
+@media (max-width: 768px){
   .jirai-title {
     font-size: 24px;
   }
@@ -1613,10 +1336,7 @@ body::-webkit-scrollbar {
     padding: 8px 12px;
   }
   
-  .play-button {
-    width: 50px;
-    height: 50px;
-  }
+  
   
   .theme-toggle-btn {
     min-width: 32px;
