@@ -73,7 +73,7 @@
           <template v-else>
             <div
               v-for="(song, index) in queue"
-              :key="`${song.id}-${index}`"
+              :key="queueKeyOf(song)"
               class="queue-row"
               :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--dragging': dragIndex === index }"
             >
@@ -291,6 +291,14 @@ export default {
       setTab(next.key)
       document.getElementById(`watch-tab-${next.key}`)?.focus()
     }
+    // 队列行稳定 key：按对象身份发 uid。若 key 含 index，每次排序都重建 DOM
+    // ——聚焦的握把被销毁、焦点掉回 body，第二次 ↑↓ 会被全局快捷键当成音量调节
+    const queueKeyMap = new WeakMap()
+    let queueKeySeq = 0
+    const queueKeyOf = (song) => {
+      if (!queueKeyMap.has(song)) queueKeyMap.set(song, `${song.id}-${++queueKeySeq}`)
+      return queueKeyMap.get(song)
+    }
     const jumpTo = (index) => emit('queue-jump', index)
     // 键盘排序等价路径：握把聚焦时 ↑↓ 移动该行
     const moveRow = (index, dir) => {
@@ -418,6 +426,7 @@ export default {
       TABS,
       setTab,
       moveTab,
+      queueKeyOf,
       jumpTo,
       moveRow,
       startDrag,

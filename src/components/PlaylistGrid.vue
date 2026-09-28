@@ -7,7 +7,7 @@
         <p class="pg-label">search results</p>
         <h2 class="grid-title" data-nosnippet>搜索结果</h2>
       </div>
-      <button class="pg-icobtn" @click="$emit('close')" title="返回歌曲列表" aria-label="返回歌曲列表"><PixelIcon name="close" :size="14" /></button>
+      <button class="pg-icobtn" @click="$emit('close')" title="返回首页" aria-label="返回首页"><PixelIcon name="close" :size="14" /></button>
     </header>
 
     <div v-if="loading" class="grid-state">

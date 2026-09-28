@@ -61,6 +61,7 @@
           <button
             @click="$emit('previous')"
             class="transport"
+            :disabled="atQueueStart"
             aria-label="上一首"
             title="上一首"
           ><PixelIcon name="prev" :size="16" /></button>
@@ -239,12 +240,18 @@ export default {
       return props.duration ? (props.currentTime / props.duration) * 100 : 0
     })
 
-    // 队尾判定：仅 list 顺序模式在队尾时禁「下一首」——loop 回卷 / single 自循环始终有效
+    // 队尾判定：仅 list 顺序模式在队尾时禁「下一首」——loop 回卷 / single 自循环始终有效。
+    // 临时歌单（single_song/saved_queue）不豁免：它们队尾点下一首只会静默空转
     const atQueueEnd = computed(() =>
-      !props.isTempPlaylist &&
       props.playMode === 'list' &&
       props.playbackList.length > 0 &&
       props.currentIndex >= props.playbackList.length - 1
+    )
+    // 队首同款：list 模式在第一首时禁「上一首」（点了也是静默 return）
+    const atQueueStart = computed(() =>
+      props.playMode === 'list' &&
+      props.playbackList.length > 0 &&
+      props.currentIndex === 0
     )
 
     const playModeIcon = computed(() =>
@@ -297,6 +304,7 @@ export default {
       coverUrl,
       seekProgress,
       atQueueEnd,
+      atQueueStart,
       playModeIcon,
       seekTo,
       seekToPosition,

@@ -252,9 +252,8 @@ export default {
     const copyShareLink = async (playlist) => {
       const url = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
       const ok = await copyText(url)
-      if (!ok) {
-        toast('复制失败，请手动复制链接', 'error')
-      }
+      // 与歌曲分享同款的反馈闭环：成功也要给戳记，否则用户不知道复制生效
+      toast(ok ? '分享链接已复制到剪贴板' : '复制失败，请手动复制链接', ok ? 'success' : 'error')
       closeMenu()
     }
 
