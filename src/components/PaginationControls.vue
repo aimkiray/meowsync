@@ -9,7 +9,7 @@
       class="pg-icobtn pg-pagination-btn"
       title="第一页"
       aria-label="第一页"
-    >⇤</button>
+    ><PixelIcon name="first" :size="14" /></button>
 
     <button
       @click="$emit('prev-page')"
@@ -17,7 +17,7 @@
       class="pg-icobtn pg-pagination-btn"
       title="上一页"
       aria-label="上一页"
-    >←</button>
+    ><PixelIcon name="chev-l" :size="14" /></button>
 
     <span class="pg-label pg-label--dim pg-pagination-label">
       第 <span class="pg-page-cur">{{ currentPage }}</span> 页 / 共 {{ totalPages }} 页
@@ -29,7 +29,7 @@
       class="pg-icobtn pg-pagination-btn"
       title="下一页"
       aria-label="下一页"
-    >→</button>
+    ><PixelIcon name="chev-r" :size="14" /></button>
 
     <button
       @click="$emit('go-to-page', totalPages)"
@@ -37,12 +37,15 @@
       class="pg-icobtn pg-pagination-btn"
       title="最后一页"
       aria-label="最后一页"
-    >⇥</button>
+    ><PixelIcon name="last" :size="14" /></button>
   </div>
 </template>
 
 <script>
+import PixelIcon from './PixelIcon.vue'
+
 export default {
+  components: { PixelIcon },
   name: 'PaginationControls',
   props: {
     currentPage: { type: Number, default: 1 },

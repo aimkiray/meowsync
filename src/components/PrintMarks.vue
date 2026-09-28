@@ -3,22 +3,16 @@
   <svg
     v-if="variant === 'hash'"
     class="pg-hash"
-    :class="{ 'pg-hash--flip': flip }"
     viewBox="0 0 1240 10"
     fill="none"
-    stroke="rgba(30,30,30,.86)"
+    stroke="currentColor"
     stroke-width="1.2"
     stroke-linejoin="round"
     style="image-rendering: pixelated"
     preserveAspectRatio="none"
     aria-hidden="true"
   >
-    <template v-if="!flip">
-      <path d="M10 0H0V10"/><path d="M1230 0H1240V10"/>
-    </template>
-    <template v-else>
-      <path d="M10 10H0V0"/><path d="M1230 10H1240V0"/>
-    </template>
+    <path d="M10 0H0V10"/><path d="M1230 0H1240V10"/>
   </svg>
 
   <div v-else-if="variant === 'reg'" class="regmarks" aria-hidden="true">
@@ -46,7 +40,6 @@ export default {
       default: 'hash',
       validator: (v) => ['hash', 'reg', 'stamp', 'b64'].includes(v)
     },
-    flip: { type: Boolean, default: false },
     // 解码即 "MeowSync: cats love music. ms.os1"
     payload: { type: String, default: 'TWVvd1N5bmM6IGNhdHMgbG92ZSBtdXNpYy4gbXMub3Mx' }
   }
@@ -58,6 +51,7 @@ export default {
   display: block;
   width: 100%;
   height: 10px;
+  color: var(--ink-86); /* stroke=currentColor：描边色收编进令牌 */
 }
 .pg-b64-body { font-weight: 300; }
 </style>

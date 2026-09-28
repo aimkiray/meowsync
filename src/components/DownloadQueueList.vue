@@ -47,13 +47,16 @@
         :key="queue.id"
         class="dql-row"
         :class="{ 'dql-row--sel': selectedQueueId === queue.id }"
-        @click="$emit('select', queue)"
-        @keydown.enter.self="$emit('select', queue)"
-        @keydown.space.prevent.self="$emit('select', queue)"
-        tabindex="0"
-        role="button"
-        :aria-label="`查看队列 ${queue.name}`"
       >
+        <div
+          class="dql-row-main"
+          @click="$emit('select', queue)"
+          @keydown.enter="$emit('select', queue)"
+          @keydown.space.prevent="$emit('select', queue)"
+          tabindex="0"
+          role="button"
+          :aria-label="`查看队列 ${queue.name}`"
+        >
         <div class="dql-cover-wrap">
           <img
             v-if="getQueueCover(queue)"
@@ -61,7 +64,7 @@
             :alt="queue.name"
             class="dql-cover"
           />
-          <div v-else class="dql-cover dql-cover--fb">♪</div>
+          <div v-else class="dql-cover dql-cover--fb"><PixelIcon name="note" :size="18" /></div>
         </div>
 
         <div class="dql-info">
@@ -83,9 +86,10 @@
             <div
               class="dql-progress-fill"
               :class="{ 'dql-progress-fill--fail': queue.status === 'failed' }"
-              :style="{ width: getProgress(queue) + '%' }"
+              :style="{ '--p': getProgress(queue) }"
             ></div>
           </div>
+        </div>
         </div>
 
         <button
@@ -218,7 +222,7 @@ function toggleMenu(queueId, event) {
       + (canRetry(queue) ? 1 : 0)
       + (canDelete(queue) ? 1 : 0)
     : 6;
-  const menuHeight = itemCount * 33 + 4; // 不足时上翻避免出视口底
+  const menuHeight = itemCount * 39 + 4; // 实测项高 ≈39，不足时上翻避免出视口底
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));
@@ -362,18 +366,18 @@ function getQueueCover(queue) {
   flex-shrink: 0;
 }
 
+/* 加载/空态同一锚点：都纵向居中，加载→空态切换不跳位 */
 .dql-state {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   padding: 32px 16px;
 }
 
-.dql-state--grow {
-  flex: 1;
-  justify-content: center;
-}
+.dql-state--grow { /* 兼容类名保留——锚点已并入基类 */ }
 
 .dql-state-text {
   font-size: 12px;
@@ -389,25 +393,32 @@ function getQueueCover(queue) {
 
 .dql-row {
   position: relative;
+  border-bottom: 1.2px solid var(--ink-10);
+}
+
+/* 点击区是 row-main——kebab 是它的兄弟节点，消灭嵌套可交互 */
+.dql-row-main {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 44px 10px 12px;
-  border-bottom: 1.2px solid var(--ink-10);
   cursor: pointer;
   transition: background .12s;
 }
 
-.dql-row:hover { background: var(--ink-06); }
+.dql-row-main:hover { background: var(--ink-06); }
+
+.dql-row--sel .dql-row-main {
+  background: var(--ink-10);
+}
 
 .dql-row--sel {
-  background: var(--ink-10);
   outline: var(--hairline);
   outline-offset: -1.2px;
 }
 
 /* 选中行获焦仍可辨——选中态的 1.2px outline 会压掉全局焦点环 */
-.dql-row:focus-visible {
+.dql-row-main:focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: -4px;
 }
@@ -431,7 +442,6 @@ function getQueueCover(queue) {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
   color: var(--ink-64);
   background: var(--paper);
 }
@@ -487,16 +497,20 @@ function getQueueCover(queue) {
 
 .dql-progress-fill {
   height: 100%;
+  width: 100%;
+  transform: scaleX(calc(var(--p, 0) / 100));
+  transform-origin: left;
   background: var(--ink);
-  transition: width .3s var(--ease-ink);
+  transition: transform .3s var(--ease-ink);
 }
 
 .dql-progress-fill--fail { background: var(--accent-magenta); }
 
 .dql-kebab {
   position: absolute;
-  top: 6px;
+  top: 50%;
   right: 6px;
+  transform: translateY(-50%);
 }
 
 /* teleport 菜单：宽度与 toggleMenu 的 132 估宽对齐（全局 pg-menu min-width 160 偏大） */

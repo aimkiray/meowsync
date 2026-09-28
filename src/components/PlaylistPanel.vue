@@ -49,14 +49,14 @@
               :alt="playlist.name"
               class="pl-cover"
             />
-            <div v-else class="pl-cover pl-cover--fallback">♪</div>
+            <div v-else class="pl-cover pl-cover--fallback"><PixelIcon name="note" :size="16" /></div>
             <!-- 悬停 ▶ 直接播放整个歌单 -->
             <button
               class="playlist-play-overlay"
               title="播放歌单"
               aria-label="播放歌单"
               @click.stop="$emit('play-playlist', playlist)"
-            >▶</button>
+            ><PixelIcon name="play" :size="14" /></button>
           </div>
           <div class="pl-info">
             <h3 class="pl-name">{{ playlist.name }}</h3>
@@ -70,7 +70,7 @@
           <button
             v-if="!isTempPlaylist(playlist)"
             @click.stop="sharePlaylist(playlist)"
-            class="pl-action"
+            class="pl-action pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             title="分享歌单"
             aria-label="分享歌单"
           >
@@ -80,7 +80,7 @@
           <!-- 更多菜单按钮 -->
           <button
             @click.stop="toggleMenu(playlist.id, $event)"
-            class="pl-action"
+            class="pl-action pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             title="更多操作"
             aria-label="更多操作"
             aria-haspopup="menu"
@@ -221,7 +221,7 @@ export default {
         // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 5 项悬空更安全
         const currentPlaylist = props.userPlaylists.find(p => p.id === playlistId)
         const itemCount = !currentPlaylist || isTempPlaylist(currentPlaylist) ? 1 : 5
-        const menuHeight = itemCount * 34 + 4
+        const menuHeight = itemCount * 39 + 4 // 实测项高 ≈39（含发丝分隔）
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh
@@ -425,7 +425,8 @@ export default {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  /* 右侧 56px 留给常显的 .pl-actions（分享+⋯）——否则与 .pl-count 交叠 */
+  padding: 9px 56px 9px 12px;
   cursor: pointer;
   transition: background .12s;
 }
@@ -497,21 +498,18 @@ export default {
   flex-shrink: 0;
 }
 
-/* 行尾操作组（分享 + ⋯） */
+/* 行尾操作组（分享 + ⋯）：垂直居中，与 dql 行尾键同法则 */
 .pl-actions {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
   display: flex;
+  gap: 2px;
 }
 
 .pl-action {
-  padding: 4px;
-  color: var(--ink-64);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color .2s;
+  transition: color .2s; /* 尺寸交给 pg-icobtn--sm（24px 行内尾键档） */
 }
 .pl-action:hover { color: var(--ink); outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
 .pl-row--active .pl-action { color: var(--label-grey); }

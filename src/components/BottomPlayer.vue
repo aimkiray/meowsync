@@ -39,7 +39,7 @@
               class="track-cover"
               :class="{ 'playing-animation': isPlaying }"
             />
-            <div v-else class="track-cover track-cover--fallback">♪</div>
+            <div v-else class="track-cover track-cover--fallback"><PixelIcon name="note" :size="16" /></div>
           </div>
           <div class="track-text">
             <p class="track-name">{{ currentSong.name }}</p>
@@ -80,9 +80,9 @@
           <button
             @click="$emit('toggle-play-mode')"
             class="transport"
-            :aria-label="`切换播放模式，当前：${playModeText || playModeIcon}`"
+            :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
-          ><span class="mode-glyph">{{ playModeIcon }}</span></button>
+          ><PixelIcon :name="playModeIcon" :size="15" /></button>
         </div>
 
         <!-- 时间与右簇（音量 + watch/词/沉浸入口） -->
@@ -93,7 +93,9 @@
           <div class="vol-wrap">
             <button
               @click="$emit('toggle-mute')"
-              class="transport"
+              class="pg-icobtn pg-icobtn--on-ink"
+              :class="{ 'pg-icobtn--pressed': muted }"
+              :aria-pressed="muted"
               :aria-label="muted ? '取消静音' : '静音'"
               :title="muted ? '取消静音' : '静音'"
             ><PixelIcon :name="muted ? 'vol-mute' : 'vol'" :size="15" /></button>
@@ -116,7 +118,7 @@
             aria-label="待播队列"
             title="待播队列"
           >
-            <span class="queue-glyph">☰</span>
+            <PixelIcon name="menu" :size="14" />
           </button>
           <button
             class="pg-icobtn pg-icobtn--on-ink bp-xtra"
@@ -246,7 +248,7 @@ export default {
     )
 
     const playModeIcon = computed(() =>
-      ({ list: '→', loop: '∞', single: '↻' })[props.playMode] || '→'
+      ({ list: 'm-list', loop: 'm-loop', single: 'm-single' })[props.playMode] || 'm-list'
     )
 
     const positionFromEvent = (e, bar) => {
@@ -361,7 +363,6 @@ export default {
   align-items: center;
   justify-content: center;
   color: var(--label-grey);
-  font-size: 15px;
 }
 .track-text { min-width: 0; }
 .track-name {
@@ -399,8 +400,9 @@ export default {
   cursor: pointer;
   transition: color .2s, border-color .2s;
 }
-.transport:hover:not(:disabled) { color: var(--accent-magenta); }
-.transport:disabled { opacity: .35; cursor: default; }
+/* hover 统一语言：墨色底上纸色发丝框 + 品红字（play 键常驻框只是强调主键） */
+.transport:hover:not(:disabled) { color: var(--accent-magenta); border-color: var(--paper); }
+.transport:disabled { opacity: .45; cursor: default; }
 .transport--active { color: var(--accent-magenta); }
 .transport--play {
   border-color: var(--paper);
@@ -408,12 +410,6 @@ export default {
   height: 40px;
 }
 .transport--play:hover:not(:disabled) { border-color: var(--accent-magenta); }
-
-.mode-glyph {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  line-height: 1;
-}
 
 .switching-glyph {
   font-family: var(--font-mono);
@@ -443,7 +439,7 @@ export default {
 }
 .player-time {
   font-family: var(--font-mono);
-  font-weight: 300;
+  font-weight: 400; /* 数值档——标签才是 300 */
   font-size: 12px;
   color: var(--label-grey);
   white-space: nowrap;
@@ -482,7 +478,7 @@ export default {
 .pg-label--on-ink { color: var(--label-grey); }
 .player-idle-hint { color: var(--white-80); }
 
-@media (max-width: 639px) {
+@media (max-width: 640px) {
   .player-inner { gap: 10px; padding: 8px 10px; }
   .vol-wrap, .player-time { display: none; }
 }

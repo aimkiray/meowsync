@@ -7,7 +7,7 @@
         <p class="pg-label">search results</p>
         <h2 class="grid-title">搜索结果</h2>
       </div>
-      <button class="pg-icobtn" @click="$emit('close')" title="返回歌曲列表" aria-label="返回歌曲列表">✕</button>
+      <button class="pg-icobtn" @click="$emit('close')" title="返回歌曲列表" aria-label="返回歌曲列表"><PixelIcon name="close" :size="14" /></button>
     </header>
 
     <div v-if="loading" class="grid-state">
@@ -27,7 +27,7 @@
           <span class="result-section-sub">歌曲 · 点击即播</span>
         </div>
         <div
-          v-for="song in songs"
+          v-for="(song, i) in songs"
           :key="song.id"
           class="song-result-row"
           :class="{ 'song-result-row--playing': String(currentSong?.id) === String(song.id) }"
@@ -39,7 +39,8 @@
           :title="`播放 ${song.name}`"
         >
           <span class="song-result-index">
-            <span class="song-result-index-play">▶</span>
+            <span class="song-result-index-num">{{ i + 1 }}</span>
+            <span class="song-result-index-play"><PixelIcon name="play" :size="11" /></span>
           </span>
           <img
             v-if="song.al?.picUrl || song.album?.picUrl"
@@ -47,9 +48,8 @@
             :alt="song.name"
             class="song-result-cover"
             loading="lazy"
-            style="image-rendering: pixelated;"
           />
-          <div v-else class="song-result-cover song-result-cover--fallback">♪</div>
+          <div v-else class="song-result-cover song-result-cover--fallback"><PixelIcon name="note" :size="16" /></div>
           <div class="song-result-info">
             <p class="song-result-name">{{ song.name }}</p>
             <p class="song-result-meta">{{ songArtist(song) }}<template v-if="songAlbum(song)"> · {{ songAlbum(song) }}</template></p>
@@ -68,26 +68,29 @@
             v-for="playlist in results"
             :key="playlist.id"
             class="grid-card"
-            @click="$emit('open', playlist)"
-            @keydown.enter="$emit('open', playlist)"
-            @keydown.space.prevent="$emit('open', playlist)"
-            tabindex="0"
-            role="button"
-            :title="`打开《${playlist.name}》`"
           >
+            <div
+              class="grid-card-main"
+              @click="$emit('open', playlist)"
+              @keydown.enter="$emit('open', playlist)"
+              @keydown.space.prevent="$emit('open', playlist)"
+              tabindex="0"
+              role="button"
+              :title="`打开《${playlist.name}》`"
+            >
             <div class="grid-card-cover">
               <img
                 v-if="playlist.coverImgUrl"
                 :src="httpsCover(playlist.coverImgUrl)"
                 :alt="playlist.name"
                 loading="lazy"
-                style="image-rendering: pixelated;"
               />
-              <div v-else class="grid-card-cover-fallback">♪</div>
+              <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             </div>
             <div class="grid-card-body">
               <h3 class="grid-card-name">{{ playlist.name }}</h3>
               <p class="grid-card-meta">{{ playlist.creator?.nickname || '神秘创建者' }} · {{ playlist.trackCount }} 首</p>
+            </div>
             </div>
             <div class="grid-card-actions">
               <!-- 已入库的歌单换成静态戳记（语义同原 disabled 态，只是不再伪装成按钮） -->
@@ -98,7 +101,7 @@
                 @click.stop="handleAdd(playlist)"
                 title="收藏到我的歌单"
               >{{ adding.has(playlist.id) ? '…' : '+ 收藏' }}</button>
-              <span v-else class="pg-chip pg-chip--static grid-added" title="已在歌单库中">✓ 已收藏</span>
+              <span v-else class="pg-chip pg-chip--static grid-added" title="已在歌单库中"><PixelIcon name="check" :size="11" /> 已收藏</span>
               <button
                 class="pg-icobtn grid-share"
                 @click.stop="sharePlaylist(playlist)"
@@ -225,9 +228,10 @@ export default {
 
 <style scoped>
 .playlist-grid-wrap {
-  padding: 20px 24px;
+  padding: 20px;
   height: 100%;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 /* 页头：等宽微标签 + 大字标题 + 发丝方键关闭 */
@@ -315,10 +319,16 @@ export default {
   color: var(--ink);
 }
 
+/* 序号 ↔ ▶ 互换（与 song-row 同构） */
+.song-result-row:hover .song-result-index-num,
+.song-result-row:focus-visible .song-result-index-num,
+.song-result-row--playing .song-result-index-num {
+  display: none;
+}
 .song-result-row:hover .song-result-index-play,
 .song-result-row:focus-visible .song-result-index-play,
 .song-result-row--playing .song-result-index-play {
-  display: inline;
+  display: inline-flex;
 }
 
 .song-result-cover {
@@ -344,7 +354,7 @@ export default {
 
 .song-result-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
@@ -373,37 +383,22 @@ export default {
   gap: 16px;
 }
 
-/* 卡片容器：纸面发丝边框（.grid-card-cover/-name/-meta 为全局共用类，
-   scoped 选择器带 data-v 只对自家模板生效） */
-.grid-card {
-  background: var(--paper);
-  border: var(--hairline);
-  cursor: pointer;
-  padding: 10px;
+/* 卡片外壳/cover/-name/-meta 均已上收全局 style.css。
+   .grid-card-main 是 role=button 点击区——动作键是它兄弟节点，消灭嵌套可交互 */
+.grid-card-main {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  transition: transform 0.15s var(--ease-ink);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .grid-card:hover {
-    transform: translateY(-2px);
-  }
-}
-
-.grid-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .grid-card-actions {
   display: flex;
-  align-items: center;
+  align-items: stretch; /* chip 戳记拉伸到与 ink-btn--sm 同高，入库瞬间不跳行高 */
   gap: 8px;
   margin-top: auto;
+  min-height: 30px;
 }
+.grid-added { display: inline-flex; align-items: center; }
 
 .grid-add {
   flex: 1;

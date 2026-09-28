@@ -38,6 +38,16 @@ const ICONS = {
   share:   'M9 15H8v-1H7v-1h1v-1h1v-1h1v-1h1V9H8V7h7v7h-2v-3h-1v1h-1v1h-1v1H9m9 6H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1m-1-1v-1h1V5h-1V4H5v1H4v12h1v1Z',
   kebab:   'M15 21H8v-1H7v-1H6V3h1V2h1V1h4v1h1v1h1v14h-1v1h-3v-1H9V5h2v11h1V4h-1V3H9v1H8v14h1v1h5v-1h1V5h2v14h-1v1h-1Z',
   dots:    'M7 3h2v2H7zM7 7h2v2H7zM7 11h2v2H7z',
+  close:   'M3 3h2v2H3zM11 3h2v2h-2zM5 5h2v2H5zM9 5h2v2H9zM7 7h2v2H7zM5 9h2v2H5zM9 9h2v2H9zM3 11h2v2H3zM11 11h2v2h-2z',
+  menu:    'M2 4h12v2H2zM2 7h12v2H2zM2 10h12v2H2z',
+  'chev-l':'M9 3h2v1H9zM7 4h2v1H7zM5 5h2v1H5zM4 6h1v1H4zM3 7h2v2H3zM4 9h1v1H4zM5 10h2v1H5zM7 11h2v1H7zM9 12h2v1H9z',
+  'chev-r':'M5 3h2v1H5zM7 4h2v1H7zM9 5h2v1H9zM11 6h1v1h-1zM11 7h2v2h-2zM11 9h1v1h-1zM9 10h2v1H9zM7 11h2v1H7zM5 12h2v1H5z',
+  first:   'M2 3h2v10H2zM10 3h2v1h-2zM8 4h2v1H8zM6 5h2v1H6zM5 6h1v1H5zM4 7h2v2H4zM5 9h1v1H5zM6 10h2v1H6zM8 11h2v1H8zM10 12h2v1h-2z',
+  last:    'M12 3h2v10h-2zM4 3h2v1H4zM6 4h2v1H6zM8 5h2v1H8zM10 6h1v1h-1zM10 7h2v2h-2zM10 9h1v1h-1zM8 10h2v1H8zM6 11h2v1H6zM4 12h2v1H4z',
+  /* 播放模式：顺序(右箭) / 循环(双箭) / 单曲(1) —— ↻ 等字符无字形必回退，改位图 */
+  'm-list':  'M2 7h9v2H2zM10 4h1v1h-1zM11 5h1v1h-1zM12 6h1v1h-1zM13 7h1v2h-1zM12 9h1v1h-1zM11 10h1v1h-1zM10 11h1v1h-1z',
+  'm-loop':  'M3 5h7v2H3zM10 4h1v1h-1zM11 5h1v2h-1zM10 7h1v1h-1zM6 11h7v2H6zM5 10h1v1H5zM4 11h1v2H4zM5 13h1v1H5z',
+  'm-single':'M7 3h2v1H7zM6 4h3v1H6zM7 5h2v6H7zM5 11h6v2H5z',
 };
 // share/kebab 画在 22×22 网格上，其余 16×16
 const VIEWBOX = { share: '0 0 22 22', kebab: '0 0 22 22' };
