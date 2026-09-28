@@ -465,13 +465,14 @@ export default {
   line-height: 1;
 }
 
-/* 待机条 */
+/* 待机条：与激活条同高（40 内容 + 10×2 padding + 1.2 顶线 = 61.2），首次点歌不跳主区 */
 .player-idle {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  height: 61.2px;
+  padding: 0 16px;
   max-width: 1440px;
   margin: 0 auto;
 }

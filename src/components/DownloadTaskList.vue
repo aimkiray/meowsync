@@ -338,6 +338,7 @@ const TaskRow = {
 .dtl-stat-num--fail { color: var(--ink); text-decoration: underline 1.2px var(--accent-magenta); text-underline-offset: 3px; }
 
 .dtl-state {
+  border-top: var(--hairline); /* 与 .dtl-scroll 同位，空态不断线 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -353,6 +354,7 @@ const TaskRow = {
 }
 
 .dtl-empty {
+  border-top: var(--hairline); /* 与 .dtl-scroll 同位，空态不断线 */
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -402,17 +404,15 @@ const TaskRow = {
 }
 
 .dtl-group-tag--fail { color: var(--accent-magenta-ink); }
-.dtl-group-tag--ok { color: var(--ink); }
+.dtl-group-tag--ok { color: var(--accent-green-ink); }
 
 /* 任务卡：发丝盒 */
 .dtl-task {
   border: var(--hairline);
   padding: 10px;
-  transition: border-color .15s;
 }
 
 .dtl-task + .dtl-task { margin-top: 8px; }
-.dtl-task:hover { border-color: var(--ink); }
 
 /* 已完成折叠头：整行发丝盒可点 */
 .dtl-group-toggle {

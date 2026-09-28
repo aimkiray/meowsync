@@ -408,7 +408,7 @@ export default {
 /* typeahead 下拉：纸面发丝盒（pg-menu 同族，绝对定位版） */
 .topnav-suggest {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 4px);
   left: 0;
   right: 0;
   z-index: var(--z-menu);
@@ -449,7 +449,7 @@ export default {
   font-size: 10px;
   letter-spacing: .05em;
   color: var(--ink-64);
-  border: 1.2px solid var(--ink-10);
+  border: var(--hairline);
   padding: 1px 6px;
 }
 

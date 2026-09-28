@@ -299,7 +299,7 @@
   gap: 12px;
   /* 与 grid-state/home-state 同规约：64 竖 + 16 横 + 顶部发丝分隔 */
   padding: 64px 16px;
-  border-top: 1.2px solid var(--ink-10);
+  border-top: var(--hairline);
 }
 
 .song-state-icon {
@@ -477,7 +477,7 @@
 .song-actions {
   position: absolute;
   top: 50%;
-  right: 10px;
+  right: 6px;
   transform: translateY(-50%);
   display: flex;
 }
@@ -521,7 +521,7 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  padding: 12px 0 6px;
+  padding: 12px 0;
   flex-wrap: wrap;
 }
 

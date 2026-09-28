@@ -270,7 +270,7 @@ export default {
 /* 分区：发丝线起头 + 微标签节题 */
 .result-section {
   border-top: var(--hairline);
-  padding-top: 10px;
+  padding-top: 12px;
   margin-bottom: 26px;
 }
 
