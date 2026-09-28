@@ -361,14 +361,18 @@ export class CanvasManager {
 
     const space = this._space
     const ctx = this._ctx
-    // 预填所有已排块的格子：occupiedSlots 只登记"本帧已绘制"的前序 lyric，
-    // 晚落位的前序块会偷占后序块的格——受害者被顶掉且 persist 期不可恢复。
-    // claimed 语义 = 认领即占，与绘制顺序解耦
-    const occupiedSlots = new Set()
+    // 预填所有已排块的格子：只登记"本帧已绘制"的前序 lyric 会让晚落位的
+    // 前序块偷占后序块的格——受害者被顶掉且 persist 期不可恢复。
+    // claimed 语义 = 认领即占，与绘制顺序解耦。Map 记持有者下标：
+    // 用纯 Set 的话已排块每帧撞上自己的格被误判偷占（隔帧灭灯式闪烁）；
+    // 先登记者持有，同格被两块声称时序号靠前者保留所有权
+    const slotOwner = new Map()
     for (let i = start; i < end; i += 1) {
       const l = this._lyrics[i]
       if (l.isDraw && l.slotKeys?.length) {
-        for (const key of l.slotKeys) occupiedSlots.add(key)
+        for (const key of l.slotKeys) {
+          if (!slotOwner.has(key)) slotOwner.set(key, i)
+        }
       }
     }
     ctx.textAlign = 'center'
@@ -408,7 +412,7 @@ export class CanvasManager {
         const pos = { x: startX + dir.x * i, y: startY + dir.y * i }
         const key = `${pos.x}:${pos.y}`
         // 提前退出：命中占位/出界立即失败，不为注定失败的结果分配整组对象
-        if (occupiedSlots.has(key)) return null
+        if (slotOwner.has(key)) return null
         if (strict && !inView(pos)) return null
         positions.push(pos)
         slotKeys.push(key)
@@ -594,14 +598,28 @@ export class CanvasManager {
             }
           }
 
-          if (lyric.slotKeys.some(slotKey => occupiedSlots.has(slotKey))) {
+          // 偷占检查只认"被别的块占"的格：自己的格本就在 slotOwner
+          // 里（预填或本帧登记），无差别命中会让已排块隔帧自我撤销
+          let stolen = false
+          for (const slotKey of lyric.slotKeys) {
+            const owner = slotOwner.get(slotKey)
+            if (owner !== undefined && owner !== i) {
+              stolen = true
+              break
+            }
+          }
+          if (stolen) {
+            // 释放登记在自己名下的格，本帧后序块立即可用
+            for (const slotKey of lyric.slotKeys) {
+              if (slotOwner.get(slotKey) === i) slotOwner.delete(slotKey)
+            }
             lyric.isDraw = false
             lyric.slotKeys = []
             lyric.glyphPositions = []
             continue
           }
 
-          lyric.slotKeys.forEach(slotKey => occupiedSlots.add(slotKey))
+          lyric.slotKeys.forEach(slotKey => slotOwner.set(slotKey, i))
 
           for (let g = 0; g < lyric.glyphs.length; g++) {
             const glyph = lyric.glyphs[g]
