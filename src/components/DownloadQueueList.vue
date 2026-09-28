@@ -119,7 +119,7 @@
         <Teleport to="body">
           <div
             v-if="openMenuId === queue.id"
-            class="queue-menu fixed bg-gray-900 border border-purple-400 shadow-lg z-[9999] w-[132px]"
+            class="queue-menu fixed bg-gray-900 border border-purple-400 shadow-lg z-[var(--z-menu)] w-[132px]"
             style="border-radius: 0;"
             :style="getMenuPosition(queue.id)"
           >

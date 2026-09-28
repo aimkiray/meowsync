@@ -1,29 +1,30 @@
 <template>
-  <div class="lg:col-span-1">
-    <div class="jirai-card card-songlist flex flex-col relative p-6 max-h-96 overflow-y-auto">
-      <div class="grid grid-cols-1 xl:grid-cols-[400px_minmax(0,1fr)] gap-4 flex-1 min-h-0">
-        <div class="min-h-0 flex flex-col">
-          <DownloadQueueList
-            :queues="displayQueues"
-            :loading="loadingQueues"
-            :selected-queue-id="selectedQueue?.id ?? null"
-            :title="queueListTitle"
-            :empty-text="queueEmptyText"
-            :search-query="queueSearch"
-            :status-filter="queueStatusFilter"
-            @update:search-query="queueSearch = $event"
-            @update:status-filter="queueStatusFilter = $event"
-            @start="startQueue"
-            @pause="pauseQueue"
-            @resume="resumeQueue"
-            @cancel="cancelQueue"
-            @retry="retryQueue"
-            @delete="deleteQueue"
-            @select="selectQueue"
-          />
-        </div>
+  <!-- 主区全宽：管理视图占用整个内容列（YTM 式页面切换而非面板挤压） -->
+  <div class="admin-panel jirai-card card-songlist flex flex-col relative p-6 m-4 lg:m-6 flex-1 min-h-0 overflow-hidden">
+    <!-- <xl 单列时两行各按内容撑高会超出面板——给网格自身加纵向滚动兜底 -->
+    <div class="grid grid-cols-1 xl:grid-cols-[400px_minmax(0,1fr)] gap-4 flex-1 min-h-0 overflow-y-auto xl:overflow-visible">
+      <div class="min-h-0 flex flex-col">
+        <DownloadQueueList
+          :queues="displayQueues"
+          :loading="loadingQueues"
+          :selected-queue-id="selectedQueue?.id ?? null"
+          :title="queueListTitle"
+          :empty-text="queueEmptyText"
+          :search-query="queueSearch"
+          :status-filter="queueStatusFilter"
+          @update:search-query="queueSearch = $event"
+          @update:status-filter="queueStatusFilter = $event"
+          @start="startQueue"
+          @pause="pauseQueue"
+          @resume="resumeQueue"
+          @cancel="cancelQueue"
+          @retry="retryQueue"
+          @delete="deleteQueue"
+          @select="selectQueue"
+        />
+      </div>
 
-        <div class="min-h-0 flex flex-col">
+      <div class="min-h-0 flex flex-col">
         <DownloadTaskList
           :tasks="tasks"
           :loading="loadingTasks"
@@ -31,7 +32,6 @@
           :retrying-task-id="retryingTaskId"
           @retry-task="retryTask"
         />
-      </div>
       </div>
     </div>
   </div>
@@ -42,13 +42,6 @@ import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import { downloadsApi } from '../api/downloads';
 import DownloadQueueList from './DownloadQueueList.vue';
 import DownloadTaskList from './DownloadTaskList.vue';
-
-const props = defineProps({
-  selectedPlaylist: {
-    type: Object,
-    default: null
-  }
-});
 
 const queues = ref([]);
 const selectedQueue = ref(null);

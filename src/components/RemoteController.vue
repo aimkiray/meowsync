@@ -281,6 +281,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  min-height: 100vh;
   min-height: 100dvh;
   padding: 24px 20px;
   background: #0f0f0f;

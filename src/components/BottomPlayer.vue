@@ -1,9 +1,7 @@
 <template>
   <div
     v-if="currentSong"
-    class="fixed bottom-0 left-0 right-0 jirai-card card-player z-50 backdrop-blur-md transition-transform duration-300"
-    :class="{ 'translate-y-full': isHidden }"
-    style="margin: 0; border-radius: 0; border-bottom: none; border-left: none; border-right: none; border-top: none; background: rgba(240, 192, 192, 0.2);"
+    class="jirai-card card-player bottom-player"
   >
     <!-- 顶部进度条（兼作上边框） -->
     <div
@@ -45,6 +43,12 @@
 
           <!-- 播放控制 + 时间 -->
           <div class="flex items-center space-x-1 flex-shrink-0">
+            <button
+              @click="$emit('toggle-lyrics')"
+              class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center"
+              :class="{ 'bottom-player__toggle--active': lyricsOpen }"
+              title="歌词"
+            >词</button>
             <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏">
               <svg class="bottom-player__icon bottom-player__icon--mobile" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
@@ -114,6 +118,13 @@
 
                 <!-- 播放控制 -->
                 <div class="flex items-center space-x-3">
+                  <!-- YTM 式歌词抽屉开关 -->
+                  <button
+                    @click="$emit('toggle-lyrics')"
+                    class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center bottom-player__icon-button"
+                    :class="{ 'bottom-player__toggle--active': lyricsOpen }"
+                    title="歌词"
+                  >词</button>
                   <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-3 text-xl w-12 h-12 flex items-center justify-center" title="全屏">
                     <svg class="bottom-player__icon bottom-player__icon--desktop" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
@@ -134,41 +145,10 @@
       </div>
     </div>
   </div>
-  
-  <!-- 隐藏按钮 - 浮动在播放器外部右上角 -->
-  <div
-    v-if="currentSong && !isHidden"
-    class="fixed right-4 z-50 bottom-[60px] md:bottom-[100px]"
-  >
-    <button
-      @click="toggleHidden"
-      class="jirai-button p-1 text-xs w-6 h-6 flex items-center justify-center backdrop-blur-md"
-      :style="toggleButtonStyle"
-      title="隐藏播放器"
-    >
-      ▼
-    </button>
-  </div>
-  
-  <!-- 当播放器隐藏时显示的小按钮 -->
-  <div
-    v-if="currentSong && isHidden"
-    class="fixed bottom-4 right-4 z-50"
-  >
-    <button
-      @click="toggleHidden"
-      class="jirai-button-primary p-2 text-sm w-10 h-10 flex items-center justify-center backdrop-blur-md"
-      :style="toggleButtonStyle"
-      title="显示播放器"
-    >
-      ♪
-    </button>
-  </div>
 </template>
 
 <script>
 import { computed } from 'vue'
-import { useTheme } from '../composables/useTheme'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 
@@ -199,39 +179,13 @@ export default {
       type: Boolean,
       default: false
     },
-    playerHidden: {
+    lyricsOpen: {
       type: Boolean,
       default: false
     }
   },
-  emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:player-hidden', 'open-fullscreen'],
+  emits: ['toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'open-fullscreen', 'toggle-lyrics'],
   setup(props, { emit }) {
-    // 受控隐藏状态（v-model:player-hidden），与父组件保持同步，remount 不再丢失
-    const isHidden = computed({
-      get: () => props.playerHidden,
-      set: (v) => emit('update:player-hidden', v)
-    })
-    const { currentTheme } = useTheme()
-
-    // 动态样式（--jirai-pink 从未定义，原写法会让 border 失效 → 按钮无边框；
-    // 用各主题卡片同款粉边框色替代）。隐藏/显示两个按钮共用同一样式
-    const toggleButtonStyle = computed(() => {
-      if (currentTheme.value === 'pixel-retro') {
-        return {
-          background: 'rgba(240, 179, 192, 0.8)',
-          border: '2px solid rgb(210, 100, 130)'
-        }
-      }
-      return {
-        background: 'rgba(255, 192, 203, 0.8)',
-        border: '2px solid rgb(244, 114, 182)'
-      }
-    })
-
-    const toggleHidden = () => {
-      isHidden.value = !isHidden.value
-    }
-
     // 进度条点击 → 归一化比例 0-1（父组件负责换算为秒）
     const onSeekClick = (event) => {
       const rect = event.currentTarget.getBoundingClientRect()
@@ -248,19 +202,36 @@ export default {
       progressPercentage,
       formatTime,
       httpsCover,
-      isHidden,
-      toggleHidden,
-      onSeekClick,
-      toggleButtonStyle
+      onSeekClick
     }
   }
 }
 </script>
 
 <style scoped>
+/* 文档流内嵌：应用壳 flex 列的最后一个子项，不再 fixed */
+.bottom-player {
+  position: relative;
+  flex-shrink: 0;
+  z-index: var(--z-player);
+  margin: 0;
+  border-radius: 0;
+  border-bottom: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  /* 底色由全局 .card-player 提供（!important），scoped 再写是死代码 */
+}
+
 .bottom-player__icon-button {
   padding-left: 0;
   padding-right: 0;
+}
+
+/* 歌词抽屉开关的激活态 */
+.bottom-player__toggle--active {
+  background: #f472b6;
+  color: #1a1a2e;
 }
 
 .bottom-player__icon {

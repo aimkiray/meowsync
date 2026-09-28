@@ -36,12 +36,105 @@
   --pixel-text-dim: #cccccc;
   --pixel-dark: #000000;
   --pixel-highlight: rgba(255, 255, 255, 0.3);
-  /* 层级刻度：全屏播放器 < 底部播放器 < 点击捕手 < 悬浮菜单 */
+  /* 层级刻度：歌词抽屉 < 全屏播放器 < 底部播放器 < 点击捕手 < 悬浮菜单/侧栏抽屉 */
+  --z-drawer: 60;
   --z-fullscreen: 70;
   --z-player: 900;
   --z-overlay: 950;
   --z-menu: 1000;
 }
+
+/* ===== YTM 式应用壳 ===== */
+/* 全断点整屏 flex 列：顶栏 / (侧栏+主区) / 播放条，滚动只发生在各栏内部 */
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 桌面端：歌单库常驻侧栏 */
+.app-sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  min-height: 0;
+  border-right: 2px solid rgba(240, 179, 192, 0.2);
+  background: rgba(20, 16, 28, 0.35);
+}
+
+:root[data-theme="pixel-retro"] .app-sidebar {
+  border-right-color: rgba(210, 100, 130, 0.4);
+  background: rgba(252, 238, 220, 0.5);
+}
+
+/* 移动端：侧栏改抽屉（汉堡键呼出 + 遮罩关闭） */
+.sidebar-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: var(--z-overlay);
+}
+
+@media (max-width: 1023px) {
+  .app-sidebar {
+    position: fixed;
+    /* top 避让 54px 细顶栏：抽屉不盖住汉堡键，它本身就是关闭入口 */
+    top: 54px;
+    left: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    z-index: var(--z-menu);
+    background: var(--pixel-card-bg);
+    transform: translateX(-100%);
+    /* visibility 延迟到滑出结束后才隐藏：关闭态不进 Tab 序/可访问性树 */
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s 0.28s;
+    visibility: hidden;
+  }
+
+  .app-sidebar--open {
+    transform: translateX(0);
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s 0s;
+    visibility: visible;
+  }
+
+  /* retro 主题下半透明侧底色在抽屉态必须改实底——外层规则 0,3,0
+     的优先级高于这里的 .app-sidebar，需要在媒体查询内单独覆盖 */
+  :root[data-theme="pixel-retro"] .app-sidebar {
+    background: rgb(252, 238, 220);
+  }
+}
+
+@media (max-width: 1023px) and (prefers-reduced-motion: reduce) {
+  .app-sidebar {
+    transition: none;
+  }
+}
+
+/* 歌单库侧栏（pixel-retro）：条目文字在象牙色 music-card 上需深色 */
+:root[data-theme="pixel-retro"] .playlist-panel .text-pink-300 { color: rgb(180, 60, 100) !important; }
+:root[data-theme="pixel-retro"] .playlist-panel .text-purple-300 { color: rgb(160, 80, 120) !important; }
+:root[data-theme="pixel-retro"] .playlist-panel .text-gray-400,
+:root[data-theme="pixel-retro"] .playlist-panel .text-gray-600 { color: rgb(140, 100, 110) !important; }
+:root[data-theme="pixel-retro"] .playlist-panel .border-pink-400 { border-color: rgb(210, 120, 160) !important; }
+:root[data-theme="pixel-retro"] .playlist-panel .border-purple-400 { border-color: rgb(185, 90, 130) !important; }
 
 /* 像素风格主题 - 用户指定的4色配色 */
 :root[data-theme="pixel-retro"] {
@@ -126,112 +219,7 @@
 }
 
 /* ── pixel-retro 主题：各卡片内文字颜色与边框色系统一 ── */
-
-/* 导航栏（蓝色系） */
-:root[data-theme="pixel-retro"] .card-nav .text-pink-300,
-:root[data-theme="pixel-retro"] .card-nav .text-purple-300 { color: rgb(50, 100, 160) !important; }
-:root[data-theme="pixel-retro"] .card-nav .text-gray-400,
-:root[data-theme="pixel-retro"] .card-nav .text-gray-600 { color: rgb(100, 140, 190) !important; }
-:root[data-theme="pixel-retro"] .card-nav .jirai-title { color: rgb(30, 80, 140) !important; }
-
-/* 歌单面板（绿色系） */
-:root[data-theme="pixel-retro"] .card-playlist .text-pink-300 { color: rgb(40, 120, 80) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .text-purple-300 { color: rgb(60, 140, 90) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .text-gray-400,
-:root[data-theme="pixel-retro"] .card-playlist .text-gray-600 { color: rgb(100, 160, 120) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .text-red-300 { color: rgb(180, 60, 60) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .border-pink-400 { border-color: rgb(80, 170, 120) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .border-pink-500 { border-color: rgb(60, 150, 100) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .border-purple-400 { border-color: rgb(60, 150, 100) !important; }
-
-/* 歌单面板：子卡片（歌单条目） */
-:root[data-theme="pixel-retro"] .card-playlist .music-card,
-:root[data-theme="pixel-retro"] .card-playlist .jirai-card {
-  background: rgba(200, 240, 215, 0.9) !important;
-  border: none !important;
-  box-shadow:
-    0 -2px 0 0 rgba(200, 240, 215, 0.9),
-    2px 0 0 0 rgba(200, 240, 215, 0.9),
-    0 2px 0 0 rgba(200, 240, 215, 0.9),
-    -2px 0 0 0 rgba(200, 240, 215, 0.9),
-    0 0 0 2px rgb(80, 160, 110),
-    0 -4px 0 0 rgb(80, 160, 110),
-    4px 0 0 0 rgb(80, 160, 110),
-    0 4px 0 0 rgb(80, 160, 110),
-    -4px 0 0 0 rgb(80, 160, 110) !important;
-  filter: none !important;
-}
-:root[data-theme="pixel-retro"] .card-playlist .music-card:hover,
-:root[data-theme="pixel-retro"] .card-playlist .jirai-card:hover {
-  background: rgba(170, 230, 195, 0.95) !important;
-  box-shadow:
-    0 -2px 0 0 rgba(170, 230, 195, 0.95),
-    2px 0 0 0 rgba(170, 230, 195, 0.95),
-    0 2px 0 0 rgba(170, 230, 195, 0.95),
-    -2px 0 0 0 rgba(170, 230, 195, 0.95),
-    0 0 0 2px rgb(50, 140, 85),
-    0 -4px 0 0 rgb(50, 140, 85),
-    4px 0 0 0 rgb(50, 140, 85),
-    0 4px 0 0 rgb(50, 140, 85),
-    -4px 0 0 0 rgb(50, 140, 85) !important;
-}
-
-/* 歌单面板：tab 按钮 */
-:root[data-theme="pixel-retro"] .card-playlist .bg-pink-900 { background-color: rgba(60, 140, 95, 0.9) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .bg-gray-900 { background-color: rgba(180, 225, 200, 0.9) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .text-pink-100 { color: rgb(240, 255, 245) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .text-gray-300 { color: rgb(60, 120, 80) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .border-gray-600 { border-color: rgb(130, 190, 155) !important; }
-
-/* 歌单面板：输入框 */
-:root[data-theme="pixel-retro"] .card-playlist .pixel-input {
-  background: rgba(235, 252, 242, 0.95) !important;
-  border-color: rgb(100, 180, 130) !important;
-  color: rgb(30, 100, 60) !important;
-}
-:root[data-theme="pixel-retro"] .card-playlist .pixel-input::placeholder { color: rgb(120, 175, 140) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .pixel-input:focus {
-  border-color: rgb(50, 150, 90) !important;
-  background: rgba(215, 245, 228, 0.95) !important;
-}
-
-/* 歌单面板：按钮 */
-:root[data-theme="pixel-retro"] .card-playlist .pixel-button {
-  background: rgba(80, 160, 110, 0.9) !important;
-  border-color: rgb(50, 130, 80) !important;
-  color: rgb(240, 255, 245) !important;
-  box-shadow: none !important;
-}
-:root[data-theme="pixel-retro"] .card-playlist .pixel-button:hover {
-  background: rgba(60, 140, 90, 0.95) !important;
-  box-shadow: none !important;
-}
-:root[data-theme="pixel-retro"] .card-playlist .pixel-button:active {
-  background: rgba(40, 120, 70, 0.95) !important;
-  box-shadow: none !important;
-  transform: translate(1px, 1px);
-}
-
-/* 歌单面板：tab 按钮 hover/active */
-:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-pink-950:hover {
-  background-color: rgba(50, 130, 85, 0.9) !important;
-}
-:root[data-theme="pixel-retro"] .card-playlist .hover\:border-pink-600:hover {
-  border-color: rgb(50, 140, 90) !important;
-}
-:root[data-theme="pixel-retro"] .card-playlist .hover\:text-pink-200:hover {
-  color: rgb(230, 255, 240) !important;
-}
-
-/* 歌单面板：右键菜单 */
-:root[data-theme="pixel-retro"] .card-playlist .bg-gray-900.border { background-color: rgba(220, 245, 230, 0.98) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .border-gray-700 { border-color: rgb(150, 200, 170) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-purple-800:hover { background-color: rgba(80, 160, 110, 0.9) !important; }
-:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-red-800:hover { background-color: rgba(200, 80, 80, 0.9) !important; }
-
-/* 歌单面板：分页按钮 */
-:root[data-theme="pixel-retro"] .card-playlist .bg-purple-600 { background-color: rgb(70, 150, 100) !important; box-shadow: none !important; }
-:root[data-theme="pixel-retro"] .card-playlist .hover\:bg-purple-500:hover { background-color: rgb(55, 135, 85) !important; box-shadow: none !important; }
+/* （card-nav / card-playlist / card-footer 三族规则随旧布局一起删除） */
 
 /* 歌曲列表（粉色系） */
 :root[data-theme="pixel-retro"] .card-songlist .text-pink-300 { color: rgb(180, 60, 100) !important; }
@@ -367,12 +355,6 @@ html {
 :root[data-theme="pixel-retro"] .card-player .text-purple-300 { color: rgb(160, 70, 100) !important; }
 :root[data-theme="pixel-retro"] .card-player .border-pink-400 { border-color: rgb(210, 100, 130) !important; }
 
-/* 页脚（黄色系） */
-:root[data-theme="pixel-retro"] .card-footer .text-pink-300,
-:root[data-theme="pixel-retro"] .card-footer .text-purple-300 { color: rgb(140, 110, 40) !important; }
-:root[data-theme="pixel-retro"] .card-footer .text-gray-400,
-:root[data-theme="pixel-retro"] .card-footer .text-gray-600 { color: rgb(170, 145, 80) !important; }
-
 :root {
   --fullscreen-background-image: url('/qb.png');
 }
@@ -434,22 +416,6 @@ body {
 }
 
 /* 暗色主题各卡片滚动条色系 */
-/* 导航栏（蓝色系） */
-.card-nav::-webkit-scrollbar-track,
-.card-nav ::-webkit-scrollbar-track { background: rgba(14, 28, 55, 0.95); border-color: rgb(60, 100, 160); }
-.card-nav::-webkit-scrollbar-thumb,
-.card-nav ::-webkit-scrollbar-thumb { background: rgb(80, 140, 210); border-color: rgb(40, 80, 140); box-shadow: inset 0 0 0 1px rgb(130, 190, 240); }
-.card-nav::-webkit-scrollbar-thumb:hover,
-.card-nav ::-webkit-scrollbar-thumb:hover { background: rgb(110, 170, 240); box-shadow: inset 0 0 0 1px rgb(80, 140, 210); }
-
-/* 歌单面板（绿色系） */
-.card-playlist::-webkit-scrollbar-track,
-.card-playlist ::-webkit-scrollbar-track { background: rgba(10, 28, 20, 0.95); border-color: rgb(60, 130, 90); }
-.card-playlist::-webkit-scrollbar-thumb,
-.card-playlist ::-webkit-scrollbar-thumb { background: rgb(60, 160, 100); border-color: rgb(30, 100, 60); box-shadow: inset 0 0 0 1px rgb(100, 200, 140); }
-.card-playlist::-webkit-scrollbar-thumb:hover,
-.card-playlist ::-webkit-scrollbar-thumb:hover { background: rgb(80, 190, 120); box-shadow: inset 0 0 0 1px rgb(60, 160, 100); }
-
 /* 歌曲列表（橙色系） */
 .card-songlist::-webkit-scrollbar-track,
 .card-songlist ::-webkit-scrollbar-track { background: rgba(35, 18, 5, 0.95); border-color: rgb(160, 90, 40); }
@@ -466,73 +432,8 @@ body {
 .card-lyrics::-webkit-scrollbar-thumb:hover,
 .card-lyrics ::-webkit-scrollbar-thumb:hover { background: rgb(180, 120, 240); box-shadow: inset 0 0 0 1px rgb(150, 90, 210); }
 
-/* 确保滚动条不影响内容对齐 */
-.jirai-card.max-h-96 {
-  max-height: 32rem; /* 增加高度从24rem到32rem */
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  /* 在左侧添加与滚动条宽度相等的padding */
-  padding-left: calc(1.5rem + 16px); /* 原有padding + 滚动条宽度 */
-  padding-right: 1.5rem; /* 保持原有右侧padding */
-}
-
-/* 桌面端铺满页面布局 */
-@media (min-width: 1024px) {
-  .desktop-fullscreen {
-    height: 100vh;
-    height: 100dvh; /* iOS Safari 视口高度抖动修复 */
-    overflow: hidden;
-  }
-  
-  /* 桌面端统一header和footer的边距 */
-  nav {
-    padding-top: 0.5rem; /* 8px，与footer保持一致 */
-  }
-  
-  footer {
-    position: static;
-    z-index: 40;
-  }
-  
-  .desktop-content {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-  }
-  
-  .desktop-content > .grid {
-    flex: 1;
-    height: 100%;
-    overflow: hidden; /* 防止grid容器溢出 */
-  }
-  
-  .desktop-content .lg\:col-span-1 {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden; /* 防止列容器溢出 */
-  }
-  
-  .jirai-card.max-h-96 {
-    max-height: 600px; /* 设置合理的最大高度 */
-    height: auto; /* 让高度自适应内容 */
-    min-height: 200px; /* 设置最小高度，确保至少显示3个条目 */
-    flex: 1;
-    overflow-y: auto; /* 启用垂直滚动 */
-    display: flex;
-    flex-direction: column;
-  }
-  
-  /* 确保桌面端所有组件都有正确的高度和滚动 */
-  .desktop-content .jirai-card {
-    height: auto;
-    max-height: 600px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-  }
-}
+/* 旧三栏卡片布局（max-h-96/desktop-content）已随 YTM 应用壳移除——
+   各栏滚动由 .app-sidebar/.app-main/组件自身 overflow 接管 */
 
 .jirai-button-primary {
   background: var(--pixel-card-bg);
@@ -693,25 +594,6 @@ body {
 
 /* ── 各功能区域专属边框（默认主题） ── */
 
-/* 导航栏：蓝色双线 */
-.card-nav {
-  border: 3px solid rgb(100, 160, 220);
-  background: rgba(20, 40, 80, 0.92) !important;
-  box-shadow:
-    0 0 0 1px rgb(173, 215, 230),
-    3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-/* 歌单面板：绿色虚线风格 */
-.card-playlist {
-  border: 3px dashed rgb(100, 190, 140);
-  background: rgba(15, 40, 30, 0.92) !important;
-  box-shadow:
-    3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
 /* 歌曲列表：橙色粗实线 */
 .card-songlist {
   border: 3px solid rgb(230, 150, 80);
@@ -740,15 +622,6 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
 }
 
-/* 页脚：灰色细线 */
-.card-footer {
-  border: 2px solid rgb(180, 160, 170);
-  background: rgba(30, 20, 25, 0.88) !important;
-  box-shadow:
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
 /* ── 各功能区域专属边框（pixel-retro 主题） ── */
 
 /* 底部播放器：玫瑰色背景 */
@@ -758,40 +631,6 @@ body {
   border-bottom: none !important;
   box-shadow: 0 -2px 0 0 rgb(240, 160, 180) !important;
   filter: none;
-}
-
-/* 导航栏：蓝色像素边框 */
-:root[data-theme="pixel-retro"] .card-nav {
-  border: none;
-  background-color: rgba(210, 235, 248, 0.97) !important;
-  box-shadow:
-    0 -2px 0 0 rgba(210, 235, 248, 0.97),
-    2px 0 0 0 rgba(210, 235, 248, 0.97),
-    0 2px 0 0 rgba(210, 235, 248, 0.97),
-    -2px 0 0 0 rgba(210, 235, 248, 0.97),
-    0 0 0 2px rgb(130, 190, 230),
-    0 -4px 0 0 rgb(130, 190, 230),
-    4px 0 0 0 rgb(130, 190, 230),
-    0 4px 0 0 rgb(130, 190, 230),
-    -4px 0 0 0 rgb(130, 190, 230);
-  filter: drop-shadow(4px 4px 0 rgb(160, 200, 220));
-}
-
-/* 歌单面板：绿色像素边框 */
-:root[data-theme="pixel-retro"] .card-playlist {
-  border: none;
-  background-color: rgba(220, 245, 230, 0.97) !important;
-  box-shadow:
-    0 -2px 0 0 rgba(220, 245, 230, 0.97),
-    2px 0 0 0 rgba(220, 245, 230, 0.97),
-    0 2px 0 0 rgba(220, 245, 230, 0.97),
-    -2px 0 0 0 rgba(220, 245, 230, 0.97),
-    0 0 0 2px rgb(120, 190, 150),
-    0 -4px 0 0 rgb(120, 190, 150),
-    4px 0 0 0 rgb(120, 190, 150),
-    0 4px 0 0 rgb(120, 190, 150),
-    -4px 0 0 0 rgb(120, 190, 150);
-  filter: drop-shadow(4px 4px 0 rgb(150, 210, 170));
 }
 
 /* 歌曲列表：橙色像素边框 */
@@ -828,57 +667,7 @@ body {
   filter: drop-shadow(4px 4px 0 rgb(200, 170, 225));
 }
 
-/* 页脚：浅黄色像素边框 */
-:root[data-theme="pixel-retro"] .card-footer {
-  border: none;
-  background-color: rgba(255, 251, 220, 0.97) !important;
-  box-shadow:
-    0 -2px 0 0 rgba(252, 238, 220, 0.97),
-    2px 0 0 0 rgba(252, 238, 220, 0.97),
-    0 2px 0 0 rgba(252, 238, 220, 0.97),
-    -2px 0 0 0 rgba(252, 238, 220, 0.97),
-    0 0 0 2px var(--pixel-border),
-    0 -4px 0 0 var(--pixel-border),
-    4px 0 0 0 var(--pixel-border),
-    0 4px 0 0 var(--pixel-border),
-    -4px 0 0 0 var(--pixel-border);
-  filter: drop-shadow(4px 4px 0 var(--pixel-box-shadow));
-}
 
-/* 修复桌面端像素主题下滚动容器的阴影显示问题 */
-@media (min-width: 1024px) {
-  :root[data-theme="pixel-retro"] .jirai-card.max-h-96 {
-    margin: 4px 8px 8px 4px; /* 为边框和阴影留空间 */
-  }
-
-  /* 桌面端像素主题下header和footer的宽度对齐 */
-  :root[data-theme="pixel-retro"] nav .jirai-card {
-    margin: 4px 8px 8px 4px; /* 与主要内容区域的卡片保持一致的margin */
-  }
-
-  :root[data-theme="pixel-retro"] .desktop-content > .grid > .lg\:col-span-3 > .card-songlist {
-    margin: 4px 8px 8px 4px;
-  }
-
-  :root[data-theme="pixel-retro"] footer .jirai-card {
-    margin: 4px 8px 8px 4px; /* 与主要内容区域的卡片保持一致的margin */
-  }
-
-  /* 像素主题下增加header顶部和footer底部间隔 */
-  :root[data-theme="pixel-retro"] nav {
-    padding-top: 1rem; /* 从0.5rem增加到1rem，增加顶部间隔 */
-  }
-
-  :root[data-theme="pixel-retro"] footer {
-    padding-bottom: 1rem; /* 从0.5rem增加到1rem，增加底部间隔 */
-  }
-}
-
-/* 修复滚动容器内的卡片边距 */
-.jirai-card.max-h-96 .jirai-card {
-  margin-left: 0;
-  margin-right: 0;
-}
 
 /* 隐藏滚动条但保持滚动功能 */
 body::-webkit-scrollbar {
@@ -886,27 +675,10 @@ body::-webkit-scrollbar {
   background: transparent;
 }
 
-/* 底部播放器特殊样式 */
-.jirai-card.fixed {
-  background: var(--pixel-card-bg);
-  border-top: 4px solid var(--pixel-primary);
-  border-radius: 0;
-  box-shadow: 
-    0 -3px 0px var(--pixel-dark),
-    inset 1px 1px 0px var(--pixel-highlight);
-  position: fixed !important;
-  margin: 0 !important;
-  bottom: 0 !important;
-  left: 0 !important;
-  right: 0 !important;
-  width: 100vw !important;
-  z-index: var(--z-player) !important;
-}
-
-/* 像素风格主题下的底部播放器样式 */
-:root[data-theme="pixel-retro"] .jirai-card.fixed {
-  box-shadow: none;
-  filter: none;
+/* 底部播放器已在应用壳文档流内（.card-player 提供像素描边），不再 fixed */
+/* iOS 安全区：配合 viewport-fit=cover，避开 Home 指示条 */
+.bottom-player {
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 /* pixel音乐卡片 */
@@ -1507,22 +1279,6 @@ body::-webkit-scrollbar {
 }
 
 /* 各卡片内滚动条颜色 */
-/* 导航栏（蓝色系） */
-:root[data-theme="pixel-retro"] .card-nav::-webkit-scrollbar-track,
-:root[data-theme="pixel-retro"] .card-nav ::-webkit-scrollbar-track { background: rgba(210, 235, 248, 0.97); border-color: rgb(130, 190, 230); }
-:root[data-theme="pixel-retro"] .card-nav::-webkit-scrollbar-thumb,
-:root[data-theme="pixel-retro"] .card-nav ::-webkit-scrollbar-thumb { background: rgb(100, 160, 210); border-color: rgb(70, 130, 180); box-shadow: none; }
-:root[data-theme="pixel-retro"] .card-nav::-webkit-scrollbar-thumb:hover,
-:root[data-theme="pixel-retro"] .card-nav ::-webkit-scrollbar-thumb:hover { background: rgb(70, 130, 180); box-shadow: none; }
-
-/* 歌单面板（绿色系） */
-:root[data-theme="pixel-retro"] .card-playlist::-webkit-scrollbar-track,
-:root[data-theme="pixel-retro"] .card-playlist ::-webkit-scrollbar-track { background: rgba(220, 245, 230, 0.97); border-color: rgb(120, 190, 150); }
-:root[data-theme="pixel-retro"] .card-playlist::-webkit-scrollbar-thumb,
-:root[data-theme="pixel-retro"] .card-playlist ::-webkit-scrollbar-thumb { background: rgb(80, 160, 110); border-color: rgb(50, 130, 80); box-shadow: none; }
-:root[data-theme="pixel-retro"] .card-playlist::-webkit-scrollbar-thumb:hover,
-:root[data-theme="pixel-retro"] .card-playlist ::-webkit-scrollbar-thumb:hover { background: rgb(50, 140, 85); box-shadow: none; }
-
 /* 歌曲列表（粉色系） */
 :root[data-theme="pixel-retro"] .card-songlist::-webkit-scrollbar-track,
 :root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-track { background: rgba(255, 225, 235, 0.97); border-color: rgb(220, 140, 170); }
