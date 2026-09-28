@@ -70,6 +70,24 @@
         />
         <span class="rc-vol-icon">🔊</span>
       </div>
+
+      <!-- 待播队列：host 广播的播放快照，点选跳转 -->
+      <div v-if="queueItems.length" class="rc-queue">
+        <div class="rc-queue-title">待播队列</div>
+        <div class="rc-queue-list">
+          <button
+            v-for="(s, i) in queueItems"
+            :key="`${s.id}-${i}`"
+            class="rc-queue-row"
+            :class="{ 'rc-queue-row--current': i === state.queueIndex }"
+            @click="send('play_song', s.id)"
+          >
+            <span class="rc-queue-idx">{{ i === state.queueIndex ? '▶' : i + 1 }}</span>
+            <span class="rc-queue-name">{{ s.name }}</span>
+            <span class="rc-queue-artist">{{ queueArtist(s) }}</span>
+          </button>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -102,8 +120,21 @@ const state = ref({
   currentSong: null,
   currentTime: 0,
   duration: 0,
-  volume: 80
+  volume: 80,
+  queue: [],
+  queueIndex: -1
 })
+
+// 队列渲染：白名单已保证数组形状，这里只需对元素个体防御
+const queueItems = computed(() =>
+  Array.isArray(state.value.queue) ? state.value.queue.filter(s => s && s.id != null) : []
+)
+
+const queueArtist = (s) => {
+  const list = s?.ar || s?.artists
+  if (!Array.isArray(list)) return ''
+  return list.map(a => a?.name ?? '').filter(Boolean).join(' / ')
+}
 
 let ws = null
 let reconnectTimer = null
@@ -131,6 +162,8 @@ function connect() {
         // 拖动中不回写对应字段，避免 thumb 被远端旧值拽回
         if (seekDragging.value) delete payload.currentTime
         if (volumeDragging.value) delete payload.volume
+        // sanitize 后 queue 可能整个键缺席（非数组被丢）——不补默认值会留着旧队列
+        if (!Array.isArray(payload.queue)) payload.queue = []
         state.value = { ...state.value, ...payload }
       } else if (msg.type === 'host_disconnected' || msg.type === 'host_absent') {
         // 断开与"从未有 host"共用空态 UI
@@ -435,5 +468,77 @@ onUnmounted(() => {
 
 .rc-btn-main:active {
   background: #c0392b;
+}
+
+/* 待播队列 */
+.rc-queue {
+  width: 100%;
+  max-width: 360px;
+}
+
+.rc-queue-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #aaa;
+  margin-bottom: 8px;
+}
+
+.rc-queue-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.rc-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 8px;
+  background: none;
+  border: none;
+  border-left: 3px solid transparent;
+  color: #ddd;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rc-queue-row:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.rc-queue-row--current {
+  border-left-color: #e74c3c;
+  color: #fff;
+}
+
+.rc-queue-idx {
+  width: 18px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #888;
+  text-align: center;
+}
+
+.rc-queue-row--current .rc-queue-idx {
+  color: #e74c3c;
+}
+
+.rc-queue-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rc-queue-artist {
+  flex-shrink: 0;
+  max-width: 40%;
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

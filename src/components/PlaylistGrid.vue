@@ -11,16 +11,56 @@
       <p class="text-pink-300 flex justify-center items-center">搜索中喵...</p>
     </div>
 
-    <div v-else-if="results.length === 0" class="text-center py-16">
-      <p class="text-gray-600">没有找到相关歌单喵~</p>
+    <div v-else-if="results.length === 0 && songs.length === 0" class="text-center py-16">
+      <p class="text-gray-600">没有找到相关内容喵~</p>
     </div>
 
-    <div v-else class="playlist-grid">
+    <template v-else>
+      <!-- YTM 分区结果：歌曲行在前（可直接播放），歌单卡片区在后 -->
+      <section v-if="songs.length" class="result-section">
+        <h3 class="result-section-title">歌曲</h3>
+        <div
+          v-for="song in songs"
+          :key="song.id"
+          class="song-result-row"
+          :class="{ 'song-result-row--playing': String(currentSong?.id) === String(song.id) }"
+          @click="$emit('play-song', song)"
+          @keydown.enter="$emit('play-song', song)"
+          tabindex="0"
+          role="button"
+          :title="`播放 ${song.name}`"
+        >
+          <span class="song-result-index">
+            <span class="song-result-index-play">▶</span>
+          </span>
+          <img
+            v-if="song.al?.picUrl || song.album?.picUrl"
+            :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+            :alt="song.name"
+            class="song-result-cover"
+            loading="lazy"
+            style="image-rendering: pixelated;"
+          />
+          <div v-else class="song-result-cover song-result-cover--fallback">♪</div>
+          <div class="song-result-info">
+            <p class="song-result-name">{{ song.name }}</p>
+            <p class="song-result-meta">{{ songArtist(song) }}<template v-if="songAlbum(song)"> · {{ songAlbum(song) }}</template></p>
+          </div>
+          <span class="song-result-duration">{{ formatSongDuration(song) }}</span>
+        </div>
+      </section>
+
+      <section v-if="results.length" class="result-section">
+        <h3 class="result-section-title">歌单</h3>
+        <div class="playlist-grid">
       <div
         v-for="playlist in results"
         :key="playlist.id"
         class="grid-card jirai-card"
         @click="$emit('open', playlist)"
+        @keydown.enter="$emit('open', playlist)"
+        tabindex="0"
+        role="button"
         :title="`打开《${playlist.name}》`"
       >
         <div class="grid-card-cover">
@@ -54,7 +94,9 @@
           </button>
         </div>
       </div>
-    </div>
+        </div>
+      </section>
+    </template>
   </div>
 </template>
 
@@ -62,6 +104,7 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { shareOrCopy } from '../lib/share'
 import { httpsCover } from '../lib/url'
+import { formatTime } from '../lib/format'
 
 export default {
   name: 'PlaylistGrid',
@@ -69,6 +112,15 @@ export default {
     results: {
       type: Array,
       default: () => []
+    },
+    // 单曲结果（type=1 搜索），点击即播并构成待播队列
+    songs: {
+      type: Array,
+      default: () => []
+    },
+    currentSong: {
+      type: Object,
+      default: null
     },
     userPlaylists: {
       type: Array,
@@ -79,7 +131,7 @@ export default {
       default: false
     }
   },
-  emits: ['open', 'add', 'close'],
+  emits: ['open', 'add', 'close', 'play-song'],
   setup(props, { emit }) {
     const httpsCoverUrl = httpsCover
     // 添加中的歌单 id：立即禁用按钮防连点，10s 兜底清（父组件入库后由 watch 提前清）
@@ -128,12 +180,22 @@ export default {
       else if (result === 'failed') alert('分享失败，请手动复制链接')
     }
 
+    const songArtist = (song) =>
+      (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/') || '未知艺人'
+
+    const songAlbum = (song) => song.al?.name || song.album?.name || ''
+
+    const formatSongDuration = (song) => formatTime((song.dt || song.duration || 0) / 1000)
+
     return {
       httpsCover: httpsCoverUrl,
       adding,
       inLibrary,
       handleAdd,
-      sharePlaylist
+      sharePlaylist,
+      songArtist,
+      songAlbum,
+      formatSongDuration
     }
   }
 }
@@ -185,49 +247,8 @@ export default {
   transform: translateY(-2px);
 }
 
-.grid-card-cover {
-  width: 100%;
-  aspect-ratio: 1;
-  overflow: hidden;
-  border: 2px solid #f472b6;
-}
-
-.grid-card-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.grid-card-cover-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 36px;
-}
-
-.grid-card-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--pixel-text);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-height: 1.35;
-  min-height: 2.7em;
-}
-
-.grid-card-meta {
-  font-size: 11px;
-  color: var(--pixel-text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* grid-card-cover/name/meta 等卡片内部件样式已提为全局（与 HomeFeed 货架共用，
+   scoped 选择器带 data-v 只对自家模板生效） */
 .grid-card-actions {
   display: flex;
   gap: 6px;
@@ -265,5 +286,96 @@ export default {
   align-items: center;
   justify-content: center;
   color: #9ca3af;
+}
+
+/* ── 分区结果（YTM：歌曲区 + 歌单区） ── */
+.result-section {
+  margin-bottom: 24px;
+}
+
+.result-section-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--pixel-text);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid rgba(240, 179, 192, 0.2);
+}
+
+/* 歌曲行：悬停显 ▶、可整行点击播放 */
+.song-result-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.song-result-row:hover {
+  background: rgba(236, 72, 153, 0.08);
+}
+
+.song-result-row--playing {
+  background: rgba(236, 72, 153, 0.14);
+}
+
+.song-result-index {
+  width: 20px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+}
+
+.song-result-index-play {
+  display: none;
+  color: var(--pixel-accent-fg, #f472b6);
+}
+
+.song-result-row:hover .song-result-index-play {
+  display: inline;
+}
+
+.song-result-cover {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border: 2px solid #f472b6;
+  flex-shrink: 0;
+}
+
+.song-result-cover--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pixel-text-dim);
+}
+
+.song-result-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.song-result-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pixel-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.song-result-meta {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.song-result-duration {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  flex-shrink: 0;
 }
 </style>

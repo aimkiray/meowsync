@@ -1,6 +1,17 @@
 <template>
-  <!-- 歌单库侧栏：YTM 左栏语义——只放"我的歌单"，发现走顶栏搜索 -->
+  <!-- 歌单库侧栏：YTM 左栏语义——顶部导航项 + "我的歌单"媒体库列表 -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
+    <!-- YTM mini-guide 导航项：首页（发现流） -->
+    <button
+      class="side-nav-item"
+      :class="{ 'side-nav-item--active': homeActive }"
+      @click="$emit('nav-home')"
+      title="首页"
+    >
+      <span class="side-nav-icon">🏠</span>
+      <span>首页</span>
+    </button>
+
     <h2 class="panel-title">我的歌单</h2>
 
     <div v-if="loading" class="text-center py-8">
@@ -15,7 +26,7 @@
 
     <div v-else class="playlist-scroll flex-1 min-h-0 overflow-y-auto space-y-2">
       <div
-        v-for="playlist in currentPlaylists"
+        v-for="playlist in userPlaylists"
         :key="playlist.id"
         class="music-card cursor-pointer p-3 jirai-card transition-all w-full relative group"
         :class="{ 'border-purple-400': String(selectedPlaylist?.id) === String(playlist.id) }"
@@ -34,6 +45,12 @@
               class="w-12 h-12 flex items-center justify-center border-2 border-pink-400 text-pink-300"
               style="border-radius: 0;"
             >♪</div>
+            <!-- 悬停 ▶ 直接播放整个歌单 -->
+            <button
+              class="playlist-play-overlay"
+              title="播放歌单"
+              @click.stop="$emit('play-playlist', playlist)"
+            >▶</button>
           </div>
           <div class="flex-1 min-w-0">
             <h3 class="font-semibold text-pink-300 truncate">{{ playlist.name }}</h3>
@@ -114,17 +131,7 @@
         </Teleport>
       </div>
 
-      <!-- 分页控件 -->
-      <PaginationControls
-        v-if="totalPages > 1"
-        :current-page="currentPage"
-        :total-pages="totalPages"
-        :bar-style="paginationStyle"
-        @go-to-page="$emit('go-to-page', $event)"
-        @prev-page="$emit('prev-page')"
-        @next-page="$emit('next-page')"
-      />
-      <div v-else class="text-center py-2">
+      <div class="text-center py-2">
         <span class="text-pink-300 text-xs">共 {{ userPlaylists.length }} 个歌单</span>
       </div>
     </div>
@@ -132,18 +139,13 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { downloadsApi } from '../api/downloads'
-import PaginationControls from './PaginationControls.vue'
-import { useTheme } from '../composables/useTheme'
 import { copyText, shareOrCopy } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
 
 export default {
   name: 'PlaylistPanel',
-  components: {
-    PaginationControls
-  },
   props: {
     userPlaylists: {
       type: Array,
@@ -157,41 +159,20 @@ export default {
       type: Boolean,
       default: false
     },
-    currentPage: {
-      type: Number,
-      default: 1
-    },
-    pageSize: {
-      type: Number,
-      default: 10
+    // 首页导航项的激活态（centerView === 'home'）
+    homeActive: {
+      type: Boolean,
+      default: false
     }
   },
-  emits: ['select-playlist', 'remove-playlist', 'go-to-page', 'prev-page', 'next-page', 'playlist-downloads-deleted'],
+  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'nav-home', 'playlist-downloads-deleted'],
   setup(props, { emit }) {
-    const { currentTheme } = useTheme()
     const openMenuId = ref(null)
     const menuPositions = ref({})
 
     // HTTPS 部署下 http: 封面会被浏览器混拦——网易图床均支持 TLS，显式升级
     // （共享 helper 见 lib/url.js，歌曲封面/歌单封面/任务封面同一来源）
     const httpsCover = sharedHttpsCover
-
-    // 动态样式
-    const paginationStyle = computed(() => {
-      if (currentTheme.value === 'pixel-retro') {
-        return {
-          background: 'rgba(240, 179, 192, 0.2)',
-          boxShadow: 'inset 0 0 0 2px rgba(240, 179, 192, 0.4)',
-          borderRadius: '0'
-        }
-      } else {
-        return {
-          background: 'rgba(255, 192, 203, 0.2)',
-          boxShadow: 'inset 0 0 0 2px rgba(255, 182, 193, 0.4)',
-          borderRadius: '0'
-        }
-      }
-    })
 
     const closeOnEscape = (e) => { if (e.key === 'Escape') closeMenu() }
 
@@ -206,17 +187,6 @@ export default {
       document.removeEventListener('click', handleClickOutside)
       window.removeEventListener('scroll', closeMenu, true)
       window.removeEventListener('keydown', closeOnEscape)
-    })
-
-    // 分页计算属性 - 我的歌单库
-    const totalPages = computed(() => {
-      return Math.ceil(props.userPlaylists.length / props.pageSize)
-    })
-
-    const currentPlaylists = computed(() => {
-      const start = (props.currentPage - 1) * props.pageSize
-      const end = start + props.pageSize
-      return props.userPlaylists.slice(start, end)
     })
 
     // 菜单相关方法
@@ -235,7 +205,7 @@ export default {
         // 菜单高度按可见项数算：临时歌单隐藏 4 项只剩"删除歌单"，
         // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空。
         // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 5 项悬空更安全
-        const currentPlaylist = currentPlaylists.value.find(p => p.id === playlistId)
+        const currentPlaylist = props.userPlaylists.find(p => p.id === playlistId)
         const itemCount = !currentPlaylist || isTempPlaylist(currentPlaylist) ? 1 : 5
         const menuHeight = itemCount * 38 + 4
         const vw = window.innerWidth
@@ -264,8 +234,9 @@ export default {
       closeMenu()
     }
 
+    // 分享链带 view=songs&pl=ID：冷启动后主区直接落在该歌单歌曲页，不停在首页
     const copyShareLink = async (playlist) => {
-      const url = `${window.location.origin}/?playlist=${playlist.id}`
+      const url = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
       const ok = await copyText(url)
       if (!ok) {
         alert('复制失败，请手动复制链接')
@@ -275,7 +246,7 @@ export default {
 
     // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
     const sharePlaylist = async (playlist) => {
-      const shareUrl = `${window.location.origin}/?playlist=${playlist.id}`
+      const shareUrl = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
       const result = await shareOrCopy({
         title: `🎵 歌单：${playlist.name}`,
         text: `来看看这个歌单：${playlist.name}`,
@@ -353,9 +324,6 @@ export default {
      }
 
     return {
-       totalPages,
-       currentPlaylists,
-       paginationStyle,
        openMenuId,
        toggleMenu,
        closeMenu,
@@ -390,5 +358,61 @@ export default {
 
 .playlist-scroll {
   scrollbar-gutter: stable;
+}
+
+/* YTM mini-guide 导航项 */
+.side-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pixel-text-dim);
+  background: transparent;
+  border: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  margin-bottom: 4px;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.side-nav-item:hover {
+  background: rgba(236, 72, 153, 0.1);
+  color: var(--pixel-text);
+}
+
+.side-nav-item--active {
+  color: var(--pixel-text);
+  border-color: var(--pixel-accent-fg, #f472b6);
+  background: rgba(236, 72, 153, 0.14);
+}
+
+.side-nav-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* 侧栏歌单行悬停 ▶ 播放键（浮于封面上） */
+.playlist-play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+
+.music-card:hover .playlist-play-overlay,
+.playlist-play-overlay:focus-visible {
+  opacity: 1;
 }
 </style>
