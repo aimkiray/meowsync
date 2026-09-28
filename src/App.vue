@@ -2,104 +2,107 @@
   <!-- 手机控制器模式 -->
   <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" :ws-protocols="remoteWsProtocols" />
 
-  <div v-else id="app" class="min-h-screen lg:h-screen lg:flex lg:flex-col">
-    <!-- 顶部导航 -->
-    <TopNavigation :is-downloads-view="centerView === 'downloads'" @toggle-center-view="toggleCenterView" />
+  <!-- YTM 式应用壳：细顶栏 / 左库侧栏+全宽主区 / 底部播放条；歌词为按需右侧抽屉 -->
+  <div v-else class="app-shell">
+    <!-- 顶部导航（含歌单搜索） -->
+    <TopNavigation
+      :is-downloads-view="centerView === 'downloads'"
+      v-model:search-query="searchQuery"
+      :sidebar-open="sidebarOpen"
+      @toggle-center-view="toggleCenterView"
+      @toggle-sidebar="sidebarOpen = !sidebarOpen"
+      @search="handlePlaylistSearch"
+      @search-by-id="loadPlaylistByIdAndAdd"
+    />
 
-    <div class="max-w-[1440px] mx-auto w-full px-4 sm:px-6 lg:px-16 pt-6 pb-32 md:pb-32 lg:pt-10 lg:pb-10 desktop-content lg:flex-1 lg:min-h-0">
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- 左侧：歌单列表 -->
-        <div v-if="centerView === 'songs'" class="lg:col-span-1">
-          <PlaylistPanel
-            :active-tab="activeTab"
-            v-model:search-query="searchQuery"
-            :loading="loading"
-            :selected-playlist="selectedPlaylist"
-            :user-playlists="userPlaylists"
-            :search-results="searchResults"
-            :current-page="playlistCurrentPage"
-            :page-size="playlistPageSize"
-            :collapsed="playlistCollapsed"
-            @update:active-tab="activeTab = $event"
-            @search="searchPlaylists"
-            @search-by-id="loadPlaylistByIdAndAdd"
-            @select-playlist="selectPlaylist"
-            @add-playlist="addPlaylistToLibrary"
-            @remove-playlist="removePlaylistFromLibrary"
-            @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
-            @go-to-page="goToPlaylistPage"
-            @prev-page="prevPlaylistPage"
-            @next-page="nextPlaylistPage"
-            @toggle-collapse="togglePlaylistCollapse"
-          />
-        </div>
+    <div class="app-body">
+      <!-- 移动端侧栏抽屉遮罩 -->
+      <div v-if="sidebarOpen" class="sidebar-scrim lg:hidden" @click="sidebarOpen = false"></div>
 
-        <!-- 中间：歌曲列表 / 下载管理 -->
-        <div :class="centerView === 'downloads' ? 'lg:col-span-3 min-h-0' : 'lg:col-span-1'">
-          <SongList
-            v-if="centerView === 'songs'"
-            :songs="songs"
-            :loading-songs="loadingSongs"
-            :current-song="currentSong"
-            :is-playing="isPlaying"
-            :show-vip-songs="showVipSongs"
-            :play-mode-text="getPlayModeText()"
-            :current-page="currentPage"
-            :page-size="pageSize"
-            :collapsed="songListCollapsed"
-            :selected-playlist="selectedPlaylist"
-            :playlist-downloads-refresh-key="playlistDownloadsRefreshKey"
-            @play-song="playSong"
-            @toggle-play-mode="togglePlayMode"
-            @toggle-vip-songs="showVipSongs = !showVipSongs"
-            @go-to-page="goToPage"
-            @prev-page="prevPage"
-            @next-page="nextPage"
-            @toggle-collapse="toggleSongListCollapse"
-          />
-          <AdminPanel
-            v-else
-            :selected-playlist="selectedPlaylist"
-          />
-        </div>
+      <!-- 左侧：歌单库（桌面常驻 / 移动端抽屉） -->
+      <aside class="app-sidebar" :class="{ 'app-sidebar--open': sidebarOpen }">
+        <PlaylistPanel
+          :loading="loading"
+          :selected-playlist="selectedPlaylist"
+          :user-playlists="userPlaylists"
+          :current-page="playlistCurrentPage"
+          :page-size="playlistPageSize"
+          @select-playlist="selectPlaylistAndShow"
+          @remove-playlist="removePlaylistFromLibrary"
+          @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
+          @go-to-page="goToPlaylistPage"
+          @prev-page="prevPlaylistPage"
+          @next-page="nextPlaylistPage"
+        />
+      </aside>
 
-        <!-- 右侧：歌词面板 -->
-        <div v-if="centerView === 'songs'" class="lg:col-span-1">
-          <LyricsPanel
-            :current-song="currentSong"
-            :is-playing="isPlaying"
-            :lyrics="lyrics"
-            :current-lyric-index="currentLyricIndex"
-            :auto-follow-lyrics="autoFollowLyrics"
-            :loading-lyrics="loadingLyrics"
-            :song-switching="songSwitching"
-            :duration-warning="durationWarning"
-            :playback-error="playbackError"
-            :collapsed="lyricsCollapsed"
-            @toggle-auto-follow-lyrics="toggleAutoFollowLyrics"
-            @toggle-collapse="toggleLyricsCollapse"
-          />
-        </div>
-      </div>
-
-      <!-- 底部播放器 -->
-      <BottomPlayer
-        v-if="currentSong && !isFullscreenPlayerOpen"
-        :current-song="currentSong"
-        :is-playing="isPlaying"
-        :current-time="currentTime"
-        :duration="duration"
-        :volume="volume"
-        :song-switching="songSwitching"
-        @toggle-play="togglePlay"
-        @previous-song="previousSong"
-        @next-song="nextSong"
-        @seek-to="seekTo"
-        @update-volume="updateVolume"
-        @open-fullscreen="openFullscreenPlayer"
-        v-model:player-hidden="playerHidden"
-      />
+      <!-- 主区：歌曲列表 / 搜索结果 / 下载管理 -->
+      <main class="app-main">
+        <SongList
+          v-if="centerView === 'songs'"
+          :songs="songs"
+          :loading-songs="loadingSongs"
+          :current-song="currentSong"
+          :is-playing="isPlaying"
+          :show-vip-songs="showVipSongs"
+          :play-mode-text="getPlayModeText()"
+          :current-page="currentPage"
+          :page-size="pageSize"
+          :selected-playlist="selectedPlaylist"
+          :playlist-downloads-refresh-key="playlistDownloadsRefreshKey"
+          @play-song="playSong"
+          @toggle-play-mode="togglePlayMode"
+          @toggle-vip-songs="showVipSongs = !showVipSongs"
+          @go-to-page="goToPage"
+          @prev-page="prevPage"
+          @next-page="nextPage"
+        />
+        <PlaylistGrid
+          v-else-if="centerView === 'search'"
+          :results="searchResults"
+          :user-playlists="userPlaylists"
+          :loading="searching"
+          @open="openSearchPlaylist"
+          @add="addPlaylistToLibrary"
+          @close="centerView = 'songs'"
+        />
+        <AdminPanel v-else />
+      </main>
     </div>
+
+    <!-- 底部播放器（文档流内嵌） -->
+    <BottomPlayer
+      v-if="currentSong && !isFullscreenPlayerOpen"
+      :current-song="currentSong"
+      :is-playing="isPlaying"
+      :current-time="currentTime"
+      :duration="duration"
+      :volume="volume"
+      :song-switching="songSwitching"
+      :lyrics-open="lyricsDrawerOpen"
+      @toggle-play="togglePlay"
+      @previous-song="previousSong"
+      @next-song="nextSong"
+      @seek-to="seekTo"
+      @update-volume="updateVolume"
+      @open-fullscreen="openFullscreenPlayer"
+      @toggle-lyrics="lyricsDrawerOpen = !lyricsDrawerOpen"
+    />
+
+    <!-- 歌词抽屉（右侧浮层，不占常驻栏位） -->
+    <LyricsPanel
+      :open="lyricsDrawerOpen"
+      :current-song="currentSong"
+      :lyrics="lyrics"
+      :current-lyric-index="currentLyricIndex"
+      :auto-follow-lyrics="autoFollowLyrics"
+      :loading-lyrics="loadingLyrics"
+      :song-switching="songSwitching"
+      :duration-warning="durationWarning"
+      :playback-error="playbackError"
+      @toggle-auto-follow-lyrics="toggleAutoFollowLyrics"
+      @close="lyricsDrawerOpen = false"
+    />
 
     <FullscreenPlayer
       v-if="isFullscreenPlayerOpen && currentSong"
@@ -121,9 +124,6 @@
       @update:lyric-mode="fullscreenLyricMode = $event"
       @update:interaction-mode="fullscreenInteractionMode = $event"
     />
-
-    <!-- 页脚 -->
-    <Footer :style="currentSong && !playerHidden && !isFullscreenPlayerOpen ? { visibility: 'hidden' } : {}" />
   </div>
 </template>
 
@@ -137,11 +137,11 @@ import { isVipSong } from './lib/song'
 import { httpsCover } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
+import PlaylistGrid from './components/PlaylistGrid.vue'
 import SongList from './components/SongList.vue'
 import LyricsPanel from './components/LyricsPanel.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
-import Footer from './components/Footer.vue'
 import RemoteController from './components/RemoteController.vue'
 import AdminPanel from './components/AdminPanel.vue'
 
@@ -150,11 +150,11 @@ export default {
   components: {
     TopNavigation,
     PlaylistPanel,
+    PlaylistGrid,
     SongList,
     LyricsPanel,
     BottomPlayer,
     FullscreenPlayer,
-    Footer,
     RemoteController,
     AdminPanel
   },
@@ -168,7 +168,6 @@ export default {
     const selectedPlaylist = ref(null)
     const songs = ref([])
     const currentSong = ref(null)
-    const activeTab = ref('my') // 控制选项卡：'my' 或 'discover'
     const showVipSongs = ref(true) // 控制VIP歌曲显示，默认显示
     const playMode = ref('list') // 播放模式：'list'(列表播放), 'loop'(列表循环), 'single'(单曲循环)
     const lyrics = ref([])
@@ -176,7 +175,6 @@ export default {
     const autoFollowLyrics = ref(true) // 歌词自动跟随，默认开启
     const songSwitching = ref(false) // 歌曲切换提示
     const isPlaying = ref(false)
-    const playerHidden = ref(false)
     const isFullscreenPlayerOpen = ref(false)
     const currentTime = ref(0)
     const duration = ref(0)
@@ -207,11 +205,11 @@ export default {
     const playlistCurrentPage = ref(1)
     const playlistPageSize = ref(10)
     
-    // 面板折叠状态
-    const playlistCollapsed = ref(false)
-    const songListCollapsed = ref(false)
-    const lyricsCollapsed = ref(false)
-    const centerView = ref('songs')
+    // YTM 式布局状态：主区视图（歌曲/搜索结果/下载管理）+ 两个按需抽屉
+    const centerView = ref('songs') // 'songs' | 'search' | 'downloads'
+    const sidebarOpen = ref(false) // 移动端歌单库抽屉
+    const lyricsDrawerOpen = ref(false) // 右侧歌词抽屉（播放条「词」键呼出）
+    const searching = ref(false) // 仅驱动搜索结果网格的加载态（勿与歌单库 loading 混用）
     const playlistDownloadsRefreshKey = ref(0)
     
     let howl = null
@@ -221,6 +219,7 @@ export default {
     let currentAbortController = null // 用于取消正在进行的网络请求
     let currentPlayingId = null // 当前正在播放的歌曲ID，用于防止竞态条件
     let selectReqId = 0 // selectPlaylist 请求序号，防止慢响应覆盖新选择
+    let searchReqId = 0 // searchPlaylists 请求序号，同上
 
     // 远程控制模式
     const urlParams = new URLSearchParams(window.location.search)
@@ -392,9 +391,8 @@ export default {
       const max = Math.max(1, totalPages.value)
       if (currentPage.value > max) currentPage.value = max
     })
-    watch([() => userPlaylists.value.length, () => searchResults.value.length], () => {
-      const list = activeTab.value === 'my' ? userPlaylists.value : searchResults.value
-      const max = Math.max(1, Math.ceil(list.length / playlistPageSize.value))
+    watch(() => userPlaylists.value.length, () => {
+      const max = Math.max(1, playlistMaxPages())
       if (playlistCurrentPage.value > max) playlistCurrentPage.value = max
     })
 
@@ -418,28 +416,44 @@ export default {
     }
 
     // 歌单分页控制函数
+    // 侧栏分页只管"我的歌单"库（搜索结果在主区网格全量渲染）
+    const playlistMaxPages = () => Math.ceil(userPlaylists.value.length / playlistPageSize.value)
+
     const goToPlaylistPage = (page) => {
-      const maxPages = activeTab.value === 'my' 
-        ? Math.ceil(userPlaylists.value.length / playlistPageSize.value)
-        : Math.ceil(searchResults.value.length / playlistPageSize.value)
-      if (page >= 1 && page <= maxPages) {
+      if (page >= 1 && page <= playlistMaxPages()) {
         playlistCurrentPage.value = page
       }
     }
-    
+
     const prevPlaylistPage = () => {
       if (playlistCurrentPage.value > 1) {
         playlistCurrentPage.value--
       }
     }
-    
+
     const nextPlaylistPage = () => {
-      const maxPages = activeTab.value === 'my' 
-        ? Math.ceil(userPlaylists.value.length / playlistPageSize.value)
-        : Math.ceil(searchResults.value.length / playlistPageSize.value)
-      if (playlistCurrentPage.value < maxPages) {
+      if (playlistCurrentPage.value < playlistMaxPages()) {
         playlistCurrentPage.value++
       }
+    }
+
+    // 顶栏搜索：搜歌单 → 主区切换为结果网格；ID/URL 走 search-by-id 直接入库
+    const handlePlaylistSearch = async (query) => {
+      centerView.value = 'search'
+      await searchPlaylists(query)
+    }
+
+    // 点搜索结果卡片 = 打开歌单（不入库）；「+ 收藏」才进侧栏库
+    const openSearchPlaylist = async (playlist) => {
+      centerView.value = 'songs'
+      await selectPlaylist(playlist)
+    }
+
+    // 侧栏选歌单：回歌曲视图 + 移动端收起抽屉
+    const selectPlaylistAndShow = async (playlist) => {
+      centerView.value = 'songs'
+      sidebarOpen.value = false
+      await selectPlaylist(playlist)
     }
 
     const loadPlaylistByIdAndAdd = async (id) => {
@@ -485,21 +499,25 @@ export default {
       }
     }
 
+    // 与 selectReqId 同款序号守卫：快速连搜时丢弃过期响应，
+    // 防止慢响应覆盖新查询的结果
     const searchPlaylists = async (query) => {
+      const myReq = ++searchReqId
       try {
-        loading.value = true
+        searching.value = true
         console.log('🔍 搜索歌单:', query)
-        
+
         const results = await musicApi.searchPlaylists(query)
+        if (myReq !== searchReqId) return
         searchResults.value = results.playlists || []
-        playlistCurrentPage.value = 1 // 新搜索结果重置歌单分页
 
         console.log('✅ 搜索完成，找到', searchResults.value.length, '个歌单')
       } catch (error) {
+        if (myReq !== searchReqId) return
         console.error('❌ 搜索歌单失败:', error)
         searchResults.value = []
       } finally {
-        loading.value = false
+        if (myReq === searchReqId) searching.value = false
       }
     }
 
@@ -574,6 +592,14 @@ export default {
           selectedPlaylist.value = null
           songs.value = []
         }
+
+        // 若移除的是正在播放的歌单：本会话靠快照续播不受影响，但播放快照的
+        // 归属 id 已死——清空它，否则持久化会一直写入无效 playingPlaylistId，
+        // 刷新恢复时 userPlaylists.find 落空、续播点永久作废
+        if (String(playingPlaylistId.value) === String(playlistId)) {
+          playingPlaylistId.value = null
+          playingSongs.value = []
+        }
       }
     }
 
@@ -641,10 +667,6 @@ export default {
         playMode: playMode.value,
         showVipSongs: showVipSongs.value,
         autoFollowLyrics: autoFollowLyrics.value,
-        playlistCollapsed: playlistCollapsed.value,
-        songListCollapsed: songListCollapsed.value,
-        lyricsCollapsed: lyricsCollapsed.value,
-        playerHidden: playerHidden.value,
         isFullscreenPlayerOpen: isFullscreenPlayerOpen.value,
         fullscreenLyricMode: fullscreenLyricMode.value,
         fullscreenInteractionMode: fullscreenInteractionMode.value
@@ -676,10 +698,6 @@ export default {
       if (typeof savedState.playMode === 'string') playMode.value = savedState.playMode
       if (typeof savedState.showVipSongs === 'boolean') showVipSongs.value = savedState.showVipSongs
       if (typeof savedState.autoFollowLyrics === 'boolean') autoFollowLyrics.value = savedState.autoFollowLyrics
-      if (typeof savedState.playlistCollapsed === 'boolean') playlistCollapsed.value = savedState.playlistCollapsed
-      if (typeof savedState.songListCollapsed === 'boolean') songListCollapsed.value = savedState.songListCollapsed
-      if (typeof savedState.lyricsCollapsed === 'boolean') lyricsCollapsed.value = savedState.lyricsCollapsed
-      if (typeof savedState.playerHidden === 'boolean') playerHidden.value = savedState.playerHidden
       if (typeof savedState.fullscreenLyricMode === 'string') fullscreenLyricMode.value = savedState.fullscreenLyricMode
       if (typeof savedState.fullscreenInteractionMode === 'string') fullscreenInteractionMode.value = savedState.fullscreenInteractionMode
     }
@@ -817,6 +835,17 @@ export default {
         if (!preserveContext || playingSongs.value.length === 0) {
           playingSongs.value = filteredSongs.value.slice()
           playingPlaylistId.value = selectedPlaylist.value?.id ?? null
+        }
+
+        // 播即收藏：打开搜索结果歌单（不入库）后若真在播放，说明用户认可它——
+        // 静默入库，否则刷新恢复会找不到该歌单（restorePlaybackState 只查库），
+        // 播放位置随 selectedPlaylistId 一起蒸发
+        if (
+          selectedPlaylist.value &&
+          !userPlaylists.value.some(p => String(p.id) === String(selectedPlaylist.value.id))
+        ) {
+          userPlaylists.value.push(selectedPlaylist.value)
+          savePlaylistsToStorage()
         }
 
         // 立即停止当前播放，防止多首歌同时播放
@@ -1360,9 +1389,16 @@ export default {
     }
     document.addEventListener('visibilitychange', onVisibilityFlush)
 
+    // Esc 关闭两个抽屉（全屏播放器自带 Esc 处理，先一步接管）
+    const onGlobalKeydown = (e) => {
+      if (e.key !== 'Escape') return
+      if (lyricsDrawerOpen.value) lyricsDrawerOpen.value = false
+      if (sidebarOpen.value) sidebarOpen.value = false
+    }
+    window.addEventListener('keydown', onGlobalKeydown)
+
     watch([
       showVipSongs,
-      playerHidden,
       isFullscreenPlayerOpen,
       fullscreenLyricMode,
       fullscreenInteractionMode
@@ -1373,11 +1409,6 @@ export default {
     // 监听VIP歌曲显示状态变化，重置分页
     watch(showVipSongs, () => {
       currentPage.value = 1
-    })
-
-    // 监听选项卡切换，重置歌单分页
-    watch(activeTab, () => {
-      playlistCurrentPage.value = 1
     })
 
     // host 模式：状态变化时立即推送
@@ -1418,10 +1449,6 @@ export default {
       return songParam.trim()
     }
 
-    // 检查是否为单首歌曲分享
-    const isSingleSongShare = () => {
-      return getSongIdFromUrl() !== null
-    }
 
     // 消费掉一次性 URL 参数：不清理的话每次刷新都会重新劫持恢复逻辑
     // （?song= 会永久抢占 restorePlaybackState；?playlists= 会重复尝试导入）
@@ -1517,24 +1544,9 @@ export default {
       }
     }
 
-    // 处理面板折叠
-    const togglePlaylistCollapse = () => {
-      playlistCollapsed.value = !playlistCollapsed.value
-      savePlayerStateToStorage()
-    }
-
-    const toggleSongListCollapse = () => {
-      songListCollapsed.value = !songListCollapsed.value
-      savePlayerStateToStorage()
-    }
-
-    const toggleLyricsCollapse = () => {
-      lyricsCollapsed.value = !lyricsCollapsed.value
-      savePlayerStateToStorage()
-    }
-
+    // 顶栏「管理」键：只在 下载管理 ⇄ 歌曲 之间往返；搜索态点它应进下载管理
     const toggleCenterView = () => {
-      centerView.value = centerView.value === 'songs' ? 'downloads' : 'songs'
+      centerView.value = centerView.value === 'downloads' ? 'songs' : 'downloads'
     }
 
     // 组件挂载
@@ -1554,11 +1566,7 @@ export default {
         connectRemoteHost()
       }
 
-      // 检查是否为单首歌曲分享，如果是则默认折叠歌单面板（仅移动端）
-      if (isSingleSongShare() && window.innerWidth < 1024) {
-        playlistCollapsed.value = true
-        console.log('📱 检测到单首歌曲分享，移动端默认折叠歌单面板')
-      }
+      // 单曲分享：侧栏抽屉默认收起，主区直接呈现歌曲——无需额外处理
 
       // 加载保存的歌单
       loadPlaylistsFromStorage()
@@ -1634,7 +1642,11 @@ export default {
         await restorePlaybackState(restorePlayerState)
       }
 
-      savePlayerStateToStorage()
+      // 恢复路径失败（歌单被删/网络抖动）时不落盘：否则会拿全空状态覆盖掉
+      // 存档里仍可用的续播点。无恢复存档时正常写入初始态
+      if (!restorePlayerState || currentSong.value) {
+        savePlayerStateToStorage()
+      }
 
       console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
     })
@@ -1666,6 +1678,7 @@ export default {
       clearHowlWatchdog()
       clearTimeout(volumeSaveTimer)
       document.removeEventListener('visibilitychange', onVisibilityFlush)
+      window.removeEventListener('keydown', onGlobalKeydown)
       teardownMediaSession()
       if (howl) {
         howl.stop()
@@ -1677,7 +1690,6 @@ export default {
     return {
       // 响应式数据
       remoteMode,
-      playerHidden,
       remoteControllerWsUrl,
       remoteWsProtocols,
       searchQuery,
@@ -1688,7 +1700,6 @@ export default {
       selectedPlaylist,
       songs,
       currentSong,
-      activeTab,
       showVipSongs,
       lyrics,
       currentLyricIndex,
@@ -1708,8 +1719,10 @@ export default {
       pageSize,
       playlistCurrentPage,
       playlistPageSize,
-      playlistCollapsed,
       centerView,
+      sidebarOpen,
+      lyricsDrawerOpen,
+      searching,
       playlistDownloadsRefreshKey,
 
       // 方法
@@ -1726,6 +1739,9 @@ export default {
       removePlaylistFromLibrary,
       handlePlaylistDownloadsDeleted,
       selectPlaylist,
+      selectPlaylistAndShow,
+      openSearchPlaylist,
+      handlePlaylistSearch,
       playSong,
       togglePlay,
       previousSong,
@@ -1737,12 +1753,7 @@ export default {
       openFullscreenPlayer,
       closeFullscreenPlayer,
       toggleAutoFollowLyrics,
-      togglePlaylistCollapse,
-      toggleSongListCollapse,
-      toggleLyricsCollapse,
-      toggleCenterView,
-      songListCollapsed,
-      lyricsCollapsed
+      toggleCenterView
     }
   }
 }
