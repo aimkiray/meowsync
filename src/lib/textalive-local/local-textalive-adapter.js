@@ -1,4 +1,3 @@
-import { Segment, useDefault } from 'segmentit'
 import { Lyric } from './lyric.js'
 
 const MIN_LINE_DURATION_MS = 900
@@ -22,20 +21,24 @@ const KATAKANA_PATTERN = /[\u30a0-\u30ff\u31f0-\u31ff\uff66-\uff9f]/
 const JAPANESE_PARTICLE_PATTERN = /^(は|が|を|に|へ|で|と|や|も|の|ね|よ|か|な|さ|ぞ|ぜ|わ|し|て|で|た|だ|ら|り|る|れ|ろ|う|ん|ゃ|ゅ|ょ)$/
 const NON_SEGMENTABLE_PATTERN = /^[，。、“”‘’？！；：,.!?;:、】【（）()《》〈〉…—\s]+$/
 
-let segmentit = null
+// 原生 Intl.Segmenter（ICU 词库级中日文分词，零依赖）取代 segmentit——
+// 15MB 词典包 + 懒加载机器都省掉；不支持的旧浏览器（FF<125）回退按字切
+let wordSegmenter = null
+let wordSegmenterTried = false
 
-function getSegmentit() {
-  if (segmentit) {
-    return segmentit
+function getWordSegmenter() {
+  if (wordSegmenterTried) {
+    return wordSegmenter
   }
-
+  wordSegmenterTried = true
   try {
-    segmentit = useDefault(new Segment())
+    wordSegmenter = typeof Intl?.Segmenter === 'function'
+      ? new Intl.Segmenter('zh', { granularity: 'word' })
+      : null
   } catch {
-    segmentit = null
+    wordSegmenter = null
   }
-
-  return segmentit
+  return wordSegmenter
 }
 
 function createCharNode(text, startTime, endTime, lineId, lineLength) {
@@ -304,19 +307,16 @@ function tokenizeMixedText(text) {
 }
 
 function segmentCjkToken(text) {
-  const engine = getSegmentit()
+  const engine = getWordSegmenter()
   if (!engine) {
     return fallbackChunkGlyphs(text)
   }
 
   try {
-    const result = engine.doSegment(text, {
-      simple: true,
-      stripPunctuation: false
-    })
-
-    return result
-      .map((part) => String(part || '').trim())
+    // 标点/空白段保留（isWordLike=false 不过滤）——下游
+    // mergePunctuationSegments 负责把它们并入前一词
+    return [...engine.segment(text)]
+      .map(part => part.segment.trim())
       .filter(Boolean)
   } catch {
     return fallbackChunkGlyphs(text)

@@ -6,8 +6,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { CanvasManager } from '../lib/textalive-local/canvas-manager'
 
-// segmentit 分词词典体积很大，静态引入会把它打进首屏 chunk。
-// 本组件只在打开全屏播放时挂载，适配器改为按需加载（多次并发调用共享同一 Promise）
+// 适配器只在打开全屏播放时才需要，按需加载（多次并发调用共享同一 Promise）
 let adapterModule = null
 let adapterPromise = null
 const loadAdapter = () => {
