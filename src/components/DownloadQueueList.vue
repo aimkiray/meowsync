@@ -226,9 +226,9 @@ function toggleMenu(queueId, event) {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));
-  const top = rect.bottom + 6 + menuHeight > viewportHeight
-    ? Math.max(8, rect.top - menuHeight - 6)
-    : rect.bottom + 6;
+  const top = rect.bottom + 4 + menuHeight > viewportHeight
+    ? Math.max(8, rect.top - menuHeight - 4)
+    : rect.bottom + 4;
 
   menuPosition.value = {
     top: `${top}px`,
@@ -366,9 +366,11 @@ function getQueueCover(queue) {
   flex-shrink: 0;
 }
 
-/* 加载/空态同一锚点：都纵向居中，加载→空态切换不跳位 */
+/* 加载/空态同一锚点：都纵向居中，加载→空态切换不跳位。
+   border-top 兜住列表态 .dql-scroll 的分隔线，空态不断线 */
 .dql-state {
   flex: 1;
+  border-top: var(--hairline);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -395,13 +397,14 @@ function getQueueCover(queue) {
   position: relative;
   border-bottom: 1.2px solid var(--ink-10);
 }
+.dql-row:last-child { border-bottom: none; } /* 末行交给面板底框闭合，不叠双线 */
 
 /* 点击区是 row-main——kebab 是它的兄弟节点，消灭嵌套可交互 */
 .dql-row-main {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 44px 10px 12px;
+  padding: 10px 44px 10px 16px; /* 与 dtl 卡左缘 16 同轴 */
   cursor: pointer;
   transition: background .12s;
 }
@@ -414,7 +417,7 @@ function getQueueCover(queue) {
 
 .dql-row--sel {
   outline: var(--hairline);
-  outline-offset: -1.2px;
+  outline-offset: -2.4px; /* 四缘留等量 moat，不与邻线相贴 */
 }
 
 /* 选中行获焦仍可辨——选中态的 1.2px outline 会压掉全局焦点环 */

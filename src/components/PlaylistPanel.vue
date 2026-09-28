@@ -357,7 +357,7 @@ export default {
 
 <style scoped>
 .playlist-panel {
-  padding: 14px 0 0;
+  padding: 20px 0 0; /* 与主区首行同轴：全站 masthead→内容 = 20 */
 }
 
 .panel-label {
@@ -366,6 +366,7 @@ export default {
 }
 
 .panel-state {
+  border-top: var(--hairline); /* 与列表态 .playlist-scroll 同位不断线 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -395,7 +396,8 @@ export default {
   gap: 10px;
   width: calc(100% - 32px);
   margin: 0 16px 10px;
-  padding: 9px 10px;
+  height: 36px; /* 与 watch-header 的 ink-btn--sm 同高——两列头行共一条横带 */
+  padding: 0 10px;
   font-size: 13px;
   font-weight: 500;
   color: var(--ink);
@@ -517,7 +519,7 @@ export default {
 /* 侧栏歌单行悬停 ▶ 播放键（浮于封面上） */
 .playlist-play-overlay {
   position: absolute;
-  inset: 0;
+  inset: 1.2px; /* 不压 .pl-cover 的墨框 */
   display: flex;
   align-items: center;
   justify-content: center;

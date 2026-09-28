@@ -443,9 +443,11 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 20px;
+  padding: 20px 20px 10px; /* 顶 20 与全站首行轴齐平；底 10 收紧与内容区的距 */
   flex-shrink: 0;
 }
+/* 与侧栏 .side-nav-item(36px) 同高——两列头行是同一条横带 */
+.watch-header .ink-btn { height: 36px; }
 
 .watch-layout {
   flex: 1;

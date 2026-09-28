@@ -242,7 +242,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 /* 画布上的图标键/把手：ink-64 在饱和底上 <3:1 图形线，升 ink-86 */
 .app-body .queue-row-remove, .app-body .song-menu-btn, .app-body .pl-action,
-.app-body .dql-kebab {
+.app-body .dql-kebab, .app-body .pg-tab:not(.pg-tab--active) {
   color: var(--ink-86);
 }
 
@@ -266,7 +266,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    top 让 56px：抽屉不盖顶栏，遮罩也不能盖——否则 ☰ 无法关闭抽屉 */
 .sidebar-scrim {
   position: fixed;
-  inset: 56px 0 0;
+  inset: 57.2px 0 0; /* 顶栏 56 + 底发丝线 1.2 */
   background: rgba(30, 30, 30, .45);
   z-index: var(--z-overlay);
 }
@@ -275,7 +275,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   .app-sidebar {
     position: fixed;
     /* top 避让 56px 顶栏：抽屉不盖住汉堡键，它本身就是关闭入口 */
-    top: 56px;
+    top: 57.2px; /* 顶栏 56 + 底发丝线 1.2 */
     left: 0;
     bottom: 0;
     width: min(300px, 85vw);
@@ -367,7 +367,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   color: var(--ink);
   border: var(--hairline);
 }
-.ink-btn--ghost:hover:not(:disabled) { color: var(--accent-magenta); }
+.ink-btn--ghost:hover:not(:disabled) { color: var(--accent-magenta-ink); } /* 纸面文字走 -ink 档 */
 
 /* 图标方键（32px 发丝盒） */
 .pg-icobtn {
@@ -623,6 +623,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   image-rendering: pixelated;
 }
 .grid-card-cover-fallback {
+  background: var(--paper);
   width: 100%;
   height: 100%;
   display: flex;

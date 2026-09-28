@@ -173,9 +173,18 @@ export default {
   position: relative;
 }
 
-/* 页头：等宽微标签 + 大字标题 */
+/* hash 裁切标线贴画布顶缘（typesafe 的页缘签名），不占文档流——
+   否则它把页头标签推到 y≈42，与其它视图的 20 首行轴跳位 */
+.home-feed > .pg-hash {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+/* 页头：等宽微标签 + 大字标题。顶距 0——pg-label 落在全站 20 首行轴 */
 .home-head {
-  padding: 12px 0 16px;
+  padding: 0 0 16px;
   position: relative;
 }
 
