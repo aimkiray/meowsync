@@ -6,17 +6,7 @@ module.exports = {
   ],
   theme: {
     extend: {
-      colors: {
-        /* print-grid 令牌（typesafe.ai print-sheet 语言） */
-        'ink': '#1e1e1e',
-        'paper': '#fefefe',
-        'label-grey': '#dedede',
-        'canvas-teal': '#09aea1',
-        'canvas-sage': '#abbab9',
-        'canvas-pink': '#f386a1',
-        'accent-magenta': '#d45bb6',
-        'accent-green': '#03aa5c',
-      },
+      /* 颜色单一事实源是 style.css :root 令牌——此处不再镜像，防双源漂移 */
       fontFamily: {
         'sans': ['Inter', 'Noto Sans SC', 'system-ui', 'sans-serif'],
         'mono': ['JetBrains Mono', 'Fusion Pixel', 'ui-monospace', 'monospace'],

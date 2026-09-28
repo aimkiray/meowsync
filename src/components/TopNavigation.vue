@@ -89,14 +89,22 @@
           class="pg-label pg-label--dim topnav-remote-hint"
           title="添加 ?mode=host 启用远程控制"
         >remote: off</span>
+
+        <!-- 主题循环：注册表见 lib/theme.js -->
+        <button
+          class="pg-link topnav-action topnav-theme"
+          @click="cycleTheme"
+          :title="`切换主题（当前 ${themeLabel}）`"
+        >theme:{{ themeLabel }}</button>
       </div>
     </div>
   </nav>
 </template>
 
 <script>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
+import { THEMES, currentTheme, cycleTheme } from '../lib/theme.js'
 import PixelIcon from './PixelIcon.vue'
 
 export default {
@@ -114,23 +122,16 @@ export default {
     sidebarOpen: {
       type: Boolean,
       default: false
+    },
+    remoteMode: {
+      type: String,
+      default: 'off'
     }
   },
   emits: ['toggle-center-view', 'toggle-sidebar', 'search', 'search-by-id', 'update:searchQuery'],
   setup(props, { emit }) {
-    const urlParams = new URLSearchParams(window.location.search)
-    const rawMode = urlParams.get('mode')
-    const remoteMode = ref(['host', 'controller'].includes(rawMode) ? rawMode : 'off')
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
-
-    // data-theme 只剩 FullscreenPlayer 沉浸歌词页消费——开机应用上次选择即可
-    const bootTheme = () => {
-      if (localStorage.getItem('pixel-theme') === 'pixel-retro') {
-        document.documentElement.setAttribute('data-theme', 'pixel-retro')
-      } else {
-        document.documentElement.removeAttribute('data-theme')
-      }
-    }
+    const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
 
     // 从URL或文本中提取歌单ID：网易云 ?id= / 本站分享链 ?playlist(s)=|?song= / 纯数字
     const extractPlaylistId = (input) => {
@@ -289,18 +290,15 @@ export default {
       }
     }
 
-    onMounted(() => {
-      bootTheme()
-    })
-
     onBeforeUnmount(() => {
       clearTimeout(suggestTimer)
       suggestAbort?.abort()
     })
 
     return {
-      remoteMode,
       controllerUrl,
+      themeLabel,
+      cycleTheme,
       extractPlaylistId,
       handleSearch,
       onKeydown,
@@ -425,7 +423,7 @@ export default {
   cursor: pointer;
   font-size: 12px;
   color: var(--ink);
-  border-bottom: 1.2px solid var(--ink-10);
+  border-bottom: var(--hairline-soft);
 }
 .topnav-suggest-item:last-child { border-bottom: none; }
 
@@ -480,5 +478,6 @@ export default {
   .topnav { padding: 0 12px; }
   .topnav-title { display: none; }
   .topnav-remote-hint { display: none; }
+  .topnav-theme { display: none; }
 }
 </style>

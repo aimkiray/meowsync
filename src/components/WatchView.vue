@@ -588,7 +588,7 @@ export default {
   touch-action: none;
 }
 .watch-grip:hover { color: var(--ink); }
-.watch-grip:active { cursor: grabbing; color: var(--accent-magenta-ink); }
+.watch-grip:active { cursor: grabbing; color: var(--ink); } /* teal 画布上 -ink 档仅 2.17:1，拖拽态用实墨 */
 
 /* 触屏下半透明把手 1.99:1 不可见——直接常显 */
 @media (hover: none){
@@ -634,7 +634,7 @@ export default {
   font-size: 12px;
   color: var(--ink-86);
   cursor: pointer;
-  border-top: 1.2px solid var(--ink-10);
+  border-top: var(--hairline-soft);
   margin-top: 4px;
 }
 

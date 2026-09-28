@@ -10,6 +10,7 @@
       :is-downloads-view="centerView === 'downloads'"
       v-model:search-query="searchQuery"
       :sidebar-open="sidebarOpen"
+      :remote-mode="remoteMode"
       @toggle-center-view="toggleCenterView"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @search="handlePlaylistSearch"

@@ -148,7 +148,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(30, 30, 30, .45);
+  background: var(--scrim);
 }
 
 /* 纸面盒 + 角部裁切标记（pg-panel/pg-corners 提供盒与 tick） */

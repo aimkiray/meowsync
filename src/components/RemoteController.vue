@@ -1,7 +1,7 @@
 <template>
   <div class="remote-controller">
     <div v-if="!connected || hostDisconnected" class="rc-connecting">
-      <div v-if="!gaveUp" class="rc-spinner"></div>
+      <div v-if="!gaveUp" class="rc-spinner pixel-loading pixel-loading--on-ink"></div>
       <p>{{ gaveUp ? '无法连接主机' : (hostDisconnected ? '主机已断开，等待重连...' : '正在连接主机...') }}</p>
       <button v-if="gaveUp" class="rc-btn rc-retry" @click="retry">重新连接</button>
     </div>
@@ -29,7 +29,7 @@
         <span class="rc-time">{{ formatTime(state.currentTime) }}</span>
         <input
           type="range"
-          class="rc-slider"
+          class="rc-slider pg-range pg-range--on-ink"
           aria-label="播放进度"
           :value="state.currentTime"
           :max="state.duration || 1"
@@ -58,7 +58,7 @@
         <span class="rc-vol-icon"><PixelIcon name="vol-mute" :size="16" /></span>
         <input
           type="range"
-          class="rc-slider"
+          class="rc-slider pg-range pg-range--on-ink"
           aria-label="音量"
           :value="state.volume"
           min="0"
@@ -315,6 +315,15 @@ onUnmounted(() => {
 <style scoped>
 /* 墨条遥控面板：整版 --ink 墨面 + --paper 纸字，发丝用 --white-16/--white-40 */
 .remote-controller {
+  /* 遥控页恒暗面——就地 pin 住消费的令牌，不随应用 data-theme 翻转 */
+  --ink: #1e1e1e;
+  --paper: #fefefe;
+  --label-grey: #dedede;
+  --white-16: rgba(255, 255, 255, .16);
+  --white-40: rgba(255, 255, 255, .40);
+  --white-80: rgba(255, 255, 255, .8);
+  --accent-magenta: #d45bb6;
+  --accent-magenta-ink: #a5358c;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -336,17 +345,10 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-/* 点阵灯闪烁同构：等宽步进旋转的方框 */
+/* 复用 .pixel-loading--on-ink 点阵灯（等宽步进旋转）；这里只放大尺寸 */
 .rc-spinner {
   width: 40px;
   height: 40px;
-  border: 2px solid var(--white-16);
-  border-top-color: var(--paper);
-  animation: pgSpin .9s steps(8) infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .rc-spinner { animation: none; }
 }
 
 .rc-cover-wrap {
@@ -413,45 +415,14 @@ onUnmounted(() => {
   color: var(--label-grey);
 }
 
-/* 墨上滑块：white-40 发丝轨 + 纸方柄（pg-range--on-ink 同构） */
+/* 轨道/柄色由 .pg-range + .pg-range--on-ink 全局供给；这里只补布局、焦点环、14px 加大柄（触屏遥控） */
 .rc-slider {
   flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 16px;
-  background: transparent;
   outline: none;
-  cursor: pointer;
 }
 .rc-slider:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
-
-.rc-slider::-webkit-slider-runnable-track {
-  height: 4px;
-  background: var(--white-40);
-}
-
-.rc-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  background: var(--paper);
-  margin-top: -5px;
-  cursor: pointer;
-}
-
-.rc-slider::-moz-range-track {
-  height: 4px;
-  background: var(--white-40);
-}
-
-.rc-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border: none;
-  border-radius: 0;
-  background: var(--paper);
-  cursor: pointer;
-}
+.rc-slider::-webkit-slider-thumb { width: 14px; height: 14px; margin-top: -5px; }
+.rc-slider::-moz-range-thumb { width: 14px; height: 14px; }
 
 .rc-controls {
   display: flex;
