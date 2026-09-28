@@ -409,6 +409,7 @@ export default {
   border: 4px solid rgba(255, 255, 255, 0.9);
   box-shadow: none;
   image-rendering: pixelated;
+  opacity: 0.5;
 }
 
 .fullscreen-player__close {
