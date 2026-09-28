@@ -395,7 +395,7 @@ function getQueueCover(queue) {
 
 .dql-row {
   position: relative;
-  border-bottom: 1.2px solid var(--ink-10);
+  border-bottom: var(--hairline-soft);
 }
 .dql-row:last-child { border-bottom: none; } /* 末行交给面板底框闭合，不叠双线 */
 
@@ -477,7 +477,7 @@ function getQueueCover(queue) {
 }
 
 .dql-chip--dim { color: var(--ink-64); }
-.dql-chip--ok { color: var(--ink); border-color: var(--accent-green); }
+.dql-chip--ok { color: var(--accent-green-ink); border-color: var(--accent-green); }
 .dql-chip--fail { color: var(--accent-magenta-ink); border-color: var(--accent-magenta); }
 
 .dql-meta {

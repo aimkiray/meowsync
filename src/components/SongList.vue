@@ -318,7 +318,7 @@
 
 .song-row {
   position: relative;
-  border-bottom: 1.2px solid var(--ink-10);
+  border-bottom: var(--hairline-soft);
 }
 
 /* VIP 曲弱化：不压整行透明度（.55 让歌名掉到 3.01:1），改降级文字色 + VIP 戳记 */

@@ -542,7 +542,7 @@ const TaskRow = {
 }
 
 .dtl-task :deep(.dtr-chip.dtr-chip--dim) { color: var(--ink-64); }
-.dtl-task :deep(.dtr-chip.dtr-chip--ok) { color: var(--ink); border-color: var(--accent-green); }
+.dtl-task :deep(.dtr-chip.dtr-chip--ok) { color: var(--accent-green-ink); border-color: var(--accent-green); }
 .dtl-task :deep(.dtr-chip.dtr-chip--fail) { color: var(--accent-magenta-ink); border-color: var(--accent-magenta); }
 
 .dtl-task :deep(.dtr-progress-wrap) {

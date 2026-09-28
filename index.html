@@ -9,13 +9,30 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
+    <script>
+      // 首帧前恢复持久化主题，避免主题闪变；未知值由 CSS 自然回落默认
+      try {
+        var t = localStorage.getItem('meowsync-theme') ||
+                (localStorage.getItem('pixel-theme') === 'pixel-retro' ? 'pixel-retro' : '')
+        if (t) document.documentElement.setAttribute('data-theme', t)
+      } catch (e) {}
+    </script>
+    <style>
+      /* 启动闪屏——先于令牌 CSS 加载，字面量须与 style.css :root 默认主题保持一致；
+         新主题若需改闪屏色，在此追加 :root[data-theme="id"] .boot-splash 钩子 */
+      .boot-splash { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #fefefe; font-family: 'JetBrains Mono', monospace; }
+      .boot-splash-card { border: 1.2px solid #1e1e1e; padding: 24px 32px; text-align: center; }
+      .boot-splash-card p { margin: 0; letter-spacing: .05em; color: #1e1e1e; }
+      .boot-splash-name { font-size: 12px; }
+      .boot-splash-hint { font-size: 11px; color: rgba(30,30,30,.64); margin-top: 8px !important; }
+    </style>
   </head>
   <body>
     <div id="app">
-      <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #fefefe; font-family: 'JetBrains Mono', monospace;">
-        <div style="border: 1.2px solid #1e1e1e; padding: 24px 32px; text-align: center;">
-          <p style="font-size: 12px; letter-spacing: .05em; color: #1e1e1e; margin: 0;">meowsync</p>
-          <p style="font-size: 11px; letter-spacing: .05em; color: rgba(30,30,30,.64); margin: 8px 0 0;">loading…</p>
+      <div class="boot-splash">
+        <div class="boot-splash-card">
+          <p class="boot-splash-name">meowsync</p>
+          <p class="boot-splash-hint">loading…</p>
         </div>
       </div>
     </div>

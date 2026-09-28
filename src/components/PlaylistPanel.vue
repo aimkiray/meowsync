@@ -419,7 +419,7 @@ export default {
 /* 歌单行：发丝下缘分隔，整行可点 */
 .pl-row {
   position: relative;
-  border-bottom: 1.2px solid var(--ink-10);
+  border-bottom: var(--hairline-soft);
 }
 
 .pl-row-main {
@@ -524,7 +524,7 @@ export default {
   justify-content: center;
   font-size: 14px;
   color: var(--paper);
-  background: rgba(30, 30, 30, .55);
+  background: var(--scrim-strong);
   opacity: 0;
   border: none;
   cursor: pointer;

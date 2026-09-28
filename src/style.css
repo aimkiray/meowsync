@@ -27,7 +27,8 @@
 }
 
 :root {
-  /* ── print-grid 令牌 ── */
+  /* ── print-grid 令牌（主题机制见 lib/theme.js：新主题 = :root[data-theme] 覆盖本表） ── */
+  color-scheme: light; /* 暗色主题需在其令牌块声明 color-scheme: dark */
   --ink: #1e1e1e;                  /* 文字/发丝线/窗口铬 —— 唯一的墨色 */
   --ink-86: rgba(30, 30, 30, .86); /* 次级文字 */
   --ink-64: rgba(30, 30, 30, .64); /* 微标签/元数据 */
@@ -37,7 +38,6 @@
   --paper: #fefefe;                /* 面板纸面 */
   --label-grey: #dedede;           /* 墨条上的标签灰 */
   --os-grey: #c4c4c4;              /* 窗口体——经典 OS-9 Platinum 灰（故意非纸色） */
-  --grey-90: rgba(133, 133, 133, .9); /* 暗面上的弱文字 */
 
   /* 每视图一张饱和纸色 —— 色彩即页面身份，无暗色模式 */
   --canvas-teal: #09aea1;
@@ -52,56 +52,46 @@
   --white-40: rgba(255, 255, 255, .40);
   --white-80: rgba(255, 255, 255, .8);
 
+  /* 遮罩语义：侧栏抽屉/模态 scrim、封面悬停墨色罩 */
+  --scrim: rgba(30, 30, 30, .45);
+  --scrim-strong: rgba(30, 30, 30, .55);
+
   --hairline: 1.2px solid var(--ink);
+  --hairline-soft: 1.2px solid var(--ink-10); /* 行分隔器 */
   --font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fusion Pixel', ui-monospace, monospace;
   --font-display: 'Space Grotesk', 'Inter', 'Noto Sans SC', sans-serif;
   --font-pixel: 'Fusion Pixel', 'JetBrains Mono', monospace;
   --ease-ink: cubic-bezier(.12, .23, .5, 1); /* typesafe 签名缓动 */
 
-  /* 层级刻度：全屏播放器 < 底部播放条 < 点击捕手 < 悬浮菜单/侧栏抽屉 */
-  --z-drawer: 60;
+  /* 层级刻度：全屏播放器 < 点击捕手 < 悬浮菜单/侧栏抽屉 */
   --z-fullscreen: 70;
-  --z-player: 900;
   --z-overlay: 950;
   --z-menu: 1000;
 
   /* ── 以下仅供 FullscreenPlayer 沉浸歌词页（视觉冻结，勿改） ── */
   --pixel-bg: #0f0f23;
-  --pixel-card-bg: rgba(26, 26, 46, 0.9);
   --pixel-primary: #00ff41;
   --pixel-secondary: #0080ff;
   --pixel-accent: #ff0080;
-  --pixel-warning: #ffff00;
-  --pixel-success: #00ff00;
-  --pixel-border: #333366;
   --pixel-text: #ffffff;
-  --pixel-text-dim: #cccccc;
   --pixel-dark: #000000;
   --pixel-highlight: rgba(255, 255, 255, 0.3);
-  --pixel-accent-fg: #f472b6;
   --pixel-progress-track: rgba(236, 72, 153, .2);
   --pixel-progress-fill: rgb(190, 24, 93);
   --fullscreen-background-image: url('/qb.png');
 }
 
-/* pixel-retro 变量块仅余 FullscreenPlayer 一个消费者——
-   保留 localStorage 状态即可让沉浸页维持用户上次所见配色 */
+/* pixel-retro：FullscreenPlayer 沉浸页的调色变体（冻结域），不改动应用令牌。
+   只覆盖存活消费点；未覆盖的 --pixel-progress-* 是刻意的冻结选择。 */
 :root[data-theme="pixel-retro"] {
   --pixel-bg: rgb(173, 215, 230);
-  --pixel-card-bg: rgba(252, 238, 220, 0.95);
   --pixel-primary: rgb(240, 179, 192);
   --pixel-secondary: rgb(173, 215, 230);
   --pixel-accent: rgb(255, 251, 209);
-  --pixel-warning: rgb(255, 251, 209);
-  --pixel-success: rgb(173, 215, 230);
-  --pixel-border: rgb(240, 179, 192);
   --pixel-text: rgb(120, 90, 100);
-  --pixel-text-dim: rgb(125, 90, 103);
   --pixel-dark: rgb(80, 60, 70);
-  --pixel-box-shadow: rgb(200, 160, 170);
   --pixel-highlight: rgba(240, 179, 192, 0.3);
-  --pixel-accent-fg: rgb(190, 70, 115);
   --fullscreen-background-image: url('/cinnamoroll2.png');
 }
 
@@ -181,7 +171,8 @@ button {
 /* forced-colors：只靠底色表达的状态加透明 outline——HC 模式下被强制显色 */
 @media (forced-colors: active) {
   .pl-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
-  .queue-row--current, .song-row--active {
+  .queue-row--current, .song-row--playing, .song-result-row--playing,
+  .rc-queue-row--current {
     outline: 1.2px solid transparent;
   }
 }
@@ -242,7 +233,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* 彩纸画布上的次级文字升档——ink-64 在 teal/pink/sage 上 <4.5:1。
    作用域限定 .app-body：纸面 masthead/teleport 菜单/toast 仍用原档，
    反白态（song-row--playing、pl-row--active 内的 label-grey）由 scoped
-   后加载规则继续覆盖，不受影响。 */
+   后加载规则继续覆盖，不受影响。
+   ⚠ 白名单机制：新增的「画布内 ink-64 次级文字/图标」类必须登记到下列，
+   否则在彩布上静默不达标（新主题改画布色后尤甚）。 */
 .app-body .watch-meta, .app-body .watch-empty, .app-body .watch-lyric-line,
 .app-body .queue-row-artist, .app-body .queue-row-duration, .app-body .queue-source,
 .app-body .song-artist, .app-body .song-duration, .app-body .song-state-text,
@@ -284,7 +277,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .sidebar-scrim {
   position: fixed;
   inset: 57.2px 0 0; /* 顶栏 56 + 底发丝线 1.2 */
-  background: rgba(30, 30, 30, .45);
+  background: var(--scrim);
   z-index: var(--z-overlay);
 }
 
@@ -512,7 +505,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   color: var(--ink);
   background: none;
   border: none;
-  border-bottom: 1.2px solid var(--ink-10);
+  border-bottom: var(--hairline-soft);
   cursor: pointer;
   text-align: left;
   transition: color .2s;
@@ -528,7 +521,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   align-items: center;
   gap: 6px;
   padding: 4px 6px 4px 4px;
-  border-bottom: 1.2px solid var(--ink-10);
+  border-bottom: var(--hairline-soft);
   transition: background .12s;
 }
 .queue-row-main {
@@ -808,6 +801,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border-top-color: var(--ink);
   animation: pgSpin .9s steps(8) infinite;
 }
+.pixel-loading--on-ink { border-color: var(--white-16); border-top-color: var(--paper); }
 @keyframes pgSpin {
   to { transform: rotate(360deg); }
 }
