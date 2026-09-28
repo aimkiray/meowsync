@@ -164,6 +164,7 @@
             tabindex="0"
             @click="playNextFromMenu"
             @keydown.enter="playNextFromMenu"
+            @keydown.space.prevent="playNextFromMenu"
           >
             ⏭ 下一首播放
           </div>
@@ -173,6 +174,7 @@
             tabindex="0"
             @click="addToQueueFromMenu"
             @keydown.enter="addToQueueFromMenu"
+            @keydown.space.prevent="addToQueueFromMenu"
           >
             📋 加入队列末尾
           </div>
@@ -182,6 +184,7 @@
             tabindex="0"
             @click="shareFromMenu"
             @keydown.enter="shareFromMenu"
+            @keydown.space.prevent="shareFromMenu"
           >
             🔗 分享歌曲
           </div>
@@ -193,6 +196,7 @@
             tabindex="0"
             @click="downloadSongDirect(menuSong, 320000)"
             @keydown.enter="downloadSongDirect(menuSong, 320000)"
+            @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
             📄 获取源文件 (320k)
           </div>
@@ -206,6 +210,7 @@
             tabindex="0"
             @click="toggleServerDownload(menuSong)"
             @keydown.enter="toggleServerDownload(menuSong)"
+            @keydown.space.prevent="toggleServerDownload(menuSong)"
           >
             <span v-if="serverDownloadingStates[showDownloadMenu]">⏳ 处理中...</span>
             <span v-else-if="serverDownloadedStates[showDownloadMenu]">🗑️ 删除已下载文件</span>

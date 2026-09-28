@@ -172,6 +172,10 @@ export default {
     const handleSearch = () => {
       const query = props.searchQuery.trim()
       if (!query) return
+      // 提交即废弃建议——否则在途 fetch 回包会把已关的下拉重新顶开遮挡结果
+      cancelSuggest()
+      suggestions.value = []
+      suggestOpen.value = false
       const playlistId = extractPlaylistId(query)
       emit(playlistId ? 'search-by-id' : 'search', playlistId || query)
     }
@@ -258,6 +262,7 @@ export default {
     // blur 延迟由 @mousedown.prevent 承担——mousedown 先于 blur 且不转移焦点
     const onSearchBlur = () => {
       suggestOpen.value = false
+      cancelSuggest() // 在途请求回包不得重开下拉
     }
 
     const pickSuggestion = (item) => {

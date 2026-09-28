@@ -16,6 +16,7 @@
       v-if="state.confirm"
       class="fb-overlay"
       @click.self="answer(false)"
+      @mousedown.prevent
       @keydown.esc="answer(false)"
       @keydown.tab.prevent="cycleFocus"
     >
@@ -62,11 +63,16 @@ export default {
       btns[(i + (e.shiftKey ? -1 : 1) + btns.length) % btns.length]?.focus()
     }
 
-    // 打开确认框时焦点落在「取消」——破坏性操作默认安全项
+    // 打开确认框时焦点落在「取消」——破坏性操作默认安全项；关闭时归还焦点
+    let lastFocused = null
     watch(() => state.confirm, async (c) => {
       if (c) {
+        lastFocused = document.activeElement
         await nextTick()
         cancelBtn.value?.focus()
+      } else if (lastFocused?.isConnected) {
+        lastFocused.focus()
+        lastFocused = null
       }
     })
 

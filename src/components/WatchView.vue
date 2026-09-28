@@ -46,7 +46,8 @@
             @click="$emit('toggle-play')"
             :disabled="songSwitching"
             :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-            :aria-label="isPlaying ? '暂停' : '播放'"
+            :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
+            :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
           >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
           <button
             class="watch-transport-btn"

@@ -407,25 +407,34 @@ html {
   text-overflow: ellipsis;
 }
 
-/* 侧栏 ⋯ 菜单 teleport 到 body，脱离 .playlist-panel 作用域——retro 下
-   全局 .bg-gray900→浅黄 映射会让紫字不可读，给它自己的主题对照 */
-:root[data-theme="pixel-retro"] .playlist-menu,
+/* ⋯ 菜单 teleport 到 body 脱离组件作用域——retro 下需自己的主题对照。
+   底色要盖过下面 .bg-gray-900→accent 的全局映射——加类限定提特异度。
+   playlist-menu 类被卡片内联工具条复用（无 bg-gray-900），限定词也顺带避免误伤它 */
+:root[data-theme="pixel-retro"] .playlist-menu.bg-gray-900,
 :root[data-theme="pixel-retro"] .download-menu,
-:root[data-theme="pixel-retro"] .queue-menu {
+:root[data-theme="pixel-retro"] .queue-menu.bg-gray-900 {
   background: var(--pixel-card-bg) !important;
   border-color: rgb(210, 120, 160) !important;
 }
 
-:root[data-theme="pixel-retro"] .playlist-menu button,
-:root[data-theme="pixel-retro"] .download-menu button,
-:root[data-theme="pixel-retro"] .queue-menu button {
+:root[data-theme="pixel-retro"] .playlist-menu.bg-gray-900 button,
+:root[data-theme="pixel-retro"] .download-menu .download-option,
+:root[data-theme="pixel-retro"] .queue-menu.bg-gray-900 button {
   color: var(--pixel-text) !important;
   border-bottom-color: rgba(210, 120, 160, 0.3) !important;
 }
 
-:root[data-theme="pixel-retro"] .playlist-menu button:hover,
-:root[data-theme="pixel-retro"] .download-menu button:hover,
-:root[data-theme="pixel-retro"] .queue-menu button:hover {
+:root[data-theme="pixel-retro"] .download-menu .download-option-header {
+  color: var(--pixel-text-dim) !important;
+}
+
+:root[data-theme="pixel-retro"] .download-menu .download-option-header:hover {
+  background: transparent !important;
+}
+
+:root[data-theme="pixel-retro"] .playlist-menu.bg-gray-900 button:hover,
+:root[data-theme="pixel-retro"] .download-menu .download-option:hover,
+:root[data-theme="pixel-retro"] .queue-menu.bg-gray-900 button:hover {
   background: rgba(210, 120, 160, 0.25) !important;
   color: var(--pixel-text) !important;
 }
@@ -905,7 +914,7 @@ body::-webkit-scrollbar {
   z-index: 1;
 }
 
-.player-progress-bar:hover {
+.player-progress-bar:not(.watch-progress):hover {
   height: 6px;
 }
 
@@ -1138,10 +1147,10 @@ body::-webkit-scrollbar {
   color: var(--pixel-dark);
 }
 
-/* 像素风格主题下的标题样式 */
+/* 像素风格主题下的标题样式——--pixel-primary 浅粉配浅蓝顶栏 ≈1.1:1 隐形，用正文深色 */
 :root[data-theme="pixel-retro"] .jirai-title {
-  color: var(--pixel-primary);
-  text-shadow: 0 0 4px var(--pixel-primary);
+  color: var(--pixel-text);
+  text-shadow: 0 0 4px var(--pixel-highlight);
 }
 
 /* 像素风格主题下的输入框样式 */
@@ -1167,12 +1176,14 @@ body::-webkit-scrollbar {
   border-color: var(--pixel-secondary) !important;
 }
 
-:root[data-theme="pixel-retro"] .text-pink-100 {
-  color: var(--pixel-card-bg) !important;
-}
-
 :root[data-theme="pixel-retro"] .bg-gray-900 {
   background-color: var(--pixel-accent) !important;
+}
+
+/* 深灰底控件/徽标在 retro 下压浅底，配合上面 text-pink/text-gray→深色映射 */
+:root[data-theme="pixel-retro"] .bg-gray-900\/80,
+:root[data-theme="pixel-retro"] .bg-gray-800 {
+  background-color: var(--pixel-card-bg) !important;
 }
 
 :root[data-theme="pixel-retro"] .border-gray-600 {
