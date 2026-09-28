@@ -13,13 +13,22 @@ const PER_CHAR_REVEAL_LIMIT = 4
 const DEFAULT_GROUP_SIZE = 2
 const MAX_LATIN_SEGMENT_LENGTH = 18
 const MAX_CJK_SEGMENT_LENGTH = 2
-const PUNCTUATION_PATTERN = /[，。、“”‘’？！；：,.!?;:、】【（）()《》〈〉…—\s]/
-const LATIN_TOKEN_PATTERN = /^[A-Za-z0-9]+(?:[A-Za-z0-9'’-]*[A-Za-z0-9]+)*$/
+// 标点/符号类字符集：歌词常见的 ASCII 撇号/连字符、日式括号「」、
+// 中点・、音符记号等都要并入前组而非独立成 reveal 步
+// 注意：'-' 必须放字符类末尾——夹在中间会形成范围（如 "-– 覆盖全部 ASCII）
+const PUNCT_CHARS = '，。、“”‘’？！；：,.!?;:、】【（）()《》〈〉…—\\s\'"‐‑―–「」『』・~～〜．·♪♥★☆♡♢-'
+const PUNCTUATION_PATTERN = new RegExp(`[${PUNCT_CHARS}]`)
+// 拉丁 token 用 Script=Latin + 数字判定：café/naïve 等带符拉丁词不再被劈开
+const LATIN_CHARS = '\\p{Script=Latin}\\p{Nd}'
+const LATIN_TOKEN_PATTERN = new RegExp(`^[${LATIN_CHARS}]+(?:[${LATIN_CHARS}'’-]*[${LATIN_CHARS}]+)*$`, 'u')
+const LATIN_TOKEN_SCAN = new RegExp(`[${LATIN_CHARS}]+(?:[${LATIN_CHARS}'’-]*[${LATIN_CHARS}]+)*`, 'gu')
+const LATIN_TEXT_PATTERN = new RegExp(`^[${LATIN_CHARS}][${LATIN_CHARS}’'\\-\\s]*$`, 'u')
+const LATIN_GROUP_PATTERN = new RegExp(`[${LATIN_CHARS}]`, 'u')
 const JAPANESE_CHAR_PATTERN = /[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f々〆〤]/
 const HIRAGANA_PATTERN = /[\u3040-\u309f]/
 const KATAKANA_PATTERN = /[\u30a0-\u30ff\u31f0-\u31ff\uff66-\uff9f]/
 const JAPANESE_PARTICLE_PATTERN = /^(は|が|を|に|へ|で|と|や|も|の|ね|よ|か|な|さ|ぞ|ぜ|わ|し|て|で|た|だ|ら|り|る|れ|ろ|う|ん|ゃ|ゅ|ょ)$/
-const NON_SEGMENTABLE_PATTERN = /^[，。、“”‘’？！；：,.!?;:、】【（）()《》〈〉…—\s]+$/
+const NON_SEGMENTABLE_PATTERN = new RegExp(`^[${PUNCT_CHARS}]+$`)
 
 // 原生 Intl.Segmenter（ICU 词库级中日文分词，零依赖）取代 segmentit——
 // 15MB 词典包 + 懒加载机器都省掉；不支持的旧浏览器（FF<125）回退按字切
@@ -35,10 +44,40 @@ function getWordSegmenter() {
     wordSegmenter = typeof Intl?.Segmenter === 'function'
       ? new Intl.Segmenter('zh', { granularity: 'word' })
       : null
+    // 引擎缺 zh 词典时不抛错而是静默回落默认 locale（≈逐字切）——
+    // resolvedOptions 验明正身，没生效就当不可用走 fallback
+    if (wordSegmenter && !wordSegmenter.resolvedOptions().locale.startsWith('zh')) {
+      wordSegmenter = null
+    }
   } catch {
     wordSegmenter = null
   }
   return wordSegmenter
+}
+
+// grapheme 粒度切分：emoji ZWJ/keycap 序列（👨‍👩‍👧、1️⃣）按码点切会劈碎成 tofu
+let graphemeSegmenter = null
+let graphemeSegmenterTried = false
+
+function splitGraphemes(text) {
+  if (!graphemeSegmenterTried) {
+    graphemeSegmenterTried = true
+    try {
+      graphemeSegmenter = typeof Intl?.Segmenter === 'function'
+        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+        : null
+    } catch {
+      graphemeSegmenter = null
+    }
+  }
+  if (!graphemeSegmenter) {
+    return Array.from(text)
+  }
+  try {
+    return [...graphemeSegmenter.segment(text)].map(part => part.segment)
+  } catch {
+    return Array.from(text)
+  }
 }
 
 function createCharNode(text, startTime, endTime, lineId, lineLength) {
@@ -269,11 +308,12 @@ function splitLongSegment(segment) {
   }
 
   const normalizedLatin = normalizeLatinSpacing(text)
-  if (/^[A-Za-z0-9][A-Za-z0-9’’\-\s]*$/.test(normalizedLatin)) {
+  if (LATIN_TEXT_PATTERN.test(normalizedLatin)) {
     return splitLatinSegment(normalizedLatin)
   }
 
-  const glyphs = Array.from(text)
+  // grapheme 切分：emoji 组合序列（👨‍👩‍👧 5 码点、1️⃣ 3 码点）不能被码点上限劈碎
+  const glyphs = splitGraphemes(text)
   if (glyphs.length <= MAX_CJK_SEGMENT_LENGTH) {
     return [text]
   }
@@ -289,8 +329,7 @@ function tokenizeMixedText(text) {
   const tokens = []
   let lastIndex = 0
 
-  const latinWordPattern = /[A-Za-z0-9]+(?:[A-Za-z0-9'’-]*[A-Za-z0-9]+)*/g
-  text.replace(latinWordPattern, (match, offset) => {
+  text.replace(LATIN_TOKEN_SCAN, (match, offset) => {
     if (offset > lastIndex) {
       tokens.push(text.slice(lastIndex, offset))
     }
@@ -341,30 +380,43 @@ function segmentLyricText(text) {
   })
 }
 
+// 无任何文字/数字/emoji 的段（孤儿组合符如 keycap 尾缀 ️⃣、杂散记号）
+// 独立成组会渲染成豆腐块——与标点同处理并入前组
+const WORDLIKE_PATTERN = /[\p{L}\p{N}\p{Extended_Pictographic}]/u
+
 function mergePunctuationSegments(segments) {
-  return segments.reduce((result, segment) => {
+  const result = []
+  // 行首标点暂存并入下一组（"「你好」" 的「不该独占一个 reveal 步）；
+  // 行尾全是标点时兜底自成一组
+  let pending = ''
+
+  for (const segment of segments) {
     if (!segment) {
-      return result
+      continue
     }
 
-    if (result.length === 0) {
-      result.push(segment)
-      return result
+    if (NON_SEGMENTABLE_PATTERN.test(segment) || !WORDLIKE_PATTERN.test(segment)) {
+      if (result.length) {
+        result[result.length - 1] += segment
+      } else {
+        pending += segment
+      }
+      continue
     }
 
-    if (NON_SEGMENTABLE_PATTERN.test(segment)) {
-      result[result.length - 1] += segment
-      return result
-    }
+    result.push(pending + segment)
+    pending = ''
+  }
 
-    result.push(segment)
-    return result
-  }, [])
+  if (pending) {
+    result.push(pending)
+  }
+  return result
 }
 
 // 归并只在同文种内进行：拉丁词与 CJK 直接 join 会产生 "you我的" 这种
 // 无空格粘连，先把分组切成同文种 run，再在 run 内按步数上限归并
-const isLatinGroup = (group) => /[A-Za-z0-9]/.test(group)
+const isLatinGroup = (group) => LATIN_GROUP_PATTERN.test(group)
 
 function limitRevealSteps(groups) {
   if (groups.length <= MAX_REVEAL_STEPS) {
@@ -387,6 +439,16 @@ function limitRevealSteps(groups) {
     for (let i = 0; i < run.length; i += mergeSize) {
       merged.push(run.slice(i, i + mergeSize).join(''))
     }
+  }
+
+  // 硬上限兜底：run 数过多（全交替混排）时 merged 仍可能超限，
+  // 对同文种相邻组二次归并——宁可同文种组更粗也不跨文种粘连
+  while (merged.length > MAX_REVEAL_STEPS) {
+    const pairIndex = merged.findIndex(
+      (group, i) => i + 1 < merged.length && isLatinGroup(group) === isLatinGroup(merged[i + 1])
+    )
+    if (pairIndex === -1) break
+    merged.splice(pairIndex, 2, merged[pairIndex] + merged[pairIndex + 1])
   }
   return merged
 }
@@ -448,12 +510,14 @@ export function createLocalTextAliveVideo(lines = [], durationSeconds = 0) {
     const stepDuration = Math.max(lineDurationMs / Math.max(groups.length, 1), MIN_CHAR_DURATION_MS)
 
     groups.forEach((group, groupIndex) => {
-      const startTime = lineStartMs + stepDuration * groupIndex
+      // stepDuration 有 140ms 地板，组数过多时末组 startTime 会越过 lineEndMs
+      // 生成永不渲染的退化块——钳在行内保证时序单调
+      const startTime = Math.min(lineStartMs + stepDuration * groupIndex, lineEndMs - 1)
       const endTime = groupIndex === groups.length - 1
         ? lineEndMs
         : Math.min(lineStartMs + stepDuration * (groupIndex + 1), lineEndMs)
       const node = createCharNode(
-        typeof group === 'string' ? group : group.text,
+        group,
         startTime,
         endTime,
         // 行标识 + 行总长：画布按行标识把同一句词块沿同一方向链式排布，

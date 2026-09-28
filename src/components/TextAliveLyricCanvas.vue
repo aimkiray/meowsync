@@ -97,7 +97,7 @@ export default {
       manager = null
     })
 
-    watch(displayLyrics, syncLyrics, { deep: true })
+    watch(displayLyrics, syncLyrics)
     watch(() => props.duration, syncLyrics)
     watch(() => props.currentTime, syncPosition)
     watch(() => props.isPlaying, syncPosition)

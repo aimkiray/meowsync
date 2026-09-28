@@ -20,13 +20,16 @@ const LINE_DIRECTIONS = [
 const VIEW_MARGIN_CELLS = 0.8
 // 主动拐弯概率：链尾直行可放时也有几率换方向，让字链长出折线
 const BEND_CHANCE = 0.15
+// 落位失败的重试节流（ms）：屏幕挤占时不至于每帧跑完整螺旋扫描
+const PLACE_RETRY_INTERVAL_MS = 200
+// 行可见性回溯上限：endTime 非单调（行时长各异），回扫不能只靠
+// "上一行还在 persist 期"判断——长行可活得比后面的短行更久
+const LINE_LOOKBACK_MS = 14000
+// 相机硬边钳制的单帧最大校正量：focus 跳到深屏外时限速，防瞬移
+const MAX_SNAP_CELLS = 4
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
-}
-
-function lerp(start, end, amount) {
-  return start + (end - start) * amount
 }
 
 export class CanvasManager {
@@ -51,7 +54,10 @@ export class CanvasManager {
     this._focusCell = null
 
     this._can = document.createElement('canvas')
+    // 极端环境（GPU 被禁/context 丢失）下 getContext 返回 null：
+    // 不 append 不挂监听，各方法靠 _ctx 判空早退，组件降级为无画布
     this._ctx = this._can.getContext('2d')
+    if (!this._ctx) return
     this._can.className = 'textalive-local-canvas'
     this._container.append(this._can)
 
@@ -89,11 +95,12 @@ export class CanvasManager {
   }
 
   resetLayout() {
-    this._px = 0
-    this._py = 0
+    // 相机不归零：切歌/译文切换时整体重排已够明显，
+    // 相机瞬移回原点是额外的可见跳变（漂移是连续的，保留无副作用）
     this._position = 0
     this._activeLyricIndex = -1
     this._lineState.clear()
+    this._focusCell = null
     this._lyrics.forEach((lyric) => {
       lyric.anchorX = 0
       lyric.anchorY = 0
@@ -103,6 +110,7 @@ export class CanvasManager {
       lyric.isDraw = false
       lyric.slotKeys = []
       lyric.glyphPositions = []
+      lyric._placeRetryAt = 0
     })
   }
 
@@ -112,6 +120,7 @@ export class CanvasManager {
   }
 
   update(position) {
+    if (!this._ctx) return
     // NaN/Infinity 参与相机插值后 _px/_py 永久变成 NaN，之后所有帧都无法恢复，
     // 非有限输入一律回退到上一帧的 position
     if (!Number.isFinite(position)) {
@@ -155,11 +164,14 @@ export class CanvasManager {
         const ease = 1 - Math.exp(-dt * 2.5)
         this._px += (clamp(fx, pad, this._stw - pad) - fx) * ease
         this._py += (clamp(fy, pad, this._sth - pad) - fy) * ease
+        // 硬边钳制限速：focus 落在深屏外（兜底落位允许部分出屏）时
+        // 全额瞬时校正会造成瞬移，单帧最多回拉 MAX_SNAP_CELLS 格
         const edge = space * 0.3
+        const maxSnap = space * MAX_SNAP_CELLS
         const hx = this._px + this._focusCell.x * space + space / 2
         const hy = this._py + this._focusCell.y * space + space / 2
-        this._px += clamp(hx, edge, this._stw - edge) - hx
-        this._py += clamp(hy, edge, this._sth - edge) - hy
+        this._px += clamp(clamp(hx, edge, this._stw - edge) - hx, -maxSnap, maxSnap)
+        this._py += clamp(clamp(hy, edge, this._sth - edge) - hy, -maxSnap, maxSnap)
       }
 
       this._mouseX = this._stw / 2
@@ -174,6 +186,7 @@ export class CanvasManager {
   }
 
   resize() {
+    if (!this._ctx) return
     const rect = this._container.getBoundingClientRect()
     this._stw = Math.max(Math.floor(rect.width || window.innerWidth), 1)
     this._sth = Math.max(Math.floor(rect.height || window.innerHeight), 1)
@@ -188,6 +201,7 @@ export class CanvasManager {
   }
 
   destroy() {
+    if (!this._ctx) return
     window.removeEventListener('mousemove', this._handleMove)
     window.removeEventListener('mouseleave', this._handleLeave)
     window.removeEventListener('resize', this._handleResize)
@@ -224,6 +238,7 @@ export class CanvasManager {
   }
 
   _drawBg() {
+    if (!this._ctx) return
     const space = this._space
     const ox = this._px % space
     const oy = this._py % space
@@ -256,6 +271,12 @@ export class CanvasManager {
       this._activeLyricIndex = -1
       return -1
     }
+    // 全部行未开始/已过期时短路：activeIndex===-1 时否则每帧从头扫整表
+    if (position < lyrics[0].startTime ||
+        position > lyrics[lyrics.length - 1].endTime + LYRIC_PERSIST_MS) {
+      this._activeLyricIndex = -1
+      return -1
+    }
 
     let index = clamp(this._activeLyricIndex, 0, lyrics.length - 1)
 
@@ -284,8 +305,10 @@ export class CanvasManager {
       return { start: lyrics.length, end: lyrics.length }
     }
 
+    // endTime 非单调（行时长各异）：上一行已过期不代表更早的行都死了，
+    // 长行可活得比后面的短行更久。按 startTime 界内回溯，死行由绘制段跳过
     let start = activeIndex
-    while (start > 0 && lyrics[start - 1].endTime + LYRIC_PERSIST_MS >= position) {
+    while (start > 0 && lyrics[start - 1].startTime + LINE_LOOKBACK_MS >= position) {
       start -= 1
     }
 
@@ -329,22 +352,28 @@ export class CanvasManager {
   }
 
   _drawLyrics() {
-    if (!this._lyrics?.length) return
+    this._focusCell = null
+    if (!this._ctx || !this._lyrics?.length) return
 
     const position = this._position
     const { start, end } = this._getVisibleLyricRange(position)
-    this._focusCell = null
     if (start >= end) return
 
     const space = this._space
     const ctx = this._ctx
+    // 预填所有已排块的格子：occupiedSlots 只登记"本帧已绘制"的前序 lyric，
+    // 晚落位的前序块会偷占后序块的格——受害者被顶掉且 persist 期不可恢复。
+    // claimed 语义 = 认领即占，与绘制顺序解耦
     const occupiedSlots = new Set()
+    for (let i = start; i < end; i += 1) {
+      const l = this._lyrics[i]
+      if (l.isDraw && l.slotKeys?.length) {
+        for (const key of l.slotKeys) occupiedSlots.add(key)
+      }
+    }
     ctx.textAlign = 'center'
     ctx.fillStyle = '#241827'
-
-    const getSlotKeys = (positions) => {
-      return positions.map(pos => `${pos.x}:${pos.y}`)
-    }
+    ctx.font = `bold ${space * 0.5}px Fusion Pixel, Noto Sans SC, sans-serif`
 
     const buildSpawnCandidates = (nx, ny) => {
       const candidates = []
@@ -374,18 +403,17 @@ export class CanvasManager {
 
     const tryPlaceWord = (startX, startY, lyric, dir, strict = true) => {
       const positions = []
+      const slotKeys = []
       for (let i = 0; i < lyric.glyphs.length; i++) {
-        positions.push({ x: startX + dir.x * i, y: startY + dir.y * i })
+        const pos = { x: startX + dir.x * i, y: startY + dir.y * i }
+        const key = `${pos.x}:${pos.y}`
+        // 提前退出：命中占位/出界立即失败，不为注定失败的结果分配整组对象
+        if (occupiedSlots.has(key)) return null
+        if (strict && !inView(pos)) return null
+        positions.push(pos)
+        slotKeys.push(key)
       }
-
-      const slotKeys = getSlotKeys(positions)
-      const isOk = slotKeys.every(key => !occupiedSlots.has(key)) &&
-        (!strict || positions.every(inView))
-
-      if (isOk) {
-        return { positions, slotKeys }
-      }
-      return null
+      return { positions, slotKeys }
     }
 
     const lineStateOf = (lyric) => {
@@ -401,7 +429,9 @@ export class CanvasManager {
       return state
     }
 
-    const commitPlacement = (lyric, state, result, anchorX, anchorY, dir) => {
+    const commitPlacement = (lyric, state, result, anchorX, anchorY, dir, index) => {
+      // 空块兜底：positions[-1].x 会 TypeError（上游已过滤空文本，这里是防御）
+      if (!result.positions.length) return
       lyric.glyphPositions = result.positions
       lyric.slotKeys = result.slotKeys
       lyric.anchorX = anchorX
@@ -414,6 +444,8 @@ export class CanvasManager {
       // 链尾 = 末字格沿行轴再延一格：下一块从这里接着排，同句连成字链
       state.tailX = lyric.lastGlyphX + dir.x
       state.tailY = lyric.lastGlyphY + dir.y
+      // 链尾推进记录块序号：回退 seek 后旧尾属于已重置的后块，可据此检测并回退
+      state.tailIndex = index
       lyric.isDraw = true
     }
 
@@ -421,10 +453,34 @@ export class CanvasManager {
       const lyric = this._lyrics[i]
 
       if (lyric.startTime < position) {
-        if (position < lyric.endTime) {
+        // 落位闸放宽到 persist 期：seek 落进句中/淡出窗的块也能补放，
+        // 否则残句永久缺块（revealProgress 已满，放置即完整呈现）
+        if (position <= lyric.endTime + LYRIC_PERSIST_MS) {
           // Number.isFinite 才能挡住 undefined（Number.isNaN(undefined) 为 false 会放行）
-          if (Number.isFinite(this._mouseX) && !lyric.isDraw) {
+          if (Number.isFinite(this._mouseX) && !lyric.isDraw &&
+              position >= (lyric._placeRetryAt || 0)) {
             const state = lineStateOf(lyric)
+
+            // 链尾失效检测：尾块被回退 seek 重置（tailIndex >= i）或已出存续窗时，
+            // 回退到本行最近仍可见的已排块续排；全灭则链从零开始
+            if (state.tailIndex !== undefined &&
+                (state.tailIndex >= i ||
+                 !(this._lyrics[state.tailIndex]?.isDraw &&
+                   position <= this._lyrics[state.tailIndex].endTime + LYRIC_PERSIST_MS))) {
+              state.tailX = null
+              state.tailIndex = -1
+              for (let j = i - 1; j >= 0 && this._lyrics[j].lineId === lyric.lineId; j -= 1) {
+                const prev = this._lyrics[j]
+                if (prev.isDraw && position <= prev.endTime + LYRIC_PERSIST_MS) {
+                  state.tailX = prev.lastGlyphX + prev.dir.x
+                  state.tailY = prev.lastGlyphY + prev.dir.y
+                  state.dir = prev.dir
+                  state.tailIndex = j
+                  break
+                }
+              }
+            }
+
             const dir = state.dir
             // 行轴是单向延伸的（→↓↘），以焦点为锚点会让长句尾部探出屏幕。
             // 锚点沿行轴反推半个"行长"（非块长），让整句大致以焦点为中心展开；
@@ -437,12 +493,12 @@ export class CanvasManager {
             // 碰壁（占位/靠边）就换方向在同点续排——字链长出折线；
             // 另有小概率主动拐弯增加随机感。全败退回焦点散布
             const candidates = []
+            const altDirs = LINE_DIRECTIONS.filter(d => d !== dir)
+            for (let k = altDirs.length - 1; k > 0; k--) {
+              const j = Math.floor(Math.random() * (k + 1))
+              ;[altDirs[k], altDirs[j]] = [altDirs[j], altDirs[k]]
+            }
             if (state.tailX !== null) {
-              const altDirs = LINE_DIRECTIONS.filter(d => d !== dir)
-              for (let i = altDirs.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1))
-                ;[altDirs[i], altDirs[j]] = [altDirs[j], altDirs[i]]
-              }
               const dirOrder = Math.random() < BEND_CHANCE ? [...altDirs, dir] : [dir, ...altDirs]
               for (const d of dirOrder) {
                 candidates.push({ x: state.tailX, y: state.tailY, dir: d })
@@ -462,14 +518,16 @@ export class CanvasManager {
             for (const candidate of candidates) {
               const result = tryPlaceWord(candidate.x, candidate.y, lyric, candidate.dir)
               if (result) {
-                commitPlacement(lyric, state, result, candidate.x, candidate.y, candidate.dir)
+                commitPlacement(lyric, state, result, candidate.x, candidate.y, candidate.dir, i)
                 placed = true
                 break
               }
             }
 
+            // 螺旋扫描封顶 40 环：n=100 时 ~2 万次/帧的候选会把低端机拖垮，
+            // 40 环已远超视口半径；扫不到就交给下面的宽松兜底
             if (!placed) {
-              hitcheck: for (let n = 0; n <= 100; n += 1) {
+              hitcheck: for (let n = 0; n <= 40; n += 1) {
                 let tx = n
                 let ty = 0
                 let mx = -1
@@ -479,7 +537,7 @@ export class CanvasManager {
                 for (let r = 0; r < rn; r += 1) {
                   const result = tryPlaceWord(nx + tx, ny + ty, lyric, dir)
                   if (result) {
-                    commitPlacement(lyric, state, result, nx + tx, ny + ty, dir)
+                    commitPlacement(lyric, state, result, nx + tx, ny + ty, dir, i)
                     break hitcheck
                   }
 
@@ -492,19 +550,29 @@ export class CanvasManager {
             }
 
             // 兜底：行比视口长或候选全撞时，放宽视口约束（保留占位检查）
-            // 把锚点钳进安全区，宁可部分出屏也不让整句消失
+            // 把锚点钳进安全区，宁可部分出屏也不让整句消失。
+            // 旧轴放不下时轮询全部可读方向——拐弯只在链尾尝试，
+            // 散布/兜底路径换轴才有机会
             if (!lyric.isDraw) {
               const len = lyric.glyphs.length - 1
               const cx0 = Math.ceil((viewPad - this._px - space / 2) / space)
               const cx1 = Math.floor((this._stw - viewPad - this._px - space / 2) / space)
               const cy0 = Math.ceil((viewPad - this._py - space / 2) / space)
               const cy1 = Math.floor((this._sth - viewPad - this._py - space / 2) / space)
-              const ax = clamp(nx, Math.min(cx0, cx1 - dir.x * len), Math.max(cx0, cx1 - dir.x * len))
-              const ay = clamp(ny, Math.min(cy0, cy1 - dir.y * len), Math.max(cy0, cy1 - dir.y * len))
-              const result = tryPlaceWord(ax, ay, lyric, dir, false)
-              if (result) {
-                commitPlacement(lyric, state, result, ax, ay, dir)
+              for (const d of [dir, ...altDirs]) {
+                const ax = clamp(nx, Math.min(cx0, cx1 - d.x * len), Math.max(cx0, cx1 - d.x * len))
+                const ay = clamp(ny, Math.min(cy0, cy1 - d.y * len), Math.max(cy0, cy1 - d.y * len))
+                const result = tryPlaceWord(ax, ay, lyric, d, false)
+                if (result) {
+                  commitPlacement(lyric, state, result, ax, ay, d, i)
+                  break
+                }
               }
+            }
+
+            // 落位失败节流：屏幕饱和时不至于每帧跑完整候选+螺旋
+            if (!lyric.isDraw) {
+              lyric._placeRetryAt = position + PLACE_RETRY_INTERVAL_MS
             }
           }
         }
@@ -542,21 +610,17 @@ export class CanvasManager {
 
             const timing = this._getGlyphTiming(lyric, g)
             const revealProgress = this._getGlyphProgress(position, timing)
-            const isSettledGlyph = position > lyric.endTime && position <= lyric.endTime + LYRIC_PERSIST_MS
-            if (revealProgress <= 0 && !isSettledGlyph) continue
+            if (revealProgress <= 0) continue
 
             // 吐字头 = 激活歌词最远已揭示的格：相机软牵引的目标。
-            // 含淡出期（isSettledGlyph），让整句在消散前都留在屏内
+            // 被视口裁剪的格也照设——把相机拖过去显示它正是牵引的职责
             this._focusCell = glyphPos
 
-            let px = glyphPos.x * space
-            let py = glyphPos.y * space
+            const px = glyphPos.x * space
+            const py = glyphPos.y * space
 
             if (px + space < -this._px || -this._px + this._stw < px) continue
             if (py + space < -this._py || -this._py + this._sth < py) continue
-
-            px = this._px + px + space / 2
-            py = this._py + py + space / 2
 
             const introDuration = Math.min(INTRO_ANIMATION_MS, timing.endTime - timing.startTime + INTRO_ANIMATION_MS * 0.45)
             const introProgress = clamp((position - timing.startTime) / Math.max(introDuration, 1), 0, 1)
@@ -564,21 +628,19 @@ export class CanvasManager {
             const settleProgress = clamp((position - lyric.endTime) / LYRIC_PERSIST_MS, 0, 1)
             // 淡入淡出：入场 alpha 0→1，存续尾段整体渐隐到 0
             const alpha = easedIntro * (1 - settleProgress)
-            const fontSize = space * 0.5
 
-            ctx.save()
             ctx.globalAlpha = alpha
-            ctx.translate(px, py + fontSize * 0.37)
-            ctx.font = `bold ${fontSize}px Fusion Pixel, Noto Sans SC, sans-serif`
-            ctx.fillText(glyph, 0, 0)
-            ctx.restore()
+            ctx.fillText(glyph, this._px + px + space / 2, this._py + py + space * 0.5 * 0.37 + space / 2)
           }
         }
       } else {
+        // 未开始的块：回退 seek 时重置，重排时链尾由 tailIndex 检测回退
         lyric.isDraw = false
         lyric.slotKeys = []
         lyric.glyphPositions = []
+        lyric._placeRetryAt = 0
       }
     }
+    ctx.globalAlpha = 1
   }
 }
