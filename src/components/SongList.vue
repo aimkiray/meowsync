@@ -724,6 +724,8 @@ export default {
       closeDownloadMenu()
       try {
         downloadingStates.value[song.id] = true
+        // blob 下载全程无浏览器自带进度提示——先给一个开始戳记，终点由浏览器下载栏呈现
+        toast(`正在获取「${song.name}」…`, 'info')
         await musicApi.downloadSong(song, bitrate)
       } catch (error) {
         console.error('下载失败:', error)

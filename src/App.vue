@@ -275,7 +275,9 @@ export default {
     // 远程控制模式
     const urlParams = new URLSearchParams(window.location.search)
     const rawMode = urlParams.get('mode')
-    const remoteMode = ref(['host', 'controller'].includes(rawMode) ? rawMode : 'off') // 'off' | 'host' | 'controller'
+    // 'remote' 是 'controller' 的别名——用户/旧链接手滑写 remote 时应进控制器而非普通应用
+    const normalizedMode = rawMode === 'remote' ? 'controller' : rawMode
+    const remoteMode = ref(['host', 'controller'].includes(normalizedMode) ? normalizedMode : 'off') // 'off' | 'host' | 'controller'
 
     const apiBase = resolveApiBaseUrl()
     const remoteToken = import.meta.env.VITE_REMOTE_TOKEN || ''
@@ -858,6 +860,9 @@ export default {
           if (myReq !== selectReqId) return false // 已被更新的选择取代，丢弃过期数据
           songs.value = fullPlaylist?.tracks || []
           console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
+
+          // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据
+          selectedPlaylist.value = { ...playlist, ...(fullPlaylist || {}) }
 
           // 更新本地歌单库中的数据
           const playlistIndex = userPlaylists.value.findIndex(p => String(p.id) === String(playlist.id))
@@ -2098,6 +2103,7 @@ export default {
           console.log('✅ 单首歌曲分享加载完成并开始播放')
         } catch (error) {
           console.error('❌ 加载单首歌曲失败:', error)
+          toast('分享的歌曲加载失败，请稍后重试', 'error')
         }
       } else if (restorePlayerState) {
         await restorePlaybackState(restorePlayerState)
