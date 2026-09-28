@@ -1,139 +1,122 @@
 <template>
-  <div class="jirai-card p-4 h-full flex flex-col">
-    <div class="flex items-start justify-between gap-3 mb-3 pb-2 border-b border-pink-900/30">
-      <div>
-        <h2 class="text-base font-semibold text-pink-300 leading-none">下载任务</h2>
-        <p v-if="selectedQueue" class="text-[11px] text-purple-300 mt-1.5 truncate">
+  <!-- 下载任务列：纸面发丝盒 + 统计格 + 分组任务卡 -->
+  <div class="pg-panel dtl-panel h-full flex flex-col">
+    <div class="dtl-head">
+      <div class="dtl-head-info">
+        <h2 class="dtl-title">下载任务</h2>
+        <p v-if="selectedQueue" class="pg-label pg-label--dim dtl-sub">
           {{ selectedQueue.name }} · {{ tasks.length }} 条任务
         </p>
-        <p v-else class="text-[11px] text-gray-400 mt-1.5">
+        <p v-else class="pg-label pg-label--dim dtl-sub">
           选择左侧队列后，这里会显示任务详情喵~
         </p>
       </div>
-      <span
-        v-if="selectedQueue"
-        class="px-2 py-1 text-[11px] border bg-purple-900/80 text-purple-200 border-purple-500"
-        style="border-radius: 0;"
-      >
+      <span v-if="selectedQueue" class="pg-chip pg-chip--static dtl-count">
         队列 #{{ selectedQueue.id }}
       </span>
     </div>
 
-    <div v-if="selectedQueue" class="grid grid-cols-2 xl:grid-cols-4 gap-2 mb-4">
-      <div class="border border-gray-700 bg-gray-900/60 px-2.5 py-2">
-        <div class="text-[11px] text-gray-400">总任务</div>
-        <div class="text-sm font-semibold text-pink-300 mt-0.5">{{ taskStats.total }}</div>
+    <div v-if="selectedQueue" class="dtl-stats grid grid-cols-2 xl:grid-cols-4 gap-2">
+      <div class="dtl-stat">
+        <p class="pg-label pg-label--dim">总任务</p>
+        <p class="dtl-stat-num">{{ taskStats.total }}</p>
       </div>
-      <div class="border border-blue-700 bg-blue-950/40 px-3 py-2">
-        <div class="text-[11px] text-blue-200">下载中</div>
-        <div class="text-sm font-semibold text-blue-200 mt-0.5">{{ taskStats.downloading }}</div>
+      <div class="dtl-stat">
+        <p class="pg-label pg-label--dim">下载中</p>
+        <p class="dtl-stat-num">{{ taskStats.downloading }}</p>
       </div>
-      <div class="border border-green-700 bg-green-950/40 px-3 py-2">
-        <div class="text-[11px] text-green-200">已完成</div>
-        <div class="text-sm font-semibold text-green-200 mt-0.5">{{ taskStats.completed }}</div>
+      <div class="dtl-stat">
+        <p class="pg-label pg-label--dim">已完成</p>
+        <p class="dtl-stat-num dtl-stat-num--ok">{{ taskStats.completed }}</p>
       </div>
-      <div class="border border-red-700 bg-red-950/40 px-3 py-2">
-        <div class="text-[11px] text-red-200">失败</div>
-        <div class="text-sm font-semibold text-red-200 mt-0.5">{{ taskStats.failed }}</div>
-      </div>
-    </div>
-
-    <div v-if="!selectedQueue" class="flex-1 flex items-center justify-center text-center px-6">
-      <div>
-        <div class="text-4xl text-pink-300 mb-3">♪</div>
-        <p class="text-sm text-pink-300">先从左侧挑一个下载队列喵</p>
-        <p class="text-xs text-gray-400 mt-2">选中后就能看到每首歌的下载状态、进度和失败原因。</p>
+      <div class="dtl-stat">
+        <p class="pg-label pg-label--dim">失败</p>
+        <p class="dtl-stat-num dtl-stat-num--fail">{{ taskStats.failed }}</p>
       </div>
     </div>
 
-    <div v-else-if="loading" class="flex-1 text-center py-8 flex flex-col items-center justify-center">
-      <div class="pixel-loading mx-auto mb-4"></div>
-      <p class="text-purple-300">加载任务中喵...</p>
+    <div v-if="!selectedQueue" class="dtl-empty">
+      <div class="dtl-empty-icon"><PixelIcon name="note" :size="34" /></div>
+      <p class="dtl-empty-title">先从左侧挑一个下载队列喵</p>
+      <p class="dtl-empty-sub">选中后就能看到每首歌的下载状态、进度和失败原因。</p>
     </div>
 
-    <div v-else-if="tasks.length === 0" class="flex-1 flex items-center justify-center text-center px-6">
-      <div>
-        <p class="text-sm text-pink-300">这条队列里还没有任务喵~</p>
-        <p class="text-xs text-gray-400 mt-2">如果这是新建队列，稍等一下就会开始填充任务列表。</p>
-      </div>
+    <div v-else-if="loading" class="dtl-state">
+      <div class="pixel-loading" aria-hidden="true"></div>
+      <p class="dtl-state-text">加载任务中喵...</p>
     </div>
 
-    <div v-else class="flex-1 min-h-0 overflow-y-auto -mx-3 px-3">
-      <div class="space-y-3.5">
-        <section v-if="groupedTasks.failed.length" class="space-y-2">
-          <div class="flex items-center justify-between gap-2 mb-1.5">
-            <div class="flex items-center gap-2">
-              <span class="text-[11px] px-2 py-0.5 border bg-red-900 text-red-200 border-red-500" style="border-radius: 0;">失败</span>
-              <span class="text-[11px] text-gray-400">{{ groupedTasks.failed.length }} 条</span>
-            </div>
-          </div>
-          <div class="space-y-2">
-            <div
-              v-for="task in groupedTasks.failed"
-              :key="task.id"
-              class="music-card px-3 py-2.5 jirai-card transition-all border border-red-900/60 hover:border-red-700"
-            >
-              <TaskRow :task="task" :retrying-task-id="retryingTaskId" :get-status-class="getStatusClass" :get-status-text="getStatusText" @retry-task="$emit('retry-task', $event)" />
-            </div>
-          </div>
-        </section>
+    <div v-else-if="tasks.length === 0" class="dtl-empty">
+      <p class="dtl-empty-title">这条队列里还没有任务喵~</p>
+      <p class="dtl-empty-sub">如果这是新建队列，稍等一下就会开始填充任务列表。</p>
+    </div>
 
-        <section v-if="groupedTasks.downloading.length" class="space-y-2">
-          <div class="flex items-center gap-2 mb-1.5">
-            <span class="text-[11px] px-2 py-0.5 border bg-blue-900 text-blue-200 border-blue-500" style="border-radius: 0;">下载中</span>
-            <span class="text-[11px] text-gray-400">{{ groupedTasks.downloading.length }} 条</span>
-          </div>
-          <div class="space-y-2">
-            <div
-              v-for="task in groupedTasks.downloading"
-              :key="task.id"
-              class="music-card px-3 py-2.5 jirai-card transition-all border border-blue-900/60 hover:border-blue-700"
-            >
-              <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
-            </div>
-          </div>
-        </section>
+    <div v-else class="dtl-scroll flex-1 min-h-0">
+      <section v-if="groupedTasks.failed.length" class="dtl-group">
+        <div class="dtl-group-head">
+          <span class="dtl-group-tag dtl-group-tag--fail">failed:</span>
+          <span class="pg-label pg-label--dim">{{ groupedTasks.failed.length }} 条</span>
+        </div>
+        <div
+          v-for="task in groupedTasks.failed"
+          :key="task.id"
+          class="dtl-task"
+        >
+          <TaskRow :task="task" :retrying-task-id="retryingTaskId" :get-status-class="getStatusClass" :get-status-text="getStatusText" @retry-task="$emit('retry-task', $event)" />
+        </div>
+      </section>
 
-        <section v-if="groupedTasks.pending.length" class="space-y-2">
-          <div class="flex items-center gap-2 mb-1.5">
-            <span class="text-[11px] px-2 py-0.5 border bg-gray-800 text-gray-300 border-gray-600" style="border-radius: 0;">等待中</span>
-            <span class="text-[11px] text-gray-400">{{ groupedTasks.pending.length }} 条</span>
-          </div>
-          <div class="space-y-2">
-            <div
-              v-for="task in groupedTasks.pending"
-              :key="task.id"
-              class="music-card px-3 py-2.5 jirai-card transition-all border border-transparent hover:border-pink-900"
-            >
-              <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
-            </div>
-          </div>
-        </section>
+      <section v-if="groupedTasks.downloading.length" class="dtl-group">
+        <div class="dtl-group-head">
+          <span class="dtl-group-tag">downloading:</span>
+          <span class="pg-label pg-label--dim">{{ groupedTasks.downloading.length }} 条</span>
+        </div>
+        <div
+          v-for="task in groupedTasks.downloading"
+          :key="task.id"
+          class="dtl-task"
+        >
+          <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
+        </div>
+      </section>
 
-        <section v-if="groupedTasks.completed.length" class="space-y-2">
-          <button
-            type="button"
-            class="w-full flex items-center justify-between gap-3 mb-1.5 px-2 py-1 border border-green-900/70 bg-green-950/20 text-left hover:bg-green-950/30 transition-colors"
-            style="border-radius: 0;"
-            @click="showCompleted = !showCompleted"
+      <section v-if="groupedTasks.pending.length" class="dtl-group">
+        <div class="dtl-group-head">
+          <span class="dtl-group-tag">pending:</span>
+          <span class="pg-label pg-label--dim">{{ groupedTasks.pending.length }} 条</span>
+        </div>
+        <div
+          v-for="task in groupedTasks.pending"
+          :key="task.id"
+          class="dtl-task"
+        >
+          <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
+        </div>
+      </section>
+
+      <section v-if="groupedTasks.completed.length" class="dtl-group">
+        <button
+          type="button"
+          class="dtl-group-toggle"
+          :aria-expanded="showCompleted"
+          @click="showCompleted = !showCompleted"
+        >
+          <span class="dtl-group-toggle-left">
+            <span class="dtl-group-tag dtl-group-tag--ok">completed:</span>
+            <span class="pg-label pg-label--dim">{{ groupedTasks.completed.length }} 条</span>
+          </span>
+          <span class="dtl-group-toggle-note">{{ showCompleted ? '收起' : '展开' }}</span>
+        </button>
+        <template v-if="showCompleted">
+          <div
+            v-for="task in groupedTasks.completed"
+            :key="task.id"
+            class="dtl-task"
           >
-            <div class="flex items-center gap-2">
-              <span class="text-[11px] px-2 py-0.5 border bg-green-900 text-green-200 border-green-500" style="border-radius: 0;">已完成</span>
-              <span class="text-[11px] text-gray-400">{{ groupedTasks.completed.length }} 条</span>
-            </div>
-            <span class="text-[11px] text-green-200">{{ showCompleted ? '收起' : '展开' }}</span>
-          </button>
-          <div v-if="showCompleted" class="space-y-2">
-            <div
-              v-for="task in groupedTasks.completed"
-              :key="task.id"
-              class="music-card px-3 py-2.5 jirai-card transition-all border border-transparent hover:border-pink-900"
-            >
-              <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
-            </div>
+            <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
           </div>
-        </section>
-      </div>
+        </template>
+      </section>
     </div>
   </div>
 </template>
@@ -141,6 +124,7 @@
 <script setup>
 import { computed, h, ref, watch } from 'vue';
 import { httpsCover } from '../lib/url';
+import PixelIcon from './PixelIcon.vue';
 
 const props = defineProps({
   tasks: {
@@ -194,16 +178,20 @@ function getStatusText(status) {
   return statusMap[status] || status;
 }
 
+// 状态 → 芯片修饰类（print-grid 配色）：downloading=墨底反白，completed=绿戳，
+// failed=品红，pending 淡墨。只换类名不改映射结构
 function getStatusClass(status) {
   const classMap = {
-    pending: 'bg-gray-800 text-gray-300 border-gray-600',
-    downloading: 'bg-blue-900 text-blue-200 border-blue-500',
-    completed: 'bg-green-900 text-green-200 border-green-500',
-    failed: 'bg-red-900 text-red-200 border-red-500'
+    pending: 'dtr-chip--dim',
+    downloading: 'pg-chip--on',
+    completed: 'dtr-chip--ok',
+    failed: 'dtr-chip--fail'
   };
-  return classMap[status] || 'bg-gray-800 text-gray-300 border-gray-600';
+  return classMap[status] || 'dtr-chip--dim';
 }
 
+// TaskRow 是内联渲染函数组件：产出的内层元素没有父组件 scopeId，
+// 其样式只能走本文件 <style scoped> 里的 :deep() 通道（见下方样式注释）
 const TaskRow = {
   props: {
     task: {
@@ -225,75 +213,398 @@ const TaskRow = {
   },
   emits: ['retry-task'],
   setup(rowProps, { emit }) {
-    return () => h('div', { class: 'flex items-start gap-2.5' }, [
-      h('div', {
-        class: 'w-10 h-10 border-2 border-pink-400 bg-gray-900 overflow-hidden flex-shrink-0',
-        style: 'border-radius: 0;'
-      }, rowProps.task.coverUrl
+    return () => h('div', { class: 'dtr' }, [
+      h('div', { class: 'dtr-cover' }, rowProps.task.coverUrl
         ? h('img', {
           // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底。
           // coverUrl 是上游 http 明文 CDN 地址：HTTPS 部署下被动混合内容
           // 会被浏览器拦截，显式升级 https（*.music.126.net 均支持 TLS）
           src: httpsCover(rowProps.task.coverUrl),
           alt: rowProps.task.songName,
-          class: 'w-full h-full object-cover',
-          style: 'image-rendering: pixelated;'
+          class: 'dtr-cover-img'
         })
-        : h('div', { class: 'w-full h-full flex items-center justify-center text-pink-300 text-[10px]' }, '♫')),
-      h('div', { class: 'flex-1 min-w-0' }, [
-        h('div', { class: 'flex items-start justify-between gap-3' }, [
-          h('div', { class: 'min-w-0 flex-1' }, [
-            h('div', { class: 'flex items-center gap-2 flex-wrap' }, [
-              h('h4', { class: 'font-medium text-sm truncate text-pink-300' }, rowProps.task.songName),
+        : h('div', { class: 'dtr-cover-fb' }, [h(PixelIcon, { name: 'note', size: 14 })])),
+      h('div', { class: 'dtr-body' }, [
+        h('div', { class: 'dtr-top' }, [
+          h('div', { class: 'dtr-headcell' }, [
+            h('div', { class: 'dtr-namerow' }, [
+              h('h4', { class: 'dtr-name' }, rowProps.task.songName),
               h('span', {
-                class: `px-2 py-0.5 text-[11px] border shrink-0 ${rowProps.getStatusClass(rowProps.task.status)}`,
-                style: 'border-radius: 0;'
+                class: `pg-chip pg-chip--static dtr-chip ${rowProps.getStatusClass(rowProps.task.status)}`
               }, rowProps.getStatusText(rowProps.task.status))
             ]),
-            h('p', { class: 'text-xs text-purple-300 mt-0.5 truncate' }, rowProps.task.artist)
+            h('p', { class: 'dtr-artist' }, rowProps.task.artist)
           ]),
-          h('div', { class: 'text-[11px] text-gray-400 shrink-0 text-right' }, `#${rowProps.task.id}`)
+          h('div', { class: 'dtr-id' }, `#${rowProps.task.id}`)
         ]),
-        h('div', { class: 'flex items-center flex-wrap gap-x-2.5 gap-y-1 mt-1 text-[11px] text-gray-400' }, [
-          rowProps.task.downloadAudio ? h('span', '🎵 音频') : null,
-          rowProps.task.downloadLyrics ? h('span', '📝 歌词') : null,
-          rowProps.task.downloadCover ? h('span', '🖼️ 封面') : null
+        h('div', { class: 'dtr-flags' }, [
+          rowProps.task.downloadAudio ? h('span', { class: 'dtr-flag' }, '音频') : null,
+          rowProps.task.downloadLyrics ? h('span', { class: 'dtr-flag' }, '歌词') : null,
+          rowProps.task.downloadCover ? h('span', { class: 'dtr-flag' }, '封面') : null
         ].filter(Boolean)),
         rowProps.task.status === 'downloading'
-          ? h('div', { class: 'mt-1.5' }, [
-            h('div', { class: 'flex items-center gap-2' }, [
-              h('div', { class: 'flex-1 h-1.5 bg-gray-800 border border-gray-700' }, [
-                h('div', {
-                  class: 'h-full bg-pink-500 transition-all',
-                  // undefined/>100 会产生非法/溢出样式
-                  style: `width: ${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`
-                })
-              ]),
-              h('div', { class: 'text-[11px] text-gray-400 w-10 text-right' }, `${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`)
-            ])
+          ? h('div', { class: 'dtr-progress-wrap' }, [
+            h('div', {
+              class: 'dtr-progress',
+              role: 'progressbar',
+              'aria-valuenow': Math.max(0, Math.min(100, rowProps.task.progress || 0)),
+              'aria-valuemin': 0, 'aria-valuemax': 100,
+              'aria-label': '下载进度'
+            }, [
+              h('div', {
+                class: 'dtr-progress-fill',
+                // undefined/>100 会产生非法/溢出样式
+                style: `width: ${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`
+              })
+            ]),
+            h('div', { class: 'dtr-progress-num' }, `${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`)
           ])
           : null,
         rowProps.task.status === 'failed'
-          ? h('div', { class: 'mt-1' }, [
-            rowProps.task.errorMessage
-              ? h('p', { class: 'text-[11px] text-red-300 break-words' }, `下载失败喵：${rowProps.task.errorMessage}`)
-              : h('p', { class: 'text-[11px] text-red-300 break-words' }, '下载失败喵'),
+          ? h('div', { class: 'dtr-err' }, [
+            h('p', { class: 'dtr-err-line' }, [
+              h('span', { class: 'dtr-err-tag' }, 'error:'),
+              ` ${rowProps.task.errorMessage || '下载失败喵'}`
+            ]),
             rowProps.task.retryCount > 0
-              ? h('p', { class: 'text-[11px] text-gray-400 mt-1' }, `已重试 ${rowProps.task.retryCount} 次`)
+              ? h('p', { class: 'dtr-retry-note' }, `已重试 ${rowProps.task.retryCount} 次`)
               : null,
             h('button', {
-              class: 'mt-1 text-[11px] px-2 py-1 border bg-orange-700 text-white border-orange-500 hover:bg-orange-600 transition-colors',
-              style: 'border-radius: 0;',
+              class: 'ink-btn ink-btn--ghost ink-btn--sm dtr-retry-btn',
               disabled: rowProps.retryingTaskId === rowProps.task.id,
               onClick: () => emit('retry-task', rowProps.task.id)
             }, rowProps.retryingTaskId === rowProps.task.id ? '重试中...' : '重试任务')
           ].filter(Boolean))
           : null,
         rowProps.task.status === 'completed'
-          ? h('div', { class: 'mt-1.5 text-[11px] text-green-300' }, '✓ 下载完成喵')
+          ? h('div', { class: 'dtr-done' }, [h(PixelIcon, { name: 'check', size: 11 }), '下载完成喵'])
           : null
       ])
     ]);
   }
 };
 </script>
+
+<style scoped>
+/* 纸面发丝盒：头部/统计内收，任务区贴边滚动 */
+.dtl-panel {
+  padding: 14px 0 0;
+}
+
+.dtl-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 12px;
+  flex-shrink: 0;
+}
+
+.dtl-head-info { min-width: 0; }
+
+.dtl-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.dtl-sub { margin-top: 5px; }
+
+.dtl-count { flex-shrink: 0; }
+
+/* 统计格：发丝格 + display 大数字（完成=绿戳，失败=品红） */
+.dtl-stats {
+  padding: 0 16px 12px;
+  flex-shrink: 0;
+}
+
+.dtl-stat {
+  border: 1.2px solid var(--ink-10);
+  padding: 8px 10px;
+}
+
+.dtl-stat-num {
+  margin-top: 4px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.dtl-stat-num--ok { color: var(--ink); text-decoration: underline 1.2px var(--accent-green); text-underline-offset: 3px; }
+.dtl-stat-num--fail { color: var(--ink); text-decoration: underline 1.2px var(--accent-magenta); text-underline-offset: 3px; }
+
+.dtl-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 32px 16px;
+  flex: 1;
+  justify-content: center;
+}
+
+.dtl-state-text {
+  font-size: 12px;
+  color: var(--ink-64);
+}
+
+.dtl-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.dtl-empty-icon { color: var(--ink-64); }
+
+.dtl-empty-title {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.dtl-empty-sub {
+  font-size: 12px;
+  color: var(--ink-64);
+  max-width: 32ch;
+}
+
+.dtl-scroll {
+  overflow-y: auto;
+  border-top: var(--hairline);
+  padding: 12px 16px;
+  scrollbar-gutter: stable;
+}
+
+.dtl-group + .dtl-group { margin-top: 14px; }
+
+.dtl-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* 分组签：等宽小写，状态即签名（failed/completed 上色） */
+.dtl-group-tag {
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 12px;
+  letter-spacing: .05em;
+  color: var(--ink);
+}
+
+.dtl-group-tag--fail { color: var(--accent-magenta-ink); }
+.dtl-group-tag--ok { color: var(--ink); }
+
+/* 任务卡：发丝盒 */
+.dtl-task {
+  border: 1.2px solid var(--ink-10);
+  padding: 10px;
+  transition: border-color .15s;
+}
+
+.dtl-task + .dtl-task { margin-top: 8px; }
+.dtl-task:hover { border-color: var(--ink); }
+
+/* 已完成折叠头：整行发丝盒可点 */
+.dtl-group-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border: var(--hairline);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: background .12s;
+}
+
+.dtl-group-toggle:hover { background: var(--ink-06); }
+
+.dtl-group-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dtl-group-toggle-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  flex-shrink: 0;
+}
+
+/* ── TaskRow 内部件：内联组件元素无本文件 scopeId，须 :deep() 命中 ── */
+.dtl-task :deep(.dtr) {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.dtl-task :deep(.dtr-cover) {
+  width: 40px;
+  height: 40px;
+  border: var(--hairline);
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-64);
+  background: var(--paper);
+}
+
+.dtl-task :deep(.dtr-cover-img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.dtl-task :deep(.dtr-body) { flex: 1; min-width: 0; }
+
+.dtl-task :deep(.dtr-top) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dtl-task :deep(.dtr-headcell) { flex: 1; min-width: 0; }
+
+.dtl-task :deep(.dtr-namerow) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dtl-task :deep(.dtr-name) {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.dtl-task :deep(.dtr-artist) {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dtl-task :deep(.dtr-id) {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.dtl-task :deep(.dtr-flags) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+}
+
+.dtl-task :deep(.dtr-flag) {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+}
+
+.dtl-task :deep(.dtr-chip) {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.dtl-task :deep(.dtr-chip.dtr-chip--dim) { color: var(--ink-64); }
+.dtl-task :deep(.dtr-chip.dtr-chip--ok) { color: var(--ink); border-color: var(--accent-green); }
+.dtl-task :deep(.dtr-chip.dtr-chip--fail) { color: var(--accent-magenta-ink); border-color: var(--accent-magenta); }
+
+.dtl-task :deep(.dtr-progress-wrap) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.dtl-task :deep(.dtr-progress) {
+  flex: 1;
+  height: 4px;
+  background: var(--ink-10);
+  overflow: hidden;
+}
+
+.dtl-task :deep(.dtr-progress-fill) {
+  height: 100%;
+  background: var(--ink);
+  transition: width .3s var(--ease-ink);
+}
+
+.dtl-task :deep(.dtr-progress-num) {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.dtl-task :deep(.dtr-err) { margin-top: 5px; }
+
+.dtl-task :deep(.dtr-err-line) {
+  font-size: 11px;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.dtl-task :deep(.dtr-err-tag) {
+  font-family: var(--font-mono);
+  letter-spacing: .05em;
+  color: var(--accent-magenta-ink);
+}
+
+.dtl-task :deep(.dtr-retry-note) {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+}
+
+.dtl-task :deep(.dtr-retry-btn) { margin-top: 6px; }
+
+.dtl-task :deep(.dtr-done) {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--ink-86);
+}
+
+.dtl-task :deep(.dtr-done svg) { color: var(--accent-green); }
+</style>

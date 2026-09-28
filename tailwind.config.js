@@ -7,39 +7,28 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        'pink': {
-          50: '#fdf2f8',
-          100: '#fce7f3',
-          200: '#fbcfe8',
-          300: '#f9a8d4',
-          400: '#f472b6',
-          500: '#ec4899',
-          600: '#db2777',
-          700: '#be185d',
-          800: '#9d174d',
-          900: '#831843',
-        },
-        'purple': {
-          50: '#faf5ff',
-          100: '#f3e8ff',
-          200: '#e9d5ff',
-          300: '#d8b4fe',
-          400: '#c084fc',
-          500: '#a855f7',
-          600: '#9333ea',
-          700: '#7c3aed',
-          800: '#6b21a8',
-          900: '#581c87',
-        }
+        /* print-grid 令牌（typesafe.ai print-sheet 语言） */
+        'ink': '#1e1e1e',
+        'paper': '#fefefe',
+        'label-grey': '#dedede',
+        'canvas-teal': '#09aea1',
+        'canvas-sage': '#abbab9',
+        'canvas-pink': '#f386a1',
+        'accent-magenta': '#d45bb6',
+        'accent-green': '#03aa5c',
       },
       fontFamily: {
-        'cute': ['Comic Sans MS', 'cursive'],
+        'sans': ['Inter', 'Noto Sans SC', 'system-ui', 'sans-serif'],
+        'mono': ['JetBrains Mono', 'Fusion Pixel', 'ui-monospace', 'monospace'],
+        'display': ['Space Grotesk', 'Inter', 'Noto Sans SC', 'sans-serif'],
+        'pixel': ['Fusion Pixel', 'JetBrains Mono', 'monospace'],
       },
-      animation: {
-        'bounce-slow': 'bounce 2s infinite',
-        'pulse-slow': 'pulse 3s infinite',
-        'spin-slow': 'spin 3s linear infinite',
-      }
+      borderWidth: {
+        'hairline': '1.2px',
+      },
+      borderRadius: {
+        'none': '0',
+      },
     },
   },
   plugins: [],

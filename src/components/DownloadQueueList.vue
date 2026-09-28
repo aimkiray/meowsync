@@ -1,29 +1,24 @@
 <template>
-  <div class="jirai-card card-songlist p-4 h-full flex flex-col">
-    <div class="flex items-start justify-between gap-3 mb-3 pb-2 border-b border-pink-900/30">
-      <div>
-        <h2 class="text-base font-semibold text-pink-300 leading-none">{{ title }}</h2>
-        <p class="text-[11px] text-gray-400 mt-1.5">左侧选队列，右侧看详情喵~</p>
+  <!-- 下载队列列：纸面发丝盒，队列发丝行；行尾 ⋯ 菜单 teleport 到 body -->
+  <div class="pg-panel dql-panel h-full flex flex-col">
+    <div class="dql-head">
+      <div class="dql-head-info">
+        <h2 class="dql-title">{{ title }}</h2>
+        <p class="pg-label pg-label--dim dql-sub">左侧选队列，右侧看详情喵~</p>
       </div>
-      <span class="px-2 py-1 text-[11px] border bg-gray-900/80 text-gray-300 border-gray-700" style="border-radius: 0;">
-        {{ queues.length }} 条
-      </span>
+      <span class="pg-chip pg-chip--static dql-count">{{ queues.length }} 条</span>
     </div>
 
-    <div class="-mx-3 px-3 mb-4">
-      <div class="flex items-center gap-2 rounded-none border border-pink-900/40 bg-pink-950/10 py-2 px-3">
+    <div class="dql-filters">
+      <div class="pg-field">
         <input
           :value="searchQuery"
           type="text"
           placeholder="搜索队列名..."
-          class="flex-1 min-w-[160px] h-9 px-3 text-xs border bg-gray-900/80 text-pink-200 border-gray-700 focus:outline-none focus:border-pink-500"
-          style="border-radius: 0;"
           @input="$emit('update:search-query', $event.target.value)"
         />
         <select
           :value="statusFilter"
-          class="h-9 px-3 text-xs border bg-gray-900/80 text-pink-200 border-gray-700 focus:outline-none focus:border-pink-500"
-          style="border-radius: 0;"
           @change="$emit('update:status-filter', $event.target.value)"
         >
           <option value="all">全部状态</option>
@@ -37,142 +32,121 @@
       </div>
     </div>
 
-    <div v-if="loading" class="text-center py-8">
-      <div class="pixel-loading mx-auto mb-4"></div>
-      <p class="text-purple-300">加载队列中喵...</p>
+    <div v-if="loading" class="dql-state">
+      <div class="pixel-loading" aria-hidden="true"></div>
+      <p class="dql-state-text">加载队列中喵...</p>
     </div>
 
-    <div v-else-if="queues.length === 0" class="text-center py-8 text-gray-400 flex-1 flex items-center justify-center">
-      {{ emptyText }}
+    <div v-else-if="queues.length === 0" class="dql-state dql-state--grow">
+      <p class="dql-state-text">{{ emptyText }}</p>
     </div>
 
-    <div v-else class="space-y-2 overflow-y-auto -mx-3 px-3 flex-1 min-h-0">
+    <div v-else class="dql-scroll flex-1 min-h-0">
       <div
         v-for="queue in queues"
         :key="queue.id"
-        class="music-card cursor-pointer p-4 jirai-card transition-all w-full relative"
-        :class="selectedQueueId === queue.id ? 'border-pink-400 shadow-[0_0_0_1px_rgba(244,114,182,0.35)]' : 'border-transparent hover:border-pink-900'"
+        class="dql-row"
+        :class="{ 'dql-row--sel': selectedQueueId === queue.id }"
         @click="$emit('select', queue)"
+        @keydown.enter.self="$emit('select', queue)"
+        @keydown.space.prevent.self="$emit('select', queue)"
+        tabindex="0"
+        role="button"
+        :aria-label="`查看队列 ${queue.name}`"
       >
-        <div class="flex items-center space-x-3 pr-12">
-          <div class="relative">
-            <div class="w-12 h-12 border-2 border-pink-400 bg-gray-900 overflow-hidden flex items-center justify-center" style="border-radius: 0;">
-              <img
-                v-if="getQueueCover(queue)"
-                :src="getQueueCover(queue)"
-                :alt="queue.name"
-                class="w-full h-full object-cover"
-                style="image-rendering: pixelated;"
-              />
-              <div v-else class="w-full h-full flex items-center justify-center text-pink-300 text-[10px]">
-                ♪
-              </div>
-            </div>
-          </div>
+        <div class="dql-cover-wrap">
+          <img
+            v-if="getQueueCover(queue)"
+            :src="getQueueCover(queue)"
+            :alt="queue.name"
+            class="dql-cover"
+          />
+          <div v-else class="dql-cover dql-cover--fb">♪</div>
+        </div>
 
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 flex-wrap">
-              <h3 class="font-medium truncate text-pink-300">{{ queue.name }}</h3>
-              <span
-                :class="[
-                  'px-2 py-0.5 text-[11px] border shrink-0',
-                  getStatusClass(queue.status)
-                ]"
-                style="border-radius: 0;"
-              >
-                {{ getStatusText(queue.status) }}
-              </span>
-              <span
-                v-if="queue.failedTasks > 0"
-                class="px-2 py-0.5 text-[11px] border shrink-0 bg-red-950 text-red-200 border-red-700"
-                style="border-radius: 0;"
-              >
-                失败 {{ queue.failedTasks }}
-              </span>
-            </div>
-            <p class="text-sm text-purple-300 truncate mt-0.5">
-              #{{ queue.id }} · 歌单 {{ queue.playlistId }} · {{ queue.completedTasks }}/{{ queue.totalTasks }} · {{ getProgress(queue) }}%
-            </p>
-            <div class="mt-2 w-full h-1.5 bg-gray-800 border border-gray-700">
-              <div
-                :style="{ width: getProgress(queue) + '%' }"
-                :class="[
-                  'h-full transition-all',
-                  queue.status === 'failed' ? 'bg-red-500' : 'bg-pink-500'
-                ]"
-              ></div>
-            </div>
+        <div class="dql-info">
+          <div class="dql-namerow">
+            <h3 class="dql-name">{{ queue.name }}</h3>
+            <span
+              class="pg-chip pg-chip--static dql-chip"
+              :class="getStatusClass(queue.status)"
+            >{{ getStatusText(queue.status) }}</span>
+            <span
+              v-if="queue.failedTasks > 0"
+              class="pg-chip pg-chip--static dql-chip dql-chip--fail"
+            >失败 {{ queue.failedTasks }}</span>
+          </div>
+          <p class="dql-meta">
+            #{{ queue.id }} · 歌单 {{ queue.playlistId }} · {{ queue.completedTasks }}/{{ queue.totalTasks }} · {{ getProgress(queue) }}%
+          </p>
+          <div class="dql-progress" role="progressbar" :aria-valuenow="getProgress(queue)" aria-valuemin="0" aria-valuemax="100" :aria-label="`队列 ${queue.id} 下载进度`">
+            <div
+              class="dql-progress-fill"
+              :class="{ 'dql-progress-fill--fail': queue.status === 'failed' }"
+              :style="{ width: getProgress(queue) + '%' }"
+            ></div>
           </div>
         </div>
 
-        <div class="absolute top-0 right-0 flex">
-          <button
-            class="queue-menu-trigger p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
-            style="border-radius: 0;"
-            title="更多操作"
-            @click.stop="toggleMenu(queue.id, $event)"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 22 22"><path fill="currentColor" d="M15 21H8v-1H7v-1H6V3h1V2h1V1h4v1h1v1h1v14h-1v1h-1Z"/></svg>
-          </button>
-        </div>
+        <button
+          class="queue-menu-trigger pg-icobtn pg-icobtn--bare dql-kebab"
+          title="更多操作"
+          aria-label="更多操作"
+          aria-haspopup="menu"
+          :aria-expanded="openMenuId === queue.id"
+          @click.stop="toggleMenu(queue.id, $event)"
+        >
+          <PixelIcon name="kebab" :size="15" />
+        </button>
 
         <Teleport to="body">
           <div
             v-if="openMenuId === queue.id"
-            class="queue-menu fixed bg-gray-900 border border-purple-400 shadow-lg z-[var(--z-menu)] w-[132px]"
-            style="border-radius: 0;"
+            class="pg-menu queue-menu"
+            role="menu"
             :style="getMenuPosition(queue.id)"
           >
             <button
               v-if="['pending', 'cancelled'].includes(queue.status)"
               @click.stop="runQueueAction('start', queue.id)"
-              class="w-full text-left px-3 py-2 text-xs text-green-200 hover:bg-green-800 hover:text-white transition-colors border-b border-gray-700"
-            >
-              启动
-            </button>
+              class="pg-menu-item"
+              role="menuitem"
+            >启动</button>
             <button
               v-if="queue.status === 'running'"
               @click.stop="runQueueAction('pause', queue.id)"
-              class="w-full text-left px-3 py-2 text-xs text-yellow-200 hover:bg-yellow-800 hover:text-white transition-colors border-b border-gray-700"
-            >
-              暂停
-            </button>
+              class="pg-menu-item"
+              role="menuitem"
+            >暂停</button>
             <button
               v-if="queue.status === 'paused'"
               @click.stop="runQueueAction('resume', queue.id)"
-              class="w-full text-left px-3 py-2 text-xs text-blue-200 hover:bg-blue-800 hover:text-white transition-colors border-b border-gray-700"
-            >
-              恢复
-            </button>
+              class="pg-menu-item"
+              role="menuitem"
+            >恢复</button>
             <button
               v-if="['pending', 'running', 'paused'].includes(queue.status)"
               @click.stop="runQueueAction('cancel', queue.id)"
-              class="w-full text-left px-3 py-2 text-xs text-red-200 hover:bg-red-800 hover:text-white transition-colors border-b border-gray-700"
-            >
-              取消
-            </button>
+              class="pg-menu-item"
+              role="menuitem"
+            >取消</button>
             <button
               @click.stop="runQueueAction('select', queue)"
-              class="w-full text-left px-3 py-2 text-xs text-purple-200 hover:bg-purple-800 hover:text-white transition-colors"
-              :class="canRetry(queue) || canDelete(queue) ? 'border-b border-gray-700' : ''"
-            >
-              详情
-            </button>
+              class="pg-menu-item"
+              role="menuitem"
+            >详情</button>
             <button
               v-if="canRetry(queue)"
               @click.stop="runQueueAction('retry', queue.id)"
-              class="w-full text-left px-3 py-2 text-xs text-orange-200 hover:bg-orange-800 hover:text-white transition-colors"
-              :class="canDelete(queue) ? 'border-b border-gray-700' : ''"
-            >
-              重试
-            </button>
+              class="pg-menu-item"
+              role="menuitem"
+            >重试</button>
             <button
               v-if="canDelete(queue)"
               @click.stop="runQueueAction('delete', queue.id)"
-              class="w-full text-left px-3 py-2 text-xs text-red-200 hover:bg-red-800 hover:text-white transition-colors"
-            >
-              删除
-            </button>
+              class="pg-menu-item pg-menu-item--danger"
+              role="menuitem"
+            >删除</button>
           </div>
         </Teleport>
       </div>
@@ -183,6 +157,7 @@
 <script setup>
 import { onBeforeUnmount, ref } from 'vue';
 import { httpsCover } from '../lib/url';
+import PixelIcon from './PixelIcon.vue';
 
 const props = defineProps({
   queues: {
@@ -281,9 +256,9 @@ function canDelete(queue) {
 
 function handleWindowPointerDown(event) {
   const target = event.target;
-  // 菜单是 Teleport 到 body 的——不在 .music-card 内，必须单独豁免；
+  // 菜单是 Teleport 到 body 的——不在 .dql-row 内，必须单独豁免；
   // 否则 pointerdown（先于 click）就把菜单关了，菜单项点击永远不触发
-  // 豁免收窄到菜单本体与触发钮：.music-card 整卡豁免会让"点另一张卡片不关菜单"，
+  // 豁免收窄到菜单本体与触发钮：.dql-row 整行豁免会让"点另一行不关菜单"，
   // 选中置顶排序后旧菜单悬空指向错误卡片
   if (target instanceof Element && target.closest('.queue-menu, .queue-menu-trigger')) {
     return;
@@ -328,16 +303,18 @@ function getStatusText(status) {
   return statusMap[status] || status;
 }
 
+// 状态 → 芯片修饰类：running=墨底反白（激活），completed=绿戳，failed=品红，
+// 其余淡墨。只换类名不改映射结构
 function getStatusClass(status) {
   const classMap = {
-    pending: 'bg-gray-800 text-gray-300 border-gray-600',
-    running: 'bg-blue-900 text-blue-200 border-blue-500',
-    paused: 'bg-yellow-900 text-yellow-200 border-yellow-500',
-    completed: 'bg-green-900 text-green-200 border-green-500',
-    failed: 'bg-red-900 text-red-200 border-red-500',
-    cancelled: 'bg-gray-900 text-gray-400 border-gray-700'
+    pending: 'dql-chip--dim',
+    running: 'pg-chip--on',
+    paused: 'dql-chip--dim',
+    completed: 'dql-chip--ok',
+    failed: 'dql-chip--fail',
+    cancelled: 'dql-chip--dim'
   };
-  return classMap[status] || 'bg-gray-800 text-gray-300 border-gray-600';
+  return classMap[status] || 'dql-chip--dim';
 }
 
 function getProgress(queue) {
@@ -350,3 +327,178 @@ function getQueueCover(queue) {
   return httpsCover(url);
 }
 </script>
+
+<style scoped>
+/* 纸面发丝盒：头部/筛选内收，行列表贴边到盒缘 */
+.dql-panel {
+  padding: 14px 0 0;
+}
+
+.dql-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 12px;
+  flex-shrink: 0;
+}
+
+.dql-head-info { min-width: 0; }
+
+.dql-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.dql-sub { margin-top: 5px; }
+
+.dql-count { flex-shrink: 0; }
+
+.dql-filters {
+  padding: 0 16px 12px;
+  flex-shrink: 0;
+}
+
+.dql-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 32px 16px;
+}
+
+.dql-state--grow {
+  flex: 1;
+  justify-content: center;
+}
+
+.dql-state-text {
+  font-size: 12px;
+  color: var(--ink-64);
+}
+
+/* 队列发丝行：底缘发丝分隔，选中行墨底浅衬 + 内收发丝框 */
+.dql-scroll {
+  overflow-y: auto;
+  border-top: var(--hairline);
+  scrollbar-gutter: stable;
+}
+
+.dql-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 44px 10px 12px;
+  border-bottom: 1.2px solid var(--ink-10);
+  cursor: pointer;
+  transition: background .12s;
+}
+
+.dql-row:hover { background: var(--ink-06); }
+
+.dql-row--sel {
+  background: var(--ink-10);
+  outline: var(--hairline);
+  outline-offset: -1.2px;
+}
+
+/* 选中行获焦仍可辨——选中态的 1.2px outline 会压掉全局焦点环 */
+.dql-row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -4px;
+}
+
+.dql-cover-wrap {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.dql-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: var(--hairline);
+  image-rendering: pixelated;
+  display: block;
+}
+
+.dql-cover--fb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  color: var(--ink-64);
+  background: var(--paper);
+}
+
+.dql-info { flex: 1; min-width: 0; }
+
+.dql-namerow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dql-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 芯片紧凑化（队列行密度高于标签云） */
+.dql-chip {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.dql-chip--dim { color: var(--ink-64); }
+.dql-chip--ok { color: var(--ink); border-color: var(--accent-green); }
+.dql-chip--fail { color: var(--accent-magenta-ink); border-color: var(--accent-magenta); }
+
+.dql-meta {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 进度：发丝底槽 + 墨块填充（失败列用品红块） */
+.dql-progress {
+  margin-top: 7px;
+  height: 4px;
+  background: var(--ink-10);
+  overflow: hidden;
+}
+
+.dql-progress-fill {
+  height: 100%;
+  background: var(--ink);
+  transition: width .3s var(--ease-ink);
+}
+
+.dql-progress-fill--fail { background: var(--accent-magenta); }
+
+.dql-kebab {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+/* teleport 菜单：宽度与 toggleMenu 的 132 估宽对齐（全局 pg-menu min-width 160 偏大） */
+.queue-menu { min-width: 132px; }
+</style>

@@ -1,5 +1,5 @@
 <template>
-  <!-- 全局反馈宿主：toast 栈（右下）+ 确认模态（居中）。像素风，替代原生 alert/confirm -->
+  <!-- 全局反馈宿主：toast 栈（右下）+ 确认模态（居中）。print-grid，替代原生 alert/confirm -->
   <Teleport to="body">
     <div class="fb-toasts" role="status" aria-live="polite">
       <TransitionGroup name="fb-toast">
@@ -8,7 +8,7 @@
           :key="t.id"
           class="fb-toast"
           :class="`fb-toast--${t.type}`"
-        >{{ t.text }}</div>
+        ><span class="fb-toast-tag">{{ t.type }}:</span> {{ t.text }}</div>
       </TransitionGroup>
     </div>
 
@@ -21,7 +21,7 @@
       @keydown.tab.prevent="cycleFocus"
     >
       <div
-        class="fb-dialog"
+        class="fb-dialog pg-panel pg-corners"
         role="alertdialog"
         aria-modal="true"
         :aria-label="state.confirm.message"
@@ -30,11 +30,11 @@
         <div class="fb-actions">
           <button
             ref="cancelBtn"
-            class="fb-btn"
+            class="fb-btn ink-btn ink-btn--ghost ink-btn--sm"
             @click="answer(false)"
           >取消</button>
           <button
-            class="fb-btn"
+            class="fb-btn ink-btn ink-btn--sm"
             :class="{ 'fb-btn--danger': state.confirm.danger }"
             @click="answer(true)"
           >{{ state.confirm.confirmText }}</button>
@@ -94,22 +94,42 @@ export default {
   pointer-events: none;
 }
 
+/* 纸面发丝盒 toast：左缘发丝色条（success 绿戳 / error 品红 / info 墨色） */
 .fb-toast {
-  padding: 8px 14px;
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-weight: 300;
   font-size: 12px;
-  color: var(--pixel-text);
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 3px 3px 0 var(--pixel-dark);
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper);
+  border: var(--hairline);
   pointer-events: auto;
 }
 
-.fb-toast--success { border-color: #22c55e; }
-.fb-toast--error { border-color: #ef4444; }
+/* 类型区分用色块而非彩字——绿色文字在纸面 <3:1 不达标 */
+.fb-toast-tag::before {
+  content: '■';
+  margin-right: 6px;
+  font-size: 9px;
+  vertical-align: 1px;
+  color: var(--ink);
+}
+.fb-toast--success .fb-toast-tag::before { color: var(--accent-green); }
+.fb-toast--error .fb-toast-tag::before { color: var(--accent-magenta); }
+
+.fb-toast-tag {
+  letter-spacing: .05em;
+  color: var(--ink);
+}
 
 .fb-toast-enter-active,
 .fb-toast-leave-active {
   transition: opacity 0.18s, transform 0.18s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-toast-enter-active,
+  .fb-toast-leave-active { transition: none; }
 }
 
 .fb-toast-enter-from {
@@ -128,21 +148,19 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(30, 30, 30, .45);
 }
 
+/* 纸面盒 + 角部裁切标记（pg-panel/pg-corners 提供盒与 tick） */
 .fb-dialog {
-  width: min(360px, calc(100vw - 40px));
-  padding: 18px;
-  background: var(--pixel-card-bg);
-  border: 3px solid var(--pixel-border);
-  box-shadow: 5px 5px 0 var(--pixel-dark);
+  width: min(340px, calc(100vw - 48px));
+  padding: 20px;
 }
 
 .fb-message {
   font-size: 13px;
   line-height: 1.6;
-  color: var(--pixel-text);
+  color: var(--ink-86);
   word-break: break-word;
 }
 
@@ -150,32 +168,18 @@ export default {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
-.fb-btn {
-  font-size: 12px;
-  padding: 5px 16px;
-  color: var(--pixel-text);
-  background: var(--pixel-accent);
-  border: 2px solid var(--pixel-border);
-  cursor: pointer;
-}
-
-.fb-btn:hover {
-  filter: brightness(1.08);
-}
-
-.fb-btn:active {
-  transform: translate(1px, 1px);
-}
-
+/* .fb-btn 类名保留——cycleFocus 靠它抓模态内按钮 */
 .fb-btn--danger {
-  border-color: #ef4444;
-  color: #ef4444;
+  background: transparent;
+  border: 1.2px solid var(--accent-magenta);
+  color: var(--accent-magenta-ink);
 }
 
-:root[data-theme="pixel-retro"] .fb-btn--danger {
-  color: #b91c1c;
+.fb-btn--danger:hover:not(:disabled) {
+  background: var(--accent-magenta);
+  color: var(--paper);
 }
 </style>

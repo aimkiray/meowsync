@@ -12,3 +12,9 @@ export function isLocalPlaylistId(id) {
   const s = String(id ?? '')
   return s.startsWith('single_song_') || s.startsWith('saved_queue_')
 }
+
+/** 艺人名兜底：ar||artists 数组 → "a, b"，空则 未知艺术家 */
+export function songArtists(song) {
+  const list = song?.ar || song?.artists || []
+  return list.map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
+}

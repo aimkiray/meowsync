@@ -1,7 +1,13 @@
-/* Google Fonts 经 index.html <link> 加载（@import 阻塞渲染）；
-   Silkscreen 已从依赖中移除（从未使用） */
+/* ═══════════════════════════════════════════════════════════════
+   MeowSync — print-grid 设计语言（typesafe.ai print-sheet）
+   每视图一张饱和纸色画布 · 1.2px 墨色发丝线 · 零圆角
+   裁切标记 / ∵⩆ 套准符 / 等宽微标签 / 位图字体版本戳
+   ─────────────────────────────────────────────────────────────
+   --pixel-* 变量与 .jirai-slider/.player-progress-* 仅供
+   FullscreenPlayer 沉浸歌词页（视觉冻结组件）消费
+   ═══════════════════════════════════════════════════════════════ */
 
-/* Fusion Pixel 字体定义 */
+/* Fusion Pixel（本地打包位图等宽——窗口标题栏/版本戳/[b.64] 用） */
 @font-face{
   font-family: 'Fusion Pixel';
   src: url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2'),
@@ -10,7 +16,6 @@
   font-style: normal;
   font-display: swap;
 }
-
 @font-face{
   font-family: 'Fusion Pixel';
   src: url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff2') format('woff2'),
@@ -21,9 +26,45 @@
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* pixel音乐播放器样式 */
-/* 经典8bit配色方案 */
 :root {
+  /* ── print-grid 令牌 ── */
+  --ink: #1e1e1e;                  /* 文字/发丝线/窗口铬 —— 唯一的墨色 */
+  --ink-86: rgba(30, 30, 30, .86); /* 次级文字 */
+  --ink-64: rgba(30, 30, 30, .64); /* 微标签/元数据 */
+  --ink-30: rgba(30, 30, 30, .30);
+  --ink-10: rgba(30, 30, 30, .10);
+  --ink-06: rgba(30, 30, 30, .06);
+  --paper: #fefefe;                /* 面板纸面 */
+  --label-grey: #dedede;           /* 墨条上的标签灰 */
+
+  /* 每视图一张饱和纸色 —— 色彩即页面身份，无暗色模式 */
+  --canvas-teal: #09aea1;
+  --canvas-sage: #abbab9;
+  --canvas-pink: #f386a1;
+  --accent-magenta: #d45bb6;       /* 链接 hover / 激活态点缀（图形/边框） */
+  --accent-green: #03aa5c;         /* 成功戳记（图形/边框） */
+  /* 深档语义色：专供纸面小字——accent 本色在 paper 上 <4.5:1 不达标 */
+  --accent-magenta-ink: #a5358c;
+  --accent-green-ink: #027a45;
+  --white-16: rgba(255, 255, 255, .16);
+  --white-40: rgba(255, 255, 255, .40);
+  --white-80: rgba(255, 255, 255, .8);
+
+  --hairline: 1.2px solid var(--ink);
+  --font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fusion Pixel', ui-monospace, monospace;
+  --font-display: 'Space Grotesk', 'Inter', 'Noto Sans SC', sans-serif;
+  --font-pixel: 'Fusion Pixel', 'JetBrains Mono', monospace;
+  --ease-ink: cubic-bezier(.12, .23, .5, 1); /* typesafe 签名缓动 */
+
+  /* 层级刻度：全屏播放器 < 底部播放条 < 点击捕手 < 悬浮菜单/侧栏抽屉 */
+  --z-drawer: 60;
+  --z-fullscreen: 70;
+  --z-player: 900;
+  --z-overlay: 950;
+  --z-menu: 1000;
+
+  /* ── 以下仅供 FullscreenPlayer 沉浸歌词页（视觉冻结，勿改） ── */
   --pixel-bg: #0f0f23;
   --pixel-card-bg: rgba(26, 26, 46, 0.9);
   --pixel-primary: #00ff41;
@@ -36,16 +77,119 @@
   --pixel-text-dim: #cccccc;
   --pixel-dark: #000000;
   --pixel-highlight: rgba(255, 255, 255, 0.3);
-  /* 层级刻度：歌词抽屉 < 全屏播放器 < 底部播放器 < 点击捕手 < 悬浮菜单/侧栏抽屉 */
-  --z-drawer: 60;
-  --z-fullscreen: 70;
-  --z-player: 900;
-  --z-overlay: 950;
-  --z-menu: 1000;
+  --pixel-accent-fg: #f472b6;
+  --pixel-progress-track: rgba(236, 72, 153, .2);
+  --pixel-progress-fill: rgb(190, 24, 93);
+  --fullscreen-background-image: url('/qb.png');
 }
 
-/* ===== YTM 式应用壳 ===== */
-/* 全断点整屏 flex 列：顶栏 / (侧栏+主区) / 播放条，滚动只发生在各栏内部 */
+/* pixel-retro 变量块仅余 FullscreenPlayer 一个消费者——
+   保留 localStorage 状态即可让沉浸页维持用户上次所见配色 */
+:root[data-theme="pixel-retro"] {
+  --pixel-bg: rgb(173, 215, 230);
+  --pixel-card-bg: rgba(252, 238, 220, 0.95);
+  --pixel-primary: rgb(240, 179, 192);
+  --pixel-secondary: rgb(173, 215, 230);
+  --pixel-accent: rgb(255, 251, 209);
+  --pixel-warning: rgb(255, 251, 209);
+  --pixel-success: rgb(173, 215, 230);
+  --pixel-border: rgb(240, 179, 192);
+  --pixel-text: rgb(120, 90, 100);
+  --pixel-text-dim: rgb(125, 90, 103);
+  --pixel-dark: rgb(80, 60, 70);
+  --pixel-box-shadow: rgb(200, 160, 170);
+  --pixel-highlight: rgba(240, 179, 192, 0.3);
+  --pixel-accent-fg: rgb(190, 70, 115);
+  --fullscreen-background-image: url('/cinnamoroll2.png');
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══ 基底层 ═══ */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--paper);
+  color: var(--ink-86);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+h1, h2, h3 { text-wrap: balance; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* THE focus ring —— 系统里唯一的圆角 */
+:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* 盒件内环（印刷签名）：发丝线内收 4px 的描边 */
+.ink-btn:focus-visible, .pg-icobtn:focus-visible, .pg-tab:focus-visible,
+.pg-chip:focus-visible, .pg-field:focus-within, .queue-row:focus-visible,
+.song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
+.pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row:focus-visible, .dtl-group-toggle:focus-visible,
+.grid-card:focus-visible, .song-result-row:focus-visible, .side-nav-item:focus-visible,
+.watch-foot-btn:focus-visible, .toy-window:focus-visible, .transport:focus-visible,
+.pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
+.pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
+.song-menu-btn:focus-visible, .queue-row-remove:focus-visible,
+.playlist-play-overlay:focus-visible, .topnav-suggest-item:focus-visible,
+.rc-btn:focus-visible, .rc-queue-row:focus-visible, .player-progress-bar:focus-visible {
+  outline-offset: -4px;
+  border-radius: 8px;
+}
+
+/* 激活侧栏行反白态：墨底上需要纸色环（ink-86 环在 #1e1e1e 上不可见） */
+.pl-row--active .pl-row-main:focus-visible { outline-color: var(--paper); }
+
+/* teleport 菜单触发器语态 */
+[aria-expanded="true"].song-menu-btn,
+[aria-expanded="true"].queue-menu-trigger,
+[aria-expanded="true"].pl-action { outline: 1.2px solid var(--ink); outline-offset: -4px; }
+
+/* 细滚动条：透明轨道 + 镂空墨块柄 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--ink);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-64);
+  background-clip: padding-box;
+}
+body::-webkit-scrollbar { width: 0; background: transparent; }
+
+/* ═══ 应用壳：纸面 masthead / 彩纸主区 / 墨色底条 ═══ */
 .app-shell {
   height: 100vh;
   height: 100dvh;
@@ -54,6 +198,13 @@
   overflow: hidden;
 }
 
+/* 每视图一张饱和纸色（print-grid 核心身份） */
+.app-shell[data-view="home"]      { --view-canvas: var(--paper); }
+.app-shell[data-view="songs"]     { --view-canvas: var(--canvas-sage); }
+.app-shell[data-view="search"]    { --view-canvas: var(--canvas-pink); }
+.app-shell[data-view="watch"]     { --view-canvas: var(--canvas-teal); }
+.app-shell[data-view="downloads"] { --view-canvas: var(--canvas-sage); }
+
 .app-body {
   flex: 1;
   min-height: 0;
@@ -61,6 +212,26 @@
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
+  background: var(--view-canvas, var(--paper));
+  transition: background-color .4s var(--ease-ink);
+}
+
+/* 彩纸画布上的次级文字升档——ink-64 在 teal/pink/sage 上 <4.5:1。
+   作用域限定 .app-body：纸面 masthead/teleport 菜单/toast 仍用原档，
+   反白态（song-row--playing、pl-row--active 内的 label-grey）由 scoped
+   后加载规则继续覆盖，不受影响。 */
+.app-body .watch-meta, .app-body .watch-empty, .app-body .watch-lyric-line,
+.app-body .queue-row-artist, .app-body .queue-row-duration, .app-body .queue-source,
+.app-body .song-artist, .app-body .song-duration, .app-body .song-state-text,
+.app-body .panel-state-text, .app-body .panel-state-sub,
+.app-body .pl-meta, .app-body .pl-count, .app-body .result-section-sub,
+.app-body .grid-state-text, .app-body .home-section-sub, .app-body .home-state-text,
+.app-body .watch-banner, .app-body .watch-autoplay,
+.app-body .watch-lyric-translation, .app-body .playlist-hero-sub {
+  color: var(--ink-86);
+}
+.app-body .pg-label--dim, .app-body .queue-row-index, .app-body .song-row-index {
+  color: var(--ink-86);
 }
 
 .app-main {
@@ -71,313 +242,346 @@
   flex-direction: column;
 }
 
-/* 桌面端：歌单库常驻侧栏 */
+/* 桌面端：歌单库常驻侧栏（与主区同一张纸，发丝线分栏） */
 .app-sidebar {
-  width: 300px;
+  width: 280px;
   flex-shrink: 0;
   min-height: 0;
-  border-right: 2px solid rgba(240, 179, 192, 0.2);
-  background: rgba(20, 16, 28, 0.35);
-}
-
-:root[data-theme="pixel-retro"] .app-sidebar {
-  border-right-color: rgba(210, 100, 130, 0.4);
-  background: rgba(252, 238, 220, 0.5);
+  border-right: var(--hairline);
 }
 
 /* 移动端：侧栏改抽屉（汉堡键呼出 + 遮罩关闭） */
 .sidebar-scrim {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(30, 30, 30, .45);
   z-index: var(--z-overlay);
 }
 
 @media (max-width: 1023px){
   .app-sidebar {
     position: fixed;
-    /* top 避让 54px 细顶栏：抽屉不盖住汉堡键，它本身就是关闭入口 */
-    top: 54px;
+    /* top 避让 56px 顶栏：抽屉不盖住汉堡键，它本身就是关闭入口 */
+    top: 56px;
     left: 0;
     bottom: 0;
     width: min(300px, 85vw);
     z-index: var(--z-menu);
-    background: var(--pixel-card-bg);
+    background: var(--paper);
     transform: translateX(-100%);
     /* visibility 延迟到滑出结束后才隐藏：关闭态不进 Tab 序/可访问性树 */
-    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s 0.28s;
+    transition: transform .28s var(--ease-ink), visibility 0s .28s;
     visibility: hidden;
   }
 
   .app-sidebar--open {
     transform: translateX(0);
-    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s 0s;
+    transition: transform .28s var(--ease-ink), visibility 0s 0s;
     visibility: visible;
-  }
-
-  /* retro 主题下半透明侧底色在抽屉态必须改实底——外层规则 0,3,0
-     的优先级高于这里的 .app-sidebar，需要在媒体查询内单独覆盖 */
-  :root[data-theme="pixel-retro"] .app-sidebar {
-    background: rgb(252, 238, 220);
   }
 }
 
 @media (max-width: 1023px) and (prefers-reduced-motion: reduce){
-  .app-sidebar {
-    transition: none;
-  }
+  .app-sidebar { transition: none; }
 }
 
-/* 歌单库侧栏（pixel-retro）：条目文字在象牙色 music-card 上需深色 */
-:root[data-theme="pixel-retro"] .playlist-panel .text-pink-300 { color: rgb(180, 60, 100) !important; }
-:root[data-theme="pixel-retro"] .playlist-panel .text-purple-300 { color: rgb(160, 80, 120) !important; }
-:root[data-theme="pixel-retro"] .playlist-panel .text-gray-400,
-:root[data-theme="pixel-retro"] .playlist-panel .text-gray-600 { color: rgb(140, 100, 110) !important; }
-:root[data-theme="pixel-retro"] .playlist-panel .border-pink-400 { border-color: rgb(210, 120, 160) !important; }
-:root[data-theme="pixel-retro"] .playlist-panel .border-purple-400 { border-color: rgb(185, 90, 130) !important; }
+/* ═══ print-grid 原子件 ═══ */
 
-/* 像素风格主题 - 用户指定的4色配色 */
-:root[data-theme="pixel-retro"] {
-  --pixel-bg: rgb(173, 215, 230); /* Light Blue */
-  --pixel-card-bg: rgba(252, 238, 220, 0.95); /* Ivory White with transparency */
-  --pixel-primary: rgb(240, 179, 192); /* Pale Pink */
-  --pixel-secondary: rgb(173, 215, 230); /* Light Blue */
-  --pixel-accent: rgb(255, 251, 209); /* Soft Yellow */
-  --pixel-warning: rgb(255, 251, 209); /* Soft Yellow */
-  --pixel-success: rgb(173, 215, 230); /* Light Blue */
-  --pixel-border: rgb(240, 179, 192); /* Pale Pink */
-  --pixel-text: rgb(120, 90, 100); /* Darker tone for text readability */
-  --pixel-text-dim: rgb(125, 90, 103); /* Muted tone for secondary text（深一档保 AA 对比度） */
-  --pixel-dark: rgb(80, 60, 70); /* Dark tone for shadows */
-  --pixel-box-shadow: rgb(200, 160, 170); /* Muted pink for shadows */
-  --pixel-highlight: rgba(240, 179, 192, 0.3); /* Pale Pink highlight */
+/* 等宽微标签（JetBrains Mono 300 · 12px · +.05em · 小写） */
+.pg-label {
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: .05em;
+  color: var(--ink);
+  text-transform: lowercase;
+}
+.pg-label--dim { color: var(--ink-64); }
+
+/* 发丝线面板（纸面内容块的唯一容器） */
+.pg-panel {
+  position: relative;
+  background: var(--paper);
+  border: var(--hairline);
 }
 
-/* 前景态 accent：--pixel-accent 在 retro 是浅黄底角色，做前景色时对比度不及格，
-   单独发一个前景变量（下划线/高亮标记/▶ 等用） */
-:root {
-  --pixel-accent-fg: #f472b6;
+/* 角部裁切标记（纯 CSS 四角 tick，面板外扩 7px） */
+.pg-corners { position: relative; }
+.pg-corners::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--ink-86), var(--ink-86)) left top / 10px 1.2px no-repeat,
+    linear-gradient(var(--ink-86), var(--ink-86)) left top / 1.2px 10px no-repeat,
+    linear-gradient(var(--ink-86), var(--ink-86)) right top / 10px 1.2px no-repeat,
+    linear-gradient(var(--ink-86), var(--ink-86)) right top / 1.2px 10px no-repeat,
+    linear-gradient(var(--ink-86), var(--ink-86)) left bottom / 10px 1.2px no-repeat,
+    linear-gradient(var(--ink-86), var(--ink-86)) left bottom / 1.2px 10px no-repeat,
+    linear-gradient(var(--ink-86), var(--ink-86)) right bottom / 10px 1.2px no-repeat,
+    linear-gradient(var(--ink-86), var(--ink-86)) right bottom / 1.2px 10px no-repeat;
 }
 
-:root[data-theme="pixel-retro"] {
-  --pixel-accent-fg: rgb(190, 70, 115);
+/* 墨块按钮（直角矩形，hover 字色转品红，按面无动画即瞬态） */
+.ink-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--ink);
+  color: var(--paper);
+  border: none;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: .02em;
+  padding: 10px 18px;
+  cursor: pointer;
+  transition: color .5s var(--ease-ink);
+  white-space: nowrap;
+}
+.ink-btn:hover:not(:disabled) { color: var(--accent-magenta); }
+.ink-btn:disabled { opacity: .45; cursor: default; }
+
+.ink-btn--sm { padding: 7px 12px; font-size: 12px; }
+
+/* 幽灵按钮：纸面描边墨字（次级动作） */
+.ink-btn--ghost {
+  background: transparent;
+  color: var(--ink);
+  border: var(--hairline);
+}
+.ink-btn--ghost:hover:not(:disabled) { color: var(--accent-magenta); }
+
+/* 图标方键（32px 发丝盒） */
+.pg-icobtn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: var(--hairline);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: color .5s var(--ease-ink), background .2s;
+}
+.pg-icobtn:hover:not(:disabled) { color: var(--accent-magenta); }
+.pg-icobtn--bare { border-color: transparent; }
+.pg-icobtn:disabled { opacity: .45; cursor: default; }
+
+/* 纯文字链接键（nav/footer 的裸墨字） */
+.pg-link {
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  transition: color .5s var(--ease-ink);
+}
+.pg-link:hover { color: var(--accent-magenta-ink); }
+
+/* tab 条：激活态墨底反白（FAQ open 同构） */
+.pg-tabs {
+  display: flex;
+  border-bottom: var(--hairline);
+}
+.pg-tab {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: .05em;
+  padding: 10px 16px;
+  color: var(--ink-64);
+  background: transparent;
+  border-right: var(--hairline);
+  cursor: pointer;
+  transition: color .2s;
+}
+.pg-tab:last-child { border-right: none; }
+.pg-tab:hover { color: var(--ink); }
+.pg-tab--active {
+  background: var(--ink);
+  color: var(--paper);
 }
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* 芯片（25px 发丝小牌：标签/热搜/筛选） */
+.pg-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 25px;
+  padding: 0 10px;
+  border: var(--hairline);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.pg-chip:hover { background: var(--ink-06); }
+.pg-chip--on { background: var(--ink); color: var(--paper); }
+.pg-chip--static { cursor: default; }
+.pg-chip--static:hover { background: transparent; }
 
-/* 4色配色方案背景色覆盖，仅在pixel-retro主题下生效 */
-:root[data-theme="pixel-retro"] .bg-pink-950 {
-  background-color: rgba(100, 70, 80, 0.9) !important;
+/* 表单：发丝框 + focus-within 环 */
+.pg-field {
+  display: flex;
+  align-items: center;
+  border: var(--hairline);
+  background: var(--paper);
+}
+.pg-field input,
+.pg-field select {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+}
+.pg-field select { flex: 0 0 auto; border-left: var(--hairline); cursor: pointer; }
+.pg-field input::placeholder { color: var(--ink-64); }
+.pg-field:focus-within { outline: 2px solid currentColor; outline-offset: -1px; }
+
+/* 浮动菜单（teleport 到 body 脱离组件作用域——必须全局类） */
+.pg-menu {
+  position: fixed;
+  background: var(--paper);
+  border: var(--hairline);
+  z-index: var(--z-menu);
+  min-width: 160px;
+  overflow: hidden;
+}
+.pg-menu-head {
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .05em;
+  color: var(--ink-64);
+  border-bottom: var(--hairline);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pg-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-bottom: 1.2px solid var(--ink-10);
+  cursor: pointer;
+  text-align: left;
+  transition: color .2s;
+}
+.pg-menu-item:last-child { border-bottom: none; }
+.pg-menu-item:hover { color: var(--accent-magenta-ink); }
+.pg-menu-item--danger { color: var(--accent-magenta-ink); }
+
+/* 待播队列行（watch 侧栏共用）：行是容器，点击区收进 .queue-row-main
+   ——避免 button 嵌套 role=button 的非法结构 */
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 4px;
+  border-bottom: 1.2px solid var(--ink-10);
+  transition: background .12s;
+}
+.queue-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  cursor: pointer;
+}
+.queue-row:hover { background: var(--ink-06); }
+.queue-row--current { background: var(--ink-10); }
+/* 当前行 ▶ 用墨色——品红在 teal/ink-10 底上仅 ~1.3:1，不达图形 3:1 线 */
+.queue-row--current .queue-row-index { color: var(--ink); font-weight: 700; }
+
+.queue-source {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .05em;
+  color: var(--ink-64);
+  padding: 10px 10px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-:root[data-theme="pixel-retro"] .bg-red-600 {
-  background-color: rgba(240, 179, 192, 0.9) !important;
+.queue-row-index {
+  width: 18px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  text-align: center;
 }
-
-:root[data-theme="pixel-retro"] .bg-red-700 {
-  background-color: rgba(240, 179, 192, 0.9) !important;
+.queue-row-info { flex: 1; min-width: 0; }
+.queue-row-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-:root[data-theme="pixel-retro"] .bg-gray-700 {
-  background-color: rgba(160, 140, 150, 0.9) !important;
+.queue-row-artist {
+  font-size: 11px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-:root[data-theme="pixel-retro"] .bg-gray-600 {
-  background-color: rgba(160, 140, 150, 0.9) !important;
+.queue-row-duration {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  flex-shrink: 0;
 }
-
-:root[data-theme="pixel-retro"] .bg-pink-500 {
-  background-color: rgba(240, 179, 192, 0.9) !important;
+.queue-row-remove {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 5px;
+  color: var(--ink-64);
+  opacity: 0;
+  transition: opacity .12s, color .2s;
 }
-
-:root[data-theme="pixel-retro"] .bg-blue-600 {
-  background-color: rgba(173, 215, 230, 0.9) !important;
+.queue-row:hover .queue-row-remove,
+.queue-row:focus-within .queue-row-remove,
+.queue-row-remove:focus-visible { opacity: 1; }
+/* 触屏设备无 hover——隐藏但可点的移除键会误删，直接常显 */
+@media (hover: none){
+  .queue-row-remove { opacity: 1; }
 }
+.queue-row-remove:hover { color: var(--ink); text-decoration: underline; }
 
-:root[data-theme="pixel-retro"] .bg-blue-500 {
-  background-color: rgba(173, 215, 230, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .bg-yellow-500 {
-  background-color: rgba(255, 251, 209, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .bg-yellow-100 {
-  background-color: rgba(252, 238, 220, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .bg-pink-600 {
-  background-color: rgba(240, 179, 192, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:bg-pink-500:hover {
-  background-color: rgba(240, 179, 192, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:bg-gray-600:hover {
-  background-color: rgba(160, 140, 150, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:bg-red-700:hover {
-  background-color: rgba(240, 179, 192, 0.9) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:bg-blue-500:hover {
-  background-color: rgba(173, 215, 230, 0.9) !important;
-}
-
-/* ── pixel-retro 主题：各卡片内文字颜色与边框色系统一 ── */
-/* （card-nav / card-playlist / card-footer 三族规则随旧布局一起删除） */
-
-/* 歌曲列表（粉色系） */
-:root[data-theme="pixel-retro"] .card-songlist .text-pink-300 { color: rgb(180, 60, 100) !important; }
-:root[data-theme="pixel-retro"] .card-songlist .text-purple-300 { color: rgb(160, 80, 120) !important; }
-:root[data-theme="pixel-retro"] .card-songlist .text-gray-400,
-:root[data-theme="pixel-retro"] .card-songlist .text-gray-600 { color: rgb(190, 130, 150) !important; }
-:root[data-theme="pixel-retro"] .card-songlist .border-pink-400 { border-color: rgb(210, 120, 160) !important; }
-:root[data-theme="pixel-retro"] .card-songlist .border-purple-400 { border-color: rgb(200, 100, 140) !important; }
-
-/* 歌曲列表：子卡片 */
-:root[data-theme="pixel-retro"] .card-songlist .music-card,
-:root[data-theme="pixel-retro"] .card-songlist .jirai-card {
-  background: rgba(255, 215, 228, 0.9) !important;
-  border: none !important;
-  box-shadow:
-    0 -2px 0 0 rgba(255, 215, 228, 0.9),
-    2px 0 0 0 rgba(255, 215, 228, 0.9),
-    0 2px 0 0 rgba(255, 215, 228, 0.9),
-    -2px 0 0 0 rgba(255, 215, 228, 0.9),
-    0 0 0 2px rgb(210, 120, 155),
-    0 -4px 0 0 rgb(210, 120, 155),
-    4px 0 0 0 rgb(210, 120, 155),
-    0 4px 0 0 rgb(210, 120, 155),
-    -4px 0 0 0 rgb(210, 120, 155) !important;
-  filter: none !important;
-}
-:root[data-theme="pixel-retro"] .card-songlist .music-card:hover,
-:root[data-theme="pixel-retro"] .card-songlist .jirai-card:hover {
-  background: rgba(250, 195, 215, 0.95) !important;
-  box-shadow:
-    0 -2px 0 0 rgba(250, 195, 215, 0.95),
-    2px 0 0 0 rgba(250, 195, 215, 0.95),
-    0 2px 0 0 rgba(250, 195, 215, 0.95),
-    -2px 0 0 0 rgba(250, 195, 215, 0.95),
-    0 0 0 2px rgb(185, 90, 130),
-    0 -4px 0 0 rgb(185, 90, 130),
-    4px 0 0 0 rgb(185, 90, 130),
-    0 4px 0 0 rgb(185, 90, 130),
-    -4px 0 0 0 rgb(185, 90, 130) !important;
-}
-
-/* pixel-retro 正在播放高亮 */
-:root[data-theme="pixel-retro"] .card-songlist .playing-song,
-:root[data-theme="pixel-retro"] .card-songlist .playing-song:hover {
-  background: rgba(200, 80, 130, 0.25) !important;
-  box-shadow:
-    0 0 0 2px rgb(120, 0, 50),
-    0 -4px 0 0 rgb(120, 0, 50),
-    4px 0 0 0 rgb(120, 0, 50),
-    0 4px 0 0 rgb(120, 0, 50),
-    -4px 0 0 0 rgb(120, 0, 50) !important;
-}
-:root[data-theme="pixel-retro"] .card-songlist .playing-song .text-pink-500 { color: rgb(160, 30, 80) !important; }
-
-/* 亮色主题正在播放高亮 */
-.playing-song {
-  background: rgba(236, 72, 153, 0.12) !important;
-  border-color: rgb(140, 10, 60) !important;
-}
-
-/* 暗色主题正在播放高亮 */
-:root:not([data-theme="pixel-retro"]) .card-songlist .playing-song {
-  background: rgba(236, 72, 153, 0.22) !important;
-  border-color: rgb(200, 20, 80) !important;
-}
-
-/* 播放中封面动效（BottomPlayer/LyricsPanel/FullscreenPlayer 共用；封面为方形，用脉冲而非旋转） */
-@keyframes playingPulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.04); }
-}
-
-.playing-animation {
-  animation: playingPulse 1.6s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce){
-  html {
-    scroll-behavior: auto;
-  }
-  .playing-animation {
-    animation: none;
-  }
-}
-
-/* 平滑滚动（锚点/程序化 scrollIntoView 都受益） */
-html {
-  scroll-behavior: smooth;
-}
-
-/* 键盘焦点可见性（像素风焦点环——方块 outline 贴合 8bit 语言） */
-.pixel-button:focus-visible,
-.jirai-button:focus-visible,
-.jirai-button-primary:focus-visible,
-.jirai-slider:focus-visible,
-.music-card:focus-visible,
-.panel-tab:focus-visible,
-.queue-row-remove:focus-visible,
-.song-menu-btn:focus-visible,
-.home-chip:focus-visible,
-.side-nav-item:focus-visible,
-.grid-action:focus-visible,
-.topnav-suggest-item:focus-visible,
-.playlist-play-overlay:focus-visible,
-.queue-row:focus-visible,
-.song-result-row:focus-visible,
-.grid-card:focus-visible,
-.download-option:focus-visible {
-  outline: 2px solid var(--pixel-secondary);
-  outline-offset: 2px;
-}
-
-:root[data-theme="pixel-retro"] .pixel-button:focus-visible,
-:root[data-theme="pixel-retro"] .jirai-button:focus-visible,
-:root[data-theme="pixel-retro"] .jirai-button-primary:focus-visible,
-:root[data-theme="pixel-retro"] .jirai-slider:focus-visible,
-:root[data-theme="pixel-retro"] .music-card:focus-visible,
-:root[data-theme="pixel-retro"] .panel-tab:focus-visible,
-:root[data-theme="pixel-retro"] .queue-row-remove:focus-visible,
-:root[data-theme="pixel-retro"] .song-menu-btn:focus-visible,
-:root[data-theme="pixel-retro"] .home-chip:focus-visible,
-:root[data-theme="pixel-retro"] .side-nav-item:focus-visible,
-:root[data-theme="pixel-retro"] .grid-action:focus-visible,
-:root[data-theme="pixel-retro"] .topnav-suggest-item:focus-visible,
-:root[data-theme="pixel-retro"] .playlist-play-overlay:focus-visible,
-:root[data-theme="pixel-retro"] .queue-row:focus-visible,
-:root[data-theme="pixel-retro"] .song-result-row:focus-visible,
-:root[data-theme="pixel-retro"] .grid-card:focus-visible,
-:root[data-theme="pixel-retro"] .download-option:focus-visible {
-  outline: 2px solid var(--pixel-primary);
-  outline-offset: 2px;
-}
-
-/* 歌单卡片内部件（PlaylistGrid 与 HomeFeed 货架共用——必须全局，scoped 只罩自家组件） */
+/* 卡片内部件（PlaylistGrid 与 HomeFeed 货架共用——必须全局） */
 .grid-card-cover {
   width: 100%;
   aspect-ratio: 1;
   overflow: hidden;
-  border: 2px solid #f472b6;
+  border: var(--hairline);
 }
-
 .grid-card-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  image-rendering: pixelated;
 }
-
 .grid-card-cover-fallback {
   width: 100%;
   height: 100%;
@@ -385,12 +589,12 @@ html {
   align-items: center;
   justify-content: center;
   font-size: 36px;
+  color: var(--ink-64);
 }
-
 .grid-card-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--pixel-text);
+  color: var(--ink);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -398,598 +602,34 @@ html {
   line-height: 1.35;
   min-height: 2.7em;
 }
-
 .grid-card-meta {
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* ⋯ 菜单 teleport 到 body 脱离组件作用域——retro 下需自己的主题对照。
-   底色要盖过下面 .bg-gray-900→accent 的全局映射——加类限定提特异度。
-   playlist-menu 类被卡片内联工具条复用（无 bg-gray-900），限定词也顺带避免误伤它 */
-:root[data-theme="pixel-retro"] .playlist-menu.bg-gray-900,
-:root[data-theme="pixel-retro"] .download-menu,
-:root[data-theme="pixel-retro"] .queue-menu.bg-gray-900 {
-  background: var(--pixel-card-bg) !important;
-  border-color: rgb(210, 120, 160) !important;
-}
-
-:root[data-theme="pixel-retro"] .playlist-menu.bg-gray-900 button,
-:root[data-theme="pixel-retro"] .download-menu .download-option,
-:root[data-theme="pixel-retro"] .queue-menu.bg-gray-900 button {
-  color: var(--pixel-text) !important;
-  border-bottom-color: rgba(210, 120, 160, 0.3) !important;
-}
-
-:root[data-theme="pixel-retro"] .download-menu .download-option-header {
-  color: var(--pixel-text-dim) !important;
-}
-
-:root[data-theme="pixel-retro"] .download-menu .download-option-header:hover {
-  background: transparent !important;
-}
-
-:root[data-theme="pixel-retro"] .playlist-menu.bg-gray-900 button:hover,
-:root[data-theme="pixel-retro"] .download-menu .download-option:hover,
-:root[data-theme="pixel-retro"] .queue-menu.bg-gray-900 button:hover {
-  background: rgba(210, 120, 160, 0.25) !important;
-  color: var(--pixel-text) !important;
-}
-
-/* retro 下 Tailwind 粉色文字在象牙/浅蓝底上 ≈1.2:1 隐形——body 级兜底映射到深色 mauve */
-:root[data-theme="pixel-retro"] .text-pink-100,
-:root[data-theme="pixel-retro"] .text-pink-200,
-:root[data-theme="pixel-retro"] .text-pink-300 {
-  color: rgb(175, 55, 95) !important;
-}
-
-:root[data-theme="pixel-retro"] .text-pink-400 {
-  color: rgb(185, 60, 105) !important;
-}
-
-/* 面板 tab 条 + 待播队列行（LyricsPanel 抽屉与 FullscreenPlayer watch 侧栏共用） */
-.panel-tabs {
-  display: flex;
-  gap: 14px;
-}
-
-.panel-tab {
-  font-size: 13px;
-  font-weight: bold;
-  padding: 4px 2px;
-  color: var(--pixel-text-dim);
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.panel-tab:hover {
-  color: var(--pixel-text);
-}
-
-.panel-tab--active {
-  color: var(--pixel-text);
-  border-bottom-color: var(--pixel-accent-fg, #f472b6);
-}
-
-.queue-source {
-  font-size: 11px;
-  color: var(--pixel-text-dim);
-  margin-bottom: 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.queue-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 6px;
-  cursor: pointer;
-  border-left: 3px solid transparent;
-  transition: background 0.12s;
-}
-
-.queue-row:hover {
-  background: rgba(236, 72, 153, 0.08);
-}
-
-.queue-row--current {
-  border-left-color: var(--pixel-accent-fg, #f472b6);
-  background: rgba(236, 72, 153, 0.12);
-}
-
-.queue-row-index {
-  width: 18px;
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--pixel-text-dim);
-  text-align: center;
-}
-
-.queue-row--current .queue-row-index {
-  color: var(--pixel-accent-fg, #f472b6);
-}
-
-.queue-row-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.queue-row-title {
-  font-size: 12px;
-  color: var(--pixel-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.queue-row-artist {
-  font-size: 11px;
-  color: var(--pixel-text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.queue-row-duration {
-  font-size: 11px;
-  color: var(--pixel-text-dim);
-  flex-shrink: 0;
-}
-
-.queue-row-remove {
-  flex-shrink: 0;
-  font-size: 11px;
-  padding: 2px 5px;
-  color: var(--pixel-text-dim);
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-
-.queue-row:hover .queue-row-remove,
-.queue-row:focus-within .queue-row-remove,
-.queue-row-remove:focus-visible {
-  opacity: 1;
-}
-
-/* 触屏设备无 hover——隐藏但可点的移除键会误删，直接常显 */
-@media (hover: none){
-  .queue-row-remove {
-    opacity: 1;
-  }
-}
-
-.queue-row-remove:hover {
-  color: #f87171;
-}
-
-/* 歌曲列表：分页按钮 */
-:root[data-theme="pixel-retro"] .card-songlist .bg-purple-600 { background-color: rgb(200, 100, 140) !important; box-shadow: none !important; }
-:root[data-theme="pixel-retro"] .card-songlist .hover\:bg-purple-500:hover { background-color: rgb(180, 80, 120) !important; box-shadow: none !important; }
-:root[data-theme="pixel-retro"] .card-songlist .pixel-button { box-shadow: none !important; }
-
-/* 底部播放器（玫瑰红系） */
-:root[data-theme="pixel-retro"] .card-player .text-pink-300 { color: rgb(180, 50, 80) !important; }
-:root[data-theme="pixel-retro"] .card-player .text-purple-300 { color: rgb(160, 70, 100) !important; }
-:root[data-theme="pixel-retro"] .card-player .border-pink-400 { border-color: rgb(210, 100, 130) !important; }
-
-:root {
-  --fullscreen-background-image: url('/qb.png');
-}
-
-:root[data-theme="pixel-retro"] {
-  --fullscreen-background-image: url('/cinnamoroll2.png');
-}
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: 'Fusion Pixel', 'Press Start 2P', 'Noto Sans SC', monospace;
-  background-color: var(--pixel-bg);
-  background-image: url('/qb.png');
-  background-repeat: repeat;
-  background-size: auto;
-  background-position: top left;
-  min-height: 100vh;
-  color: var(--pixel-text);
-  overflow-x: hidden;
-  image-rendering: pixelated;
-}
-
-/* 像素风格主题下的body样式 */
-:root[data-theme="pixel-retro"] body {
-  background-color: var(--pixel-bg);
-  color: var(--pixel-text);
-  background-image: url('/cinnamoroll2.png');
-  background-repeat: repeat;
-  background-size: auto;
-  background-position: top left;
-}
-
-/* pixel滚动条 */
-::-webkit-scrollbar {
-  width: 16px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--pixel-dark);
-  border: 2px solid var(--pixel-border);
-  border-radius: 0;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-dark);
-  border-radius: 0;
-  box-shadow: inset 0 0 0 1px var(--pixel-secondary);
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--pixel-secondary);
-  box-shadow: inset 0 0 0 1px var(--pixel-primary);
-}
-
-/* 暗色主题各卡片滚动条色系 */
-/* 歌曲列表（橙色系） */
-.card-songlist::-webkit-scrollbar-track,
-.card-songlist ::-webkit-scrollbar-track { background: rgba(35, 18, 5, 0.95); border-color: rgb(160, 90, 40); }
-.card-songlist::-webkit-scrollbar-thumb,
-.card-songlist ::-webkit-scrollbar-thumb { background: rgb(210, 130, 60); border-color: rgb(150, 80, 20); box-shadow: inset 0 0 0 1px rgb(255, 190, 110); }
-.card-songlist::-webkit-scrollbar-thumb:hover,
-.card-songlist ::-webkit-scrollbar-thumb:hover { background: rgb(240, 160, 80); box-shadow: inset 0 0 0 1px rgb(210, 130, 60); }
-
-/* 歌词面板（紫色系） */
-
-/* 旧三栏卡片布局（max-h-96/desktop-content）已随 YTM 应用壳移除——
-   各栏滚动由 .app-sidebar/.app-main/组件自身 overflow 接管 */
-
-.jirai-button-primary {
-  background: var(--pixel-card-bg);
-  border: none;
-  border-radius: 0;
-  color: var(--pixel-text);
-  padding: 12px 22px 12px 24px;
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  font-weight: normal;
-  font-size: 10px;
-  cursor: pointer;
-  transition: all 0.1s ease;
-  position: relative;
-  margin: 4px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  /* 8bit立体边框 */
-  border: 3px solid var(--pixel-primary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 rgba(0, 255, 65, 0.2);
-}
-
-.jirai-button-primary:hover {
-  background: var(--pixel-accent);
-  border: 3px solid var(--pixel-primary);
-  color: var(--pixel-primary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 rgba(0, 255, 65, 0.3);
-}
-
-.jirai-button-primary:active {
-  background: var(--pixel-primary);
-  border: 3px solid var(--pixel-primary);
-  color: var(--pixel-primary);
-  box-shadow: 
-    1px 1px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(0, 0, 0, 0.5);
-  transform: translate(1px, 1px);
-}
-
-/* pixel按钮样式 */
-.jirai-button {
-  background: var(--pixel-card-bg);
-  border: none;
-  border-radius: 0;
-  color: var(--pixel-text);
-  padding: 12px 24px;
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  font-weight: normal;
-  font-size: 10px;
-  cursor: pointer;
-  transition: all 0.1s ease;
-  position: relative;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  /* 8bit立体边框 */
-  border: 2px solid var(--pixel-text-dim);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-.jirai-button:hover {
-  background: var(--pixel-accent);
-  border: 2px solid var(--pixel-primary);
-  color: var(--pixel-primary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(0, 255, 65, 0.2);
-}
-
-.jirai-button:active {
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-primary);
-  color: var(--pixel-primary);
-  box-shadow: 
-    1px 1px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(0, 0, 0, 0.5);
-  transform: translate(1px, 1px);
-}
-
-/* pixel按钮样式 */
-.pixel-button {
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  font-size: 8px;
-  padding: 2px 8px;
-  background: var(--pixel-primary);
-  border: none;
-  border-radius: 0;
-  color: var(--pixel-dark);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  cursor: pointer;
-  transition: all 0.1s ease;
-  position: relative;
-  margin: 2px;
-  /* 8bit按钮边框 */
-  border: 2px solid var(--pixel-text);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-}
-
-.pixel-button:hover {
-  background: var(--pixel-secondary);
-  border: 2px solid var(--pixel-text);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-.pixel-button:active {
-  background: var(--pixel-accent);
-  border: 2px solid var(--pixel-text);
-  box-shadow: 
-    1px 1px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(0, 0, 0, 0.3);
-  transform: translate(1px, 1px);
-}
-
-/* pixel卡片容器 */
-.jirai-card {
-  background: var(--pixel-card-bg);
-  border: 3px solid var(--pixel-text);
-  border-radius: 0;
-  box-shadow: 
-    3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-  position: relative;
-  margin: 4px;
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  image-rendering: pixelated;
-}
-
-/* 像素风格主题的卡片样式 */
-:root[data-theme="pixel-retro"] .jirai-card {
-  background-color: var(--pixel-card-bg);
-  box-shadow:
-    0 -2px 0 0 var(--pixel-card-bg),
-    2px 0 0 0 var(--pixel-card-bg),
-    0 2px 0 0 var(--pixel-card-bg),
-    -2px 0 0 0 var(--pixel-card-bg),
-    0 0 0 2px var(--pixel-border),
-    0 -4px 0 0 var(--pixel-border),
-    4px 0 0 0 var(--pixel-border),
-    0 4px 0 0 var(--pixel-border),
-    -4px 0 0 0 var(--pixel-border);
-  filter: drop-shadow(4px 4px 0 var(--pixel-box-shadow));
-  border: none;
-}
-
-/* ── 各功能区域专属边框（默认主题） ── */
-
-/* 歌曲列表：橙色粗实线 */
-.card-songlist {
-  border: 3px solid rgb(230, 150, 80);
-  background: rgba(50, 28, 10, 0.92) !important;
-  box-shadow:
-    0 0 0 1px rgb(255, 200, 130),
-    3px 3px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-/* 歌词面板：紫色点线 */
-
-/* 底部播放器：无边框，进度条充当上边框 */
-.card-player {
-  border: none !important;
-  background: rgba(50, 15, 20, 0.95) !important;
-  box-shadow:
-    0 -2px 0 0 rgb(255, 160, 170),
-    inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
-}
-
-/* ── 各功能区域专属边框（pixel-retro 主题） ── */
-
-/* 底部播放器：玫瑰色背景 */
-:root[data-theme="pixel-retro"] .card-player {
-  background-color: rgba(252, 220, 228, 0.97) !important;
-  border: none !important;
-  border-bottom: none !important;
-  box-shadow: 0 -2px 0 0 rgb(240, 160, 180) !important;
-  filter: none;
-}
-
-/* 歌曲列表：橙色像素边框 */
-:root[data-theme="pixel-retro"] .card-songlist {
-  border: none;
-  background-color: rgba(255, 225, 235, 0.97) !important;
-  box-shadow:
-    0 -2px 0 0 rgba(255, 225, 235, 0.97),
-    2px 0 0 0 rgba(255, 225, 235, 0.97),
-    0 2px 0 0 rgba(255, 225, 235, 0.97),
-    -2px 0 0 0 rgba(255, 225, 235, 0.97),
-    0 0 0 2px rgb(220, 140, 170),
-    0 -4px 0 0 rgb(220, 140, 170),
-    4px 0 0 0 rgb(220, 140, 170),
-    0 4px 0 0 rgb(220, 140, 170),
-    -4px 0 0 0 rgb(220, 140, 170);
-  filter: drop-shadow(4px 4px 0 rgb(235, 170, 195));
-}
-
-/* 歌词面板：紫色像素边框 */
-
-/* 隐藏滚动条但保持滚动功能 */
-body::-webkit-scrollbar {
-  width: 0px;
-  background: transparent;
-}
-
-/* 底部播放器已在应用壳文档流内（.card-player 提供像素描边），不再 fixed */
-/* iOS 安全区：配合 viewport-fit=cover，避开 Home 指示条 */
-.bottom-player {
-  padding-bottom: env(safe-area-inset-bottom);
-}
-
-/* pixel音乐卡片 */
-.music-card {
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-text-dim);
-  border-radius: 0;
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-  position: relative;
-  image-rendering: pixelated;
-}
-
-.music-card:hover {
-  border: 2px solid var(--pixel-primary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
-  background: var(--pixel-border);
-}
-
-.music-card:active {
-  border: 2px solid var(--pixel-secondary);
-  box-shadow: 
-    1px 1px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(0, 0, 0, 0.2);
-  transform: translate(1px, 1px); /* 与按钮一致的按压缩进手感 */
-  background: var(--pixel-secondary);
-}
-
-/* 8bit播放按钮 */
-
-/* 播放器顶部进度条（兼作上边框）。填充用 transform 而非 width——
-   width/height 过渡每帧触发布局（detector layout-transition），合成层动画免费 */
+/* 进度条机制（BottomPlayer/FullscreenPlayer 共用：scaleX 驱动免布局）
+   颜色保留原粉——FullscreenPlayer 视觉冻结；BottomPlayer 在墨条上自行覆写 */
 .player-progress-bar {
   height: 4px;
-  background: rgba(236, 72, 153, 0.2);
+  background: var(--pixel-progress-track);
   z-index: 1;
 }
-
-.player-progress-bar:hover {
-  height: 6px;
-}
-
+.player-progress-bar:hover { height: 6px; }
 .player-progress-fill {
   height: 100%;
   width: 100%;
   transform: scaleX(calc(var(--p, 0) / 100));
   transform-origin: left;
-  background: rgb(190, 24, 93);
-  transition: transform 0.1s linear;
+  background: var(--pixel-progress-fill);
+  transition: transform .1s linear;
 }
 
-:root[data-theme="pixel-retro"] .player-progress-bar {
-  background: rgba(236, 72, 153, 0.2);
-  border-bottom: none;
-}
-
-:root[data-theme="pixel-retro"] .player-progress-fill {
-  background: rgb(190, 24, 93);
-}
-
-/* pixel进度条 */
-
-/* 8bit歌词样式 */
-
-/* pixel输入框 */
-.pixel-input {
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-text-dim);
-  border-radius: 0;
-  color: var(--pixel-text);
-  padding: 10px 16px;
-  font-size: 10px;
-  outline: none;
-  transition: all 0.1s ease;
-  box-shadow: 
-    inset 1px 1px 0px rgba(0, 0, 0, 0.3),
-    1px 1px 0px var(--pixel-highlight);
-  image-rendering: pixelated;
-  height: 40px;
-  box-sizing: border-box;
-}
-
-.pixel-input:focus {
-  border-color: var(--pixel-primary);
-  background: var(--pixel-border);
-  box-shadow: 
-    inset 1px 1px 0px rgba(0, 0, 0, 0.2),
-    1px 1px 0px var(--pixel-highlight),
-    0 0 0 2px var(--pixel-primary);
-}
-
-.pixel-input::placeholder {
-  color: var(--pixel-text-dim);
-  opacity: 0.7;
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-}
-
-/* 8bit标题 */
-.jirai-title {
-  font-family: 'Fusion Pixel', 'Press Start 2P', monospace;
-  font-size: 24px;
-  color: var(--pixel-primary);
-  text-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    4px 4px 0px rgba(0, 0, 0, 0.3);
-  letter-spacing: 2px;
-  margin-bottom: 0; /* 移除底部margin */
-  text-align: center;
-}
-
-/* pixel音量控制 */
-
-/* pixel滑块控制 */
+/* FullscreenPlayer 音量滑块基底（视觉冻结组件依赖——勿改几何/配色） */
+.jirai-slider:focus-visible { outline: 2px solid var(--pixel-highlight, rgba(255,255,255,.8)); outline-offset: 2px; }
 .jirai-slider {
   width: 100px;
   height: 8px;
@@ -999,12 +639,11 @@ body::-webkit-scrollbar {
   outline: none;
   cursor: pointer;
   appearance: none;
-  box-shadow: 
+  box-shadow:
     inset 1px 1px 0px rgba(0, 0, 0, 0.5),
     1px 1px 0px var(--pixel-highlight);
   image-rendering: pixelated;
 }
-
 .jirai-slider::-webkit-slider-thumb {
   appearance: none;
   width: 16px;
@@ -1013,29 +652,20 @@ body::-webkit-scrollbar {
   border: 2px solid var(--pixel-text);
   border-radius: 0;
   cursor: pointer;
-  box-shadow: 
+  box-shadow:
     2px 2px 0px var(--pixel-dark),
     inset 1px 1px 0 var(--pixel-highlight);
   image-rendering: pixelated;
 }
-
 .jirai-slider::-webkit-slider-thumb:hover {
   background: var(--pixel-secondary);
   border: 2px solid var(--pixel-text);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
 }
-
 .jirai-slider::-webkit-slider-thumb:active {
   background: var(--pixel-accent);
   border: 2px solid var(--pixel-text);
-  box-shadow: 
-    1px 1px 0px var(--pixel-dark),
-    inset 1px 1px 0 rgba(0, 0, 0, 0.3);
   transform: scale(0.9);
 }
-
 .jirai-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
@@ -1043,11 +673,7 @@ body::-webkit-scrollbar {
   border: 2px solid var(--pixel-text);
   border-radius: 0;
   cursor: pointer;
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
 }
-
 .jirai-slider::-moz-range-track {
   height: 8px;
   background: var(--pixel-dark);
@@ -1055,310 +681,188 @@ body::-webkit-scrollbar {
   border-radius: 0;
 }
 
-/* pixel加载动画 - 圆圈旋转 */
+/* print 滑块（音量/进度——发丝轨道 + 方块柄） */
+.pg-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+.pg-range::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--ink-30);
+}
+.pg-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--ink);
+  margin-top: -4px;
+}
+.pg-range::-moz-range-track {
+  height: 4px;
+  background: var(--ink-30);
+}
+.pg-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 0;
+  background: var(--ink);
+}
+/* 墨条上的纸色变体 */
+.pg-range--on-ink::-webkit-slider-runnable-track { background: var(--white-40); }
+.pg-range--on-ink::-webkit-slider-thumb { background: var(--paper); }
+.pg-range--on-ink::-moz-range-track { background: var(--white-40); }
+.pg-range--on-ink::-moz-range-thumb { background: var(--paper); }
+
+/* 发丝勾选框 */
+.pg-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: var(--hairline);
+  background: var(--paper);
+  flex-shrink: 0;
+  cursor: pointer;
+  position: relative;
+}
+.pg-check:checked { background: var(--ink); }
+.pg-check:checked::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  color: var(--paper);
+  font-size: 10px;
+  line-height: 12px;
+  text-align: center;
+}
+
+/* 加载：点阵灯闪烁（dot-matrix 同构，等宽步进旋转） */
 .pixel-loading {
   display: inline-block;
-  width: 24px;
-  height: 24px;
-  position: relative;
-  image-rendering: pixelated;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--ink-10);
+  border-top-color: var(--ink);
+  animation: pgSpin .9s steps(8) infinite;
+}
+@keyframes pgSpin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce){
+  .pixel-loading { animation: none; }
 }
 
-.pixel-loading::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 100%;
-  height: 100%;
-  background: transparent;
-  border: 3px solid var(--pixel-primary);
-  border-top: 3px solid transparent;
-  border-radius: 50%;
-  animation: pixelCircleSpin 1s linear infinite;
+/* 播放中封面脉冲（BottomPlayer/WatchView/FullscreenPlayer 共用——勿改） */
+@keyframes playingPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+.playing-animation { animation: playingPulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce){
+  html { scroll-behavior: auto; }
+  .playing-animation { animation: none; }
 }
 
-@keyframes pixelCircleSpin {
-  0% { 
-    transform: translate(-50%, -50%) rotate(0deg);
-  }
-  100% { 
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-}
+/* ═══ 印刷装饰件 ═══ */
 
-/* 像素风格主题下的加载动画覆盖 */
-:root[data-theme="pixel-retro"] .pixel-loading::before {
-  background: transparent;
-  border: 3px solid var(--pixel-primary);
-  border-top: 3px solid transparent;
-  border-radius: 50%;
-}
-
-/* 主题切换按钮样式 */
-.theme-toggle-btn {
-  min-width: 40px;
-  height: 40px;
-  font-size: 16px;
-  padding: 8px;
+/* ∵ ⩆ / ⩆ ∵ 套准符（页脚收版） */
+.regmarks {
   display: flex;
-  align-items: center;
   justify-content: center;
-  transition: all 0.2s ease;
+  gap: 14px;
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 12px;
+  letter-spacing: .05em;
+  color: var(--ink);
 }
 
-.theme-toggle-btn:hover {
-  transform: scale(1.1);
+/* 版本戳（Fusion Pixel 位图字——构建清单式签名） */
+.pg-stamp {
+  font-family: var(--font-pixel);
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--ink);
+  text-align: center;
 }
 
-/* 像素风格主题下的按钮样式 */
-:root[data-theme="pixel-retro"] .theme-toggle-btn {
-  background: var(--pixel-accent);
-  border: 2px solid var(--pixel-border);
-  color: var(--pixel-text);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
+/* [b.64] 彩蛋块：墨底纸字，藏一段可解码的 base64 */
+.pg-b64 {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 11px;
+  padding: 10px 12px;
+  word-break: break-all;
+}
+.pg-b64-label {
+  display: block;
+  color: var(--label-grey);
+  margin-bottom: 4px;
+  letter-spacing: .05em;
 }
 
-:root[data-theme="pixel-retro"] .theme-toggle-btn:hover {
-  background: var(--pixel-primary);
-  color: var(--pixel-dark);
-  box-shadow: 
-    2px 2px 0px var(--pixel-dark),
-    inset 1px 1px 0 var(--pixel-highlight);
+/* 窗口玩具：墨条标题 + 纸面体，可拖拽回弹（装饰，非内容容器） */
+.toy-window {
+  position: absolute;
+  width: 230px;
+  background: var(--paper);
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
+  rotate: var(--r, 0deg);
+}
+.toy-window:active { cursor: grabbing; }
+.toy-window__title {
+  background: var(--ink);
+  color: var(--label-grey);
+  border: var(--hairline);
+  font-family: var(--font-pixel);
+  font-size: 14px;
+  letter-spacing: .01em;
+  padding: 8px 10px;
+}
+.toy-window__body {
+  border: var(--hairline);
+  border-top: 0;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.toy-window__sub {
+  font-size: 12px;
+  color: var(--ink-86);
+  text-transform: lowercase;
+}
+.toy-window__tag {
+  align-self: flex-start;
+  background: var(--ink-10);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.toy-window__num {
+  position: absolute;
+  right: -8px;
+  top: -18px;
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 12px;
+  letter-spacing: .05em;
+  color: var(--ink);
 }
 
-/* 像素风格主题下的其他按钮样式 */
-:root[data-theme="pixel-retro"] .jirai-button,
-:root[data-theme="pixel-retro"] .jirai-button-primary,
-:root[data-theme="pixel-retro"] .pixel-button {
-  background: var(--pixel-accent);
-  border: 2px solid var(--pixel-border);
-  /* --pixel-primary 浅粉配浅黄底 ≈1.8:1 不可读——retro 按钮文字用正文深色 */
-  color: var(--pixel-text);
+/* iOS 安全区：避开 Home 指示条 */
+.bottom-player { padding-bottom: env(safe-area-inset-bottom); }
+
+/* 印刷稿致敬：打印时保留画布色与发丝线（这套美学本来就该上纸） */
+@media print {
+  .app-body { background: var(--view-canvas, var(--paper)); }
+  .bottom-player, .sidebar-scrim, .toy-window { display: none; }
 }
-
-:root[data-theme="pixel-retro"] .jirai-button:hover,
-:root[data-theme="pixel-retro"] .jirai-button-primary:hover,
-:root[data-theme="pixel-retro"] .pixel-button:hover {
-  background: var(--pixel-primary);
-  color: var(--pixel-dark);
-}
-
-/* 像素风格主题下的标题样式——--pixel-primary 浅粉配浅蓝顶栏 ≈1.1:1 隐形，用正文深色 */
-:root[data-theme="pixel-retro"] .jirai-title {
-  color: var(--pixel-text);
-  text-shadow: 0 0 4px var(--pixel-highlight);
-}
-
-/* 像素风格主题下的输入框样式 */
-:root[data-theme="pixel-retro"] .pixel-input {
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border);
-  color: var(--pixel-text);
-}
-
-:root[data-theme="pixel-retro"] .pixel-input:focus {
-  border-color: var(--pixel-primary);
-  background: var(--pixel-card-bg);
-}
-
-/* 像素风格主题下的歌词样式 */
-
-/* 像素风格主题下的歌单选项卡样式 */
-:root[data-theme="pixel-retro"] .bg-pink-900 {
-  background-color: var(--pixel-primary) !important;
-}
-
-:root[data-theme="pixel-retro"] .border-pink-500 {
-  border-color: var(--pixel-secondary) !important;
-}
-
-:root[data-theme="pixel-retro"] .bg-gray-900 {
-  background-color: var(--pixel-accent) !important;
-}
-
-/* 深灰底控件/徽标在 retro 下压浅底，配合上面 text-pink/text-gray→深色映射 */
-:root[data-theme="pixel-retro"] .bg-gray-900\/80,
-:root[data-theme="pixel-retro"] .bg-gray-800 {
-  background-color: var(--pixel-card-bg) !important;
-}
-
-:root[data-theme="pixel-retro"] .border-gray-600 {
-  border-color: var(--pixel-secondary) !important;
-}
-
-:root[data-theme="pixel-retro"] .text-gray-300 {
-  color: var(--pixel-text) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:bg-pink-950:hover {
-  background-color: var(--pixel-secondary) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:border-pink-600:hover {
-  border-color: var(--pixel-primary) !important;
-}
-
-:root[data-theme="pixel-retro"] .hover\:text-pink-200:hover {
-  color: var(--pixel-card-bg) !important;
-}
-
-:root[data-theme="pixel-retro"] .bg-pink-800\/20 {
-  background-color: rgba(240, 179, 192, 0.2) !important;
-}
-
-/* 像素风格主题下的列表间距 */
-:root[data-theme="pixel-retro"] .space-y-2 > :not([hidden]) ~ :not([hidden]) {
-  margin-top: 16px; /* 增加间距从 0.5rem (8px) 到 24px */
-}
-
-/* 像素风格主题下的按钮阴影覆盖 */
-:root[data-theme="pixel-retro"] .jirai-button {
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .jirai-button:hover {
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .jirai-button:active {
-  box-shadow: 
-    1px 1px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 rgba(240, 179, 192, 0.5);
-}
-
-:root[data-theme="pixel-retro"] .pixel-button {
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .pixel-button:hover {
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .pixel-button:active {
-  box-shadow: 
-    1px 1px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 rgba(173, 215, 230, 0.3);
-}
-
-/* 像素风格主题下的滚动条覆盖 */
-:root[data-theme="pixel-retro"] ::-webkit-scrollbar-track {
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border);
-}
-
-:root[data-theme="pixel-retro"] ::-webkit-scrollbar-thumb {
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-box-shadow);
-  box-shadow: inset 0 0 0 1px var(--pixel-secondary);
-}
-
-:root[data-theme="pixel-retro"] ::-webkit-scrollbar-thumb:hover {
-  background: var(--pixel-secondary);
-  box-shadow: inset 0 0 0 1px var(--pixel-primary);
-}
-
-/* 各卡片内滚动条颜色 */
-/* 歌曲列表（粉色系） */
-:root[data-theme="pixel-retro"] .card-songlist::-webkit-scrollbar-track,
-:root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-track { background: rgba(255, 225, 235, 0.97); border-color: rgb(220, 140, 170); }
-:root[data-theme="pixel-retro"] .card-songlist::-webkit-scrollbar-thumb,
-:root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-thumb { background: rgb(210, 100, 145); border-color: rgb(180, 70, 115); box-shadow: none; }
-:root[data-theme="pixel-retro"] .card-songlist::-webkit-scrollbar-thumb:hover,
-:root[data-theme="pixel-retro"] .card-songlist ::-webkit-scrollbar-thumb:hover { background: rgb(180, 70, 115); box-shadow: none; }
-
-/* 歌词面板（紫色系） */
-
-/* 底部播放器（玫瑰红系） */
-:root[data-theme="pixel-retro"] .card-player::-webkit-scrollbar-track,
-:root[data-theme="pixel-retro"] .card-player ::-webkit-scrollbar-track { background: rgba(252, 220, 228, 0.97); border-color: rgb(220, 120, 150); }
-:root[data-theme="pixel-retro"] .card-player::-webkit-scrollbar-thumb,
-:root[data-theme="pixel-retro"] .card-player ::-webkit-scrollbar-thumb { background: rgb(200, 90, 125); border-color: rgb(170, 60, 95); box-shadow: none; }
-:root[data-theme="pixel-retro"] .card-player::-webkit-scrollbar-thumb:hover,
-:root[data-theme="pixel-retro"] .card-player ::-webkit-scrollbar-thumb:hover { background: rgb(170, 60, 95); box-shadow: none; }
-
-/* 像素风格主题下的进度条覆盖 */
-
-/* 像素风格主题下的音量控制覆盖 */
-
-/* 像素风格主题下的滑块控制覆盖 */
-:root[data-theme="pixel-retro"] .jirai-slider {
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 
-    inset 1px 1px 0px rgba(200, 160, 170, 0.5),
-    1px 1px 0px var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .jirai-slider::-webkit-slider-thumb {
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .jirai-slider::-webkit-slider-thumb:hover {
-  background: var(--pixel-secondary);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .jirai-slider::-webkit-slider-thumb:active {
-  background: var(--pixel-accent);
-  box-shadow: 
-    1px 1px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 rgba(255, 251, 209, 0.3);
-}
-
-:root[data-theme="pixel-retro"] .jirai-slider::-moz-range-thumb {
-  background: var(--pixel-primary);
-  border: 2px solid var(--pixel-border);
-  box-shadow: 
-    2px 2px 0px var(--pixel-box-shadow),
-    inset 1px 1px 0 var(--pixel-highlight);
-}
-
-:root[data-theme="pixel-retro"] .jirai-slider::-moz-range-track {
-  background: var(--pixel-card-bg);
-  border: 2px solid var(--pixel-border);
-}
-
-/* 响应式设计 */
-@media (max-width: 768px){
-  .jirai-title {
-    font-size: 24px;
-  }
-  
-  .pixel-button {
-    font-size: 8px;
-    padding: 8px 12px;
-  }
-  
-  
-  
-  .theme-toggle-btn {
-    min-width: 32px;
-    height: 32px;
-    font-size: 14px;
-    padding: 6px;
-  }
-  
-  /* 移动端像素风格主题的列表间距 */
-  :root[data-theme="pixel-retro"] .space-y-2 > :not([hidden]) ~ :not([hidden]) {
-    margin-top: 16px; /* 移动端稍小的间距 */
-  }
-}
-

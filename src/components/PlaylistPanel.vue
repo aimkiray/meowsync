@@ -1,95 +1,92 @@
 <template>
-  <!-- 歌单库侧栏：YTM 左栏语义——顶部导航项 + "我的歌单"媒体库列表 -->
+  <!-- 歌单库侧栏：顶部导航项 + "library" 媒体库列表，发丝线行排 -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
-    <!-- YTM mini-guide 导航项：首页（发现流） -->
+    <!-- 导航项：首页（发现流） -->
     <button
       class="side-nav-item"
       :class="{ 'side-nav-item--active': homeActive }"
+      :aria-current="homeActive ? 'page' : undefined"
       @click="$emit('nav-home')"
       title="首页"
     >
-      <span class="side-nav-icon">🏠</span>
+      <PixelIcon name="home" :size="15" />
       <span>首页</span>
     </button>
 
-    <h2 class="panel-title">我的歌单</h2>
+    <p class="pg-label panel-label">library · 我的歌单</p>
 
-    <div v-if="loading" class="text-center py-8">
-      <div class="pixel-loading mx-auto mb-4"></div>
-      <p class="text-pink-300 flex justify-center items-center">加载中喵...</p>
+    <div v-if="loading" class="panel-state">
+      <div class="pixel-loading" aria-hidden="true"></div>
+      <p class="panel-state-text">加载中喵...</p>
     </div>
 
-    <div v-else-if="userPlaylists.length === 0" class="text-center py-8">
-      <p class="text-gray-600 flex justify-center items-center">还没有添加歌单喵~</p>
-      <p class="text-sm text-purple-300 mt-2">用顶部搜索框找歌单吧！</p>
+    <div v-else-if="userPlaylists.length === 0" class="panel-state">
+      <p class="panel-state-text">还没有添加歌单喵~</p>
+      <p class="panel-state-sub">用顶部搜索框找歌单吧！</p>
     </div>
 
-    <div v-else class="playlist-scroll flex-1 min-h-0 overflow-y-auto space-y-2">
+    <div v-else class="playlist-scroll flex-1 min-h-0 overflow-y-auto">
       <div
         v-for="playlist in userPlaylists"
         :key="playlist.id"
-        class="music-card cursor-pointer p-3 jirai-card transition-all w-full relative group"
-        :class="{ 'border-purple-400': String(selectedPlaylist?.id) === String(playlist.id) }"
+        class="pl-row"
+        :class="{ 'pl-row--active': String(selectedPlaylist?.id) === String(playlist.id) }"
+        :aria-current="String(selectedPlaylist?.id) === String(playlist.id) ? 'true' : undefined"
       >
         <div
           @click="$emit('select-playlist', playlist)"
           @keydown.enter="$emit('select-playlist', playlist)"
           @keydown.space.prevent="$emit('select-playlist', playlist)"
-          class="flex items-center space-x-3"
+          class="pl-row-main"
           tabindex="0"
           role="button"
           :aria-label="`打开歌单 ${playlist.name}`"
         >
-          <div class="relative">
+          <div class="pl-cover-wrap">
             <img
               v-if="playlist.coverImgUrl"
               :src="httpsCover(playlist.coverImgUrl)"
               :alt="playlist.name"
-              class="w-12 h-12 object-cover border-2 border-pink-400"
-              style="border-radius: 0; image-rendering: pixelated;"
+              class="pl-cover"
             />
-            <div
-              v-else
-              class="w-12 h-12 flex items-center justify-center border-2 border-pink-400 text-pink-300"
-              style="border-radius: 0;"
-            >♪</div>
+            <div v-else class="pl-cover pl-cover--fallback">♪</div>
             <!-- 悬停 ▶ 直接播放整个歌单 -->
             <button
               class="playlist-play-overlay"
               title="播放歌单"
+              aria-label="播放歌单"
               @click.stop="$emit('play-playlist', playlist)"
             >▶</button>
           </div>
-          <div class="flex-1 min-w-0">
-            <h3 class="font-semibold text-pink-300 truncate">{{ playlist.name }}</h3>
-            <p class="text-sm text-purple-300 truncate">{{ playlist.creator?.nickname || '神秘创建者' }}</p>
+          <div class="pl-info">
+            <h3 class="pl-name">{{ playlist.name }}</h3>
+            <p class="pl-meta">{{ playlist.creator?.nickname || '神秘创建者' }}</p>
           </div>
-          <div class="text-xs text-gray-400">
-            {{ playlist.trackCount }} 首
-          </div>
+          <div class="pl-count">{{ playlist.trackCount }}</div>
         </div>
         <!-- 菜单与分享按钮 -->
-        <div class="playlist-menu absolute top-0 right-0 flex">
-          <!-- 分享按钮（与歌曲一致的样式与图标）；临时歌单的 id 非数字，
-               接收端 getPlaylistIdsFromUrl 只认 \d+ → 分享链接必死，隐藏 -->
+        <div class="pl-actions">
+          <!-- 临时歌单的 id 非数字，接收端 getPlaylistIdsFromUrl 只认 \d+ → 分享链接必死，隐藏 -->
           <button
             v-if="!isTempPlaylist(playlist)"
             @click.stop="sharePlaylist(playlist)"
-            class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
-            style="border-radius: 0;"
+            class="pl-action"
             title="分享歌单"
+            aria-label="分享歌单"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M9 15H8v-1H7v-1h1v-1h1v-1h1v-1h1V9H8V7h7v7h-2v-3h-1v1h-1v1h-1v1H9m9 6H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1m-1-1v-1h1V5h-1V4H5v1H4v12h1v1Z"/></svg>
+            <PixelIcon name="share" :size="15" />
           </button>
 
           <!-- 更多菜单按钮 -->
           <button
             @click.stop="toggleMenu(playlist.id, $event)"
-            class="p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
-            style="border-radius: 0;"
+            class="pl-action"
             title="更多操作"
+            aria-label="更多操作"
+            aria-haspopup="menu"
+            :aria-expanded="openMenuId === playlist.id"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path fill="currentColor" d="M15 21H8v-1H7v-1H6V3h1V2h1V1h4v1h1v1h1v14h-1v1h-3v-1H9V5h2v11h1V4h-1V3H9v1H8v14h1v1h5v-1h1V5h2v14h-1v1h-1Z"/></svg>
+            <PixelIcon name="kebab" :size="15" />
           </button>
         </div>
 
@@ -97,50 +94,55 @@
         <Teleport to="body">
           <div
             v-if="openMenuId === playlist.id"
-            class="playlist-menu fixed bg-gray-900 border border-purple-400 shadow-lg z-[var(--z-menu)] w-[140px] max-w-[140px]"
-            style="border-radius: 0;"
+            class="pg-menu playlist-menu"
+            role="menu"
             :style="getMenuPosition(playlist.id)"
           >
             <button
               v-if="!isTempPlaylist(playlist)"
               @click.stop="downloadPlaylist(playlist)"
-              class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+              class="pg-menu-item"
+              role="menuitem"
             >
-              📥 下载歌单
+              下载歌单
             </button>
             <button
               v-if="!isTempPlaylist(playlist)"
               @click.stop="openInNetease(playlist)"
-              class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+              class="pg-menu-item"
+              role="menuitem"
             >
-              🎵 打开网易云
+              打开网易云
             </button>
             <button
               v-if="!isTempPlaylist(playlist)"
               @click.stop="copyShareLink(playlist)"
-              class="w-full text-left px-3 py-2 text-xs text-purple-300 hover:bg-purple-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+              class="pg-menu-item"
+              role="menuitem"
             >
-              🔗 复制分享链接
+              复制分享链接
             </button>
             <button
               v-if="!isTempPlaylist(playlist)"
               @click.stop="deletePlaylistDownloads(playlist)"
-              class="w-full text-left px-3 py-2 text-xs text-orange-300 hover:bg-orange-800 hover:text-white transition-colors border-b border-gray-700 truncate"
+              class="pg-menu-item"
+              role="menuitem"
             >
-              🧹 删除已下载歌曲
+              删除已下载歌曲
             </button>
             <button
               @click.stop="removePlaylist(playlist.id)"
-              class="w-full text-left px-3 py-2 text-xs text-red-300 hover:bg-red-800 hover:text-white transition-colors truncate"
+              class="pg-menu-item pg-menu-item--danger"
+              role="menuitem"
             >
-              🗑️ 删除歌单
+              删除歌单
             </button>
           </div>
         </Teleport>
       </div>
 
-      <div class="text-center py-2">
-        <span class="text-pink-300 text-xs">共 {{ userPlaylists.length }} 个歌单</span>
+      <div class="pl-foot">
+        <span class="pg-label pg-label--dim">{{ userPlaylists.length }} playlists</span>
       </div>
     </div>
   </div>
@@ -153,9 +155,11 @@ import { copyText, shareOrCopy } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId } from '../lib/song'
 import { toast, pixelConfirm } from '../lib/feedback'
+import PixelIcon from './PixelIcon.vue'
 
 export default {
   name: 'PlaylistPanel',
+  components: { PixelIcon },
   props: {
     userPlaylists: {
       type: Array,
@@ -211,13 +215,13 @@ export default {
         // 开出视口后 scroll-close 又挡住滚动，菜单就永远不可达
         const button = event.target.closest('button') || event.target
         const rect = button.getBoundingClientRect()
-        const menuWidth = 140
+        const menuWidth = 160
         // 菜单高度按可见项数算：临时歌单隐藏 4 项只剩"删除歌单"，
         // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空。
         // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 5 项悬空更安全
         const currentPlaylist = props.userPlaylists.find(p => p.id === playlistId)
         const itemCount = !currentPlaylist || isTempPlaylist(currentPlaylist) ? 1 : 5
-        const menuHeight = itemCount * 38 + 4
+        const menuHeight = itemCount * 34 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh
@@ -353,57 +357,164 @@ export default {
 
 <style scoped>
 .playlist-panel {
-  padding: 14px 12px;
+  padding: 14px 0 0;
 }
 
-.panel-title {
-  font-size: 13px;
-  font-weight: bold;
-  color: var(--pixel-text, #f9a8d4);
-  opacity: 0.85;
-  letter-spacing: 0.05em;
-  padding: 0 4px 10px;
+.panel-label {
+  padding: 8px 16px 10px;
   flex-shrink: 0;
+}
+
+.panel-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 32px 16px;
+}
+
+.panel-state-text {
+  font-size: 12px;
+  color: var(--ink-86);
+}
+
+.panel-state-sub {
+  font-size: 11px;
+  color: var(--ink-64);
 }
 
 .playlist-scroll {
   scrollbar-gutter: stable;
+  border-top: var(--hairline);
 }
 
-/* YTM mini-guide 导航项 */
+/* 导航项：裸墨行，激活态墨底反白 */
 .side-nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
-  padding: 8px 10px;
+  width: calc(100% - 32px);
+  margin: 0 16px 10px;
+  padding: 9px 10px;
   font-size: 13px;
-  font-weight: 600;
-  color: var(--pixel-text-dim);
-  background: transparent;
-  border: 2px solid transparent;
+  font-weight: 500;
+  color: var(--ink);
+  border: var(--hairline);
   cursor: pointer;
   text-align: left;
-  margin-bottom: 4px;
   flex-shrink: 0;
-  transition: background 0.12s, color 0.12s;
+  transition: background .15s, color .15s;
 }
 
 .side-nav-item:hover {
-  background: rgba(236, 72, 153, 0.1);
-  color: var(--pixel-text);
+  color: var(--accent-magenta-ink);
 }
 
 .side-nav-item--active {
-  color: var(--pixel-text);
-  border-color: var(--pixel-accent-fg, #f472b6);
-  background: rgba(236, 72, 153, 0.14);
+  background: var(--ink);
+  color: var(--paper);
 }
 
-.side-nav-icon {
-  font-size: 15px;
-  line-height: 1;
+/* 歌单行：发丝下缘分隔，整行可点 */
+.pl-row {
+  position: relative;
+  border-bottom: 1.2px solid var(--ink-10);
 }
+
+.pl-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  transition: background .12s;
+}
+
+.pl-row-main:hover { background: var(--ink-06); }
+
+.pl-row--active .pl-row-main {
+  background: var(--ink);
+}
+.pl-row--active .pl-name,
+.pl-row--active .pl-meta,
+.pl-row--active .pl-count { color: var(--paper); }
+.pl-row--active .pl-meta,
+.pl-row--active .pl-count { color: var(--label-grey); }
+
+.pl-cover-wrap {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.pl-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: var(--hairline);
+  image-rendering: pixelated;
+  display: block;
+}
+
+.pl-cover--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-64);
+  background: var(--paper);
+}
+
+.pl-row--active .pl-cover { border-color: var(--paper); }
+
+.pl-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pl-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pl-meta {
+  font-size: 11px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.pl-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-64);
+  flex-shrink: 0;
+}
+
+/* 行尾操作组（分享 + ⋯） */
+.pl-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+}
+
+.pl-action {
+  padding: 4px;
+  color: var(--ink-64);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color .2s;
+}
+.pl-action:hover { color: var(--ink); outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
+.pl-row--active .pl-action { color: var(--label-grey); }
 
 /* 侧栏歌单行悬停 ▶ 播放键（浮于封面上） */
 .playlist-play-overlay {
@@ -412,17 +523,17 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  color: var(--paper);
+  background: rgba(30, 30, 30, .55);
   opacity: 0;
   border: none;
   cursor: pointer;
-  transition: opacity 0.12s;
+  transition: opacity .12s;
 }
 
-.music-card:hover .playlist-play-overlay,
-.music-card:focus-within .playlist-play-overlay,
+.pl-row:hover .playlist-play-overlay,
+.pl-row:focus-within .playlist-play-overlay,
 .playlist-play-overlay:focus-visible {
   opacity: 1;
 }
@@ -430,7 +541,12 @@ export default {
 /* 触屏无 hover——隐形可点的播放键会误触，常显（半透明遮罩版） */
 @media (hover: none) {
   .playlist-play-overlay {
-    opacity: 0.85;
+    opacity: .85;
   }
+}
+
+.pl-foot {
+  text-align: center;
+  padding: 12px 0;
 }
 </style>

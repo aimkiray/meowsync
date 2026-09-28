@@ -1,24 +1,31 @@
 <template>
-  <!-- 搜索结果：YTM 式歌单卡片网格。点击卡片=打开试听（不入库），+ 按钮=收藏到侧栏 -->
+  <!-- 搜索结果页（粉纸画布）：上"歌曲"发丝行、下"歌单"纸面卡片。
+       点击卡片=打开试听（不入库），+ 收藏=收进侧栏歌单库 -->
   <div class="playlist-grid-wrap">
-    <div class="grid-header">
-      <span class="grid-title">搜索结果</span>
-      <button class="pixel-button grid-back" @click="$emit('close')" title="返回歌曲列表">✕ 返回</button>
+    <header class="grid-head">
+      <div class="grid-head-text">
+        <p class="pg-label">search results</p>
+        <h2 class="grid-title">搜索结果</h2>
+      </div>
+      <button class="pg-icobtn" @click="$emit('close')" title="返回歌曲列表" aria-label="返回歌曲列表">✕</button>
+    </header>
+
+    <div v-if="loading" class="grid-state">
+      <div class="pixel-loading" aria-hidden="true"></div>
+      <p class="grid-state-text">搜索中喵...</p>
     </div>
 
-    <div v-if="loading" class="text-center py-16">
-      <div class="pixel-loading mx-auto mb-4"></div>
-      <p class="text-pink-300 flex justify-center items-center">搜索中喵...</p>
-    </div>
-
-    <div v-else-if="results.length === 0 && songs.length === 0" class="text-center py-16">
-      <p class="text-gray-600">没有找到相关内容喵~</p>
+    <div v-else-if="results.length === 0 && songs.length === 0" class="grid-state">
+      <p class="grid-state-text">没有找到相关内容喵~</p>
     </div>
 
     <template v-else>
       <!-- YTM 分区结果：歌曲行在前（可直接播放），歌单卡片区在后 -->
       <section v-if="songs.length" class="result-section">
-        <h3 class="result-section-title">歌曲</h3>
+        <div class="result-section-head">
+          <p class="pg-label">songs</p>
+          <span class="result-section-sub">歌曲 · 点击即播</span>
+        </div>
         <div
           v-for="song in songs"
           :key="song.id"
@@ -52,52 +59,62 @@
       </section>
 
       <section v-if="results.length" class="result-section">
-        <h3 class="result-section-title">歌单</h3>
+        <div class="result-section-head">
+          <p class="pg-label">playlists</p>
+          <span class="result-section-sub">歌单</span>
+        </div>
         <div class="playlist-grid">
-      <div
-        v-for="playlist in results"
-        :key="playlist.id"
-        class="grid-card jirai-card"
-        @click="$emit('open', playlist)"
-        @keydown.enter="$emit('open', playlist)"
-        @keydown.space.prevent="$emit('open', playlist)"
-        tabindex="0"
-        role="button"
-        :title="`打开《${playlist.name}》`"
-      >
-        <div class="grid-card-cover">
-          <img
-            v-if="playlist.coverImgUrl"
-            :src="httpsCover(playlist.coverImgUrl)"
-            :alt="playlist.name"
-            loading="lazy"
-            style="image-rendering: pixelated;"
-          />
-          <div v-else class="grid-card-cover-fallback text-pink-300">♪</div>
-        </div>
-        <div class="grid-card-body">
-          <h3 class="grid-card-name">{{ playlist.name }}</h3>
-          <p class="grid-card-meta">{{ playlist.creator?.nickname || '神秘创建者' }} · {{ playlist.trackCount }} 首</p>
-        </div>
-        <div class="grid-card-actions">
-          <button
-            class="grid-action"
-            :class="inLibrary(playlist) ? 'grid-action--done' : ''"
-            :disabled="inLibrary(playlist) || adding.has(playlist.id)"
-            @click.stop="handleAdd(playlist)"
-            :title="inLibrary(playlist) ? '已在歌单库中' : '收藏到我的歌单'"
-          >{{ inLibrary(playlist) ? '✓ 已收藏' : (adding.has(playlist.id) ? '…' : '+ 收藏') }}</button>
-          <button
-            class="grid-action grid-action--icon"
-            @click.stop="sharePlaylist(playlist)"
-            title="分享歌单"
+          <div
+            v-for="playlist in results"
+            :key="playlist.id"
+            class="grid-card"
+            @click="$emit('open', playlist)"
+            @keydown.enter="$emit('open', playlist)"
+            @keydown.space.prevent="$emit('open', playlist)"
+            tabindex="0"
+            role="button"
+            :title="`打开《${playlist.name}》`"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 22 22"><path fill="currentColor" d="M9 15H8v-1H7v-1h1v-1h1v-1h1v-1h1V9H8V7h7v7h-2v-3h-1v1h-1v1h-1v1H9m9 6H4v-1H3v-1H2V4h1V3h1V2h14v1h1v1h1v14h-1v1h-1m-1-1v-1h1V5h-1V4H5v1H4v12h1v1Z"/></svg>
-          </button>
-        </div>
-      </div>
+            <div class="grid-card-cover">
+              <img
+                v-if="playlist.coverImgUrl"
+                :src="httpsCover(playlist.coverImgUrl)"
+                :alt="playlist.name"
+                loading="lazy"
+                style="image-rendering: pixelated;"
+              />
+              <div v-else class="grid-card-cover-fallback">♪</div>
+            </div>
+            <div class="grid-card-body">
+              <h3 class="grid-card-name">{{ playlist.name }}</h3>
+              <p class="grid-card-meta">{{ playlist.creator?.nickname || '神秘创建者' }} · {{ playlist.trackCount }} 首</p>
+            </div>
+            <div class="grid-card-actions">
+              <!-- 已入库的歌单换成静态戳记（语义同原 disabled 态，只是不再伪装成按钮） -->
+              <button
+                v-if="!inLibrary(playlist)"
+                class="ink-btn ink-btn--sm grid-add"
+                :disabled="adding.has(playlist.id)"
+                @click.stop="handleAdd(playlist)"
+                title="收藏到我的歌单"
+              >{{ adding.has(playlist.id) ? '…' : '+ 收藏' }}</button>
+              <span v-else class="pg-chip pg-chip--static grid-added" title="已在歌单库中">✓ 已收藏</span>
+              <button
+                class="pg-icobtn grid-share"
+                @click.stop="sharePlaylist(playlist)"
+                title="分享歌单"
+                aria-label="分享歌单"
+              >
+                <PixelIcon name="share" :size="14" />
+              </button>
+            </div>
+          </div>
         </div>
       </section>
+
+      <div class="grid-foot">
+        <span class="pg-label pg-label--dim">{{ songs.length }} songs · {{ results.length }} playlists</span>
+      </div>
     </template>
   </div>
 </template>
@@ -108,9 +125,11 @@ import { shareOrCopy } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
 import { formatTime } from '../lib/format'
+import PixelIcon from './PixelIcon.vue'
 
 export default {
   name: 'PlaylistGrid',
+  components: { PixelIcon },
   props: {
     results: {
       type: Array,
@@ -211,131 +230,94 @@ export default {
   overflow-y: auto;
 }
 
-.grid-header {
+/* 页头：等宽微标签 + 大字标题 + 发丝方键关闭 */
+.grid-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 18px;
+  gap: 16px;
+  padding-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .grid-title {
-  font-size: 15px;
-  font-weight: bold;
-  /* 主题变量：pixel-retro 浅色底下硬编码粉 (#f9a8d4) 对比度不足 */
-  color: var(--pixel-text);
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--ink);
 }
 
-.grid-back {
-  font-size: 12px;
-  padding: 4px 10px;
-}
-
-/* 卡片网格：YTM 式封面大卡，自适应列数 */
-.playlist-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 16px;
-}
-
-.grid-card {
-  cursor: pointer;
-  padding: 10px;
+.grid-state {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.grid-card:hover {
-  transform: translateY(-2px);
-}
-
-/* grid-card-cover/name/meta 等卡片内部件样式已提为全局（与 HomeFeed 货架共用，
-   scoped 选择器带 data-v 只对自家模板生效） */
-.grid-card-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: auto;
-}
-
-.grid-action {
-  flex: 1;
-  font-size: 11px;
-  padding: 4px 6px;
-  background: #701a75;
-  color: #fce7f3;
-  border: 1px solid #f472b6;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.grid-action:hover:not(:disabled) {
-  background: #a21caf;
-}
-
-.grid-action:disabled {
-  cursor: default;
-  opacity: 0.7;
-}
-
-.grid-action--done {
-  background: #3b0764;
-  color: #c084fc;
-}
-
-.grid-action--icon {
-  flex: 0 0 30px;
-  display: flex;
   align-items: center;
-  justify-content: center;
-  color: #9ca3af;
+  gap: 12px;
+  padding: 64px 16px;
+  border-top: var(--hairline);
 }
 
-/* ── 分区结果（YTM：歌曲区 + 歌单区） ── */
+.grid-state-text {
+  font-size: 12px;
+  color: var(--ink-64);
+}
+
+/* 分区：发丝线起头 + 微标签节题 */
 .result-section {
-  margin-bottom: 24px;
+  border-top: var(--hairline);
+  padding-top: 10px;
+  margin-bottom: 26px;
 }
 
-.result-section-title {
-  font-size: 14px;
-  font-weight: bold;
-  color: var(--pixel-text);
-  margin-bottom: 10px;
-  padding-bottom: 6px;
-  border-bottom: 2px solid rgba(240, 179, 192, 0.2);
+.result-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
-/* 歌曲行：悬停显 ▶、可整行点击播放 */
+.result-section-sub {
+  font-size: 12px;
+  color: var(--ink-64);
+}
+
+/* 歌曲行：发丝下缘分隔，整行可点播放（YTM 行交互） */
 .song-result-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px;
+  padding: 7px 8px;
   cursor: pointer;
+  border-bottom: 1.2px solid var(--ink-10);
   transition: background 0.12s;
 }
 
 .song-result-row:hover {
-  background: rgba(236, 72, 153, 0.08);
+  background: var(--ink-06);
 }
 
 .song-result-row--playing {
-  background: rgba(236, 72, 153, 0.14);
+  background: var(--ink-10);
 }
 
 .song-result-index {
-  width: 20px;
+  width: 18px;
   flex-shrink: 0;
   text-align: center;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
 }
 
 .song-result-index-play {
   display: none;
-  color: var(--pixel-accent-fg, #f472b6);
+  color: var(--ink);
 }
 
-.song-result-row:hover .song-result-index-play {
+.song-result-row:hover .song-result-index-play,
+.song-result-row:focus-visible .song-result-index-play,
+.song-result-row--playing .song-result-index-play {
   display: inline;
 }
 
@@ -343,7 +325,7 @@ export default {
   width: 40px;
   height: 40px;
   object-fit: cover;
-  border: 2px solid #f472b6;
+  border: var(--hairline);
   flex-shrink: 0;
 }
 
@@ -351,7 +333,8 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
+  background: var(--paper);
 }
 
 .song-result-info {
@@ -362,7 +345,7 @@ export default {
 .song-result-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--pixel-text);
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -370,15 +353,74 @@ export default {
 
 .song-result-meta {
   font-size: 11px;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .song-result-duration {
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--pixel-text-dim);
+  color: var(--ink-64);
   flex-shrink: 0;
+}
+
+/* 卡片网格：自适应列数 */
+.playlist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+/* 卡片容器：纸面发丝边框（.grid-card-cover/-name/-meta 为全局共用类，
+   scoped 选择器带 data-v 只对自家模板生效） */
+.grid-card {
+  background: var(--paper);
+  border: var(--hairline);
+  cursor: pointer;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: transform 0.15s var(--ease-ink);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .grid-card:hover {
+    transform: translateY(-2px);
+  }
+}
+
+.grid-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.grid-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.grid-add {
+  flex: 1;
+}
+
+.grid-added {
+  flex: 1;
+  justify-content: center;
+}
+
+.grid-share {
+  flex-shrink: 0;
+}
+
+.grid-foot {
+  border-top: var(--hairline);
+  padding: 12px 0;
+  text-align: center;
 }
 </style>

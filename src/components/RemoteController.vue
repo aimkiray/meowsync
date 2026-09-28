@@ -14,9 +14,9 @@
           :src="httpsCover(state.currentSong?.al?.picUrl || state.currentSong?.album?.picUrl)"
           :alt="state.currentSong?.name || '专辑封面'"
           class="rc-cover"
-          :class="{ spinning: state.isPlaying }"
+          :class="{ 'playing-animation': state.isPlaying }"
         />
-        <div v-else class="rc-cover rc-cover-placeholder">🎵</div>
+        <div v-else class="rc-cover rc-cover-placeholder"><PixelIcon name="note" :size="56" /></div>
       </div>
 
       <div class="rc-song-info">
@@ -46,16 +46,16 @@
 
       <!-- 控制按钮 -->
       <div class="rc-controls">
-        <button class="rc-btn" @click="send('prev')" title="上一首" aria-label="上一首">⏮</button>
+        <button class="rc-btn" @click="send('prev')" title="上一首" aria-label="上一首"><PixelIcon name="prev" :size="20" /></button>
         <button class="rc-btn rc-btn-main" @click="send(state.isPlaying ? 'pause' : 'play')" :title="state.isPlaying ? '暂停' : '播放'" :aria-label="state.isPlaying ? '暂停' : '播放'">
-          {{ state.isPlaying ? '⏸' : '▶' }}
+          <PixelIcon :name="state.isPlaying ? 'pause' : 'play'" :size="30" />
         </button>
-        <button class="rc-btn" @click="send('next')" title="下一首" aria-label="下一首">⏭</button>
+        <button class="rc-btn" @click="send('next')" title="下一首" aria-label="下一首"><PixelIcon name="next" :size="20" /></button>
       </div>
 
       <!-- 音量 -->
       <div class="rc-volume-wrap">
-        <span class="rc-vol-icon">🔈</span>
+        <span class="rc-vol-icon"><PixelIcon name="vol-mute" :size="16" /></span>
         <input
           type="range"
           class="rc-slider"
@@ -71,7 +71,7 @@
           @pointercancel="onDragPointerEnd"
           @lostpointercapture="onDragPointerEnd"
         />
-        <span class="rc-vol-icon">🔊</span>
+        <span class="rc-vol-icon"><PixelIcon name="vol" :size="16" /></span>
       </div>
 
       <!-- 待播队列：host 广播的播放快照，点选跳转 -->
@@ -99,6 +99,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
+import PixelIcon from './PixelIcon.vue'
 
 const props = defineProps({
   // 完整 WS URL，须已包含 ?role=controller（由 App.vue 构建）
@@ -312,16 +313,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 墨条遥控面板：整版 --ink 墨面 + --paper 纸字，发丝用 --white-16/--white-40 */
 .remote-controller {
-  --rc-bg: #0f0f0f;
-  --rc-surface: #222;
-  --rc-line: #333;
-  --rc-text: #fff;
-  --rc-text-2: #ddd;
-  --rc-dim: #888;
-  --rc-dim-2: #aaa;
-  --rc-accent: #e74c3c;
-  --rc-accent-dark: #c0392b;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -329,10 +322,9 @@ onUnmounted(() => {
   min-height: 100vh;
   min-height: 100dvh;
   padding: 24px 20px;
-  background: var(--rc-bg);
-  color: var(--rc-text);
+  background: var(--ink);
+  color: var(--paper);
   gap: 20px;
-  box-sizing: border-box;
 }
 
 .rc-connecting {
@@ -340,19 +332,22 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  color: var(--rc-dim);
+  color: var(--label-grey);
+  font-size: 13px;
 }
 
+/* 点阵灯闪烁同构：等宽步进旋转的方框 */
 .rc-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid var(--rc-line);
-  border-top-color: var(--rc-accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  border: 2px solid var(--white-16);
+  border-top-color: var(--paper);
+  animation: pgSpin .9s steps(8) infinite;
 }
 
-@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .rc-spinner { animation: none; }
+}
 
 .rc-cover-wrap {
   width: 220px;
@@ -362,23 +357,18 @@ onUnmounted(() => {
 .rc-cover {
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   object-fit: cover;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  border: 1.2px solid var(--white-40);
+  image-rendering: pixelated;
+  display: block;
 }
-
-.rc-cover.spinning {
-  animation: rotate 8s linear infinite;
-}
-
-@keyframes rotate { to { transform: rotate(360deg); } }
 
 .rc-cover-placeholder {
-  background: var(--rc-surface);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 64px;
+  background: var(--white-16);
+  color: var(--label-grey);
 }
 
 .rc-song-info {
@@ -386,8 +376,9 @@ onUnmounted(() => {
 }
 
 .rc-song-name {
+  font-family: var(--font-display);
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 700;
   margin-bottom: 6px;
   max-width: 300px;
   overflow: hidden;
@@ -396,8 +387,8 @@ onUnmounted(() => {
 }
 
 .rc-artist {
-  font-size: 14px;
-  color: var(--rc-dim);
+  font-size: 13px;
+  color: var(--label-grey);
 }
 
 .rc-progress-wrap,
@@ -410,32 +401,55 @@ onUnmounted(() => {
 }
 
 .rc-time {
-  font-size: 12px;
-  color: var(--rc-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--label-grey);
   min-width: 36px;
   text-align: center;
 }
 
 .rc-vol-icon {
-  font-size: 16px;
+  display: flex;
+  color: var(--label-grey);
 }
 
+/* 墨上滑块：white-40 发丝轨 + 纸方柄（pg-range--on-ink 同构） */
 .rc-slider {
   flex: 1;
   -webkit-appearance: none;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--rc-line);
+  appearance: none;
+  height: 16px;
+  background: transparent;
   outline: none;
   cursor: pointer;
+}
+.rc-slider:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+
+.rc-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--white-40);
 }
 
 .rc-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--rc-accent);
+  width: 14px;
+  height: 14px;
+  background: var(--paper);
+  margin-top: -5px;
+  cursor: pointer;
+}
+
+.rc-slider::-moz-range-track {
+  height: 4px;
+  background: var(--white-40);
+}
+
+.rc-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 0;
+  background: var(--paper);
   cursor: pointer;
 }
 
@@ -445,54 +459,62 @@ onUnmounted(() => {
   gap: 24px;
 }
 
+/* 发丝方键：white-40 描边纸字；主播放键纸白反白 */
 .rc-btn {
-  background: none;
-  border: none;
-  color: var(--rc-text);
-  font-size: 28px;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: 50%;
-  transition: background 0.15s;
-  line-height: 1;
-}
-
-.rc-btn:active {
-  background: rgba(255,255,255,0.1);
-}
-
-.rc-retry {
-  font-size: 15px;
-  padding: 10px 24px;
-  background: var(--rc-accent);
-  border-radius: 20px;
-}
-
-.rc-btn-main {
-  font-size: 40px;
-  background: var(--rc-accent);
-  width: 72px;
-  height: 72px;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1.2px solid var(--white-40);
+  color: var(--paper);
+  cursor: pointer;
+  line-height: 1;
+  transition: color .2s, background .12s;
 }
 
-.rc-btn-main:active {
-  background: var(--rc-accent-dark);
+.rc-btn:hover { color: var(--accent-magenta); }
+.rc-btn:active { background: var(--white-16); }
+
+.rc-retry {
+  width: auto;
+  height: auto;
+  padding: 11px 26px;
+  background: var(--paper);
+  border: none;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: .02em;
 }
 
-/* 待播队列 */
+.rc-retry:active { background: var(--label-grey); }
+
+.rc-btn-main {
+  width: 72px;
+  height: 72px;
+  background: var(--paper);
+  border-color: var(--paper);
+  color: var(--ink);
+}
+
+.rc-btn-main:active { background: var(--label-grey); }
+
+/* 待播队列：发丝分隔行，当前行品红左记 */
 .rc-queue {
   width: 100%;
   max-width: 360px;
 }
 
 .rc-queue-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--rc-dim-2);
-  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 12px;
+  letter-spacing: .05em;
+  color: var(--label-grey);
+  padding-bottom: 8px;
+  border-bottom: 1.2px solid var(--white-40);
 }
 
 .rc-queue-list {
@@ -508,32 +530,35 @@ onUnmounted(() => {
   padding: 9px 8px;
   background: none;
   border: none;
-  border-left: 3px solid transparent;
-  color: var(--rc-text-2);
+  border-left: 1.2px solid transparent;
+  border-bottom: 1.2px solid var(--white-16);
+  color: var(--white-80);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
 
 .rc-queue-row:active {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--white-16);
 }
 
 .rc-queue-row--current {
-  border-left-color: var(--rc-accent);
-  color: var(--rc-text);
+  border-left-color: var(--accent-magenta);
+  background: var(--white-16);
+  color: var(--paper);
 }
 
 .rc-queue-idx {
   width: 18px;
   flex-shrink: 0;
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--rc-dim);
+  color: var(--label-grey);
   text-align: center;
 }
 
 .rc-queue-row--current .rc-queue-idx {
-  color: var(--rc-accent);
+  color: var(--accent-magenta);
 }
 
 .rc-queue-name {
@@ -548,7 +573,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   max-width: 40%;
   font-size: 11px;
-  color: var(--rc-dim);
+  color: var(--label-grey);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

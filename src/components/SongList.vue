@@ -1,39 +1,38 @@
 <template>
-  <div class="song-list-main card-songlist flex flex-col h-full min-h-0">
-    <!-- 歌单页头：YTM 播放页头部（封面+元信息），未选歌单时不占位 -->
+  <!-- 歌曲列表：songs 视图，落在 sage 纸色画布上（.app-shell[data-view="songs"] → --canvas-sage #abbab9） -->
+  <div class="song-list-main flex flex-col h-full min-h-0">
+    <!-- 歌单页头：裁切角标封面 + 元信息 + 墨块按钮组，未选歌单时不占位 -->
     <div v-if="selectedPlaylist" class="playlist-hero">
-      <img
-        v-if="selectedPlaylist.coverImgUrl"
-        :src="httpsCover(selectedPlaylist.coverImgUrl)"
-        :alt="selectedPlaylist.name"
-        class="playlist-hero-cover"
-        style="image-rendering: pixelated;"
-      />
-      <div v-else class="playlist-hero-cover playlist-hero-fallback text-pink-300">♪</div>
+      <div class="playlist-hero-cover-wrap pg-corners">
+        <img
+          v-if="selectedPlaylist.coverImgUrl"
+          :src="httpsCover(selectedPlaylist.coverImgUrl)"
+          :alt="selectedPlaylist.name"
+          class="playlist-hero-cover"
+        />
+        <div v-else class="playlist-hero-cover playlist-hero-fallback">♪</div>
+      </div>
       <div class="playlist-hero-meta">
         <h2 class="playlist-hero-name">{{ selectedPlaylist.name }}</h2>
         <p class="playlist-hero-sub">
           {{ selectedPlaylist.creator?.nickname || '神秘创建者' }} · {{ selectedPlaylist.trackCount || songs.length }} 首
         </p>
-        <!-- YTM hero 主按钮组：播放全部 + 随机；VIP 过滤收敛为次级开关 -->
+        <!-- 主按钮墨块 / 随机幽灵键 / VIP 过滤收敛为 chip 开关 -->
         <div class="playlist-hero-actions">
           <button
             @click="$emit('play-all')"
-            class="jirai-button-primary text-sm px-4 py-2 flex items-center gap-1"
-            style="border-radius: 0;"
+            class="ink-btn"
             title="播放全部"
-          >▶ 播放</button>
+          ><PixelIcon name="play" :size="13" /> 播放</button>
           <button
             @click="$emit('play-shuffle')"
-            class="jirai-button text-sm px-4 py-2"
-            style="border-radius: 0;"
+            class="ink-btn ink-btn--ghost"
             title="随机播放"
-          >🔀 随机</button>
+          ><PixelIcon name="shuffle" :size="13" /> 随机</button>
           <button
             @click="$emit('toggle-vip-songs')"
-            class="text-xs px-2 py-1 border transition-colors"
-            :class="showVipSongs ? 'bg-pink-500 text-white border-pink-400' : 'bg-gray-700 text-gray-300 border-gray-500 hover:bg-gray-600'"
-            style="border-radius: 0;"
+            class="pg-chip"
+            :class="{ 'pg-chip--on': showVipSongs }"
             title="切换VIP歌曲显示"
           >
             {{ showVipSongs ? '隐藏VIP' : '显示VIP' }}
@@ -42,97 +41,94 @@
       </div>
     </div>
 
-    <div v-if="loadingSongs" class="text-center py-16">
-      <div class="pixel-loading mx-auto mb-4"></div>
-      <p class="text-pink-300 flex justify-center items-center">加载歌曲中喵...</p>
+    <div v-if="loadingSongs" class="song-state">
+      <div class="pixel-loading" aria-hidden="true"></div>
+      <p class="song-state-text">加载歌曲中喵...</p>
     </div>
 
-    <div v-else-if="songs.length === 0" class="song-empty">
-      <p class="song-empty-icon">🎵</p>
-      <p class="text-gray-600">从左侧选择歌单，或在顶部搜索发现新歌单喵~</p>
+    <div v-else-if="songs.length === 0" class="song-state">
+      <PixelIcon name="note" :size="36" class="song-state-icon" />
+      <p class="song-state-text">从左侧选择歌单，或在顶部搜索发现新歌单喵~</p>
     </div>
 
     <div v-else class="flex-1 min-h-0 overflow-y-auto song-rows">
       <div
         v-for="(song, index) in paginatedSongs"
         :key="song.id"
-        class="music-card cursor-pointer p-3 jirai-card transition-all w-full relative group"
+        class="song-row"
         :class="{
-          'playing-song': isCurrent(song),
-          'opacity-50 grayscale': isVipSong(song)
+          'song-row--playing': isCurrent(song),
+          'song-row--vip': isVipSong(song)
         }"
       >
         <div
           @click="$emit('play-song', song)"
           @keydown.enter="$emit('play-song', song)"
           @keydown.space.prevent="$emit('play-song', song)"
-          class="flex items-center space-x-3"
+          class="song-row-main"
           tabindex="0"
           role="button"
           :aria-label="`播放 ${song.name}`"
         >
-          <!-- 曲序号：悬停时换成播放符号（YTM 行首交互） -->
+          <!-- 行首序号：常态等宽数字，悬停/当前曲换 ▶ -->
           <span class="song-row-index">
             <span class="song-row-index-num">{{ (currentPage - 1) * pageSize + index + 1 }}</span>
             <span class="song-row-index-play">▶</span>
           </span>
-          <div class="relative">
+          <div
+            class="song-cover-wrap"
+            :class="{ 'playing-animation': isCurrent(song) && isPlaying }"
+          >
             <img
               v-if="song.al?.picUrl || song.album?.picUrl"
               :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
               :alt="song.name"
-              class="w-12 h-12 object-cover border-2 border-pink-400"
-              style="border-radius: 0; image-rendering: pixelated;"
+              class="song-cover"
             />
-            <div
-              v-else
-              class="w-12 h-12 border-2 border-pink-400 flex items-center justify-center text-pink-300"
-              style="border-radius: 0;"
-            >♪</div>
-            <div v-if="isCurrent(song) && isPlaying" class="absolute inset-0 flex items-center justify-center">
-              <div class="text-pink-300 text-sm animate-pulse flex items-center justify-center">♡</div>
-            </div>
+            <div v-else class="song-cover song-cover--fallback">♪</div>
           </div>
-          <div class="flex-1 min-w-0">
-            <h4 class="font-medium truncate flex items-center"
-              :class="isCurrent(song) ? 'text-pink-500 font-bold' : 'text-pink-300'"
-            >
-              {{ song.name }}
-              <span v-if="isVipSong(song)" class="ml-2 text-xs bg-yellow-500 text-black px-1 rounded">VIP</span>
+          <div class="song-info">
+            <h4 class="song-title">
+              <span class="song-title-text">{{ song.name }}</span>
+              <span v-if="isVipSong(song)" class="pg-chip pg-chip--static song-tag">VIP</span>
+              <span
+                v-if="serverDownloadedStates[song.id]"
+                class="pg-chip pg-chip--static song-tag"
+                title="已下载到服务器"
+                aria-label="已下载到服务器"
+              ><PixelIcon name="check" :size="10" /></span>
             </h4>
-            <p class="text-sm text-purple-300 truncate">
+            <p class="song-artist">
               {{ song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') }}
             </p>
           </div>
-          <div class="text-xs text-gray-400 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
-            {{ formatDuration(song.dt || song.duration) }}
-          </div>
+          <div class="song-duration">{{ formatDuration(song.dt || song.duration) }}</div>
         </div>
 
-        <!-- 操作按钮组 - 右上角：合并为 YTM 式 ⋯ 溢出菜单，悬停/聚焦时露出 -->
-        <div class="absolute top-0 right-0 flex">
+        <!-- 行尾 ⋯ 菜单键：悬停/聚焦时露出，触屏常显 -->
+        <div class="song-actions">
           <button
-            class="song-menu-btn p-1 transition-all text-gray-400 hover:text-pink-300 flex items-center justify-center"
+            class="song-menu-btn"
             @click.stop="toggleDownloadMenu(song.id, $event)"
             title="更多操作"
             aria-label="更多操作"
             aria-haspopup="menu"
+            :aria-expanded="showDownloadMenu === song.id"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 22 22"><path fill="currentColor" d="M10 6h2v2h-2V6zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z"/></svg>
+            <PixelIcon name="kebab" :size="15" />
           </button>
         </div>
       </div>
 
       <!-- 统计 + 分页合并为一行 -->
       <div class="song-list-footer">
-        <span class="text-pink-300 text-xs">
+        <span class="pg-label pg-label--dim">
           {{ filteredSongs.length === 0 ? 0 : (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, filteredSongs.length) }} / 共 {{ filteredSongs.length }} 首<template v-if="!showVipSongs && songs.length > filteredSongs.length">（隐藏 {{ songs.length - filteredSongs.length }} 首VIP）</template>
         </span>
         <PaginationControls
           v-if="totalPages > 1"
           :current-page="currentPage"
           :total-pages="totalPages"
-          :bar-style="paginationStyle"
           @go-to-page="$emit('go-to-page', $event)"
           @prev-page="$emit('prev-page')"
           @next-page="$emit('next-page')"
@@ -140,7 +136,7 @@
       </div>
     </div>
 
-    <!-- 下载菜单 - 使用 Teleport 确保显示在外部 -->
+    <!-- 歌曲 ⋯ 菜单 - Teleport 到 body，容器走全局 .pg-menu（菜单类必须是全局类） -->
     <Teleport to="body">
       <div
         v-if="showDownloadMenu"
@@ -148,73 +144,74 @@
         @click="closeDownloadMenu"
       >
         <div
-          class="download-menu"
+          class="pg-menu song-menu"
           role="menu"
           :style="getMenuPosition(showDownloadMenu)"
           @click.stop
         >
-          <div class="download-option download-option-header">
+          <div class="pg-menu-head">
             {{ menuSong?.name || '歌曲操作' }}
           </div>
 
-          <!-- YTM 行内 ⋯ 菜单：队列操作与分享/下载合一 -->
+          <!-- 行内 ⋯ 菜单：队列操作与分享/下载合一 -->
           <div
-            class="download-option"
+            class="pg-menu-item"
             role="menuitem"
             tabindex="0"
             @click="playNextFromMenu"
             @keydown.enter="playNextFromMenu"
             @keydown.space.prevent="playNextFromMenu"
           >
-            ⏭ 下一首播放
+            <PixelIcon name="next" :size="13" /> 下一首播放
           </div>
           <div
-            class="download-option"
+            class="pg-menu-item"
             role="menuitem"
             tabindex="0"
             @click="addToQueueFromMenu"
             @keydown.enter="addToQueueFromMenu"
             @keydown.space.prevent="addToQueueFromMenu"
           >
-            📋 加入队列末尾
+            <PixelIcon name="save" :size="13" /> 加入队列末尾
           </div>
           <div
-            class="download-option"
+            class="pg-menu-item"
             role="menuitem"
             tabindex="0"
             @click="shareFromMenu"
             @keydown.enter="shareFromMenu"
             @keydown.space.prevent="shareFromMenu"
           >
-            🔗 分享歌曲
+            <PixelIcon name="share" :size="13" /> 分享歌曲
           </div>
 
           <!-- 获取源文件（浏览器下载）。菜单跨分页时 paginatedSongs 里找不到目标，必须查全量 props.songs -->
           <div
-            class="download-option"
+            class="pg-menu-item"
             role="menuitem"
             tabindex="0"
             @click="downloadSongDirect(menuSong, 320000)"
             @keydown.enter="downloadSongDirect(menuSong, 320000)"
             @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
-            📄 获取源文件 (320k)
+            <PixelIcon name="download" :size="13" /> 获取源文件 (320k)
           </div>
 
           <!-- 下载到服务器 / 删除已下载（临时单曲歌单没有服务端持久化意义，隐藏；
                未选歌单时选了也只会 alert，同样不渲染） -->
           <div
             v-if="!isSingleSongPlaylist && selectedPlaylist"
-            class="download-option"
+            class="pg-menu-item"
+            :class="{ 'pg-menu-item--danger': serverDownloadedStates[showDownloadMenu] }"
             role="menuitem"
             tabindex="0"
             @click="toggleServerDownload(menuSong)"
             @keydown.enter="toggleServerDownload(menuSong)"
             @keydown.space.prevent="toggleServerDownload(menuSong)"
           >
-            <span v-if="serverDownloadingStates[showDownloadMenu]">⏳ 处理中...</span>
-            <span v-else-if="serverDownloadedStates[showDownloadMenu]">🗑️ 删除已下载文件</span>
-            <span v-else>💾 下载到服务器</span>
+            <template v-if="serverDownloadingStates[showDownloadMenu]"><span class="pixel-loading" aria-hidden="true"></span> 处理中...</template>
+            <template v-else-if="serverDownloadedStates[showDownloadMenu]"><PixelIcon name="warn" :size="13" /> 删除已下载文件</template>
+            <template v-else><PixelIcon name="download" :size="13" /> 下载到服务器</template>
           </div>
         </div>
       </div>
@@ -227,23 +224,31 @@
   padding: 16px 20px;
 }
 
-/* 歌单页头 */
+/* ── 歌单页头：裁切角标封面 + 墨块按钮组 ── */
 .playlist-hero {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding-bottom: 14px;
-  margin-bottom: 12px;
-  border-bottom: 2px solid rgba(240, 179, 192, 0.2);
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: var(--hairline);
   flex-shrink: 0;
 }
 
-.playlist-hero-cover {
+.playlist-hero-cover-wrap {
   width: 112px;
   height: 112px;
-  object-fit: cover;
-  border: 2px solid #f472b6;
   flex-shrink: 0;
+  /* pg-corners 角标外扩 7px，四周留呼吸位防贴邻 */
+  margin: 8px;
+}
+
+.playlist-hero-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: var(--hairline);
+  display: block;
+  image-rendering: pixelated;
 }
 
 .playlist-hero-fallback {
@@ -251,6 +256,8 @@
   align-items: center;
   justify-content: center;
   font-size: 26px;
+  color: var(--ink-64);
+  background: var(--paper);
 }
 
 .playlist-hero-meta {
@@ -259,61 +266,253 @@
 }
 
 .playlist-hero-name {
-  font-size: 17px;
-  font-weight: bold;
-  /* 主题变量：pixel-retro 浅色底下硬编码粉 (#f9a8d4) 对比度不足 */
-  color: var(--pixel-text);
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .playlist-hero-sub {
-  font-size: 12px;
-  color: var(--pixel-text-dim);
-  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .05em;
+  color: var(--ink-64);
+  margin-top: 6px;
 }
 
 .playlist-hero-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-top: 12px;
+  margin-top: 14px;
   align-items: center;
 }
 
-/* 行首序号：常态显示数字，悬停换 ▶（YTM 同款） */
+/* ── 加载 / 空态 ── */
+.song-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 64px 0;
+}
+
+.song-state-icon {
+  color: var(--ink-64);
+}
+
+.song-state-text {
+  font-size: 12px;
+  color: var(--ink-86);
+}
+
+/* ── 歌曲行：发丝下缘分隔 + 悬停浅墨 + 当前曲墨底反白 ── */
+.song-rows {
+  scrollbar-gutter: stable;
+}
+
+.song-row {
+  position: relative;
+  border-bottom: 1.2px solid var(--ink-10);
+}
+
+/* VIP 曲弱化：不压整行透明度（.55 让歌名掉到 3.01:1），改降级文字色 + VIP 戳记 */
+.song-row--vip .song-title { color: var(--ink-86); }
+.song-row--vip .song-artist, .song-row--vip .song-duration,
+.song-row--vip .song-row-index { color: var(--ink-64); }
+
+.song-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  padding-right: 44px; /* 行尾 ⋯ 键悬浮位，防压时长列 */
+  cursor: pointer;
+  transition: background .12s;
+}
+
+.song-row-main:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -4px;
+}
+
+.song-row:not(.song-row--playing):hover .song-row-main {
+  background: var(--ink-06);
+}
+
+.song-row--playing .song-row-main {
+  background: var(--ink);
+}
+
+.song-row--playing .song-row-main:focus-visible {
+  outline-color: var(--paper);
+}
+
+/* 行首序号：常态等宽数字，悬停/当前曲换 ▶ */
 .song-row-index {
-  width: 24px;
+  width: 26px;
   flex-shrink: 0;
   text-align: center;
-  font-size: 12px;
-  color: var(--pixel-text-dim);
-  position: relative;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
 }
 
 .song-row-index-play {
   display: none;
-  color: var(--pixel-accent-fg, #f472b6);
+  color: var(--ink);
 }
 
-.music-card:hover .song-row-index-num {
+.song-row:hover .song-row-index-num,
+.song-row--playing .song-row-index-num {
   display: none;
 }
 
-.music-card:hover .song-row-index-play {
+.song-row:hover .song-row-index-play,
+.song-row--playing .song-row-index-play {
   display: inline;
 }
 
-/* ⋯ 菜单键：悬停/聚焦才露出，常显时保持行面干净（键盘可达性保留 focus-visible） */
-.song-menu-btn {
+.song-row--playing .song-row-index-play {
+  color: var(--paper);
+}
+
+.song-cover-wrap {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.song-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: var(--hairline);
+  display: block;
+  image-rendering: pixelated;
+}
+
+.song-cover--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-64);
+  background: var(--paper);
+}
+
+.song-row--playing .song-cover {
+  border-color: var(--paper);
+}
+
+.song-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.song-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.song-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 行内小牌（VIP / 已下载勾）：pg-chip 的紧凑变体 */
+.song-tag {
+  height: 17px;
+  padding: 0 6px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.song-row--playing .song-tag {
+  border-color: var(--paper);
+  color: var(--paper);
+}
+
+.song-artist {
+  font-size: 11px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.song-duration {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  flex-shrink: 0;
+  transition: opacity .12s;
+}
+
+.song-row:hover .song-duration,
+.song-row:focus-within .song-duration {
   opacity: 0;
 }
 
-.music-card:hover .song-menu-btn,
-.song-menu-btn:focus-visible,
-.music-card:focus-within .song-menu-btn {
+/* 当前曲反白：文字/标签全换纸色与标签灰 */
+.song-row--playing .song-title,
+.song-row--playing .song-duration {
+  color: var(--paper);
+}
+
+.song-row--playing .song-artist,
+.song-row--playing .song-row-index-num {
+  color: var(--label-grey);
+}
+
+/* 行尾 ⋯ 菜单键：悬停/聚焦露出，常显时保持行面干净 */
+.song-actions {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  display: flex;
+}
+
+.song-menu-btn {
+  padding: 6px;
+  color: var(--ink-64);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity .12s, color .2s;
+}
+
+.song-menu-btn:hover {
+  color: var(--ink);
+  outline: 1.2px solid var(--ink);
+  outline-offset: -1.2px;
+}
+
+.song-row:hover .song-menu-btn,
+.song-row:focus-within .song-menu-btn,
+.song-menu-btn:focus-visible {
   opacity: 1;
+}
+
+.song-row--playing .song-menu-btn {
+  color: var(--label-grey);
+}
+
+.song-row--playing .song-menu-btn:hover {
+  color: var(--paper);
 }
 
 /* 触屏无 hover——隐形但可点的 ⋯ 键会误触，常显 */
@@ -323,82 +522,22 @@
   }
 }
 
-.song-rows {
-  scrollbar-gutter: stable;
-}
-
-.song-rows > * + * {
-  margin-top: 8px;
-}
-
-.song-empty {
-  text-align: center;
-  padding: 64px 0;
-}
-
-.song-empty-icon {
-  font-size: 40px;
-  margin-bottom: 12px;
-}
-
+/* ── 统计 + 分页脚 ── */
 .song-list-footer {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 14px;
-  padding: 10px 0;
+  padding: 12px 0 6px;
   flex-wrap: wrap;
 }
 
-/* 下载菜单覆盖层 */
+/* ── ⋯ 菜单点击捕手（菜单本体走全局 .pg-menu——teleport 出 scoped 域） ── */
 .download-menu-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   z-index: var(--z-overlay);
   background: transparent;
-}
-
-/* 下载菜单（原先引用未定义的 --bg-color/--border-color 等变量导致透明背景，直接写死像素风配色） */
-.download-menu {
-  position: fixed;
-  background: #1a1a2e;
-  border: 1px solid #c084fc;
-  border-radius: 0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  z-index: var(--z-menu);
-  min-width: 140px;
-  overflow: hidden;
-}
-
-.download-option {
-  padding: 10px 12px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-  font-size: 14px;
-  color: #d8b4fe;
-  border-bottom: 1px solid #374151;
-}
-
-.download-option:last-child {
-  border-bottom: none;
-}
-
-.download-option-header {
-  cursor: default;
-  color: #a78bfa;
-}
-
-.download-option-header:hover {
-  background: transparent;
-  color: #a78bfa;
-}
-
-.download-option:hover {
-  background-color: #6b21a8;
-  color: #fff;
 }
 </style>
 
@@ -408,7 +547,7 @@ import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { httpsCover } from '../lib/url'
 import PaginationControls from './PaginationControls.vue'
-import { useTheme } from '../composables/useTheme'
+import PixelIcon from './PixelIcon.vue'
 import { formatDuration } from '../lib/format'
 import { isVipSong, isLocalPlaylistId } from '../lib/song'
 import { shareOrCopy } from '../lib/share'
@@ -417,7 +556,8 @@ import { toast, pixelConfirm } from '../lib/feedback'
 export default {
   name: 'SongList',
   components: {
-    PaginationControls
+    PaginationControls,
+    PixelIcon
   },
   props: {
     songs: {
@@ -459,7 +599,6 @@ export default {
   },
   emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'toggle-vip-songs', 'go-to-page', 'prev-page', 'next-page'],
   setup(props, { emit }) {
-    const { currentTheme } = useTheme()
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})
     const menuPositions = ref({})
@@ -470,23 +609,6 @@ export default {
     // 组件卸载标志：单曲下载轮询挂在 v-if 挂载的组件上，切到管理面板即卸载——
     // props 卸载后仍持旧值，stillCurrent 永真会让孤儿轮询空转 10min 还跨视图弹窗
     let viewDisposed = false
-
-    // 动态样式
-    const paginationStyle = computed(() => {
-      if (currentTheme.value === 'pixel-retro') {
-        return {
-          background: 'rgba(240, 179, 192, 0.2)',
-          boxShadow: 'inset 0 0 0 2px rgba(240, 179, 192, 0.4)',
-          borderRadius: '0'
-        }
-      } else {
-        return {
-          background: 'rgba(255, 192, 203, 0.2)',
-          boxShadow: 'inset 0 0 0 2px rgba(255, 182, 193, 0.4)',
-          borderRadius: '0'
-        }
-      }
-    })
 
     // 过滤后的歌曲列表（根据VIP显示设置）
     const filteredSongs = computed(() => {
@@ -530,7 +652,7 @@ export default {
         // 计算菜单位置：下方空间不足时翻到按钮上方，左右越界时收回视口内
         const button = event.target.closest('button')
         const rect = button.getBoundingClientRect()
-        const menuWidth = 140
+        const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：固定项=头部+下一首+队尾+分享+源文件 5 项；
         // 临时/未选歌单时"下载到服务器"项不渲染少一项（~42px/项，偏小会被裁）
         const menuHeight = (!isSingleSongPlaylist.value && props.selectedPlaylist) ? 252 : 212
@@ -812,7 +934,7 @@ export default {
       formatDuration,
       isVipSong,
       isCurrent,
-      paginationStyle,
+
       showDownloadMenu,
       downloadingStates,
       serverDownloadedStates,
