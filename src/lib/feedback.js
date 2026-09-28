@@ -19,9 +19,15 @@ export function toast(text, type = 'info', duration = 2600) {
 }
 
 export function pixelConfirm(message, { confirmText = '确定', danger = false } = {}) {
+  // 重入防护：新 confirm 顶掉未决的旧框（按取消结算），否则旧 Promise 永远悬挂
+  if (state.confirm) resolveConfirm(false)
   return new Promise(resolve => {
     state.confirm = { message: String(message), confirmText, danger, resolve }
   })
+}
+
+export function isConfirmOpen() {
+  return state.confirm != null
 }
 
 // 仅供 FeedbackHost 使用

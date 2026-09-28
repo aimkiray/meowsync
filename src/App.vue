@@ -181,7 +181,7 @@ import { musicApi } from './api/music'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId } from './lib/song'
-import { toast } from './lib/feedback'
+import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { httpsCover } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
@@ -1086,7 +1086,11 @@ export default {
     const watchBack = () => {
       // 当前条目是我们 push 的 → 站内还有上一页可回；否则（分享链冷启动）回首页
       if (window.history.state?.meowsyncNav) window.history.back()
-      else centerView.value = 'home'
+      else {
+        centerView.value = 'home'
+        // 同步地址栏——否则 UI 在首页而 URL 停在 ?view=watch，刷新又回 watch
+        window.history.replaceState(null, '', buildNavUrl())
+      }
     }
 
     // 队列拖拽排序：from→to 实时移动；原序备份做同构移动（关随机后顺序不回弹）
@@ -1783,6 +1787,11 @@ export default {
     // 键盘快捷键（YTM 式）：空格播放暂停、←→ 进退、↑↓ 音量、M 静音、
     // F 全屏、Q 待播队列、/ 聚焦搜索；输入态/修饰键组合全部放行
     const onGlobalKeydown = (e) => {
+      // 确认框未决时全局快捷键全部冻结（/ 偷焦点会破焦点陷阱，F 会在遮罩下隐形切全屏）
+      if (isConfirmOpen()) {
+        if (e.key === 'Escape') resolveConfirm(false) // 兜底：焦点逃出 overlay 时仍能关
+        return
+      }
       if (e.key === 'Escape') {
         if (sidebarOpen.value) sidebarOpen.value = false
         return
@@ -2196,6 +2205,7 @@ export default {
       searchSongResults,
       playlistDownloadsRefreshKey,
       shuffleOn,
+      playMode,
       playingSongs,
       queueTitle,
       topNavRef,

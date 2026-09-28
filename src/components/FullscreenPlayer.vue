@@ -48,8 +48,8 @@
               :disabled="songSwitching"
               class="fullscreen-player__control-button fullscreen-player__control-button--primary"
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-              :title="isPlaying ? '暂停' : '播放'"
-              :aria-label="isPlaying ? '暂停' : '播放'"
+              :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
+              :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
             ><span class="fullscreen-player__control-icon" :class="{ 'fullscreen-player__control-icon--pause': isPlaying && !songSwitching, 'fullscreen-player__control-icon--loading': songSwitching }">{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</span></button>
             <button @click="$emit('next-song')" class="fullscreen-player__control-button" title="下一首" aria-label="下一首">▶▶</button>
           </div>

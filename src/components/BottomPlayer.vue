@@ -55,6 +55,7 @@
               :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'queue' }"
               title="待播队列"
               aria-label="待播队列"
+              :aria-pressed="sidePanelOpen && panelTab === 'queue'"
             >☰</button>
             <button
               @click="$emit('toggle-side-panel', 'lyrics')"
@@ -62,6 +63,7 @@
               :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'lyrics' }"
               title="歌词"
               aria-label="歌词"
+              :aria-pressed="sidePanelOpen && panelTab === 'lyrics'"
             >词</button>
             <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏" aria-label="全屏">
               <svg class="bottom-player__icon bottom-player__icon--mobile" viewBox="0 0 24 24" aria-hidden="true">
@@ -74,8 +76,8 @@
               :disabled="songSwitching"
               class="jirai-button-primary p-1 text-sm w-8 h-8 flex items-center justify-center"
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-              :title="isPlaying ? '暂停' : '播放'"
-              :aria-label="isPlaying ? '暂停' : '播放'"
+              :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
+              :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
             >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
             <button @click="$emit('next-song')" class="jirai-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="下一首" aria-label="下一首">▶▶</button>
             <span class="text-xs text-pink-300 ml-2 whitespace-nowrap max-[420px]:hidden">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
@@ -121,8 +123,8 @@
                     :disabled="songSwitching"
                     class="jirai-button-primary p-3 text-xl w-12 h-12 flex items-center justify-center"
                     :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-                    :title="isPlaying ? '暂停' : '播放'"
-                    :aria-label="isPlaying ? '暂停' : '播放'"
+                    :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
+                    :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
                   >{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</button>
                   <button @click="$emit('next-song')" class="jirai-button p-3 text-xl w-12 h-12 flex items-center justify-center" title="下一首" aria-label="下一首">▶▶</button>
                 </div>
@@ -179,6 +181,7 @@
                     :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'queue' }"
                     title="待播队列"
                     aria-label="待播队列"
+                    :aria-pressed="sidePanelOpen && panelTab === 'queue'"
                   >☰</button>
                   <button
                     @click="$emit('toggle-side-panel', 'lyrics')"
@@ -186,6 +189,7 @@
                     :class="{ 'bottom-player__toggle--active': sidePanelOpen && panelTab === 'lyrics' }"
                     title="歌词"
                     aria-label="歌词"
+                    :aria-pressed="sidePanelOpen && panelTab === 'lyrics'"
                   >词</button>
                   <button @click="$emit('open-fullscreen')" class="jirai-button bottom-player__icon-button p-1 text-sm w-8 h-8 flex items-center justify-center" title="全屏" aria-label="全屏">
                     <svg class="bottom-player__icon bottom-player__icon--desktop" viewBox="0 0 24 24" aria-hidden="true">
