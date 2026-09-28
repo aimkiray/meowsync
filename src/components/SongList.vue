@@ -390,7 +390,7 @@ import { httpsCover } from '../lib/url'
 import PaginationControls from './PaginationControls.vue'
 import { useTheme } from '../composables/useTheme'
 import { formatDuration } from '../lib/format'
-import { isVipSong } from '../lib/song'
+import { isVipSong, isLocalPlaylistId } from '../lib/song'
 import { shareOrCopy } from '../lib/share'
 
 export default {
@@ -492,9 +492,9 @@ export default {
       props.songs.find(s => String(s.id) === String(showDownloadMenu.value)) || null
     )
 
-    // 单曲分享生成的 single_song_* 是内存态临时歌单，服务端没有对应持久行，不提供服务器下载
+    // 本地内存态歌单（单曲分享/队列存盘）服务端没有对应持久行，不提供服务器下载
     const isSingleSongPlaylist = computed(() =>
-      String(props.selectedPlaylist?.id ?? '').startsWith('single_song_')
+      isLocalPlaylistId(props.selectedPlaylist?.id)
     )
 
     // 切换下载菜单显示
@@ -559,8 +559,8 @@ export default {
     // 分享歌曲
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
-      // 带 view=songs：冷启动打开分享链后主区直接落在歌曲视图，不是首页
-      const shareUrl = `${window.location.origin}/?song=${song.id}&view=songs`
+      // 带 view=watch：冷启动打开分享链后落在播放页（YTM watch 同款直达）
+      const shareUrl = `${window.location.origin}/?song=${song.id}&view=watch`
 
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistNames}`,

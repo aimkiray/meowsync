@@ -431,6 +431,128 @@ html {
   color: var(--pixel-text) !important;
 }
 
+/* 面板 tab 条 + 待播队列行（LyricsPanel 抽屉与 FullscreenPlayer watch 侧栏共用） */
+.panel-tabs {
+  display: flex;
+  gap: 14px;
+}
+
+.panel-tab {
+  font-size: 13px;
+  font-weight: bold;
+  padding: 4px 2px;
+  color: var(--pixel-text-dim);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.panel-tab:hover {
+  color: var(--pixel-text);
+}
+
+.panel-tab--active {
+  color: var(--pixel-text);
+  border-bottom-color: var(--pixel-accent-fg, #f472b6);
+}
+
+.queue-source {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  margin-bottom: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-body {
+  padding-top: 10px;
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.12s;
+}
+
+.queue-row:hover {
+  background: rgba(236, 72, 153, 0.08);
+}
+
+.queue-row--current {
+  border-left-color: var(--pixel-accent-fg, #f472b6);
+  background: rgba(236, 72, 153, 0.12);
+}
+
+.queue-row-index {
+  width: 18px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  text-align: center;
+}
+
+.queue-row--current .queue-row-index {
+  color: var(--pixel-accent-fg, #f472b6);
+}
+
+.queue-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-row-title {
+  font-size: 12px;
+  color: var(--pixel-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-row-artist {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-row-duration {
+  font-size: 11px;
+  color: var(--pixel-text-dim);
+  flex-shrink: 0;
+}
+
+.queue-row-remove {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 5px;
+  color: var(--pixel-text-dim);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.queue-row:hover .queue-row-remove,
+.queue-row:focus-within .queue-row-remove,
+.queue-row-remove:focus-visible {
+  opacity: 1;
+}
+
+/* 触屏设备无 hover——隐藏但可点的移除键会误删，直接常显 */
+@media (hover: none) {
+  .queue-row-remove {
+    opacity: 1;
+  }
+}
+
+.queue-row-remove:hover {
+  color: #f87171;
+}
+
 /* 歌曲列表：分页按钮 */
 :root[data-theme="pixel-retro"] .card-songlist .bg-purple-600 { background-color: rgb(200, 100, 140) !important; box-shadow: none !important; }
 :root[data-theme="pixel-retro"] .card-songlist .hover\:bg-purple-500:hover { background-color: rgb(180, 80, 120) !important; box-shadow: none !important; }

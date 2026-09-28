@@ -143,6 +143,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { downloadsApi } from '../api/downloads'
 import { copyText, shareOrCopy } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
+import { isLocalPlaylistId } from '../lib/song'
 
 export default {
   name: 'PlaylistPanel',
@@ -266,8 +267,8 @@ export default {
       closeMenu()
     }
 
-    // 单曲分享生成的 single_song_* 是本地内存态临时歌单，服务端无对应持久行——不提供下载入口
-    const isTempPlaylist = (playlist) => String(playlist?.id ?? '').startsWith('single_song_')
+    // 本地内存态歌单（单曲分享/队列存盘）服务端无对应持久行——不提供分享/下载入口
+    const isTempPlaylist = (playlist) => isLocalPlaylistId(playlist?.id)
 
     // 下载歌单
     const downloadPlaylist = async (playlist) => {

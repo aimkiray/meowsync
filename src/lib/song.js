@@ -2,3 +2,13 @@
 export function isVipSong(song) {
   return song?.fee === 1 || song?.privilege?.fee === 1
 }
+
+/**
+ * 本地内存态歌单 id 判定：single_song_*（单曲分享临时歌单）与 saved_queue_*
+ * （待播队列存成的歌单）都是非数字 id——不进 URL、不参与网易接口拉取、
+ * 不显示分享/下载入口。各处判断统一收口到这里，避免前缀散落漂移。
+ */
+export function isLocalPlaylistId(id) {
+  const s = String(id ?? '')
+  return s.startsWith('single_song_') || s.startsWith('saved_queue_')
+}

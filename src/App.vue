@@ -35,7 +35,7 @@
         />
       </aside>
 
-      <!-- 主区：首页发现流 / 歌曲列表 / 搜索结果 / 下载管理 -->
+      <!-- 主区：首页发现流 / 歌曲列表 / 搜索结果 / watch 播放页 / 下载管理 -->
       <main class="app-main">
         <HomeFeed
           v-if="centerView === 'home'"
@@ -57,9 +57,9 @@
           :page-size="pageSize"
           :selected-playlist="selectedPlaylist"
           :playlist-downloads-refresh-key="playlistDownloadsRefreshKey"
-          @play-song="playSong"
-          @play-all="playPlaylist(false)"
-          @play-shuffle="playPlaylist(true)"
+          @play-song="openWatchSong"
+          @play-all="playPlaylistAndWatch(false)"
+          @play-shuffle="playPlaylistAndWatch(true)"
           @play-next="playNextInQueue"
           @add-to-queue="addToQueueEnd"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
@@ -76,8 +76,46 @@
           :loading="searching"
           @open="openSearchPlaylist"
           @add="addPlaylistToLibrary"
-          @play-song="playSongFromSearch"
+          @play-song="openWatchSearchSong"
           @close="closeSearchView"
+        />
+        <!-- YTM watch 播放页：点单曲进入；歌词/待播/相关都在页内右栏，不遮主区 -->
+        <WatchView
+          v-else-if="centerView === 'watch'"
+          :current-song="currentSong"
+          :is-playing="isPlaying"
+          :current-time="currentTime"
+          :duration="duration"
+          :volume="volume"
+          :song-switching="songSwitching"
+          :queue="playingSongs"
+          :queue-title="queueTitle"
+          :lyrics="lyrics"
+          :current-lyric-index="currentLyricIndex"
+          :loading-lyrics="loadingLyrics"
+          :playback-error="playbackError"
+          :duration-warning="durationWarning"
+          v-model:tab="watchTab"
+          v-model:autoplay="autoplayOn"
+          :play-mode="playMode"
+          :play-mode-text="getPlayModeText()"
+          :shuffle-on="shuffleOn"
+          @back="watchBack"
+          @open-fullscreen="openFullscreenPlayer"
+          @toggle-play="togglePlay"
+          @previous-song="previousSong"
+          @next-song="nextSong"
+          @seek-to="seekTo"
+          @update-volume="updateVolume"
+          @toggle-mute="toggleMute"
+          @toggle-shuffle="toggleShuffle"
+          @toggle-repeat="togglePlayMode"
+          @queue-jump="queueJump"
+          @queue-remove="queueRemove"
+          @queue-move="queueMove"
+          @save-queue="saveQueueAsPlaylist"
+          @clear-queue="clearQueue"
+          @play-song="playSongFromRelated"
         />
         <AdminPanel v-else />
       </main>
@@ -92,8 +130,8 @@
       :duration="duration"
       :volume="volume"
       :song-switching="songSwitching"
-      :side-panel-open="lyricsDrawerOpen"
-      :panel-tab="sidePanelTab"
+      :side-panel-open="centerView === 'watch'"
+      :panel-tab="watchTab"
       :play-mode="playMode"
       :play-mode-text="getPlayModeText()"
       :shuffle-on="shuffleOn"
@@ -105,29 +143,10 @@
       @toggle-mute="toggleMute"
       @toggle-repeat="togglePlayMode"
       @toggle-shuffle="toggleShuffle"
-      @toggle-side-panel="toggleSidePanel"
+      @toggle-side-panel="openWatchPanel"
       @open-fullscreen="openFullscreenPlayer"
     />
 
-    <!-- 待播/歌词 双 tab 抽屉（右侧浮层，不占常驻栏位） -->
-    <LyricsPanel
-      :open="lyricsDrawerOpen"
-      v-model:panel-tab="sidePanelTab"
-      :current-song="currentSong"
-      :queue="playingSongs"
-      :queue-title="queueTitle"
-      :lyrics="lyrics"
-      :current-lyric-index="currentLyricIndex"
-      :auto-follow-lyrics="autoFollowLyrics"
-      :loading-lyrics="loadingLyrics"
-      :song-switching="songSwitching"
-      :duration-warning="durationWarning"
-      :playback-error="playbackError"
-      @toggle-auto-follow-lyrics="toggleAutoFollowLyrics"
-      @queue-jump="queueJump"
-      @queue-remove="queueRemove"
-      @close="lyricsDrawerOpen = false"
-    />
 
     <FullscreenPlayer
       v-if="isFullscreenPlayerOpen && currentSong"
@@ -158,14 +177,14 @@ import { Howl } from 'howler'
 import { musicApi } from './api/music'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
-import { isVipSong } from './lib/song'
+import { isVipSong, isLocalPlaylistId } from './lib/song'
 import { httpsCover } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
 import HomeFeed from './components/HomeFeed.vue'
 import SongList from './components/SongList.vue'
-import LyricsPanel from './components/LyricsPanel.vue'
+import WatchView from './components/WatchView.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import RemoteController from './components/RemoteController.vue'
@@ -179,7 +198,7 @@ export default {
     PlaylistGrid,
     HomeFeed,
     SongList,
-    LyricsPanel,
+    WatchView,
     BottomPlayer,
     FullscreenPlayer,
     RemoteController,
@@ -202,7 +221,9 @@ export default {
     let queueOriginalOrder = null // 打乱前的队列原序——关掉随机时还原
     const lyrics = ref([])
     const currentLyricIndex = ref(0)
-    const autoFollowLyrics = ref(true) // 歌词自动跟随，默认开启
+    // watch 播放页：右栏 tab（待播/歌词/相关）与 YTM UP NEXT 自动播放开关
+    const watchTab = ref('queue')
+    const autoplayOn = ref(false)
     const songSwitching = ref(false) // 歌曲切换提示
     const isPlaying = ref(false)
     const isFullscreenPlayerOpen = ref(false)
@@ -232,10 +253,8 @@ export default {
     const pageSize = ref(10)
 
     // YTM 式布局状态：主区视图（首页/歌曲/搜索结果/下载管理）+ 两个按需抽屉
-    const centerView = ref('home') // 'home' | 'songs' | 'search' | 'downloads'
+    const centerView = ref('home') // 'home' | 'songs' | 'search' | 'watch' | 'downloads'
     const sidebarOpen = ref(false) // 移动端歌单库抽屉
-    const lyricsDrawerOpen = ref(false) // 右侧 待播/歌词 双 tab 抽屉
-    const sidePanelTab = ref('queue') // 'queue' | 'lyrics'——播放条两个开关各自呼出对应 tab
     const searching = ref(false) // 仅驱动搜索结果网格的加载态（勿与歌单库 loading 混用）
     const searchSongResults = ref([]) // 单曲搜索结果（与歌单结果同区展示）
     const playlistDownloadsRefreshKey = ref(0)
@@ -450,7 +469,7 @@ export default {
     }
 
     // ── URL 导航（YTM 式：视图/歌单可寻址，浏览器前进后退生效） ──
-    const NAV_VIEWS = new Set(['home', 'songs', 'search', 'downloads'])
+    const NAV_VIEWS = new Set(['home', 'songs', 'search', 'watch', 'downloads'])
     let suppressNavPush = false // popstate 回放时不再重复入栈
 
     // 导航 URL 构造：push 与初始化 normalize 共用，保证 pl 语义一致。
@@ -461,11 +480,11 @@ export default {
       url.searchParams.delete('view')
       url.searchParams.delete('pl')
       url.searchParams.set('view', centerView.value)
-      // 临时单曲歌单（single_song_*）不进 URL——id 非数字，刷新也无法按歌单恢复
+      // 本地内存态歌单（single_song_/saved_queue_）不进 URL——id 非数字，刷新也无法按歌单恢复
       if (
         centerView.value === 'songs' &&
         playlist?.id != null &&
-        !String(playlist.id).startsWith('single_song_')
+        !isLocalPlaylistId(playlist.id)
       ) {
         url.searchParams.set('pl', String(playlist.id))
       }
@@ -501,6 +520,11 @@ export default {
       if (view === 'search' && !searchResults.value.length
           && !searchSongResults.value.length && !searching.value) {
         centerView.value = 'home'
+        return
+      }
+      // watch 页必须有正在播放的歌——冷加载空 watch 没有意义
+      if (view === 'watch' && !currentSong.value) {
+        centerView.value = selectedPlaylist.value ? 'songs' : 'home'
         return
       }
       centerView.value = view
@@ -707,9 +731,9 @@ export default {
 
     const savePlaylistsToStorage = () => {
       // 持久化时剥离大体积 tracks（selectedPlaylist 切回时会重新拉取详情），
-      // 仅保留单曲分享临时歌单的 tracks 供下次直接复用
+      // 本地内存态歌单（单曲分享/队列存盘）无法从接口重拉，tracks 必须保留
       const toStore = userPlaylists.value.map(p => {
-        if (String(p.id).startsWith('single_song_')) return p
+        if (isLocalPlaylistId(p.id)) return p
         const { tracks, ...rest } = p
         return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
       })
@@ -738,7 +762,7 @@ export default {
         playMode: playMode.value,
         shuffleOn: shuffleOn.value,
         showVipSongs: showVipSongs.value,
-        autoFollowLyrics: autoFollowLyrics.value,
+        autoplayOn: autoplayOn.value,
         isFullscreenPlayerOpen: isFullscreenPlayerOpen.value,
         fullscreenLyricMode: fullscreenLyricMode.value,
         fullscreenInteractionMode: fullscreenInteractionMode.value
@@ -770,7 +794,7 @@ export default {
       if (typeof savedState.playMode === 'string') playMode.value = savedState.playMode
       if (typeof savedState.shuffleOn === 'boolean') shuffleOn.value = savedState.shuffleOn
       if (typeof savedState.showVipSongs === 'boolean') showVipSongs.value = savedState.showVipSongs
-      if (typeof savedState.autoFollowLyrics === 'boolean') autoFollowLyrics.value = savedState.autoFollowLyrics
+      if (typeof savedState.autoplayOn === 'boolean') autoplayOn.value = savedState.autoplayOn
       if (typeof savedState.fullscreenLyricMode === 'string') fullscreenLyricMode.value = savedState.fullscreenLyricMode
       if (typeof savedState.fullscreenInteractionMode === 'string') fullscreenInteractionMode.value = savedState.fullscreenInteractionMode
     }
@@ -825,10 +849,8 @@ export default {
 
         console.log('🎵 加载歌单歌曲:', playlist.name)
 
-        // 检查是否为临时歌单（单曲分享）
-        // 某些歌单ID为数字，直接调用 startsWith 会报错，先转换为字符串
-        if (playlist.id && String(playlist.id).startsWith('single_song_')) {
-          // 对于临时歌单，直接使用已有的歌曲数据
+        // 本地内存态歌单（单曲分享/队列存盘）没有接口数据——直接用内嵌 tracks
+        if (isLocalPlaylistId(playlist.id)) {
           songs.value = playlist.tracks || []
           console.log('✅ 临时歌单加载完成，共', songs.value.length, '首')
         } else {
@@ -931,7 +953,7 @@ export default {
       if (song) playSong(song, { preserveContext: true })
     }
 
-    // 从队列移除（当前播放行不可删——LyricsPanel 已隐藏按钮，这里兜底）
+    // 从队列移除（当前播放行不可删——WatchView 已隐藏按钮，这里兜底）
     const queueRemove = (index) => {
       const list = playingSongs.value
       if (index < 0 || index >= list.length) return
@@ -950,7 +972,7 @@ export default {
     const playNextInQueue = (song) => {
       if (!song || song.id == null) return
       if (!currentSong.value || playingSongs.value.length === 0) {
-        playSong(song)
+        openWatchSong(song)
         return
       }
       if (String(song.id) === String(currentSong.value.id)) return
@@ -972,7 +994,7 @@ export default {
     const addToQueueEnd = (song) => {
       if (!song || song.id == null) return
       if (!currentSong.value || playingSongs.value.length === 0) {
-        playSong(song)
+        openWatchSong(song)
         return
       }
       // id 唯一性：currentPlayingIndex 按 id 定位，同 id 双份会让高亮/接续错乱
@@ -1008,7 +1030,7 @@ export default {
       const ok = await selectPlaylist(playlist)
       if (!ok) return
       sidebarOpen.value = false
-      pushNavState(playlist) // 浏览选中变了——view=songs 时 pl 要跟到新歌单
+      enterWatch() // 点歌单播放即进入 watch 页（YTM 同款导航）
       playPlaylist(false)
     }
 
@@ -1020,13 +1042,110 @@ export default {
       return playingPlaylistId.value ? '未知歌单' : '当前队列'
     })
 
-    // 侧栏面板开关：同 tab 再点收起，不同 tab 直接切换
-    const toggleSidePanel = (tab) => {
-      if (lyricsDrawerOpen.value && sidePanelTab.value === tab) {
-        lyricsDrawerOpen.value = false
-      } else {
-        sidePanelTab.value = tab
-        lyricsDrawerOpen.value = true
+    // 播放条 ☰/词 开关 → 打开 watch 页对应 tab（YTM：UP NEXT/歌词都是页内栏位）
+    const openWatchPanel = (tab) => {
+      if (!currentSong.value) return // 没在播的歌：空 watch 页无意义
+      watchTab.value = tab
+      if (centerView.value !== 'watch') {
+        centerView.value = 'watch'
+        pushNavState()
+      }
+    }
+
+    // 点歌进入 watch 播放页（YTM：任何地方点歌都导航到 /watch）。
+    // 调用处紧跟着就是 playSong——不能用 currentSong 做守卫，冷启动点歌时它还是 null
+    const enterWatch = () => {
+      if (centerView.value !== 'watch') {
+        centerView.value = 'watch'
+        pushNavState()
+      }
+    }
+
+    const openWatchSong = (song) => {
+      enterWatch()
+      playSong(song)
+    }
+
+    const openWatchSearchSong = (song) => {
+      enterWatch()
+      playSongFromSearch(song)
+    }
+
+    const playPlaylistAndWatch = (shuffle) => {
+      enterWatch()
+      playPlaylist(shuffle)
+    }
+
+    const watchBack = () => {
+      window.history.back()
+    }
+
+    // 队列拖拽排序：from→to 实时移动；原序备份做同构移动（关随机后顺序不回弹）
+    const queueMove = ({ from, to }) => {
+      const list = playingSongs.value
+      if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return
+      const [moved] = list.splice(from, 1)
+      list.splice(to, 0, moved)
+      if (queueOriginalOrder && queueOriginalOrder.length) {
+        const oi = queueOriginalOrder.findIndex(s => String(s.id) === String(moved.id))
+        if (oi !== -1) {
+          const [m] = queueOriginalOrder.splice(oi, 1)
+          const toOrig = Math.min(to, queueOriginalOrder.length)
+          queueOriginalOrder.splice(toOrig, 0, m)
+        }
+      }
+      playingSongs.value = list.slice()
+    }
+
+    // 清空队列（保留当前播放曲）
+    const clearQueue = () => {
+      if (!currentSong.value) { playingSongs.value = []; queueOriginalOrder = null; return }
+      playingSongs.value = [currentSong.value]
+      if (queueOriginalOrder) {
+        queueOriginalOrder = queueOriginalOrder.filter(s => String(s.id) === String(currentSong.value.id))
+      }
+      savePlayerStateToStorage()
+    }
+
+    // 把当前队列存成新歌单（本地内存态——网易侧无持久行，id 用 saved_queue_ 前缀）
+    const saveQueueAsPlaylist = () => {
+      if (!playingSongs.value.length) return
+      const first = playingSongs.value[0]
+      const pl = {
+        id: `saved_queue_${Date.now()}`,
+        name: `${queueTitle.value} · 队列`,
+        coverImgUrl: first?.al?.picUrl || first?.album?.picUrl || '',
+        creator: { nickname: '我的队列' },
+        trackCount: playingSongs.value.length,
+        tracks: playingSongs.value.slice(),
+        isLocal: true
+      }
+      userPlaylists.value.unshift(pl)
+      savePlaylistsToStorage()
+      alert(`已存为歌单「${pl.name}」`)
+    }
+
+    // 相关 tab 点歌：单曲独立成队（与搜索结果点歌同构）
+    const playSongFromRelated = (song) => {
+      setQueue([song], null)
+      playingPlaylistId.value = null
+      playSong(song, { preserveContext: true })
+    }
+
+    // autoplay：自然播完且队列耗尽时，拉当前艺人相关歌接进队列继续播
+    const continueWithRelated = async () => {
+      const artist = (currentSong.value?.ar || currentSong.value?.artists || [])[0]?.name
+      if (!artist) return false
+      try {
+        const list = await musicApi.searchSongs(artist, 15)
+        const exist = new Set(playingSongs.value.map(s => String(s.id)))
+        const fresh = (list || []).filter(s => s?.id != null && !exist.has(String(s.id)))
+        if (!fresh.length) return false
+        playingSongs.value = [...playingSongs.value, ...fresh]
+        playSong(fresh[0], { preserveContext: true })
+        return true
+      } catch {
+        return false
       }
     }
 
@@ -1454,7 +1573,7 @@ export default {
       }
     }
 
-    const nextSong = () => {
+    const nextSong = (opts = {}) => {
       const list = playbackList()
       if (list.length === 0) {
         if (!howl || !howl.playing()) isPlaying.value = false
@@ -1477,14 +1596,12 @@ export default {
       if (newIndex >= list.length) {
         if (playMode.value === 'loop') {
           newIndex = 0
+        } else if (opts.autoplay && autoplayOn.value) {
+          // YTM 自动播放：队列耗尽时接相关歌曲续播；拉不到才落到停止分支
+          continueWithRelated().then(ok => { if (!ok) stopAtQueueEnd() })
+          return
         } else {
-          // 列表播放到末尾：显式停止播放态，否则 isPlaying 残留 true、rAF 空转。
-          // 手动点下一首到末尾时音频其实还在响——必须真停 howl，
-          // 否则 UI/MediaSession 显示暂停但声音继续（自然播完路径的 stop 无害空转）
-          if (howl?.playing()) howl.pause()
-          isPlaying.value = false
-          currentTime.value = duration.value
-          savePlaybackTimeIfNeeded(true)
+          stopAtQueueEnd()
           return
         }
       }
@@ -1493,6 +1610,17 @@ export default {
       if (song) {
         playSong(song, { preserveContext: true })
       }
+    }
+
+    // 队列播尽的停止收尾（抽出共用：直接停止路径与 autoplay 拉取失败路径）
+    const stopAtQueueEnd = () => {
+      // 列表播放到末尾：显式停止播放态，否则 isPlaying 残留 true、rAF 空转。
+      // 手动点下一首到末尾时音频其实还在响——必须真停 howl，
+      // 否则 UI/MediaSession 显示暂停但声音继续（自然播完路径的 stop 无害空转）
+      if (howl?.playing()) howl.pause()
+      isPlaying.value = false
+      currentTime.value = duration.value
+      savePlaybackTimeIfNeeded(true)
     }
 
     const handleSongEnd = () => {
@@ -1510,8 +1638,8 @@ export default {
           }
         }, 0)
       } else {
-        // 列表播放和列表循环：播放下一首
-        nextSong()
+        // 列表播放和列表循环：播放下一首（队列耗尽时走 autoplay 接续）
+        nextSong({ autoplay: true })
       }
     }
 
@@ -1571,16 +1699,11 @@ export default {
       isFullscreenPlayerOpen.value = false
     }
 
-    // 歌词自动跟随切换
-    const toggleAutoFollowLyrics = () => {
-      autoFollowLyrics.value = !autoFollowLyrics.value
-      console.log('🎯 歌词自动跟随:', autoFollowLyrics.value ? '开启' : '关闭')
-      savePlayerStateToStorage()
-    }
-
     watch(currentTime, () => {
       savePlaybackTimeIfNeeded()
     })
+
+    watch(autoplayOn, () => savePlayerStateToStorage())
 
     // MediaSession：锁屏/耳机线控/系统媒体键。action handler 在挂载时注册一次，
     // 元数据与 playbackState 随播放状态同步；不支持的环境静默跳过
@@ -1649,7 +1772,6 @@ export default {
     // F 全屏、Q 待播队列、/ 聚焦搜索；输入态/修饰键组合全部放行
     const onGlobalKeydown = (e) => {
       if (e.key === 'Escape') {
-        if (lyricsDrawerOpen.value) lyricsDrawerOpen.value = false
         if (sidebarOpen.value) sidebarOpen.value = false
         return
       }
@@ -1682,7 +1804,7 @@ export default {
           if (currentSong.value) isFullscreenPlayerOpen.value = !isFullscreenPlayerOpen.value
           break
         case 'q': case 'Q':
-          toggleSidePanel('queue')
+          if (currentSong.value) openWatchPanel('queue')
           break
         case '/':
           e.preventDefault()
@@ -1913,8 +2035,9 @@ export default {
             currentSong.value = existingPlaylist.tracks[0]
             songs.value = existingPlaylist.tracks || []
 
-            // 自动播放
+            // 自动播放并进入 watch 播放页
             await playSong(existingPlaylist.tracks[0])
+            enterWatch()
           } else {
             console.log('🎵 创建新的单曲分享歌单')
             // 获取歌曲详情
@@ -1949,8 +2072,9 @@ export default {
             currentSong.value = songDetail
             songs.value = tempPlaylist.tracks || []
 
-            // 自动播放
+            // 自动播放并进入 watch 播放页
             await playSong(songDetail)
+            enterWatch()
           }
 
           console.log('✅ 单首歌曲分享加载完成并开始播放')
@@ -2036,7 +2160,6 @@ export default {
       showVipSongs,
       lyrics,
       currentLyricIndex,
-      autoFollowLyrics,
       songSwitching,
       isPlaying,
       currentTime,
@@ -2052,8 +2175,8 @@ export default {
       pageSize,
       centerView,
       sidebarOpen,
-      lyricsDrawerOpen,
-      sidePanelTab,
+      watchTab,
+      autoplayOn,
       searching,
       searchSongResults,
       playlistDownloadsRefreshKey,
@@ -2089,7 +2212,16 @@ export default {
       addToQueueEnd,
       queueJump,
       queueRemove,
-      toggleSidePanel,
+      queueMove,
+      clearQueue,
+      saveQueueAsPlaylist,
+      openWatchPanel,
+      enterWatch,
+      openWatchSong,
+      openWatchSearchSong,
+      playPlaylistAndWatch,
+      watchBack,
+      playSongFromRelated,
       toggleShuffle,
       toggleMute,
       togglePlay,
@@ -2101,7 +2233,6 @@ export default {
       updateVolume,
       openFullscreenPlayer,
       closeFullscreenPlayer,
-      toggleAutoFollowLyrics,
       toggleCenterView
     }
   }
