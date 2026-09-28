@@ -3,8 +3,8 @@
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
   <div class="watch-view">
     <header class="watch-header">
-      <button class="ink-btn ink-btn--ghost watch-header-btn" @click="$emit('back')" title="返回上一页">← 返回</button>
-      <button class="ink-btn ink-btn--ghost watch-header-btn" @click="$emit('open-fullscreen')" title="全屏歌词模式">
+      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="12" />返回</button>
+      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('open-fullscreen')" title="全屏歌词模式">
         <PixelIcon name="expand" :size="13" /> 沉浸
       </button>
     </header>
@@ -20,7 +20,7 @@
             class="watch-cover"
             :class="{ 'playing-animation': isPlaying }"
           />
-          <div v-else class="watch-cover watch-cover--fallback">♪</div>
+          <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
         </div>
 
         <h2 class="watch-title">{{ currentSong?.name || '未播放' }}</h2>
@@ -96,7 +96,7 @@
                 @keydown.space.prevent="jumpTo(index)"
               >
               <span class="queue-row-index">
-                <template v-if="String(song.id) === String(currentSong?.id)">▶</template>
+                <template v-if="String(song.id) === String(currentSong?.id)"><PixelIcon name="play" :size="10" /></template>
                 <template v-else>{{ index + 1 }}</template>
               </span>
               <img
@@ -105,7 +105,7 @@
                 :alt="song.name"
                 class="watch-queue-thumb"
               />
-              <div v-else class="watch-queue-thumb watch-queue-thumb--fallback">♪</div>
+              <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="12" /></div>
               <div class="queue-row-info">
                 <p class="queue-row-title">{{ song.name }}</p>
                 <p class="queue-row-artist">{{ songArtist(song) }}</p>
@@ -118,16 +118,16 @@
                 title="从队列移除"
                 aria-label="从队列移除"
                 @click.stop="$emit('queue-remove', index)"
-              >✕</button>
+              ><PixelIcon name="close" :size="11" /></button>
             </div>
           </template>
 
           <div class="watch-queue-foot" v-if="queue.length">
-            <button class="watch-foot-btn" @click="$emit('save-queue')" title="把当前队列存成新歌单">
+            <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('save-queue')" title="把当前队列存成新歌单">
               <PixelIcon name="save" :size="12" /> 存为歌单
             </button>
             <button
-              class="watch-foot-btn"
+              class="ink-btn ink-btn--ghost ink-btn--sm"
               :disabled="queue.length < 2"
               @click="$emit('clear-queue')"
               title="清空队列（保留当前播放）"
@@ -212,7 +212,7 @@
               :alt="song.name"
               class="watch-queue-thumb"
             />
-            <div v-else class="watch-queue-thumb watch-queue-thumb--fallback">♪</div>
+            <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="12" /></div>
             <div class="queue-row-info">
               <p class="queue-row-title">{{ song.name }}</p>
               <p class="queue-row-artist">{{ songArtist(song) }}</p>
@@ -443,13 +443,8 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 16px;
+  padding: 10px 20px;
   flex-shrink: 0;
-}
-
-.watch-header-btn {
-  font-size: 12px;
-  padding: 7px 12px;
 }
 
 .watch-layout {
@@ -465,16 +460,20 @@ export default {
 .watch-main {
   min-width: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 8px 8px 24px;
+  padding: 8px 8px 0; /* 底距交给 .watch-layout 的 20，不再叠 24 */
   text-align: center;
 }
 
 .watch-cover {
-  width: min(46vh, 420px, 100%);
+  /* width 里的 100% 对 shrink-to-fit 父级是循环%——fallback 分支塌成 42px。
+     min() 只留物理上限，收窄交给 max-width */
+  width: min(46vh, 420px);
+  max-width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
   border: var(--hairline);
@@ -486,7 +485,6 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 64px;
   color: var(--ink-64);
   background: var(--paper);
 }
@@ -494,7 +492,7 @@ export default {
 .watch-title {
   margin-top: 20px;
   font-family: var(--font-display);
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   line-height: 1.15;
   color: var(--ink);
@@ -525,7 +523,8 @@ export default {
   flex-direction: column;
   min-height: 0;
   border-left: var(--hairline);
-  padding-left: 16px;
+  /* gap 24 → padding 24：发丝线两侧留白对称 */
+  padding-left: 24px;
 }
 
 /* 状态横幅：纸面发丝盒 + 等宽标签（warn:/error:） */
@@ -541,7 +540,7 @@ export default {
 
 .watch-banner-tag {
   font-family: var(--font-mono);
-  font-weight: 400;
+  font-weight: 300;
   letter-spacing: .05em;
   color: var(--accent-magenta-ink);
 }
@@ -558,7 +557,7 @@ export default {
 
 .watch-empty {
   text-align: center;
-  padding: 32px 8px;
+  padding: 32px 16px;
   font-size: 12px;
   color: var(--ink-64);
 }
@@ -577,14 +576,18 @@ export default {
   cursor: grab;
   touch-action: none;
 }
+.watch-grip:hover { color: var(--ink); }
+.watch-grip:active { cursor: grabbing; color: var(--accent-magenta-ink); }
 
 /* 触屏下半透明把手 1.99:1 不可见——直接常显 */
 @media (hover: none){
   .watch-grip { color: var(--ink); }
 }
 
+.watch-related-row { cursor: pointer; }
+
 .queue-row--dragging {
-  outline: 1.2px dashed var(--accent-magenta);
+  outline: 1.2px solid var(--accent-magenta); /* 全站唯一 dashed 已归一 */
   outline-offset: -4px;
   background: var(--paper);
 }
@@ -602,7 +605,6 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
   color: var(--ink-64);
   background: var(--paper);
 }
@@ -612,22 +614,6 @@ export default {
   gap: 8px;
   padding: 12px 4px 4px;
 }
-
-.watch-foot-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  padding: 6px 10px;
-  color: var(--ink);
-  background: var(--paper);
-  border: var(--hairline);
-  cursor: pointer;
-  transition: color .2s;
-}
-
-.watch-foot-btn:hover:not(:disabled) { color: var(--ink); text-decoration: underline; }
-.watch-foot-btn:disabled { opacity: .45; cursor: default; }
 
 .watch-autoplay {
   display: flex;

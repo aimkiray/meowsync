@@ -152,27 +152,33 @@ button {
 .ink-btn:focus-visible, .pg-icobtn:focus-visible, .pg-tab:focus-visible,
 .pg-chip:focus-visible, .pg-field:focus-within, .queue-row:focus-visible,
 .song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
-.pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row:focus-visible, .dtl-group-toggle:focus-visible,
+.pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
 .grid-card:focus-visible, .song-result-row:focus-visible, .side-nav-item:focus-visible,
-.watch-foot-btn:focus-visible, .toy-window:focus-visible, .transport:focus-visible,
+.toy-window:focus-visible, .transport:focus-visible,
 .pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
 .pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
 .song-menu-btn:focus-visible, .queue-row-remove:focus-visible,
 .playlist-play-overlay:focus-visible, .topnav-suggest-item:focus-visible,
+.pl-action:focus-visible, .watch-grip:focus-visible, .pg-check:focus-visible,
+.grid-card-main:focus-visible,
 .rc-btn:focus-visible, .rc-queue-row:focus-visible, .player-progress-bar:focus-visible {
   outline-offset: -4px;
-  border-radius: 8px;
+  /* 零圆角世界：环贴形走，不圆角化实底（border-radius 会同时圆掉反白行底色） */
 }
 
 /* 激活侧栏行反白态：墨底上需要纸色环（ink-86 环在 #1e1e1e 上不可见） */
 .pl-row--active .pl-row-main:focus-visible { outline-color: var(--paper); }
+/* 反白行上的图标键 hover 框线同样要纸色，否则隐形 */
+.pl-row--active .pl-action:hover { outline-color: var(--paper); color: var(--paper); }
+.song-row--playing .song-menu-btn:hover { outline-color: var(--paper); color: var(--paper); }
 
 /* teleport 菜单触发器语态 */
 [aria-expanded="true"].song-menu-btn,
 [aria-expanded="true"].queue-menu-trigger,
 [aria-expanded="true"].pl-action { outline: 1.2px solid var(--ink); outline-offset: -4px; }
 
-/* 细滚动条：透明轨道 + 镂空墨块柄 */
+/* 细滚动条：透明轨道 + 镂空墨块柄；Firefox 走 scrollbar-* 双属性 */
+* { scrollbar-width: thin; scrollbar-color: var(--ink) transparent; }
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -227,10 +233,16 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .app-body .pl-meta, .app-body .pl-count, .app-body .result-section-sub,
 .app-body .grid-state-text, .app-body .home-section-sub, .app-body .home-state-text,
 .app-body .watch-banner, .app-body .watch-autoplay,
-.app-body .watch-lyric-translation, .app-body .playlist-hero-sub {
+.app-body .watch-lyric-translation, .app-body .playlist-hero-sub,
+.app-body .song-result-index, .app-body .song-result-meta, .app-body .song-result-duration {
   color: var(--ink-86);
 }
 .app-body .pg-label--dim, .app-body .queue-row-index, .app-body .song-row-index {
+  color: var(--ink-86);
+}
+/* 画布上的图标键/把手：ink-64 在饱和底上 <3:1 图形线，升 ink-86 */
+.app-body .queue-row-remove, .app-body .song-menu-btn, .app-body .pl-action,
+.app-body .dql-kebab {
   color: var(--ink-86);
 }
 
@@ -250,10 +262,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border-right: var(--hairline);
 }
 
-/* 移动端：侧栏改抽屉（汉堡键呼出 + 遮罩关闭） */
+/* 移动端：侧栏改抽屉（汉堡键呼出 + 遮罩关闭）。
+   top 让 56px：抽屉不盖顶栏，遮罩也不能盖——否则 ☰ 无法关闭抽屉 */
 .sidebar-scrim {
   position: fixed;
-  inset: 0;
+  inset: 56px 0 0;
   background: rgba(30, 30, 30, .45);
   z-index: var(--z-overlay);
 }
@@ -324,7 +337,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
     linear-gradient(var(--ink-86), var(--ink-86)) right bottom / 1.2px 10px no-repeat;
 }
 
-/* 墨块按钮（直角矩形，hover 字色转品红，按面无动画即瞬态） */
+/* 墨块按钮（直角矩形，hover 字色转品红，按面无动画即瞬态）。
+   border 始终占 1.2px（透明=ink 底延伸视觉无差）——与 --ghost 同盒高，消灭 2.4px 错位 */
 .ink-btn {
   display: inline-flex;
   align-items: center;
@@ -332,7 +346,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   gap: 6px;
   background: var(--ink);
   color: var(--paper);
-  border: none;
+  border: 1.2px solid transparent;
   font-family: var(--font-display);
   font-weight: 500;
   font-size: 13px;
@@ -371,6 +385,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .pg-icobtn:hover:not(:disabled) { color: var(--accent-magenta); }
 .pg-icobtn--bare { border-color: transparent; }
+.pg-icobtn--sm { width: 24px; height: 24px; } /* 行内尾键档：⋯/分享 */
 .pg-icobtn:disabled { opacity: .45; cursor: default; }
 
 /* 纯文字链接键（nav/footer 的裸墨字） */
@@ -424,10 +439,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-chip--static { cursor: default; }
 .pg-chip--static:hover { background: transparent; }
 
-/* 表单：发丝框 + focus-within 环 */
+/* 表单：发丝框 + focus-within 环。高度锁定 36 与 .ink-btn 同盒（控件对不不齐） */
 .pg-field {
   display: flex;
   align-items: center;
+  height: 36px;
   border: var(--hairline);
   background: var(--paper);
 }
@@ -435,9 +451,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-field select {
   flex: 1;
   min-width: 0;
+  height: 100%;
   background: transparent;
   border: 0;
-  padding: 9px 12px;
+  padding: 8px 12px;
   font: inherit;
   font-size: 13px;
   color: var(--ink);
@@ -512,6 +529,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 
 .queue-source {
   font-family: var(--font-mono);
+  font-weight: 300;
   font-size: 11px;
   letter-spacing: .05em;
   color: var(--ink-64);
@@ -568,7 +586,29 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .queue-row-remove:hover { color: var(--ink); text-decoration: underline; }
 
-/* 卡片内部件（PlaylistGrid 与 HomeFeed 货架共用——必须全局） */
+/* 卡片外壳 + 内部件（PlaylistGrid 与 HomeFeed 货架共用——必须全局） */
+.grid-card {
+  background: var(--paper);
+  border: var(--hairline);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: transform 0.15s var(--ease-ink);
+}
+/* PG 里整卡不可点——可点区是 .grid-card-main */
+.grid-card-main { cursor: pointer; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .grid-card:hover { transform: translateY(-2px); }
+}
+
+.grid-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .grid-card-cover {
   width: 100%;
   aspect-ratio: 1;
@@ -588,7 +628,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 36px;
   color: var(--ink-64);
 }
 .grid-card-name {
@@ -618,7 +657,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   background: var(--pixel-progress-track);
   z-index: 1;
 }
-.player-progress-bar:hover { height: 6px; }
+/* hover 加高仅限底部走带——FullscreenPlayer 复用同名类，不加前缀会渗漏 */
+.bottom-player .player-progress-bar:hover { height: 6px; }
 .player-progress-fill {
   height: 100%;
   width: 100%;
@@ -844,6 +884,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   align-self: flex-start;
   background: var(--ink-10);
   font-family: var(--font-mono);
+  font-weight: 300;
   font-size: 11px;
   padding: 2px 8px;
 }

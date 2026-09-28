@@ -254,7 +254,7 @@ const TaskRow = {
               h('div', {
                 class: 'dtr-progress-fill',
                 // undefined/>100 会产生非法/溢出样式
-                style: `width: ${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`
+                style: `--p: ${Math.max(0, Math.min(100, rowProps.task.progress || 0))}`
               })
             ]),
             h('div', { class: 'dtr-progress-num' }, `${Math.max(0, Math.min(100, rowProps.task.progress || 0))}%`)
@@ -321,7 +321,7 @@ const TaskRow = {
 }
 
 .dtl-stat {
-  border: 1.2px solid var(--ink-10);
+  border: var(--hairline);
   padding: 8px 10px;
 }
 
@@ -379,7 +379,7 @@ const TaskRow = {
 .dtl-scroll {
   overflow-y: auto;
   border-top: var(--hairline);
-  padding: 12px 16px;
+  padding: 12px 6px 12px 16px; /* 右缘 6+10(gutter)=16 与左缘对称 */
   scrollbar-gutter: stable;
 }
 
@@ -406,7 +406,7 @@ const TaskRow = {
 
 /* 任务卡：发丝盒 */
 .dtl-task {
-  border: 1.2px solid var(--ink-10);
+  border: var(--hairline);
   padding: 10px;
   transition: border-color .15s;
 }
@@ -505,7 +505,7 @@ const TaskRow = {
 
 .dtl-task :deep(.dtr-artist) {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-64);
   white-space: nowrap;
   overflow: hidden;
@@ -561,8 +561,11 @@ const TaskRow = {
 
 .dtl-task :deep(.dtr-progress-fill) {
   height: 100%;
+  width: 100%;
+  transform: scaleX(calc(var(--p, 0) / 100));
+  transform-origin: left;
   background: var(--ink);
-  transition: width .3s var(--ease-ink);
+  transition: transform .3s var(--ease-ink);
 }
 
 .dtl-task :deep(.dtr-progress-num) {
@@ -584,6 +587,7 @@ const TaskRow = {
 
 .dtl-task :deep(.dtr-err-tag) {
   font-family: var(--font-mono);
+  font-weight: 300;
   letter-spacing: .05em;
   color: var(--accent-magenta-ink);
 }

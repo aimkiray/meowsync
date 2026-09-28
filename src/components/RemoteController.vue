@@ -85,7 +85,7 @@
             :class="{ 'rc-queue-row--current': i === state.queueIndex }"
             @click="send('play_song', s.id)"
           >
-            <span class="rc-queue-idx">{{ i === state.queueIndex ? '▶' : i + 1 }}</span>
+            <span class="rc-queue-idx"><PixelIcon v-if="i === state.queueIndex" name="play" :size="10" /><template v-else>{{ i + 1 }}</template></span>
             <span class="rc-queue-name">{{ s.name }}</span>
             <span class="rc-queue-artist">{{ queueArtist(s) }}</span>
           </button>
@@ -489,6 +489,7 @@ onUnmounted(() => {
   letter-spacing: .02em;
 }
 
+.rc-retry:hover { background: var(--label-grey); }
 .rc-retry:active { background: var(--label-grey); }
 
 .rc-btn-main {
@@ -520,6 +521,14 @@ onUnmounted(() => {
 .rc-queue-list {
   max-height: 240px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  /* 暗面上的滚动条柄要换浅柄——全局 ink 柄在此不可见 */
+  scrollbar-color: var(--label-grey) transparent;
+}
+.rc-queue-list::-webkit-scrollbar-thumb {
+  background: var(--label-grey);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .rc-queue-row {
@@ -536,6 +545,11 @@ onUnmounted(() => {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+}
+
+.rc-queue-row:hover {
+  background: var(--white-16);
+  color: var(--paper);
 }
 
 .rc-queue-row:active {

@@ -8,7 +8,7 @@
         :aria-expanded="sidebarOpen"
         aria-label="歌单库"
         title="打开歌单库"
-      >☰</button>
+      ><PixelIcon name="menu" :size="15" /></button>
 
       <h1 class="topnav-title">MeowSync<span class="topnav-ver">MS.OS1</span></h1>
 
@@ -40,7 +40,7 @@
             title="清除"
             aria-label="清除搜索"
             @mousedown.prevent="clearQuery"
-          >✕</button>
+          ><PixelIcon name="close" :size="12" /></button>
           <!-- typeahead 下拉：搜索建议（文本+实体名），↑↓ 可选 -->
           <div v-if="suggestOpen && suggestions.length" class="topnav-suggest" id="topnav-suggest-list" role="listbox">
             <div
@@ -366,6 +366,7 @@ export default {
   flex: 1;
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: 8px;
   min-width: 0;
 }
@@ -384,7 +385,6 @@ export default {
 
 .topnav-search-input {
   width: 100%;
-  height: 36px;
   padding: 0 30px 0 8px;
   font-size: 13px;
 }
@@ -396,7 +396,7 @@ export default {
   transform: translateY(-50%);
   font-size: 12px;
   padding: 2px 6px;
-  color: var(--ink-64);
+  color: var(--ink-86);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -445,10 +445,11 @@ export default {
 .topnav-suggest-kind {
   flex-shrink: 0;
   font-family: var(--font-mono);
+  font-weight: 300;
   font-size: 10px;
   letter-spacing: .05em;
   color: var(--ink-64);
-  border: 1.2px solid var(--ink-30);
+  border: 1.2px solid var(--ink-10);
   padding: 1px 6px;
 }
 
@@ -476,7 +477,7 @@ export default {
 
 /* 窄屏：标题让位给搜索框（移动端搜索仍是主入口） */
 @media (max-width: 640px) {
-  .topnav { padding: 0 10px; }
+  .topnav { padding: 0 12px; }
   .topnav-title { display: none; }
   .topnav-remote-hint { display: none; }
 }

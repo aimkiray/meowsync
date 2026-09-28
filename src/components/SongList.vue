@@ -10,7 +10,7 @@
           :alt="selectedPlaylist.name"
           class="playlist-hero-cover"
         />
-        <div v-else class="playlist-hero-cover playlist-hero-fallback">♪</div>
+        <div v-else class="playlist-hero-cover playlist-hero-fallback"><PixelIcon name="note" :size="34" /></div>
       </div>
       <div class="playlist-hero-meta">
         <h2 class="playlist-hero-name">{{ selectedPlaylist.name }}</h2>
@@ -73,7 +73,7 @@
           <!-- 行首序号：常态等宽数字，悬停/当前曲换 ▶ -->
           <span class="song-row-index">
             <span class="song-row-index-num">{{ (currentPage - 1) * pageSize + index + 1 }}</span>
-            <span class="song-row-index-play">▶</span>
+            <span class="song-row-index-play"><PixelIcon name="play" :size="11" /></span>
           </span>
           <div
             class="song-cover-wrap"
@@ -85,7 +85,7 @@
               :alt="song.name"
               class="song-cover"
             />
-            <div v-else class="song-cover song-cover--fallback">♪</div>
+            <div v-else class="song-cover song-cover--fallback"><PixelIcon name="note" :size="16" /></div>
           </div>
           <div class="song-info">
             <h4 class="song-title">
@@ -108,7 +108,7 @@
         <!-- 行尾 ⋯ 菜单键：悬停/聚焦时露出，触屏常显 -->
         <div class="song-actions">
           <button
-            class="song-menu-btn"
+            class="song-menu-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             @click.stop="toggleDownloadMenu(song.id, $event)"
             title="更多操作"
             aria-label="更多操作"
@@ -144,7 +144,7 @@
         @click="closeDownloadMenu"
       >
         <div
-          class="pg-menu song-menu"
+          class="pg-menu"
           role="menu"
           :style="getMenuPosition(showDownloadMenu)"
           @click.stop
@@ -221,7 +221,7 @@
 
 <style scoped>
 .song-list-main {
-  padding: 16px 20px;
+  padding: 20px;
 }
 
 /* ── 歌单页头：裁切角标封面 + 墨块按钮组 ── */
@@ -255,7 +255,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 26px;
   color: var(--ink-64);
   background: var(--paper);
 }
@@ -277,6 +276,7 @@
 
 .playlist-hero-sub {
   font-family: var(--font-mono);
+  font-weight: 300;
   font-size: 11px;
   letter-spacing: .05em;
   color: var(--ink-64);
@@ -297,7 +297,9 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  padding: 64px 0;
+  /* 与 grid-state/home-state 同规约：64 竖 + 16 横 + 顶部发丝分隔 */
+  padding: 64px 16px;
+  border-top: 1.2px solid var(--ink-10);
 }
 
 .song-state-icon {
@@ -332,11 +334,6 @@
   padding-right: 44px; /* 行尾 ⋯ 键悬浮位，防压时长列 */
   cursor: pointer;
   transition: background .12s;
-}
-
-.song-row-main:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: -4px;
 }
 
 .song-row:not(.song-row--playing):hover .song-row-main {
@@ -432,7 +429,7 @@
 
 /* 行内小牌（VIP / 已下载勾）：pg-chip 的紧凑变体 */
 .song-tag {
-  height: 17px;
+  height: 20px;
   padding: 0 6px;
   font-size: 10px;
   flex-shrink: 0;
@@ -486,11 +483,7 @@
 }
 
 .song-menu-btn {
-  padding: 6px;
   color: var(--ink-64);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   opacity: 0;
   transition: opacity .12s, color .2s;
 }
@@ -653,9 +646,9 @@ export default {
         const button = event.target.closest('button')
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
-        // 菜单高度按实际项数算：固定项=头部+下一首+队尾+分享+源文件 5 项；
-        // 临时/未选歌单时"下载到服务器"项不渲染少一项（~42px/项，偏小会被裁）
-        const menuHeight = (!isSingleSongPlaylist.value && props.selectedPlaylist) ? 252 : 212
+        // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
+        // 固定项=下一首+队尾+分享+源文件 4 项；非临时歌单+已选歌单时多"下载到服务器"共 5 项
+        const menuHeight = 40 + ((!isSingleSongPlaylist.value && props.selectedPlaylist) ? 5 : 4) * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh

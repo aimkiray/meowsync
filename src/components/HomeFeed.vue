@@ -7,15 +7,6 @@
     <header class="home-head">
       <p class="pg-label">home · discover</p>
       <h2 class="home-title">发现音乐</h2>
-      <!-- 窗口玩具：装饰件，可拖拽回弹 / 方向键可移 / Enter 归位 -->
-      <ToyWindow
-        class="home-toy"
-        title="MEOWSYNC"
-        :lines="['netease music player']"
-        tag="<meow approved>"
-        num="001"
-        rotate="-3deg"
-      />
     </header>
 
     <!-- 热搜 chips（点击直接搜） -->
@@ -64,9 +55,8 @@
                 :src="httpsCover(pl.coverImgUrl)"
                 :alt="pl.name"
                 loading="lazy"
-                style="image-rendering: pixelated;"
               />
-              <div v-else class="grid-card-cover-fallback">♪</div>
+              <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             </div>
             <div class="grid-card-body">
               <h3 class="grid-card-name">{{ pl.name }}</h3>
@@ -100,9 +90,8 @@
                 :src="httpsCover(pl.picUrl || pl.coverImgUrl)"
                 :alt="pl.name"
                 loading="lazy"
-                style="image-rendering: pixelated;"
               />
-              <div v-else class="grid-card-cover-fallback">♪</div>
+              <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             </div>
             <div class="grid-card-body">
               <h3 class="grid-card-name">{{ pl.name }}</h3>
@@ -117,13 +106,22 @@
       </div>
     </template>
 
-    <!-- 页脚收版：∵⩆ 套准符 + 版本戳 + [b.64] 彩蛋块 -->
+    <!-- 页脚收版：∵⩆ 套准符 + 版本戳 + [b.64] 彩蛋块。
+         窗口玩具落在收版区右上——不压任何可点内容（原在页头悬着会盖住末位热搜 chip） -->
     <footer class="home-foot">
       <PrintMarks variant="reg" />
       <div class="home-foot-grid">
         <PrintMarks variant="stamp" class="home-foot-stamp" />
         <PrintMarks variant="b64" class="home-b64" />
       </div>
+      <ToyWindow
+        class="home-toy"
+        title="MEOWSYNC"
+        :lines="['netease music player']"
+        tag="<meow approved>"
+        num="001"
+        rotate="-3deg"
+      />
     </footer>
   </div>
 </template>
@@ -131,11 +129,12 @@
 <script>
 import { httpsCover } from '../lib/url'
 import PrintMarks from './PrintMarks.vue'
+import PixelIcon from './PixelIcon.vue'
 import ToyWindow from './ToyWindow.vue'
 
 export default {
   name: 'HomeFeed',
-  components: { PrintMarks, ToyWindow },
+  components: { PrintMarks, PixelIcon, ToyWindow },
   props: {
     toplists: {
       type: Array,
@@ -167,9 +166,10 @@ export default {
 
 <style scoped>
 .home-feed {
-  padding: 20px 24px;
+  padding: 20px;
   height: 100%;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   position: relative;
 }
 
@@ -179,11 +179,11 @@ export default {
   position: relative;
 }
 
-/* 窗口玩具悬在页头右上——印刷稿上掉落的小玩具（窄屏隐藏，不挡标题） */
+/* 窗口玩具钉在收版区右缘——印刷稿角落掉落的小玩具（窄屏隐藏） */
 .home-toy {
   position: absolute;
-  top: 6px;
-  right: 12px;
+  bottom: 8px;
+  right: 0;
 }
 @media (max-width: 860px) {
   .home-toy { display: none; }
@@ -248,32 +248,12 @@ export default {
   scrollbar-gutter: stable;
 }
 
-/* 卡片容器：纸面发丝边框（.grid-card-cover/-name/-meta 为全局共用类） */
-.grid-card {
-  background: var(--paper);
-  border: var(--hairline);
-  cursor: pointer;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transition: transform 0.15s var(--ease-ink);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .grid-card:hover {
-    transform: translateY(-2px);
-  }
-}
-
-.grid-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
+/* 卡片外壳已上收全局 style.css——这里只留「整卡可点」语义 */
+.grid-card { cursor: pointer; }
 
 /* 页脚收版 */
 .home-foot {
+  position: relative; /* home-toy 的定位参照 */
   border-top: var(--hairline);
   margin-top: 8px;
   padding: 18px 0 12px;
