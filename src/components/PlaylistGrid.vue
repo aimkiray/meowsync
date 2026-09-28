@@ -5,7 +5,7 @@
     <header class="grid-head">
       <div class="grid-head-text">
         <p class="pg-label">search results</p>
-        <h2 class="grid-title">搜索结果</h2>
+        <h2 class="grid-title" data-nosnippet>搜索结果</h2>
       </div>
       <button class="pg-icobtn" @click="$emit('close')" title="返回歌曲列表" aria-label="返回歌曲列表"><PixelIcon name="close" :size="14" /></button>
     </header>

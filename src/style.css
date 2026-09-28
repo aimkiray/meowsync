@@ -36,6 +36,8 @@
   --ink-06: rgba(30, 30, 30, .06);
   --paper: #fefefe;                /* 面板纸面 */
   --label-grey: #dedede;           /* 墨条上的标签灰 */
+  --os-grey: #c4c4c4;              /* 窗口体——经典 OS-9 Platinum 灰（故意非纸色） */
+  --grey-90: rgba(133, 133, 133, .9); /* 暗面上的弱文字 */
 
   /* 每视图一张饱和纸色 —— 色彩即页面身份，无暗色模式 */
   --canvas-teal: #09aea1;
@@ -153,8 +155,8 @@ button {
 .pg-chip:focus-visible, .pg-field:focus-within, .queue-row:focus-visible,
 .song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
 .pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
-.grid-card:focus-visible, .song-result-row:focus-visible, .side-nav-item:focus-visible,
-.toy-window:focus-visible, .transport:focus-visible,
+.song-result-row:focus-visible, .side-nav-item:focus-visible,
+.transport:focus-visible,
 .pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
 .pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
 .song-menu-btn:focus-visible, .queue-row-remove:focus-visible,
@@ -168,6 +170,21 @@ button {
 
 /* 激活侧栏行反白态：墨底上需要纸色环（ink-86 环在 #1e1e1e 上不可见） */
 .pl-row--active .pl-row-main:focus-visible { outline-color: var(--paper); }
+
+/* 大面件用 canonical 环：-8px 内收 + 12px 圆角——全系统唯一的圆角许可
+   （swag-card 源流形）。行/小件保持方形 -4px 环：圆角会肉眼圆掉反白行底色 */
+.grid-card:focus-visible, .toy-window:focus-visible {
+  outline-offset: -8px;
+  border-radius: 12px;
+}
+
+/* forced-colors：只靠底色表达的状态加透明 outline——HC 模式下被强制显色 */
+@media (forced-colors: active) {
+  .pl-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
+  .queue-row--current, .song-row--active {
+    outline: 1.2px solid transparent;
+  }
+}
 /* 反白行上的图标键 hover 框线同样要纸色，否则隐形 */
 .pl-row--active .pl-action:hover { outline-color: var(--paper); color: var(--paper); }
 .song-row--playing .song-menu-btn:hover { outline-color: var(--paper); color: var(--paper); }
@@ -355,6 +372,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   cursor: pointer;
   transition: color .5s var(--ease-ink);
   white-space: nowrap;
+  text-transform: lowercase; /* CTA 一律小写——印刷稿语气规则 */
 }
 .ink-btn:hover:not(:disabled) { color: var(--accent-magenta); }
 .ink-btn:disabled { opacity: .45; cursor: default; }
@@ -869,12 +887,13 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   padding: 8px 10px;
 }
 .toy-window__body {
+  background: var(--os-grey);      /* 经典 OS-9 Platinum——窗口故意不用纸色 */
   border: var(--hairline);
   border-top: 0;
-  padding: 14px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .toy-window__sub {
   font-size: 12px;
@@ -898,6 +917,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   font-size: 12px;
   letter-spacing: .05em;
   color: var(--ink);
+}
+
+/* 装饰件断点门槛：密集页面 ≤810px 藏起裁切标线（typesafe 的 ornament cutoff） */
+@media (max-width: 810px) {
+  .pg-hash { display: none; }
 }
 
 /* iOS 安全区：避开 Home 指示条 */
