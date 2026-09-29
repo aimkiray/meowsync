@@ -23,6 +23,7 @@ import { ref, readonly } from 'vue'
 
 export const THEMES = [
   { id: 'default', label: 'print-grid' },
+  { id: 'glitch-restoration', label: 'glitch' },
   { id: 'pixel-retro', label: 'pixel-retro' },
 ]
 
@@ -67,10 +68,10 @@ export function cycleTheme() {
   setTheme(THEMES[(i + 1) % THEMES.length].id)
 }
 
-// main.js 启动时调用一次：应用持久化主题 + 跨标签页同步
+// main.js 启动时调用一次：应用持久化主题 + 自愈存储 + 跨标签页同步
 // （storage 事件只在其他同源文档触发；e.key===null 表示 localStorage.clear()）
 export function initTheme() {
-  applyTheme(stored.value)
+  setTheme(stored.value) // 经 setTheme 规范化+回写：非法值/旧键残留在此自愈
   window.addEventListener('storage', (e) => {
     if (e.key === null || e.key === STORAGE_KEY || e.key === LEGACY_KEY) {
       stored.value = readStoredTheme()

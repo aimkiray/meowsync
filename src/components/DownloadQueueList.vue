@@ -478,7 +478,7 @@ function getQueueCover(queue) {
 
 .dql-chip--dim { color: var(--ink-64); }
 .dql-chip--ok { color: var(--accent-green-ink); border-color: var(--accent-green); }
-.dql-chip--fail { color: var(--accent-magenta-ink); border-color: var(--accent-magenta); }
+.dql-chip--fail { color: var(--accent-danger-ink); border-color: var(--accent-danger); }
 
 .dql-meta {
   margin-top: 3px;
@@ -507,7 +507,7 @@ function getQueueCover(queue) {
   transition: transform .3s var(--ease-ink);
 }
 
-.dql-progress-fill--fail { background: var(--accent-magenta); }
+.dql-progress-fill--fail { background: var(--accent-danger); }
 
 .dql-kebab {
   position: absolute;

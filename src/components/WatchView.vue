@@ -553,7 +553,7 @@ export default {
   font-family: var(--font-mono);
   font-weight: 300;
   letter-spacing: .05em;
-  color: var(--accent-magenta-ink);
+  color: var(--accent-danger-ink);
 }
 
 .watch-tabs { flex-shrink: 0; }

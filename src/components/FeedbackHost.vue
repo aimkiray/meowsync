@@ -116,7 +116,7 @@ export default {
   color: var(--ink);
 }
 .fb-toast--success .fb-toast-tag::before { color: var(--accent-green); }
-.fb-toast--error .fb-toast-tag::before { color: var(--accent-magenta); }
+.fb-toast--error .fb-toast-tag::before { color: var(--accent-danger); }
 
 .fb-toast-tag {
   letter-spacing: .05em;
@@ -174,12 +174,12 @@ export default {
 /* .fb-btn 类名保留——cycleFocus 靠它抓模态内按钮 */
 .fb-btn--danger {
   background: transparent;
-  border: 1.2px solid var(--accent-magenta);
-  color: var(--accent-magenta-ink);
+  border: 1.2px solid var(--accent-danger);
+  color: var(--accent-danger-ink);
 }
 
 .fb-btn--danger:hover:not(:disabled) {
-  background: var(--accent-magenta);
+  background: var(--accent-danger);
   color: var(--paper);
 }
 </style>
