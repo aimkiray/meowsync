@@ -79,14 +79,6 @@
       </div>
 
       <div class="topnav-actions">
-        <!-- 管理页面入口 -->
-        <button
-          v-if="remoteMode === 'off'"
-          @click="$emit('toggle-center-view')"
-          class="ink-btn ink-btn--ghost topnav-action"
-          :title="isDownloadsView ? '返回歌曲列表' : '打开下载管理'"
-        >{{ isDownloadsView ? '歌曲' : '管理' }}</button>
-
         <!-- 远程控制模式指示 -->
         <a
           v-if="remoteMode === 'host'"
@@ -101,6 +93,14 @@
           class="pg-label pg-label--dim topnav-remote-hint"
           title="添加 ?mode=host 启用远程控制"
         >remote: off</span>
+
+        <!-- 管理页面入口 -->
+        <button
+          v-if="remoteMode === 'off'"
+          @click="$emit('toggle-center-view')"
+          class="ink-btn ink-btn--ghost topnav-action"
+          :title="isDownloadsView ? '返回歌曲列表' : '打开下载管理'"
+        >{{ isDownloadsView ? '歌曲' : '管理' }}</button>
 
         <!-- 主题切换：lang-pill 滑动胶囊（三段态 = radio index），注册表见 lib/theme.js -->
         <div class="theme-pill topnav-theme" role="radiogroup" aria-label="切换主题" :title="`主题：${themeLabel}`">
