@@ -74,6 +74,9 @@ function updateQueue(id, updates) {
     params.name = updates.name;
   }
   if (updates.bitrate !== undefined) {
+    if (!Number.isInteger(updates.bitrate) || updates.bitrate <= 0) {
+      throw new Error('bitrate 必须是正整数');
+    }
     fields.push('bitrate = @bitrate');
     params.bitrate = updates.bitrate;
   }
@@ -90,12 +93,20 @@ function updateQueue(id, updates) {
     params.download_cover = updates.downloadCover ? 1 : 0;
   }
   if (updates.concurrentLimit !== undefined) {
+    if (!Number.isInteger(updates.concurrentLimit) || updates.concurrentLimit <= 0) {
+      throw new Error('concurrentLimit 必须是正整数');
+    }
     fields.push('concurrent_limit = @concurrent_limit');
     params.concurrent_limit = updates.concurrentLimit;
   }
   if (updates.completedAt !== undefined) {
     fields.push('completed_at = @completed_at');
     params.completed_at = updates.completedAt;
+  }
+  // 复活视作"新活动"：刷新 created_at 让行在 created_at DESC 的列表里浮顶
+  if (updates.createdAt !== undefined) {
+    fields.push('created_at = @created_at');
+    params.created_at = updates.createdAt;
   }
 
   fields.push('updated_at = @updated_at');

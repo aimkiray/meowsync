@@ -276,7 +276,13 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
     const body = await readJsonBody(c);
 
     const queue = await downloadManager.createDownloadQueue(playlistId, normalizeDownloadOptions(body));
-    await downloadManager.startQueue(queue.id);
+    try {
+      await downloadManager.startQueue(queue.id);
+    } catch (error) {
+      // create→start 窗口被并发抢先启动：409"已在运行中"其实就是目标态——
+      // 照常返回 progress 而非误报失败
+      if (error.status !== 409) throw error;
+    }
 
     // startQueue 已把 status 推进到 running——回传创建时快照的 'pending' 是脏响应；
     // reused 是 create 阶段的瞬时标记（不落库），getQueueProgress 重取的对象上没有，手动透传
