@@ -11,10 +11,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
     <script>
       // 首帧前恢复持久化主题，避免主题闪变；未知值由 CSS 自然回落默认
-      // 键名与 src/lib/theme.js 的 STORAGE_KEY/LEGACY_KEY 必须保持同步
+      // 键名与 src/lib/theme.js 的 STORAGE_KEY 必须保持同步
       try {
-        var t = localStorage.getItem('meowsync-theme') ||
-                (localStorage.getItem('pixel-theme') === 'pixel-retro' ? 'pixel-retro' : '')
+        var t = localStorage.getItem('meowsync-theme')
         if (t) document.documentElement.setAttribute('data-theme', t)
       } catch (e) {}
     </script>

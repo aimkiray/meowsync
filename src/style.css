@@ -8,7 +8,7 @@
    色值冻结，底栏自行覆写
    ═══════════════════════════════════════════════════════════════ */
 
-/* Fusion Pixel（本地打包位图等宽——glitch 主题主字族 / pixel-retro 沉浸页 / 版本戳） */
+/* Fusion Pixel（本地打包位图等宽——glitch 主题主字族 / 歌词画布 / 版本戳） */
 @font-face{
   font-family: 'Fusion Pixel';
   src: url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2'),
@@ -87,19 +87,6 @@
   --pixel-progress-track: rgba(236, 72, 153, .2);
   --pixel-progress-fill: rgb(190, 24, 93);
   --fullscreen-background-image: url('/qb.png');
-}
-
-/* pixel-retro：FullscreenPlayer 沉浸页的调色变体（冻结域），不改动应用令牌。
-   只覆盖存活消费点；未覆盖的 --pixel-progress-* 是刻意的冻结选择。 */
-:root[data-theme="pixel-retro"] {
-  --pixel-bg: rgb(173, 215, 230);
-  --pixel-primary: rgb(240, 179, 192);
-  --pixel-secondary: rgb(173, 215, 230);
-  --pixel-accent: rgb(255, 251, 209);
-  --pixel-text: rgb(120, 90, 100);
-  --pixel-dark: rgb(80, 60, 70);
-  --pixel-highlight: rgba(240, 179, 192, 0.3);
-  --fullscreen-background-image: url('/cinnamoroll2.png');
 }
 
 /* ══════════════════════════════════════════════════════════════════
