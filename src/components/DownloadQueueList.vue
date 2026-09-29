@@ -307,7 +307,7 @@ function getStatusText(status) {
   return statusMap[status] || status;
 }
 
-// 状态 → 芯片修饰类：running=墨底反白（激活），completed=绿戳，failed=品红，
+// 状态 → 芯片修饰类：running=墨底反白（激活），completed=绿戳，failed=危险红，
 // 其余淡墨。只换类名不改映射结构
 function getStatusClass(status) {
   const classMap = {
@@ -490,7 +490,7 @@ function getQueueCover(queue) {
   text-overflow: ellipsis;
 }
 
-/* 进度：发丝底槽 + 墨块填充（失败列用品红块） */
+/* 进度：发丝底槽 + 墨块填充（失败列用 danger 块） */
 .dql-progress {
   margin-top: 7px;
   height: 4px;

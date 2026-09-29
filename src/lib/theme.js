@@ -22,9 +22,9 @@
 import { ref, readonly } from 'vue'
 
 export const THEMES = [
-  { id: 'default', label: 'print-grid' },
-  { id: 'glitch-restoration', label: 'glitch' },
-  { id: 'pixel-retro', label: 'pixel-retro' },
+  { id: 'default', label: 'print-grid', pill: 'grid' },
+  { id: 'glitch-restoration', label: 'glitch', pill: 'glitch' },
+  { id: 'pixel-retro', label: 'pixel-retro', pill: 'retro' },
 ]
 
 // 与 index.html 内联脚本共用键名，改动须同步
@@ -44,6 +44,13 @@ function readStoredTheme() {
 const stored = ref(readStoredTheme())
 // 只读导出：外部一律经 setTheme 写入，防止 ref 与 data-theme 属性分叉
 export const currentTheme = readonly(stored)
+
+/* glitch-restoration 的「张力表盘」：全屏共享的腐蚀世代计数——
+   规范语义是叙事驱动（我们映射到「错误事件」）：每次 +1，
+   所有 GlitchText 实例读到同值并触发一次 burst 全 scramble，
+   由稳态 tick 自然回净（corruption 是张力不是装饰纹理） */
+export const glitchGen = ref(0)
+export function glitchBurst() { glitchGen.value++ }
 
 export function applyTheme(id) {
   const root = document.documentElement

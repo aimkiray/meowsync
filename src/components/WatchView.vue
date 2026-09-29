@@ -661,9 +661,10 @@ export default {
 }
 
 .watch-lyric-translation {
+  /* opacity .75 叠在 ink-86 上画布对比度会跌破 3.5:1——升 .9 保读 */
   margin-top: 2px;
   font-size: 11px;
-  opacity: .75;
+  opacity: .9;
 }
 
 /* 窄屏：单列——封面→信息 在上、tab 区在下 */
