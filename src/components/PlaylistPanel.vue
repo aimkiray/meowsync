@@ -269,8 +269,13 @@ export default {
     // 服务端对活跃队列本就 409，这里省掉那条注定失败的往返与错误 toast
     const downloadingIds = new Set()
     const downloadPlaylist = async (playlist) => {
-      if (downloadingIds.has(playlist.id)) return
-      downloadingIds.add(playlist.id)
+      const pid = String(playlist.id)
+      if (downloadingIds.has(pid)) {
+        toast('该歌单下载已在进行中', 'info')
+        closeMenu()
+        return
+      }
+      downloadingIds.add(pid)
       try {
         const res = await downloadsApi.quickDownloadPlaylist(playlist.id, {
           bitrate: 320000,
@@ -280,16 +285,20 @@ export default {
           concurrentLimit: 3
         })
 
-        // 服务端对终态队列原地复活而非另立行——提示文案区分两种路径
-        toast(res.data?.data?.reused
-          ? '继续下载该歌单的已有队列'
-          : '下载队列已创建，正在后台下载', 'success')
+        // 服务端对终态队列原地复活而非另立行——按复用标记与完成度分文案：
+        // 复活且任务全数完好 = 没有东西要下，"继续下载"的文案会误导
+        const queue = res.data?.data
+        toast(!queue?.reused
+          ? '下载队列已创建，正在后台下载'
+          : queue.totalTasks > 0 && queue.completedTasks === queue.totalTasks
+            ? '该歌单已全部下载'
+            : '继续下载该歌单的已有队列', 'success')
       } catch (error) {
         console.error('创建下载队列失败:', error)
         const message = error.response?.data?.message || error.message
         toast('下载失败: ' + message, 'error')
       } finally {
-        downloadingIds.delete(playlist.id)
+        downloadingIds.delete(pid)
         closeMenu() // 失败也要关菜单——否则菜单挂着看似还能点
       }
     }

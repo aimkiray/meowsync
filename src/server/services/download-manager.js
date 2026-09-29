@@ -209,19 +209,16 @@ async function createDownloadQueue(playlistId, options = {}) {
 
   // 终态队列原地复活而非另立新行：收养逻辑本就把它掏空，再建行的结果是
   // "队列列表里同名歌单成对出现"（旧壳 + 新队）。复用最新一行——队列 id 稳定、
-  // 任务行经收养/复位回收、计数在末尾重算
-  const reusable = siblings.length
-    ? siblings.reduce((a, b) => (b.id > a.id ? b : a))
-    : null;
-  if (reusable) {
-    // 活体控制器/删除窗口下的行不可复活：协程的 abort-reset 会把"已取消"写回
-    // 刚复位的任务行（与收养段 ownerBusy 判定同源）
-    if (queueHasLiveController(reusable.id)) {
-      throw httpError(409, '该歌单有下载任务仍在收尾，请稍后再试');
-    }
-    if (deletingQueues.has(reusable.id)) {
-      throw httpError(409, '队列正在删除中');
-    }
+  // 任务行经收养/复位回收、计数在末尾重算。
+  // 选 id 最大的未锁定终态行：活体控制器/删除窗口下的行不可复活（协程的
+  // abort-reset 会把"已取消"写回刚复位的任务行——与收养段 ownerBusy 同源）；
+  // 最新行被锁时降级到更旧的干净行，全部锁定才 409
+  const reusable = siblings
+    .slice()
+    .sort((a, b) => b.id - a.id)
+    .find(q => !queueHasLiveController(q.id) && !deletingQueues.has(q.id)) || null;
+  if (!reusable && siblings.length) {
+    throw httpError(409, '该歌单有下载任务仍在收尾，请稍后再试');
   }
 
   // 队列行 + 全部任务行在同一个事务里写入：半途抛错不留"有队列没任务"的脏数据
@@ -244,6 +241,7 @@ async function createDownloadQueue(playlistId, options = {}) {
         name: playlist.name,
         status: 'pending',
         completedAt: null,
+        createdAt: new Date().toISOString(),
         bitrate: options.bitrate || 320000,
         downloadAudio: options.downloadAudio !== false,
         downloadLyrics: options.downloadLyrics !== false,
@@ -291,6 +289,11 @@ async function createDownloadQueue(playlistId, options = {}) {
         if (ownerBusy) {
           throw httpError(409, '该歌单有下载任务仍在收尾，请稍后再试');
         }
+        // 属主正在删除中同样不可收养——否则"删队列=删其文件"的语义被悄悄改成
+        // "文件随任务搬去新队列"，DELETE 调用方预期落空
+        if (existing.queueId != null && deletingQueues.has(existing.queueId)) {
+          throw httpError(409, '该歌单有队列正在删除中，请稍后再试');
+        }
         // owner 为 null = queue_id 指向已消失队列的孤儿行，同样收养；
         // owner 即本次复活的队列自身时也按收养处理——其行上的任务正是要
         // keepCompleted 保留 / reset 重跑的对象，跳过会让失败任务永久滞留
@@ -321,9 +324,11 @@ async function createDownloadQueue(playlistId, options = {}) {
           // 由 reap 兜底，比幻影登记路径安全）。扩展名现已随源浮动，不删会
           // 让不同扩展名的旧文件以未登记状态无限期滞留。文件 unlink 收集后
           // 推迟到事务提交——txn 内删文件遇回滚会留"路径还在但文件没了"
+          // keepCompleted 行也要进 adoptedTaskIds——陈旧 retryAfter 条目得清，
+          // 否则日后复位重跑会白等最长 30s 退避
+          adoptedTaskIds.push(existing.id);
           if (!keepCompleted) {
             adoptedPaths.push(existing.audioPath, existing.lyricsPath, existing.coverPath);
-            adoptedTaskIds.push(existing.id);
           }
           // 旧属主队列的计数器虚高（任务被搬走后不再重算）——记录待回调；
           // 属主即本队列时不记：末尾 recountQueueCounters(queue.id) 已覆盖
