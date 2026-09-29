@@ -199,11 +199,29 @@ async function createDownloadQueue(playlistId, options = {}) {
   }
 
   // 同歌单已有 pending/running/paused 队列时拒绝再建——重复队列会并发写同一批文件
-  const active = downloadQueuesRepo.listQueues().find(
-    q => q.playlistId === resolvedPlaylistId && ['pending', 'running', 'paused'].includes(q.status)
+  const siblings = downloadQueuesRepo.listQueues().filter(
+    q => q.playlistId === resolvedPlaylistId
   );
+  const active = siblings.find(q => ['pending', 'running', 'paused'].includes(q.status));
   if (active) {
     throw httpError(409, `该歌单已有进行中的下载队列 (#${active.id})`);
+  }
+
+  // 终态队列原地复活而非另立新行：收养逻辑本就把它掏空，再建行的结果是
+  // "队列列表里同名歌单成对出现"（旧壳 + 新队）。复用最新一行——队列 id 稳定、
+  // 任务行经收养/复位回收、计数在末尾重算
+  const reusable = siblings.length
+    ? siblings.reduce((a, b) => (b.id > a.id ? b : a))
+    : null;
+  if (reusable) {
+    // 活体控制器/删除窗口下的行不可复活：协程的 abort-reset 会把"已取消"写回
+    // 刚复位的任务行（与收养段 ownerBusy 判定同源）
+    if (queueHasLiveController(reusable.id)) {
+      throw httpError(409, '该歌单有下载任务仍在收尾，请稍后再试');
+    }
+    if (deletingQueues.has(reusable.id)) {
+      throw httpError(409, '队列正在删除中');
+    }
   }
 
   // 队列行 + 全部任务行在同一个事务里写入：半途抛错不留"有队列没任务"的脏数据
@@ -220,16 +238,28 @@ async function createDownloadQueue(playlistId, options = {}) {
   const adoptedPaths = []; // 收养重置清掉的旧文件路径——提交后才删（txn 内 unlink 会留回滚窗口）
   const adoptedTaskIds = [];
   const createWithTasks = db.transaction(() => {
-    const queue = downloadQueuesRepo.createQueue({
-      playlistId: resolvedPlaylistId,
-      name: playlist.name,
-      totalTasks: 0,
-      bitrate: options.bitrate || 320000,
-      downloadAudio: options.downloadAudio !== false,
-      downloadLyrics: options.downloadLyrics !== false,
-      downloadCover: options.downloadCover !== false,
-      concurrentLimit: options.concurrentLimit || 3
-    });
+    // 复活路径：回写名称/选项/状态而不新建行——queueId 保持稳定
+    const queue = reusable
+      ? downloadQueuesRepo.updateQueue(reusable.id, {
+        name: playlist.name,
+        status: 'pending',
+        completedAt: null,
+        bitrate: options.bitrate || 320000,
+        downloadAudio: options.downloadAudio !== false,
+        downloadLyrics: options.downloadLyrics !== false,
+        downloadCover: options.downloadCover !== false,
+        concurrentLimit: options.concurrentLimit || 3
+      })
+      : downloadQueuesRepo.createQueue({
+        playlistId: resolvedPlaylistId,
+        name: playlist.name,
+        totalTasks: 0,
+        bitrate: options.bitrate || 320000,
+        downloadAudio: options.downloadAudio !== false,
+        downloadLyrics: options.downloadLyrics !== false,
+        downloadCover: options.downloadCover !== false,
+        concurrentLimit: options.concurrentLimit || 3
+      });
 
     // 歌单内可能重复含同一首歌：按 songId 去重；计数在末尾由任务行重算
     const seen = new Set();
@@ -261,9 +291,11 @@ async function createDownloadQueue(playlistId, options = {}) {
         if (ownerBusy) {
           throw httpError(409, '该歌单有下载任务仍在收尾，请稍后再试');
         }
-        const ownerActive = owner
+        // owner 为 null = queue_id 指向已消失队列的孤儿行，同样收养；
+        // owner 即本次复活的队列自身时也按收养处理——其行上的任务正是要
+        // keepCompleted 保留 / reset 重跑的对象，跳过会让失败任务永久滞留
+        const ownerActive = owner && owner.id !== queue.id
           && ['pending', 'running', 'paused'].includes(owner.status);
-        // owner 为 null = queue_id 指向已消失队列的孤儿行，同样收养
         if (!standaloneActive && (existing.queueId == null || !ownerActive)) {
           // completed 但文件已被外部删掉的行是幻影——按未完成收养重跑补回
           const keepCompleted = existing.status === 'completed' && taskFilesIntact(existing);
@@ -293,8 +325,11 @@ async function createDownloadQueue(playlistId, options = {}) {
             adoptedPaths.push(existing.audioPath, existing.lyricsPath, existing.coverPath);
             adoptedTaskIds.push(existing.id);
           }
-          // 旧属主队列的计数器虚高（任务被搬走后不再重算）——记录待回调
-          if (existing.queueId) oldOwnerQueueIds.add(existing.queueId);
+          // 旧属主队列的计数器虚高（任务被搬走后不再重算）——记录待回调；
+          // 属主即本队列时不记：末尾 recountQueueCounters(queue.id) 已覆盖
+          if (existing.queueId && existing.queueId !== queue.id) {
+            oldOwnerQueueIds.add(existing.queueId);
+          }
         }
         continue;
       }
@@ -335,6 +370,17 @@ async function createDownloadQueue(playlistId, options = {}) {
   for (const qid of oldOwnerQueueIds) {
     recountQueueCounters(qid);
   }
+  // 收养掏空的其他终态壳行顺手清掉——文件随任务行走，0 任务的壳删除无文件副作用；
+  // 任务未被收养完（属主活跃跳过等）的壳保留，等下轮调用自愈
+  for (const shell of siblings) {
+    if (shell.id === created.id) continue;
+    if (queueHasLiveController(shell.id) || deletingQueues.has(shell.id)) continue;
+    if (downloadTasksRepo.listTasksByQueue(shell.id).length === 0) {
+      try { downloadQueuesRepo.deleteQueue(shell.id); } catch { /* 壳已消失 */ }
+    }
+  }
+  // 透出复用标记：前端据此区分"新建队列"与"复活旧队列"的提示文案
+  if (reusable) created.reused = true;
   return created;
 }
 

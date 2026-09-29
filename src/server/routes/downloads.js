@@ -278,8 +278,10 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
     const queue = await downloadManager.createDownloadQueue(playlistId, normalizeDownloadOptions(body));
     await downloadManager.startQueue(queue.id);
 
-    // startQueue 已把 status 推进到 running——回传创建时快照的 'pending' 是脏响应
-    return c.json({ code: 200, data: downloadManager.getQueueProgress(queue.id).queue });
+    // startQueue 已把 status 推进到 running——回传创建时快照的 'pending' 是脏响应；
+    // reused 是 create 阶段的瞬时标记（不落库），getQueueProgress 重取的对象上没有，手动透传
+    const progress = downloadManager.getQueueProgress(queue.id).queue;
+    return c.json({ code: 200, data: queue.reused ? { ...progress, reused: true } : progress });
   } catch (error) {
     return handleError(c, error, '快速下载失败');
   }
