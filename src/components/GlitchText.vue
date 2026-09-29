@@ -5,13 +5,16 @@
        data-glitched 读共享计数（theme.js glitchGen）——错误事件触发
        burst 时全屏所有实例同代同闪，规范语义是共享叙事计数 -->
   <span class="glitch-text" :data-glitched="active && glitchGen ? String(glitchGen) : undefined">
-    <template v-for="(word, wi) in words" :key="wi"><span class="glitch-word"><span
-      v-for="(ch, ci) in word.chars"
-      :key="ci"
-      class="corruptible"
-      :class="{ 'char-glitch': corrupt.has(keyOf(wi, ci)) }"
-      :data-glitch="corrupt.get(keyOf(wi, ci))"
-    >{{ ch }}</span></span>{{ ' ' }}</template>
+    <!-- 屏幕阅读器正本：visibility:hidden 的腐蚀字符会整段出 a11y 树，
+         且 ::after 替身符可能被朗读——视觉层整体 aria-hidden，SR 恒读本行 -->
+    <span class="glitch-sr">{{ text }}</span><span aria-hidden="true"><template
+      v-for="(word, wi) in words" :key="wi"><span class="glitch-word"><span
+        v-for="(ch, ci) in word.chars"
+        :key="ci"
+        class="corruptible"
+        :class="{ 'char-glitch': corrupt.has(keyOf(wi, ci)) }"
+        :data-glitch="corrupt.get(keyOf(wi, ci))"
+      >{{ ch }}</span></span>{{ ' ' }}</template></span>
   </span>
 </template>
 
@@ -20,8 +23,9 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { currentTheme, glitchGen } from '../lib/theme.js'
 
 // mojibake 字形池：半角片假名/西里尔/希腊/制表符/数字——形近真字，
-// 替换读起来是「腐蚀」而非乱码（取自 glitch-restoration-ui skill；
-// 縺繝€ 三连保留——Fusion Pixel 有 CJK 字形覆盖）
+// 替换读起来是「腐蚀」而非乱码（取自 glitch-restoration-ui skill）。
+// 注意：多数替身符在 Fusion Pixel 的 unicode-range 外，会回落
+// Noto Sans SC 非像素字形——质感更杂，对「损坏」语义反而是加分
 const POOL = [...'▓░▒ﾂﾎﾃﾄﾅﾌﾑﾒﾓﾘﾚﾖﾊﾋﾍﾐﾕﾗﾆﾇ℮†‡ΓŘ®₥§¤¥šмλθτþÐÑØÅЯИƧγÿýξ∑縺繝€∆ⅯﾉﾙΞë|+×01345!$']
 
 export default {
@@ -30,7 +34,7 @@ export default {
   setup(props) {
     // 按词分组包 .glitch-word（nowrap 保证词组不断行拆散）——规范 recipe 形态
     const words = computed(() => props.text.split(' ').map(w => ({ chars: [...w] })))
-    const keyOf = (wi, ci) => wi * 256 + ci
+    const keyOf = (wi, ci) => `${wi}:${ci}` // 字符串 key——杜绝长词串位碰撞
     const corrupt = ref(new Map()) // keyOf(wi,ci) → 替身字形
     const reduced = ref(false)
 
@@ -54,16 +58,22 @@ export default {
       // 每代随机恢复 2-3 个存量——稳态来回腐蚀而非单向累积
       glitched.slice(0, 2 + (Math.random() * 2 | 0)).forEach(k => corrupt.value.delete(k))
     }
-    // burst：全 scramble 一瞬（错误张力）；re-wrap 源文本天然回净由 tick 完成
+    // burst：全 scramble 闪回（错误张力峰值）——规范是同帧 scramble→复原，
+    // 我们持留 ~480ms 肉眼可辨再整批回净，DOM 文本始终干净（比规范
+    // textContent 改写更守 a11y）。错误连发时重定时，闪回不打叠
+    let burstTimer = 0
     function burst() {
       words.value.forEach((word, wi) =>
         word.chars.forEach((_, ci) =>
           corrupt.value.set(keyOf(wi, ci), POOL[Math.random() * POOL.length | 0])
         )
       )
+      clearTimeout(burstTimer)
+      burstTimer = setTimeout(() => { corrupt.value.clear() }, 480)
     }
     function stop() {
       clearInterval(timer)
+      clearTimeout(burstTimer)
       timer = 0
       corrupt.value.clear()
     }
@@ -76,6 +86,8 @@ export default {
     // 共享世代爬升 → 全屏所有实例同代 burst（主题外激活也无副作用，
     // 但仍在 active 下才做 DOM 写入）
     watch(glitchGen, (n, o) => { if (n > o && active.value) burst() })
+    // 注意：若宿主视图未来改用 keep-alive/v-show，active 只看主题不看
+    // 可见性——隐藏期间 interval 照跑，届时需补 onDeactivated 停表
 
     let mq
     const onMq = e => { reduced.value = e.matches }

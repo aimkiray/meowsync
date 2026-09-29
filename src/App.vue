@@ -174,6 +174,7 @@ import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId } from './lib/song'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
+import { glitchBurst } from './lib/theme'
 import { httpsCover } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
@@ -1720,6 +1721,9 @@ export default {
     })
 
     watch(autoplayOn, () => savePlayerStateToStorage())
+    // 播放错误是行内 banner（不经 toast）——补进 glitch 张力表盘，
+    // 错误出现瞬间全屏腐蚀字符同代闪回（其他主题零成本 no-op）
+    watch(playbackError, v => { if (v) glitchBurst() })
 
     // MediaSession：锁屏/耳机线控/系统媒体键。action handler 在挂载时注册一次，
     // 元数据与 playbackState 随播放状态同步；不支持的环境静默跳过

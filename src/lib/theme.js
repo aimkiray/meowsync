@@ -48,11 +48,16 @@ export const currentTheme = readonly(stored)
 /* glitch-restoration 的「张力表盘」：全屏共享的腐蚀世代计数——
    规范语义是叙事驱动（我们映射到「错误事件」）：每次 +1，
    所有 GlitchText 实例读到同值并触发一次 burst 全 scramble，
-   由稳态 tick 自然回净（corruption 是张力不是装饰纹理） */
-export const glitchGen = ref(0)
-export function glitchBurst() { glitchGen.value++ }
+   短暂闪回后回净（corruption 是张力不是装饰纹理）。
+   覆盖边界：反馈服务错误（toast error / danger confirm）经
+   feedback.js 接入；播放错误（watch-banner 行内态）经
+   App.vue 的 watch(playbackError) 接入；下载轮询出的行内失败
+   是「状态」而非「事件」，不推表盘。 */
+const gen = ref(0)
+export const glitchGen = readonly(gen)
+export function glitchBurst() { gen.value++ }
 
-export function applyTheme(id) {
+function applyTheme(id) {
   const root = document.documentElement
   if (id === 'default') root.removeAttribute('data-theme')
   else root.setAttribute('data-theme', id)
@@ -68,11 +73,6 @@ export function setTheme(id) {
     else localStorage.setItem(STORAGE_KEY, id)
   } catch { /* 持久化失败不阻断应用 */ }
   applyTheme(id)
-}
-
-export function cycleTheme() {
-  const i = THEMES.findIndex(t => t.id === stored.value)
-  setTheme(THEMES[(i + 1) % THEMES.length].id)
 }
 
 // main.js 启动时调用一次：应用持久化主题 + 自愈存储 + 跨标签页同步
