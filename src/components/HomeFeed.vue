@@ -1,6 +1,6 @@
 <template>
   <!-- 首页发现流（白纸画布）：热搜 chips + 榜单/推荐歌单横向货架。
-       顶部裁切标线、页脚套准符+版本戳收版（print-grid 签名） -->
+       顶部裁切标线、页脚版本戳收版（print-grid 签名） -->
   <div class="home-feed">
     <PrintMarks variant="hash" />
 
@@ -25,13 +25,14 @@
       </div>
     </section>
 
-    <!-- 货架脱离加载闸门渐进渲染：单路到达即上架，不被最慢请求拖住 -->
-    <div v-if="loading && !hasShelves" class="home-state">
+    <!-- 货架脱离加载闸门渐进渲染：单路到达即上架，不被最慢请求拖住。
+         空态文案保持中立——8s 软上限到点时请求可能仍在飞，不说「失败」 -->
+    <div v-if="loading && !hasShelves" class="home-state" role="status">
       <div class="pixel-loading" aria-hidden="true"></div>
       <p class="home-state-text">加载推荐中喵...</p>
     </div>
-    <div v-else-if="!hasShelves" class="home-state">
-      <p class="home-state-text">推荐加载失败，去顶部搜索试试喵~</p>
+    <div v-else-if="!hasShelves" class="home-state" role="status">
+      <p class="home-state-text">推荐暂时没刷出来，去顶部搜索试试喵~</p>
     </div>
 
     <!-- 榜单货架 -->

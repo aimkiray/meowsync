@@ -1183,15 +1183,27 @@ export default {
       if (homeLoaded) return
       homeLoaded = true
       homeLoading.value = true
-      Promise.race([
-        Promise.allSettled([
-          musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) }),
-          musicApi.getPersonalized(12).then(list => { homePersonalized.value = list }),
-          musicApi.getSearchHot().then(list => { homeHots.value = list.slice(0, 12) })
-        ]),
-        new Promise(resolve => setTimeout(resolve, 8000))
-      ]).finally(() => { homeLoading.value = false })
+      const settled = Promise.allSettled([
+        musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) }),
+        musicApi.getPersonalized(12).then(list => { homePersonalized.value = list }),
+        musicApi.getSearchHot().then(list => { homeHots.value = list.slice(0, 12) })
+      ])
+      settled.then(results => {
+        // allSettled 吞掉每路报错——留个脚印，否则全挂时控制台静默
+        results.forEach(r => {
+          if (r.status === 'rejected') console.warn('[home]', r.reason?.message || r.reason)
+        })
+        // 三路全空（全失败/全空数组）解开一次性闩锁——回到首页或网络恢复时可重试
+        if (!homeToplists.value.length && !homePersonalized.value.length && !homeHots.value.length) {
+          homeLoaded = false
+        }
+      })
+      Promise.race([settled, new Promise(resolve => setTimeout(resolve, 8000))])
+        .finally(() => { homeLoading.value = false })
     }
+    // 回到首页即重试（上一趟有货则闩锁短路零成本）；断网恢复同理
+    watch(centerView, v => { if (v === 'home') loadHomeFeed() })
+    window.addEventListener('online', loadHomeFeed)
 
     // 歌曲播放逻辑
     // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
@@ -2048,6 +2060,11 @@ export default {
       restorePlayerState = loadPlayerStateFromStorage()
       restoreUiState(restorePlayerState)
 
+      // 首页发现流（后台加载，不阻塞首屏）——必须早于下面的恢复 await：
+      // 否则 restorePlaybackState/分享链路动辄数十秒期间 HomeFeed 已挂载而
+      // loading=false，空态会先把「加载失败」闪上屏
+      loadHomeFeed()
+
       // 加载默认歌单
       await loadDefaultPlaylists()
       
@@ -2136,14 +2153,12 @@ export default {
         window.history.replaceState(null, '', buildNavUrl().toString())
       } finally { suppressNavPush = false }
 
-      // 首页发现流（后台加载，不阻塞首屏）
-      loadHomeFeed()
-
       console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
     })
 
     // 组件卸载：清理 WS/定时器/rAF/音频，避免泄漏与卸载后重连
     onBeforeUnmount(() => {
+      window.removeEventListener('online', loadHomeFeed)
       remoteReconnectTimer && clearTimeout(remoteReconnectTimer)
       remoteReconnectTimer = null
       // onclose 被置 null 后不会再清 remoteStateTimer，这里必须手动清，否则 interval 泄漏
