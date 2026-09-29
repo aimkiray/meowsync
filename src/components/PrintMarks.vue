@@ -1,5 +1,5 @@
 <template>
-  <!-- 印刷装饰件：裁切角标 / ∵⩆ 套准符 / 版本戳 -->
+  <!-- 印刷装饰件：裁切角标 / 版本戳 -->
   <svg
     v-if="variant === 'hash'"
     class="pg-hash"
@@ -14,10 +14,6 @@
   >
     <path d="M10 0H0V10"/><path d="M1230 0H1240V10"/>
   </svg>
-
-  <div v-else-if="variant === 'reg'" class="regmarks" aria-hidden="true">
-    <span>∵ ⩆</span><span>⩆ ∵</span>
-  </div>
 
   <div v-else-if="variant === 'stamp'" class="pg-stamp">
     <p><GlitchText text="MeowSync · Version 1.0.0" /></p>
@@ -36,7 +32,7 @@ export default {
     variant: {
       type: String,
       default: 'hash',
-      validator: (v) => ['hash', 'reg', 'stamp'].includes(v)
+      validator: (v) => ['hash', 'stamp'].includes(v)
     }
   }
 }
