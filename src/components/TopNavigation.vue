@@ -354,7 +354,9 @@ export default {
 }
 
 /* 三栏 grid：左右各占 1fr，中栏 auto——搜索组锚定真中线，
-   不再随右簇宽度漂移（旧 flex:1 居中的是"剩余空间"不是整栏） */
+   不再随右簇宽度漂移（旧 flex:1 居中的是"剩余空间"不是整栏）。
+   侧列不设 min-width:0：列宽下限=内容 min-content，空间不足时
+   中列先收缩（字段 max-width:100%），侧簇永不溢出侵入中列 */
 .topnav-inner {
   max-width: 1440px;
   margin: 0 auto;
@@ -369,7 +371,6 @@ export default {
   display: flex;
   align-items: center;
   gap: 16px;
-  min-width: 0;
 }
 
 .topnav-hamburger {
@@ -506,7 +507,6 @@ export default {
   align-items: center;
   gap: 14px;
   justify-self: end; /* grid 右列贴右缘 */
-  min-width: 0;
 }
 
 .topnav-remote-hint {
@@ -514,9 +514,17 @@ export default {
   white-space: nowrap;
 }
 
-/* 窄屏：标题让位给搜索框（移动端搜索仍是主入口） */
+/* 中屏：隐藏 remote 状态提示——它是右簇最重的非动作件，
+   隐藏后左右簇 min-content 接近相等，中列在 641-1100 区间仍近似居中 */
+@media (max-width: 1100px) {
+  .topnav-remote-hint { display: none; }
+}
+
+/* 窄屏：标题让位给搜索框（移动端搜索仍是主入口）。
+   auto/1fr/auto：侧簇各占内容宽，中列 1fr 填满剩余——放弃居中换可用性 */
 @media (max-width: 640px) {
   .topnav { padding: 0 12px; }
+  .topnav-inner { grid-template-columns: auto 1fr auto; }
   .topnav-title { display: none; }
   .topnav-home-ico { display: inline-flex; }
   .topnav-remote-hint { display: none; }
