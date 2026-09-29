@@ -458,7 +458,8 @@
 }
 
 .song-row:hover .song-duration,
-.song-row:focus-within .song-duration {
+.song-row:focus-within .song-duration,
+.song-row:has(.song-menu-btn[aria-expanded="true"]) .song-duration { /* 菜单浮空期行已失 hover，时长仍须让位给可见的 ⋯ */
   opacity: 0;
 }
 
@@ -493,7 +494,8 @@
 
 .song-row:hover .song-menu-btn,
 .song-row:focus-within .song-menu-btn,
-.song-menu-btn:focus-visible {
+.song-menu-btn:focus-visible,
+.song-menu-btn[aria-expanded="true"] { /* 菜单浮空期间触发键保持可见——菜单 teleport 到 body，聚焦菜单项时行会失焦 */
   opacity: 1;
   pointer-events: auto;
 }

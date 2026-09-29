@@ -287,30 +287,12 @@
 
 /* teal 本色在纸面仅 ~2.1:1——纸面文字/图标 hover 一律走 accent-deep；
    墨面变体排除掉（accent-deep 在 slate 上仅 ~1.5:1 隐形），另行走亮档 */
-:root[data-theme="glitch-restoration"] .pg-link:hover,
 :root[data-theme="glitch-restoration"] .pg-icobtn:hover:not(:disabled):not(.pg-icobtn--on-ink) {
   color: var(--accent-magenta-ink);
 }
 :root[data-theme="glitch-restoration"] .pg-icobtn--on-ink:hover:not(:disabled) {
   color: var(--accent-magenta-on-ink);
 }
-
-/* forgot-link 签名件：中心生长 accent 下划线（width+left 双属性同曲线，
-   拆 transition 简写只会给 left 上缓动——规范注释原话） */
-:root[data-theme="glitch-restoration"] .pg-link { position: relative; }
-:root[data-theme="glitch-restoration"] .pg-link::after {
-  content: "";
-  pointer-events: none;
-  position: absolute;
-  bottom: -2px;
-  left: 50%;
-  width: 0%;
-  height: 2px;
-  background: var(--accent-magenta);
-  transition: width .4s cubic-bezier(.25, .8, .25, 1), left .4s cubic-bezier(.25, .8, .25, 1);
-}
-:root[data-theme="glitch-restoration"] .pg-link:hover::after,
-:root[data-theme="glitch-restoration"] .pg-link:focus-visible::after { width: 100%; left: 0; }
 
 /* 规范：window chrome 文本禁选（header/footer/hint），正文保持可选 */
 :root[data-theme="glitch-restoration"] .topnav,
@@ -535,6 +517,9 @@ button {
 [aria-expanded="true"].queue-menu-trigger,
 [aria-expanded="true"].topnav-hamburger,
 [aria-expanded="true"].pl-action { outline: 1.2px solid var(--ink); outline-offset: -4px; }
+/* 反白行上的展开态改纸色——墨环在墨行上不可见 */
+.song-row--playing [aria-expanded="true"].song-menu-btn,
+.pl-row--active [aria-expanded="true"].pl-action { outline-color: var(--paper); }
 
 /* 细滚动条：透明轨道 + 镂空墨块柄；Firefox 走 scrollbar-* 双属性 */
 * { scrollbar-width: thin; scrollbar-color: var(--ink) transparent; }
@@ -644,11 +629,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 /* glitch 反白行尾键：accent-on-ink 字色 + 纸色环（与默认主题的 paper 法则同构） */
 :root[data-theme="glitch-restoration"] .app-shell .pl-row--active .pl-action:hover,
-:root[data-theme="glitch-restoration"] .app-shell .song-row--playing .song-menu-btn:hover,
-:root[data-theme="glitch-restoration"] .app-shell .queue-row--current .queue-row-remove:hover {
+:root[data-theme="glitch-restoration"] .app-shell .song-row--playing .song-menu-btn:hover {
   color: var(--accent-magenta-on-ink);
   outline-color: var(--paper);
 }
+/* 注：queue-row--current 是 ink-10 浅 tint 而非反白行，且当前行不渲染 remove 键——不入此表 */
 
 .app-main {
   flex: 1;
@@ -757,6 +742,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   letter-spacing: .02em;
   padding: 0 18px;
   height: 36px; /* 锁名义高——不锁则按 font+pad 漂到 ~38，与 pg-field(36) 失配 */
+  text-decoration: none; /* <a> 作按钮用时兜底——不依赖 preflight 的 inherit */
   cursor: pointer;
   transition: color .5s var(--ease-ink);
   white-space: nowrap;
@@ -793,15 +779,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-icobtn--bare { border-color: transparent; }
 .pg-icobtn--sm { width: 24px; height: 24px; } /* 行内尾键档：⋯/分享 */
 .pg-icobtn:disabled { opacity: .45; cursor: default; }
-
-/* 纯文字链接键（nav/footer 的裸墨字） */
-.pg-link {
-  font: inherit;
-  color: var(--ink);
-  cursor: pointer;
-  transition: color .5s var(--ease-ink);
-}
-.pg-link:hover { color: var(--accent-magenta-ink); }
 
 /* 主题切换 pill：lang-tabs 形态的分段滑块胶囊。
    radio 用 visually-hidden 变体而非 display:none——display:none 的 radio
@@ -870,7 +847,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   transition: color .2s;
 }
 .pg-tab:last-child { border-right: none; }
-.pg-tab:hover { color: var(--ink); }
+.pg-tab:not(.pg-tab--active):hover { color: var(--ink); } /* 激活 tab 是墨底纸字——不守卫则 hover 墨字隐形 */
 .pg-tab--active {
   background: var(--ink);
   color: var(--paper);
@@ -894,7 +871,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-chip--on { background: var(--ink); color: var(--paper); }
 .pg-chip--on:hover { color: var(--accent-magenta-on-ink); } /* 墨底上给 accent 字色——ink-06 底会洗白 */
 .pg-chip--static { cursor: default; }
-.pg-chip--static:hover { background: transparent; }
+/* static 的 hover 抵色已由 :not(.pg-chip--static) 守卫兜底——
+   勿再写 .pg-chip--static:hover{bg:transparent}，会剥掉 static+--on 组合（running 状态戳）的墨底 */
 
 /* 表单：发丝框 + focus-within 环。高度锁定 36 与 .ink-btn 同盒（控件对不不齐） */
 .pg-field {
