@@ -90,12 +90,19 @@
           title="添加 ?mode=host 启用远程控制"
         >remote: off</span>
 
-        <!-- 主题循环：注册表见 lib/theme.js -->
-        <button
-          class="pg-link topnav-action topnav-theme"
-          @click="cycleTheme"
-          :title="`切换主题（当前 ${themeLabel}）`"
-        >theme:{{ themeLabel }}</button>
+        <!-- 主题切换：lang-pill 滑动胶囊（三段态 = radio index），注册表见 lib/theme.js -->
+        <div class="theme-pill topnav-theme" role="radiogroup" aria-label="切换主题" :title="`主题：${themeLabel}`">
+          <span class="theme-pill-glider" :style="{ transform: `translateX(${themeIndex * 100}%)` }" aria-hidden="true"></span>
+          <label
+            v-for="t in THEMES" :key="t.id"
+            class="theme-pill-tab"
+            :class="{ 'theme-pill-tab--on': t.id === currentTheme }"
+          ><input
+            type="radio" class="theme-pill-radio" name="ms-theme"
+            :value="t.id" :checked="t.id === currentTheme"
+            @change="setTheme(t.id)"
+          ><span>{{ t.pill }}</span></label>
+        </div>
       </div>
     </div>
   </nav>
@@ -104,7 +111,7 @@
 <script>
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
-import { THEMES, currentTheme, cycleTheme } from '../lib/theme.js'
+import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 
@@ -296,10 +303,15 @@ export default {
       suggestAbort?.abort()
     })
 
+    const themeIndex = computed(() => Math.max(0, THEMES.findIndex(t => t.id === currentTheme.value)))
+
     return {
       controllerUrl,
       themeLabel,
-      cycleTheme,
+      themeIndex,
+      THEMES,
+      currentTheme,
+      setTheme,
       extractPlaylistId,
       handleSearch,
       onKeydown,

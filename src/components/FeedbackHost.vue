@@ -94,7 +94,7 @@ export default {
   pointer-events: none;
 }
 
-/* 纸面发丝盒 toast：左缘发丝色条（success 绿戳 / error 品红 / info 墨色） */
+/* 纸面发丝盒 toast：左缘发丝色条（success 绿戳 / error 危险红 / info 墨色） */
 .fb-toast {
   padding: 9px 12px;
   font-family: var(--font-mono);

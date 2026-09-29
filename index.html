@@ -25,12 +25,14 @@
       .boot-splash-card { border: 1.2px solid #1e1e1e; padding: 24px 32px; text-align: center; }
       .boot-splash-card p { margin: 0; letter-spacing: .05em; color: #1e1e1e; }
       .boot-splash-name { font-size: 12px; }
-      .boot-splash-hint { font-size: 11px; color: rgba(30,30,30,.64); margin-top: 8px !important; }
+      /* hint 降档色须写 .boot-splash-card .boot-splash-hint——.boot-splash-card p
+         (0,1,1) 与单类 (0,1,0) 平手后胜，裸类选择器是死声明 */
+      .boot-splash-card .boot-splash-hint { font-size: 11px; color: rgba(30,30,30,.64); margin-top: 8px !important; }
       /* glitch-restoration 闪屏钩子：近白字段 + slate 墨 + 圆角柔影（令牌见 style.css） */
       :root[data-theme="glitch-restoration"] .boot-splash { background: #fbfbfb; font-family: 'Fusion Pixel', 'JetBrains Mono', monospace; }
       :root[data-theme="glitch-restoration"] .boot-splash-card { border: 2px solid #4e5662; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,.08); }
       :root[data-theme="glitch-restoration"] .boot-splash-card p { color: #4e5662; }
-      :root[data-theme="glitch-restoration"] .boot-splash-hint { color: rgba(78,86,98,.64); }
+      :root[data-theme="glitch-restoration"] .boot-splash-card .boot-splash-hint { color: rgba(78,86,98,.64); }
     </style>
   </head>
   <body>
@@ -39,6 +41,7 @@
         <div class="boot-splash-card">
           <p class="boot-splash-name">meowsync</p>
           <p class="boot-splash-hint">loading…</p>
+          <noscript><p class="boot-splash-hint">需要启用 JavaScript 才能运行</p></noscript>
         </div>
       </div>
     </div>

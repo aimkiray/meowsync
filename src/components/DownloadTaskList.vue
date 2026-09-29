@@ -179,7 +179,7 @@ function getStatusText(status) {
 }
 
 // 状态 → 芯片修饰类（print-grid 配色）：downloading=墨底反白，completed=绿戳，
-// failed=品红，pending 淡墨。只换类名不改映射结构
+// failed=危险红，pending 淡墨。只换类名不改映射结构
 function getStatusClass(status) {
   const classMap = {
     pending: 'dtr-chip--dim',
@@ -314,7 +314,7 @@ const TaskRow = {
 
 .dtl-count { flex-shrink: 0; }
 
-/* 统计格：发丝格 + display 大数字（完成=绿戳，失败=品红） */
+/* 统计格：发丝格 + display 大数字（完成=绿戳，失败=danger 红） */
 .dtl-stats {
   padding: 0 16px 12px;
   flex-shrink: 0;

@@ -113,20 +113,20 @@
 :root[data-theme="glitch-restoration"] {
   --ink: #4e5662;                      /* slate 软墨 */
   --ink-86: rgba(78, 86, 98, .86);
-  --ink-64: rgba(78, 86, 98, .64);
+  --ink-64: rgba(78, 86, 98, .8);    /* slate 比 print 墨浅：.64 档纸面仅 ~3.1:1，提 .8 回 ~4.9:1 */
   --ink-30: rgba(78, 86, 98, .30);
   --ink-10: rgba(78, 86, 98, .10);
   --ink-06: rgba(78, 86, 98, .06);
   --paper: #ffffff;
   --page: #fbfbfb;                     /* 近白页面字段 */
-  --label-grey: #c9cfd6;               /* slate 墨面上的弱标签（~6.5:1） */
+  --label-grey: #c9cfd6;               /* slate 墨面上的弱标签（~4.7:1） */
   --os-grey: #eef1f3;
   --canvas-teal: #dff3f0;              /* 视图画布→淡彩 tint，保留页面身份 */
   --canvas-sage: #e9edf0;
   --canvas-pink: #f7e8e9;
   --accent-magenta: #2dd3be;           /* accent → teal */
   --accent-magenta-ink: #157e70;       /* accent-deep（纸面文字 ~4.7:1） */
-  --accent-magenta-on-ink: #57e3d1;    /* 亮 teal（slate 墨面 ~5.3:1） */
+  --accent-magenta-on-ink: #57e3d1;    /* 亮 teal（slate 墨面 ~4.7:1） */
   --accent-green: #1ba796;             /* 成功归入 teal 族（accent-dark） */
   --accent-green-ink: #157e70;
   --accent-danger: #e5484d;            /* error red——双极另一极 */
@@ -138,17 +138,16 @@
   --font-display: 'Fusion Pixel', 'Noto Sans SC', monospace;
 }
 
-/* 页面字段：近白 + 顶部锚定 vignette（fixed——视口钉住而非随元素） */
+/* 页面字段：近白 + 居中椭圆 vignette（规范形态；fixed 钉视口）。
+   body 上叠渐变会被 .app-body 的画布盖住—— vignette 放 app-body 单层 */
 :root[data-theme="glitch-restoration"] body {
-  -webkit-font-smoothing: none;        /* 像素字要硬边 */
-  background:
-    radial-gradient(120% 90% at 50% 0%, transparent 55%, rgba(78, 86, 98, .07) 100%) fixed,
-    var(--page);
+  -webkit-font-smoothing: none;        /* 像素字要硬边（双写 moz 档） */
+  -moz-osx-font-smoothing: grayscale;
   transition: background-color .8s;    /* page-mood shift */
 }
 :root[data-theme="glitch-restoration"] .app-body {
   background:
-    radial-gradient(120% 80% at 50% 0%, transparent 60%, rgba(78, 86, 98, .06) 100%) fixed,
+    radial-gradient(ellipse at center, transparent 55%, rgba(78, 86, 98, .07) 100%) fixed,
     var(--view-canvas, var(--paper));
 }
 
@@ -169,7 +168,6 @@
 :root[data-theme="glitch-restoration"] .grid-card-cover { border-radius: 6px; }
 :root[data-theme="glitch-restoration"] .watch-cover,
 :root[data-theme="glitch-restoration"] .playlist-hero-cover { border-radius: 10px; }
-:root[data-theme="glitch-restoration"] .player-cover,
 :root[data-theme="glitch-restoration"] .song-cover,
 :root[data-theme="glitch-restoration"] .song-result-cover,
 :root[data-theme="glitch-restoration"] .track-cover,
@@ -182,14 +180,15 @@
 :root[data-theme="glitch-restoration"] .pg-hash,
 :root[data-theme="glitch-restoration"] .regmarks { display: none; }
 
-/* execute 键：accent 实底 + teal 辉光；hover 辉光收缩为四档。
-   底色走 accent-deep（#157e70 上白字 ~5:1），辉光用 accent 本色提亮 */
+/* execute 键：accent-deep 实底（#157e70 上白字 ~5:1）+ accent 本色辉光。
+   transition 须连基类的 color .5s 一并重写，否则 hover 变色变瞬跳 */
 :root[data-theme="glitch-restoration"] .ink-btn {
   background: var(--accent-magenta-ink);
   color: #fff;
   border-radius: 7px;
+  letter-spacing: .08em;
   box-shadow: 0 0 25px var(--accent-magenta);
-  transition: box-shadow .25s, background-color .25s;
+  transition: color .5s var(--ease-ink), box-shadow .5s, background-color .25s;
 }
 :root[data-theme="glitch-restoration"] .ink-btn:hover:not(:disabled) {
   color: #fff;
@@ -199,19 +198,42 @@
     0 0 15px var(--accent-magenta),
     0 0 30px var(--accent-magenta);
 }
+/* spent：禁用=灰底无辉光（规范 .spent 语义），不是调透明度 */
+:root[data-theme="glitch-restoration"] .ink-btn:disabled {
+  background: #b9c2c9;
+  box-shadow: none;
+  opacity: 1;
+  cursor: not-allowed;
+}
+/* ghost 必须显式复位底色——否则继承 execute 的实底变 slate-on-teal 1.49:1 */
 :root[data-theme="glitch-restoration"] .ink-btn--ghost {
+  background: transparent;
   border-color: var(--ink-30);
   color: var(--ink);
+  box-shadow: none;
 }
 :root[data-theme="glitch-restoration"] .ink-btn--ghost:hover:not(:disabled) {
+  background: #f3f5f7;
   color: var(--accent-magenta-ink);
-  box-shadow: 0 0 7.5px var(--accent-magenta);
+  box-shadow: 0 0 12px rgba(78, 86, 98, .15); /* ghost 的辉光是灰不是 teal */
+}
+/* danger 确认键：别被 execute 皮吞掉——红边红字，hover 翻红底 */
+:root[data-theme="glitch-restoration"] .fb-btn--danger {
+  background: transparent;
+  border-color: var(--accent-danger);
+  color: var(--accent-danger-ink);
+  box-shadow: none;
+}
+:root[data-theme="glitch-restoration"] .fb-btn--danger:hover:not(:disabled) {
+  background: var(--accent-danger);
+  color: #fff;
+  box-shadow: none;
 }
 
 /* 发丝控件圆角化：field/chip/check 4-5px，tab 改分段 pill 组
    （边框保持 --hairline——slate 墨本就比 print 墨软，再降档会过淡） */
 :root[data-theme="glitch-restoration"] .pg-field { border-radius: 4px; }
-:root[data-theme="glitch-restoration"] .pg-chip { border-radius: 5px; }
+:root[data-theme="glitch-restoration"] .pg-chip { border-radius: 4px; }
 :root[data-theme="glitch-restoration"] .pg-check { border-radius: 4px; }
 :root[data-theme="glitch-restoration"] .pg-tab {
   border-right: none;
@@ -219,14 +241,23 @@
   margin: 4px 2px;
   padding: 6px 14px;
 }
-:root[data-theme="glitch-restoration"] .pg-tab--active { border-radius: 6px; }
+/* 双极语言下「选中」是 teal tint + accent-deep 字，不是墨反白 */
+:root[data-theme="glitch-restoration"] .pg-tab--active {
+  background: rgba(45, 211, 190, .18);
+  color: var(--accent-magenta-ink);
+}
 
-/* 悬浮层：menu/suggest/toast/dialog 收圆角 + 柔影 */
+/* 悬浮层：menu/suggest/toast 收圆角 + 柔影；dialog 是独立档
+   （8px 半径 + 更深 .18 影——规范 window≠dialog） */
 :root[data-theme="glitch-restoration"] .pg-menu,
 :root[data-theme="glitch-restoration"] .topnav-suggest {
   border: 2px solid var(--ink);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
+}
+:root[data-theme="glitch-restoration"] .fb-dialog {
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
 }
 :root[data-theme="glitch-restoration"] .fb-toast {
   border: 2px solid var(--ink);
@@ -234,32 +265,105 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
 }
 
-/* teal 本色在纸面仅 ~2.1:1——文字/图标 hover 一律走 accent-deep */
+/* teal 本色在纸面仅 ~2.1:1——纸面文字/图标 hover 一律走 accent-deep；
+   墨面变体排除掉（accent-deep 在 slate 上仅 ~1.5:1 隐形），另行走亮档 */
 :root[data-theme="glitch-restoration"] .pg-link:hover,
-:root[data-theme="glitch-restoration"] .pg-icobtn:hover:not(:disabled) {
+:root[data-theme="glitch-restoration"] .pg-icobtn:hover:not(:disabled):not(.pg-icobtn--on-ink) {
   color: var(--accent-magenta-ink);
+}
+:root[data-theme="glitch-restoration"] .pg-icobtn--on-ink:hover:not(:disabled),
+:root[data-theme="glitch-restoration"] .pl-row--active .pl-action:hover,
+:root[data-theme="glitch-restoration"] .song-row--playing .song-menu-btn:hover,
+:root[data-theme="glitch-restoration"] .queue-row--current .queue-row-remove:hover {
+  color: var(--accent-magenta-on-ink);
 }
 
 /* 墨条上的进度填充：teal accent 在 slate 上比纸色更亮 */
 :root[data-theme="glitch-restoration"] .bp-progress-fill { background: var(--accent-magenta); }
 
-/* 错误横幅：fail-title 式左红签 callout */
+/* 错误面：双极的另一极要落在「面」上——tint 盒 + 红签 + tag 红光晕 +
+   出现时 shake（v-if 挂载即播放一次）。规范 shake 属 reduced-motion 保留集 */
 :root[data-theme="glitch-restoration"] .watch-banner {
-  border: var(--hairline-soft);
+  background: rgba(229, 72, 77, .08);
+  border: 1.2px solid rgba(229, 72, 77, .35);
   border-left: 3px solid var(--accent-danger);
-  border-radius: 6px;
+  border-radius: 4px;
+  animation: .3s ease-in-out glitchShake;
+}
+:root[data-theme="glitch-restoration"] .watch-banner-tag { text-shadow: 0 0 12px rgba(229, 72, 77, .35); }
+:root[data-theme="glitch-restoration"] .fb-toast--error {
+  background: rgba(229, 72, 77, .08);
+  border-color: rgba(229, 72, 77, .35);
+  animation: .3s ease-in-out glitchShake;
+}
+/* 失败 tag 硬闪（alert-label 语义）——reduced-motion 集里杀掉 */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-theme="glitch-restoration"] .watch-banner-tag,
+  :root[data-theme="glitch-restoration"] .dtl-group-tag--fail {
+    animation: 1.1s steps(2, start) infinite glitchBlink;
+  }
+}
+/* 揭示仪式：完成徽章的 signal-settle 三步 CRT 锁定——本主题的 payoff 时刻 */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-theme="glitch-restoration"] .dtr-chip--ok,
+  :root[data-theme="glitch-restoration"] .dtl-group-tag--ok,
+  :root[data-theme="glitch-restoration"] .dql-chip--ok {
+    animation: .5s steps(3, end) glitchSettle;
+  }
+}
+@keyframes glitchShake { /* banner-shake verbatim */
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  55% { transform: translateX(3px); }
+  80% { transform: translateX(-2px); }
+}
+@keyframes glitchBlink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes glitchSettle { /* signal-settle verbatim */
+  0%, 100%, 48% { transform: translateX(0); filter: none; }
+  12% { transform: translateX(-4px); filter: hue-rotate(25deg); }
+  24% { transform: translateX(3px); filter: none; }
+  36% { transform: translateX(-2px); filter: hue-rotate(-15deg); }
 }
 
-/* 玩具窗：memoria-window 重皮——圆角柔影 + slate 标题栏 */
-:root[data-theme="glitch-restoration"] .toy-window {
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, .14);
+/* 主题 pill 收进 lang-tabs 形：99px 胶囊 + teal 滑块 + teal 染色影 */
+:root[data-theme="glitch-restoration"] .theme-pill {
+  border-radius: 99px;
+  border-color: var(--ink-30);
+  box-shadow: 0 0 1px 0 rgba(45, 211, 190, .3), 0 4px 10px 0 rgba(45, 211, 190, .18);
 }
-:root[data-theme="glitch-restoration"] .toy-window__title { border: 2px solid var(--ink); border-bottom: 0; }
-:root[data-theme="glitch-restoration"] .toy-window__body { border: 2px solid var(--ink); border-top: 0; }
+:root[data-theme="glitch-restoration"] .theme-pill-tab { border-radius: 99px; }
+:root[data-theme="glitch-restoration"] .theme-pill-tab--on { color: var(--accent-magenta-ink); }
+:root[data-theme="glitch-restoration"] .theme-pill-glider {
+  background: rgba(45, 211, 190, .18);
+  border-radius: 99px;
+}
+:root[data-theme="glitch-restoration"] .theme-pill:focus-within { outline-color: var(--accent-magenta-ink); }
+
+/* teal 拖拽指示线在白纸/淡画布上仅 ~1.8:1——走 accent-deep */
+:root[data-theme="glitch-restoration"] .queue-row--dragging { outline-color: var(--accent-magenta-ink); }
+
+/* 选区换 teal tint——墨条上选区不再自隐，双极签名 */
+:root[data-theme="glitch-restoration"] ::selection {
+  background: rgba(45, 211, 190, .28);
+  color: var(--ink);
+}
+
+/* 玩具窗：memoria-window 重皮——圆角落在 title/body 各自边缘
+   （容器 overflow:hidden 会把浮出窗体的 __num 编号裁掉） */
+:root[data-theme="glitch-restoration"] .toy-window { box-shadow: 0 8px 30px rgba(0, 0, 0, .14); }
+:root[data-theme="glitch-restoration"] .toy-window__title {
+  border: 2px solid var(--ink);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+}
+:root[data-theme="glitch-restoration"] .toy-window__body {
+  border: 2px solid var(--ink);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+}
 
 /* ── 字符腐蚀（GlitchText 驱动，仅本主题激活时渲染替身符） ── */
+:root[data-theme="glitch-restoration"] .glitch-word { display: inline; white-space: nowrap; }
 :root[data-theme="glitch-restoration"] .corruptible { display: inline; position: relative; }
 :root[data-theme="glitch-restoration"] .char-glitch { visibility: hidden; }
 :root[data-theme="glitch-restoration"] .char-glitch::after {
@@ -413,28 +517,30 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 
 /* 彩纸画布上的次级文字升档——ink-64 在 teal/pink/sage 上 <4.5:1。
-   作用域限定 .app-body：纸面 masthead/teleport 菜单/toast 仍用原档，
-   反白态（song-row--playing、pl-row--active 内的 label-grey）由 scoped
-   后加载规则继续覆盖，不受影响。
+   选择器写 .app-shell .app-body（0,3,0）：单纯 .app-body .X（0,2,0）与
+   scoped 规则平手时靠后加载落败，白名单会整片死区化（曾实锤）。
+   升到 (0,3,0) 后与反白态 scoped 规则（同为 0,3,0）平手，
+   仍靠「全局先、scoped 后」的顺序让反白态继续胜出——语义兼容。
    ⚠ 白名单机制：新增的「画布内 ink-64 次级文字/图标」类必须登记到下列，
    否则在彩布上静默不达标（新主题改画布色后尤甚）。 */
-.app-body .watch-meta, .app-body .watch-empty, .app-body .watch-lyric-line,
-.app-body .queue-row-artist, .app-body .queue-row-duration, .app-body .queue-source,
-.app-body .song-artist, .app-body .song-duration, .app-body .song-state-text,
-.app-body .panel-state-text, .app-body .panel-state-sub,
-.app-body .pl-meta, .app-body .pl-count, .app-body .result-section-sub,
-.app-body .grid-state-text, .app-body .home-section-sub, .app-body .home-state-text,
-.app-body .watch-banner, .app-body .watch-autoplay,
-.app-body .watch-lyric-translation, .app-body .playlist-hero-sub,
-.app-body .song-result-index, .app-body .song-result-meta, .app-body .song-result-duration {
+.app-shell .app-body .watch-meta, .app-shell .app-body .watch-empty, .app-shell .app-body .watch-lyric-line,
+.app-shell .app-body .queue-row-artist, .app-shell .app-body .queue-row-duration, .app-shell .app-body .queue-source,
+.app-shell .app-body .song-artist, .app-shell .app-body .song-duration, .app-shell .app-body .song-state-text,
+.app-shell .app-body .panel-state-text, .app-shell .app-body .panel-state-sub,
+.app-shell .app-body .pl-meta, .app-shell .app-body .pl-count, .app-shell .app-body .result-section-sub,
+.app-shell .app-body .grid-state-text, .app-shell .app-body .home-section-sub, .app-shell .app-body .home-state-text,
+.app-shell .app-body .watch-banner, .app-shell .app-body .watch-autoplay,
+.app-shell .app-body .watch-lyric-translation, .app-shell .app-body .playlist-hero-sub,
+.app-shell .app-body .song-result-index, .app-shell .app-body .song-result-meta, .app-shell .app-body .song-result-duration {
   color: var(--ink-86);
 }
-.app-body .pg-label--dim, .app-body .queue-row-index, .app-body .song-row-index {
+.app-shell .app-body .pg-label--dim, .app-shell .app-body .queue-row-index, .app-shell .app-body .song-row-index {
   color: var(--ink-86);
 }
 /* 画布上的图标键/把手：ink-64 在饱和底上 <3:1 图形线，升 ink-86 */
-.app-body .queue-row-remove, .app-body .song-menu-btn, .app-body .pl-action,
-.app-body .dql-kebab, .app-body .pg-tab:not(.pg-tab--active) {
+.app-shell .app-body .queue-row-remove, .app-shell .app-body .song-menu-btn, .app-shell .app-body .pl-action,
+.app-shell .app-body .dql-kebab, .app-shell .app-body .song-state-icon,
+.app-shell .app-body .pg-tab:not(.pg-tab--active) {
   color: var(--ink-86);
 }
 
@@ -590,6 +696,55 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .pg-link:hover { color: var(--accent-magenta-ink); }
 
+/* 主题切换 pill：lang-tabs 形态的分段滑块胶囊。
+   radio 用 visually-hidden 变体而非 display:none——display:none 的 radio
+   不在 Tab 序里（skill a11y 契约点名此坑）；focus-within 供环。
+   glider 等宽 tab 假定：tab 固定 54px，translateX 走 index×100% */
+.theme-pill {
+  display: flex;
+  position: relative;
+  background: var(--paper);
+  border: var(--hairline);
+  padding: 3px;
+  flex-shrink: 0;
+}
+.theme-pill-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none; /* label 隐式激活转发点击；否则 abs 定位的 input 拦截命中 */
+}
+.theme-pill-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  width: 54px;
+  line-height: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .05em;
+  color: var(--ink-64);
+  cursor: pointer;
+  position: relative;
+  z-index: 2;
+  transition: color .2s;
+}
+.theme-pill-tab--on { color: var(--paper); }
+.theme-pill:focus-within { outline: 2px solid var(--ink); outline-offset: 2px; }
+.theme-pill-glider {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  height: 26px;
+  width: 54px;
+  z-index: 1;
+  background: var(--ink);
+  transition: transform .25s ease-out;
+}
+
 /* tab 条：激活态墨底反白（FAQ open 同构） */
 .pg-tabs {
   display: flex;
@@ -656,6 +811,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-field select { flex: 0 0 auto; border-left: var(--hairline); cursor: pointer; }
 .pg-field input::placeholder { color: var(--ink-64); }
 .pg-field:focus-within { outline: 2px solid currentColor; outline-offset: -1px; }
+/* iOS 防缩放：<16px 的 input 聚焦会触发整页 zoom */
+@media (max-width: 700px) {
+  .pg-field input { font-size: 16px; }
+}
 
 /* 浮动菜单（teleport 到 body 脱离组件作用域——必须全局类） */
 .pg-menu {
