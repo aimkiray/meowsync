@@ -1,7 +1,7 @@
 <template>
   <!-- 歌单库侧栏："library" 媒体库列表，发丝线行排 -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
-    <p class="pg-label panel-label">library·我的歌单</p>
+    <p class="pg-label panel-label">library 我的歌单</p>
 
     <div v-if="loading" class="panel-state">
       <div class="pixel-loading" aria-hidden="true"></div>
@@ -343,7 +343,7 @@ export default {
 }
 
 .panel-label {
-  padding: 8px 12px 10px; /* 与栏内 12px 内容轴同缘（图标/封面左缘） */
+  padding: 8px 12px 10px 0; /* 栏缘家具：标签贴左缘（x=0），内容轴仍在 12px */
   flex-shrink: 0;
 }
 
