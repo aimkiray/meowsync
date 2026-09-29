@@ -1,18 +1,6 @@
 <template>
-  <!-- 歌单库侧栏：顶部导航项 + "library" 媒体库列表，发丝线行排 -->
+  <!-- 歌单库侧栏："library" 媒体库列表，发丝线行排 -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
-    <!-- 导航项：首页（发现流） -->
-    <button
-      class="side-nav-item"
-      :class="{ 'side-nav-item--active': homeActive }"
-      :aria-current="homeActive ? 'page' : undefined"
-      @click="$emit('nav-home')"
-      title="首页"
-    >
-      <PixelIcon name="home" :size="15" />
-      <span>首页</span>
-    </button>
-
     <p class="pg-label panel-label">library·我的歌单</p>
 
     <div v-if="loading" class="panel-state">
@@ -172,14 +160,9 @@ export default {
     loading: {
       type: Boolean,
       default: false
-    },
-    // 首页导航项的激活态（centerView === 'home'）
-    homeActive: {
-      type: Boolean,
-      default: false
     }
   },
-  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'nav-home', 'playlist-downloads-deleted'],
+  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted'],
   setup(props, { emit }) {
     const openMenuId = ref(null)
     const menuPositions = ref({})
@@ -385,32 +368,6 @@ export default {
 
 .playlist-scroll {
   border-top: var(--hairline);
-}
-
-/* 导航项：与歌单行同一语法——通栏 + 发丝下缘 + 激活整行墨底反白 */
-.side-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 36px; /* 与 watch-header 的 ink-btn--sm 同高——两列头行共一条横带 */
-  padding: 0 12px; /* 图标左缘与 .pl-cover 的 12px 内容网格同轴 */
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink);
-  border-bottom: var(--hairline);
-  cursor: pointer;
-  text-align: left;
-  flex-shrink: 0;
-  transition: background .12s, color .15s;
-}
-
-.side-nav-item:hover {
-  background: var(--ink-06);
-}
-
-.side-nav-item--active {
-  background: var(--ink);
-  color: var(--paper);
 }
 
 /* 歌单行：发丝下缘分隔，整行可点 */
