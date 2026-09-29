@@ -8,7 +8,7 @@
    色值冻结，底栏自行覆写
    ═══════════════════════════════════════════════════════════════ */
 
-/* Fusion Pixel（本地打包位图等宽——窗口标题栏/版本戳/[b.64] 用） */
+/* Fusion Pixel（本地打包位图等宽——glitch 主题主字族 / pixel-retro 沉浸页 / 版本戳） */
 @font-face{
   font-family: 'Fusion Pixel';
   src: url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2'),
@@ -192,7 +192,7 @@
 :root[data-theme="glitch-restoration"] .dql-cover { border-radius: 4px; }
 
 /* 印刷家具退场——memoria 窗体不带裁切标线/页缘标尺/套准符；
-   版本戳与 [b.64] 保留（OS-fiction 兼容的戳记） */
+   版本戳保留（OS-fiction 兼容的戳记） */
 :root[data-theme="glitch-restoration"] .pg-corners::before { content: none; }
 :root[data-theme="glitch-restoration"] .pg-hash,
 :root[data-theme="glitch-restoration"] .regmarks { display: none; }
@@ -1273,23 +1273,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   line-height: 1.9;
   color: var(--ink);
   text-align: center;
-}
-
-/* [b.64] 彩蛋块：墨底纸字，藏一段可解码的 base64 */
-.pg-b64 {
-  background: var(--ink);
-  color: var(--paper);
-  font-family: var(--font-mono);
-  font-weight: 300;
-  font-size: 11px;
-  padding: 10px 12px;
-  word-break: break-all;
-}
-.pg-b64-label {
-  display: block;
-  color: var(--label-grey);
-  margin-bottom: 4px;
-  letter-spacing: .05em;
 }
 
 /* 装饰件断点门槛：密集页面 ≤810px 藏起裁切标线（typesafe 的 ornament cutoff） */

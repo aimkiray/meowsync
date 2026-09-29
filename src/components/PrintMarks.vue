@@ -1,5 +1,5 @@
 <template>
-  <!-- 印刷装饰件：裁切角标 / ∵⩆ 套准符 / 版本戳 / [b.64] 彩蛋 -->
+  <!-- 印刷装饰件：裁切角标 / ∵⩆ 套准符 / 版本戳 -->
   <svg
     v-if="variant === 'hash'"
     class="pg-hash"
@@ -24,11 +24,6 @@
     <p><GlitchText text="©2026 · All rights reserved" /></p>
     <p><GlitchText text="Made with Love · MS.OS1" /></p>
   </div>
-
-  <div v-else-if="variant === 'b64'" class="pg-b64">
-    <span class="pg-b64-label" aria-hidden="true">[b.64]</span>
-    <span class="pg-b64-body">{{ payload }}</span>
-  </div>
 </template>
 
 <script>
@@ -41,10 +36,8 @@ export default {
     variant: {
       type: String,
       default: 'hash',
-      validator: (v) => ['hash', 'reg', 'stamp', 'b64'].includes(v)
-    },
-    // 解码即 "MeowSync: cats love music. ms.os1"
-    payload: { type: String, default: 'TWVvd1N5bmM6IGNhdHMgbG92ZSBtdXNpYy4gbXMub3Mx' }
+      validator: (v) => ['hash', 'reg', 'stamp'].includes(v)
+    }
   }
 }
 </script>
@@ -56,5 +49,4 @@ export default {
   height: 10px;
   color: var(--ink-86); /* stroke=currentColor：描边色收编进令牌 */
 }
-.pg-b64-body { font-weight: 300; }
 </style>
