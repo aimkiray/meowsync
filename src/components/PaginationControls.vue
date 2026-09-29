@@ -1,7 +1,6 @@
 <template>
   <!-- 分页条：仅被 SongList 消费 → 同落 sage 纸色画布（--canvas-sage #abbab9）。
-       发丝方格翻页键 + 墨底反白当前页读数；
-       barStyle 是 retro 主题遗留接口，print-grid 条不再消费它（prop 保留兼容父组件传参） -->
+       发丝方格翻页键 + 墨底反白当前页读数 -->
   <div class="pg-pagination">
     <button
       @click="$emit('go-to-page', 1)"
@@ -49,8 +48,7 @@ export default {
   name: 'PaginationControls',
   props: {
     currentPage: { type: Number, default: 1 },
-    totalPages: { type: Number, default: 1 },
-    barStyle: { type: Object, default: null }
+    totalPages: { type: Number, default: 1 }
   },
   emits: ['go-to-page', 'prev-page', 'next-page']
 }

@@ -323,7 +323,7 @@ onUnmounted(() => {
   --white-40: rgba(255, 255, 255, .40);
   --white-80: rgba(255, 255, 255, .8);
   --accent-magenta: #d45bb6;
-  --accent-magenta-ink: #a5358c;
+  --accent-magenta-on-ink: var(--accent-magenta);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -444,7 +444,7 @@ onUnmounted(() => {
   transition: color .2s, background .12s;
 }
 
-.rc-btn:hover { color: var(--accent-magenta); }
+.rc-btn:hover { color: var(--accent-magenta-on-ink); }
 .rc-btn:active { background: var(--white-16); }
 
 .rc-retry {
@@ -543,7 +543,7 @@ onUnmounted(() => {
 }
 
 .rc-queue-row--current .rc-queue-idx {
-  color: var(--accent-magenta);
+  color: var(--accent-magenta-on-ink);
 }
 
 .rc-queue-name {
