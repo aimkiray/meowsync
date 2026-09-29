@@ -147,7 +147,6 @@
     <div class="player-idle" v-else>
       <span class="pg-label pg-label--on-ink">meowsync</span>
       <span class="pg-label pg-label--on-ink player-idle-hint">选择歌曲开始播放</span>
-      <span class="pg-label pg-label--on-ink player-idle-ver">ms.os1</span>
     </div>
   </div>
 </template>
@@ -475,9 +474,9 @@ export default {
 
 /* 待机条：与激活条同高（40 内容 + 10×2 padding + 1.2 顶线 = 61.2），首次点歌不跳主区 */
 .player-idle {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr; /* 中列自适应居中——右缘件已删 */
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   height: 61.2px;
   padding: 0 16px;
@@ -485,7 +484,7 @@ export default {
   margin: 0 auto;
 }
 .pg-label--on-ink { color: var(--label-grey); }
-.player-idle-hint { color: var(--white-80); }
+.player-idle-hint { color: var(--white-80); grid-column: 2; }
 
 @media (max-width: 640px) {
   .player-inner { gap: 10px; padding: 8px 10px; }
