@@ -22,6 +22,7 @@
     >
       <div
         class="fb-dialog pg-panel pg-corners"
+        :class="{ 'fb-dialog--danger': state.confirm.danger }"
         role="alertdialog"
         aria-modal="true"
         :aria-label="state.confirm.message"
