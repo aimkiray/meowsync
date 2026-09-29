@@ -388,7 +388,7 @@ export default {
   cursor: pointer;
   transition: color .5s var(--ease-ink);
 }
-.topnav-home:hover { color: var(--accent-magenta-ink); } /* 文字键 hover = accent 字色（pg-link 同律） */
+.topnav-home:hover { color: var(--accent-magenta-ink); } /* 文字键 hover = accent 字色 */
 
 .topnav-home-ico { display: none; }
 
@@ -508,5 +508,6 @@ export default {
   .topnav-home-ico { display: inline-flex; }
   .topnav-remote-hint { display: none; }
   .topnav-theme { display: none; }
+  .topnav-action { padding: 0 10px; } /* 窄屏 ghost 键收紧——保搜索框宽度 */
 }
 </style>

@@ -400,15 +400,16 @@ export default {
   margin-top: auto;
   min-height: 30px;
 }
-.grid-added { display: inline-flex; align-items: center; }
-
 .grid-add {
   flex: 1;
 }
 
 .grid-added {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  height: 32px; /* pg-chip 默认 25px 顶对齐会下缘悬空 7px——钉到 ink-btn--sm 同高 */
 }
 
 .grid-share {

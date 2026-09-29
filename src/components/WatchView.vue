@@ -114,6 +114,7 @@
               </div>
               <button
                 v-if="String(song.id) !== String(currentSong?.id)"
+                type="button"
                 class="queue-row-remove pg-icobtn pg-icobtn--bare pg-icobtn--sm"
                 title="从队列移除"
                 aria-label="从队列移除"
