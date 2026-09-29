@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════
    MeowSync — print-grid 设计语言（typesafe.ai print-sheet）
    每视图一张饱和纸色画布 · 1.2px 墨色发丝线 · 零圆角
-   裁切标记 / ∵⩆ 套准符 / 等宽微标签 / 位图字体版本戳
+   裁切标记 / 等宽微标签 / 位图字体版本戳
    ─────────────────────────────────────────────────────────────
    --pixel-* 变量与 .jirai-slider 仅供 FullscreenPlayer 沉浸歌词页
    （视觉冻结组件）消费；.player-progress-* 几何与 BottomPlayer 共用、
@@ -105,7 +105,7 @@
 /* ══════════════════════════════════════════════════════════════════
    glitch-restoration —— takdrdr.com/memoria 的「虚构修复终端」皮
    近白字段 + slate 软墨 + teal/error 双极；圆角柔影窗体 + 单像素字族
-   禁抗锯齿；印刷家具（pg-corners/pg-hash/regmarks）退场；
+   禁抗锯齿；印刷家具（pg-corners/pg-hash）退场；
    字符腐蚀由 GlitchText.vue 驱动（仅本主题激活时 tick）。
    冻结域（--pixel-*）与 RC pin 块不受影响。
    ══════════════════════════════════════════════════════════════════ */
@@ -191,11 +191,10 @@
 :root[data-theme="glitch-restoration"] .pl-cover,
 :root[data-theme="glitch-restoration"] .dql-cover { border-radius: 4px; }
 
-/* 印刷家具退场——memoria 窗体不带裁切标线/页缘标尺/套准符；
+/* 印刷家具退场——memoria 窗体不带裁切标线/页缘标尺；
    版本戳保留（OS-fiction 兼容的戳记） */
 :root[data-theme="glitch-restoration"] .pg-corners::before { content: none; }
-:root[data-theme="glitch-restoration"] .pg-hash,
-:root[data-theme="glitch-restoration"] .regmarks { display: none; }
+:root[data-theme="glitch-restoration"] .pg-hash { display: none; }
 
 /* execute 键：accent-deep 实底（#157e70 上白字 ~5:1）+ accent 本色辉光。
    transition 须连基类的 color .5s 一并重写，否则 hover 变色变瞬跳 */
@@ -1253,18 +1252,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 
 /* ═══ 印刷装饰件 ═══ */
-
-/* ∵ ⩆ / ⩆ ∵ 套准符（页脚收版） */
-.regmarks {
-  display: flex;
-  justify-content: center;
-  gap: 14px;
-  font-family: var(--font-mono);
-  font-weight: 300;
-  font-size: 12px;
-  letter-spacing: .05em;
-  color: var(--ink);
-}
 
 /* 版本戳（Fusion Pixel 位图字——构建清单式签名） */
 .pg-stamp {

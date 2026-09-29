@@ -25,93 +25,88 @@
       </div>
     </section>
 
-    <div v-if="loading" class="home-state">
+    <!-- 货架脱离加载闸门渐进渲染：单路到达即上架，不被最慢请求拖住 -->
+    <div v-if="loading && !hasShelves" class="home-state">
       <div class="pixel-loading" aria-hidden="true"></div>
       <p class="home-state-text">加载推荐中喵...</p>
     </div>
+    <div v-else-if="!hasShelves" class="home-state">
+      <p class="home-state-text">推荐加载失败，去顶部搜索试试喵~</p>
+    </div>
 
-    <template v-else>
-      <!-- 榜单货架 -->
-      <section v-if="toplists.length" class="home-section">
-        <div class="home-section-head">
-          <p class="pg-label">charts</p>
-          <span class="home-section-sub">榜单</span>
-        </div>
-        <div class="home-shelf">
-          <div
-            v-for="pl in toplists"
-            :key="pl.id"
-            class="grid-card"
-            @click="$emit('open', pl)"
-            @keydown.enter="$emit('open', pl)"
-            @keydown.space.prevent="$emit('open', pl)"
-            tabindex="0"
-            role="button"
-            :title="`打开《${pl.name}》`"
-          >
-            <div class="grid-card-cover">
-              <img
-                v-if="pl.coverImgUrl"
-                :src="httpsCover(pl.coverImgUrl)"
-                :alt="pl.name"
-                loading="lazy"
-              />
-              <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
-            </div>
-            <div class="grid-card-body">
-              <h3 class="grid-card-name">{{ pl.name }}</h3>
-              <p class="grid-card-meta">{{ pl.updateFrequency || '榜单' }}</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 推荐歌单货架 -->
-      <section v-if="personalized.length" class="home-section">
-        <div class="home-section-head">
-          <p class="pg-label">for you</p>
-          <span class="home-section-sub">推荐歌单</span>
-        </div>
-        <div class="home-shelf">
-          <div
-            v-for="pl in personalized"
-            :key="pl.id"
-            class="grid-card"
-            @click="$emit('open', pl)"
-            @keydown.enter="$emit('open', pl)"
-            @keydown.space.prevent="$emit('open', pl)"
-            tabindex="0"
-            role="button"
-            :title="`打开《${pl.name}》`"
-          >
-            <div class="grid-card-cover">
-              <img
-                v-if="pl.picUrl || pl.coverImgUrl"
-                :src="httpsCover(pl.picUrl || pl.coverImgUrl)"
-                :alt="pl.name"
-                loading="lazy"
-              />
-              <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
-            </div>
-            <div class="grid-card-body">
-              <h3 class="grid-card-name">{{ pl.name }}</h3>
-              <p class="grid-card-meta">{{ formatPlayCount(pl.playCount) }} 次播放</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <div v-if="!toplists.length && !personalized.length" class="home-state">
-        <p class="home-state-text">推荐加载失败，去顶部搜索试试喵~</p>
+    <!-- 榜单货架 -->
+    <section v-if="toplists.length" class="home-section">
+      <div class="home-section-head">
+        <p class="pg-label">charts</p>
+        <span class="home-section-sub">榜单</span>
       </div>
-    </template>
+      <div class="home-shelf">
+        <div
+          v-for="pl in toplists"
+          :key="pl.id"
+          class="grid-card"
+          @click="$emit('open', pl)"
+          @keydown.enter="$emit('open', pl)"
+          @keydown.space.prevent="$emit('open', pl)"
+          tabindex="0"
+          role="button"
+          :title="`打开《${pl.name}》`"
+        >
+          <div class="grid-card-cover">
+            <img
+              v-if="pl.coverImgUrl"
+              :src="httpsCover(pl.coverImgUrl)"
+              :alt="pl.name"
+              loading="lazy"
+            />
+            <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
+          </div>
+          <div class="grid-card-body">
+            <h3 class="grid-card-name">{{ pl.name }}</h3>
+            <p class="grid-card-meta">{{ pl.updateFrequency || '榜单' }}</p>
+          </div>
+        </div>
+      </div>
+    </section>
 
-    <!-- 页脚收版：∵⩆ 套准符 + 版本戳 -->
+    <!-- 推荐歌单货架 -->
+    <section v-if="personalized.length" class="home-section">
+      <div class="home-section-head">
+        <p class="pg-label">for you</p>
+        <span class="home-section-sub">推荐歌单</span>
+      </div>
+      <div class="home-shelf">
+        <div
+          v-for="pl in personalized"
+          :key="pl.id"
+          class="grid-card"
+          @click="$emit('open', pl)"
+          @keydown.enter="$emit('open', pl)"
+          @keydown.space.prevent="$emit('open', pl)"
+          tabindex="0"
+          role="button"
+          :title="`打开《${pl.name}》`"
+        >
+          <div class="grid-card-cover">
+            <img
+              v-if="pl.picUrl || pl.coverImgUrl"
+              :src="httpsCover(pl.picUrl || pl.coverImgUrl)"
+              :alt="pl.name"
+              loading="lazy"
+            />
+            <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
+          </div>
+          <div class="grid-card-body">
+            <h3 class="grid-card-name">{{ pl.name }}</h3>
+            <p class="grid-card-meta">{{ formatPlayCount(pl.playCount) }} 次播放</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 页脚收版：版本戳 -->
     <footer class="home-foot">
-      <PrintMarks variant="reg" />
-      <div class="home-foot-grid">
-        <PrintMarks variant="stamp" class="home-foot-stamp" />
-      </div>
+      <PrintMarks variant="stamp" />
     </footer>
   </div>
 </template>
@@ -143,6 +138,11 @@ export default {
     }
   },
   emits: ['open', 'search'],
+  computed: {
+    hasShelves() {
+      return this.toplists.length > 0 || this.personalized.length > 0
+    }
+  },
   setup() {
     const formatPlayCount = (n) => {
       if (!n || typeof n !== 'number') return ''
@@ -239,30 +239,10 @@ export default {
 /* 卡片外壳已上收全局 style.css——这里只留「整卡可点」语义 */
 .grid-card { cursor: pointer; }
 
-/* 页脚收版 */
+/* 页脚收版（pg-stamp 自带 text-align:center，无需再排栅） */
 .home-foot {
   border-top: var(--hairline);
   margin-top: 8px;
   padding: 18px 0 12px;
-}
-
-.home-foot-grid {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: end;
-  gap: 16px;
-}
-
-.home-foot-stamp {
-  grid-column: 2;
-}
-
-@media (max-width: 640px) {
-  .home-foot-grid {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
 }
 </style>

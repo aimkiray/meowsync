@@ -1174,16 +1174,22 @@ export default {
       }
     }
 
-    // 首页发现流：三路独立加载互不阻塞，单路失败只空自己那格
+    // 首页发现流：三路独立加载互不阻塞，单路失败只空自己那格；
+    // 货架渐进渲染（HomeFeed 按数组到达上架），loading 只负责「全空态」的转圈。
+    // 8s 软上限：上游挂起时不让用户盯满 15s axios 超时——先到点落失败态，
+    // 晚到的数据经响应式照常补位替换失败文案
     let homeLoaded = false
     const loadHomeFeed = () => {
       if (homeLoaded) return
       homeLoaded = true
       homeLoading.value = true
-      Promise.allSettled([
-        musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) }),
-        musicApi.getPersonalized(12).then(list => { homePersonalized.value = list }),
-        musicApi.getSearchHot().then(list => { homeHots.value = list.slice(0, 12) })
+      Promise.race([
+        Promise.allSettled([
+          musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) }),
+          musicApi.getPersonalized(12).then(list => { homePersonalized.value = list }),
+          musicApi.getSearchHot().then(list => { homeHots.value = list.slice(0, 12) })
+        ]),
+        new Promise(resolve => setTimeout(resolve, 8000))
       ]).finally(() => { homeLoading.value = false })
     }
 
