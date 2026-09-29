@@ -464,9 +464,8 @@ export default {
 }
 
 .pl-action {
-  transition: color .2s; /* 尺寸交给 pg-icobtn--sm（24px 行内尾键档） */
+  transition: color .2s; /* 尺寸交给 pg-icobtn--sm（24px 行内尾键档）；hover 走全局行尾键统一律 */
 }
-.pl-action:hover { color: var(--ink); outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
 .pl-row--active .pl-action { color: var(--label-grey); }
 
 /* 侧栏歌单行悬停 ▶ 播放键（浮于封面上） */
@@ -480,6 +479,7 @@ export default {
   color: var(--paper);
   background: var(--scrim-strong);
   opacity: 0;
+  pointer-events: none; /* 隐形时不吃点击——封面点击应放行到行（song-menu-btn 同纪律） */
   border: none;
   cursor: pointer;
   transition: opacity .12s;
@@ -489,12 +489,14 @@ export default {
 .pl-row:focus-within .playlist-play-overlay,
 .playlist-play-overlay:focus-visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /* 触屏无 hover——隐形可点的播放键会误触，常显（半透明遮罩版） */
 @media (hover: none) {
   .playlist-play-overlay {
     opacity: .85;
+    pointer-events: auto;
   }
 }
 

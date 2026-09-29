@@ -3,7 +3,7 @@
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
   <div class="watch-view">
     <header class="watch-header">
-      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="12" />返回</button>
+      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="13" />返回</button>
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('open-fullscreen')" title="全屏歌词模式">
         <PixelIcon name="expand" :size="13" /> 沉浸
       </button>
@@ -114,11 +114,11 @@
               </div>
               <button
                 v-if="String(song.id) !== String(currentSong?.id)"
-                class="queue-row-remove"
+                class="queue-row-remove pg-icobtn pg-icobtn--bare pg-icobtn--sm"
                 title="从队列移除"
                 aria-label="从队列移除"
                 @click.stop="$emit('queue-remove', index)"
-              ><PixelIcon name="close" :size="11" /></button>
+              ><PixelIcon name="close" :size="13" /></button>
             </div>
           </template>
 
@@ -455,8 +455,7 @@ export default {
   padding: 20px 20px 10px; /* 顶 20 与全站首行轴齐平；底 10 收紧与内容区的距 */
   flex-shrink: 0;
 }
-/* 头行按钮统一 36px 横带 */
-.watch-header .ink-btn { height: 36px; }
+/* 头行按钮走 --sm 自然高（32px）——侧栏同高对象已随首页键一起移除 */
 
 .watch-layout {
   flex: 1;
@@ -634,7 +633,9 @@ export default {
   cursor: pointer;
   border-top: var(--hairline-soft);
   margin-top: 4px;
+  transition: background .12s;
 }
+.watch-autoplay:hover { background: var(--ink-06); }
 
 /* 歌词行：当前行墨色加粗放大，其余 ink-64 */
 .watch-lyric-list {

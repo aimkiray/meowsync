@@ -83,7 +83,7 @@
         <button
           v-if="remoteMode === 'off'"
           @click="$emit('toggle-center-view')"
-          class="pg-link topnav-action"
+          class="ink-btn ink-btn--ghost topnav-action"
           :title="isDownloadsView ? '返回歌曲列表' : '打开下载管理'"
         >{{ isDownloadsView ? '歌曲' : '管理' }}</button>
 
@@ -93,7 +93,7 @@
           :href="controllerUrl"
           target="_blank"
           rel="noopener"
-          class="pg-link topnav-action"
+          class="ink-btn ink-btn--ghost topnav-action"
           title="在新标签页打开手机控制器"
         >控制器</a>
         <span
@@ -386,7 +386,9 @@ export default {
   border: 0;
   padding: 0;
   cursor: pointer;
+  transition: color .5s var(--ease-ink);
 }
+.topnav-home:hover { color: var(--accent-magenta-ink); } /* 文字键 hover = accent 字色（pg-link 同律） */
 
 .topnav-home-ico { display: none; }
 
@@ -449,11 +451,12 @@ export default {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
+  padding: 10px 12px; /* 与 pg-menu-item 同档 */
   cursor: pointer;
   font-size: 12px;
   color: var(--ink);
   border-bottom: var(--hairline-soft);
+  transition: background .12s;
 }
 .topnav-suggest-item:last-child { border-bottom: none; }
 
@@ -491,11 +494,6 @@ export default {
   align-items: center;
   gap: 14px;
   flex-shrink: 0;
-}
-
-.topnav-action {
-  font-size: 13px;
-  font-weight: 500;
 }
 
 .topnav-remote-hint {

@@ -93,7 +93,7 @@
         </div>
 
         <button
-          class="queue-menu-trigger pg-icobtn pg-icobtn--bare dql-kebab"
+          class="queue-menu-trigger pg-icobtn pg-icobtn--bare pg-icobtn--sm dql-kebab"
           title="更多操作"
           aria-label="更多操作"
           aria-haspopup="menu"
