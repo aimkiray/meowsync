@@ -16,14 +16,6 @@
             <GlitchText text="MeowSync" />
           </button>
         </h1>
-
-        <!-- 窄屏标题隐藏时，原位给回首页图标键（发现页的唯一移动端入口） -->
-        <button
-          class="pg-icobtn pg-icobtn--bare topnav-home-ico"
-          @click="$emit('nav-home')"
-          title="回到首页"
-          aria-label="回到首页"
-        ><PixelIcon name="home" :size="15" /></button>
       </div>
 
       <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
@@ -403,8 +395,6 @@ export default {
 }
 .topnav-home:hover { color: var(--accent-magenta-ink); } /* 文字键 hover = accent 字色 */
 
-.topnav-home-ico { display: none; }
-
 .topnav-search {
   display: flex;
   justify-content: center;
@@ -520,14 +510,26 @@ export default {
   .topnav-remote-hint { display: none; }
 }
 
-/* 窄屏：标题让位给搜索框（移动端搜索仍是主入口）。
-   auto/1fr/auto：侧簇各占内容宽，中列 1fr 填满剩余——放弃居中换可用性 */
+/* 窄屏两行布局：一行塞不下"导航+搜索+动作"——
+   row1 = 汉堡+标题(home入口) | 动作簇，row2 = 搜索占满整行 */
+@media (max-width: 768px) {
+  .topnav-inner {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "left actions"
+      "search search";
+    height: auto;
+    padding: 8px 0;
+    row-gap: 8px;
+  }
+  .topnav-left { grid-area: left; }
+  .topnav-actions { grid-area: actions; }
+  .topnav-search { grid-area: search; }
+  .topnav-search-field { flex: 1; width: auto; }
+}
+
 @media (max-width: 640px) {
   .topnav { padding: 0 12px; }
-  .topnav-inner { grid-template-columns: auto 1fr auto; }
-  .topnav-title { display: none; }
-  .topnav-home-ico { display: inline-flex; }
-  .topnav-remote-hint { display: none; }
   .topnav-theme { display: none; }
   .topnav-action { padding: 0 10px; } /* 窄屏 ghost 键收紧——保搜索框宽度 */
 }
