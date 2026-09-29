@@ -13,6 +13,7 @@
       :remote-mode="remoteMode"
       @toggle-center-view="toggleCenterView"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
+      @nav-home="navHome"
       @search="handlePlaylistSearch"
       @search-by-id="loadPlaylistByIdAndAdd"
     />
@@ -27,11 +28,9 @@
           :loading="loading"
           :selected-playlist="selectedPlaylist"
           :user-playlists="userPlaylists"
-          :home-active="centerView === 'home'"
           @select-playlist="selectPlaylistAndShow"
           @play-playlist="playPlaylistFromSidebar"
           @remove-playlist="removePlaylistFromLibrary"
-          @nav-home="navHome"
           @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
         />
       </aside>
@@ -565,7 +564,7 @@ export default {
       pushNavState()
     }
 
-    // 侧栏「首页」导航项
+    // 顶栏标题/首页键：回发现流
     const navHome = () => {
       centerView.value = 'home'
       sidebarOpen.value = false

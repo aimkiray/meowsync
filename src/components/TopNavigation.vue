@@ -10,7 +10,19 @@
         title="打开歌单库"
       ><PixelIcon name="menu" :size="15" /></button>
 
-      <h1 class="topnav-title"><GlitchText text="MeowSync" /></h1>
+      <h1 class="topnav-title">
+        <button class="topnav-home" @click="$emit('nav-home')" title="回到首页" aria-label="回到首页">
+          <GlitchText text="MeowSync" />
+        </button>
+      </h1>
+
+      <!-- 窄屏标题隐藏时，原位给回首页图标键（发现页的唯一移动端入口） -->
+      <button
+        class="pg-icobtn pg-icobtn--bare topnav-home-ico"
+        @click="$emit('nav-home')"
+        title="回到首页"
+        aria-label="回到首页"
+      ><PixelIcon name="home" :size="15" /></button>
 
       <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
       <div class="topnav-search">
@@ -136,7 +148,7 @@ export default {
       default: 'off'
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'search', 'search-by-id', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
@@ -365,6 +377,19 @@ export default {
   gap: 8px;
 }
 
+/* 标题即回首页键：剥掉 button UA 皮，只吃排版继承 */
+.topnav-home {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.topnav-home-ico { display: none; }
+
 .topnav-search {
   flex: 1;
   display: flex;
@@ -482,6 +507,7 @@ export default {
 @media (max-width: 640px) {
   .topnav { padding: 0 12px; }
   .topnav-title { display: none; }
+  .topnav-home-ico { display: inline-flex; }
   .topnav-remote-hint { display: none; }
   .topnav-theme { display: none; }
 }
