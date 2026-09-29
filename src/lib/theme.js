@@ -1,7 +1,7 @@
 /**
  * 主题注册表与持久化——data-theme 的两个写点之一
  * （另一处是 index.html 内联脚本，负责首帧前恢复；两处的
- *   STORAGE_KEY/LEGACY_KEY 键名必须保持同步）。
+ *   STORAGE_KEY 键名必须保持同步）。
  *
  * 新增主题只需四步：
  *   1. 在 THEMES 注册 { id, label }（id 即 data-theme 值）
@@ -16,27 +16,23 @@
  *        --accent-magenta-on-ink（墨面文字用，暗色下指向深档值）与
  *        --scrim-strong（罩上压 --paper 图标，极性随 --paper 翻面）。
  *
- * 'default' 不写属性（:root 基线即默认主题）；未知/非法 id 一律回落 default。
- * 'pixel-retro' 当前只承载全屏歌词页的 --pixel-* 调色变体，不改 print-grid 应用令牌。
+ * 'default' 不写属性（:root 基线即默认主题，UI 显示名 retro）；未知/非法 id 一律回落 default。
  */
 import { ref, readonly } from 'vue'
 
 export const THEMES = [
-  { id: 'default', label: 'print-grid', pill: 'grid' },
+  { id: 'default', label: 'retro', pill: 'retro' },
   { id: 'glitch-restoration', label: 'glitch', pill: 'glitch' },
-  { id: 'pixel-retro', label: 'pixel-retro', pill: 'retro' },
 ]
 
 // 与 index.html 内联脚本共用键名，改动须同步
 const STORAGE_KEY = 'meowsync-theme'
-const LEGACY_KEY = 'pixel-theme' // 旧键历史写值域已确认只有 'default'/'pixel-retro'
 const VALID = new Set(THEMES.map(t => t.id))
 
 function readStoredTheme() {
   try {
     const v = localStorage.getItem(STORAGE_KEY)
     if (v && VALID.has(v)) return v
-    if (localStorage.getItem(LEGACY_KEY) === 'pixel-retro') return 'pixel-retro'
   } catch { /* localStorage 不可用（隐私模式等） */ }
   return 'default'
 }
@@ -67,8 +63,6 @@ export function setTheme(id) {
   if (!VALID.has(id)) id = 'default'
   stored.value = id
   try {
-    // 先清旧键再写新键——setItem 抛异常时不会跳过旧键清理
-    localStorage.removeItem(LEGACY_KEY)
     if (id === 'default') localStorage.removeItem(STORAGE_KEY)
     else localStorage.setItem(STORAGE_KEY, id)
   } catch { /* 持久化失败不阻断应用 */ }
@@ -80,7 +74,7 @@ export function setTheme(id) {
 export function initTheme() {
   setTheme(stored.value) // 经 setTheme 规范化+回写：非法值/旧键残留在此自愈
   window.addEventListener('storage', (e) => {
-    if (e.key === null || e.key === STORAGE_KEY || e.key === LEGACY_KEY) {
+    if (e.key === null || e.key === STORAGE_KEY) {
       stored.value = readStoredTheme()
       applyTheme(stored.value)
     }
