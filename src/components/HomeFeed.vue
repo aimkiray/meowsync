@@ -106,12 +106,11 @@
       </div>
     </template>
 
-    <!-- 页脚收版：∵⩆ 套准符 + 版本戳 + [b.64] 彩蛋块 -->
+    <!-- 页脚收版：∵⩆ 套准符 + 版本戳 -->
     <footer class="home-foot">
       <PrintMarks variant="reg" />
       <div class="home-foot-grid">
         <PrintMarks variant="stamp" class="home-foot-stamp" />
-        <PrintMarks variant="b64" class="home-b64" />
       </div>
     </footer>
   </div>
@@ -259,21 +258,11 @@ export default {
   grid-column: 2;
 }
 
-.home-b64 {
-  grid-column: 3;
-  justify-self: end;
-  width: 220px;
-}
-
 @media (max-width: 640px) {
   .home-foot-grid {
     display: flex;
     flex-direction: column;
     align-items: center;
-  }
-
-  .home-b64 {
-    width: min(220px, 100%);
   }
 }
 </style>
