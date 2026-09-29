@@ -335,7 +335,7 @@ const TaskRow = {
 }
 
 .dtl-stat-num--ok { color: var(--ink); text-decoration: underline 1.2px var(--accent-green); text-underline-offset: 3px; }
-.dtl-stat-num--fail { color: var(--ink); text-decoration: underline 1.2px var(--accent-magenta); text-underline-offset: 3px; }
+.dtl-stat-num--fail { color: var(--ink); text-decoration: underline 1.2px var(--accent-danger); text-underline-offset: 3px; }
 
 .dtl-state {
   border-top: var(--hairline); /* 与 .dtl-scroll 同位，空态不断线 */
@@ -403,7 +403,7 @@ const TaskRow = {
   color: var(--ink);
 }
 
-.dtl-group-tag--fail { color: var(--accent-magenta-ink); }
+.dtl-group-tag--fail { color: var(--accent-danger-ink); }
 .dtl-group-tag--ok { color: var(--accent-green-ink); }
 
 /* 任务卡：发丝盒 */
@@ -543,7 +543,7 @@ const TaskRow = {
 
 .dtl-task :deep(.dtr-chip.dtr-chip--dim) { color: var(--ink-64); }
 .dtl-task :deep(.dtr-chip.dtr-chip--ok) { color: var(--accent-green-ink); border-color: var(--accent-green); }
-.dtl-task :deep(.dtr-chip.dtr-chip--fail) { color: var(--accent-magenta-ink); border-color: var(--accent-magenta); }
+.dtl-task :deep(.dtr-chip.dtr-chip--fail) { color: var(--accent-danger-ink); border-color: var(--accent-danger); }
 
 .dtl-task :deep(.dtr-progress-wrap) {
   display: flex;
@@ -589,7 +589,7 @@ const TaskRow = {
   font-family: var(--font-mono);
   font-weight: 300;
   letter-spacing: .05em;
-  color: var(--accent-magenta-ink);
+  color: var(--accent-danger-ink);
 }
 
 .dtl-task :deep(.dtr-retry-note) {

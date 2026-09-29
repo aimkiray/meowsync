@@ -20,9 +20,9 @@
   </div>
 
   <div v-else-if="variant === 'stamp'" class="pg-stamp">
-    <p>MeowSync · Version 1.0.0</p>
-    <p>©2026 · All rights reserved</p>
-    <p>Made with Love · MS.OS1</p>
+    <p><GlitchText text="MeowSync · Version 1.0.0" /></p>
+    <p><GlitchText text="©2026 · All rights reserved" /></p>
+    <p><GlitchText text="Made with Love · MS.OS1" /></p>
   </div>
 
   <div v-else-if="variant === 'b64'" class="pg-b64">
@@ -32,8 +32,11 @@
 </template>
 
 <script>
+import GlitchText from './GlitchText.vue'
+
 export default {
   name: 'PrintMarks',
+  components: { GlitchText },
   props: {
     variant: {
       type: String,

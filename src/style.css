@@ -37,6 +37,7 @@
   --ink-10: rgba(30, 30, 30, .10);
   --ink-06: rgba(30, 30, 30, .06);
   --paper: #fefefe;                /* 面板纸面 */
+  --page: var(--paper);            /* 页面字段（body 底色）——可与纸面分离 */
   --label-grey: #dedede;           /* 墨条上的标签灰 */
   --os-grey: #c4c4c4;              /* 窗口体——经典 OS-9 Platinum 灰（故意非纸色） */
 
@@ -51,6 +52,10 @@
   --accent-green-ink: #027a45;
   /* 极性配对：墨面文字/图标用的 accent——暗色主题里墨面翻浅时应指向深档 */
   --accent-magenta-on-ink: var(--accent-magenta);
+  /* 错误语义独立通道：与交互 accent 解耦——双极色板主题（如 glitch）里
+     hover 走 accent、失败走 danger；默认主题 danger 回落 magenta 保持原样 */
+  --accent-danger: var(--accent-magenta);
+  --accent-danger-ink: var(--accent-magenta-ink);
   --white-16: rgba(255, 255, 255, .16);
   --white-40: rgba(255, 255, 255, .40);
   --white-80: rgba(255, 255, 255, .8);
@@ -98,6 +103,180 @@
   --fullscreen-background-image: url('/cinnamoroll2.png');
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   glitch-restoration —— takdrdr.com/memoria 的「虚构修复终端」皮
+   近白字段 + slate 软墨 + teal/error 双极；圆角柔影窗体 + 单像素字族
+   禁抗锯齿；印刷家具（pg-corners/pg-hash/regmarks）退场；
+   字符腐蚀由 GlitchText.vue 驱动（仅本主题激活时 tick）。
+   冻结域（--pixel-*）与 RC pin 块不受影响。
+   ══════════════════════════════════════════════════════════════════ */
+:root[data-theme="glitch-restoration"] {
+  --ink: #4e5662;                      /* slate 软墨 */
+  --ink-86: rgba(78, 86, 98, .86);
+  --ink-64: rgba(78, 86, 98, .64);
+  --ink-30: rgba(78, 86, 98, .30);
+  --ink-10: rgba(78, 86, 98, .10);
+  --ink-06: rgba(78, 86, 98, .06);
+  --paper: #ffffff;
+  --page: #fbfbfb;                     /* 近白页面字段 */
+  --label-grey: #c9cfd6;               /* slate 墨面上的弱标签（~6.5:1） */
+  --os-grey: #eef1f3;
+  --canvas-teal: #dff3f0;              /* 视图画布→淡彩 tint，保留页面身份 */
+  --canvas-sage: #e9edf0;
+  --canvas-pink: #f7e8e9;
+  --accent-magenta: #2dd3be;           /* accent → teal */
+  --accent-magenta-ink: #157e70;       /* accent-deep（纸面文字 ~4.7:1） */
+  --accent-magenta-on-ink: #57e3d1;    /* 亮 teal（slate 墨面 ~5.3:1） */
+  --accent-green: #1ba796;             /* 成功归入 teal 族（accent-dark） */
+  --accent-green-ink: #157e70;
+  --accent-danger: #e5484d;            /* error red——双极另一极 */
+  --accent-danger-ink: #b23237;
+  --scrim: rgba(78, 86, 98, .35);      /* ink 色 scrim，非黑 */
+  --scrim-strong: rgba(78, 86, 98, .5);
+  --font-body: 'Fusion Pixel', 'Noto Sans SC', monospace;
+  --font-mono: 'Fusion Pixel', 'Noto Sans SC', monospace;
+  --font-display: 'Fusion Pixel', 'Noto Sans SC', monospace;
+}
+
+/* 页面字段：近白 + 顶部锚定 vignette（fixed——视口钉住而非随元素） */
+:root[data-theme="glitch-restoration"] body {
+  -webkit-font-smoothing: none;        /* 像素字要硬边 */
+  background:
+    radial-gradient(120% 90% at 50% 0%, transparent 55%, rgba(78, 86, 98, .07) 100%) fixed,
+    var(--page);
+  transition: background-color .8s;    /* page-mood shift */
+}
+:root[data-theme="glitch-restoration"] .app-body {
+  background:
+    radial-gradient(120% 80% at 50% 0%, transparent 60%, rgba(78, 86, 98, .06) 100%) fixed,
+    var(--view-canvas, var(--paper));
+}
+
+/* memoria-window：2px 墨框 + 10px 圆角 + 柔影；overflow 裁剪防
+   反白行底色方角戳穿圆角 */
+:root[data-theme="glitch-restoration"] .pg-panel {
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .08);
+  overflow: hidden;
+}
+
+/* 卡片/封面同进圆角体系：卡 10px（与窗体同）+ 封面内缩 6px */
+:root[data-theme="glitch-restoration"] .grid-card {
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .06);
+}
+:root[data-theme="glitch-restoration"] .grid-card-cover { border-radius: 6px; }
+:root[data-theme="glitch-restoration"] .watch-cover,
+:root[data-theme="glitch-restoration"] .playlist-hero-cover { border-radius: 10px; }
+:root[data-theme="glitch-restoration"] .player-cover,
+:root[data-theme="glitch-restoration"] .song-cover,
+:root[data-theme="glitch-restoration"] .song-result-cover,
+:root[data-theme="glitch-restoration"] .track-cover,
+:root[data-theme="glitch-restoration"] .pl-cover,
+:root[data-theme="glitch-restoration"] .dql-cover { border-radius: 4px; }
+
+/* 印刷家具退场——memoria 窗体不带裁切标线/页缘标尺/套准符；
+   版本戳与 [b.64] 保留（OS-fiction 兼容的戳记） */
+:root[data-theme="glitch-restoration"] .pg-corners::before { content: none; }
+:root[data-theme="glitch-restoration"] .pg-hash,
+:root[data-theme="glitch-restoration"] .regmarks { display: none; }
+
+/* execute 键：accent 实底 + teal 辉光；hover 辉光收缩为四档。
+   底色走 accent-deep（#157e70 上白字 ~5:1），辉光用 accent 本色提亮 */
+:root[data-theme="glitch-restoration"] .ink-btn {
+  background: var(--accent-magenta-ink);
+  color: #fff;
+  border-radius: 7px;
+  box-shadow: 0 0 25px var(--accent-magenta);
+  transition: box-shadow .25s, background-color .25s;
+}
+:root[data-theme="glitch-restoration"] .ink-btn:hover:not(:disabled) {
+  color: #fff;
+  box-shadow:
+    0 0 1.5px var(--accent-magenta),
+    0 0 7.5px var(--accent-magenta),
+    0 0 15px var(--accent-magenta),
+    0 0 30px var(--accent-magenta);
+}
+:root[data-theme="glitch-restoration"] .ink-btn--ghost {
+  border-color: var(--ink-30);
+  color: var(--ink);
+}
+:root[data-theme="glitch-restoration"] .ink-btn--ghost:hover:not(:disabled) {
+  color: var(--accent-magenta-ink);
+  box-shadow: 0 0 7.5px var(--accent-magenta);
+}
+
+/* 发丝控件圆角化：field/chip/check 4-5px，tab 改分段 pill 组
+   （边框保持 --hairline——slate 墨本就比 print 墨软，再降档会过淡） */
+:root[data-theme="glitch-restoration"] .pg-field { border-radius: 4px; }
+:root[data-theme="glitch-restoration"] .pg-chip { border-radius: 5px; }
+:root[data-theme="glitch-restoration"] .pg-check { border-radius: 4px; }
+:root[data-theme="glitch-restoration"] .pg-tab {
+  border-right: none;
+  border-radius: 6px;
+  margin: 4px 2px;
+  padding: 6px 14px;
+}
+:root[data-theme="glitch-restoration"] .pg-tab--active { border-radius: 6px; }
+
+/* 悬浮层：menu/suggest/toast/dialog 收圆角 + 柔影 */
+:root[data-theme="glitch-restoration"] .pg-menu,
+:root[data-theme="glitch-restoration"] .topnav-suggest {
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
+}
+:root[data-theme="glitch-restoration"] .fb-toast {
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
+}
+
+/* teal 本色在纸面仅 ~2.1:1——文字/图标 hover 一律走 accent-deep */
+:root[data-theme="glitch-restoration"] .pg-link:hover,
+:root[data-theme="glitch-restoration"] .pg-icobtn:hover:not(:disabled) {
+  color: var(--accent-magenta-ink);
+}
+
+/* 墨条上的进度填充：teal accent 在 slate 上比纸色更亮 */
+:root[data-theme="glitch-restoration"] .bp-progress-fill { background: var(--accent-magenta); }
+
+/* 错误横幅：fail-title 式左红签 callout */
+:root[data-theme="glitch-restoration"] .watch-banner {
+  border: var(--hairline-soft);
+  border-left: 3px solid var(--accent-danger);
+  border-radius: 6px;
+}
+
+/* 玩具窗：memoria-window 重皮——圆角柔影 + slate 标题栏 */
+:root[data-theme="glitch-restoration"] .toy-window {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .14);
+}
+:root[data-theme="glitch-restoration"] .toy-window__title { border: 2px solid var(--ink); border-bottom: 0; }
+:root[data-theme="glitch-restoration"] .toy-window__body { border: 2px solid var(--ink); border-top: 0; }
+
+/* ── 字符腐蚀（GlitchText 驱动，仅本主题激活时渲染替身符） ── */
+:root[data-theme="glitch-restoration"] .corruptible { display: inline; position: relative; }
+:root[data-theme="glitch-restoration"] .char-glitch { visibility: hidden; }
+:root[data-theme="glitch-restoration"] .char-glitch::after {
+  content: attr(data-glitch);
+  visibility: visible;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: pre;
+  opacity: .92;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="glitch-restoration"] .char-glitch { visibility: visible; }
+  :root[data-theme="glitch-restoration"] .char-glitch::after { content: none; }
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -116,7 +295,7 @@ html {
 
 body {
   font-family: var(--font-body);
-  background: var(--paper);
+  background: var(--page);
   color: var(--ink-86);
   min-height: 100vh;
   overflow-x: hidden;
@@ -515,7 +694,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .pg-menu-item:last-child { border-bottom: none; }
 .pg-menu-item:hover { color: var(--accent-magenta-ink); }
-.pg-menu-item--danger { color: var(--accent-magenta-ink); }
+.pg-menu-item--danger { color: var(--accent-danger-ink); }
 
 /* 待播队列行（watch 侧栏共用）：行是容器，点击区收进 .queue-row-main
    ——避免 button 嵌套 role=button 的非法结构 */

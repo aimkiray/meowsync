@@ -26,6 +26,11 @@
       .boot-splash-card p { margin: 0; letter-spacing: .05em; color: #1e1e1e; }
       .boot-splash-name { font-size: 12px; }
       .boot-splash-hint { font-size: 11px; color: rgba(30,30,30,.64); margin-top: 8px !important; }
+      /* glitch-restoration 闪屏钩子：近白字段 + slate 墨 + 圆角柔影（令牌见 style.css） */
+      :root[data-theme="glitch-restoration"] .boot-splash { background: #fbfbfb; font-family: 'Fusion Pixel', 'JetBrains Mono', monospace; }
+      :root[data-theme="glitch-restoration"] .boot-splash-card { border: 2px solid #4e5662; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+      :root[data-theme="glitch-restoration"] .boot-splash-card p { color: #4e5662; }
+      :root[data-theme="glitch-restoration"] .boot-splash-hint { color: rgba(78,86,98,.64); }
     </style>
   </head>
   <body>

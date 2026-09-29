@@ -10,7 +10,7 @@
         title="打开歌单库"
       ><PixelIcon name="menu" :size="15" /></button>
 
-      <h1 class="topnav-title">MeowSync<span class="topnav-ver">MS.OS1</span></h1>
+      <h1 class="topnav-title"><GlitchText text="MeowSync" /><span class="topnav-ver">MS.OS1</span></h1>
 
       <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
       <div class="topnav-search">
@@ -106,10 +106,11 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { THEMES, currentTheme, cycleTheme } from '../lib/theme.js'
 import PixelIcon from './PixelIcon.vue'
+import GlitchText from './GlitchText.vue'
 
 export default {
   name: 'TopNavigation',
-  components: { PixelIcon },
+  components: { PixelIcon, GlitchText },
   props: {
     isDownloadsView: {
       type: Boolean,
