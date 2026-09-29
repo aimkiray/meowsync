@@ -39,7 +39,6 @@
   --paper: #fefefe;                /* 面板纸面 */
   --page: var(--paper);            /* 页面字段（body 底色）——可与纸面分离 */
   --label-grey: #dedede;           /* 墨条上的标签灰 */
-  --os-grey: #c4c4c4;              /* 窗口体——经典 OS-9 Platinum 灰（故意非纸色） */
 
   /* 每视图一张饱和纸色 —— 色彩即页面身份；新主题改画布只覆盖本组值 */
   --canvas-teal: #09aea1;
@@ -120,7 +119,6 @@
   --paper: #ffffff;
   --page: #fbfbfb;                     /* 近白页面字段 */
   --label-grey: #c9cfd6;               /* slate 墨面上的弱标签（~4.7:1） */
-  --os-grey: #eef1f3;
   --canvas-teal: #dff3f0;              /* 视图画布→淡彩 tint，保留页面身份 */
   --canvas-sage: #e9edf0;
   --canvas-pink: #f7e8e9;
@@ -176,9 +174,8 @@
   overflow: hidden;
   animation: .3s glitchFadeIn;
 }
-/* 悬浮 menu 与玩具窗同属窗体族——同入场 fade */
-:root[data-theme="glitch-restoration"] .pg-menu,
-:root[data-theme="glitch-restoration"] .toy-window { animation: .3s glitchFadeIn; }
+/* 悬浮 menu 同属窗体族——同入场 fade */
+:root[data-theme="glitch-restoration"] .pg-menu { animation: .3s glitchFadeIn; }
 
 /* 卡片/封面同进圆角体系：卡 10px（与窗体同）+ 封面内缩 6px */
 :root[data-theme="glitch-restoration"] .grid-card {
@@ -431,20 +428,6 @@
   background: rgba(45, 211, 190, .28);
 }
 
-/* 玩具窗：memoria-window 重皮——圆角落在 title/body 各自边缘
-   （容器 overflow:hidden 会把浮出窗体的 __num 编号裁掉） */
-:root[data-theme="glitch-restoration"] .toy-window { box-shadow: 0 8px 30px rgba(0, 0, 0, .14); }
-:root[data-theme="glitch-restoration"] .toy-window__title {
-  border: 2px solid var(--ink);
-  border-bottom: 0;
-  border-radius: 10px 10px 0 0;
-}
-:root[data-theme="glitch-restoration"] .toy-window__body {
-  border: 2px solid var(--ink);
-  border-top: 0;
-  border-radius: 0 0 10px 10px;
-}
-
 /* ── 字符腐蚀（GlitchText 驱动，仅本主题激活时渲染替身符） ── */
 /* SR 正本：视觉隐藏但保留在 a11y 树（替身符整层 aria-hidden） */
 .glitch-sr {
@@ -544,7 +527,7 @@ button {
 
 /* 大面件用 canonical 环：-8px 内收 + 12px 圆角——全系统唯一的圆角许可
    （swag-card 源流形）。行/小件保持方形 -4px 环：圆角会肉眼圆掉反白行底色 */
-.grid-card:focus-visible, .toy-window:focus-visible {
+.grid-card:focus-visible {
   outline-offset: -8px;
   border-radius: 12px;
 }
@@ -1309,59 +1292,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   letter-spacing: .05em;
 }
 
-/* 窗口玩具：墨条标题 + 纸面体，可拖拽回弹（装饰，非内容容器） */
-.toy-window {
-  position: absolute;
-  width: 230px;
-  background: var(--paper);
-  user-select: none;
-  touch-action: none;
-  cursor: grab;
-  rotate: var(--r, 0deg);
-}
-.toy-window:active { cursor: grabbing; }
-.toy-window__title {
-  background: var(--ink);
-  color: var(--label-grey);
-  border: var(--hairline);
-  font-family: var(--font-pixel);
-  font-size: 14px;
-  letter-spacing: .01em;
-  padding: 8px 10px;
-}
-.toy-window__body {
-  background: var(--os-grey);      /* 经典 OS-9 Platinum——窗口故意不用纸色 */
-  border: var(--hairline);
-  border-top: 0;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.toy-window__sub {
-  font-size: 12px;
-  color: var(--ink-86);
-  text-transform: lowercase;
-}
-.toy-window__tag {
-  align-self: flex-start;
-  background: var(--ink-10);
-  font-family: var(--font-mono);
-  font-weight: 300;
-  font-size: 11px;
-  padding: 2px 8px;
-}
-.toy-window__num {
-  position: absolute;
-  right: -8px;
-  top: -18px;
-  font-family: var(--font-mono);
-  font-weight: 300;
-  font-size: 12px;
-  letter-spacing: .05em;
-  color: var(--ink);
-}
-
 /* 装饰件断点门槛：密集页面 ≤810px 藏起裁切标线（typesafe 的 ornament cutoff） */
 @media (max-width: 810px) {
   .pg-hash { display: none; }
@@ -1373,5 +1303,5 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* 印刷稿致敬：打印时保留画布色与发丝线（这套美学本来就该上纸） */
 @media print {
   .app-body { background: var(--view-canvas, var(--paper)); }
-  .bottom-player, .sidebar-scrim, .toy-window { display: none; }
+  .bottom-player, .sidebar-scrim { display: none; }
 }
