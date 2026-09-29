@@ -265,10 +265,14 @@ export default {
     // 本地内存态歌单（单曲分享/队列存盘）服务端无对应持久行——不提供分享/下载入口
     const isTempPlaylist = (playlist) => isLocalPlaylistId(playlist?.id)
 
-    // 下载歌单
+    // 下载歌单——同一歌单在途请求合并：双击/连点不发第二个 POST，
+    // 服务端对活跃队列本就 409，这里省掉那条注定失败的往返与错误 toast
+    const downloadingIds = new Set()
     const downloadPlaylist = async (playlist) => {
+      if (downloadingIds.has(playlist.id)) return
+      downloadingIds.add(playlist.id)
       try {
-        await downloadsApi.quickDownloadPlaylist(playlist.id, {
+        const res = await downloadsApi.quickDownloadPlaylist(playlist.id, {
           bitrate: 320000,
           downloadAudio: true,
           downloadLyrics: true,
@@ -276,12 +280,16 @@ export default {
           concurrentLimit: 3
         })
 
-        toast('下载队列已创建，正在后台下载', 'success')
+        // 服务端对终态队列原地复活而非另立行——提示文案区分两种路径
+        toast(res.data?.data?.reused
+          ? '继续下载该歌单的已有队列'
+          : '下载队列已创建，正在后台下载', 'success')
       } catch (error) {
         console.error('创建下载队列失败:', error)
         const message = error.response?.data?.message || error.message
         toast('下载失败: ' + message, 'error')
       } finally {
+        downloadingIds.delete(playlist.id)
         closeMenu() // 失败也要关菜单——否则菜单挂着看似还能点
       }
     }

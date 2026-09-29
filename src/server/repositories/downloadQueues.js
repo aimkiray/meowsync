@@ -65,9 +65,34 @@ function updateQueue(id, updates) {
     fields.push('status = @status');
     params.status = updates.status;
   }
-  // 计数列刻意不接受写入：total/completed/failed 一律由
+  // 队列复活（终态行原地重用）需要回写名称与下载选项——
+  // 计数列仍刻意不接受写入：total/completed/failed 一律由
   // download-manager 的 recountQueueCounters 从任务行状态派生，
   // 手工写计数正是这批重构消除的漂移面
+  if (updates.name !== undefined) {
+    fields.push('name = @name');
+    params.name = updates.name;
+  }
+  if (updates.bitrate !== undefined) {
+    fields.push('bitrate = @bitrate');
+    params.bitrate = updates.bitrate;
+  }
+  if (updates.downloadAudio !== undefined) {
+    fields.push('download_audio = @download_audio');
+    params.download_audio = updates.downloadAudio ? 1 : 0;
+  }
+  if (updates.downloadLyrics !== undefined) {
+    fields.push('download_lyrics = @download_lyrics');
+    params.download_lyrics = updates.downloadLyrics ? 1 : 0;
+  }
+  if (updates.downloadCover !== undefined) {
+    fields.push('download_cover = @download_cover');
+    params.download_cover = updates.downloadCover ? 1 : 0;
+  }
+  if (updates.concurrentLimit !== undefined) {
+    fields.push('concurrent_limit = @concurrent_limit');
+    params.concurrent_limit = updates.concurrentLimit;
+  }
   if (updates.completedAt !== undefined) {
     fields.push('completed_at = @completed_at');
     params.completed_at = updates.completedAt;
