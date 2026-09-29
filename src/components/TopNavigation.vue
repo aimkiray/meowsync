@@ -10,7 +10,7 @@
         title="打开歌单库"
       ><PixelIcon name="menu" :size="15" /></button>
 
-      <h1 class="topnav-title"><GlitchText text="MeowSync" /><span class="topnav-ver">MS.OS1</span></h1>
+      <h1 class="topnav-title"><GlitchText text="MeowSync" /></h1>
 
       <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
       <div class="topnav-search">
@@ -363,14 +363,6 @@ export default {
   display: flex;
   align-items: baseline;
   gap: 8px;
-}
-
-/* 版本戳小牌（构建清单签名） */
-.topnav-ver {
-  font-family: var(--font-pixel);
-  font-size: 10px;
-  color: var(--ink-64);
-  letter-spacing: .05em;
 }
 
 .topnav-search {

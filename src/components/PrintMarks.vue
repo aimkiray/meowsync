@@ -22,7 +22,7 @@
   <div v-else-if="variant === 'stamp'" class="pg-stamp">
     <p><GlitchText text="MeowSync · Version 1.0.0" /></p>
     <p><GlitchText text="©2026 · All rights reserved" /></p>
-    <p><GlitchText text="Made with Love · MS.OS1" /></p>
+    <p><GlitchText text="Made with Love" /></p>
   </div>
 </template>
 
