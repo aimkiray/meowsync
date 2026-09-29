@@ -231,7 +231,6 @@ export default {
   padding: 20px;
   height: 100%;
   overflow-y: auto;
-  scrollbar-gutter: stable;
 }
 
 /* 页头：等宽微标签 + 大字标题 + 发丝方键关闭 */

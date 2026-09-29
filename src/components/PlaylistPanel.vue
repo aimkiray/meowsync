@@ -384,7 +384,6 @@ export default {
 }
 
 .playlist-scroll {
-  scrollbar-gutter: stable;
   border-top: var(--hairline);
 }
 
