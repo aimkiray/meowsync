@@ -409,9 +409,9 @@ export default {
   transition: color .2s, border-color .2s;
 }
 /* hover 统一语言：墨色底上纸色发丝框 + 品红字（play 键常驻框只是强调主键） */
-.transport:hover:not(:disabled) { color: var(--accent-magenta); border-color: var(--paper); }
+.transport:hover:not(:disabled) { color: var(--accent-magenta-on-ink); border-color: var(--paper); }
 .transport:disabled { opacity: .45; cursor: default; }
-.transport--active { color: var(--accent-magenta); }
+.transport--active { color: var(--accent-magenta-on-ink); }
 .transport--play {
   border-color: var(--paper);
   width: 40px;
@@ -465,7 +465,7 @@ export default {
   border-color: transparent;
   color: var(--paper);
 }
-.pg-icobtn--on-ink:hover:not(:disabled) { color: var(--accent-magenta); }
+.pg-icobtn--on-ink:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
 
 .queue-glyph {
   font-family: var(--font-mono);

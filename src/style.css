@@ -3,8 +3,9 @@
    每视图一张饱和纸色画布 · 1.2px 墨色发丝线 · 零圆角
    裁切标记 / ∵⩆ 套准符 / 等宽微标签 / 位图字体版本戳
    ─────────────────────────────────────────────────────────────
-   --pixel-* 变量与 .jirai-slider/.player-progress-* 仅供
-   FullscreenPlayer 沉浸歌词页（视觉冻结组件）消费
+   --pixel-* 变量与 .jirai-slider 仅供 FullscreenPlayer 沉浸歌词页
+   （视觉冻结组件）消费；.player-progress-* 几何与 BottomPlayer 共用、
+   色值冻结，底栏自行覆写
    ═══════════════════════════════════════════════════════════════ */
 
 /* Fusion Pixel（本地打包位图等宽——窗口标题栏/版本戳/[b.64] 用） */
@@ -39,7 +40,7 @@
   --label-grey: #dedede;           /* 墨条上的标签灰 */
   --os-grey: #c4c4c4;              /* 窗口体——经典 OS-9 Platinum 灰（故意非纸色） */
 
-  /* 每视图一张饱和纸色 —— 色彩即页面身份，无暗色模式 */
+  /* 每视图一张饱和纸色 —— 色彩即页面身份；新主题改画布只覆盖本组值 */
   --canvas-teal: #09aea1;
   --canvas-sage: #abbab9;
   --canvas-pink: #f386a1;
@@ -48,6 +49,8 @@
   /* 深档语义色：专供纸面小字——accent 本色在 paper 上 <4.5:1 不达标 */
   --accent-magenta-ink: #a5358c;
   --accent-green-ink: #027a45;
+  /* 极性配对：墨面文字/图标用的 accent——暗色主题里墨面翻浅时应指向深档 */
+  --accent-magenta-on-ink: var(--accent-magenta);
   --white-16: rgba(255, 255, 255, .16);
   --white-40: rgba(255, 255, 255, .40);
   --white-80: rgba(255, 255, 255, .8);
@@ -367,7 +370,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   white-space: nowrap;
   text-transform: lowercase; /* CTA 一律小写——印刷稿语气规则 */
 }
-.ink-btn:hover:not(:disabled) { color: var(--accent-magenta); }
+.ink-btn:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
 .ink-btn:disabled { opacity: .45; cursor: default; }
 
 .ink-btn--sm { padding: 7px 12px; font-size: 12px; }
