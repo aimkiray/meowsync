@@ -208,7 +208,7 @@
   background: #b9c2c9;
   box-shadow: none;
   opacity: 1;
-  cursor: not-allowed;
+  cursor: default; /* 与全局 ink-btn/pg-icobtn/transport 同约定 */
 }
 /* ghost 必须显式复位底色——否则继承 execute 的实底变 slate-on-teal 1.49:1 */
 :root[data-theme="glitch-restoration"] .ink-btn--ghost {
@@ -291,10 +291,7 @@
 :root[data-theme="glitch-restoration"] .pg-icobtn:hover:not(:disabled):not(.pg-icobtn--on-ink) {
   color: var(--accent-magenta-ink);
 }
-:root[data-theme="glitch-restoration"] .pg-icobtn--on-ink:hover:not(:disabled),
-:root[data-theme="glitch-restoration"] .pl-row--active .pl-action:hover,
-:root[data-theme="glitch-restoration"] .song-row--playing .song-menu-btn:hover,
-:root[data-theme="glitch-restoration"] .queue-row--current .queue-row-remove:hover {
+:root[data-theme="glitch-restoration"] .pg-icobtn--on-ink:hover:not(:disabled) {
   color: var(--accent-magenta-on-ink);
 }
 
@@ -508,6 +505,11 @@ button {
   outline-offset: -4px;
   /* 零圆角世界：环贴形走，不圆角化实底（border-radius 会同时圆掉反白行底色） */
 }
+/* 例外：底栏进度条仅 4px 高，-4px 内陷使环盒高度归零——改外环 + 纸色（墨条上可见） */
+.bottom-player .player-progress-bar:focus-visible {
+  outline-offset: 2px;
+  outline-color: var(--paper);
+}
 
 /* 激活侧栏行反白态：墨底上需要纸色环（ink-86 环在 #1e1e1e 上不可见） */
 .pl-row--active .pl-row-main:focus-visible { outline-color: var(--paper); }
@@ -523,19 +525,15 @@ button {
 @media (forced-colors: active) {
   .pl-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
   .queue-row--current, .song-row--playing, .song-result-row--playing,
-  .rc-queue-row--current {
+  .transport--active, .pg-icobtn--pressed, .theme-pill-tab--on,
+  .topnav-suggest-item--active, .rc-queue-row--current {
     outline: 1.2px solid transparent;
   }
 }
-/* 反白行上的图标键 hover 框线同样要纸色，否则隐形 */
-/* (0,4,0)：scoped `.pl-action:hover` 同为 (0,3,0) 且后加载会平手胜出——
-   不升档则激活行 hover 是墨上墨字（存量 bug，glitch 下被主题覆写意外治好） */
-.app-shell .pl-row--active .pl-action:hover { outline-color: var(--paper); color: var(--paper); }
-.song-row--playing .song-menu-btn:hover { outline-color: var(--paper); color: var(--paper); }
-
 /* teleport 菜单触发器语态 */
 [aria-expanded="true"].song-menu-btn,
 [aria-expanded="true"].queue-menu-trigger,
+[aria-expanded="true"].topnav-hamburger,
 [aria-expanded="true"].pl-action { outline: 1.2px solid var(--ink); outline-offset: -4px; }
 
 /* 细滚动条：透明轨道 + 镂空墨块柄；Firefox 走 scrollbar-* 双属性 */
@@ -616,12 +614,41 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    ① 被压死的状态色——当前行墨色、把手 hover、tab hover 恢复反馈
    ② 纸面板内 dim 回退——画布升档不该抹平 .pg-panel 里的层级差 */
 .app-shell .app-body .queue-row--current .queue-row-index,
-.app-shell .app-body .queue-row-remove:hover,
 .app-shell .app-body .pg-tab:not(.pg-tab--active):hover {
   color: var(--ink);
 }
 .app-shell .app-body .pg-panel .pg-label--dim,
-.app-shell .app-body .pg-panel .dql-kebab { color: var(--ink-64); }
+.app-shell .app-body .pg-panel .dql-kebab:not(:hover) { color: var(--ink-64); }
+
+/* 行尾动作键统一 hover：墨字 + 内陷盒环（⋯/分享/✕ 同律）。
+   排在补丁带之后——同 (0,4,0) 靠后序压过 dim 回退与白名单 */
+.app-shell .app-body .song-menu-btn:hover, .app-shell .app-body .pl-action:hover,
+.app-shell .app-body .dql-kebab:hover, .app-shell .app-body .queue-row-remove:hover {
+  color: var(--ink);
+  outline: 1.2px solid var(--ink);
+  outline-offset: -1.2px;
+}
+/* 反白行上的行尾键改纸色（排在统一律之后才不被压） */
+.app-shell .pl-row--active .pl-action:hover,
+.app-shell .song-row--playing .song-menu-btn:hover {
+  color: var(--paper);
+  outline-color: var(--paper);
+}
+/* glitch 语汇：行尾键 hover 是 accent 字色而非墨字（统一律的形状保留，颜色翻译） */
+:root[data-theme="glitch-restoration"] .app-shell .app-body .song-menu-btn:hover,
+:root[data-theme="glitch-restoration"] .app-shell .app-body .pl-action:hover,
+:root[data-theme="glitch-restoration"] .app-shell .app-body .dql-kebab:hover,
+:root[data-theme="glitch-restoration"] .app-shell .app-body .queue-row-remove:hover {
+  color: var(--accent-magenta-ink);
+  outline-color: var(--accent-magenta-ink);
+}
+/* glitch 反白行尾键：accent-on-ink 字色 + 纸色环（与默认主题的 paper 法则同构） */
+:root[data-theme="glitch-restoration"] .app-shell .pl-row--active .pl-action:hover,
+:root[data-theme="glitch-restoration"] .app-shell .song-row--playing .song-menu-btn:hover,
+:root[data-theme="glitch-restoration"] .app-shell .queue-row--current .queue-row-remove:hover {
+  color: var(--accent-magenta-on-ink);
+  outline-color: var(--paper);
+}
 
 .app-main {
   flex: 1;
@@ -728,7 +755,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   font-weight: 500;
   font-size: 13px;
   letter-spacing: .02em;
-  padding: 10px 18px;
+  padding: 0 18px;
+  height: 36px; /* 锁名义高——不锁则按 font+pad 漂到 ~38，与 pg-field(36) 失配 */
   cursor: pointer;
   transition: color .5s var(--ease-ink);
   white-space: nowrap;
@@ -737,7 +765,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .ink-btn:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
 .ink-btn:disabled { opacity: .45; cursor: default; }
 
-.ink-btn--sm { padding: 7px 12px; font-size: 12px; }
+.ink-btn--sm { height: 32px; padding: 0 12px; font-size: 12px; } /* 与 pg-icobtn(32) 同档 */
 
 /* 幽灵按钮：纸面描边墨字（次级动作） */
 .ink-btn--ghost {
@@ -812,6 +840,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   transition: color .2s;
 }
 .theme-pill-tab--on { color: var(--paper); }
+.theme-pill-tab:not(.theme-pill-tab--on):hover { color: var(--ink); } /* 与 pg-tab:hover 同律 */
 .theme-pill:focus-within { outline: 2px solid var(--ink); outline-offset: 2px; }
 .theme-pill-glider {
   position: absolute;
@@ -861,8 +890,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   cursor: pointer;
   transition: background .2s, color .2s;
 }
-.pg-chip:hover { background: var(--ink-06); }
+.pg-chip:not(.pg-chip--on):not(.pg-chip--static):hover { background: var(--ink-06); }
 .pg-chip--on { background: var(--ink); color: var(--paper); }
+.pg-chip--on:hover { color: var(--accent-magenta-on-ink); } /* 墨底上给 accent 字色——ink-06 底会洗白 */
 .pg-chip--static { cursor: default; }
 .pg-chip--static:hover { background: transparent; }
 
@@ -933,6 +963,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-menu-item:last-child { border-bottom: none; }
 .pg-menu-item:hover { color: var(--accent-magenta-ink); }
 .pg-menu-item--danger { color: var(--accent-danger-ink); }
+.pg-menu-item--danger:hover { color: var(--accent-danger); } /* 危险项悬停仍是红色系 */
 
 /* 待播队列行（watch 侧栏共用）：行是容器，点击区收进 .queue-row-main
    ——避免 button 嵌套 role=button 的非法结构 */
@@ -1000,22 +1031,21 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   color: var(--ink-64);
   flex-shrink: 0;
 }
+/* 尺寸交给 pg-icobtn--sm（24px 行尾键档）；hover 走行尾键统一律 */
 .queue-row-remove {
   flex-shrink: 0;
-  font-size: 11px;
-  padding: 2px 5px;
   color: var(--ink-64);
   opacity: 0;
+  pointer-events: none; /* 隐形时不吃点击——song-menu-btn 同纪律 */
   transition: opacity .12s, color .2s;
 }
 .queue-row:hover .queue-row-remove,
 .queue-row:focus-within .queue-row-remove,
-.queue-row-remove:focus-visible { opacity: 1; }
+.queue-row-remove:focus-visible { opacity: 1; pointer-events: auto; }
 /* 触屏设备无 hover——隐藏但可点的移除键会误删，直接常显 */
 @media (hover: none){
-  .queue-row-remove { opacity: 1; }
+  .queue-row-remove { opacity: 1; pointer-events: auto; }
 }
-.queue-row-remove:hover { color: var(--ink); text-decoration: underline; }
 
 /* 卡片外壳 + 内部件（PlaylistGrid 与 HomeFeed 货架共用——必须全局） */
 .grid-card {
@@ -1238,6 +1268,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 @media (prefers-reduced-motion: reduce){
   html { scroll-behavior: auto; }
   .playing-animation { animation: none; }
+  .theme-pill-glider { transition: none; } /* 滑块位移 reduce 下瞬跳 */
 }
 
 /* ═══ 印刷装饰件 ═══ */

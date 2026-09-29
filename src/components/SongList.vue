@@ -291,6 +291,9 @@
   align-items: center;
 }
 
+/* 动作行内 chip 开关与同排 ink-btn 同高（36 档）——否则 25px 悬在中间 */
+.playlist-hero-actions .pg-chip { height: 36px; padding: 0 14px; }
+
 /* ── 加载 / 空态 ── */
 .song-state {
   display: flex;
@@ -359,11 +362,13 @@
 }
 
 .song-row:hover .song-row-index-num,
+.song-row:focus-within .song-row-index-num,
 .song-row--playing .song-row-index-num {
   display: none;
 }
 
 .song-row:hover .song-row-index-play,
+.song-row:focus-within .song-row-index-play,
 .song-row--playing .song-row-index-play {
   display: inline;
 }
@@ -425,7 +430,7 @@
 /* 行内小牌（VIP / 已下载勾）：pg-chip 的紧凑变体 */
 .song-tag {
   height: 20px;
-  padding: 0 6px;
+  padding: 0 8px;
   font-size: 10px;
   flex-shrink: 0;
 }
@@ -483,12 +488,7 @@
   opacity: 0;
   pointer-events: none; /* 隐形时不吃点击——此区已还给时长，点击应放行到行播放 */
   transition: opacity .12s, color .2s;
-}
-
-.song-menu-btn:hover {
-  color: var(--ink);
-  outline: 1.2px solid var(--ink);
-  outline-offset: -1.2px;
+  /* hover 走全局行尾键统一律（墨字+内陷盒环） */
 }
 
 .song-row:hover .song-menu-btn,
@@ -500,10 +500,6 @@
 
 .song-row--playing .song-menu-btn {
   color: var(--label-grey);
-}
-
-.song-row--playing .song-menu-btn:hover {
-  color: var(--paper);
 }
 
 /* 触屏无 hover——隐形但可点的 ⋯ 键会误触，常显 */

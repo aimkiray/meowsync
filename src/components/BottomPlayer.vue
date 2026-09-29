@@ -83,7 +83,7 @@
             class="transport"
             :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
-          ><PixelIcon :name="playModeIcon" :size="15" /></button>
+          ><PixelIcon :name="playModeIcon" :size="16" /></button>
         </div>
 
         <!-- 时间与右簇（音量 + watch/词/沉浸入口） -->
@@ -99,7 +99,7 @@
               :aria-pressed="muted"
               :aria-label="muted ? '取消静音' : '静音'"
               :title="muted ? '取消静音' : '静音'"
-            ><PixelIcon :name="muted ? 'vol-mute' : 'vol'" :size="15" /></button>
+            ><PixelIcon :name="muted ? 'vol-mute' : 'vol'" :size="14" /></button>
             <input
               type="range"
               min="0"
@@ -496,6 +496,7 @@ export default {
   .bp-xtra { display: none; }
   .transport { width: 30px; height: 30px; }
   .transport--play { width: 36px; height: 36px; }
+  .pg-icobtn--on-ink { width: 30px; height: 30px; } /* 与 transport 同收——否则 30<32 倒挂 */
   .player-controls { gap: 2px; }
   .player-inner { gap: 6px; padding: 8px; }
   .track-text { max-width: 34vw; }
