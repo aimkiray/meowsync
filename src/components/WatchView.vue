@@ -471,7 +471,6 @@ export default {
 .watch-main {
   min-width: 0;
   overflow-y: auto;
-  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -563,7 +562,6 @@ export default {
   min-height: 0;
   overflow-y: auto;
   padding-top: 8px;
-  scrollbar-gutter: stable;
 }
 
 .watch-empty {

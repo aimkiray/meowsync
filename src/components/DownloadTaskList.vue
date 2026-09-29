@@ -381,8 +381,7 @@ const TaskRow = {
 .dtl-scroll {
   overflow-y: auto;
   border-top: var(--hairline);
-  padding: 12px 6px 12px 16px; /* 右缘 6+10(gutter)=16 与左缘对称 */
-  scrollbar-gutter: stable;
+  padding: 12px 16px;
 }
 
 .dtl-group + .dtl-group { margin-top: 14px; }

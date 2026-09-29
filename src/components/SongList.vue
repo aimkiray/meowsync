@@ -312,10 +312,6 @@
 }
 
 /* ── 歌曲行：发丝下缘分隔 + 悬停浅墨 + 当前曲墨底反白 ── */
-.song-rows {
-  scrollbar-gutter: stable;
-}
-
 .song-row {
   position: relative;
   border-bottom: var(--hairline-soft);
@@ -331,7 +327,6 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  padding-right: 44px; /* 行尾 ⋯ 键悬浮位，防压时长列 */
   cursor: pointer;
   transition: background .12s;
 }
@@ -473,11 +468,12 @@
   color: var(--label-grey);
 }
 
-/* 行尾 ⋯ 菜单键：悬停/聚焦露出，常显时保持行面干净 */
+/* 行尾 ⋯ 菜单键：时长常态贴右缘，悬停/聚焦时时长淡出、⋯ 原位替换——
+   不再为隐形键预留 44px 死区（YTM 同款 reveal-swap） */
 .song-actions {
   position: absolute;
   top: 50%;
-  right: 6px;
+  right: 12px;
   transform: translateY(-50%);
   display: flex;
 }
@@ -485,6 +481,7 @@
 .song-menu-btn {
   color: var(--ink-64);
   opacity: 0;
+  pointer-events: none; /* 隐形时不吃点击——此区已还给时长，点击应放行到行播放 */
   transition: opacity .12s, color .2s;
 }
 
@@ -498,6 +495,7 @@
 .song-row:focus-within .song-menu-btn,
 .song-menu-btn:focus-visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .song-row--playing .song-menu-btn {
@@ -512,6 +510,7 @@
 @media (hover: none) {
   .song-menu-btn {
     opacity: 1;
+    pointer-events: auto;
   }
 }
 

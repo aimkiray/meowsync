@@ -159,7 +159,6 @@ export default {
   padding: 20px;
   height: 100%;
   overflow-y: auto;
-  scrollbar-gutter: stable;
   position: relative;
 }
 
@@ -234,7 +233,6 @@ export default {
   gap: 16px;
   overflow-x: auto;
   padding-bottom: 8px;
-  scrollbar-gutter: stable;
 }
 
 /* 卡片外壳已上收全局 style.css——这里只留「整卡可点」语义 */

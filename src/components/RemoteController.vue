@@ -496,7 +496,6 @@ onUnmounted(() => {
 .rc-queue-list {
   max-height: 240px;
   overflow-y: auto;
-  scrollbar-gutter: stable;
   /* 暗面上的滚动条柄要换浅柄——全局 ink 柄在此不可见 */
   scrollbar-color: var(--label-grey) transparent;
 }

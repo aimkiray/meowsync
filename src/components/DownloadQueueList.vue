@@ -390,7 +390,6 @@ function getQueueCover(queue) {
 .dql-scroll {
   overflow-y: auto;
   border-top: var(--hairline);
-  scrollbar-gutter: stable;
 }
 
 .dql-row {
