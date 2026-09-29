@@ -1,28 +1,30 @@
 <template>
   <nav class="topnav">
     <div class="topnav-inner">
-      <!-- 移动端：汉堡键呼出歌单库抽屉 -->
-      <button
-        class="pg-icobtn pg-icobtn--bare topnav-hamburger lg:hidden"
-        @click="$emit('toggle-sidebar')"
-        :aria-expanded="sidebarOpen"
-        aria-label="歌单库"
-        title="打开歌单库"
-      ><PixelIcon name="menu" :size="15" /></button>
+      <div class="topnav-left">
+        <!-- 移动端：汉堡键呼出歌单库抽屉 -->
+        <button
+          class="pg-icobtn pg-icobtn--bare topnav-hamburger lg:hidden"
+          @click="$emit('toggle-sidebar')"
+          :aria-expanded="sidebarOpen"
+          aria-label="歌单库"
+          title="打开歌单库"
+        ><PixelIcon name="menu" :size="15" /></button>
 
-      <h1 class="topnav-title">
-        <button class="topnav-home" @click="$emit('nav-home')" title="回到首页" aria-label="回到首页">
-          <GlitchText text="MeowSync" />
-        </button>
-      </h1>
+        <h1 class="topnav-title">
+          <button class="topnav-home" @click="$emit('nav-home')" title="回到首页" aria-label="回到首页">
+            <GlitchText text="MeowSync" />
+          </button>
+        </h1>
 
-      <!-- 窄屏标题隐藏时，原位给回首页图标键（发现页的唯一移动端入口） -->
-      <button
-        class="pg-icobtn pg-icobtn--bare topnav-home-ico"
-        @click="$emit('nav-home')"
-        title="回到首页"
-        aria-label="回到首页"
-      ><PixelIcon name="home" :size="15" /></button>
+        <!-- 窄屏标题隐藏时，原位给回首页图标键（发现页的唯一移动端入口） -->
+        <button
+          class="pg-icobtn pg-icobtn--bare topnav-home-ico"
+          @click="$emit('nav-home')"
+          title="回到首页"
+          aria-label="回到首页"
+        ><PixelIcon name="home" :size="15" /></button>
+      </div>
 
       <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
       <div class="topnav-search">
@@ -351,13 +353,23 @@ export default {
   background: var(--paper);
 }
 
+/* 三栏 grid：左右各占 1fr，中栏 auto——搜索组锚定真中线，
+   不再随右簇宽度漂移（旧 flex:1 居中的是"剩余空间"不是整栏） */
 .topnav-inner {
   max-width: 1440px;
   margin: 0 auto;
   height: 56px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+}
+
+.topnav-left {
   display: flex;
   align-items: center;
   gap: 16px;
+  min-width: 0;
 }
 
 .topnav-hamburger {
@@ -393,7 +405,6 @@ export default {
 .topnav-home-ico { display: none; }
 
 .topnav-search {
-  flex: 1;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -404,7 +415,8 @@ export default {
 /* 输入框 + 图标 + 清除键 + 建议下拉的定位容器 */
 .topnav-search-field {
   position: relative;
-  width: min(480px, 100%);
+  width: 480px;
+  max-width: 100%; /* 大于可用中列时收缩；width:min() 的 % 与 auto 列宽循环依赖会塌成 input 固有宽 */
 }
 
 .topnav-search-icon {
@@ -493,7 +505,8 @@ export default {
   display: flex;
   align-items: center;
   gap: 14px;
-  flex-shrink: 0;
+  justify-self: end; /* grid 右列贴右缘 */
+  min-width: 0;
 }
 
 .topnav-remote-hint {
