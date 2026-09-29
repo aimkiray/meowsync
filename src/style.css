@@ -125,8 +125,9 @@
 
 /* 页面字段：近白 + 居中椭圆 vignette（规范 45% 透明档，.07 slate-alpha
    与 scrim 同源）。fixed 渐变按视口铺但只在元素盒内绘制——单挂
-   .app-body 会在 >1440px 页缘切断且顶栏/底条漏角：四层同式 fixed
-   拼接，无缝覆盖整页含 chrome（规范 vignette 本就含 masthead） */
+   .app-body 会在 >1440px 页缘切断且顶栏/底条漏角：body/app-shell/
+   topnav/bottom-player 同式 fixed 拼接，无缝覆盖整页含 chrome
+   （规范 vignette 本就含 masthead） */
 :root[data-theme="glitch-restoration"] body {
   -webkit-font-smoothing: none;        /* 像素字要硬边（双写 moz 档） */
   -moz-osx-font-smoothing: grayscale;
@@ -140,7 +141,7 @@
     radial-gradient(ellipse at center, transparent 45%, rgba(78, 86, 98, .07) 100%) fixed,
     var(--paper);
 }
-:root[data-theme="glitch-restoration"] .app-body {
+:root[data-theme="glitch-restoration"] .app-shell {
   background:
     radial-gradient(ellipse at center, transparent 45%, rgba(78, 86, 98, .07) 100%) fixed,
     var(--view-canvas, var(--paper));
@@ -562,6 +563,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* 画布铺满视口——content 列限宽 1440 居中，两侧页缘由本层上色不留白 */
+  background: var(--view-canvas, var(--paper));
+  transition: background-color .4s var(--ease-ink);
 }
 
 /* 每视图一张饱和纸色（print-grid 核心身份） */
@@ -578,8 +582,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
-  background: var(--view-canvas, var(--paper));
-  transition: background-color .4s var(--ease-ink);
 }
 
 /* 彩纸画布上的次级文字升档——ink-64 在 teal/pink/sage 上 <4.5:1。
