@@ -106,22 +106,13 @@
       </div>
     </template>
 
-    <!-- 页脚收版：∵⩆ 套准符 + 版本戳 + [b.64] 彩蛋块。
-         窗口玩具落在收版区右上——不压任何可点内容（原在页头悬着会盖住末位热搜 chip） -->
+    <!-- 页脚收版：∵⩆ 套准符 + 版本戳 + [b.64] 彩蛋块 -->
     <footer class="home-foot">
       <PrintMarks variant="reg" />
       <div class="home-foot-grid">
         <PrintMarks variant="stamp" class="home-foot-stamp" />
         <PrintMarks variant="b64" class="home-b64" />
       </div>
-      <ToyWindow
-        class="home-toy"
-        title="MEOWSYNC"
-        :lines="['netease music player']"
-        tag="<meow approved>"
-        num="001"
-        rotate="-3deg"
-      />
     </footer>
   </div>
 </template>
@@ -130,11 +121,10 @@
 import { httpsCover } from '../lib/url'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
-import ToyWindow from './ToyWindow.vue'
 
 export default {
   name: 'HomeFeed',
-  components: { PrintMarks, PixelIcon, ToyWindow },
+  components: { PrintMarks, PixelIcon },
   props: {
     toplists: {
       type: Array,
@@ -186,16 +176,6 @@ export default {
 .home-head {
   padding: 0 0 16px;
   position: relative;
-}
-
-/* 窗口玩具钉在收版区右缘——印刷稿角落掉落的小玩具（窄屏隐藏） */
-.home-toy {
-  position: absolute;
-  bottom: 8px;
-  right: 0;
-}
-@media (max-width: 860px) {
-  .home-toy { display: none; }
 }
 
 .home-title {
@@ -262,7 +242,6 @@ export default {
 
 /* 页脚收版 */
 .home-foot {
-  position: relative; /* home-toy 的定位参照 */
   border-top: var(--hairline);
   margin-top: 8px;
   padding: 18px 0 12px;
