@@ -13,7 +13,7 @@
       <span>首页</span>
     </button>
 
-    <p class="pg-label panel-label">library · 我的歌单</p>
+    <p class="pg-label panel-label">library·我的歌单</p>
 
     <div v-if="loading" class="panel-state">
       <div class="pixel-loading" aria-hidden="true"></div>
@@ -360,7 +360,7 @@ export default {
 }
 
 .panel-label {
-  padding: 8px 16px 10px;
+  padding: 8px 12px 10px; /* 与栏内 12px 内容轴同缘（图标/封面左缘） */
   flex-shrink: 0;
 }
 
@@ -387,27 +387,25 @@ export default {
   border-top: var(--hairline);
 }
 
-/* 导航项：裸墨行，激活态墨底反白 */
+/* 导航项：与歌单行同一语法——通栏 + 发丝下缘 + 激活整行墨底反白 */
 .side-nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: calc(100% - 32px);
-  margin: 0 16px 10px;
   height: 36px; /* 与 watch-header 的 ink-btn--sm 同高——两列头行共一条横带 */
-  padding: 0 10px;
+  padding: 0 12px; /* 图标左缘与 .pl-cover 的 12px 内容网格同轴 */
   font-size: 13px;
   font-weight: 500;
   color: var(--ink);
-  border: var(--hairline);
+  border-bottom: var(--hairline);
   cursor: pointer;
   text-align: left;
   flex-shrink: 0;
-  transition: background .15s, color .15s;
+  transition: background .12s, color .15s;
 }
 
 .side-nav-item:hover {
-  color: var(--accent-magenta-ink);
+  background: var(--ink-06);
 }
 
 .side-nav-item--active {

@@ -509,7 +509,8 @@ button {
 }
 
 /* 激活侧栏行反白态：墨底上需要纸色环（ink-86 环在 #1e1e1e 上不可见） */
-.pl-row--active .pl-row-main:focus-visible { outline-color: var(--paper); }
+.pl-row--active .pl-row-main:focus-visible,
+.side-nav-item--active:focus-visible { outline-color: var(--paper); }
 
 /* 大面件用 canonical 环：-8px 内收 + 12px 圆角——全系统唯一的圆角许可
    （swag-card 源流形）。行/小件保持方形 -4px 环：圆角会肉眼圆掉反白行底色 */
@@ -522,7 +523,7 @@ button {
 @media (forced-colors: active) {
   .pl-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
   .queue-row--current, .song-row--playing, .song-result-row--playing,
-  .rc-queue-row--current {
+  .side-nav-item--active, .rc-queue-row--current {
     outline: 1.2px solid transparent;
   }
 }
