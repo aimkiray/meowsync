@@ -343,7 +343,7 @@ export default {
 }
 
 .panel-label {
-  padding: 8px 12px 10px 0; /* 栏缘家具：标签贴左缘（x=0），内容轴仍在 12px */
+  padding: 8px 12px 10px; /* 与栏内 12px 内容轴同缘（封面左缘） */
   flex-shrink: 0;
 }
 
