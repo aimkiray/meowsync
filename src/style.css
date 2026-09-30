@@ -1106,6 +1106,43 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* 内陷环与 border 连成 ~2.4px 墨带——与 .pg-field:focus-within 同构的「加粗框」签名 */
 .atp-new input:focus-visible { outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
 
+/* ── 点歌台（asp-*）：atp 模态皮的加宽变体，行式结果列表 ── */
+.asp-dialog { width: min(380px, 92vw); }
+.asp-search { border-top: none; border-bottom: var(--hairline-soft); }
+.asp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: var(--hairline-soft);
+}
+.asp-row:last-child { border-bottom: none; }
+.asp-cover {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border: var(--hairline-soft);
+  image-rendering: pixelated;
+}
+.asp-text { flex: 1; min-width: 0; }
+.asp-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asp-artist {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asp-add { flex-shrink: 0; min-width: 52px; }
+.asp-add:disabled { opacity: .5; }
+
 /* 待播队列行（watch 侧栏共用）：行是容器，点击区收进 .queue-row-main
    ——避免 button 嵌套 role=button 的非法结构 */
 .queue-row {

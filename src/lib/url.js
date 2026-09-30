@@ -12,3 +12,24 @@ export function httpsCover(url) {
   }
   return s.replace(/^http:\/\//i, 'https://');
 }
+
+// B 站输入识别：BV 号（真实 bvid 恒 BV1 头+9 位）、av 号、
+// bilibili.com/b23.tv 链接。\b 词边界防长 token 误吞
+export function isBilibiliInput(input) {
+  const s = String(input || '');
+  return /\bBV1[0-9A-Za-z]{9}\b/i.test(s) // 小写 bv 也收下——服务端会校验真实 bvid
+    || /bilibili\.com|b23\.tv/i.test(s)
+    || /(?:^|\/)av\d+/i.test(s);
+}
+
+// 网易云歌曲 id 提取：music.163.com/song?id= / song/N / ?song=N / 裸数字。
+// 点歌框语境下裸数字即歌曲 id（歌单 id 歧义由外层语义决定）
+export function extractNeteaseSongId(input) {
+  const s = String(input || '').trim();
+  if (!s) return null;
+  const m = s.match(/song\?[^ ]*?[?&]id=(\d+)/i)      // music.163.com/song?id=N
+    || s.match(/\/song\/(\d+)/i)                      // .../song/N
+    || s.match(/[?&]song=(\d+)/i);                    // 本站 ?song=N 分享链
+  if (m) return m[1];
+  return /^\d+$/.test(s) ? s : null;
+}
