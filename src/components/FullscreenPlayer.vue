@@ -411,6 +411,13 @@ export default {
   color: white;
 }
 
+/* 顶栏三键与播放键同族底色（control-button 粉 tint），退出键同档 */
+.fullscreen-player__topbar-button {
+  background: rgba(182, 125, 158, 0.32);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
 .fullscreen-player__cover {
   width: min(20vw, 200px);
   aspect-ratio: 1;
@@ -423,7 +430,6 @@ export default {
 
 .fullscreen-player__close {
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.22);
   backdrop-filter: none;
 }
