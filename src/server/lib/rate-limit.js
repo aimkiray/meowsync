@@ -15,7 +15,13 @@ function rateLimit(c, key, limit) {
   if (hits.length >= limit) return false;
   hits.push(now);
   rateBuckets.set(bucketKey, hits);
-  if (rateBuckets.size > 5000) rateBuckets.clear(); // 防内存膨胀
+  if (rateBuckets.size > 5000) {
+    // 先扫过期键再整表清——共享 map 的粗粒度 clear 会把别的路由的活桶连坐清掉
+    for (const [k, v] of rateBuckets) {
+      if (!v.some(t => now - t < 60000)) rateBuckets.delete(k);
+    }
+    if (rateBuckets.size > 5000) rateBuckets.clear();
+  }
   return true;
 }
 

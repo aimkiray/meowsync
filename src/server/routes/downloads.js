@@ -301,7 +301,7 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
 // 服务端下载链要求 DB 行——把本地单落成 netease_playlist_id=local_<id> 的镜像行，
 // 之后既有路由（quick 建队 / 状态查询 / 文件删除）经 findExistingPlaylistId 的
 // netease_playlist_id 分支全部自然解析，零路由改动。
-// tracks 只收网易云数字 id——bv_* 等无服务端下载源的条目跳过并计数回传。
+// tracks 只收网易云数字 id——bv_*/yt_* 等无服务端下载源的条目跳过并计数回传。
 const LOCAL_MIRROR_ID_MAX = 80;
 app.post('/downloads/local/mirror', async (c) => {
   try {
@@ -321,7 +321,7 @@ app.post('/downloads/local/mirror', async (c) => {
     }
     const allTracks = Array.isArray(body.tracks) ? body.tracks : [];
     if (!allTracks.length) return fail(c, 400, '歌单中没有歌曲');
-    // 只留可下载的网易云曲目（数字 id）；bv_ 等跳过并回传计数让前端提示。
+    // 只留可下载的网易云曲目（数字 id）；bv_/yt_ 等跳过并回传计数让前端提示。
     // 先过滤后截断：前 2000 个可下载曲进入镜像；skipped=非数字 id，truncated=超上限截尾
     const numeric = allTracks.filter(t => t && /^\d+$/.test(String(t.id ?? '')));
     const tracks = numeric.slice(0, 2000)

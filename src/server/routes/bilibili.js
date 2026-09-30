@@ -174,7 +174,7 @@ app.get('/bilibili/resolve', async (c) => {
       budgetTimer.unref?.();
     });
     const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, duration, 'bilibili'), matchBudget,
+      matchNeteaseSong(candidates, duration, 'bilibili', c.req.raw.signal), matchBudget,
     ]);
     clearTimeout(budgetTimer);
     const { audio, video } = pickStreams(playurl);

@@ -53,7 +53,7 @@
             class="ink-btn ink-btn--ghost"
             title="收藏到歌单库（预览单刷新后即丢失）"
           ><PixelIcon name="plus" :size="15" /> 收藏歌单</button>
-          <!-- 点歌台：搜索网易云/粘 B 站链接向本单追加。single_song_ 壳是单曲
+          <!-- 点歌台：搜索网易云/粘 B 站、YouTube 链接向本单追加。single_song_ 壳是单曲
                容器，加第二首会改其语义——保持隐藏（与行级菜单同口径） -->
           <button
             v-if="!isShareShell"
@@ -710,7 +710,7 @@ export default {
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
-        // 除分享壳的歌单且非 B 站曲再多"下载到服务器"——合计 5/6/7 三档。
+        // 除分享壳的歌单且非外部导入曲（bv_/yt_）再多"下载到服务器"——合计 5/6/7 三档。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const itemCount = 5

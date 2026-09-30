@@ -241,7 +241,7 @@ export default {
 
     // 分享链带 view=songs&pl=ID：冷启动后主区直接落在该歌单歌曲页，不停在首页
     // 本地单无远端 id——?mix=<name>~<ids> 内容携带链，接收端按 id 重解析。
-    // 按字节而非条数切：bv_ id ~24B，300 条全 bv_ 会到 7KB 触 nginx 414 边缘
+    // 按字节而非条数切：bv_ id ~24B/yt_ ~14B，300 条全 bv_ 会到 7KB 触 nginx 414 边缘
     const MIX_ID_CAP = 300
     const MIX_IDS_BUDGET = 3000
     const mixIdsFor = (playlist) => {
