@@ -329,7 +329,7 @@ onUnmounted(() => {
   --accent-magenta-on-ink: var(--accent-magenta);
   /* 字体也 pin——glitch 主题会把 --font-* 整体翻成像素族 */
   --font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fusion Pixel', ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'PingFang SC', 'Noto Sans SC', monospace;
   --font-display: 'Space Grotesk', 'Inter', 'Noto Sans SC', sans-serif;
   display: flex;
   flex-direction: column;
