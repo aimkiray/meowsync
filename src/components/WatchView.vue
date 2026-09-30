@@ -191,23 +191,28 @@
              不挂进滚动体——面板滚动时工具条恒可见 -->
         <div v-if="tab === 'lyrics' && currentSong" class="lyric-tools">
           <div class="lyric-tools-group" role="group" aria-label="歌词字号">
-            <button class="lyric-tool" :disabled="lyricFontSize <= LYRIC_FS_MIN"
+            <button type="button" class="lyric-tool" :disabled="lyricFontSize <= LYRIC_FS_MIN"
               @click="lyricFontSize--" title="歌词字号减小" aria-label="减小字号">A−</button>
-            <span class="lyric-tool-val" aria-live="polite">{{ lyricFontSize }}</span>
-            <button class="lyric-tool" :disabled="lyricFontSize >= LYRIC_FS_MAX"
+            <span class="lyric-tool-val" aria-live="polite" aria-label="当前字号">{{ lyricFontSize }}px</span>
+            <button type="button" class="lyric-tool" :disabled="lyricFontSize >= LYRIC_FS_MAX"
               @click="lyricFontSize++" title="歌词字号增大" aria-label="增大字号">A+</button>
           </div>
           <div class="lyric-tools-group" role="group" aria-label="歌词时间校准">
-            <button class="lyric-tool" :disabled="!lyrics.length"
+            <!-- 切歌/歌词在途期间禁调——此时显示的还是旧曲的词与校准值 -->
+            <button type="button" class="lyric-tool"
+              :disabled="!lyrics.length || songSwitching || loadingLyrics"
               @click="$emit('lyric-offset-adjust', -500)"
-              title="歌词延后 0.5 秒">−0.5s</button>
-            <button class="lyric-tool lyric-tool-val lyric-tool-reset"
-              :disabled="!lyrics.length || lyricOffsetMs === 0"
+              title="歌词延后 0.5 秒" aria-label="歌词延后 0.5 秒">−0.5s</button>
+            <button type="button" class="lyric-tool lyric-tool-val lyric-tool-reset"
+              :disabled="!lyrics.length || lyricOffsetMs === 0 || songSwitching || loadingLyrics"
               @click="$emit('lyric-offset-reset')"
-              :title="`当前校准 ${lyricOffsetLabel}，点击复位`">{{ lyricOffsetLabel }}</button>
-            <button class="lyric-tool" :disabled="!lyrics.length"
+              :aria-label="`复位时间校准，当前 ${lyricOffsetLabel}`"
+              :title="`当前校准 ${lyricOffsetLabel}，点击复位`"
+            ><span aria-live="polite">{{ lyricOffsetLabel }}</span><template v-if="lyricOffsetMs !== 0"> ↺</template></button>
+            <button type="button" class="lyric-tool"
+              :disabled="!lyrics.length || songSwitching || loadingLyrics"
               @click="$emit('lyric-offset-adjust', 500)"
-              title="歌词提前 0.5 秒">+0.5s</button>
+              title="歌词提前 0.5 秒" aria-label="歌词提前 0.5 秒">+0.5s</button>
           </div>
         </div>
 
@@ -350,11 +355,14 @@ export default {
     // CSS 变量 --lyric-fs 挂在列表上，当前行/译文用 calc 相对值随动
     const LYRIC_FS_MIN = 10
     const LYRIC_FS_MAX = 24
+    // 隐私模式/存储禁用时 localStorage 抛 SecurityError——裸读会砸整个 setup
+    const safeGetLs = (k) => { try { return localStorage.getItem(k) } catch { return null } }
+    const safeSetLs = (k, v) => { try { localStorage.setItem(k, v) } catch { /* 存不上就只用会话值 */ } }
     const lyricFontSize = ref(
       Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MIN,
-        parseInt(localStorage.getItem('meowsync-lyric-fs')) || 13)))
+        parseInt(safeGetLs('meowsync-lyric-fs')) || 13)))
     watch(lyricFontSize, v => {
-      localStorage.setItem('meowsync-lyric-fs', String(v))
+      safeSetLs('meowsync-lyric-fs', String(v))
     })
     const lyricOffsetLabel = computed(() => {
       const s = props.lyricOffsetMs / 1000
@@ -489,25 +497,38 @@ export default {
       }
     }
 
-    watch(() => props.currentLyricIndex, async (i) => {
-      if (props.tab !== 'lyrics' || i < 0) return
-      await nextTick()
+    // rect 法只滚 lyricContainer——scrollIntoView 会连滚所有祖先，
+    // 单列态拽动整页。字号重排后同样用这只滚容器
+    const scrollLyricIntoCenter = (i, smooth) => {
       const container = lyricContainer.value
       const el = container?.querySelector(`[data-lyric-index="${i}"]`)
       if (!container || !el) return
       const containerRect = container.getBoundingClientRect()
       const lyricRect = el.getBoundingClientRect()
       const scrollOffset = (lyricRect.top - containerRect.top + lyricRect.height / 2) - containerRect.height / 2
-      const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
       container.scrollTo({ top: container.scrollTop + scrollOffset, behavior: smooth ? 'smooth' : 'auto' })
+    }
+
+    watch(() => props.currentLyricIndex, async (i) => {
+      if (props.tab !== 'lyrics' || i < 0) return
+      await nextTick()
+      const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      scrollLyricIntoCenter(i, smooth)
     })
+
+    // 字号变化全列重排——不等下一 tick 就重居中当前行，长间奏不空屏
+    watch(lyricFontSize, () => nextTick(() => {
+      if (props.tab === 'lyrics' && props.currentLyricIndex >= 0) {
+        scrollLyricIntoCenter(props.currentLyricIndex, false)
+      }
+    }))
 
     // ── B 站视频模式 ──
     // 偏好持久化：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开
     const biliVideoRef = ref(null)
-    const videoOn = ref(localStorage.getItem('meowsync-bili-video') !== '0')
+    const videoOn = ref(safeGetLs('meowsync-bili-video') !== '0')
     watch(videoOn, v => {
-      localStorage.setItem('meowsync-bili-video', v ? '1' : '0')
+      safeSetLs('meowsync-bili-video', v ? '1' : '0')
       // 开视频就是用户最自然的重试入口——复位失败闩重新拉流
       if (v) biliVideoFailed.value = false
     })
@@ -890,41 +911,45 @@ export default {
 }
 
 .watch-lyric-translation {
-  /* opacity .75 叠在 ink-86 上画布对比度会跌破 3.5:1——升 .9 保读 */
+  /* opacity .75 叠在 ink-86 上画布对比度会跌破 3.5:1——升 .9 保读；
+     字号下限 9px——字号调到最小档时译文不比这更小 */
   margin-top: 2px;
-  font-size: calc(var(--lyric-fs, 13px) - 2px);
+  font-size: max(9px, calc(var(--lyric-fs, 13px) - 2px));
   opacity: .9;
 }
 
-/* 歌词工具条：字号 / 时间校准两组，顶在歌词面板上方 */
+/* 歌词工具条：字号 / 时间校准两组，顶在歌词面板上方。
+   软分隔线——watch 侧栏约定「静止零装饰，边界交给滚动影」 */
 .lyric-tools {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 6px 10px;
-  border-bottom: var(--hairline);
+  padding: 4px 16px;
+  border-bottom: var(--hairline-soft);
   flex-shrink: 0;
 }
 .lyric-tools-group { display: flex; align-items: center; gap: 4px; }
 .lyric-tool {
   font-size: 10px;
   line-height: 1;
-  padding: 3px 6px;
+  padding: 6px;
+  min-height: 24px; /* 触控地板与仓内 pg-icobtn--sm 同档 */
+  min-width: 24px;
   border: var(--hairline);
   background: transparent;
-  color: var(--ink-64);
+  color: var(--ink-86);
   cursor: pointer;
-  min-width: 22px;
+  transition: color .5s var(--ease-ink), background .5s var(--ease-ink);
 }
 .lyric-tool:hover:not(:disabled) { background: var(--ink-06); color: var(--ink); }
 .lyric-tool:disabled { opacity: .38; cursor: default; }
 .lyric-tool-val {
   font-variant-numeric: tabular-nums;
-  color: var(--ink-64);
+  color: var(--ink-86);
 }
-/* 校准值键：复位功能藏在读数上，hover 提示才显语义 */
-.lyric-tool-reset { min-width: 44px; }
+/* 校准值键兼复位：按最大刻度 ±300.0s 预留宽，避免值跳变时整组位移 */
+.lyric-tool-reset { min-width: 56px; }
 
 /* 窄屏：单列——封面→信息 在上、tab 区在下 */
 @media (max-width: 900px) {

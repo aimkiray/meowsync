@@ -507,6 +507,7 @@ button {
 .pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
 .pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
 .song-menu-btn:focus-visible, .queue-row-remove:focus-visible, .row-add-btn:focus-visible,
+.lyric-tool:focus-visible,
 .playlist-play-overlay:focus-visible, .topnav-suggest-item:focus-visible,
 .pl-action:focus-visible, .watch-grip:focus-visible, .pg-check:focus-visible,
 .grid-card-main:focus-visible,

@@ -274,6 +274,7 @@
       :duration="duration"
       :volume="volume"
       :lyrics="lyrics"
+      :lyric-offset-ms="lyricOffsetMs"
       :song-switching="songSwitching"
       :lyric-mode="fullscreenLyricMode"
       :interaction-mode="fullscreenInteractionMode"
@@ -2201,6 +2202,8 @@ export default {
         // 清掉上一首歌的残留歌词，避免在新歌标题下渲染旧歌词
         lyrics.value = []
         currentLyricIndex.value = 0
+        lyricOffsetMs.value = 0
+        lyricOwnerKey.value = null
         if (currentAbortController === myController) currentAbortController = null
         savePlayerStateToStorage()
       }
@@ -2215,10 +2218,12 @@ export default {
         lyrics.value = []
         currentLyricIndex.value = 0
         lyricOffsetMs.value = 0
+        lyricOwnerKey.value = null
         return
       }
       const lyricId = song?.neteaseId ?? song?.id
       if (lyricId == null) return
+      lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
       try {
         loadingLyrics.value = true
         console.log('📝 加载歌词:', lyricId)
@@ -2233,6 +2238,7 @@ export default {
         if (signal?.aborted || currentPlayingId !== song.id) return
 
         lyricOffsetMs.value = meta?.data?.offsetMs ?? 0
+        lyricOwnerKey.value = lyricId // 词属主与值同源——见 lyricOwnerKey 注释
         lyrics.value = lyricsData?.lyrics || []
         currentLyricIndex.value = 0
 
@@ -2262,7 +2268,9 @@ export default {
         if (!howl || !isPlaying.value || lyrics.value.length === 0) return
 
         // lyricOffsetMs>0（提前）⇔ 播放时钟拨快 offset 再比时间戳
-        const currentTimeSeconds = howl.seek() + lyricOffsetMs.value / 1000
+        const rawSeek = howl.seek()
+        if (!Number.isFinite(rawSeek)) return
+        const currentTimeSeconds = rawSeek + lyricOffsetMs.value / 1000
 
         // 找到当前时间对应的歌词行
         let newIndex = 0
@@ -2279,38 +2287,43 @@ export default {
       }, 100)
     }
 
-    // 歌词时间校准：±0.5s 步进，±300s 封顶（对齐服务端 MAX_OFFSET_MS）。
-    // 无词源曲（bv_ 未匹配网易云）不给校准——写了也没人消费
-    const LYRIC_OFFSET_STEP = 500
+    // 歌词时间校准：±0.5s 步进（步进值在 WatchView 工具条），±300s 封顶（对齐服务端 MAX_OFFSET_MS）。
+    // 词属主与值同源——lyricOwnerKey 由 loadLyrics 与 lyrics/offset 一起写入，
+    // 不从 currentSong 推导：切歌到 meta 回包之间 key 仍属旧词源，此时调节
+    // 写的是「正在显示的这份词」的校准，不会跨歌写污。无词源曲不给校准
     const LYRIC_OFFSET_MAX = 5 * 60 * 1000
+    const lyricOwnerKey = ref(null)
     let lyricOffsetSaveTimer = null
-    const lyricOffsetKey = computed(() => {
-      const s = currentSong.value
-      if (!s || (s.bilibili && !s.neteaseId)) return null
-      return s.neteaseId ?? s.id ?? null
-    })
+    let pendingLyricSave = null
+    const flushLyricOffsetSave = () => {
+      clearTimeout(lyricOffsetSaveTimer)
+      const p = pendingLyricSave
+      pendingLyricSave = null
+      if (!p) return
+      downloadsApi.saveLyricOffset(p.key, p.ms)
+        .catch(err => toast(`时间校准保存失败：${err?.message || '网络错误'}`, 'error'))
+    }
     const scheduleLyricOffsetSave = () => {
-      // key/ms 调度时捕获——防抖窗口内切歌，旧保存仍写旧曲不串到新曲
-      const key = lyricOffsetKey.value
+      const key = lyricOwnerKey.value
       const ms = lyricOffsetMs.value
       if (key == null) return
+      // 换词源前先冲刷上一首的待发写——共享 timer 被顶替会静默丢写
+      if (pendingLyricSave && pendingLyricSave.key !== key) flushLyricOffsetSave()
+      pendingLyricSave = { key, ms }
       clearTimeout(lyricOffsetSaveTimer)
-      lyricOffsetSaveTimer = setTimeout(() => {
-        downloadsApi.saveLyricOffset(key, ms)
-          .catch(err => toast(`时间校准保存失败：${err?.message || '网络错误'}`, 'error'))
-      }, 400)
+      lyricOffsetSaveTimer = setTimeout(flushLyricOffsetSave, 400)
     }
     const adjustLyricOffset = (deltaMs) => {
-      if (lyricOffsetKey.value == null) {
-        toast('当前歌曲没有歌词源，无法校准', 'info')
-        return
-      }
+      // 切歌/歌词在途期间禁调——显示的词与 offset 还是旧曲的
+      if (lyricOwnerKey.value == null || !lyrics.value.length
+          || songSwitching.value || loadingLyrics.value) return
       lyricOffsetMs.value = Math.max(-LYRIC_OFFSET_MAX,
         Math.min(LYRIC_OFFSET_MAX, lyricOffsetMs.value + deltaMs))
       scheduleLyricOffsetSave()
     }
     const resetLyricOffset = () => {
-      if (lyricOffsetKey.value == null || lyricOffsetMs.value === 0) return
+      if (lyricOwnerKey.value == null || lyricOffsetMs.value === 0
+          || songSwitching.value || loadingLyrics.value) return
       lyricOffsetMs.value = 0
       scheduleLyricOffsetSave() // PUT 0 = 服务端删行复位
     }
@@ -3156,6 +3169,7 @@ export default {
       }
       clearHowlWatchdog()
       clearTimeout(volumeSaveTimer)
+      flushLyricOffsetSave() // 卸载前把待发的校准写出去
       document.removeEventListener('visibilitychange', onVisibilityFlush)
       window.removeEventListener('keydown', onGlobalKeydown)
       window.removeEventListener('popstate', onPopState)

@@ -8,6 +8,7 @@
       :is-playing="isPlaying"
       :lyric-mode="lyricMode"
       :interaction-mode="interactionMode"
+      :lyric-offset-ms="lyricOffsetMs"
     />
 
     <div class="fullscreen-player__overlay"></div>
@@ -133,6 +134,8 @@ export default {
       type: Number,
       default: 80
     },
+    // 歌词时间校准（ms，正=提前）——TextAliveLyricCanvas 用它偏移渲染时钟
+    lyricOffsetMs: { type: Number, default: 0 },
     lyrics: {
       type: Array,
       default: () => []
