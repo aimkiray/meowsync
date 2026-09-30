@@ -606,6 +606,12 @@ export default {
   scrollbar-gutter: stable;
   overflow-y: auto;
   padding-top: 8px;
+  /* 滚动影替尺：画布色盖片 local 随内容滚走 → 钉在顶缘的 scroll 影显露；
+     回到顶时盖片重新遮住影——边界只在内容压在 tab 下时出现。
+     盖片须跟该处实际底色 --view-canvas（watch=teal），写 --paper 会漏白缝 */
+  background:
+    linear-gradient(var(--view-canvas, var(--paper)), var(--view-canvas, var(--paper))) 0 0 / 100% 14px local no-repeat,
+    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--ink) 16%, transparent), transparent) 0 0 / 100% 10px scroll no-repeat;
 }
 
 .watch-empty {
