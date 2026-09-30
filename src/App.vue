@@ -60,6 +60,7 @@
           @play-shuffle="playPlaylistAndWatch(true)"
           @play-next="playNextInQueue"
           @add-to-queue="addToQueueEnd"
+          @add-to-playlist="openAddToPlaylist"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
         />
         <PlaylistGrid
@@ -72,6 +73,7 @@
           @open="openSearchPlaylist"
           @add="addPlaylistToLibrary"
           @play-song="openWatchSearchSong"
+          @add-to-playlist="openAddToPlaylist"
           @close="closeSearchView"
         />
         <!-- YTM watch 播放页：点单曲进入；歌词/待播/相关都在页内右栏，不遮主区 -->
@@ -100,6 +102,7 @@
           @clear-queue="clearQueue"
           @play-song="playSongFromRelated"
           @open-source="openQueueSource"
+          @add-to-playlist="openAddToPlaylist"
         />
         <AdminPanel v-else />
       </main>
@@ -137,6 +140,56 @@
     />
 
 
+    <!-- 添加到歌单选择器（待播/相关/歌单页/搜索结果四处行共用入口）。
+         居中模态复用 pg-menu 皮：歌单列表 + 底部新建行 -->
+    <Teleport to="body">
+      <div
+        v-if="addTargetSong"
+        class="atp-overlay"
+        @click="addTargetSong = null"
+        @keydown.esc="addTargetSong = null"
+      >
+        <div
+          class="atp-dialog"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`添加 ${addTargetSong.name} 到歌单`"
+          @click.stop
+        >
+          <div class="pg-menu-head">添加到歌单 · {{ addTargetSong.name }}</div>
+          <div class="atp-list">
+            <button
+              v-for="pl in userPlaylists"
+              :key="pl.id"
+              class="pg-menu-item atp-item"
+              :title="`加入《${pl.name}》`"
+              @click="addSongToPlaylist(pl)"
+            >
+              <PixelIcon name="m-list" :size="13" />
+              <span class="atp-name">{{ pl.name }}</span>
+              <span class="atp-count">{{ pl.trackCount ?? pl.tracks?.length ?? 0 }} 首</span>
+            </button>
+            <p v-if="!userPlaylists.length" class="atp-empty">还没有歌单，在下面建一个</p>
+          </div>
+          <div class="atp-new">
+            <input
+              ref="atpInput"
+              v-model="newPlaylistName"
+              placeholder="新建歌单…"
+              maxlength="40"
+              aria-label="新歌单名称"
+              @keydown.enter="createPlaylistAndAdd"
+            />
+            <button
+              class="ink-btn ink-btn--sm"
+              :disabled="!newPlaylistName.trim()"
+              @click="createPlaylistAndAdd"
+            ><PixelIcon name="plus" :size="12" /> 新建</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 全局 toast + 确认模态宿主（替代原生 alert/confirm） -->
     <FeedbackHost />
 
@@ -164,7 +217,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { Howl } from 'howler'
 import { musicApi } from './api/music'
 import { resolveApiBaseUrl } from './lib/api-base'
@@ -181,6 +234,7 @@ import SongList from './components/SongList.vue'
 import WatchView from './components/WatchView.vue'
 import FeedbackHost from './components/FeedbackHost.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
+import PixelIcon from './components/PixelIcon.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import RemoteController from './components/RemoteController.vue'
 import AdminPanel from './components/AdminPanel.vue'
@@ -198,7 +252,8 @@ export default {
     BottomPlayer,
     FullscreenPlayer,
     RemoteController,
-    AdminPanel
+    AdminPanel,
+    PixelIcon
   },
   setup() {
     // 响应式数据
@@ -832,16 +887,29 @@ export default {
           console.log('🔄 从服务器获取最新歌单数据...')
           const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
           if (myReq !== selectReqId) return false // 已被更新的选择取代，丢弃过期数据
-          songs.value = fullPlaylist?.tracks || []
+          const fetchedTracks = fullPlaylist?.tracks || []
+          // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧
+          const addedTracks = (playlist.addedTracks || [])
+            .filter(t => t && !fetchedTracks.some(f => String(f.id) === String(t.id)))
+          songs.value = [...fetchedTracks, ...addedTracks]
           console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
 
-          // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据
-          selectedPlaylist.value = { ...playlist, ...(fullPlaylist || {}) }
+          // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
+          // 有本地追加时 trackCount 也要带上（远端计数不含它们）
+          const merged = { ...playlist, ...(fullPlaylist || {}) }
+          if (addedTracks.length) {
+            merged.trackCount = (fullPlaylist?.trackCount ?? fetchedTracks.length) + addedTracks.length
+          }
+          selectedPlaylist.value = merged
 
           // 更新本地歌单库中的数据
           const playlistIndex = userPlaylists.value.findIndex(p => String(p.id) === String(playlist.id))
           if (playlistIndex !== -1) {
-            userPlaylists.value[playlistIndex] = { ...userPlaylists.value[playlistIndex], ...fullPlaylist }
+            // addedTracks 是库对象自己的键（fullPlaylist 没有）——展开合并天然保留
+            userPlaylists.value[playlistIndex] = {
+              ...userPlaylists.value[playlistIndex],
+              ...merged
+            }
             savePlaylistsToStorage()
             console.log('✅ 已更新本地歌单数据')
           }
@@ -1134,6 +1202,72 @@ export default {
       userPlaylists.value.unshift(pl)
       savePlaylistsToStorage()
       toast(`已存为歌单「${pl.name}」`, 'success')
+    }
+
+    // ── 添加到歌单（待播/相关/歌单页/搜索结果行尾键共用入口） ──
+    // 远端歌单不能整表存 tracks——本地追加记 addedTracks，selectPlaylist 拉取后合并；
+    // 本地歌单（saved_queue_ 系）tracks 直接追加，持久化整条保留
+    const addTargetSong = ref(null)
+    const newPlaylistName = ref('')
+    const atpInput = ref(null)
+    const openAddToPlaylist = (song) => {
+      if (!song || song.id == null) return
+      newPlaylistName.value = ''
+      addTargetSong.value = song
+    }
+    // 对话框开启期间：Esc 全局可关（overlay 上的 keydown 只在焦点位于框内时冒泡到），
+    // 焦点移入输入框——键盘流可立即输入新歌单名
+    watch(addTargetSong, async (v, _prev, onCleanup) => {
+      if (!v) return
+      const onKey = (e) => { if (e.key === 'Escape') addTargetSong.value = null }
+      document.addEventListener('keydown', onKey)
+      onCleanup(() => document.removeEventListener('keydown', onKey))
+      await nextTick()
+      atpInput.value?.focus()
+    })
+
+    const addSongToPlaylist = (pl) => {
+      const song = addTargetSong.value
+      if (!song || !pl || pl.id == null) return
+      const inList = (list) => (list || []).some(t => t && String(t.id) === String(song.id))
+      if (inList(pl.tracks) || inList(pl.addedTracks)) {
+        toast(`「${song.name}」已在《${pl.name}》里`, 'info')
+        addTargetSong.value = null
+        return
+      }
+      const entry = { ...song, __localAdded: true }
+      if (isLocalPlaylistId(pl.id)) {
+        pl.tracks = [...(pl.tracks || []), entry]
+      } else {
+        pl.addedTracks = [...(pl.addedTracks || []), entry]
+        // 正打开着这张歌单——行表即时追加，不等下次拉取
+        if (String(selectedPlaylist.value?.id) === String(pl.id)) {
+          songs.value = [...songs.value, entry]
+        }
+      }
+      pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1
+      savePlaylistsToStorage()
+      toast(`已加入《${pl.name}》`, 'success')
+      addTargetSong.value = null
+    }
+
+    // 新建歌单借 saved_queue_ 前缀：isLocalPlaylistId 全链路（持久化保留 tracks /
+    // 内嵌加载 / 不进 URL / 隐藏分享下载入口）对它语义现成正确
+    const createPlaylistAndAdd = () => {
+      const name = newPlaylistName.value.trim()
+      const song = addTargetSong.value
+      if (!name || !song) return
+      const pl = {
+        id: `saved_queue_${Date.now()}`,
+        name,
+        coverImgUrl: song.al?.picUrl || song.album?.picUrl || '',
+        creator: { nickname: '我' },
+        trackCount: 0,
+        tracks: [],
+        isLocal: true
+      }
+      userPlaylists.value.unshift(pl)
+      addSongToPlaylist(pl)
     }
 
     // 相关 tab 点歌：YTM 以相关流接续——整个相关列表进队列（autoplay off 时队尾也有下一首）
@@ -2331,7 +2465,13 @@ export default {
       updateVolume,
       openFullscreenPlayer,
       closeFullscreenPlayer,
-      toggleCenterView
+      toggleCenterView,
+      addTargetSong,
+      newPlaylistName,
+      atpInput,
+      openAddToPlaylist,
+      addSongToPlaylist,
+      createPlaylistAndAdd
     }
   }
 }

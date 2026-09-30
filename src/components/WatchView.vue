@@ -129,6 +129,14 @@
                 aria-label="从队列移除"
                 @click.stop="$emit('queue-remove', index)"
               ><PixelIcon name="close" :size="14" /></button>
+              <!-- 添加入口恒占最右槽位：当前行缺 remove 时位置依旧一致 -->
+              <button
+                type="button"
+                class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
+                title="添加到歌单"
+                aria-label="添加到歌单"
+                @click.stop="$emit('add-to-playlist', song)"
+              ><PixelIcon name="plus" :size="14" /></button>
             </div>
           </template>
 
@@ -209,25 +217,36 @@
             v-for="song in relatedSongs"
             :key="song.id"
             class="queue-row watch-related-row"
-            @click="$emit('play-song', song, relatedSongs)"
-            @keydown.enter="$emit('play-song', song, relatedSongs)"
-            @keydown.space.prevent="$emit('play-song', song, relatedSongs)"
-            tabindex="0"
-            role="button"
-            :title="`播放 ${song.name}`"
           >
-            <img
-              v-if="song.al?.picUrl || song.album?.picUrl"
-              :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
-              :alt="song.name"
-              class="watch-queue-thumb"
-            />
-            <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
-            <div class="queue-row-info">
-              <p class="queue-row-title">{{ song.name }}</p>
-              <p class="queue-row-artist">{{ songArtist(song) }}</p>
+            <div
+              class="queue-row-main"
+              role="button"
+              tabindex="0"
+              :title="`播放 ${song.name}`"
+              @click="$emit('play-song', song, relatedSongs)"
+              @keydown.enter="$emit('play-song', song, relatedSongs)"
+              @keydown.space.prevent="$emit('play-song', song, relatedSongs)"
+            >
+              <img
+                v-if="song.al?.picUrl || song.album?.picUrl"
+                :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+                :alt="song.name"
+                class="watch-queue-thumb"
+              />
+              <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
+              <div class="queue-row-info">
+                <p class="queue-row-title">{{ song.name }}</p>
+                <p class="queue-row-artist">{{ songArtist(song) }}</p>
+              </div>
+              <span class="queue-row-duration">{{ formatDuration(song) }}</span>
             </div>
-            <span class="queue-row-duration">{{ formatDuration(song) }}</span>
+            <button
+              type="button"
+              class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
+              title="添加到歌单"
+              aria-label="添加到歌单"
+              @click.stop="$emit('add-to-playlist', song)"
+            ><PixelIcon name="plus" :size="14" /></button>
           </div>
         </div>
       </aside>
@@ -268,7 +287,7 @@ export default {
     'back', 'open-fullscreen',
     'update:tab', 'update:autoplay',
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
-    'play-song', 'open-source'
+    'play-song', 'open-source', 'add-to-playlist'
   ],
   setup(props, { emit }) {
     const queueContainer = ref(null)
@@ -643,7 +662,7 @@ export default {
   .watch-grip { color: var(--ink); }
 }
 
-.watch-related-row { cursor: pointer; }
+/* 相关行点击区已收进 .queue-row-main（行容器化以容纳行尾 + 键），cursor 由它提供 */
 
 .queue-row--dragging {
   outline: 1.2px solid var(--accent-magenta-ink); /* 纸面指示线走深档（火烈鸟本色 ~2.3:1 过浅） */

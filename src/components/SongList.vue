@@ -173,6 +173,16 @@
             class="pg-menu-item"
             role="menuitem"
             tabindex="0"
+            @click="addToPlaylistFromMenu"
+            @keydown.enter="addToPlaylistFromMenu"
+            @keydown.space.prevent="addToPlaylistFromMenu"
+          >
+            <PixelIcon name="m-list" :size="13" /> 添加到歌单
+          </div>
+          <div
+            class="pg-menu-item"
+            role="menuitem"
+            tabindex="0"
             @click="shareFromMenu"
             @keydown.enter="shareFromMenu"
             @keydown.space.prevent="shareFromMenu"
@@ -606,7 +616,7 @@ export default {
       default: 0
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'toggle-vip-songs'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'toggle-vip-songs'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})
@@ -652,8 +662,8 @@ export default {
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
-        // 固定项=下一首+队尾+分享+源文件 4 项；非临时歌单+已选歌单时多"下载到服务器"共 5 项
-        const menuHeight = 40 + ((!isSingleSongPlaylist.value && props.selectedPlaylist) ? 5 : 4) * 39 + 4
+        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；非临时歌单+已选歌单时多"下载到服务器"共 6 项
+        const menuHeight = 40 + ((!isSingleSongPlaylist.value && props.selectedPlaylist) ? 6 : 5) * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh
@@ -689,6 +699,13 @@ export default {
       const song = menuSong.value
       closeDownloadMenu()
       if (song) emit('add-to-queue', song)
+    }
+
+    // 添加到歌单：emit 给 App 统一弹选择器（歌单库与持久化都在 App 侧）
+    const addToPlaylistFromMenu = () => {
+      const song = menuSong.value
+      closeDownloadMenu()
+      if (song) emit('add-to-playlist', song)
     }
 
     const shareFromMenu = () => {
@@ -940,6 +957,7 @@ export default {
       toggleDownloadMenu,
       playNextFromMenu,
       addToQueueFromMenu,
+      addToPlaylistFromMenu,
       shareFromMenu,
       shareSong,
       downloadSongDirect,

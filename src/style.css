@@ -492,11 +492,11 @@ button {
 .pg-chip:focus-visible, .pg-field:focus-within, .queue-row:focus-visible,
 .song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
 .pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
-.song-result-row:focus-visible,
+.song-result-main:focus-visible,
 .transport:focus-visible,
 .pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
 .pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
-.song-menu-btn:focus-visible, .queue-row-remove:focus-visible,
+.song-menu-btn:focus-visible, .queue-row-remove:focus-visible, .row-add-btn:focus-visible,
 .playlist-play-overlay:focus-visible, .topnav-suggest-item:focus-visible,
 .pl-action:focus-visible, .watch-grip:focus-visible, .pg-check:focus-visible,
 .grid-card-main:focus-visible,
@@ -608,7 +608,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   color: var(--ink-86);
 }
 /* 画布上的图标键/把手：ink-64 在饱和底上 <3:1 图形线，升 ink-86 */
-.app-shell .app-body .queue-row-remove, .app-shell .app-body .song-menu-btn, .app-shell .app-body .pl-action,
+.app-shell .app-body .queue-row-remove, .app-shell .app-body .row-add-btn,
+.app-shell .app-body .song-menu-btn, .app-shell .app-body .pl-action,
 .app-shell .app-body .dql-kebab, .app-shell .app-body .song-state-icon,
 .app-shell .app-body .pg-tab:not(.pg-tab--active) {
   color: var(--ink-86);
@@ -626,7 +627,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* 行尾动作键统一 hover：墨字 + 内陷盒环（⋯/分享/✕ 同律）。
    排在补丁带之后——同 (0,4,0) 靠后序压过 dim 回退与白名单 */
 .app-shell .app-body .song-menu-btn:hover, .app-shell .app-body .pl-action:hover,
-.app-shell .app-body .dql-kebab:hover, .app-shell .app-body .queue-row-remove:hover {
+.app-shell .app-body .dql-kebab:hover, .app-shell .app-body .queue-row-remove:hover,
+.app-shell .app-body .row-add-btn:hover {
   color: var(--ink);
   outline: 1.2px solid var(--ink);
   outline-offset: -1.2px;
@@ -640,7 +642,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 :root[data-theme="glitch-restoration"] .app-shell .app-body .song-menu-btn:hover,
 :root[data-theme="glitch-restoration"] .app-shell .app-body .pl-action:hover,
 :root[data-theme="glitch-restoration"] .app-shell .app-body .dql-kebab:hover,
-:root[data-theme="glitch-restoration"] .app-shell .app-body .queue-row-remove:hover {
+:root[data-theme="glitch-restoration"] .app-shell .app-body .queue-row-remove:hover,
+:root[data-theme="glitch-restoration"] .app-shell .app-body .row-add-btn:hover {
   color: var(--accent-magenta-ink);
   outline-color: var(--accent-magenta-ink);
 }
@@ -1031,6 +1034,65 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-menu-item--danger { color: var(--accent-danger-ink); }
 .pg-menu-item--danger:hover { color: var(--accent-danger-ink); } /* 悬停走深档——与全站 hover→ink 同律 */
 
+/* ── 添加到歌单对话框：居中模态，复用 pg-menu 发丝皮 ── */
+.atp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-menu);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .18);
+}
+.atp-dialog {
+  width: min(300px, 86vw);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: var(--hairline);
+}
+.atp-list { overflow-y: auto; }
+.atp-item { width: 100%; }
+.atp-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.atp-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+}
+.atp-empty {
+  padding: 18px 12px;
+  font-size: 12px;
+  color: var(--ink-64);
+  text-align: center;
+}
+.atp-new {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-top: var(--hairline-soft);
+}
+.atp-new input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: var(--hairline);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.atp-new input:focus-visible { outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
+
 /* 待播队列行（watch 侧栏共用）：行是容器，点击区收进 .queue-row-main
    ——避免 button 嵌套 role=button 的非法结构 */
 .queue-row {
@@ -1130,6 +1192,24 @@ button.queue-source--link:hover { color: var(--ink); text-decoration: underline;
 /* 触屏设备无 hover——隐藏但可点的移除键会误删，直接常显 */
 @media (hover: none){
   .queue-row-remove { opacity: 1; pointer-events: auto; }
+}
+
+/* 「添加到歌单」行尾键：queue-row / song-result-row 共用（尺寸吃 pg-icobtn--sm） */
+.row-add-btn {
+  flex-shrink: 0;
+  color: var(--ink-64);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, color .2s;
+}
+.queue-row:hover .row-add-btn,
+.queue-row:focus-within .row-add-btn,
+.song-result-row:hover .row-add-btn,
+.song-result-row:focus-within .row-add-btn,
+.row-add-btn:focus-visible { opacity: 1; pointer-events: auto; }
+/* 触屏同律：hover 不可得时行尾键常显 */
+@media (hover: none){
+  .row-add-btn { opacity: 1; pointer-events: auto; }
 }
 
 /* 卡片外壳 + 内部件（PlaylistGrid 与 HomeFeed 货架共用——必须全局） */
