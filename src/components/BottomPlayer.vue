@@ -59,7 +59,7 @@
         <div class="player-controls">
           <button
             @click="$emit('toggle-shuffle')"
-            class="transport"
+            class="transport transport--edge"
             :class="{ 'transport--active': shuffleOn }"
             :aria-pressed="shuffleOn"
             :disabled="!currentSong || isTempPlaylist"
@@ -90,7 +90,7 @@
           ><PixelIcon name="next" :size="16" /></button>
           <button
             @click="$emit('toggle-play-mode')"
-            class="transport"
+            class="transport transport--edge"
             :disabled="!currentSong"
             :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
@@ -497,14 +497,22 @@ export default {
   color: var(--accent-magenta-on-ink);
 }
 
-/* ≤735px 收掉音量组：右簇 min-content 240px 在 641–735 触底会顶推
-   控件簇左移（播放键偏中心最多 ~48px）——提前隐藏保住居中承诺 */
+/* ≤735px 只收滑条（保留静音键）：右簇含整组 240px 在 ≤735 触底会顶推
+   控件簇左移（播放键偏中心最多 ~48px @641）——藏 76px 滑条降到 160px，
+   641–735 半幅 ≥192.5px 足够，居中承诺保住且静音不丢 */
 @media (max-width: 735px) {
-  .vol-wrap { display: none; }
+  .vol-range { display: none; }
 }
 
 @media (max-width: 640px) {
   .player-inner { gap: 10px; padding: 8px 10px; }
+}
+
+/* ≤551px 连静音键也收：mute+三键簇 160px 需半幅 ≥160（vw≥552）才容下，
+   501–551 会顶偏播放键（最多 ~25px @501）——该档只留三键簇 112px，
+   456 处恰好满配（半幅 112 = 簇 112） */
+@media (max-width: 551px) {
+  .vol-wrap { display: none; }
 }
 
 /* ≤455px：词/沉浸键收进 watch 页路径可达——421–455 档三键簇 112px
@@ -514,9 +522,8 @@ export default {
 }
 
 @media (max-width: 420px) {
-  /* nth-of-type 按 button 计位——免疫 .player-time span 在簇内的位置漂移 */
-  .player-controls .transport:nth-of-type(1),
-  .player-controls .transport:nth-of-type(5) { display: none; }
+  /* 类选择器标边键——免疫簇内加键/挪位导致的序号漂移（nth-of-type 脆弱） */
+  .player-controls .transport--edge { display: none; }
   .transport { width: 30px; height: 30px; }
   .transport--play { width: 36px; height: 36px; }
   .pg-icobtn--on-ink { width: 30px; height: 30px; } /* 与 transport 同收——否则 30<32 倒挂 */
