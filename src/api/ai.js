@@ -28,7 +28,9 @@ export const aiApi = {
   },
 
   // 生成/取回词源的中文译文 LRC（服务端缓存命中即回；官方译文存在则直回）
-  // 歌词翻译是批量 AI 调用，整首最坏几分钟——给足 300s
+  // 歌词翻译是批量 AI 调用，整首最坏几分钟——给足 300s。
+  // signal 预留给后续调用方：歌词加载路径刻意不传——切歌不该打断服务端
+  // 翻译（完成后按词源落库缓存，下次播放直接命中）
   translateLyric: (id, signal = null) =>
     http.post(`${API_BASE_URL}/ai/lyric-translate`, { id }, { signal, timeout: 300000 })
       .then(r => r.data),

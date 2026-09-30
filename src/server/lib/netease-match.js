@@ -51,7 +51,10 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
     maxTokens: 32,
     signal,
   });
-  const n = Number(ans?.match);
+  // match:true（模型混用 confirm 形态）Number(true)=1 会假命中第 1 候选——
+  // 布尔与 null 显式排除后再转数字
+  if (typeof ans?.match !== 'number' && typeof ans?.match !== 'string') return null;
+  const n = Number(ans.match);
   if (!Number.isInteger(n) || n < 1 || n > list.length) return null;
   const pick = list[n - 1];
   // AI 兜底仍过粗粒度时长闸（120s，约为确定性窗口的 3 倍——片头尾垫长
@@ -87,9 +90,11 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       // 时长 sanity 只在有真实时长时启用——源时长 0（live/首映/字段缺失）会把
       // ≤45s 的短曲错配（|x-0|≤45 窗口对 0 恒成立的方向性失真）
       if (Number.isFinite(durationSec) && durationSec > 0) {
+        // 被 AI 否决过的歌直接从时长候选池剔除——本串不再重问（省额度），
+        // 也让窗内次优候选有机会被复核；后续候选串同理不重问
         const byDur = songs
           .map(s => ({ s, diff: Math.abs((s.dt || s.duration || 0) / 1000 - durationSec) }))
-          .filter(x => x.diff <= MATCH_DUR_TOLERANCE_SEC)
+          .filter(x => x.diff <= MATCH_DUR_TOLERANCE_SEC && !vetoedIds.has(x.s.id))
           .sort((a, b) => a.diff - b.diff)[0];
         if (byDur) {
           // 纯时长命中（歌名不含）是错配高发位——AI 复核，明确否决才弃票
@@ -114,7 +119,10 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   // 启发式链全灭 → AI 兜底从已见候选里挑（如『短视频标题串了梗词导致
   // 所有搜索串都搜不到正主』的场景——直接看整批候选比再搜一轮更有效）
   if (useAi && seenSongs.size && !signal?.aborted) {
-    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds);
+    // 畸形上游数据（ar 非数组等）在 desc 构建处可能 TypeError——
+    // 兜底是增强路径，异常按「无兜底」降级而非 502
+    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds)
+      .catch(() => null);
     if (pick) {
       console.info(`[${tag}] AI 兜底命中: ${songDesc(pick)} ← ${sourceInfo.title}`);
       return { song: pick, query: 'ai' };
