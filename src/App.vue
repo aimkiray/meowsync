@@ -61,6 +61,8 @@
           @play-next="playNextInQueue"
           @add-to-queue="addToQueueEnd"
           @add-to-playlist="openAddToPlaylist"
+          @remove-from-playlist="removeSongFromPlaylist"
+          @sync-playlist="syncPlaylist"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
         />
         <PlaylistGrid
@@ -866,13 +868,14 @@ export default {
 
     // 歌单选择（请求序号守卫：快速连点时丢弃过期响应）
     // 返回 true=选择生效且歌曲已就绪，false=被更新的选择抢占/加载失败；供 restorePlaybackState 判断是否继续
-    const selectPlaylist = async (playlist) => {
+    const selectPlaylist = async (playlist, { force = false, silent = false } = {}) => {
       if (!playlist || playlist.id == null) return false
-      if (String(selectedPlaylist.value?.id) === String(playlist.id)) return true
+      if (!force && String(selectedPlaylist.value?.id) === String(playlist.id)) return true
 
       const myReq = ++selectReqId
       try {
-        loadingSongs.value = true
+        // silent（手动同步复跑）：不闪 loading，行表直接热替换
+        if (!silent) loadingSongs.value = true
         selectedPlaylist.value = playlist
 
         console.log('🎵 加载歌单歌曲:', playlist.name)
@@ -887,25 +890,37 @@ export default {
           const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
           if (myReq !== selectReqId) return false // 已被更新的选择取代，丢弃过期数据
           const fetchedTracks = fullPlaylist?.tracks || []
-          // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧。
+          const fetchedIds = new Set(fetchedTracks.map(t => String(t.id)))
+          // 单向同步合并：远端曲 − 本地墓碑 + 本地追加排尾。
           // 读库对象而非调用方传入的 playlist——搜索结果/stub 打开同一库中单时
-          // 参数对象上没有 addedTracks（视图会丢追加曲且 trackCount 被回写成远端值）
+          // 参数对象上没有 addedTracks/removedTrackIds（视图会丢追加曲且 trackCount 被回写成远端值）
           const libPl = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
+          const removedSet = new Set((libPl?.removedTrackIds ?? playlist.removedTrackIds ?? []).map(String))
+          // 墓碑净化：远端已不含的墓碑剪掉（远端删曲后墓碑失效；远端重加同 id 自然复活 = 镜像语义）
+          const keptRemoved = [...removedSet].filter(id => fetchedIds.has(id))
+          // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧。
           const addedTracks = (libPl?.addedTracks ?? playlist.addedTracks ?? [])
-            .filter(t => t && !fetchedTracks.some(f => String(f.id) === String(t.id)))
-          // 净化回写：远端已含的追加条目永久清掉，堵幻影持久化/僵尸复活通道
-          if (libPl?.addedTracks && libPl.addedTracks.length !== addedTracks.length) {
-            libPl.addedTracks = addedTracks
-            savePlaylistsToStorage()
+            .filter(t => t && !fetchedIds.has(String(t.id)))
+          if (libPl) {
+            if (removedSet.size !== keptRemoved.length) libPl.removedTrackIds = keptRemoved
+            // 净化回写：远端已含的追加条目永久清掉，堵幻影持久化/僵尸复活通道
+            if (libPl.addedTracks && libPl.addedTracks.length !== addedTracks.length) {
+              libPl.addedTracks = addedTracks
+            }
+            // 同步基线：最近一次远端 id 快照——手动同步/添加墓碑判重都靠它
+            libPl.lastRemoteIds = [...fetchedIds]
+            libPl.lastSyncedAt = Date.now()
           }
-          songs.value = [...fetchedTracks, ...addedTracks]
+          const visibleTracks = fetchedTracks.filter(t => !removedSet.has(String(t.id)))
+          songs.value = [...visibleTracks, ...addedTracks]
           console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
 
           // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
-          // 有本地追加时 trackCount 也要带上（远端计数不含它们）
+          // 本地增删（addedTracks/墓碑）要计入 trackCount——远端计数不含它们
           const merged = { ...playlist, ...(fullPlaylist || {}) }
-          if (addedTracks.length) {
-            merged.trackCount = (fullPlaylist?.trackCount ?? fetchedTracks.length) + addedTracks.length
+          const localDelta = addedTracks.length - keptRemoved.length
+          if (localDelta) {
+            merged.trackCount = Math.max(0, (fullPlaylist?.trackCount ?? fetchedTracks.length) + localDelta)
           }
           selectedPlaylist.value = merged
 
@@ -925,13 +940,16 @@ export default {
       } catch (error) {
         if (myReq !== selectReqId) return false
         console.error('❌ 加载歌曲失败:', error)
-        // 复位选中态：否则再次点击同一歌单会被“已选中”提前返回，永远无法重试
-        selectedPlaylist.value = null
-        songs.value = []
+        // 复位选中态：否则再次点击同一歌单会被“已选中”提前返回，永远无法重试；
+        // silent 是手动同步复跑——失败保留旧视图，不清空已渲染的行表
+        if (!silent) {
+          selectedPlaylist.value = null
+          songs.value = []
+        }
         return false
       } finally {
         // 仅最新请求负责复位 loading；过期请求直接跳过，loading 由新请求收尾
-        if (myReq === selectReqId) loadingSongs.value = false
+        if (myReq === selectReqId && !silent) loadingSongs.value = false
       }
     }
 
@@ -1244,7 +1262,23 @@ export default {
     const addSongToPlaylist = (pl) => {
       const song = addTargetSong.value
       if (!song || !pl || pl.id == null) return
-      const inList = (list) => (list || []).some(t => t && String(t.id) === String(song.id))
+      const sid = String(song.id)
+      // 命中墓碑 = 恢复被本地移除的远端曲：清墓碑即可，不进 addedTracks（曲归远端所有）
+      if ((pl.removedTrackIds || []).map(String).includes(sid)) {
+        pl.removedTrackIds = pl.removedTrackIds.filter(id => String(id) !== sid)
+        pl.trackCount = (pl.trackCount ?? 0) + 1
+        if (String(selectedPlaylist.value?.id) === String(pl.id)) {
+          songs.value = [...songs.value, { ...song }]
+          if (selectedPlaylist.value !== pl) {
+            selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: pl.trackCount }
+          }
+        }
+        savePlaylistsToStorage()
+        toast(`已加入《${pl.name}》`, 'success')
+        addTargetSong.value = null
+        return
+      }
+      const inList = (list) => (list || []).some(t => t && String(t.id) === sid)
       if (inList(pl.tracks) || inList(pl.addedTracks)) {
         toast(`「${song.name}」已在《${pl.name}》里`, 'info')
         addTargetSong.value = null
@@ -1292,6 +1326,57 @@ export default {
       userPlaylists.value.unshift(pl)
       // 传回库内响应式代理而非裸字面量——addSongToPlaylist 的字段赋值才走依赖
       addSongToPlaylist(userPlaylists.value.find(p => p.id === pl.id) || pl)
+    }
+
+    // 从歌单移除：本地单剪 tracks；远端单的本地追加曲剪 addedTracks；
+    // 远端单的原生曲写 removedTrackIds 墓碑——否则下次单向同步（拉取合并）会复活它。
+    // 纯库视图编辑：不动播放队列/当前曲（队列是快照语义）
+    const removeSongFromPlaylist = (song) => {
+      const pl = selectedPlaylist.value
+      if (!song || song.id == null || !pl || pl.id == null) return
+      // 读写都落库对象——selectedPlaylist 是 merge 快照，写它会丢持久化
+      const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id)) || pl
+      const sid = String(song.id)
+      if (isLocalPlaylistId(libPl.id)) {
+        libPl.tracks = (libPl.tracks || []).filter(t => String(t.id) !== sid)
+      } else if ((libPl.addedTracks || []).some(t => String(t.id) === sid)) {
+        libPl.addedTracks = libPl.addedTracks.filter(t => String(t.id) !== sid)
+      } else {
+        const removed = libPl.removedTrackIds || []
+        if (!removed.map(String).includes(sid)) libPl.removedTrackIds = [...removed, sid]
+      }
+      libPl.trackCount = Math.max(0, (libPl.trackCount ?? songs.value.length) - 1)
+      songs.value = songs.value.filter(t => String(t.id) !== sid)
+      if (selectedPlaylist.value !== libPl) {
+        selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: libPl.trackCount }
+      }
+      savePlaylistsToStorage()
+      toast(`已从《${libPl.name}》移除「${song.name}」`, 'success')
+    }
+
+    // 手动同步：静默重拉远端歌单并报告增量。每次拉取都刷新 lastRemoteIds 基线，
+    // 故 diff 的是「上次同步以来」的净变化——单向语义：只收远端增量，本地增删不回传
+    const syncPlaylist = async () => {
+      const pl = selectedPlaylist.value
+      if (!pl || pl.id == null || isLocalPlaylistId(pl.id)) return
+      const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id)) || pl
+      const before = new Set((libPl.lastRemoteIds || []).map(String))
+      const ok = await selectPlaylist(libPl, { force: true, silent: true })
+      if (!ok) {
+        toast('同步失败：远端歌单暂时拉不到', 'error')
+        return
+      }
+      const after = new Set((libPl.lastRemoteIds || []).map(String))
+      const added = [...after].filter(id => !before.has(id)).length
+      const gone = [...before].filter(id => !after.has(id)).length
+      if (!added && !gone) {
+        toast('已同步：与远端一致', 'info')
+      } else {
+        const parts = []
+        if (added) parts.push(`新增 ${added} 首`)
+        if (gone) parts.push(`远端移除 ${gone} 首`)
+        toast(`已同步：${parts.join('，')}`, 'success')
+      }
     }
 
     // 相关 tab 点歌：YTM 以相关流接续——整个相关列表进队列（autoplay off 时队尾也有下一首）
@@ -2501,7 +2586,9 @@ export default {
       addablePlaylists,
       openAddToPlaylist,
       addSongToPlaylist,
-      createPlaylistAndAdd
+      createPlaylistAndAdd,
+      removeSongFromPlaylist,
+      syncPlaylist
     }
   }
 }
