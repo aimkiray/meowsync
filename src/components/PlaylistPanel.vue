@@ -172,17 +172,20 @@ export default {
     const httpsCover = sharedHttpsCover
 
     const closeOnEscape = (e) => { if (e.key === 'Escape') closeMenu() }
+    // 滚动监听必须包箭头：直传 closeMenu 会把 Event 对象塞进 playlistId 形参，
+    // 定点判定 String(event) 与任何歌单 id 不等 → 滚动关菜单静默失效
+    const closeOnScroll = () => closeMenu()
 
     onMounted(() => {
       document.addEventListener('click', handleClickOutside)
       // 菜单是 fixed 定位，面板滚动后位置脱节——滚动时直接关闭
-      window.addEventListener('scroll', closeMenu, true)
+      window.addEventListener('scroll', closeOnScroll, true)
       window.addEventListener('keydown', closeOnEscape)
     })
 
     onUnmounted(() => {
       document.removeEventListener('click', handleClickOutside)
-      window.removeEventListener('scroll', closeMenu, true)
+      window.removeEventListener('scroll', closeOnScroll, true)
       window.removeEventListener('keydown', closeOnEscape)
     })
 
@@ -246,7 +249,7 @@ export default {
       let budget = MIX_IDS_BUDGET
       for (const t of playlist.tracks || []) {
         const id = String(t.id)
-        if (!/^\d+$/.test(id) && !id.startsWith('bv_')) continue
+        if (!/^\d+$/.test(id) && !/^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id)) continue
         if (ids.length >= MIX_ID_CAP || id.length + 1 > budget) break
         budget -= id.length + 1
         ids.push(id)
@@ -262,7 +265,7 @@ export default {
     const copyShareLink = async (playlist) => {
       const url = shareUrlFor(playlist)
       if (/[?&]mix=/.test(url) && url.endsWith('~')) {
-        toast('歌单里没有可分享的歌曲', 'info'); closeMenu(); return
+        toast('歌单里没有可分享的歌曲', 'info'); closeMenu(playlist.id); return
       }
       const ok = await copyText(url)
       // 与歌曲分享同款的反馈闭环：成功也要给戳记，否则用户不知道复制生效
@@ -271,7 +274,7 @@ export default {
       toast(ok
         ? `分享链接已复制到剪贴板${over ? '（部分曲目因链接过长未包含）' : ''}`
         : '复制失败，请手动复制链接', ok ? 'success' : 'error')
-      closeMenu()
+      closeMenu(playlist.id)
     }
 
     // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
@@ -286,18 +289,20 @@ export default {
         text: `来看看这个歌单：${playlist.name}`,
         url: shareUrl
       })
-      if (result === 'copied') toast('分享链接已复制到剪贴板', 'success')
+      const over = isLocalPlaylistId(playlist.id)
+        && mixIdsFor(playlist).length < (playlist.tracks?.length || 0)
+      if (result === 'copied') toast(`分享链接已复制到剪贴板${over ? '（部分曲目因链接过长未包含）' : ''}`, 'success')
       else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
     const removePlaylist = async (playlistId) => {
       // 与其他删除项保持一致的确认（本地库移除，误删可重加但易误触）
       if (!await pixelConfirm('确定要从库中移除该歌单吗？', { confirmText: '移除', danger: true })) {
-        closeMenu()
+        closeMenu(playlistId)
         return
       }
       emit('remove-playlist', playlistId)
-      closeMenu()
+      closeMenu(playlistId)
     }
 
     // 本地内存态歌单（单曲分享/队列存盘）服务端无对应持久行——不提供分享/下载入口
@@ -314,16 +319,28 @@ export default {
       const pid = String(playlist.id)
       if (downloadingIds.has(pid)) {
         toast('该歌单下载已在进行中', 'info')
-        closeMenu()
+        closeMenu(pid)
         return
       }
       downloadingIds.add(pid)
       try {
         let mirrorNote = ''
         if (isLocalPlaylistId(playlist.id)) {
-          const mirror = await downloadsApi.mirrorLocalPlaylist(playlist)
-          const skipped = mirror.data?.data?.skipped || 0
-          if (skipped) mirrorNote = `（跳过 ${skipped} 首非网易云曲目）`
+          try {
+            const mirror = await downloadsApi.mirrorLocalPlaylist(playlist)
+            const d = mirror.data?.data || {}
+            if (d.skipped) mirrorNote += `（跳过 ${d.skipped} 首非网易云曲目）`
+            if (d.truncated) mirrorNote += `（超出 ${2000} 首上限的部分未包含）`
+          } catch (mirrorErr) {
+            // 墓碑 409：本地单删除后 130s 内重导同 mix 链再点下载会撞
+            // 「该歌单正在删除中」——对刚加回的单观感相反，改写可重试语义。
+            // 注意只改镜像这一路——quick 的 409（已有队列/收尾中）要透原文
+            if (mirrorErr.response?.status === 409) {
+              toast('歌单清理中，请稍候重试', 'info')
+              return
+            }
+            throw mirrorErr
+          }
         }
         const res = await downloadsApi.quickDownloadPlaylist(playlist.id, {
           bitrate: 320000,
@@ -354,21 +371,16 @@ export default {
     const deletePlaylistDownloads = async (playlist) => {
       // confirm 取消分支与 removePlaylist 行为一致：也关菜单
       if (!await pixelConfirm(`确定要删除歌单 "${playlist.name}" 的已下载歌曲吗？`, { confirmText: '删除', danger: true })) {
-        closeMenu()
+        closeMenu(playlist.id)
         return
       }
 
       try {
-        // 本地单先镜像再删：把最新曲目集落上服务端，再按镜像名下的全部任务清文件。
-        // 镜像 400（全 bv_/空单）不代表无旧产物——早先下载过后来删光网易云曲的
-        // 本地单，旧任务/文件仍在旧镜像下，必须照样走删除；只有 404（从未镜像）
-        // 才是真的没有可删
+        // 本地单先尝试镜像再删：镜像只是让行存在的手段——删除按歌单行清任务+文件，
+        // 与曲目集无关。镜像任何失败（400 全 bv_/网络抖动）都继续删——旧镜像行
+        // 还在就照样清得掉；只有 404（从未镜像）才是真的没有可删
         if (isLocalPlaylistId(playlist.id)) {
-          try {
-            await downloadsApi.mirrorLocalPlaylist(playlist)
-          } catch (mirrorErr) {
-            if (mirrorErr.response?.status !== 400) throw mirrorErr
-          }
+          await downloadsApi.mirrorLocalPlaylist(playlist).catch(() => {})
         }
         let response
         try {
