@@ -225,7 +225,7 @@
   align-items: center;
   gap: 16px;
   padding-bottom: 18px;
-  border-bottom: var(--hairline);
+  border-bottom: var(--hairline-soft);
   flex-shrink: 0;
 }
 
@@ -298,8 +298,10 @@
   gap: 12px;
   /* 与 grid-state/home-state 同规约：64 竖 + 16 横 + 顶部发丝分隔 */
   padding: 64px 16px;
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
 }
+
+.song-rows { scrollbar-gutter: stable; }
 
 .song-state-icon {
   color: var(--ink-64);
@@ -310,10 +312,9 @@
   color: var(--ink-86);
 }
 
-/* ── 歌曲行：发丝下缘分隔 + 悬停浅墨 + 当前曲墨底反白 ── */
+/* ── 歌曲行：留白节奏（无分隔线）+ 悬停浅墨 + 当前曲墨底反白 ── */
 .song-row {
   position: relative;
-  border-bottom: var(--hairline-soft);
   /* 全滚动大歌单的渲染摊销：屏外行跳布局/绘制（YTM 虚拟列表的廉价版） */
   content-visibility: auto;
   contain-intrinsic-size: auto 44px;

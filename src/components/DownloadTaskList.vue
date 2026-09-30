@@ -338,7 +338,7 @@ const TaskRow = {
 .dtl-stat-num--fail { color: var(--ink); text-decoration: underline 1.2px var(--accent-danger); text-underline-offset: 3px; }
 
 .dtl-state {
-  border-top: var(--hairline); /* 与 .dtl-scroll 同位，空态不断线 */
+  border-top: var(--hairline-soft); /* 与 .dtl-scroll 同位，空态不断线 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -354,7 +354,7 @@ const TaskRow = {
 }
 
 .dtl-empty {
-  border-top: var(--hairline); /* 与 .dtl-scroll 同位，空态不断线 */
+  border-top: var(--hairline-soft); /* 与 .dtl-scroll 同位，空态不断线 */
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -380,7 +380,8 @@ const TaskRow = {
 
 .dtl-scroll {
   overflow-y: auto;
-  border-top: var(--hairline);
+  scrollbar-gutter: stable;
+  border-top: var(--hairline-soft);
   padding: 12px 16px;
 }
 

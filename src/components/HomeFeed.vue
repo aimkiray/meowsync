@@ -157,6 +157,7 @@ export default {
   padding: 20px;
   height: 100%;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   position: relative;
 }
 
@@ -177,7 +178,7 @@ export default {
 
 /* 区块：发丝线起头 + 微标签节题 */
 .home-section {
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
   padding: 12px 0 18px;
 }
 
@@ -206,7 +207,7 @@ export default {
   align-items: center;
   gap: 12px;
   padding: 64px 16px;
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
 }
 
 .home-state-text {
@@ -229,7 +230,7 @@ export default {
 
 /* 页脚收版（pg-stamp 自带 text-align:center，无需再排栅） */
 .home-foot {
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
   margin-top: 8px;
   padding: 18px 0 12px;
 }

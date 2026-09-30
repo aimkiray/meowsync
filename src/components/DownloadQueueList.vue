@@ -370,7 +370,7 @@ function getQueueCover(queue) {
    border-top 兜住列表态 .dql-scroll 的分隔线，空态不断线 */
 .dql-state {
   flex: 1;
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -386,17 +386,16 @@ function getQueueCover(queue) {
   color: var(--ink-64);
 }
 
-/* 队列发丝行：底缘发丝分隔，选中行墨底浅衬 + 内收发丝框 */
+/* 队列行：留白节奏，选中行墨底浅衬 + 内收发丝框 */
 .dql-scroll {
   overflow-y: auto;
-  border-top: var(--hairline);
+  scrollbar-gutter: stable;
+  border-top: var(--hairline-soft);
 }
 
 .dql-row {
   position: relative;
-  border-bottom: var(--hairline-soft);
 }
-.dql-row:last-child { border-bottom: none; } /* 末行交给面板底框闭合，不叠双线 */
 
 /* 点击区是 row-main——kebab 是它的兄弟节点，消灭嵌套可交互 */
 .dql-row-main {
