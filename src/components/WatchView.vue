@@ -104,22 +104,22 @@
                 @keydown.enter="jumpTo(index)"
                 @keydown.space.prevent="jumpTo(index)"
               >
-              <span class="queue-row-index">
-                <template v-if="String(song.id) === String(currentSong?.id)"><PixelIcon name="play" :size="16" /></template>
-                <template v-else>{{ index + 1 }}</template>
-              </span>
-              <img
-                v-if="song.al?.picUrl || song.album?.picUrl"
-                :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
-                :alt="song.name"
-                class="watch-queue-thumb"
-              />
-              <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
-              <div class="queue-row-info">
-                <p class="queue-row-title">{{ song.name }}</p>
-                <p class="queue-row-artist">{{ songArtist(song) }}</p>
-              </div>
-              <span class="queue-row-duration">{{ formatDuration(song) }}</span>
+                <span class="queue-row-index">
+                  <template v-if="String(song.id) === String(currentSong?.id)"><PixelIcon name="play" :size="16" /></template>
+                  <template v-else>{{ index + 1 }}</template>
+                </span>
+                <img
+                  v-if="song.al?.picUrl || song.album?.picUrl"
+                  :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+                  :alt="song.name"
+                  class="watch-queue-thumb"
+                />
+                <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
+                <div class="queue-row-info">
+                  <p class="queue-row-title">{{ song.name }}</p>
+                  <p class="queue-row-artist">{{ songArtist(song) }}</p>
+                </div>
+                <span class="queue-row-duration">{{ formatDuration(song) }}</span>
               </div>
               <button
                 v-if="String(song.id) !== String(currentSong?.id)"
@@ -135,6 +135,7 @@
                 class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
                 title="添加到歌单"
                 aria-label="添加到歌单"
+                aria-haspopup="dialog"
                 @click.stop="$emit('add-to-playlist', song)"
               ><PixelIcon name="plus" :size="14" /></button>
             </div>
@@ -245,6 +246,7 @@
               class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
               title="添加到歌单"
               aria-label="添加到歌单"
+              aria-haspopup="dialog"
               @click.stop="$emit('add-to-playlist', song)"
             ><PixelIcon name="plus" :size="14" /></button>
           </div>

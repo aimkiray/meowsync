@@ -65,6 +65,7 @@
             class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             title="添加到歌单"
             aria-label="添加到歌单"
+            aria-haspopup="dialog"
             @click.stop="$emit('add-to-playlist', song)"
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
@@ -350,14 +351,15 @@ export default {
   color: var(--ink);
 }
 
-/* 序号 ↔ ▶ 互换（与 song-row 同构）；焦点在 -main 上（行本体不再可聚焦） */
+/* 序号 ↔ ▶ 互换（与 song-row 同构）；用行级 :focus-within——焦点移到 + 键时
+   ▶ 保持（SongList 同构选择器语义），焦点在 -main 上时同样命中 */
 .song-result-row:hover .song-result-index-num,
-.song-result-main:focus-visible .song-result-index-num,
+.song-result-row:focus-within .song-result-index-num,
 .song-result-row--playing .song-result-index-num {
   display: none;
 }
 .song-result-row:hover .song-result-index-play,
-.song-result-main:focus-visible .song-result-index-play,
+.song-result-row:focus-within .song-result-index-play,
 .song-result-row--playing .song-result-index-play {
   display: inline-flex;
 }
