@@ -131,7 +131,7 @@
             aria-label="待播队列"
             title="待播队列"
           >
-            <PixelIcon name="menu" :size="14" />
+            <PixelIcon name="menu" :size="15" />
           </button>
           <button
             class="pg-icobtn pg-icobtn--on-ink bp-xtra"

@@ -9,7 +9,7 @@
           :aria-expanded="sidebarOpen"
           aria-label="歌单库"
           title="打开歌单库"
-        ><PixelIcon name="menu" :size="15" /></button>
+        ><PixelIcon name="menu" :size="18" /></button>
 
         <h1 class="topnav-title">
           <button class="topnav-home" @click="$emit('nav-home')" title="回到首页" aria-label="回到首页">
@@ -21,7 +21,7 @@
       <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
       <div class="topnav-search">
         <div class="pg-field topnav-search-field">
-          <PixelIcon name="search" :size="14" class="topnav-search-icon" />
+          <PixelIcon name="search" :size="16" class="topnav-search-icon" />
           <input
             ref="searchInput"
             :value="searchQuery"
@@ -46,7 +46,7 @@
             title="清除"
             aria-label="清除搜索"
             @mousedown.prevent="clearQuery"
-          ><PixelIcon name="close" :size="12" /></button>
+          ><PixelIcon name="close" :size="14" /></button>
           <!-- YTM：提交收进框内右缘（歌单名/ID/链接三合一由 handler 分流） -->
           <button
             class="topnav-search-go"
@@ -54,7 +54,7 @@
             title="搜索 / 按ID添加歌单"
             aria-label="搜索"
             @click="handleSearch"
-          ><PixelIcon name="chev-r" :size="13" /></button>
+          ><PixelIcon name="chev-r" :size="16" /></button>
           <!-- typeahead 下拉：搜索建议（文本+实体名），↑↓ 可选 -->
           <div v-if="suggestOpen && suggestions.length" class="topnav-suggest" id="topnav-suggest-list" role="listbox">
             <div

@@ -48,7 +48,7 @@
       <div class="rc-controls">
         <button class="rc-btn" @click="send('prev')" title="上一首" aria-label="上一首"><PixelIcon name="prev" :size="20" /></button>
         <button class="rc-btn rc-btn-main" @click="send(state.isPlaying ? 'pause' : 'play')" :title="state.isPlaying ? '暂停' : '播放'" :aria-label="state.isPlaying ? '暂停' : '播放'">
-          <PixelIcon :name="state.isPlaying ? 'pause' : 'play'" :size="30" />
+          <PixelIcon :name="state.isPlaying ? 'pause' : 'play'" :size="state.isPlaying ? 30 : 35" />
         </button>
         <button class="rc-btn" @click="send('next')" title="下一首" aria-label="下一首"><PixelIcon name="next" :size="20" /></button>
       </div>
