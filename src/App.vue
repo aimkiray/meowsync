@@ -294,8 +294,9 @@
 <script>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { Howl } from 'howler'
-import { musicApi } from './api/music'
+import { musicApi, parseLyrics, mergeTranslations } from './api/music'
 import { downloadsApi } from './api/downloads'
+import { aiApi } from './api/ai'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
@@ -778,7 +779,8 @@ export default {
       dt: (data.duration || 0) * 1000,
       bilibili: {
         bvid: data.bvid, cid: data.cid, page: data.page || 1,
-        hasVideo: !!data.hasVideo, title: data.title, matchedBy: data.matchedBy || null
+        hasVideo: !!data.hasVideo, title: data.title,
+        author: data.owner || '', matchedBy: data.matchedBy || null
       },
       neteaseId: data.matched?.id || null
     })
@@ -2310,6 +2312,10 @@ export default {
         lyricOwnerKey.value = lyricId // 词属主与值同源——见 lyricOwnerKey 注释
         lyrics.value = lyricsData?.lyrics || []
         currentLyricIndex.value = 0
+        // 同 lyricId 往返（A→B→A 快切）时旧 postProcess 会随 lyricOwnerKey/
+        // currentPlayingId 双双回正而「复活」重获写权——加单调序号区分同 id
+        // 的两次加载，旧批次的 ownsLyric 永久失效
+        const seq = ++lyricProcSeq
 
         console.log('✅ 歌词加载完成，共', lyrics.value.length, '行')
 
@@ -2317,15 +2323,102 @@ export default {
         if (lyrics.value.length > 0) {
           startLyricSync()
         }
+
+        // AI 后处理挂后台不阻塞显示：外部曲核验歌词归属 + 无官方译文的
+        // 自动翻译。结果回来时词属主可能已换——写回前逐项复查
+        void postProcessLyrics(song, lyricId, seq, signal).catch(() => {})
       } catch (error) {
         if (signal?.aborted || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
         console.error('❌ 加载歌词失败:', error)
-        if (currentPlayingId === song.id) lyrics.value = []
+        if (currentPlayingId === song.id) {
+          lyrics.value = []
+          currentLyricIndex.value = 0
+          lyricOwnerKey.value = null
+        }
       } finally {
         if (!signal?.aborted && currentPlayingId === song.id) {
           loadingLyrics.value = false
         }
       }
+    }
+
+    // 已是中文语境歌词就不再翻译（CJK 字符占比 ≥30%——日汉混排宁误判跳过
+    // 也不错翻；日文假名/韩文谚文计入分母，它们正是需要翻译的对象）
+    const lyricCjkDominant = (lines) => {
+      const text = lines.map(l => l.text).join('')
+      const cjk = (text.match(/[一-鿿㐀-䶿]/g) || []).length
+      const other = (text.match(/[A-Za-z぀-ヿ가-힯]/g) || []).length
+      return cjk / (cjk + other || 1) >= 0.3
+    }
+
+    // AI 歌词后处理：① 外部导入曲核验配到的网易云歌词确实属于这首（错配时
+    // 「错歌词比没歌词更糟」→ 整组隐藏）；② 无官方译文且非中文语境 → 自动
+    // 生成中文译文并按时间戳合并。全程后台异步，写回前复查词属主+加载序号。
+    // 会话级缓存：判定/译文结果按 (词源,来源)/(词源) 记忆——重播/往返不再
+    // 重复请求，也避免「错词短暂闪现再被隐藏」
+    const aiLyricVerdicts = new Map()   // `${lyricId}|${title}|${author}` -> boolean
+    const aiLyricTranslations = new Map() // lyricId -> tlyric 字符串
+    let lyricProcSeq = 0 // 每次歌词落盘 +1；postProcess 捕获，ownsLyric 比对
+    const postProcessLyrics = async (song, lyricId, seq, signal = null) => {
+      if (!lyrics.value.length) return
+      const st = await aiApi.status()
+      if (!st?.enabled) return
+      // 词属主复查：每个 await 后都可能已切歌/重载——写回前必须确认
+      const ownsLyric = () => lyricProcSeq === seq
+        && lyricOwnerKey.value === lyricId && currentPlayingId === song.id
+
+      // ① 外部曲歌词归属核验（bilibili/youtube 经匹配才来的词源有风险；
+      //    纯网易云曲的词源天然属本曲，不验）
+      const ext = song?.youtube
+        ? { title: song.youtube.title, author: song.youtube.author || '' }
+        : song?.bilibili
+          ? { title: song.bilibili.title, author: song.bilibili.author || '' }
+          : null
+      if (ext?.title && ownsLyric()) {
+        const vkey = `${lyricId}|${ext.title}|${ext.author}`
+        let ok = aiLyricVerdicts.get(vkey)
+        if (ok === undefined) {
+          try {
+            // verify 秒级任务随切歌一起 abort；translate 则刻意不接 signal——
+            // 服务端完成后按词源落库，中断只会丢掉本次缓存收益
+            const v = await aiApi.verifyLyric(lyricId, ext.title, ext.author, signal)
+            ok = v?.ok !== false
+            if (v && typeof v.ok === 'boolean') aiLyricVerdicts.set(vkey, v.ok)
+          } catch { ok = true /* 核验通道故障放行——AI 是增强不是门禁 */ }
+        }
+        if (!ok) {
+          if (ownsLyric()) {
+            lyrics.value = []
+            currentLyricIndex.value = 0
+            lyricOwnerKey.value = null
+            toast('歌词与歌曲疑似不匹配，已隐藏', 'info')
+          }
+          return // 词源错了就不必再翻译错词
+        }
+      }
+
+      // ② 无官方译文 + 非中文语境 → 自动翻译（普通网易云外语曲同样受益）
+      if (!ownsLyric() || !lyrics.value.length) return
+      if (lyrics.value.some(l => l.translation)) return
+      if (lyricCjkDominant(lyrics.value)) return
+      try {
+        let tlyric = aiLyricTranslations.get(lyricId)
+        let lines = null
+        if (tlyric === undefined) {
+          const r = await aiApi.translateLyric(lyricId)
+          tlyric = r?.tlyric || null
+          lines = r?.lines
+          if (tlyric) aiLyricTranslations.set(lyricId, tlyric)
+        }
+        if (!tlyric || !ownsLyric()) return
+        // 服务端 tlyric 已回贴原时间戳并透传 [offset:] 标签——parse 后时序
+        // 与主歌词天然对齐（与 getLyrics 的官方译文合并同一约定）
+        const merged = mergeTranslations(lyrics.value, parseLyrics(tlyric))
+        if (ownsLyric()) {
+          lyrics.value = merged
+          if (lines != null) console.log(`🌐 AI 译文已合并（${lines} 行）`)
+        }
+      } catch { /* 翻译失败静默——原文歌词照常可用 */ }
     }
 
     const startLyricSync = () => {

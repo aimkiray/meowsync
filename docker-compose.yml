@@ -25,10 +25,15 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3101}
       # 可选：远程遥控令牌（设置后 ?token= 必填；前端构建需同步设 VITE_REMOTE_TOKEN）
       - REMOTE_TOKEN=${REMOTE_TOKEN:-}
-      # 公网/局域网暴露时必需：/downloads 与 /playlists 写接口鉴权令牌
+      # 公网/局域网暴露时必需：/downloads、/playlists、/song-meta、/ai 写接口鉴权令牌
       - DOWNLOAD_TOKEN=${DOWNLOAD_TOKEN:-}
       # 在会改写 Host 的反向代理后部署时才需要设为 1
       - TRUST_PROXY=${TRUST_PROXY:-}
+      # 可选：AI 辅助（OpenAI 兼容接口，三项全配才启用；公网部署请同时设 DOWNLOAD_TOKEN）
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_MODEL=${AI_MODEL:-}
+      - AI_TIMEOUT_MS=${AI_TIMEOUT_MS:-}
       # 数据目录（SQLite + 下载文件）；默认 /app/data，与下方挂载卷一致
       - DATA_DIR=${DATA_DIR:-}
       - DOWNLOAD_DIR=${DOWNLOAD_DIR:-}
