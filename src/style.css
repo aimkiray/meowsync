@@ -499,8 +499,7 @@ button {
   outline-color: var(--paper);
 }
 
-/* 激活侧栏行反白态：墨底上需要纸色环（ink-86 环在 #1e1e1e 上不可见） */
-.pl-row--active .pl-row-main:focus-visible { outline-color: var(--paper); }
+/* 激活侧栏行是淡底（ink-10）：canonical 墨色环本就可见，无需纸色覆写 */
 
 /* 大面件用 canonical 环：-8px 内收 + 12px 圆角——全系统唯一的圆角许可
    （swag-card 源流形）。行/小件保持方形 -4px 环：圆角会肉眼圆掉反白行底色 */
@@ -524,8 +523,7 @@ button {
 [aria-expanded="true"].topnav-hamburger,
 [aria-expanded="true"].pl-action { outline: 1.2px solid var(--ink); outline-offset: -4px; }
 /* 反白行上的展开态改纸色——墨环在墨行上不可见 */
-.song-row--playing [aria-expanded="true"].song-menu-btn,
-.pl-row--active [aria-expanded="true"].pl-action { outline-color: var(--paper); }
+.song-row--playing [aria-expanded="true"].song-menu-btn { outline-color: var(--paper); }
 
 /* 细滚动条：透明轨道 + 镂空墨块柄；Firefox 走 scrollbar-* 双属性 */
 * { scrollbar-width: thin; scrollbar-color: var(--ink) transparent; }
@@ -585,7 +583,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .app-shell .app-body .queue-row-artist, .app-shell .app-body .queue-row-duration, .app-shell .app-body .queue-source,
 .app-shell .app-body .song-artist, .app-shell .app-body .song-duration, .app-shell .app-body .song-state-text,
 .app-shell .app-body .panel-state-text, .app-shell .app-body .panel-state-sub,
-.app-shell .app-body .pl-meta, .app-shell .app-body .pl-count, .app-shell .app-body .result-section-sub,
+.app-shell .app-body .pl-meta, .app-shell .app-body .result-section-sub,
 .app-shell .app-body .grid-state-text, .app-shell .app-body .home-section-sub, .app-shell .app-body .home-state-text,
 .app-shell .app-body .watch-banner, .app-shell .app-body .watch-autoplay,
 .app-shell .app-body .watch-lyric-translation, .app-shell .app-body .playlist-hero-sub,
@@ -620,7 +618,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   outline-offset: -1.2px;
 }
 /* 反白行上的行尾键改纸色（排在统一律之后才不被压） */
-.app-shell .pl-row--active .pl-action:hover,
 .app-shell .song-row--playing .song-menu-btn:hover {
   color: var(--paper);
   outline-color: var(--paper);
@@ -634,7 +631,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   outline-color: var(--accent-magenta-ink);
 }
 /* glitch 反白行尾键：accent-on-ink 字色 + 纸色环（与默认主题的 paper 法则同构） */
-:root[data-theme="glitch-restoration"] .app-shell .pl-row--active .pl-action:hover,
 :root[data-theme="glitch-restoration"] .app-shell .song-row--playing .song-menu-btn:hover {
   color: var(--accent-magenta-on-ink);
   outline-color: var(--paper);
@@ -725,7 +721,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   /* 窄轨态：只留封面列——meta/count/actions/标签全隐 */
   .app-sidebar:not(.app-sidebar--open) .panel-label,
   .app-sidebar:not(.app-sidebar--open) .pl-info,
-  .app-sidebar:not(.app-sidebar--open) .pl-count,
   .app-sidebar:not(.app-sidebar--open) .pl-actions,
   .app-sidebar:not(.app-sidebar--open) .pl-foot,
   .app-sidebar:not(.app-sidebar--open) .panel-state { display: none; }

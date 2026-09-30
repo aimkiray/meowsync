@@ -48,9 +48,8 @@
           </div>
           <div class="pl-info">
             <h3 class="pl-name">{{ playlist.name }}</h3>
-            <p class="pl-meta">{{ playlist.creator?.nickname || '神秘创建者' }}</p>
+            <p class="pl-meta">{{ playlist.creator?.nickname || '神秘创建者' }} · {{ playlist.trackCount ?? 0 }} 首</p>
           </div>
-          <div class="pl-count">{{ playlist.trackCount }}</div>
         </div>
         <!-- 菜单与分享按钮 -->
         <div class="pl-actions">
@@ -397,7 +396,7 @@ export default {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 右侧 56px 留给常显的 .pl-actions（分享+⋯）——否则与 .pl-count 交叠 */
+  /* 右侧 56px 留给常显的 .pl-actions（分享+⋯） */
   padding: 9px 56px 9px 12px;
   cursor: pointer;
   transition: background .12s;
@@ -405,14 +404,12 @@ export default {
 
 .pl-row-main:hover { background: var(--ink-06); }
 
+/* 激活行：ink-10 淡底 + 内嵌 accent 左缘标尺——与队列当前行同族的轻量选中语言 */
 .pl-row--active .pl-row-main {
-  background: var(--ink);
+  background: var(--ink-10);
+  box-shadow: inset 2.4px 0 0 var(--accent-magenta-ink);
 }
-.pl-row--active .pl-name,
-.pl-row--active .pl-meta,
-.pl-row--active .pl-count { color: var(--paper); }
-.pl-row--active .pl-meta,
-.pl-row--active .pl-count { color: var(--label-grey); }
+.pl-row--active .pl-name { color: var(--ink); font-weight: 600; }
 
 .pl-cover-wrap {
   position: relative;
@@ -438,8 +435,6 @@ export default {
   background: var(--paper);
 }
 
-.pl-row--active .pl-cover { border-color: var(--paper); }
-
 .pl-info {
   flex: 1;
   min-width: 0;
@@ -463,13 +458,6 @@ export default {
   margin-top: 2px;
 }
 
-.pl-count {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--ink-64);
-  flex-shrink: 0;
-}
-
 /* 行尾操作组（分享 + ⋯）：垂直居中，与 dql 行尾键同法则 */
 .pl-actions {
   position: absolute;
@@ -483,7 +471,6 @@ export default {
 .pl-action {
   transition: color .2s; /* 尺寸交给 pg-icobtn--sm（24px 行内尾键档）；hover 走全局行尾键统一律 */
 }
-.pl-row--active .pl-action { color: var(--label-grey); }
 
 /* 侧栏歌单行悬停 ▶ 播放键（浮于封面上） */
 .playlist-play-overlay {
