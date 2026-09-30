@@ -216,7 +216,7 @@
               v-model="songPickerQuery"
               placeholder="搜歌名 / 粘歌曲链接、ID 或 B 站链接"
               aria-label="搜索或粘贴歌曲"
-              @keydown.enter="songPickerSearch"
+              @keydown.enter="!$event.isComposing && songPickerSearch()"
             />
             <button
               class="ink-btn ink-btn--sm"
@@ -224,11 +224,12 @@
               @click="songPickerSearch"
             ><PixelIcon name="search" :size="12" /> {{ songPickerSearching ? '…' : '搜索' }}</button>
           </div>
-          <div class="atp-list asp-results" aria-label="搜索结果">
+          <div class="atp-list" role="list" aria-label="搜索结果">
             <div
               v-for="song in songPickerResults"
               :key="song.id"
               class="asp-row"
+              role="listitem"
             >
               <img
                 v-if="song.al?.picUrl"
@@ -239,11 +240,11 @@
               />
               <div class="asp-text">
                 <div class="asp-name" :title="song.name">{{ song.name }}</div>
-                <div class="asp-artist">{{ (song.ar || []).map(a => a.name).join('/') || '未知歌手' }}</div>
+                <div class="asp-artist">{{ (song.ar || []).map(a => a?.name).filter(Boolean).join('/') || '未知歌手' }}</div>
               </div>
               <button
                 class="ink-btn ink-btn--sm asp-add"
-                :disabled="pickerTakenIds.has(String(song.id)) || songPickerAdded.has(String(song.id))"
+                :disabled="pickerTakenIds.has(String(song.id)) || songPickerAdded.has(String(song.id)) || songPickerPending.has(String(song.id))"
                 :aria-label="`添加 ${song.name}`"
                 @click="addPickedSong(song)"
               >{{ pickerTakenIds.has(String(song.id)) || songPickerAdded.has(String(song.id)) ? '已在单' : '添加' }}</button>
@@ -781,7 +782,7 @@ export default {
           userPlaylists.value.unshift(shell)
           // 与单曲分享壳同一个上限桶（保留最近 10 个），倒序 splice 防下标错位
           const tempIndexes = userPlaylists.value
-            .map((p, i) => String(p.id).startsWith('single_song_') ? i : -1)
+            .map((p, i) => isSingleSongShellId(p.id) ? i : -1)
             .filter(i => i !== -1)
           for (const i of tempIndexes.slice(10).reverse()) {
             userPlaylists.value.splice(i, 1)
@@ -1442,9 +1443,10 @@ export default {
     // 可选目标排除 single_song_ 分享壳：它会被「超 10 个剪枝」自动销毁，
     // 用户加进去的曲会随壳静默消失（数据丢失通道）
     const addablePlaylists = computed(() =>
-      userPlaylists.value.filter(p => !String(p.id).startsWith('single_song_'))
+      userPlaylists.value.filter(p => !isSingleSongShellId(p.id))
     )
     const openAddToPlaylist = (song) => {
+      closeSongPicker() // 与点歌台显式互斥（行菜单在模态外层但防御性收口）
       if (!song || song.id == null) {
         toast('这首歌无法加入歌单', 'error')
         return
@@ -1473,7 +1475,7 @@ export default {
       const remoteHas = (pl.lastRemoteIds || []).map(String).includes(sid)
       if ((pl.removedTrackIds || []).map(String).includes(sid) && remoteHas) {
         pl.removedTrackIds = pl.removedTrackIds.filter(id => String(id) !== sid)
-        pl.trackCount = (pl.trackCount ?? 0) + 1
+        pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1 // 与 added 支路同兜底
         if (String(selectedPlaylist.value?.id) === String(pl.id)) {
           songs.value = [...songs.value, { ...song }]
           if (selectedPlaylist.value !== pl) {
@@ -1525,22 +1527,34 @@ export default {
     const songPickerQuery = ref('')
     const songPickerResults = ref([])
     const songPickerSearching = ref(false)
-    const songPickerAdded = ref(new Set()) // 本窗已加入的 id（行态「✓」）
+    const songPickerAdded = ref(new Set())    // 本窗已加入的 id（行态「✓」）
+    const songPickerPending = ref(new Set())  // 添加在途的 id——非库单 collect 慢，双击会并发双 toast
     const songPickerInput = ref(null)
     let pickerSeq = 0
+    let pickerAbort = null // 挂在窗生命周期的 AbortController——关窗中止在途 resolve
 
     // 目标单的库对象（远端 merge 快照上的 addedTracks 不落库，必须落在库行上）
     const pickerLibPlaylist = computed(() =>
       userPlaylists.value.find(p =>
         selectedPlaylist.value && String(p.id) === String(selectedPlaylist.value.id)))
 
-    // 已在单 id 集：库对象的 tracks+addedTracks ∪ 当前展示行（远端单含远端曲基线）
+    // 已在单 id 集：库对象的 tracks+addedTracks ∪ lastRemoteIds 基线 ∪ 当前展示行，
+    // 减去墓碑——本地移除的远端曲还在 pl.tracks 快照里，但它视觉上是「不在单」，
+    // 标「已在单」会把恢复路径（append 的墓碑分支）从点歌台彻底挡掉。
+    // lastRemoteIds 必须与 append 的 remoteHas 同判决：trackIds 基线 ⊋ 拉取页时，
+    // 基线内曲显「添加」点下去却弹「已在单」，按钮态与判决不能分叉
     const pickerTakenIds = computed(() => {
       const ids = new Set()
       const lib = pickerLibPlaylist.value
-      for (const t of lib?.tracks || []) t?.id != null && ids.add(String(t.id))
+      const tombstoned = new Set((lib?.removedTrackIds || []).map(String))
+      for (const t of lib?.tracks || []) {
+        if (t?.id != null && !tombstoned.has(String(t.id))) ids.add(String(t.id))
+      }
       for (const t of lib?.addedTracks || []) t?.id != null && ids.add(String(t.id))
       for (const t of songs.value || []) t?.id != null && ids.add(String(t.id))
+      for (const id of lib?.lastRemoteIds || []) {
+        if (!tombstoned.has(String(id))) ids.add(String(id))
+      }
       return ids
     })
 
@@ -1548,13 +1562,28 @@ export default {
       const pl = selectedPlaylist.value
       if (!pl || isSingleSongShellId(pl.id)) return
       pickerSeq++ // 上一窗在途的搜索/解析作废
+      pickerAbort?.abort()   // 连带中止在途 resolve 的 HTTP（服务端级联断上游）
+      pickerAbort = null
+      addTargetSong.value = null // 与 atp 弹窗显式互斥——不指望 UI 不可达兜底
       songPickerQuery.value = ''
       songPickerResults.value = []
       songPickerSearching.value = false
       songPickerAdded.value = new Set()
+      songPickerPending.value = new Set()
       songPickerOpen.value = true
     }
-    const closeSongPicker = () => { songPickerOpen.value = false; pickerSeq++ }
+    const closeSongPicker = () => {
+      songPickerOpen.value = false
+      pickerSeq++
+      pickerAbort?.abort()
+      pickerAbort = null
+    }
+
+    // 目标单失活（selectPlaylist catch 置 null / popstate 换单）→ 弹窗语义目标
+    // 消失，关窗防「标题空白 + 加到意外单」
+    watch(selectedPlaylist, (v) => {
+      if (!v && songPickerOpen.value) closeSongPicker()
+    })
 
     // Esc 由 onGlobalKeydown 统一冻结；焦点归还与 atp 同款
     watch(songPickerOpen, async (v, _prev, onCleanup) => {
@@ -1567,22 +1596,38 @@ export default {
 
     const addPickedSong = async (song) => {
       const pl = selectedPlaylist.value
+      const sid = String(song?.id ?? '')
       if (!pl || isSingleSongShellId(pl.id)) { closeSongPicker(); return }
-      let libPl = pickerLibPlaylist.value
-      let collected = false
-      if (!libPl) {
-        // 非库远端单（搜索结果直接打开）：addedTracks 必须挂在库对象上才持久化——
-        // 先把单收进库再追加，否则刷新后加的歌全丢
-        await addPlaylistToLibrary(pl)
-        libPl = pickerLibPlaylist.value
-        collected = !!libPl
-      }
-      if (!libPl) { toast('歌单入库失败，无法添加', 'error'); return }
-      const res = appendSongToLibraryPlaylist(libPl, song)
-      if (res === 'exists') toast(`「${song.name}」已在《${libPl.name}》里`, 'info')
-      else if (res === 'added' || res === 'restored') {
-        toast(`${collected ? '已收藏歌单，' : ''}已加入《${libPl.name}》`, 'success')
-        songPickerAdded.value = new Set([...songPickerAdded.value, String(song.id)])
+      if (songPickerPending.value.has(sid)) return // collect 途中行按钮还没 disabled，挡双击并发
+      songPickerPending.value = new Set([...songPickerPending.value, sid])
+      const plId = pl.id // 捕获进入时的目标——await 期间 selectedPlaylist 可能被 popstate 换掉
+      try {
+        // 按捕获的 plId 找库对象——不走 pickerLibPlaylist 重算（await/popstate
+        // 换掉 selectedPlaylist 后不能错加到新单）
+        let libPl = userPlaylists.value.find(p => String(p.id) === String(plId))
+        let collected = false
+        if (!libPl) {
+          // 非库远端单（搜索结果直接打开）：addedTracks 必须挂在库对象上才持久化——
+          // 先把单收进库再追加，否则刷新后加的歌全丢
+          await addPlaylistToLibrary(pl)
+          libPl = userPlaylists.value.find(p => String(p.id) === String(plId))
+          collected = !!libPl
+        }
+        if (!libPl) { toast('歌单入库失败，无法添加', 'error'); return }
+        const res = appendSongToLibraryPlaylist(libPl, song)
+        if (res === 'exists') {
+          songPickerAdded.value = new Set([...songPickerAdded.value, sid])
+          if (songPickerOpen.value) toast(`「${song.name}」已在《${libPl.name}》里`, 'info')
+        } else if (res === 'added' || res === 'restored') {
+          songPickerAdded.value = new Set([...songPickerAdded.value, sid])
+          if (songPickerOpen.value) toast(`${collected ? '已收藏歌单，' : ''}已加入《${libPl.name}》`, 'success')
+        } else if (songPickerOpen.value) {
+          toast('这首歌无法加入歌单', 'error')
+        }
+      } finally {
+        const next = new Set(songPickerPending.value)
+        next.delete(sid)
+        songPickerPending.value = next
       }
     }
 
@@ -1591,24 +1636,51 @@ export default {
       if (!q || songPickerSearching.value) return
       const mySeq = ++pickerSeq
       songPickerSearching.value = true
+      let action = '搜索' // 失败 toast 名头按分支换——直加路径挂「搜索失败」误导
       try {
         if (isBilibiliInput(q)) {
+          action = '解析'
+          // 裸 BV(+可选 ?p=N) 能本地推出确定 id——已在单就短路，省下 resolve 的上游
+          // 扇出与限流配额（/resolve 12/min 与顶栏导入、mix 导入共用一桶）
+          const bvM = q.match(/\b(BV[0-9A-Za-z]{10})\b/i)
+          const pvM = q.match(/[?&]p=(\d+)/i)
+          if (bvM) {
+            // 大小写不敏感比对——buildBilibiliSong 的 id 大小写随服务端回显走，
+            // 本地候选串按用户输入形态生成，两边可能差大小写
+            const candLow = `bv_${bvM[1]}${(+pvM?.[1] || 0) > 1 ? `_p${+pvM[1]}` : ''}`.toLowerCase()
+            if ([...pickerTakenIds.value].some(id => id.toLowerCase() === candLow)) {
+              toast('该视频已在歌单里', 'info')
+              songPickerQuery.value = ''
+              return
+            }
+          }
           // B 站输入是单一目标——解析完直接入单，不经结果列表中转
           toast('正在解析 B 站视频…', 'info', 30000) // 覆盖 resolve 最坏耗时
-          const data = await musicApi.resolveBilibili(q)
+          pickerAbort = new AbortController()
+          const data = await musicApi.resolveBilibili(q, pickerAbort.signal)
           if (mySeq !== pickerSeq || !songPickerOpen.value) return
           const song = buildBilibiliSong(data)
-          songPickerResults.value = [song, ...songPickerResults.value]
+          // 同 id 重复解析不能进列表——:key 撞键会刷 Vue 警告
+          songPickerResults.value = [song,
+            ...songPickerResults.value.filter(r => String(r.id) !== String(song.id))]
           songPickerQuery.value = ''
           await addPickedSong(song)
           return
         }
         const songId = extractNeteaseSongId(q)
         if (songId) {
+          action = '添加'
+          // 已在单本地短路——不打详情接口（裸数字大概率是歌单 id 误粘时也省一趟）
+          if (pickerTakenIds.value.has(songId)) {
+            toast('该歌曲已在歌单里', 'info')
+            songPickerQuery.value = ''
+            return
+          }
           // 歌曲 ID 是单一目标——直加。getSongDetail 未命中抛错走 catch
           const song = await musicApi.getSongDetail(songId)
           if (mySeq !== pickerSeq || !songPickerOpen.value) return
-          songPickerResults.value = [song, ...songPickerResults.value]
+          songPickerResults.value = [song,
+            ...songPickerResults.value.filter(r => String(r.id) !== String(song.id))]
           songPickerQuery.value = ''
           await addPickedSong(song)
           return
@@ -1619,8 +1691,8 @@ export default {
         if (!list?.length) toast('没有找到相关歌曲', 'info')
       } catch (error) {
         if (mySeq !== pickerSeq || !songPickerOpen.value) return
-        console.error('点歌台搜索失败:', error)
-        toast('搜索失败: ' + (error.response?.data?.message || error.message), 'error')
+        console.error('点歌台失败:', error)
+        toast(`${action}失败: ` + (error.response?.data?.message || error.message), 'error')
       } finally {
         if (mySeq === pickerSeq) songPickerSearching.value = false
       }
@@ -1798,7 +1870,7 @@ export default {
     // 对象优先查 userPlaylists 活副本（本地歌单的 tracks 只有那里有），查不到才落 stub
     const recordPlaylistHistory = () => {
       const pid = playingPlaylistId.value
-      if (pid == null || String(pid).startsWith('single_song_')) return
+      if (pid == null || isSingleSongShellId(pid)) return
       const pl = userPlaylists.value.find(p => String(p.id) === String(pid))
         || (String(selectedPlaylist.value?.id) === String(pid) ? selectedPlaylist.value : null)
       if (!pl) return
@@ -2907,7 +2979,7 @@ export default {
             // 永久长一个歌单会把列表无限撑长——保留最近 10 个
             userPlaylists.value.unshift(tempPlaylist)
             const tempIndexes = userPlaylists.value
-              .map((p, i) => String(p.id).startsWith('single_song_') ? i : -1)
+              .map((p, i) => isSingleSongShellId(p.id) ? i : -1)
               .filter(i => i !== -1)
             // 倒序删除：升序 splice 会让后续下标前移错位
             for (const i of tempIndexes.slice(10).reverse()) {
@@ -3094,6 +3166,7 @@ export default {
       songPickerResults,
       songPickerSearching,
       songPickerAdded,
+      songPickerPending,
       songPickerInput,
       pickerTakenIds,
       openSongPicker,
