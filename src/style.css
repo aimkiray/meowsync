@@ -925,6 +925,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .watch-tabs .pg-tab--active::after { opacity: 1; transform: scaleX(1); }
 .watch-tabs .pg-tab:not(.pg-tab--active):hover::after { opacity: .3; transform: scaleX(1); }
+/* tab 基座线降耳语：实墨尺与 accent 激活短线是「硬尺+重彩」双笔触，
+   改 hairline-soft 后条上唯一的重痕迹就是选中短线——与 hero/区块
+   分隔软化同一令牌语义（glitch pill 形态下仅是基线变轻，无冲突） */
+.watch-tabs { border-bottom: var(--hairline-soft); }
 
 /* 芯片（25px 发丝小牌：标签/热搜/筛选） */
 .pg-chip {
