@@ -18,9 +18,11 @@
             ref="biliVideoRef"
             class="watch-cover watch-cover--video"
             :src="biliVideoUrl"
+            :aria-label="`视频画面：${currentSong?.name || ''}`"
             muted
             playsinline
             preload="auto"
+            @error="biliVideoFailed = true"
           ></video>
           <img
             v-else-if="coverUrl"
@@ -463,8 +465,11 @@ export default {
     const biliVideoRef = ref(null)
     const videoOn = ref(localStorage.getItem('meowsync-bili-video') !== '0')
     watch(videoOn, v => localStorage.setItem('meowsync-bili-video', v ? '1' : '0'))
+    // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
+    const biliVideoFailed = ref(false)
+    watch(() => props.currentSong?.bilibili?.bvid, () => { biliVideoFailed.value = false })
     const biliVideoActive = computed(() =>
-      !!(props.currentSong?.bilibili?.hasVideo && videoOn.value)
+      !!(props.currentSong?.bilibili?.hasVideo && videoOn.value && !biliVideoFailed.value)
     )
     const biliVideoUrl = computed(() => {
       const b = props.currentSong?.bilibili
@@ -472,25 +477,27 @@ export default {
     })
 
     // 音画同步：视频元素静音播放，时钟完全听 Howler——每帧对比 currentTime，
-    // 漂移超阈值才 seek（RAF 每帧触发，此处只做减法+偶尔 seek，开销可忽略）
+    // 漂移超阈值才 seek（RAF 每帧触发，此处只做减法+偶尔 seek，开销可忽略）。
+    // 顺带 reconcile paused 态——watch(isPlaying) 只在翻转时触发，组件重挂载
+    // （返回→重进 watch）与单曲循环重播时视频会停在末帧/暂停态，这里兜底拉起
     const BILI_DRIFT_SEC = 0.45
+    let biliPlayTrying = false
     const syncBiliVideo = () => {
       const v = biliVideoRef.value
-      if (!v || !biliVideoActive.value) return
+      if (!v || !biliVideoActive.value || v.error) return
+      if (props.isPlaying && v.paused && !biliPlayTrying) {
+        biliPlayTrying = true
+        v.play().catch(() => {}).finally(() => { biliPlayTrying = false })
+      } else if (!props.isPlaying && !v.paused) v.pause()
       if (Math.abs(v.currentTime - props.currentTime) > BILI_DRIFT_SEC) {
         v.currentTime = props.currentTime
       }
     }
     watch(() => props.currentTime, syncBiliVideo)
-    // 播放/暂停跟随音频；muted+playsinline 下 play() 不受自动播放策略限制
-    watch(() => props.isPlaying, p => {
-      const v = biliVideoRef.value
-      if (!v || !biliVideoActive.value) return
-      if (p) v.play().catch(() => {})
-      else v.pause()
-    })
+    watch(() => props.isPlaying, syncBiliVideo)
     // 切歌/开关视频时 src 变化或元素重建——等到新 metadata 落地再对齐时钟，
-    // 避免对空 player 空 seek；监听键含 bvid（两首 B 站曲互切时 active 不变）
+    // 避免对空 player 空 seek；监听键含 bvid（两首 B 站曲互切时 active 不变）。
+    // immediate 覆盖挂载瞬间条件已满足的情形（syncBiliVideo 也兜底）
     watch([biliVideoActive, () => props.currentSong?.bilibili?.bvid], async () => {
       if (!biliVideoActive.value) return
       await nextTick()
@@ -500,7 +507,7 @@ export default {
       if (v.readyState >= 1) align()
       else v.addEventListener('loadedmetadata', align, { once: true })
       if (props.isPlaying) v.play().catch(() => {})
-    })
+    }, { immediate: true })
 
     const shareSong = async () => {
       const song = props.currentSong
@@ -542,6 +549,7 @@ export default {
       shareSong,
       biliVideoRef,
       videoOn,
+      biliVideoFailed,
       biliVideoActive,
       biliVideoUrl
     }

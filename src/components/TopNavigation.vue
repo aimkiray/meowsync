@@ -158,10 +158,10 @@ export default {
       return null
     }
 
-    // B 站输入识别：BV 号、av 号、bilibili.com 全站链接、b23.tv 短链
-    // 先于歌单ID判定——BV 串里可能恰好含数字串被 ?id= 误吞
+    // B 站输入识别：BV 号（真实 bvid 恒 BV1 头+9 位）、av 号、
+    // bilibili.com/b23.tv 链接。先于歌单ID判定；\b 词边界防长 token 误吞
     const isBilibiliInput = (input) =>
-      /BV[0-9A-Za-z]{10}/.test(input) ||
+      /\bBV1[0-9A-Za-z]{9}\b/.test(input) ||
       /bilibili\.com|b23\.tv/i.test(input) ||
       /(?:^|\/)av\d+/i.test(input)
 
@@ -247,8 +247,8 @@ export default {
       emit('update:searchQuery', e.target.value)
       const q = e.target.value.trim()
       cancelSuggest()
-      // 纯数字/链接走"添加歌单"路径，不弹建议
-      if (!q || extractPlaylistId(q)) {
+      // 纯数字/歌单链接/B站输入走直达路径，不弹建议
+      if (!q || extractPlaylistId(q) || isBilibiliInput(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return
