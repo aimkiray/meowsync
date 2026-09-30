@@ -106,6 +106,8 @@
   --ink-30: rgba(78, 86, 98, .30);
   --ink-10: rgba(78, 86, 98, .10);
   --ink-06: rgba(78, 86, 98, .06);
+  /* slate-10% 在近白纸面上仅 ~1.1:1 已近不可见——分区耳语线提到 .18，仍轻但可寻迹 */
+  --hairline-soft: 1.2px solid rgba(78, 86, 98, .18);
   --paper: #ffffff;
   --page: #fbfbfb;                     /* 近白页面字段 */
   --label-grey: #c9cfd6;               /* slate 墨面上的弱标签（~4.7:1） */
@@ -987,7 +989,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   font-size: 11px;
   letter-spacing: .05em;
   color: var(--ink-64);
-  border-bottom: var(--hairline);
+  border-bottom: var(--hairline-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1032,6 +1034,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .queue-row:hover { background: var(--ink-06); }
 .queue-row--current { background: var(--ink-10); }
+/* :hover 特异度(0,2,0)高于--current(0,1,0)——悬停当前行会把标记从ink-10调回ink-06，补钉 */
+.queue-row--current:hover { background: var(--ink-10); }
 /* 当前行 v-if 不渲染移除键——补其占位（24px 键 + 6px 行 gap），时长列才与全列对齐不跳位 */
 .queue-row--current .queue-row-main { margin-right: 30px; }
 /* 当前行 ▶ 用墨色——火烈鸟 accent 在 teal/ink-10 底上仅 ~1.8:1，不达图形 3:1 线 */

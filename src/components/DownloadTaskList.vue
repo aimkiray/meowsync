@@ -380,9 +380,12 @@ const TaskRow = {
 
 .dtl-scroll {
   overflow-y: auto;
-  scrollbar-gutter: stable;
   border-top: var(--hairline-soft);
   padding: 12px 16px;
+}
+/* 同 .dql-scroll：<xl 滚动器在外层网格，本列不内滚——车道只在 ≥xl 常驻 */
+@media (min-width: 1280px) {
+  .dtl-scroll { scrollbar-gutter: stable; }
 }
 
 .dtl-group + .dtl-group { margin-top: 14px; }

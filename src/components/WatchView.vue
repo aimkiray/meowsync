@@ -494,7 +494,10 @@ export default {
 .watch-main {
   min-width: 0;
   overflow-y: auto;
+  /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
+     （旧浏览器不认两关键字写法时回退到上行 stable） */
   scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -676,6 +679,8 @@ export default {
   transition: background .12s;
 }
 .watch-autoplay:hover { background: var(--ink-06); }
+/* 空队列时没有行列表可供它尾随——吊在居中空文案下的左对齐控件会变孤儿，随空态居中 */
+.watch-empty ~ .watch-autoplay { justify-content: center; }
 
 /* 歌词行：当前行墨色加粗放大，其余 ink-64 */
 .watch-lyric-list {
@@ -708,7 +713,8 @@ export default {
 
 /* 窄屏：单列——封面→信息 在上、tab 区在下 */
 @media (max-width: 900px) {
-  .watch-view { overflow-y: auto; }
+  /* 单列态滚动移交 .watch-view——车道跟着滚动器走 */
+  .watch-view { overflow-y: auto; scrollbar-gutter: stable; }
 
   .watch-layout {
     display: flex;
@@ -737,7 +743,7 @@ export default {
     background: linear-gradient(to right, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
   }
 
-  /* 不再限高内滚——YTM 是整页滚动，队列随页流 */
-  .watch-side-body { max-height: none; }
+  /* 不再限高内滚——YTM 是整页滚动，队列随页流；此时本栏不滚，死车道回收 */
+  .watch-side-body { max-height: none; scrollbar-gutter: auto; }
 }
 </style>

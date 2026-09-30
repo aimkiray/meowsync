@@ -389,8 +389,11 @@ function getQueueCover(queue) {
 /* 队列行：留白节奏，选中行墨底浅衬 + 内收发丝框 */
 .dql-scroll {
   overflow-y: auto;
-  scrollbar-gutter: stable;
   border-top: var(--hairline-soft);
+}
+/* <xl 时滚动器是外层 AdminPanel 网格（本列随内容撑高不内滚）——车道只在 ≥xl 常驻 */
+@media (min-width: 1280px) {
+  .dql-scroll { scrollbar-gutter: stable; }
 }
 
 .dql-row {

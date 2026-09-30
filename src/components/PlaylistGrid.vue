@@ -306,6 +306,10 @@ export default {
 .song-result-row--playing {
   background: var(--ink-10);
 }
+/* 同上：hover(0,2,0)会压过--playing(0,1,0)把当前行调暗——钉住 */
+.song-result-row--playing:hover {
+  background: var(--ink-10);
+}
 
 .song-result-index {
   width: 18px;

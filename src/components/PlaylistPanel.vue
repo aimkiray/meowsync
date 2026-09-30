@@ -387,6 +387,11 @@ export default {
   scrollbar-gutter: stable;
 }
 
+/* 窄轨（768-1023 未展开）只剩 64px 封面列——10px 死车道会把居中封面掰偏，此处回收 */
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  .app-sidebar:not(.app-sidebar--open) .playlist-scroll { scrollbar-gutter: auto; }
+}
+
 /* 歌单行：留白节奏（无分隔线），整行可点 */
 .pl-row {
   position: relative;

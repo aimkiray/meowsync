@@ -322,6 +322,9 @@ onUnmounted(() => {
   --white-16: rgba(255, 255, 255, .16);
   --white-40: rgba(255, 255, 255, .40);
   --white-80: rgba(255, 255, 255, .8);
+  /* 全局 scrollbar 走 --ink-30/64——暗面上 pin 成白 alpha，防未来滚动容器继承暗上暗柄 */
+  --ink-30: rgba(255, 255, 255, .30);
+  --ink-64: rgba(255, 255, 255, .64);
   --accent-magenta: #fc8eac;
   --accent-magenta-on-ink: var(--accent-magenta);
   /* 字体也 pin——glitch 主题会把 --font-* 整体翻成像素族 */
@@ -490,7 +493,8 @@ onUnmounted(() => {
   letter-spacing: .05em;
   color: var(--label-grey);
   padding-bottom: 8px;
-  border-bottom: 1.2px solid var(--white-40);
+  /* 暗面分区头与亮面同律降档：white-40 → white-16 */
+  border-bottom: 1.2px solid var(--white-16);
 }
 
 .rc-queue-list {
@@ -503,6 +507,11 @@ onUnmounted(() => {
 .rc-queue-list::-webkit-scrollbar-thumb {
   background: var(--label-grey);
   border: 2px solid transparent;
+  background-clip: padding-box;
+}
+/* scoped 覆写特异性高于全局 :hover——hover 反馈在此单独补回 */
+.rc-queue-list::-webkit-scrollbar-thumb:hover {
+  background: var(--white-80);
   background-clip: padding-box;
 }
 
@@ -519,6 +528,7 @@ onUnmounted(() => {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+  transition: background .12s, color .12s;
 }
 
 .rc-queue-row:hover {
