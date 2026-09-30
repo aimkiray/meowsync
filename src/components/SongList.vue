@@ -51,7 +51,7 @@
             v-if="!isLocalPlaylist && !playlistInLibrary"
             @click="$emit('collect-playlist')"
             class="ink-btn ink-btn--ghost"
-            title="收藏到歌单库（否则刷新后此单从侧栏消失）"
+            title="收藏到歌单库（预览单刷新后即丢失）"
           ><PixelIcon name="plus" :size="15" /> 收藏歌单</button>
           <!-- 点歌台：搜索网易云/粘 B 站链接向本单追加。single_song_ 壳是单曲
                容器，加第二首会改其语义——保持隐藏（与行级菜单同口径） -->
