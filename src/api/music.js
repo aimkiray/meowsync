@@ -142,14 +142,20 @@ export const musicApi = {
     }
     const playlist = data.playlist
 
-    const tracksResponse = await withRetry(() =>
+    // limit 用 trackIds 全长而非 trackCount——后者是展示计数会滞后，
+    // 上游新增未刷新时按它截断会丢尾部曲目（服务端 playlist-sync 同款坑）
+    const response2 = await withRetry(() =>
       api.get('/playlist_track_all', {
-        params: { id, limit: playlist.trackCount || 1000, offset: 0 },
+        params: { id, limit: playlist.trackIds?.length || playlist.trackCount || 1000, offset: 0 },
         signal: abortSignal,
         timeout: 120000
       })
     )
-    const tracksData = unwrapBody(tracksResponse)
+    const tracksData = unwrapBody(response2)
+    // 上游错误码/空返不当空列表过：调用方会把空 tracks 当"歌单被清空"合并，冲掉本地差量
+    if (tracksData.code != null && tracksData.code !== 200) {
+      throw new Error(`歌单曲目接口返回 code=${tracksData.code}`)
+    }
     return { ...playlist, tracks: Array.isArray(tracksData.songs) ? tracksData.songs : [] }
   },
 
