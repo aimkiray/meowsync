@@ -651,20 +651,32 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border-right: var(--hairline);
 }
 
-/* 移动端：侧栏改抽屉（汉堡键呼出 + 遮罩关闭）。
-   top 让 56px：抽屉不盖顶栏，遮罩也不能盖——否则 ☰ 无法关闭抽屉 */
+/* 顶栏高度令牌：抽屉/遮罩顶缘锚定顶栏底（不盖住，☰ 才是关闭入口）。
+   ≤768 顶栏改两行（96+1.2 发丝线），此值与 TopNavigation.vue 断点成对维护 */
+:root { --topnav-h: 57.2px; }
+@media (max-width: 768px) { :root { --topnav-h: 97.2px; } }
+
+/* YTM watch 页是整页 surface：≥1024 藏歌单栏，两栏吃满 .app-body */
+@media (min-width: 1024px){
+  .app-shell[data-view="watch"] .app-sidebar { display: none; }
+}
+
+/* 窄轨展开是流内占位而非 overlay——遮罩只在真抽屉态(<768)出现 */
+@media (min-width: 768px){ .sidebar-scrim { display: none; } }
+
+/* 移动端：侧栏改抽屉（汉堡键呼出 + 遮罩关闭）。 */
 .sidebar-scrim {
   position: fixed;
-  inset: 57.2px 0 0; /* 顶栏 56 + 底发丝线 1.2 */
+  inset: var(--topnav-h) 0 0;
   background: var(--scrim);
   z-index: var(--z-overlay);
 }
 
-@media (max-width: 1023px){
+/* 1023/1024 亚像素死带：lg:hidden 是 min-width:1024，取 .98 兜底分数宽度 */
+@media (max-width: 1023.98px){
   .app-sidebar {
     position: fixed;
-    /* top 避让 56px 顶栏：抽屉不盖住汉堡键，它本身就是关闭入口 */
-    top: 57.2px; /* 顶栏 56 + 底发丝线 1.2 */
+    top: var(--topnav-h);
     left: 0;
     bottom: 0;
     width: min(300px, 85vw);
@@ -683,8 +695,40 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   }
 }
 
-@media (max-width: 1023px) and (prefers-reduced-motion: reduce){
+@media (max-width: 1023.98px) and (prefers-reduced-motion: reduce){
   .app-sidebar { transition: none; }
+}
+
+/* YTM 三态侧栏——中宽(768-1023)是封面窄轨而非整栏消失：
+   汉堡键在窄轨↔全栏间切换（sidebarOpen=true=展开全栏），抽屉只留给 <768。
+   排在抽屉块之后——同特异性靠后序压过它的 position/transform/visibility */
+@media (min-width: 768px) and (max-width: 1023.98px){
+  .app-sidebar {
+    position: static;
+    transform: none;
+    visibility: visible;
+    top: auto;
+    bottom: auto;
+    width: 64px;
+    z-index: auto;
+    background: transparent;
+    transition: none;
+  }
+  .app-sidebar--open { width: 280px; transform: none; }
+
+  /* 窄轨态：只留封面列——meta/count/actions/标签全隐 */
+  .app-sidebar:not(.app-sidebar--open) .panel-label,
+  .app-sidebar:not(.app-sidebar--open) .pl-info,
+  .app-sidebar:not(.app-sidebar--open) .pl-count,
+  .app-sidebar:not(.app-sidebar--open) .pl-actions,
+  .app-sidebar:not(.app-sidebar--open) .pl-foot,
+  .app-sidebar:not(.app-sidebar--open) .panel-state { display: none; }
+  .app-sidebar:not(.app-sidebar--open) .pl-row-main {
+    justify-content: center;
+    padding: 6px 0;
+  }
+  /* 窄轨里 hover 播放遮罩会盖满 44px 封面截胡点击——封面只管打开歌单 */
+  .app-sidebar:not(.app-sidebar--open) .playlist-play-overlay { display: none; }
 }
 
 /* ═══ print-grid 原子件 ═══ */
@@ -978,6 +1022,20 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 「Playing from」链接态：button 剥 UA 皮吃排版，hover 暗示可点 */
+button.queue-source--link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+button.queue-source--link:hover { color: var(--ink); text-decoration: underline; }
+
+/* YTM：当前行之上的已播段淡显 */
+.queue-row--played { opacity: .55; }
+.queue-row--played:hover { opacity: .85; }
 
 .queue-row-index {
   width: 18px;
@@ -1096,9 +1154,13 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   height: 4px;
   background: var(--pixel-progress-track);
   z-index: 1;
+  transition: height .12s ease; /* YTM：hover 变粗是平滑过渡 */
 }
 /* hover 加高仅限底部走带——FullscreenPlayer 复用同名类，不加前缀会渗漏 */
 .bottom-player .player-progress-bar:hover { height: 6px; }
+@media (prefers-reduced-motion: reduce){
+  .player-progress-bar { transition: none; }
+}
 .player-progress-fill {
   height: 100%;
   width: 100%;

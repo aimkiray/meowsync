@@ -68,14 +68,21 @@
           class="watch-side-body"
           ref="queueContainer"
         >
-          <p class="queue-source">正在播放：{{ queueTitle }}</p>
+          <!-- YTM「Playing from」：归属歌单在库时来源名可点回歌单页 -->
+          <button
+            v-if="queueOwner"
+            class="queue-source queue-source--link"
+            @click="$emit('open-source')"
+            :title="`回到歌单 ${queueTitle}`"
+          >正在播放：{{ queueTitle }}</button>
+          <p v-else class="queue-source">正在播放：{{ queueTitle }}</p>
           <div v-if="queue.length === 0" class="watch-empty">队列为空喵~</div>
           <template v-else>
             <div
               v-for="(song, index) in queue"
               :key="queueKeyOf(song)"
               class="queue-row"
-              :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--dragging': dragIndex === index }"
+              :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--played': index < currentQueueIndex, 'queue-row--dragging': dragIndex === index }"
             >
               <button
                 type="button"
@@ -200,9 +207,9 @@
             v-for="song in relatedSongs"
             :key="song.id"
             class="queue-row watch-related-row"
-            @click="$emit('play-song', song)"
-            @keydown.enter="$emit('play-song', song)"
-            @keydown.space.prevent="$emit('play-song', song)"
+            @click="$emit('play-song', song, relatedSongs)"
+            @keydown.enter="$emit('play-song', song, relatedSongs)"
+            @keydown.space.prevent="$emit('play-song', song, relatedSongs)"
             tabindex="0"
             role="button"
             :title="`播放 ${song.name}`"
@@ -245,6 +252,7 @@ export default {
     songSwitching: { type: Boolean, default: false },
     queue: { type: Array, default: () => [] },
     queueTitle: { type: String, default: '' },
+    queueOwner: { type: Object, default: null },
     lyrics: { type: Array, default: () => [] },
     currentLyricIndex: { type: Number, default: -1 },
     loadingLyrics: { type: Boolean, default: false },
@@ -257,7 +265,7 @@ export default {
     'back', 'open-fullscreen',
     'update:tab', 'update:autoplay',
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
-    'play-song'
+    'play-song', 'open-source'
   ],
   setup(props, { emit }) {
     const queueContainer = ref(null)
@@ -300,6 +308,10 @@ export default {
       if (!queueKeyMap.has(song)) queueKeyMap.set(song, `${song.id}-${++queueKeySeq}`)
       return queueKeyMap.get(song)
     }
+    // YTM：当前行之上的已播段淡显（id 匹配定位，乱序队列按 id 不按下标）
+    const currentQueueIndex = computed(() =>
+      props.queue.findIndex(s => String(s.id) === String(props.currentSong?.id))
+    )
     const jumpTo = (index) => emit('queue-jump', index)
     // 键盘排序等价路径：握把聚焦时 ↑↓ 移动该行
     const moveRow = (index, dir) => {
@@ -428,6 +440,7 @@ export default {
       setTab,
       moveTab,
       queueKeyOf,
+      currentQueueIndex,
       jumpTo,
       moveRow,
       startDrag,
@@ -688,6 +701,7 @@ export default {
     padding-top: 10px;
   }
 
-  .watch-side-body { max-height: 60vh; }
+  /* 不再限高内滚——YTM 是整页滚动，队列随页流 */
+  .watch-side-body { max-height: none; }
 }
 </style>
