@@ -219,6 +219,8 @@
   padding: 20px;
 }
 
+.song-rows { scrollbar-gutter: stable; }
+
 /* ── 歌单页头：裁切角标封面 + 墨块按钮组 ── */
 .playlist-hero {
   display: flex;
@@ -296,12 +298,10 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  /* 与 grid-state/home-state 同规约：64 竖 + 16 横 + 顶部发丝分隔 */
+  /* 与 grid-state/home-state 同规约：64 竖 + 16 横；
+     无顶线——hero 底缘已承担分区，无线时孤儿线没有可分隔的对象 */
   padding: 64px 16px;
-  border-top: var(--hairline-soft);
 }
-
-.song-rows { scrollbar-gutter: stable; }
 
 .song-state-icon {
   color: var(--ink-64);
@@ -317,7 +317,7 @@
   position: relative;
   /* 全滚动大歌单的渲染摊销：屏外行跳布局/绘制（YTM 虚拟列表的廉价版） */
   content-visibility: auto;
-  contain-intrinsic-size: auto 44px;
+  contain-intrinsic-size: auto 60px;
 }
 
 /* VIP 曲弱化：不压整行透明度（.55 让歌名掉到 3.01:1），改降级文字色 + VIP 戳记 */
