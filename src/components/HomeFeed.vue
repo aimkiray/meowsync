@@ -1,9 +1,7 @@
 <template>
   <!-- 首页发现流（白纸画布）：热搜 chips + 榜单/推荐歌单横向货架。
-       顶部裁切标线、页脚版本戳收版（print-grid 签名） -->
+       页脚版本戳收版（print-grid 签名） -->
   <div class="home-feed">
-    <PrintMarks variant="hash" />
-
     <header class="home-head">
       <p class="pg-label">home · discover</p>
       <h2 class="home-title" data-nosnippet>发现音乐</h2>
@@ -160,15 +158,6 @@ export default {
   height: 100%;
   overflow-y: auto;
   position: relative;
-}
-
-/* hash 裁切标线贴画布顶缘（typesafe 的页缘签名），不占文档流——
-   否则它把页头标签推到 y≈42，与其它视图的 20 首行轴跳位 */
-.home-feed > .pg-hash {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
 }
 
 /* 页头：等宽微标签 + 大字标题。顶距 0——pg-label 落在全站 20 首行轴 */
