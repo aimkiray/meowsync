@@ -45,6 +45,14 @@
             class="ink-btn ink-btn--ghost"
             title="与远端同步曲目：远端增删会生效，本地添加/移除保留"
           ><PixelIcon name="m-loop" :size="14" /> 同步</button>
+          <!-- 点歌台：搜索网易云/粘 B 站链接向本单追加。single_song_ 壳是单曲
+               容器，加第二首会改其语义——保持隐藏（与行级菜单同口径） -->
+          <button
+            v-if="!isShareShell"
+            @click="$emit('add-songs')"
+            class="ink-btn ink-btn--ghost"
+            title="搜索歌曲加入本歌单（支持 B 站链接/BV 号）"
+          ><PixelIcon name="plus" :size="15" /> 添加歌曲</button>
         </div>
       </div>
     </div>
@@ -637,7 +645,7 @@ export default {
       default: 0
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})

@@ -62,6 +62,7 @@
           @play-next="playNextInQueue"
           @add-to-queue="addToQueueEnd"
           @add-to-playlist="openAddToPlaylist"
+          @add-songs="openSongPicker"
           @remove-from-playlist="removeSongFromPlaylist"
           @sync-playlist="syncPlaylist"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
@@ -193,6 +194,69 @@
       </div>
     </Teleport>
 
+    <!-- 点歌台：搜索网易云 / 粘歌曲链接或 ID / B 站链接，向当前歌单一连追加。
+         复用 atp 模态皮，加宽成 asp-dialog 容纳结果行 -->
+    <Teleport to="body">
+      <div
+        v-if="songPickerOpen"
+        class="atp-overlay"
+        @click="closeSongPicker"
+      >
+        <div
+          class="atp-dialog asp-dialog"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`添加歌曲到 ${selectedPlaylist?.name}`"
+          @click.stop
+        >
+          <div class="pg-menu-head">添加歌曲 · {{ selectedPlaylist?.name }}</div>
+          <div class="atp-new asp-search">
+            <input
+              ref="songPickerInput"
+              v-model="songPickerQuery"
+              placeholder="搜歌名 / 粘歌曲链接、ID 或 B 站链接"
+              aria-label="搜索或粘贴歌曲"
+              @keydown.enter="songPickerSearch"
+            />
+            <button
+              class="ink-btn ink-btn--sm"
+              :disabled="!songPickerQuery.trim() || songPickerSearching"
+              @click="songPickerSearch"
+            ><PixelIcon name="search" :size="12" /> {{ songPickerSearching ? '…' : '搜索' }}</button>
+          </div>
+          <div class="atp-list asp-results" aria-label="搜索结果">
+            <div
+              v-for="song in songPickerResults"
+              :key="song.id"
+              class="asp-row"
+            >
+              <img
+                v-if="song.al?.picUrl"
+                class="asp-cover"
+                :src="httpsCover(song.al.picUrl)"
+                alt=""
+                loading="lazy"
+              />
+              <div class="asp-text">
+                <div class="asp-name" :title="song.name">{{ song.name }}</div>
+                <div class="asp-artist">{{ (song.ar || []).map(a => a.name).join('/') || '未知歌手' }}</div>
+              </div>
+              <button
+                class="ink-btn ink-btn--sm asp-add"
+                :disabled="pickerTakenIds.has(String(song.id)) || songPickerAdded.has(String(song.id))"
+                :aria-label="`添加 ${song.name}`"
+                @click="addPickedSong(song)"
+              >{{ pickerTakenIds.has(String(song.id)) || songPickerAdded.has(String(song.id)) ? '已在单' : '添加' }}</button>
+            </div>
+            <p v-if="!songPickerResults.length && !songPickerSearching" class="atp-empty">
+              输入歌名搜索，或直接粘贴歌曲链接 / ID / B 站 BV 号
+            </p>
+            <p v-if="songPickerSearching" class="atp-empty">搜索中…</p>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 全局 toast + 确认模态宿主（替代原生 alert/confirm） -->
     <FeedbackHost />
 
@@ -229,7 +293,7 @@ import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover } from './lib/url'
+import { httpsCover, isBilibiliInput, extractNeteaseSongId } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -1398,9 +1462,10 @@ export default {
       atpInput.value?.focus()
     })
 
-    const addSongToPlaylist = (pl) => {
-      const song = addTargetSong.value
-      if (!song || !pl || pl.id == null) return
+    // 追加核心：pl 必须是歌单库对象（远端 merge 快照上的写入不落库）。
+    // 返回 'restored' | 'added' | 'exists' | 'invalid'——toast/关窗由调用方决定
+    const appendSongToLibraryPlaylist = (pl, song) => {
+      if (!song || song.id == null || !pl || pl.id == null) return 'invalid'
       const sid = String(song.id)
       // 命中墓碑 = 恢复被本地移除的远端曲：清墓碑即可，不进 addedTracks（曲归远端所有）。
       // 但只在远端仍含该曲时（lastRemoteIds 基线命中）——远端已删的陈旧墓碑清了也恢复不了，
@@ -1416,18 +1481,12 @@ export default {
           }
         }
         savePlaylistsToStorage()
-        toast(`已加入《${pl.name}》`, 'success')
-        addTargetSong.value = null
-        return
+        return 'restored'
       }
       const inList = (list) => (list || []).some(t => t && String(t.id) === sid)
       // lastRemoteIds 是远端曲基线——开过单的歌单能拦下「远端已有」的幻影添加；
       // 墓碑曲会先走上面的恢复分支，不会误进这里被拒
-      if (inList(pl.tracks) || inList(pl.addedTracks) || remoteHas) {
-        toast(`「${song.name}」已在《${pl.name}》里`, 'info')
-        addTargetSong.value = null
-        return
-      }
+      if (inList(pl.tracks) || inList(pl.addedTracks) || remoteHas) return 'exists'
       const entry = { ...song }
       // 正打开着这张单——行表即时追加，不等下次拉取。
       // 本地单必须走这里：selectPlaylist 的 `songs = pl.tracks` 共享引用会被
@@ -1447,8 +1506,124 @@ export default {
         }
       }
       savePlaylistsToStorage()
-      toast(`已加入《${pl.name}》`, 'success')
+      return 'added'
+    }
+
+    const addSongToPlaylist = (pl) => {
+      const song = addTargetSong.value
+      const res = appendSongToLibraryPlaylist(pl, song)
+      if (res === 'invalid') return
+      if (res === 'exists') toast(`「${song.name}」已在《${pl.name}》里`, 'info')
+      else toast(`已加入《${pl.name}》`, 'success')
       addTargetSong.value = null
+    }
+
+    // ── 点歌台（歌单 hero「添加歌曲」）：搜索网易云 / 粘歌曲链接/ID / B 站链接，
+    // 向当前打开的单一连追加。single_song_ 壳不开（壳=单曲容器，SongList 已藏键）。
+    // 逐首追加不关窗——加多首是常态；每行带封面与「已在单」态
+    const songPickerOpen = ref(false)
+    const songPickerQuery = ref('')
+    const songPickerResults = ref([])
+    const songPickerSearching = ref(false)
+    const songPickerAdded = ref(new Set()) // 本窗已加入的 id（行态「✓」）
+    const songPickerInput = ref(null)
+    let pickerSeq = 0
+
+    // 目标单的库对象（远端 merge 快照上的 addedTracks 不落库，必须落在库行上）
+    const pickerLibPlaylist = computed(() =>
+      userPlaylists.value.find(p =>
+        selectedPlaylist.value && String(p.id) === String(selectedPlaylist.value.id)))
+
+    // 已在单 id 集：库对象的 tracks+addedTracks ∪ 当前展示行（远端单含远端曲基线）
+    const pickerTakenIds = computed(() => {
+      const ids = new Set()
+      const lib = pickerLibPlaylist.value
+      for (const t of lib?.tracks || []) t?.id != null && ids.add(String(t.id))
+      for (const t of lib?.addedTracks || []) t?.id != null && ids.add(String(t.id))
+      for (const t of songs.value || []) t?.id != null && ids.add(String(t.id))
+      return ids
+    })
+
+    const openSongPicker = () => {
+      const pl = selectedPlaylist.value
+      if (!pl || isSingleSongShellId(pl.id)) return
+      pickerSeq++ // 上一窗在途的搜索/解析作废
+      songPickerQuery.value = ''
+      songPickerResults.value = []
+      songPickerSearching.value = false
+      songPickerAdded.value = new Set()
+      songPickerOpen.value = true
+    }
+    const closeSongPicker = () => { songPickerOpen.value = false; pickerSeq++ }
+
+    // Esc 由 onGlobalKeydown 统一冻结；焦点归还与 atp 同款
+    watch(songPickerOpen, async (v, _prev, onCleanup) => {
+      if (!v) return
+      const prevFocus = document.activeElement
+      onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus() })
+      await nextTick()
+      songPickerInput.value?.focus()
+    })
+
+    const addPickedSong = async (song) => {
+      const pl = selectedPlaylist.value
+      if (!pl || isSingleSongShellId(pl.id)) { closeSongPicker(); return }
+      let libPl = pickerLibPlaylist.value
+      let collected = false
+      if (!libPl) {
+        // 非库远端单（搜索结果直接打开）：addedTracks 必须挂在库对象上才持久化——
+        // 先把单收进库再追加，否则刷新后加的歌全丢
+        await addPlaylistToLibrary(pl)
+        libPl = pickerLibPlaylist.value
+        collected = !!libPl
+      }
+      if (!libPl) { toast('歌单入库失败，无法添加', 'error'); return }
+      const res = appendSongToLibraryPlaylist(libPl, song)
+      if (res === 'exists') toast(`「${song.name}」已在《${libPl.name}》里`, 'info')
+      else if (res === 'added' || res === 'restored') {
+        toast(`${collected ? '已收藏歌单，' : ''}已加入《${libPl.name}》`, 'success')
+        songPickerAdded.value = new Set([...songPickerAdded.value, String(song.id)])
+      }
+    }
+
+    const songPickerSearch = async () => {
+      const q = songPickerQuery.value.trim()
+      if (!q || songPickerSearching.value) return
+      const mySeq = ++pickerSeq
+      songPickerSearching.value = true
+      try {
+        if (isBilibiliInput(q)) {
+          // B 站输入是单一目标——解析完直接入单，不经结果列表中转
+          toast('正在解析 B 站视频…', 'info', 30000) // 覆盖 resolve 最坏耗时
+          const data = await musicApi.resolveBilibili(q)
+          if (mySeq !== pickerSeq || !songPickerOpen.value) return
+          const song = buildBilibiliSong(data)
+          songPickerResults.value = [song, ...songPickerResults.value]
+          songPickerQuery.value = ''
+          await addPickedSong(song)
+          return
+        }
+        const songId = extractNeteaseSongId(q)
+        if (songId) {
+          // 歌曲 ID 是单一目标——直加。getSongDetail 未命中抛错走 catch
+          const song = await musicApi.getSongDetail(songId)
+          if (mySeq !== pickerSeq || !songPickerOpen.value) return
+          songPickerResults.value = [song, ...songPickerResults.value]
+          songPickerQuery.value = ''
+          await addPickedSong(song)
+          return
+        }
+        const list = await musicApi.searchSongs(q, 30)
+        if (mySeq !== pickerSeq || !songPickerOpen.value) return
+        songPickerResults.value = list || []
+        if (!list?.length) toast('没有找到相关歌曲', 'info')
+      } catch (error) {
+        if (mySeq !== pickerSeq || !songPickerOpen.value) return
+        console.error('点歌台搜索失败:', error)
+        toast('搜索失败: ' + (error.response?.data?.message || error.message), 'error')
+      } finally {
+        if (mySeq === pickerSeq) songPickerSearching.value = false
+      }
     }
 
     // 用户新建歌单用 local_pl_ 前缀：isLocalPlaylistId 全链路（持久化保留 tracks /
@@ -2268,6 +2443,12 @@ export default {
         if (e.key === 'Escape') addTargetSong.value = null
         return
       }
+      // 点歌台模态同款冻结。Esc 连框内焦点也收（输入态下 Esc 的直觉就是关窗）；
+      // 非 Esc 键直接 return——空格/斜杠不会穿透到全局快捷键
+      if (songPickerOpen.value) {
+        if (e.key === 'Escape') closeSongPicker()
+        return
+      }
       if (e.key === 'Escape') {
         if (sidebarOpen.value) sidebarOpen.value = false
         return
@@ -2908,12 +3089,24 @@ export default {
       addTargetSong,
       newPlaylistName,
       atpInput,
+      songPickerOpen,
+      songPickerQuery,
+      songPickerResults,
+      songPickerSearching,
+      songPickerAdded,
+      songPickerInput,
+      pickerTakenIds,
+      openSongPicker,
+      closeSongPicker,
+      addPickedSong,
+      songPickerSearch,
       addablePlaylists,
       openAddToPlaylist,
       addSongToPlaylist,
       createPlaylistAndAdd,
       removeSongFromPlaylist,
-      syncPlaylist
+      syncPlaylist,
+      httpsCover
     }
   }
 }
