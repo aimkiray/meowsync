@@ -326,22 +326,59 @@ export const musicApi = {
     const b = song?.bilibili
     if (!b?.bvid) throw new Error('不是 B 站导入曲')
     const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
-    const fileName = `${artists} - ${song.name}.m4a`.replace(/[\\/:*?"<>|]/g, '_')
-    const resp = await fetch(musicApi.bilibiliStreamUrl(b.bvid, 'audio', b.cid, b.page))
-    if (!resp.ok) throw new Error(`下载失败: HTTP ${resp.status}`)
-    const blob = await resp.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = objectUrl
-    link.download = fileName
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    // 吊销必须延迟：click 同步触发但浏览器取流是异步的
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-    return { success: true, fileName }
+    return saveStreamAsFile(
+      musicApi.bilibiliStreamUrl(b.bvid, 'audio', b.cid, b.page),
+      `${artists} - ${song.name}.m4a`)
+  },
+
+  // YouTube 导入：解析 URL/BV 形态/裸 id → videoDetails + 歌名提取 + 网易云
+  // 匹配。服务端串 Innertube + 云搜，超时放宽与 B 站同款
+  resolveYouTube: async (input, abortSignal = null) => {
+    const response = await api.get('/youtube/resolve', {
+      params: { input },
+      signal: abortSignal,
+      timeout: 60000
+    }).catch(err => {
+      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'YouTube 解析失败')
+    return data
+  },
+
+  // 流地址：服务端每次重解 Innertube（googlevideo 签名 ~6h 过期）再 302 进
+  // /audio-proxy——kind=video 拿 avc1 adaptive（静音补画面），audio 优先 mp4a
+  youtubeStreamUrl: (videoId, kind = 'audio') =>
+    `${API_BASE_URL}/youtube/stream?v=${encodeURIComponent(videoId)}&kind=${kind}`,
+
+  // YouTube 曲的"获取源文件"：音频流是 mp4a → m4a 容器
+  downloadYouTubeSong: async (song) => {
+    const y = song?.youtube
+    if (!y?.videoId) throw new Error('不是 YouTube 导入曲')
+    const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
+    return saveStreamAsFile(
+      musicApi.youtubeStreamUrl(y.videoId, 'audio'),
+      `${artists} - ${song.name}.m4a`)
   }
+}
+
+// 流式落盘共用：同源 fetch（已含代理链）→ blob → a[download] 触发保存
+async function saveStreamAsFile(url, fileName) {
+  const resp = await fetch(url)
+  if (!resp.ok) throw new Error(`下载失败: HTTP ${resp.status}`)
+  const blob = await resp.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = fileName.replace(/[\\/:*?"<>|]/g, '_')
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  // 吊销必须延迟：click 同步触发但浏览器取流是异步的
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  return { success: true, fileName }
 }
 
 // 歌词与翻译数组均按时间排序，双指针合并 O(n+m)

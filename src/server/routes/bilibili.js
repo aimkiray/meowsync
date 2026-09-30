@@ -1,8 +1,9 @@
 const { Hono } = require('hono');
 const { Agent } = require('undici');
-const { callNeteaseApi } = require('../services/netease-api');
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('../lib/net-guard');
 const { isAllowedHost } = require('./proxy');
+const { rateLimit } = require('../lib/rate-limit');
+const { matchNeteaseSong } = require('../lib/netease-match');
 
 const app = new Hono();
 
@@ -116,43 +117,6 @@ function extractSongName(tagNames, title) {
   return t || String(title || '').trim();
 }
 
-// 网易云匹配：候选串逐个搜，第一条通过 sanity 校验的为准（提取名 → 清洗标题）。
-// sanity = 时长差 ≤45s 或歌名与查询串有公共子串——纯「有结果就取」会把噪声标题
-// 的错配永久固化进壳与历史（错歌词比没歌词更糟），校验不过就放弃匹配用 B 站元数据
-const MATCH_DUR_TOLERANCE_SEC = 45;
-const shareName = (a, b) => {
-  const na = String(a || '').toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
-  const nb = String(b || '').toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
-  return na.length >= 2 && nb.length >= 2 && (na.includes(nb) || nb.includes(na));
-};
-async function matchNeteaseSong(candidates, durationSec) {
-  for (const q of candidates) {
-    if (!q) continue;
-    try {
-      const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '5' });
-      const songs = res.body?.result?.songs;
-      if (!Array.isArray(songs) || !songs.length) continue;
-      // 两遍优选：歌名包含是最强信号（跨语翻唱同名必中）；时长命中取差最小者——
-      // 顺序「首个过线」会让时长恰好在窗内的噪声压过排后的名字包含正主
-      const byName = songs.find(s => shareName(s.name, q));
-      if (byName) return { song: byName, query: q };
-      if (Number.isFinite(durationSec)) {
-        const byDur = songs
-          .map(s => ({ s, diff: Math.abs((s.dt || s.duration || 0) / 1000 - durationSec) }))
-          .filter(x => x.diff <= MATCH_DUR_TOLERANCE_SEC)
-          .sort((a, b) => a.diff - b.diff)[0];
-        if (byDur) return { song: byDur.s, query: q };
-      }
-      // 有结果但全不过 sanity：继续试下一个候选，整条候选链不过才算无匹配
-    } catch (e) {
-      // 上游 reject(answer) 形态无 .message——归一化再记
-      const why = e?.message || (e?.body ? `code=${e.body.code ?? '?'}` : String(e));
-      console.warn(`[bilibili] 网易云搜索「${q}」失败:`, why);
-    }
-  }
-  return { song: null, query: null };
-}
-
 // playurl 选流：音频按 bandwidth 降序（30280≈192k > 30232≈108k > 30216≈64k）；
 // 视频优先 avc1（H.264 全浏览器可放）再按分辨率降序——hevc/av01 老设备放不了。
 // 返回排序后的完整数组——单档流的备份 URL 全被端口策略拒时还能降级到下一档
@@ -176,24 +140,8 @@ function pickPageParam(input) {
   return m ? Math.max(1, parseInt(m[1], 10)) : 1;
 }
 
-// resolve/stream 是未鉴权扇出端点——滑动窗限流防循环刷量把服务端 IP 送进 B 站风控。
-// 桶 key：TRUST_PROXY 下采信 XFF 首跳（与 requestOrigin 同语义）；否则用 socket
-// 真实地址——不信客户端自带 XFF（可伪造轮换绕过），也不让 LAN 全员挤 'local' 桶
-const rateBuckets = new Map();
-function rateLimit(c, key, limit) {
-  const trustProxy = ['1', 'true'].includes((process.env.TRUST_PROXY || '').toLowerCase());
-  const ip = (trustProxy && c.req.header('x-forwarded-for')?.split(',')[0]?.trim())
-    || c.env?.incoming?.socket?.remoteAddress
-    || 'local';
-  const bucketKey = `${key}:${ip}`;
-  const now = Date.now();
-  const hits = (rateBuckets.get(bucketKey) || []).filter(t => now - t < 60000);
-  if (hits.length >= limit) return false;
-  hits.push(now);
-  rateBuckets.set(bucketKey, hits);
-  if (rateBuckets.size > 5000) rateBuckets.clear(); // 防内存膨胀
-  return true;
-}
+// 限流/匹配实现移入 src/server/lib（rate-limit.js / netease-match.js）——
+// 与 youtube.js 共用同一桶表与同一 sanity 判据，防两处漂移
 
 app.get('/bilibili/resolve', async (c) => {
   if (!rateLimit(c, 'resolve', 12)) {
@@ -226,7 +174,7 @@ app.get('/bilibili/resolve', async (c) => {
       budgetTimer.unref?.();
     });
     const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, duration), matchBudget,
+      matchNeteaseSong(candidates, duration, 'bilibili'), matchBudget,
     ]);
     clearTimeout(budgetTimer);
     const { audio, video } = pickStreams(playurl);

@@ -120,7 +120,7 @@
 <script>
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
-import { isBilibiliInput } from '../lib/url.js'
+import { isBilibiliInput, isYouTubeInput } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -146,7 +146,7 @@ export default {
       default: 'off'
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'search-yt', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
@@ -170,6 +170,10 @@ export default {
       suggestOpen.value = false
       if (isBilibiliInput(query)) {
         emit('search-bili', query)
+        return
+      }
+      if (isYouTubeInput(query)) {
+        emit('search-yt', query)
         return
       }
       const playlistId = extractPlaylistId(query)
@@ -243,7 +247,7 @@ export default {
       const q = e.target.value.trim()
       cancelSuggest()
       // 纯数字/歌单链接/B站输入走直达路径，不弹建议
-      if (!q || extractPlaylistId(q) || isBilibiliInput(q)) {
+      if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

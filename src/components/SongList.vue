@@ -59,7 +59,7 @@
             v-if="!isShareShell"
             @click="$emit('add-songs')"
             class="ink-btn ink-btn--ghost"
-            title="搜索歌曲加入本歌单（支持 B 站链接/BV 号）"
+            title="搜索歌曲加入本歌单（支持 B 站/YouTube 链接）"
           ><PixelIcon name="plus" :size="15" /> 添加歌曲</button>
         </div>
       </div>
@@ -235,13 +235,13 @@
             @keydown.enter="downloadSongDirect(menuSong, 320000)"
             @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
-            <PixelIcon name="download" :size="13" /> {{ menuSong?.bilibili ? '获取源文件 (m4a)' : '获取源文件 (320k)' }}
+            <PixelIcon name="download" :size="13" /> {{ (menuSong?.bilibili || menuSong?.youtube) ? '获取源文件 (m4a)' : '获取源文件 (320k)' }}
           </div>
 
           <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
-               local_pl_/saved_queue_ 经镜像链走既有路由。B 站曲无服务端下载源不渲染 -->
+               local_pl_/saved_queue_ 经镜像链走既有路由。外部导入曲（B 站/YouTube）无服务端下载源不渲染 -->
           <div
-            v-if="!isShareShell && selectedPlaylist && !menuSong?.bilibili && !String(menuSong?.id ?? '').startsWith('bv_')"
+            v-if="!isShareShell && selectedPlaylist && !menuSong?.bilibili && !menuSong?.youtube && !String(menuSong?.id ?? '').startsWith('bv_') && !String(menuSong?.id ?? '').startsWith('yt_')"
             class="pg-menu-item"
             :class="{ 'pg-menu-item--danger': serverDownloadedStates[showDownloadMenu] }"
             role="menuitem"
@@ -715,7 +715,7 @@ export default {
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const itemCount = 5
           + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
-          + ((!isShareShell.value && props.selectedPlaylist && !targetSong?.bilibili && !String(targetSong?.id ?? '').startsWith('bv_')) ? 1 : 0)
+          + ((!isShareShell.value && props.selectedPlaylist && !targetSong?.bilibili && !targetSong?.youtube && !String(targetSong?.id ?? '').startsWith('bv_') && !String(targetSong?.id ?? '').startsWith('yt_')) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -778,10 +778,12 @@ export default {
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
       // 带 view=watch：冷启动打开分享链后落在播放页（YTM watch 同款直达）；
-      // B 站导入曲走 ?bili=BV 链——?song= 只认网易云数值 id；分P带 p 参数
+      // B 站导入曲走 ?bili=BV 链、YouTube 走 ?yt=<videoId>——?song= 只认网易云数值 id；分P带 p 参数
       const shareUrl = song.bilibili?.bvid
         ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
-        : `${window.location.origin}/?song=${song.id}&view=watch`
+        : song.youtube?.videoId
+          ? `${window.location.origin}/?yt=${song.youtube.videoId}&view=watch`
+          : `${window.location.origin}/?song=${song.id}&view=watch`
 
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistNames}`,
@@ -811,8 +813,9 @@ export default {
         downloadingStates.value[song.id] = true
         // blob 下载全程无浏览器自带进度提示——先给一个开始戳记，终点由浏览器下载栏呈现
         toast(`正在获取「${song.name}」…`, 'info')
-        // B 站导入曲没有网易云下载链——拉自己的 /bilibili/stream（m4a）
+        // 外部导入曲没有网易云下载链——拉自己的 /bilibili|youtube/stream（m4a）
         if (song.bilibili?.bvid) await musicApi.downloadBilibiliSong(song)
+        else if (song.youtube?.videoId) await musicApi.downloadYouTubeSong(song)
         else await musicApi.downloadSong(song, bitrate)
       } catch (error) {
         console.error('下载失败:', error)

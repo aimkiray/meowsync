@@ -10,19 +10,19 @@
     <div class="watch-layout">
       <!-- ══ 左栏 ══ -->
       <div class="watch-main">
-        <div class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': biliVideoActive }">
-          <!-- B 站视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
+        <div class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }">
+          <!-- 外部导入曲视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
                音频模式回落网易云匹配封面——不加载视频即省流量 -->
           <video
-            v-if="biliVideoActive"
-            ref="biliVideoRef"
+            v-if="mediaVideoActive"
+            ref="mediaVideoRef"
             class="watch-cover watch-cover--video"
-            :src="biliVideoUrl"
+            :src="mediaVideoUrl"
             :aria-label="`视频画面：${currentSong?.name || ''}`"
             muted
             playsinline
             preload="auto"
-            @error="biliVideoFailed = true"
+            @error="mediaVideoFailed = true"
           ></video>
           <img
             v-else-if="coverUrl"
@@ -47,9 +47,9 @@
           <button class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
             <PixelIcon name="share" :size="14" /> 分享歌曲
           </button>
-          <!-- 音画切换仅对有视频流的 B 站导入曲出现；关闭即只拉音频流省流量 -->
+          <!-- 音画切换仅对有视频流的外部导入曲（B 站/YouTube）出现；关闭即只拉音频流省流量 -->
           <button
-            v-if="currentSong?.bilibili?.hasVideo"
+            v-if="currentSong?.bilibili?.hasVideo || currentSong?.youtube?.hasVideo"
             class="ink-btn ink-btn--ghost watch-action"
             :class="{ 'watch-action--on': videoOn }"
             @click="videoOn = !videoOn"
@@ -523,56 +523,65 @@ export default {
       }
     }))
 
-    // ── B 站视频模式 ──
-    // 偏好持久化：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开
-    const biliVideoRef = ref(null)
+    // ── 外部导入曲视频模式（B 站/YouTube 同一机制） ──
+    // 偏好持久化：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开。
+    // LS key 留 'meowsync-bili-video'：YouTube 接入沿用既有偏好，不换名重置用户选择
+    const mediaVideoRef = ref(null)
     const videoOn = ref(safeGetLs('meowsync-bili-video') !== '0')
     watch(videoOn, v => {
       safeSetLs('meowsync-bili-video', v ? '1' : '0')
       // 开视频就是用户最自然的重试入口——复位失败闩重新拉流
-      if (v) biliVideoFailed.value = false
+      if (v) mediaVideoFailed.value = false
     })
     // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
-    const biliVideoFailed = ref(false)
-    const biliVideoActive = computed(() =>
-      !!(props.currentSong?.bilibili?.hasVideo && videoOn.value && !biliVideoFailed.value)
-    )
-    const biliVideoUrl = computed(() => {
-      const b = props.currentSong?.bilibili
-      return b?.hasVideo ? musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page) : ''
+    const mediaVideoFailed = ref(false)
+    // 视频源键：两个 provider 各取各自的定位串——换曲（哪怕同 provider）必然换键
+    const mediaVideoKey = computed(() => {
+      const song = props.currentSong
+      if (song?.bilibili?.hasVideo) return `bv:${song.bilibili.bvid}:${song.bilibili.cid || 0}:${song.bilibili.page || 1}`
+      if (song?.youtube?.hasVideo) return `yt:${song.youtube.videoId}`
+      return null
     })
-    // 复位键用 biliVideoUrl（含 bvid+cid+page）——同 bvid 换P重导时新分P该重新尝试
-    watch(biliVideoUrl, () => { biliVideoFailed.value = false })
+    const mediaVideoActive = computed(() => !!(mediaVideoKey.value && videoOn.value && !mediaVideoFailed.value))
+    const mediaVideoUrl = computed(() => {
+      const song = props.currentSong
+      const b = song?.bilibili
+      if (b?.hasVideo) return musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page)
+      const y = song?.youtube
+      return y?.hasVideo ? musicApi.youtubeStreamUrl(y.videoId, 'video') : ''
+    })
+    // 复位键用 mediaVideoUrl——同曲换源（B 站换P/YouTube 重导）时新源该重新尝试
+    watch(mediaVideoUrl, () => { mediaVideoFailed.value = false })
 
     // 音画同步：视频元素静音播放，时钟完全听 Howler——每帧对比 currentTime，
     // 漂移超阈值才 seek（RAF 每帧触发，此处只做减法+偶尔 seek，开销可忽略）。
     // 顺带 reconcile paused 态——watch(isPlaying) 只在翻转时触发，组件重挂载
     // （返回→重进 watch）与单曲循环重播时视频会停在末帧/暂停态，这里兜底拉起
-    const BILI_DRIFT_SEC = 0.45
-    let biliPlayTrying = false
-    const syncBiliVideo = () => {
-      const v = biliVideoRef.value
-      if (!v || !biliVideoActive.value || v.error) return
-      if (props.isPlaying && v.paused && !biliPlayTrying) {
-        biliPlayTrying = true
-        // play() 在极端旧内核可同步抛错——try 兜底防 biliPlayTrying 卡死
+    const VIDEO_DRIFT_SEC = 0.45
+    let mediaPlayTrying = false
+    const syncMediaVideo = () => {
+      const v = mediaVideoRef.value
+      if (!v || !mediaVideoActive.value || v.error) return
+      if (props.isPlaying && v.paused && !mediaPlayTrying) {
+        mediaPlayTrying = true
+        // play() 在极端旧内核可同步抛错——try 兜底防 mediaPlayTrying 卡死
         try {
-          Promise.resolve(v.play()).catch(() => {}).finally(() => { biliPlayTrying = false })
-        } catch { biliPlayTrying = false }
+          Promise.resolve(v.play()).catch(() => {}).finally(() => { mediaPlayTrying = false })
+        } catch { mediaPlayTrying = false }
       } else if (!props.isPlaying && !v.paused) v.pause()
-      if (Math.abs(v.currentTime - props.currentTime) > BILI_DRIFT_SEC) {
+      if (Math.abs(v.currentTime - props.currentTime) > VIDEO_DRIFT_SEC) {
         v.currentTime = props.currentTime
       }
     }
-    watch(() => props.currentTime, syncBiliVideo)
-    watch(() => props.isPlaying, syncBiliVideo)
+    watch(() => props.currentTime, syncMediaVideo)
+    watch(() => props.isPlaying, syncMediaVideo)
     // 切歌/开关视频时 src 变化或元素重建——等到新 metadata 落地再对齐时钟，
-    // 避免对空 player 空 seek；监听键含 bvid（两首 B 站曲互切时 active 不变）。
-    // immediate 覆盖挂载瞬间条件已满足的情形（syncBiliVideo 也兜底）
-    watch([biliVideoActive, () => props.currentSong?.bilibili?.bvid], async () => {
-      if (!biliVideoActive.value) return
+    // 避免对空 player 空 seek；监听键用 mediaVideoKey（两首外部曲互切时 active 不变）。
+    // immediate 覆盖挂载瞬间条件已满足的情形（syncMediaVideo 也兜底）
+    watch([mediaVideoActive, mediaVideoKey], async () => {
+      if (!mediaVideoActive.value) return
       await nextTick()
-      const v = biliVideoRef.value
+      const v = mediaVideoRef.value
       if (!v) return
       const align = () => { v.currentTime = props.currentTime }
       if (v.readyState >= 1) align()
@@ -583,10 +592,12 @@ export default {
     const shareSong = async () => {
       const song = props.currentSong
       if (!song) return
-      // B 站导入曲的分享链是 ?bili=BVxxx——?song= 只认网易云数值 id；分P带 p 参数
+      // B 站导入曲的分享链是 ?bili=BVxxx、YouTube 是 ?yt=<id>——?song= 只认网易云数值 id；分P带 p 参数
       const shareUrl = song.bilibili?.bvid
         ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
-        : `${window.location.origin}/?song=${song.id}&view=watch`
+        : song.youtube?.videoId
+          ? `${window.location.origin}/?yt=${song.youtube.videoId}&view=watch`
+          : `${window.location.origin}/?song=${song.id}&view=watch`
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistText.value}`,
         text: `来听听这首歌：${song.name} - ${artistText.value}`,
@@ -622,11 +633,11 @@ export default {
       relatedSongs,
       relatedLoading,
       shareSong,
-      biliVideoRef,
+      mediaVideoRef,
       videoOn,
-      biliVideoFailed,
-      biliVideoActive,
-      biliVideoUrl
+      mediaVideoFailed,
+      mediaVideoActive,
+      mediaVideoUrl
     }
   }
 }
