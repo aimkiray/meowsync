@@ -415,6 +415,7 @@ export default {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  position: relative; /* player-time 挂出流的锚点 */
 }
 .transport {
   width: 34px;
@@ -455,7 +456,15 @@ export default {
   justify-content: flex-end;
   flex-shrink: 0;
 }
+/* 时间戳挂出流：absolute 贴中列右尾——五键簇恢复 play 键的几何对称，
+   使其落在 player-inner 正中心（左右 flank 同为 flex:1 等宽）；
+   若在流内，其宽度会把簇中心向右推，播放键偏左 ~29px */
 .player-time {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 8px;
   font-family: var(--font-mono);
   font-weight: 400; /* 数值档——标签才是 300 */
   font-size: 12px;
