@@ -4,9 +4,11 @@ const downloadQueuesRepo = require('../repositories/downloadQueues');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 const playlistsRepo = require('../repositories/playlists');
 const playlistTracksRepo = require('../repositories/playlistTracks');
+const { getDb } = require('../db/client');
 // 读流按字节硬截断：chunked/无 Content-Length 请求不会被声明值检查拦住
 const { readJsonBody } = require('../lib/http-body');
-const { fail, handleError } = require('../lib/http-error');
+const { fail, handleError, httpError } = require('../lib/http-error');
+const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
 
 const app = new Hono();
 
@@ -303,15 +305,25 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
 const LOCAL_MIRROR_ID_MAX = 80;
 app.post('/downloads/local/mirror', async (c) => {
   try {
-    const body = await readJsonBody(c);
+    // 前端按瘦身投影上载（~300B/曲，2000 曲 ≈600KB）；上限放宽到 8MB
+    // 兜底未瘦身的旧端/手工调用发全量对象（~2-3KB/曲）——1MB 默认上限会在
+    // ~400 曲处截死整个歌单
+    const body = await readJsonBody(c, 8 * 1024 * 1024);
     const localId = String(body.localId || '').trim();
     if (!/^(local_pl_|saved_queue_|single_song_)[\w-]{1,64}$/.test(localId)
         || localId.length > LOCAL_MIRROR_ID_MAX) {
       return fail(c, 400, '无效的本地歌单 ID');
     }
-    const rawTracks = Array.isArray(body.tracks) ? body.tracks.slice(0, 2000) : [];
+    // 级联删除窗口内的镜像会以同 netease_playlist_id 复活刚删的行——与
+    // playlist-sync 同款前置拒绝
+    if (isNeteasePlaylistDeleting(localId)) {
+      return fail(c, 409, '该歌单正在删除中');
+    }
+    const allTracks = Array.isArray(body.tracks) ? body.tracks : [];
+    const rawTracks = allTracks.slice(0, 2000);
     if (!rawTracks.length) return fail(c, 400, '歌单中没有歌曲');
-    // 只留可下载的网易云曲目（数字 id）；bv_ 等跳过并回传计数让前端提示
+    // 只留可下载的网易云曲目（数字 id）；bv_ 等跳过并回传计数让前端提示。
+    // skipped 口径含 2000 截尾——否则大歌单镜像缺尾且前端"跳过 N 首"不覆盖它
     const tracks = rawTracks
       .filter(t => t && /^\d+$/.test(String(t.id ?? '')))
       .map(t => ({
@@ -322,21 +334,56 @@ app.post('/downloads/local/mirror', async (c) => {
           : (t.album && typeof t.album === 'object') ? t.album : {},
         dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0)
       }));
-    const skipped = rawTracks.length - tracks.length;
+    const skipped = allTracks.length - tracks.length;
     if (!tracks.length) return fail(c, 400, `没有可下载的网易云歌曲（跳过 ${skipped} 首非网易云曲目）`);
     const name = String(body.name || '本地歌单').slice(0, 200);
-    const pl = playlistsRepo.upsertPlaylist({
-      neteasePlaylistId: localId,
-      name,
-      coverImgUrl: String(body.coverImgUrl || '').slice(0, 500),
-      creatorNickname: '本地歌单',
-      trackCount: tracks.length,
-      source: 'local'
-    });
-    playlistTracksRepo.replaceTracksForPlaylist(pl.id, tracks);
+    // upsert + 整表替换必须同事务（upsertPlaylist 自注"独立调用不保证原子"）；
+    // 内容签名（id:name 序列）未变时跳过 DELETE+INSERT——行级下载每首都重镜像，
+    // 无短路会是 O(N) 写放大
+    const db = getDb();
+    const pl = db.transaction(() => {
+      const row = playlistsRepo.upsertPlaylist({
+        neteasePlaylistId: localId,
+        name,
+        coverImgUrl: String(body.coverImgUrl || '').slice(0, 500),
+        creatorNickname: '本地歌单',
+        trackCount: tracks.length,
+        source: 'local'
+      });
+      if (!row) throw httpError(500, '镜像歌单写入失败');
+      // 墓碑前置检查后，本地 id 级联拿的新行仍可能正被删——事务内复查
+      if (deletingPlaylists.has(row.id)) throw httpError(409, '该歌单正在删除中');
+      const sigOf = (t) => `${t.id}:${t.name}`;
+      const existing = playlistTracksRepo.listTracksByPlaylistId(row.id);
+      const unchanged = existing.length === tracks.length
+        && existing.every((t, i) => sigOf(t) === sigOf(tracks[i]));
+      if (!unchanged) playlistTracksRepo.replaceTracksForPlaylist(row.id, tracks);
+      return row;
+    })();
     return c.json({ code: 200, data: { playlistId: pl.id, mirrored: tracks.length, skipped } });
   } catch (error) {
     return handleError(c, error, '本地歌单镜像失败');
+  }
+});
+
+// 本地歌单从库中移除时清服务端镜像产物（镜像行 + 任务 + 已下载文件）。
+// 没有这一步镜像行会成永久孤儿——reapOrphanFiles 只清无行目录，镜像行还在就不扫
+app.delete('/downloads/local/mirror/:localId', async (c) => {
+  try {
+    const localId = String(c.req.param('localId') || '').trim();
+    if (!/^(local_pl_|saved_queue_|single_song_)[\w-]{1,64}$/.test(localId)
+        || localId.length > LOCAL_MIRROR_ID_MAX) {
+      return fail(c, 400, '无效的本地歌单 ID');
+    }
+    const pl = playlistsRepo.findPlaylistByNeteaseId(localId);
+    // 幂等：未镜像过/非本地镜像行都视为"无可清"（防把数字误写成他人歌单行）
+    if (!pl || pl.source !== 'local') {
+      return c.json({ code: 200, data: { deleted: false } });
+    }
+    const deleted = await downloadManager.deletePlaylistCascade(pl.id);
+    return c.json({ code: 200, data: { deleted: !!deleted } });
+  } catch (error) {
+    return handleError(c, error, '本地歌单镜像删除失败');
   }
 });
 
