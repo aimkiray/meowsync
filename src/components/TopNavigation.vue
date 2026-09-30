@@ -120,7 +120,7 @@
 <script>
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
-import { isBilibiliInput, isYouTubeInput } from '../lib/url.js'
+import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -146,7 +146,7 @@ export default {
       default: 'off'
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'search-yt', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
@@ -174,6 +174,17 @@ export default {
       }
       if (isYouTubeInput(query)) {
         emit('search-yt', query)
+        return
+      }
+      // QQ 歌单链接先于单曲/网易云判定——taoge.html?id=N 的 ?id= 会被
+      // extractPlaylistId 当网易云歌单 id 抢走
+      const qqPlaylistId = extractQQPlaylistId(query)
+      if (qqPlaylistId) {
+        emit('search-qq-pl', qqPlaylistId)
+        return
+      }
+      if (isQQInput(query)) {
+        emit('search-qq', query)
         return
       }
       const playlistId = extractPlaylistId(query)
@@ -246,8 +257,9 @@ export default {
       emit('update:searchQuery', e.target.value)
       const q = e.target.value.trim()
       cancelSuggest()
-      // 纯数字/歌单链接/B站输入走直达路径，不弹建议
-      if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)) {
+      // 纯数字/歌单链接/B站/QQ 输入走直达路径，不弹建议
+      if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)
+        || isQQInput(q) || extractQQPlaylistId(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

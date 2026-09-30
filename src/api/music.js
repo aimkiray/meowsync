@@ -369,6 +369,80 @@ export const musicApi = {
     return saveStreamAsFile(
       musicApi.youtubeStreamUrl(y.videoId, 'audio', 'best'),
       `${artists} - ${song.name}.m4a`)
+  },
+
+  // QQ 音乐导入：解析 songDetail/分享链接/songmid/songid → 真实元数据 +
+  // 网易云匹配（只做封面/歌词兜底源）。服务端串 musicu + 云搜
+  resolveQQ: async (input, abortSignal = null) => {
+    const response = await api.get('/qq/resolve', {
+      params: { input },
+      signal: abortSignal,
+      timeout: 60000
+    }).catch(err => {
+      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 音乐解析失败')
+    return data
+  },
+
+  // 流地址：服务端每次重取 vkey（签名 ~22h 过期且绑 IP）再 302 进
+  // /audio-proxy。prefer=best 走 RS01/F000 无损档梯（需 QQ_COOKIE 登录态），
+  // 播放默认匿名稳态档（M800/M500/C400 逐档回落）
+  qqStreamUrl: (mid, kind = 'audio', prefer = '', mmid = '') => {
+    const params = new URLSearchParams({ mid })
+    if (mmid) params.set('mmid', mmid)
+    if (prefer) params.set('prefer', prefer)
+    return `${API_BASE_URL}/qq/stream?${params}`
+  },
+
+  // QQ 曲的"获取源文件"：prefer=best 优先 Hi-Res/FLAC 档
+  downloadQQSong: async (song) => {
+    const q = song?.qq
+    if (!q?.mid) throw new Error('不是 QQ 音乐曲')
+    const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
+    return saveStreamAsFile(
+      musicApi.qqStreamUrl(q.mid, 'audio', 'best', q.mediaMid),
+      `${artists} - ${song.name}.m4a`)
+  },
+
+  // QQ 自带权威歌词（LRC+翻译，服务端 base64 解好）——qq_ 曲的词源正主。
+  // 返回与 getLyrics 同形态（已合并翻译的 lyrics 数组）
+  getQQLyric: async (mid, abortSignal = null) => {
+    const response = await api.get('/qq/lyric', { params: { mid }, signal: abortSignal }).catch(err => {
+      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 歌词获取失败')
+    const lyrics = parseLyrics(data.lyric || '')
+    const translations = parseLyrics(data.trans || '', getLrcOffsetSec(data.lyric))
+    return { lyrics: mergeTranslations(lyrics, translations) }
+  },
+
+  // QQ 曲库搜索（点歌台 qq: 前缀）
+  searchQQSongs: async (q, limit = 20) => {
+    const response = await api.get('/qq/search', { params: { q } }).catch(err => {
+      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 音乐搜索失败')
+    return data.list || []
+  },
+
+  // QQ 歌单详情（disstid → 归一曲目列表，导入本地歌单用）
+  getQQPlaylist: async (id) => {
+    const response = await api.get('/qq/playlist', {
+      params: { id }, timeout: 60000
+    }).catch(err => {
+      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 歌单获取失败')
+    return data
   }
 }
 

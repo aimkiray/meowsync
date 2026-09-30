@@ -8,9 +8,10 @@ const { aiEnabled, askAiJson, AI_MODEL } = require('../lib/ai');
 
 const app = new Hono();
 
-// 词源相关端点只认网易云数字 id——bv_/yt_ 等外部 id 没有网易云词源，放行
-// 只会空耗一次上游 lyric 调用再 404
+// 词源相关端点只认网易云数字 id 与 qq_<songmid>（QQ 曲吃自家权威歌词做词源）——
+// bv_/yt_ 等外部 id 没有可翻译词源，放行只会空耗一次上游 lyric 调用再 404
 const NETEASE_ID_RE = /^\d{1,20}$/;
+const LYRIC_ID_RE = /^qq_[0-9A-Za-z]{10,20}$/;
 // 翻译负载上限：千行级歌词多半是滚动歌词逐字拆分（字数标记），整单 AI 翻译
 // 既不经济也无必要——超量直接拒
 const MAX_LYRIC_LINES = 400;
@@ -68,7 +69,13 @@ const NON_LYRIC_RE = /^(?:(?:纯音乐|instrumental|作曲|作词|编曲|监制|
 
 // callNeteaseApi 不透传 signal——上游 lyric 请求会跑到自身超时（有界），
 // 调用点在拿到结果后靠 ownsLyric/abort 检查丢弃迟到的数据
-async function fetchLyricRaw(id) {
+async function fetchLyricRaw(id, signal) {
+  const qqM = id.match(/^qq_([0-9A-Za-z]{10,20})$/);
+  if (qqM) {
+    const { getLyric } = require('../lib/qq');
+    const r = await getLyric(qqM[1], signal);
+    return { lrc: r.lyric || '', tlyric: r.trans || '' };
+  }
   const res = await callNeteaseApi('lyric', { id });
   return {
     lrc: res.body?.lrc?.lyric || '',
@@ -89,7 +96,7 @@ app.post('/ai/lyric-translate', async (c) => {
     body = {};
   }
   const id = String(body?.id ?? '');
-  if (!NETEASE_ID_RE.test(id)) return fail(c, 400, '非法 songId');
+  if (!NETEASE_ID_RE.test(id) && !LYRIC_ID_RE.test(id)) return fail(c, 400, '非法 songId');
   const signal = c.req.raw.signal;
 
   const db = getDb();
@@ -130,14 +137,15 @@ app.post('/ai/lyric-translate', async (c) => {
   try {
     // 排队期间客户端可能已断连——拿到 gate 后先查 aborted，别再烧上游+AI
     if (signal?.aborted) return c.body(null, 499);
-    const { lrc, tlyric: rawTlyric } = await fetchLyricRaw(id);
+    const { lrc, tlyric: rawTlyric } = await fetchLyricRaw(id, signal);
     const tlyric = typeof rawTlyric === 'string' ? rawTlyric : String(rawTlyric || '');
     if (tlyric.trim()) {
-      // 官方译文直回——也落库，下次连上游都不用打
+      // 官方译文直回——也落库，下次连上游都不用打（model 记录词源而非固定 netease）
+      const srcModel = id.startsWith('qq_') ? 'qq' : 'netease';
       db.prepare(`INSERT INTO song_lyric_translation (song_id, tlyric, model)
-        VALUES (?, ?, 'netease') ON CONFLICT(song_id) DO UPDATE SET
-        tlyric = excluded.tlyric, model = 'netease', updated_at = CURRENT_TIMESTAMP`).run(id, tlyric);
-      return c.json({ code: 200, tlyric, source: 'netease' });
+        VALUES (?, ?, ?) ON CONFLICT(song_id) DO UPDATE SET
+        tlyric = excluded.tlyric, model = excluded.model, updated_at = CURRENT_TIMESTAMP`).run(id, tlyric, srcModel);
+      return c.json({ code: 200, tlyric, source: srcModel });
     }
     const lines = parseLrcLines(lrc);
     if (!lines.length) {

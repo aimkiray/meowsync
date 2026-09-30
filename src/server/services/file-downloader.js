@@ -6,6 +6,40 @@ const path = require('path');
 const { pipeline } = require('stream/promises');
 const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
 const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
+const qq = require('../lib/qq');
+
+// qq_<songmid> 曲目的服务端下载分发：QQ 有真实元数据与权威歌词，与 bv_/yt_
+// 的「跳过服务端下载」不同——按前缀分发到 qq 原语，回落路径与网易云链同构。
+// 流地址宿主限定腾讯音乐 CDN 两族（sip 可能回裸 IP——后缀判定天然拒绝）
+const QQ_ID_RE = /^qq_([0-9A-Za-z]{10,20})$/;
+const QQ_STREAM_HOST_OK = (h) => h === 'qqmusic.qq.com' || h.endsWith('.qqmusic.qq.com')
+  || h === 'tc.qq.com' || h.endsWith('.tc.qq.com');
+const QQ_TIER_BR = { RS01: null, F000: null, M800: 320000, M500: 128000, C400: 96000 };
+
+// vkey 档梯取第一条能过代理校验的回链（与 routes/qq.js pickStream 同口径）
+async function qqPickStreamUrl(mid, signal) {
+  const cands = await qq.getStreamCandidates(mid, null, qq.BEST_LADDER, signal);
+  for (const cand of cands) {
+    const url = cand.urls.find(u => {
+      const checked = normalizeOutboundUrl(u);
+      return checked.ok && QQ_STREAM_HOST_OK(checked.url.hostname);
+    });
+    if (url) return { url, tier: cand.tier };
+  }
+  // filename 需 media_mid——与 songmid 不等时拿详情回填重试（routes/qq.js 同逻辑）
+  const detail = await qq.getSongDetail(mid, signal).catch(() => null);
+  if (detail?.mediaMid && detail.mediaMid !== mid) {
+    const retry = await qq.getStreamCandidates(mid, detail.mediaMid, qq.BEST_LADDER, signal);
+    for (const cand of retry) {
+      const url = cand.urls.find(u => {
+        const checked = normalizeOutboundUrl(u);
+        return checked.ok && QQ_STREAM_HOST_OK(checked.url.hostname);
+      });
+      if (url) return { url, tier: cand.tier };
+    }
+  }
+  return null;
+}
 
 // 下载 URL 来自上游 API/歌单元数据（网易云/解锁源），不是直接用户输入——但明文 http 源站
 // 可被链路篡改成 302 到内网/云元数据地址，与 proxy.js 同一威胁模型：每跳都做公网校验
@@ -321,6 +355,28 @@ function pathWithExt(outputPath, ext) {
 
 async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal) {
   try {
+    // qq_<songmid> 分发：QQ 源直链（BEST 档梯）→ 同一条 fetchStream 守卫管线
+    const qqM = String(songId).match(QQ_ID_RE);
+    if (qqM) {
+      const hit = await qqPickStreamUrl(qqM[1], signal);
+      if (!hit) throw fatalError('QQ 音乐无可用音源（可能需要 VIP 权限或地域限制）');
+      throwIfAborted(signal);
+      const finalPath = pathWithExt(outputPath, qq.QUALITY_TIERS[hit.tier]?.ext || 'm4a');
+      fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+      const resp = await fetchStream(hit.url, { timeout: 300000, signal });
+      if (resp.status !== 200 && resp.status !== 206) {
+        resp.data.destroy();
+        throw fatalError(`上游返回 ${resp.status}`);
+      }
+      const saved = await streamToFile(resp, finalPath, {
+        maxBytes: MAX_AUDIO_BYTES, onProgress, maxTotalMs: 300000
+      });
+      return {
+        path: saved.path, size: saved.size, url: hit.url,
+        br: QQ_TIER_BR[hit.tier] ?? null,
+        unblocked: false, unblockedSource: `qq/${hit.tier}`
+      };
+    }
     // 进程内直调上游模块 + 共享解锁后处理（purpose=download：不走 audio-proxy），
     // 不经过 HTTP 自调——避免依赖服务端口配置，也省去一圈 loopback 开销
     let result;
@@ -403,7 +459,10 @@ async function downloadLyrics(songId, outputPath, signal) {
       err.aborted = true;
       throw err;
     }
-    const response = await callNeteaseApi('lyric', { id: songId });
+    const qqLm = String(songId).match(QQ_ID_RE);
+    const response = qqLm
+      ? await qq.getLyric(qqLm[1], signal).then(r => ({ body: { code: r.lyric ? 200 : 404, lrc: { lyric: r.lyric } } }))
+      : await callNeteaseApi('lyric', { id: songId });
     if (signal?.aborted) {
       const err = new Error('已取消');
       err.aborted = true;

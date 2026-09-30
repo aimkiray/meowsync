@@ -14,7 +14,10 @@ const app = new Hono();
 // "获取源文件"的解锁链 CDN 不带 ACAO 必须走同源代理。白名单只决定"能代理谁"，
 // SSRF 防线由下方逐跳 resolvesToPublicIp 兜底
 const ALLOWED_HOSTS = ['googlevideo.com', 'music.126.net', 'kuwo.cn',
-  'bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
+  'bilivideo.com', 'bilivideo.cn', 'hdslb.com',
+  // QQ 音流：ws./isure./dl.stream.qqmusic.qq.com 与 aqqmusic.tc.qq.com 系
+  // sip 偶发返回裸 IP 宿主——后缀匹配天然拒绝 IP 字面量，候选自动降级
+  'qqmusic.qq.com', 'tc.qq.com'];
 // B 站 CDN 防盗链要求 Referer 头——只对 bilivideo 系注入，不给无关域透信息
 const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
 const MAX_REDIRECTS = 5;

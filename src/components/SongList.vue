@@ -235,11 +235,12 @@
             @keydown.enter="downloadSongDirect(menuSong, 320000)"
             @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
-            <PixelIcon name="download" :size="13" /> {{ (menuSong?.bilibili || menuSong?.youtube) ? '获取源文件（最优音质）' : '获取源文件 (320k)' }}
+            <PixelIcon name="download" :size="13" /> {{ (menuSong?.bilibili || menuSong?.youtube || menuSong?.qq) ? '获取源文件（最优音质）' : '获取源文件 (320k)' }}
           </div>
 
           <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
-               local_pl_/saved_queue_ 经镜像链走既有路由。外部导入曲（B 站/YouTube）无服务端下载源不渲染 -->
+               local_pl_/saved_queue_ 经镜像链走既有路由。外部导入曲中 B 站/YouTube
+               无服务端下载源不渲染，qq_ 有直链源（file-downloader 前缀分发）照常显示 -->
           <div
             v-if="!isShareShell && selectedPlaylist && !menuSong?.bilibili && !menuSong?.youtube && !String(menuSong?.id ?? '').startsWith('bv_') && !String(menuSong?.id ?? '').startsWith('yt_')"
             class="pg-menu-item"
@@ -778,12 +779,15 @@ export default {
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
       // 带 view=watch：冷启动打开分享链后落在播放页（YTM watch 同款直达）；
-      // B 站导入曲走 ?bili=BV 链、YouTube 走 ?yt=<videoId>——?song= 只认网易云数值 id；分P带 p 参数
+      // B 站导入曲走 ?bili=BV 链、YouTube 走 ?yt=<videoId>、QQ 走 ?qq=<mid>——
+      // ?song= 只认网易云数值 id；分P带 p 参数
       const shareUrl = song.bilibili?.bvid
         ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
         : song.youtube?.videoId
           ? `${window.location.origin}/?yt=${song.youtube.videoId}&view=watch`
-          : `${window.location.origin}/?song=${song.id}&view=watch`
+          : song.qq?.mid
+            ? `${window.location.origin}/?qq=${song.qq.mid}&view=watch`
+            : `${window.location.origin}/?song=${song.id}&view=watch`
 
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistNames}`,
@@ -813,10 +817,12 @@ export default {
         downloadingStates.value[song.id] = true
         // blob 下载全程无浏览器自带进度提示——先给一个开始戳记，终点由浏览器下载栏呈现
         toast(`正在获取「${song.name}」…`, 'info')
-        // 外部导入曲没有网易云下载链——拉自己的 /bilibili|youtube/stream
-        // （prefer=best：B 站可拿 Hi-Res FLAC/杜比，YouTube 拿 Opus 251）
+        // 外部导入曲没有网易云下载链——拉自己的 /bilibili|youtube|qq/stream
+        // （prefer=best：B 站可拿 Hi-Res FLAC/杜比，YouTube 拿 Opus 251，
+        // QQ 可拿 RS01/F000 无损档）
         if (song.bilibili?.bvid) await musicApi.downloadBilibiliSong(song)
         else if (song.youtube?.videoId) await musicApi.downloadYouTubeSong(song)
+        else if (song.qq?.mid) await musicApi.downloadQQSong(song)
         else await musicApi.downloadSong(song, bitrate)
       } catch (error) {
         console.error('下载失败:', error)

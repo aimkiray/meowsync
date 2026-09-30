@@ -51,6 +51,46 @@ export function isYouTubeInput(input) {
   return !!s && YT_URL_RES.some(re => re.test(s));
 }
 
+// QQ 音乐输入识别：只认无歧义形态——y.qq.com 系链接、?qq= 本站还原链、
+// qqmusic:// 协议、qq:<mid> 显式前缀。裸 songmid（14 位字母数字）与歌单
+// disstid（纯数字）跟关键词/网易云 id 同型歧义，裸串一律走正常搜索
+const QQ_SONG_URL_RES = [
+  /songmid=([0-9A-Za-z]{10,20})/i,
+  /songDetail\/([0-9A-Za-z]{10,20})/i,
+  /qq\.com\/[^ ]*?\/song\/([0-9A-Za-z]{10,20})\.html/i,
+  /[?&]qq=([0-9A-Za-z]{10,20})/i,
+  /^qq:([0-9A-Za-z]{10,20})$/i,
+];
+
+export function isQQInput(input) {
+  const s = String(input || '').trim();
+  if (!s) return false;
+  if (extractQQPlaylistId(s)) return false; // 歌单链接走歌单导入分支，不进单曲导入
+  return QQ_SONG_URL_RES.some(re => re.test(s)) || /qqmusic:\/\//i.test(s);
+}
+
+export function extractQQSongMid(input) {
+  const s = String(input || '').trim();
+  if (!s) return null;
+  for (const re of QQ_SONG_URL_RES) {
+    const m = s.match(re);
+    if (m) return m[1];
+  }
+  const sid = s.match(/[?&]songid=(\d+)/i)?.[1];
+  if (sid) return { songid: sid };
+  return null;
+}
+
+// QQ 歌单识别：y.qq.com/n/ryqq[_v2]/playlist/<disstid>、分享页 taoge.html?id=
+export function extractQQPlaylistId(input) {
+  const s = String(input || '').trim();
+  if (!/(?:y\.qq\.com|qq\.com|qqmusic)/i.test(s)) return null;
+  return s.match(/\/playlist\/(\d+)/i)?.[1]
+    || s.match(/taoge\.html[^ ]*?[?&]id=(\d+)/i)?.[1]
+    || s.match(/[?&]disstid=(\d+)/i)?.[1]
+    || null;
+}
+
 // 网易云歌曲 id 提取：music.163.com/song?id= / song/N / ?song=N / 裸数字。
 // 点歌框语境下裸数字即歌曲 id（歌单 id 歧义由外层语义决定）
 export function extractNeteaseSongId(input) {
