@@ -17,7 +17,7 @@
         <p class="playlist-hero-sub">
           {{ selectedPlaylist.creator?.nickname || '神秘创建者' }} · {{ selectedPlaylist.trackCount || songs.length }} 首
         </p>
-        <!-- 主按钮墨块 / 随机幽灵键 / VIP 过滤收敛为 chip 开关 -->
+        <!-- 主按钮墨块 / 随机、VIP 过滤同为幽灵键；on 态 accent 字 + ✓ 前缀 -->
         <div class="playlist-hero-actions">
           <button
             @click="$emit('play-all')"
@@ -31,10 +31,11 @@
           ><PixelIcon name="shuffle" :size="15" /> 随机</button>
           <button
             @click="$emit('toggle-vip-songs')"
-            class="pg-chip"
-            :class="{ 'pg-chip--on': showVipSongs }"
+            class="ink-btn ink-btn--ghost hero-vip-toggle"
+            :aria-pressed="showVipSongs"
             title="切换VIP歌曲显示"
           >
+            <PixelIcon v-if="showVipSongs" name="check" :size="13" />
             {{ showVipSongs ? '隐藏VIP' : '显示VIP' }}
           </button>
         </div>
@@ -285,8 +286,9 @@
   align-items: center;
 }
 
-/* 动作行内 chip 开关与同排 ink-btn 同高（36 档）——否则 25px 悬在中间 */
-.playlist-hero-actions .pg-chip { height: 36px; padding: 0 14px; }
+/* VIP 开关 on 态：accent 字色 + ✓ 前缀表达 toggle；缩写词豁免 CTA 小写规则 */
+.hero-vip-toggle { text-transform: none; }
+.hero-vip-toggle[aria-pressed="true"] { color: var(--accent-magenta-ink); }
 
 /* ── 加载 / 空态 ── */
 .song-state {
