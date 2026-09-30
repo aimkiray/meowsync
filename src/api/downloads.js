@@ -119,7 +119,10 @@ export const downloadsApi = {
       ar: (Array.isArray(t.ar) ? t.ar : t.artists || []).map(a => ({ name: a?.name })),
       al: {
         name: t.al?.name || t.album?.name || '',
-        picUrl: t.al?.picUrl || t.album?.picUrl || ''
+        picUrl: t.al?.picUrl || t.album?.picUrl || '',
+        // pic_str 是上游专辑对象的双生字段——有些专辑只有它没有 picUrl，
+        // 下载管理器取封面会先试 picUrl 再兜 pic_str，丢了会让封面静默缺失
+        pic_str: t.al?.pic_str || t.album?.pic_str || ''
       },
       dt: t.dt || t.duration || 0
     }))

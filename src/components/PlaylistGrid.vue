@@ -209,7 +209,8 @@ export default {
     })
 
     const sharePlaylist = async (playlist) => {
-      const shareUrl = `${window.location.origin}/?playlist=${playlist.id}`
+      // 与 PlaylistPanel 同一链形态：view=songs&pl= 让接收端直落歌曲页
+      const shareUrl = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
       const result = await shareOrCopy({
         title: `🎵 歌单：${playlist.name}`,
         text: `来看看这个歌单：${playlist.name}`,

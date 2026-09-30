@@ -226,7 +226,7 @@ import { musicApi } from './api/music'
 import { downloadsApi } from './api/downloads'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
-import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId } from './lib/song'
+import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
 import { httpsCover } from './lib/url'
@@ -605,11 +605,11 @@ export default {
     }
 
     // 侧栏选歌单：回歌曲视图 + 移动端收起抽屉
-    const selectPlaylistAndShow = async (playlist) => {
+    const selectPlaylistAndShow = async (playlist, opts) => {
       centerView.value = 'songs'
       sidebarOpen.value = false
       pushNavState(playlist)
-      await selectPlaylist(playlist)
+      await selectPlaylist(playlist, opts)
     }
 
     const loadPlaylistByIdAndAdd = async (id) => {
@@ -799,9 +799,10 @@ export default {
         }
 
         // 本地单可能有服务端镜像产物（镜像行+下载任务+文件）——通知服务端级联清；
-        // 失败仅留孤儿行，本地删除照常生效
-        if (isLocalPlaylistId(playlist.id)) {
-          downloadsApi.removeLocalMirror(playlist.id).catch(() => {})
+        // 失败仅留孤儿行，本地删除照常生效。single_song_ 壳从不镜像，不发空炮
+        if (isLocalPlaylistId(playlist.id) && !isSingleSongShellId(playlist.id)) {
+          downloadsApi.removeLocalMirror(playlist.id).catch(err =>
+            console.warn('镜像清理失败（留孤儿行）:', playlist.id, err?.message))
         }
 
         savePlaylistsToStorage()
@@ -2486,14 +2487,32 @@ export default {
         }
         pl.tracks = tracks
         pl.trackCount = tracks.length
+        if (name !== '分享歌单') pl.name = name
         if (!pl.coverImgUrl) pl.coverImgUrl = tracks[0]?.al?.picUrl || ''
-        if (!existing) userPlaylists.value.unshift(pl)
-        // mix 壳是分享导入的快照，封顶 20 个（最新的在头）——防长期累积撞配额
+        if (existing) {
+          // 空壳重建也要提头——留在原位的旧壳可能被下面的封顶剪枝当场剪掉
+          const idx = userPlaylists.value.findIndex(p => String(p.id) === mixId)
+          if (idx > 0) {
+            userPlaylists.value.splice(idx, 1)
+            userPlaylists.value.unshift(pl)
+          }
+        } else {
+          userPlaylists.value.unshift(pl)
+        }
+        // mix 壳是分享导入的快照，封顶 20 个（最新的在头）——防长期累积撞配额。
+        // 被剪掉的壳可能已建过服务端镜像——剪枝时同步级联清，防孤儿行+文件泄漏
         let mixSeen = 0
-        userPlaylists.value = userPlaylists.value.filter(p =>
-          !String(p.id).startsWith('local_pl_mix_') || ++mixSeen <= 20)
+        const pruned = []
+        userPlaylists.value = userPlaylists.value.filter(p => {
+          if (!String(p.id).startsWith('local_pl_mix_')) return true
+          if (++mixSeen <= 20) return true
+          pruned.push(p.id)
+          return false
+        })
+        for (const pid of pruned) downloadsApi.removeLocalMirror(pid).catch(() => {})
         savePlaylistsToStorage()
-        selectPlaylistAndShow(pl)
+        // force：existing 空壳可能正被选中——同 id 短路会留下陈旧空列表视图
+        selectPlaylistAndShow(pl, { force: true })
         toast(`已导入「${name}」（${tracks.length} 首${skipped ? `，跳过 ${skipped} 首` : ''}）`, 'success')
       } catch (error) {
         if (myReq !== biliImportSeq) return

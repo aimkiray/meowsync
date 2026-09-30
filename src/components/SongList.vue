@@ -951,7 +951,11 @@ export default {
           toast('下载成功', 'success')
         } catch (error) {
           console.error('下载失败:', error)
-          if (stillCurrent()) toast('下载失败: ' + extractErrorMessage(error), 'error')
+          // 本地单 409 = 撞删除墓碑（镜像/级联途中）——与 PlaylistPanel 同款改写
+          if (stillCurrent()) toast(
+            isLocalPlaylist.value && error.response?.status === 409
+              ? '歌单清理中，请稍候重试'
+              : '下载失败: ' + extractErrorMessage(error), 'error')
         } finally {
           if (stillCurrent()) {
             serverDownloadingStates.value[song.id] = false
