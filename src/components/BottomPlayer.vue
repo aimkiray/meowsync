@@ -65,14 +65,14 @@
             :disabled="!currentSong || isTempPlaylist"
             aria-label="随机播放"
             title="随机播放"
-          ><PixelIcon name="shuffle" :size="16" /></button>
+          ><PixelIcon name="shuffle" :size="18" /></button>
           <button
             @click="$emit('previous')"
             class="transport"
             :disabled="!currentSong || atQueueStart"
             aria-label="上一首"
             title="上一首"
-          ><PixelIcon name="prev" :size="16" /></button>
+          ><PixelIcon name="prev" :size="18" /></button>
           <button
             @click="$emit('toggle-play')"
             class="transport transport--play"
@@ -87,14 +87,14 @@
             :disabled="!currentSong || atQueueEnd"
             aria-label="下一首"
             title="下一首"
-          ><PixelIcon name="next" :size="16" /></button>
+          ><PixelIcon name="next" :size="18" /></button>
           <button
             @click="$emit('toggle-play-mode')"
             class="transport transport--edge"
             :disabled="!currentSong"
             :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
-          ><PixelIcon :name="playModeIcon" :size="16" /></button>
+          ><PixelIcon :name="playModeIcon" :size="18" /></button>
           <!-- YTM：time-info 在中列走带簇尾部（repeat 之后），不在右簇 -->
           <span class="player-time hidden lg:inline">
             {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
