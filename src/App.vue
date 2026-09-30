@@ -15,7 +15,7 @@
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @nav-home="navHome"
       @search="handlePlaylistSearch"
-      @search-by-id="loadPlaylistByIdAndAdd"
+      @search-by-id="previewPlaylistById"
       @search-bili="importBilibili"
     />
 
@@ -56,6 +56,7 @@
           :show-vip-songs="showVipSongs"
           :selected-playlist="selectedPlaylist"
           :playlist-downloads-refresh-key="playlistDownloadsRefreshKey"
+          :playlist-in-library="selectedPlaylistInLibrary"
           @play-song="openWatchSong"
           @play-all="playPlaylistAndWatch(false)"
           @play-shuffle="playPlaylistAndWatch(true)"
@@ -65,6 +66,7 @@
           @add-songs="openSongPicker"
           @remove-from-playlist="removeSongFromPlaylist"
           @sync-playlist="syncPlaylist"
+          @collect-playlist="collectSelectedPlaylist"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
         />
         <PlaylistGrid
@@ -677,35 +679,50 @@ export default {
       await selectPlaylist(playlist, opts)
     }
 
-    const loadPlaylistByIdAndAdd = async (id) => {
+    // 顶栏数字 id 搜索：只预览不自动入库——入库与否由用户决定
+    // （hero「收藏歌单」/搜索结果卡 + 键/点歌台直加自动收藏），
+    // 避免「搜过一次 = 永久长进侧栏」的噪音积累。已入库则直接打开。
+    const previewPlaylistById = async (id) => {
       try {
         loading.value = true
-        console.log('🔍 通过ID加载歌单:', id)
-        
-        // 检查是否已存在（确保ID类型一致）
-        const exists = userPlaylists.value.find(p => String(p.id) === String(id))
-        if (exists) {
-          console.log('ℹ️ 歌单已存在于库中:', exists.name)
+        console.log('🔍 通过ID预览歌单:', id)
+        const lib = userPlaylists.value.find(p => String(p.id) === String(id))
+        if (lib) {
+          await selectPlaylistAndShow(lib)
           searchQuery.value = ''
           return
         }
-        
         const playlist = await musicApi.getPlaylistDetail(id)
-        // 接口对不存在的歌单返回无 id 的空壳对象（{ tracks: [] }），须校验后再入库
+        // 接口对不存在的歌单返回无 id 的空壳对象（{ tracks: [] }），须校验后再打开
         if (playlist && playlist.id != null) {
-          console.log('✅ 歌单加载成功:', playlist.name)
-          await addPlaylistToLibrary(playlist)
-          console.log('✅ 歌单已添加到库中')
-          
-          // 清空搜索框
+          await openSearchPlaylist(playlist)
           searchQuery.value = ''
         } else {
-          console.warn('⚠️ 未找到歌单或返回数据无效:', id)
+          toast('未找到该歌单', 'info')
         }
       } catch (error) {
-        console.error('❌ 加载歌单失败:', error)
+        console.error('❌ 加载歌单预览失败:', error)
+        toast('歌单加载失败', 'error')
       } finally {
         loading.value = false
+      }
+    }
+
+    // 当前选中单是否已在库（hero「收藏歌单」显隐依据）
+    const selectedPlaylistInLibrary = computed(() =>
+      !!selectedPlaylist.value
+        && userPlaylists.value.some(p => String(p.id) === String(selectedPlaylist.value.id)))
+
+    const collectSelectedPlaylist = async () => {
+      const pl = selectedPlaylist.value
+      if (!pl || pl.id == null || isLocalPlaylistId(pl.id)) return
+      if (selectedPlaylistInLibrary.value) return
+      await addPlaylistToLibrary(pl)
+      if (selectedPlaylistInLibrary.value) {
+        toast(`已收藏《${pl.name}》到歌单库`, 'success')
+        glitchBurst() // 入库是状态变化时刻——与新建歌单同款的确认感
+      } else {
+        toast('收藏失败', 'error')
       }
     }
 
@@ -3110,8 +3127,10 @@ export default {
       homeLoading,
 
       // 方法
-      loadPlaylistByIdAndAdd,
+      previewPlaylistById,
       loadPlaylistById,
+      selectedPlaylistInLibrary,
+      collectSelectedPlaylist,
       importBilibili,
       importMixPlaylist,
       addPlaylistToLibrary,

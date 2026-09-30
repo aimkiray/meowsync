@@ -45,6 +45,14 @@
             class="ink-btn ink-btn--ghost"
             title="与远端同步曲目：远端增删会生效，本地添加/移除保留"
           ><PixelIcon name="m-loop" :size="14" /> 同步</button>
+          <!-- 收藏：预览态远端单（搜索/链接打开未入库）显式入库入口——
+               搜索只预览不自动加，用户自主选择（本地单无远端实体，天然在库） -->
+          <button
+            v-if="!isLocalPlaylist && !playlistInLibrary"
+            @click="$emit('collect-playlist')"
+            class="ink-btn ink-btn--ghost"
+            title="收藏到歌单库（否则刷新后此单从侧栏消失）"
+          ><PixelIcon name="plus" :size="15" /> 收藏歌单</button>
           <!-- 点歌台：搜索网易云/粘 B 站链接向本单追加。single_song_ 壳是单曲
                容器，加第二首会改其语义——保持隐藏（与行级菜单同口径） -->
           <button
@@ -643,9 +651,14 @@ export default {
     playlistDownloadsRefreshKey: {
       type: Number,
       default: 0
+    },
+    // 选中远端单是否已在库——hero「收藏歌单」显隐（本地单恒在库，模板侧已挡）
+    playlistInLibrary: {
+      type: Boolean,
+      default: true
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})
