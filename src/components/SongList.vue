@@ -73,7 +73,7 @@
           <!-- 行首序号：常态等宽数字，悬停/当前曲换 ▶ -->
           <span class="song-row-index">
             <span class="song-row-index-num">{{ index + 1 }}</span>
-            <span class="song-row-index-play"><PixelIcon name="play" :size="11" /></span>
+            <span class="song-row-index-play"><PixelIcon name="play" :size="16" /></span>
           </span>
           <div
             class="song-cover-wrap"
