@@ -393,6 +393,7 @@ export default {
     let currentAbortController = null // 用于取消正在进行的网络请求
     let currentPlayingId = null // 当前正在播放的歌曲ID，用于防止竞态条件
     let selectReqId = 0 // selectPlaylist 请求序号，防止慢响应覆盖新选择
+    let previewSeq = 0 // 顶栏 id 预览序闸：selectPlaylist/playSong/新搜索都会顶掉它
     let searchReqId = 0 // searchPlaylists 请求序号，同上
 
     // 远程控制模式
@@ -613,8 +614,11 @@ export default {
         const target = plId
           ? userPlaylists.value.find(p => String(p.id) === String(plId))
           : null
-        // pl 无效/歌单已被删：有选中歌单则仅切视图，否则退回首页
+        // pl 无效/歌单已被删：有选中歌单则仅切视图，否则退回首页。
+        // 库外数字 pl = 预览单地址栏态——回落预览路径让 ?pl= 可刷新/可回退
+        //（分享链 ?playlist=X&view=songs&pl=X 的接收端若删过默认单也能预览兜底）
         if (target) selectPlaylist(target)
+        else if (plId && /^\d+$/.test(plId)) { previewPlaylistById(plId); return }
         else if (!selectedPlaylist.value) { centerView.value = 'home'; return }
       }
       // 冷加载的 ?view=search 没有任何结果，落在空网格上不如回首页
@@ -633,6 +637,7 @@ export default {
 
     // 顶栏搜索：并行搜 歌单 + 单曲（YTM 分区结果）；序号守卫防连搜覆盖
     const handlePlaylistSearch = async (query) => {
+      previewSeq++ // 新搜索意图作废在途 id 预览
       centerView.value = 'search'
       pushNavState()
       const myReq = ++searchReqId
@@ -682,29 +687,35 @@ export default {
     // 顶栏数字 id 搜索：只预览不自动入库——入库与否由用户决定
     // （hero「收藏歌单」/搜索结果卡 + 键/点歌台直加自动收藏），
     // 避免「搜过一次 = 永久长进侧栏」的噪音积累。已入库则直接打开。
-    const previewPlaylistById = async (id) => {
+    const previewPlaylistById = async (id, rawQuery) => {
+      const myReq = ++previewSeq
       try {
-        loading.value = true
+        // loadingSongs 而非 loading——loading 是侧栏整板 spinner，预览期间侧栏全空闪
+        loadingSongs.value = true
         console.log('🔍 通过ID预览歌单:', id)
         const lib = userPlaylists.value.find(p => String(p.id) === String(id))
         if (lib) {
           await selectPlaylistAndShow(lib)
-          searchQuery.value = ''
+          if (!rawQuery || searchQuery.value.trim() === rawQuery.trim()) searchQuery.value = ''
           return
         }
         const playlist = await musicApi.getPlaylistDetail(id)
+        // 在途间用户做了别的（新搜索/点歌/选单）→ 预览作废，不得抢视图
+        if (myReq !== previewSeq) return
         // 接口对不存在的歌单返回无 id 的空壳对象（{ tracks: [] }），须校验后再打开
         if (playlist && playlist.id != null) {
           await openSearchPlaylist(playlist)
-          searchQuery.value = ''
+          // 只在框里还是本次提交的输入时才清——预览途中用户新敲的字不抹
+          if (!rawQuery || searchQuery.value.trim() === rawQuery.trim()) searchQuery.value = ''
         } else {
           toast('未找到该歌单', 'info')
         }
       } catch (error) {
+        if (myReq !== previewSeq) return
         console.error('❌ 加载歌单预览失败:', error)
-        toast('歌单加载失败', 'error')
+        toast('歌单加载失败: ' + (error.response?.data?.message || error.message), 'error')
       } finally {
-        loading.value = false
+        if (myReq === previewSeq) loadingSongs.value = false
       }
     }
 
@@ -713,16 +724,23 @@ export default {
       !!selectedPlaylist.value
         && userPlaylists.value.some(p => String(p.id) === String(selectedPlaylist.value.id)))
 
+    let collectingPl = false
     const collectSelectedPlaylist = async () => {
       const pl = selectedPlaylist.value
       if (!pl || pl.id == null || isLocalPlaylistId(pl.id)) return
-      if (selectedPlaylistInLibrary.value) return
-      await addPlaylistToLibrary(pl)
-      if (selectedPlaylistInLibrary.value) {
-        toast(`已收藏《${pl.name}》到歌单库`, 'success')
-        glitchBurst() // 入库是状态变化时刻——与新建歌单同款的确认感
-      } else {
-        toast('收藏失败', 'error')
+      if (selectedPlaylistInLibrary.value || collectingPl) return // 在途闸：双击不重复 toast
+      collectingPl = true
+      try {
+        await addPlaylistToLibrary(pl)
+        // 按捕获的 pl.id 直查库——await（空 tracks 会 refetch）期间用户切单
+        // 不能让「当前选中」computed 把真实的入库成功误报成失败
+        if (userPlaylists.value.some(p => String(p.id) === String(pl.id))) {
+          toast(`已收藏《${pl.name}》到歌单库`, 'success')
+        } else {
+          toast('收藏失败', 'error')
+        }
+      } finally {
+        collectingPl = false
       }
     }
 
@@ -1068,6 +1086,7 @@ export default {
       if (!force && String(selectedPlaylist.value?.id) === String(playlist.id)) return true
 
       biliImportSeq++ // 用户选了别的歌单——在途 B 站解析回包不得抢播放/强跳视图
+      previewSeq++     // 同上，作废在途的 id 预览（防回包强跳视图）
       const myReq = ++selectReqId
       try {
         // silent（手动同步复跑）：不闪 loading，行表直接热替换
@@ -1142,6 +1161,13 @@ export default {
           // syncPlaylist 的 `|| pl` 回退靠它做增量 diff
           merged.lastRemoteIds = [...authoritativeIds]
           merged.lastSyncedAt = Date.now()
+          if (!libPl) {
+            // 非库预览单：merged 快照自身就是存储——净化后的墓碑/追加要随它传下去。
+            // 剥离不带（plBase 剥键是防陈旧快照回退 libPl 刚写的值），非库单没有
+            // libPl 可挡——丢了就是「本次同步消费一次墓碑，二次同步复活已删曲」
+            merged.removedTrackIds = keptRemoved
+            merged.addedTracks = addedTracks
+          }
           selectedPlaylist.value = merged
 
           // 更新本地歌单库中的数据
@@ -1784,7 +1810,11 @@ export default {
         }
         return
       }
-      const after = new Set((libPl.lastRemoteIds || []).map(String))
+      // 用户中途换了单——diff 报告没有意义，静默收
+      if (String(selectedPlaylist.value?.id) !== String(pl.id)) return
+      // after 读 selectedPlaylist 的新 merged——非库预览单的新基线只写在那里
+      // （libPl 的 `|| pl` 回退拿到的是旧快照对象，重读它恒等于 before）
+      const after = new Set((selectedPlaylist.value.lastRemoteIds || []).map(String))
       const added = [...after].filter(id => !before.has(id)).length
       const gone = [...before].filter(id => !after.has(id)).length
       if (!added && !gone) {
@@ -1903,6 +1933,7 @@ export default {
     const playSong = async (song, options = {}) => {
       if (!song || song.id == null) return
       biliImportSeq++ // 用户点了别的歌——同上，作废在途 B 站解析
+      previewSeq++     // 同上，作废在途的 id 预览
       const { autoplay = true, seekTime = 0, preserveContext = false } = options
 
       console.log('🎵 播放歌曲:', song.name)
@@ -1934,15 +1965,20 @@ export default {
           playingPlaylistId.value = selectedPlaylist.value?.id ?? null
         }
 
-        // 播即收藏：打开搜索结果歌单（不入库）后若真在播放，说明用户认可它——
-        // 静默入库，否则刷新恢复会找不到该歌单（restorePlaybackState 只查库），
-        // 播放位置随 selectedPlaylistId 一起蒸发
+        // 播即收藏：播放认领了某歌单上下文（playingPlaylistId 指向它）才入库——
+        // restorePlaybackState 只查库，不入库则刷新后播放位置随 selectedPlaylistId
+        // 蒸发。preserveContext 的队列跳转（下一首/远端遥控）不认领当前预览单——
+        // 「浏览+动队列」不应等于收藏
         if (
           selectedPlaylist.value &&
+          playingPlaylistId.value != null &&
+          String(playingPlaylistId.value) === String(selectedPlaylist.value.id) &&
           !userPlaylists.value.some(p => String(p.id) === String(selectedPlaylist.value.id))
         ) {
           userPlaylists.value.push(selectedPlaylist.value)
           savePlaylistsToStorage()
+          // 预览制下入库不再静默——告诉用户它已落侧栏（一次性的强意图动作）
+          toast(`已收藏《${selectedPlaylist.value.name}》到歌单库`, 'info')
         }
 
         // 立即停止当前播放，防止多首歌同时播放

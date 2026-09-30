@@ -51,7 +51,7 @@
           <button
             class="topnav-search-go"
             :disabled="!searchQuery.trim()"
-            title="搜索 / 按ID添加歌单"
+            title="搜索 / 按ID打开歌单"
             aria-label="搜索"
             @click="handleSearch"
           ><PixelIcon name="chev-r" :size="16" /></button>
@@ -173,7 +173,7 @@ export default {
         return
       }
       const playlistId = extractPlaylistId(query)
-      emit(playlistId ? 'search-by-id' : 'search', playlistId || query)
+      emit(playlistId ? 'search-by-id' : 'search', playlistId || query, query)
     }
 
     // ── 搜索建议（YTM typeahead） ──
