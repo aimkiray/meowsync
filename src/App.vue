@@ -41,10 +41,10 @@
           v-if="centerView === 'home'"
           :toplists="homeToplists"
           :personalized="homePersonalized"
-          :hots="homeHots"
+          :recents="playHistory"
           :loading="homeLoading"
           @open="openSearchPlaylist"
-          @search="handlePlaylistSearch"
+          @play-song="openWatchRecent"
         />
         <SongList
           v-else-if="centerView === 'songs'"
@@ -240,6 +240,7 @@ export default {
     const fullscreenInteractionMode = ref('auto')
     const PLAYER_STATE_STORAGE_KEY = 'meowsync-player-state'
     const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
+    const PLAY_HISTORY_STORAGE_KEY = 'meowsync-play-history'
     const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
     let restorePlayerState = null
     let lastSavedWholeSecond = -1
@@ -252,10 +253,10 @@ export default {
     const playlistDownloadsRefreshKey = ref(0)
     const topNavRef = ref(null) // 「/」快捷键聚焦搜索框
 
-    // 首页发现流数据（toplist/personalized/search_hot）
+    // 首页发现流数据（toplist/personalized）+ 最近播放历史
     const homeToplists = ref([])
     const homePersonalized = ref([])
-    const homeHots = ref([])
+    const playHistory = ref([])
     const homeLoading = ref(false)
     
     let howl = null
@@ -1061,6 +1062,12 @@ export default {
       playSongFromSearch(song)
     }
 
+    // 首页最近播放：队列上下文就是历史列表本身（连播沿着记录往下走）
+    const openWatchRecent = (song, list) => {
+      enterWatch()
+      playSongFromRelated(song, list)
+    }
+
     const playPlaylistAndWatch = (shuffle) => {
       enterWatch()
       playPlaylist(shuffle)
@@ -1168,16 +1175,15 @@ export default {
       homeLoading.value = true
       const settled = Promise.allSettled([
         musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) }),
-        musicApi.getPersonalized(12).then(list => { homePersonalized.value = list }),
-        musicApi.getSearchHot().then(list => { homeHots.value = list.slice(0, 12) })
+        musicApi.getPersonalized(12).then(list => { homePersonalized.value = list })
       ])
       settled.then(results => {
         // allSettled 吞掉每路报错——留个脚印，否则全挂时控制台静默
         results.forEach(r => {
           if (r.status === 'rejected') console.warn('[home]', r.reason?.message || r.reason)
         })
-        // 三路全空（全失败/全空数组）解开一次性闩锁——回到首页或网络恢复时可重试
-        if (!homeToplists.value.length && !homePersonalized.value.length && !homeHots.value.length) {
+        // 两路全空（全失败/全空数组）解开一次性闩锁——回到首页或网络恢复时可重试
+        if (!homeToplists.value.length && !homePersonalized.value.length) {
           homeLoaded = false
         }
       })
@@ -1193,6 +1199,19 @@ export default {
     // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
     // preserveContext=true 表示本次切歌属于播放队列内导航（上一首/下一首/远端点歌），
     // 沿用已有快照；默认则从当前浏览列表拍新快照。
+    // 最近播放：按 id 去重置顶、截 20 首；只存渲染/重播需要的字段，
+    // 接口原始对象（含 alia 等大字段）整只塞 storage 会撑爆配额
+    const recordPlayHistory = (song) => {
+      if (!song || song.id == null) return
+      const entry = {
+        id: song.id, name: song.name,
+        ar: song.ar || song.artists, al: song.al || song.album,
+        dt: song.dt ?? song.duration, fee: song.fee, privilege: song.privilege
+      }
+      playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
+      writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
+    }
+
     const playSong = async (song, options = {}) => {
       if (!song || song.id == null) return
       const { autoplay = true, seekTime = 0, preserveContext = false } = options
@@ -1334,6 +1353,7 @@ export default {
 
             isPlaying.value = true
             playbackError.value = '' // 重试成功后清掉"播放被阻止"等提示
+            recordPlayHistory(song) // 真实起播才计入最近播放（加载失败/恢复态不记）
             startProgressLoop()
           },
           onpause: () => {
@@ -2047,8 +2067,12 @@ export default {
 
       // 单曲分享：侧栏抽屉默认收起，主区直接呈现歌曲——无需额外处理
 
-      // 加载保存的歌单
+      // 加载保存的歌单与最近播放历史（首页 recent 区块数据源）
       loadPlaylistsFromStorage()
+      const savedHistory = readJSON(PLAY_HISTORY_STORAGE_KEY)
+      if (Array.isArray(savedHistory)) {
+        playHistory.value = savedHistory.filter(s => s && s.id != null)
+      }
       restorePlayerState = loadPlayerStateFromStorage()
       restoreUiState(restorePlayerState)
 
@@ -2228,7 +2252,7 @@ export default {
       topNavRef,
       homeToplists,
       homePersonalized,
-      homeHots,
+      playHistory,
       homeLoading,
 
       // 方法
@@ -2258,6 +2282,7 @@ export default {
       enterWatch,
       openWatchSong,
       openWatchSearchSong,
+      openWatchRecent,
       playPlaylistAndWatch,
       watchBack,
       playSongFromRelated,

@@ -7,19 +7,20 @@
       <h2 class="home-title" data-nosnippet><GlitchText text="发现音乐" /></h2>
     </header>
 
-    <!-- 热搜 chips（点击直接搜） -->
-    <section v-if="hots.length" class="home-section">
+    <!-- 最近播放 chips（点击直接续播并进 watch 页，队列=历史列表） -->
+    <section v-if="recents.length" class="home-section">
       <div class="home-section-head">
-        <p class="pg-label">trending</p>
-        <span class="home-section-sub">热搜</span>
+        <p class="pg-label">recent</p>
+        <span class="home-section-sub">最近播放</span>
       </div>
       <div class="home-chips">
         <button
-          v-for="hot in hots"
-          :key="hot.first"
+          v-for="song in recents"
+          :key="song.id"
           class="pg-chip"
-          @click="$emit('search', hot.first)"
-        >{{ hot.first }}</button>
+          :title="`${song.name} - ${songArtists(song)}`"
+          @click="$emit('play-song', song, recents)"
+        >{{ song.name }}</button>
       </div>
     </section>
 
@@ -112,6 +113,7 @@
 
 <script>
 import { httpsCover } from '../lib/url'
+import { songArtists } from '../lib/song'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -128,7 +130,7 @@ export default {
       type: Array,
       default: () => []
     },
-    hots: {
+    recents: {
       type: Array,
       default: () => []
     },
@@ -137,7 +139,7 @@ export default {
       default: false
     }
   },
-  emits: ['open', 'search'],
+  emits: ['open', 'play-song'],
   computed: {
     hasShelves() {
       return this.toplists.length > 0 || this.personalized.length > 0
@@ -148,7 +150,7 @@ export default {
       if (!n || typeof n !== 'number') return ''
       return n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n)
     }
-    return { httpsCover, formatPlayCount }
+    return { httpsCover, formatPlayCount, songArtists }
   }
 }
 </script>
@@ -198,11 +200,18 @@ export default {
   color: var(--ink-64);
 }
 
-/* 热搜 chips（.pg-chip 全局类） */
+/* 最近播放 chips（.pg-chip 全局类） */
 .home-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+/* 歌名比热搜词长得多——截断兜底，别让单条 chip 撑满整行 */
+.home-chips .pg-chip {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .home-state {
