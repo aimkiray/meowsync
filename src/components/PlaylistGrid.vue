@@ -243,7 +243,7 @@ export default {
   margin-bottom: 8px;
 }
 
-/* 关闭键落在 --canvas-pink 上：accent-magenta hover 仅 ~1.4:1，用实墨保证反馈可见 */
+/* 关闭键落在 --canvas-pink 上：accent-magenta 与画布同值（hover 0 对比），用实墨保证反馈可见 */
 .grid-head .pg-icobtn:hover { color: var(--ink); }
 
 .grid-title {

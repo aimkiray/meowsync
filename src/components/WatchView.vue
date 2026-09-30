@@ -577,6 +577,9 @@ export default {
   color: var(--accent-danger-ink);
 }
 
+/* 横幅态右栏整体下移——浮层沉浸键 otherwise 压在横幅右端 */
+.watch-side:has(.watch-banner) { padding-top: 44px; }
+
 .watch-tabs { flex-shrink: 0; }
 
 .watch-side-body {

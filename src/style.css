@@ -44,17 +44,20 @@
   --canvas-teal: #09aea1;
   --canvas-sage: #abbab9;
   --canvas-pink: #fc8eac;
-  --accent-magenta: #fc8eac;       /* 火烈鸟粉：链接 hover / 激活态点缀（图形/边框） */
+  --accent-magenta: #fc8eac;       /* 火烈鸟粉：链接 hover / 激活态点缀（图形/边框）。
+                                      ⚠ 与 canvas-pink 同值——accent 件落在粉画布上零对比，须走 ink */
   --accent-green: #03aa5c;         /* 成功戳记（图形/边框） */
-  /* 深档语义色：专供纸面小字——accent 本色在 paper 上 <4.5:1 不达标 */
+  /* 深档语义色：专供纸面小字——accent 本色在 paper 上 <4.5:1 不达标；
+     ⚠ 彩纸画布上同样不达标（~2.8:1），勿在画布面上使用 */
   --accent-magenta-ink: #a83a54;
   --accent-green-ink: #027a45;
   /* 极性配对：墨面文字/图标用的 accent——暗色主题里墨面翻浅时应指向深档 */
   --accent-magenta-on-ink: var(--accent-magenta);
-  /* 错误语义独立通道：与交互 accent 解耦——双极色板主题（如 glitch）里
-     hover 走 accent、失败走 danger；默认主题 danger 回落 magenta 保持原样 */
-  --accent-danger: var(--accent-magenta);
-  --accent-danger-ink: var(--accent-magenta-ink);
+  /* 错误语义独立通道：与交互 accent 解耦——火烈鸟是浅色交互色，
+     借作 danger 会把「错误=最浅色」拖进所有 error 面（白字浅粉 2.17:1）。
+     独立为真错误红（与 glitch 同值） */
+  --accent-danger: #e5484d;
+  --accent-danger-ink: #b23237;
   --white-16: rgba(255, 255, 255, .16);
   --white-40: rgba(255, 255, 255, .40);
   --white-80: rgba(255, 255, 255, .8);
@@ -297,12 +300,12 @@
 /* 规范：window chrome 文本禁选（header/footer/hint），正文保持可选 */
 :root[data-theme="glitch-restoration"] .topnav,
 :root[data-theme="glitch-restoration"] .pg-tabs,
-:root[data-theme="glitch-restoration"] .watch-header {
+:root[data-theme="glitch-restoration"] .watch-top {
   user-select: none;
 }
 
-/* 墨条上的进度填充：teal accent 在 slate 上比纸色更亮 */
-:root[data-theme="glitch-restoration"] .bp-progress-fill { background: var(--accent-magenta); }
+/* 墨条上的进度填充：glitch 无需特判——BottomPlayer 的 .bp-progress-fill 走
+   var(--accent-magenta)，glitch 下该令牌即 teal，规则已在 scoped 层正确解析 */
 
 /* 错误面：双极的另一极要落在「面」上——tint 盒 + 红签 + tag 红光晕 +
    出现时 shake（v-if 挂载即播放一次）。规范 shake 属 reduced-motion 保留集。
@@ -985,7 +988,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-menu-item:last-child { border-bottom: none; }
 .pg-menu-item:hover { color: var(--accent-magenta-ink); }
 .pg-menu-item--danger { color: var(--accent-danger-ink); }
-.pg-menu-item--danger:hover { color: var(--accent-danger); } /* 危险项悬停仍是红色系 */
+.pg-menu-item--danger:hover { color: var(--accent-danger-ink); } /* 悬停走深档——与全站 hover→ink 同律 */
 
 /* 待播队列行（watch 侧栏共用）：行是容器，点击区收进 .queue-row-main
    ——避免 button 嵌套 role=button 的非法结构 */
@@ -1008,7 +1011,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .queue-row:hover { background: var(--ink-06); }
 .queue-row--current { background: var(--ink-10); }
-/* 当前行 ▶ 用墨色——品红在 teal/ink-10 底上仅 ~1.3:1，不达图形 3:1 线 */
+/* 当前行 ▶ 用墨色——火烈鸟 accent 在 teal/ink-10 底上仅 ~1.8:1，不达图形 3:1 线 */
 .queue-row--current .queue-row-index { color: var(--ink); font-weight: 700; }
 
 .queue-source {

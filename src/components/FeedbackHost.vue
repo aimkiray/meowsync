@@ -180,7 +180,7 @@ export default {
 }
 
 .fb-btn--danger:hover:not(:disabled) {
-  background: var(--accent-danger);
+  background: var(--accent-danger-ink); /* 深档实底——accent 本色上纸字不达标 */
   color: var(--paper);
 }
 </style>

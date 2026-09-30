@@ -441,7 +441,7 @@ export default {
     // 等 applyUrlNav 落定会先渲一帧首页再跳回刷新前视图——此处按 ?view= 预置，
     // 合法性（pl 存在/歌曲恢复成功）仍由 applyUrlNav 终局修正；
     // search 冷加载必无结果必弹回首页，不预置
-    const initialView = new URLSearchParams(window.location.search).get('view')
+    const initialView = urlParams.get('view')
     if (['songs', 'watch', 'downloads'].includes(initialView)) centerView.value = initialView
 
     // 导航 URL 构造：push 与初始化 normalize 共用，保证 pl 语义一致。
