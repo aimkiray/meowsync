@@ -13,6 +13,9 @@ const qq = require('../lib/qq');
 // 流地址宿主与 routes/qq.js 共用 lib/qq.js 的 QQ_STREAM_HOST_OK（sip 可能回
 // 裸 IP——后缀判定天然拒绝）
 const QQ_ID_RE = /^qq_([0-9A-Za-z]{10,20})$/;
+// RS01/F000=null：FLAC/Hi-Res 是 VBR，无固定码率可算——download-manager 的
+// durationLooksTruncated 对 falsy br 短路跳过，完整性由 streamToFile 的
+// content-length 对账兜底
 const QQ_TIER_BR = { RS01: null, F000: null, M800: 320000, M500: 128000, C400: 96000 };
 
 // 任务码率映射档梯：bitrate 是"目标下限"语义——<320k 的队列请求说明用户只要
@@ -24,19 +27,26 @@ const qqPickStreamUrl = (mid, signal, bitrate) =>
   qq.pickStreamUrl(mid, { ladder: qqLadderFor(bitrate), signal });
 
 // LRC 译文合并：同刻时间戳的译文行插到原文行后（标准合并格式）；
-// 译文无对应时间戳的孤儿行丢弃——贴错行比没译文更糟
+// 译文无对应时间戳的孤儿行丢弃——贴错行比没译文更糟。
+// 键归一到毫秒：lrc [00:01.23] 与 trans [00:01.230] 精度/补零不同
+// 时严格字符串相等会静默丢整曲译文
+function lrcTsKey(tag) {
+  const m = tag.match(/^\[(\d+):(\d+(?:\.\d+)?)\]$/);
+  return m ? Math.round((+m[1] * 60 + +m[2]) * 1000) : null;
+}
 function mergeLrcTrans(lrc, trans) {
   if (!trans || typeof trans !== 'string') return lrc;
   const transMap = new Map();
   for (const line of trans.split('\n')) {
     const m = line.match(/^(\[[\d:.]+\])\s*(.+)$/);
-    if (m) transMap.set(m[1], m[2]);
+    const key = m && lrcTsKey(m[1]);
+    if (key != null) transMap.set(key, { tag: m[1], text: m[2] });
   }
   if (!transMap.size) return lrc;
   return lrc.split('\n').map(line => {
     const m = line.match(/^(\[[\d:.]+\])/);
-    const t = m && transMap.get(m[1]);
-    return t ? `${line}\n${m[1]}${t}` : line;
+    const hit = m && transMap.get(lrcTsKey(m[1]));
+    return hit ? `${line}\n${m[1]}${hit.text}` : line;
   }).join('\n');
 }
 

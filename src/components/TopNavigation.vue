@@ -187,13 +187,20 @@ export default {
         emit('search-qq', query)
         return
       }
-      // qq: 前缀=QQ 曲库语义（与点歌台同语法）——mid 形态直解，其余剥前缀搜索
+      // qq: 前缀=QQ 直解语法（与点歌台同记号）：mid 形态（字母数字混合）走
+      // QQ resolve；其余剥前缀按普通关键词搜索——顶栏没有 QQ 结果位，降级有意
+      if (/^qq[:：]\s*$/i.test(query)) return
       const qqPref = query.match(/^qq[:：](.+)$/i)
       if (qqPref) {
         const kw = qqPref[1].trim()
         if (!kw) return
-        if (/^[0-9A-Za-z]{10,20}$/.test(kw)) {
-          emit('search-qq', `qq:${kw}`)
+        const qqPlInPref = extractQQPlaylistId(kw)
+        if (qqPlInPref) {
+          emit('search-qq-pl', qqPlInPref)
+          return
+        }
+        if (isQQInput(kw) || (/^[0-9A-Za-z]{10,20}$/.test(kw) && /\d/.test(kw) && /[a-z]/i.test(kw))) {
+          emit('search-qq', isQQInput(kw) ? kw : `qq:${kw}`)
           return
         }
         emit('search', kw, query)
@@ -269,9 +276,9 @@ export default {
       emit('update:searchQuery', e.target.value)
       const q = e.target.value.trim()
       cancelSuggest()
-      // 纯数字/歌单链接/B站/QQ 输入走直达路径，不弹建议
+      // 纯数字/歌单链接/B站/QQ 输入（含 qq: 前缀）走直达路径，不弹建议
       if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)
-        || isQQInput(q) || extractQQPlaylistId(q)) {
+        || isQQInput(q) || extractQQPlaylistId(q) || /^qq[:：]/i.test(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

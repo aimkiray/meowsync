@@ -69,9 +69,10 @@ const timedSignal = (extraSignal, ms = QQ_TIMEOUT_MS) => extraSignal
   ? AbortSignal.any([AbortSignal.timeout(ms), extraSignal])
   : AbortSignal.timeout(ms);
 
-// musicu.fcg 统一信封：comm 匿名档 + 可选登录字段；响应 key 与请求 key 镜像
-async function musicu(module, method, param, extraSignal, reqKey = 'req_0') {
-  const cookie = qqCookie();
+// musicu.fcg 统一信封：comm 匿名档 + 可选登录字段；响应 key 与请求 key 镜像。
+// cookie 可由调用方透传同一快照——vkey 这类 param.uin 也吃 cookie 的接口
+// 若调用方与信封各读一次 env，unm 续期恰落在两次读之间会拼出跨凭据请求
+async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cookie = qqCookie()) {
   const uin = qqUin(cookie);
   const key = qqKey(cookie);
   const comm = {
@@ -114,8 +115,11 @@ const SONGMID_RE = /^[0-9A-Za-z]{10,20}$/;
 // QQ 音流 sip 宿主白名单（routes/qq.js 与 file-downloader 共用）：qqmusic.qq.com
 // 全族（ws./isure./dl./cc.stream.qqmusic.qq.com 等）+ tc.qq.com 的音乐子族。
 // tc.qq.com 是腾讯通用 CDN（视频/小程序/广告），整棵后缀域不能进代理白名单
+// 与 proxy.js 白名单同用 endsWith 语义——picker 集合必须是代理集合的子集，
+// 否则 sip 返回 *.aqqmusic.tc.qq.com 形态时 picker 丢弃可播流
 const QQ_STREAM_HOST_OK = (h) => h === 'qqmusic.qq.com' || h.endsWith('.qqmusic.qq.com')
-  || h === 'aqqmusic.tc.qq.com' || h === 'qqmusic.tc.qq.com'
+  || h === 'aqqmusic.tc.qq.com' || h.endsWith('.aqqmusic.tc.qq.com')
+  || h === 'qqmusic.tc.qq.com' || h.endsWith('.qqmusic.tc.qq.com')
   || h === 'music.tc.qq.com' || h.endsWith('.music.tc.qq.com');
 
 // ── 音质档梯：vkey filename = {前缀}{mediaMid}.{扩展名}
@@ -134,6 +138,7 @@ const BEST_LADDER = ['RS01', 'F000', 'M800', 'M500', 'C400'];
 // 一次请求把整条档梯丢上去：songmid/filename 数组同序复制，midurlinfo 逐条回
 // purl——为空即该档无权限，挑第一个有 purl 的。比逐档串行省 4 次上游往返
 async function getStreamCandidates(mid, mediaMid, ladder, extraSignal) {
+  const cookie = qqCookie();  // 单快照：param.uin 与 musicu 信封同源
   const fileMid = mediaMid || mid;
   const names = ladder.map(t => `${QUALITY_TIERS[t].prefix}${fileMid}.${QUALITY_TIERS[t].ext}`);
   const data = await musicu('vkey.GetVkeyServer', 'CgiGetVkey', {
@@ -141,10 +146,10 @@ async function getStreamCandidates(mid, mediaMid, ladder, extraSignal) {
     songmid: names.map(() => mid),
     songtype: names.map(() => 0),
     filename: names,
-    uin: qqUin(qqCookie()) || '0',
+    uin: qqUin(cookie) || '0',
     loginflag: 1,
     platform: '20',
-  }, extraSignal);
+  }, extraSignal, 'req_0', cookie);
   // https sip 优先——明文 http 链路上 MITM 可整体替换音频内容（无完整性校验），
   // 排序后 https 宿主先被选，失败了才轮明文
   const sips = (data?.sip || []).filter(s => /^https?:\/\/[a-z0-9.-]+/i.test(s))
@@ -184,17 +189,23 @@ async function pickStreamUrl(mid, { mediaMid = '', ladder = PLAY_LADDER, signal 
     // filename 需 media_mid——多数歌 media_mid==songmid；调用方传的 mmid 也可能
     // 过期（details 里的 mediaMid 会迁移），失败时一律拿详情回填重试一次
     const tried = mediaMid || mid;
-    const detail = await getSongDetail(mid, signal).catch(() => null);
+    const detail = await getSongDetail(mid, signal, 'mid').catch((e) => {
+      if (!signal?.aborted) console.warn(`[qq] ${mid} 详情回填失败：${e.message}`);
+      return null;
+    });
     if (detail?.mediaMid && detail.mediaMid !== tried) hit = await usable(detail.mediaMid);
   }
   return hit;
 }
 
-// 单曲详情：songmid/songid 都收——纯数字先按 songid 再按 songmid 各试一次
-// （理论上存在纯数字 songmid）；字母数字只走 songmid。
+// 单曲详情：songmid/songid 都收。keyHint 由调用方按命名空间给（'mid'/'songid'）：
+// mid 命名空间的纯数字串先按 songmid 试——先 songid 会在恰好撞上别的歌的
+// songid 时静默返回错歌元数据。无 hint 时纯数字先 songid 后 songmid。
 // 返回字段是旧式命名（songmid/songname/singer/albumname/albummid/strMediaMid）
-async function getSongDetail(idOrMid, extraSignal) {
-  const params = /^\d+$/.test(idOrMid) ? ['songid', 'songmid'] : ['songmid'];
+async function getSongDetail(idOrMid, extraSignal, keyHint) {
+  const params = keyHint === 'mid' ? ['songmid', 'songid']
+    : keyHint === 'songid' ? ['songid']
+    : /^\d+$/.test(idOrMid) ? ['songid', 'songmid'] : ['songmid'];
   for (const param of params) {
     if (extraSignal?.aborted) break;
     const body = await fcg(`/v8/fcg-bin/fcg_play_single_song.fcg?${param}=${encodeURIComponent(idOrMid)}&format=json&tpl=yqq_song_detail&platform=yqq&needNewCode=0`, extraSignal).catch(() => null);
@@ -210,7 +221,9 @@ async function searchSongs(query, limit = 20, extraSignal) {
   try {
     const body = await fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=1&format=json&g_tk=5381&platform=yqq&needNewCode=0`, extraSignal);
     const list = body?.data?.song?.list;
-    if (Array.isArray(list) && list.length) {
+    // 健康空结果（code=0 + 空 list）也直接返回——匿名态下 musicu 兜底
+    // 端点已知回空，健康空再回落等于每个真空搜索白打一次上游
+    if (body?.code === 0 && Array.isArray(list)) {
       return list.map(normalizeTrack).filter(Boolean);
     }
   } catch (e) {
@@ -237,10 +250,12 @@ async function getPlaylist(disstid, extraSignal, maxTracks = 1000) {
       e.aborted = true;
       throw e;  // 路由层据此回 499——客户端断连不该被报成 404「歌单不存在」
     }
-    const body = await fcg(`/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&json=1&utf8=1&onlysong=0&new_format=1&disstid=${encodeURIComponent(disstid)}&song_begin=${begin}&song_num=${Math.min(PAGE, maxTracks - begin)}&g_tk=5381&loginUin=0&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq.json&needNewCode=0`, extraSignal);
+    const cookie = qqCookie();
+    const body = await fcg(`/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&json=1&utf8=1&onlysong=0&new_format=1&disstid=${encodeURIComponent(disstid)}&song_begin=${begin}&song_num=${Math.min(PAGE, maxTracks - begin)}&g_tk=5381&loginUin=${qqUin(cookie) || 0}&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq.json&needNewCode=0`, extraSignal);
     const cd = body?.cdlist?.[0];
     if (!cd) {
-      if (begin === 0) throw new Error(`qq 歌单 code=${body?.code}（不存在或无权限）`);
+      // begin==0 无 cdlist = 歌单不存在/无权限——回 null 让路由出 404 而非 502
+      if (begin === 0) return null;
       break;
     }
     meta ||= {
@@ -279,9 +294,9 @@ async function getLyric(mid, extraSignal) {
   const lyric = dec(body?.lyric);
   const trans = dec(body?.trans);
   // 剥掉 [ti:]/[ar:] 等标签头再探占位词——歌名含 instrumental 会误伤；
-  // 窗口放宽到 500 字符防超长头把标记词挤出切片
-  const stripped = lyric.replace(/\[[^\]\n]{1,80}\]/g, ' ');
-  const empty = /纯音乐|没有填词|instrumental/i.test(stripped.slice(0, 500));
+  // 窗口放宽到 800 字符防超长头把标记词挤出切片
+  const stripped = lyric.replace(/\[[^\]\n]{1,120}\]/g, ' ');
+  const empty = /纯音乐|没有填词|instrumental/i.test(stripped.slice(0, 800));
   return { lyric: empty ? '' : lyric, trans };
 }
 
@@ -290,7 +305,8 @@ function normalizeTrack(s) {
   if (!s || typeof s !== 'object') return null;
   const mid = s.mid || s.songmid;
   if (!mid) return null;
-  const singers = (s.singer || []).map(x => x?.name).filter(Boolean);
+  // s.singer 可能是字符串/对象——单条脏数据不能炸掉整个歌单/搜索列表
+  const singers = (Array.isArray(s.singer) ? s.singer : []).map(x => x?.name).filter(Boolean);
   const albummid = s.album?.mid || s.albummid || '';
   const file = s.file || {};
   const pay = s.pay || {};
@@ -313,6 +329,17 @@ function normalizeTrack(s) {
 
 // ── 分享链接解析：提取 songmid/songid/disstid/albummid；c.y.qq.com 短链逐跳跟随
 function pickQqFromUrl(href) {
+  // p=%7B...%7D 编码 JSON 载荷先解码回明文——songmid/disstid 正则吃的是字面量
+  const pEnc = href.match(/[?&]p=([^&]+)/i)?.[1];
+  if (pEnc && /%[0-9a-f]{2}/i.test(pEnc)) {
+    try { href += '&' + decodeURIComponent(pEnc); } catch { /* 残缺编码不致命 */ }
+  }
+  // 歌单形态先于 mid：playlist?id=N&p={"songmid":"x"} 这类链接语义是歌单，
+  // 内嵌 songmid 是载体噪音——先解出单曲等于把歌单丢成一首
+  const diss = href.match(/taoge\.html\?[^#]*?\bid=(\d+)/i)?.[1]
+    || href.match(/\/playlist\/(\d+)/i)?.[1]
+    || href.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1];  // qqmusic://qq.com/playlist?id=N
+  if (diss) return { disstid: diss };
   // ?qq=<mid> 是本站分享链形态——与 ?yt= 同口径也在这里收
   const mid = href.match(/[?&]qq=([0-9A-Za-z]{10,20})/i)?.[1]
     || href.match(/songmid=([0-9A-Za-z]{10,20})/i)?.[1]
@@ -322,10 +349,6 @@ function pickQqFromUrl(href) {
   if (mid) return { mid };
   const songid = href.match(/songid=(\d+)/i)?.[1];
   if (songid) return { songid };
-  const diss = href.match(/taoge\.html\?[^#]*?\bid=(\d+)/i)?.[1]
-    || href.match(/\/playlist\/(\d+)/i)?.[1]
-    || href.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1];  // qqmusic://qq.com/playlist?id=N
-  if (diss) return { disstid: diss };
   const albummid = href.match(/albumDetail\/([0-9A-Za-z]{10,20})/i)?.[1];
   if (albummid) return { albummid };
   return null;
@@ -343,7 +366,9 @@ async function resolveQqInput(input, extraSignal) {
   if (SONGMID_RE.test(s)) return { mid: s };
   const direct = pickQqFromUrl(s);
   if (direct) return direct;
-  let href = /^https?:\/\//i.test(s) ? s : (/^(?:c|c6|i|y|m)\.y?\.?qq\.com\//i.test(s) ? `https://${s}` : null);
+  // 裸串前缀与前端 isQQInput 同口径收 *.y.qq.com/qqmusic.*——固定列表会在
+  // 非常规子域（如 n2.y.qq.com）上产生"前端认、服务端 400"的口径分裂
+  let href = /^https?:\/\//i.test(s) ? s : (/^(?:[a-z0-9-]+\.)*y\.qq\.com\//i.test(s) || /^qqmusic\.[\w.]+\//i.test(s) ? `https://${s}` : null);
   if (!href) return null;
   for (let hop = 0; hop <= 3; hop++) {
     if (extraSignal?.aborted) return null;

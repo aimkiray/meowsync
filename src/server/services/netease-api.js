@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
-const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
+const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllowedHost } = require('../lib/net-guard');
 const { aiEnabled, askAiJson } = require('../lib/ai');
 
 // NeteaseCloudMusicApi 安装路径经 require.resolve 解析，避免依赖 process.cwd()/__dirname 布局
@@ -331,6 +331,14 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             const checked = unblocked?.url ? normalizeOutboundUrl(unblocked.url) : null;
             if (!checked?.ok) continue;
             if (!(await resolvesToPublicIp(checked.url.hostname))) continue;
+
+            // 会被包进 /audio-proxy 的回链（playback + http/ytdlp）必须过代理
+            // 白名单预筛——qq sip 偶发裸 IP/非音乐 tc.qq.com 子域，过了公网校验
+            // 却会在代理层 403，产出缓存 60s 的死链并阻断后续可用源。
+            // purpose='download' 不受此限（fetchStream 不走白名单通道）
+            const willProxy = purpose === 'playback' && !!proxyOrigin
+              && (source === 'ytdlp' || checked.url.protocol === 'http:');
+            if (willProxy && !isProxyAllowedHost(checked.url.hostname)) continue;
 
             // kuwo 已退化为 ~11s 预览剪辑，时长校验是拒收它的唯一机制——
             // 校验需 dt 基准+br 双输入，任一缺失时 kuwo 必须 fail-closed

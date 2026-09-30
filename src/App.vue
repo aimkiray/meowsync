@@ -953,12 +953,17 @@ export default {
         pl.name = data.name || `QQ 歌单 ${disstid}`
         pl.coverImgUrl = data.cover || tracks[0]?.al?.picUrl || ''
         pl.creator = { nickname: data.creator || 'QQ 音乐' }
-        pl.tracks = tracks
-        pl.trackCount = tracks.length
+        // 重导保留用户向该本地单追加的曲目——整表替换会静默丢追加
+        // （B 站壳同款保留形态；新集没有的本地追加留在尾部）
+        const newIds = new Set(tracks.map(t => String(t.id)))
+        pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
+        pl.trackCount = pl.tracks.length
         savePlaylistsToStorage()
         selectPlaylistAndShow(pl)
+        searchQuery.value = ''
         toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首）`, 'success')
       } catch (e) {
+        if (myReq !== mediaImportSeq) return  // 过期请求的失败不打扰用户
         toast(`QQ 歌单导入失败：${e.message}`, 'error', 5000)
       }
     }
@@ -1877,14 +1882,16 @@ export default {
         }
         // qq: 前缀触发 QQ 曲库搜索——补「网易云没有的那首歌」缺口。
         // 结果经 buildQQSong 归一成 qq_* 曲（歌词/下载/分享链全通）。
-        // qq:<mid 形态>先试 resolve（显式 mid 直解），失败才回落关键词搜索
+        // qq:<mid 形态>先试 resolve（显式 mid 直解），失败才回落关键词搜索；
+        // mid 判定收紧为「字母数字混合」——纯字母英文关键词不值得烧 resolve 配额
         if (/^qq[:：]/i.test(q)) {
           action = 'QQ 搜索'
           const kw = q.replace(/^qq[:：]/i, '').trim()
           if (!kw) return
-          if (/^[0-9A-Za-z]{10,20}$/.test(kw)) {
+          if (isQQInput(kw) || (/^[0-9A-Za-z]{10,20}$/.test(kw) && /\d/.test(kw) && /[a-z]/i.test(kw))) {
             try {
-              const data = await musicApi.resolveQQ(`qq:${kw}`)
+              pickerAbort = new AbortController()
+              const data = await musicApi.resolveQQ(isQQInput(kw) ? kw : `qq:${kw}`, pickerAbort.signal)
               if (mySeq !== pickerSeq || !songPickerOpen.value) return
               const song = buildQQSong(data)
               songPickerResults.value = [song,

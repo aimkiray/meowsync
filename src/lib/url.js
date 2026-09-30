@@ -17,6 +17,10 @@ export function httpsCover(url) {
 // bilibili.com/b23.tv 链接。\b 词边界防长 token 误吞
 export function isBilibiliInput(input) {
   const s = String(input || '');
+  // QQ 链接/载荷里的 songmid 理论可呈 BV1xxxxxxxxx 形态——域/scheme 前置
+  // 排除防撞车（qq.com 任意子域、qqmusic:* scheme 都按 QQ 处理）
+  if (/(?:^|[/:.\s'"])(?:[a-z0-9-]+\.)*qq\.com/i.test(s) || /qqmusic[:./]/i.test(s)) return false;
+  if (/^qq[:：]/i.test(s.trim())) return false;  // qq: 前缀语法专属于 QQ 输入，不给 BV 形 mid 抢走
   return /\bBV1[0-9A-Za-z]{9}\b/i.test(s) // 小写 bv 也收下——服务端会校验真实 bvid
     || /bilibili\.com|b23\.tv/i.test(s)
     || /(?:^|\/)av\d+/i.test(s);

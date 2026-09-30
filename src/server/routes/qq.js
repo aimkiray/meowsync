@@ -51,7 +51,8 @@ app.get('/qq/resolve', async (c) => {
     return c.json({ code: 400, message: '无法从输入解析 QQ 音乐歌曲（支持 songDetail/分享链接/songmid/songid）' }, 400);
   }
   try {
-    const t = await getSongDetail(parsed.mid || parsed.songid, c.req.raw.signal);
+    const t = await getSongDetail(parsed.mid || parsed.songid, c.req.raw.signal,
+      parsed.mid ? 'mid' : 'songid');
     // QQ 自带真实元数据——网易云匹配只当封面/歌词兜底源：候选串从精准到宽
     const candidates = [...new Set([
       `${t.artists.join(' ')} ${t.name}`.trim(), t.name,

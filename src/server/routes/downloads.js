@@ -301,7 +301,7 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
 // 服务端下载链要求 DB 行——把本地单落成 netease_playlist_id=local_<id> 的镜像行，
 // 之后既有路由（quick 建队 / 状态查询 / 文件删除）经 findExistingPlaylistId 的
 // netease_playlist_id 分支全部自然解析，零路由改动。
-// tracks 只收网易云数字 id——bv_*/yt_* 等无服务端下载源的条目跳过并计数回传。
+// tracks 只收网易云数字 id 与 qq_<songmid>——bv_*/yt_* 等无服务端下载源的条目跳过并计数回传。
 const LOCAL_MIRROR_ID_MAX = 80;
 app.post('/downloads/local/mirror', async (c) => {
   try {
