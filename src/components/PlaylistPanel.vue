@@ -392,6 +392,8 @@ export default {
 @media (min-width: 768px) and (max-width: 1023.98px) {
   .app-sidebar:not(.app-sidebar--open) .playlist-scroll { scrollbar-gutter: auto; }
   .app-sidebar:not(.app-sidebar--open) .pl-row { margin: 0 4px; }
+  /* 窄轨行块 ~55px：64px 操作簇保留位会挤垮 44px 封面——对称 6px 居中 */
+  .app-sidebar:not(.app-sidebar--open) .pl-row-main { padding: 9px 6px; }
 }
 
 /* 歌单行：留白节奏（无分隔线），整行可点；
@@ -405,9 +407,9 @@ export default {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 右侧 58px 留给常显 .pl-actions（right:4 + 双 24px 键 + 2gap = 54，+4 气隙）；
-     48 会让长名省略号滑进分享键命中盒；左 4px 让封面与行块缘留呼吸 */
-  padding: 9px 58px 9px 4px;
+  /* 卡内左右统一 10px 节奏：封面左 10 = 封面→歌名 gap 10 = 操作簇右 10；
+     右 64px 留给常显 .pl-actions（right:10 + 双 24px 键 + 2gap = 60，+4 气隙） */
+  padding: 9px 64px 9px 10px;
   cursor: pointer;
   transition: background .12s;
 }
@@ -472,8 +474,8 @@ export default {
 .pl-actions {
   position: absolute;
   top: 50%;
-  /* 与封面侧同档：块内右 4px（块外 margin 12 两侧已对称 → 栏缘到内容左右各 16px） */
-  right: 4px;
+  /* 与封面侧同档：块内右 10px（块外 margin 12 两侧对称 → 栏缘到内容左右各 22px） */
+  right: 10px;
   transform: translateY(-50%);
   display: flex;
   gap: 2px;
