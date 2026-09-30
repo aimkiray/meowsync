@@ -1,5 +1,5 @@
 <template>
-  <!-- 首页发现流（白纸画布）：热搜 chips + 榜单/推荐歌单横向货架。
+  <!-- 首页发现流（白纸画布）：最近播放 chips + 榜单/最近歌单横向货架。
        页脚版本戳收版（print-grid 签名） -->
   <div class="home-feed">
     <header class="home-head">
@@ -69,15 +69,15 @@
       </div>
     </section>
 
-    <!-- 推荐歌单货架 -->
-    <section v-if="personalized.length" class="home-section">
+    <!-- 最近播放的歌单货架 -->
+    <section v-if="recentPlaylists.length" class="home-section">
       <div class="home-section-head">
-        <p class="pg-label">for you</p>
-        <span class="home-section-sub">推荐歌单</span>
+        <p class="pg-label">history</p>
+        <span class="home-section-sub">最近播放的歌单</span>
       </div>
       <div class="home-shelf">
         <div
-          v-for="pl in personalized"
+          v-for="pl in recentPlaylists"
           :key="pl.id"
           class="grid-card"
           @click="$emit('open', pl)"
@@ -89,8 +89,8 @@
         >
           <div class="grid-card-cover">
             <img
-              v-if="pl.picUrl || pl.coverImgUrl"
-              :src="httpsCover(pl.picUrl || pl.coverImgUrl)"
+              v-if="pl.coverImgUrl"
+              :src="httpsCover(pl.coverImgUrl)"
               :alt="pl.name"
               loading="lazy"
             />
@@ -98,7 +98,7 @@
           </div>
           <div class="grid-card-body">
             <h3 class="grid-card-name">{{ pl.name }}</h3>
-            <p class="grid-card-meta">{{ formatPlayCount(pl.playCount) }} 次播放</p>
+            <p class="grid-card-meta">{{ pl.trackCount ? `${pl.trackCount} 首` : '歌单' }}</p>
           </div>
         </div>
       </div>
@@ -126,7 +126,7 @@ export default {
       type: Array,
       default: () => []
     },
-    personalized: {
+    recentPlaylists: {
       type: Array,
       default: () => []
     },
@@ -142,15 +142,11 @@ export default {
   emits: ['open', 'play-song'],
   computed: {
     hasShelves() {
-      return this.toplists.length > 0 || this.personalized.length > 0
+      return this.toplists.length > 0 || this.recentPlaylists.length > 0
     }
   },
   setup() {
-    const formatPlayCount = (n) => {
-      if (!n || typeof n !== 'number') return ''
-      return n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n)
-    }
-    return { httpsCover, formatPlayCount, songArtists }
+    return { httpsCover, songArtists }
   }
 }
 </script>
