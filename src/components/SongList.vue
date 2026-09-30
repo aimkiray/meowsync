@@ -38,6 +38,13 @@
             <PixelIcon v-if="showVipSongs" name="check" :size="13" />
             {{ showVipSongs ? '隐藏VIP' : '显示VIP' }}
           </button>
+          <!-- 单向同步：静默重拉远端并合并本地增删（本地单没有远端可拉，隐藏） -->
+          <button
+            v-if="!isSingleSongPlaylist && selectedPlaylist"
+            @click="$emit('sync-playlist')"
+            class="ink-btn ink-btn--ghost"
+            title="从远端同步歌单：拉入新增曲目，本地添加/移除不受影响"
+          ><PixelIcon name="m-loop" :size="14" /> 同步</button>
         </div>
       </div>
     </div>
@@ -178,6 +185,18 @@
             @keydown.space.prevent="addToPlaylistFromMenu"
           >
             <PixelIcon name="m-list" :size="13" /> 添加到歌单
+          </div>
+          <!-- 从歌单移除：远端曲写墓碑防同步复活，本地追加/本地单曲直接删 -->
+          <div
+            v-if="selectedPlaylist"
+            class="pg-menu-item pg-menu-item--danger"
+            role="menuitem"
+            tabindex="0"
+            @click="removeFromPlaylistFromMenu"
+            @keydown.enter="removeFromPlaylistFromMenu"
+            @keydown.space.prevent="removeFromPlaylistFromMenu"
+          >
+            <PixelIcon name="close" :size="13" /> 从歌单移除
           </div>
           <div
             class="pg-menu-item"
@@ -617,7 +636,7 @@ export default {
       default: 0
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'toggle-vip-songs'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})
@@ -663,8 +682,12 @@ export default {
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
-        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；非临时歌单+已选歌单时多"下载到服务器"共 6 项
-        const menuHeight = 40 + ((!isSingleSongPlaylist.value && props.selectedPlaylist) ? 6 : 5) * 39 + 4
+        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；已选歌单多"从歌单移除"，
+        // 非临时歌单再多"下载到服务器"——合计 5/6/7 三档
+        const itemCount = 5
+          + (props.selectedPlaylist ? 1 : 0)
+          + ((!isSingleSongPlaylist.value && props.selectedPlaylist) ? 1 : 0)
+        const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh
@@ -707,6 +730,13 @@ export default {
       const song = menuSong.value
       closeDownloadMenu()
       if (song) emit('add-to-playlist', song)
+    }
+
+    // 从歌单移除：远端曲走墓碑、本地曲真删——合并语义在 App 侧统一
+    const removeFromPlaylistFromMenu = () => {
+      const song = menuSong.value
+      closeDownloadMenu()
+      if (song) emit('remove-from-playlist', song)
     }
 
     const shareFromMenu = () => {
@@ -959,6 +989,7 @@ export default {
       playNextFromMenu,
       addToQueueFromMenu,
       addToPlaylistFromMenu,
+      removeFromPlaylistFromMenu,
       shareFromMenu,
       shareSong,
       downloadSongDirect,
