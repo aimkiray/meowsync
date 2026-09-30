@@ -107,6 +107,18 @@ export const downloadsApi = {
     });
   },
 
+  // 本地歌单（local_pl_*/saved_queue_*）先镜像到服务端 DB，之后所有下载路由
+  // 用 playlist.id 直调（服务端 findExistingPlaylistId 按 netease_playlist_id 解析镜像）。
+  // 返回 {playlistId, mirrored, skipped}——skipped = 非网易云曲目（bv_*）数
+  mirrorLocalPlaylist: (playlist) => {
+    return http.post(`${API_BASE_URL}/downloads/local/mirror`, {
+      localId: playlist.id,
+      name: playlist.name,
+      coverImgUrl: playlist.coverImgUrl || '',
+      tracks: playlist.tracks || []
+    }, { timeout: 30000 });
+  },
+
   // 快速下载歌单（建队列 + 启动即返回，后台跑）；歌单未导入时同样要先走上游
   // 导入（detail+tracks 两次往返），超时后重试会撞"已有进行中队列"的 409——给 60s
   quickDownloadPlaylist: (playlistId, options = {}) => {

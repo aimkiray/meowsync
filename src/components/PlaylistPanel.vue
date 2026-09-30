@@ -53,9 +53,9 @@
         </div>
         <!-- 菜单与分享按钮 -->
         <div class="pl-actions">
-          <!-- 临时歌单的 id 非数字，接收端 getPlaylistIdsFromUrl 只认 \d+ → 分享链接必死，隐藏 -->
+          <!-- single_song_ 壳是单曲分享容器非歌单，藏分享/下载；local_pl_ 走 ?mix= 内容链 -->
           <button
-            v-if="!isTempPlaylist(playlist)"
+            v-if="!isShareShell(playlist)"
             @click.stop="sharePlaylist(playlist)"
             class="pl-action pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             title="分享歌单"
@@ -86,7 +86,7 @@
             :style="getMenuPosition(playlist.id)"
           >
             <button
-              v-if="!isTempPlaylist(playlist)"
+              v-if="!isShareShell(playlist)"
               @click.stop="downloadPlaylist(playlist)"
               class="pg-menu-item"
               role="menuitem"
@@ -94,7 +94,7 @@
               下载歌单
             </button>
             <button
-              v-if="!isTempPlaylist(playlist)"
+              v-if="isNeteasePlaylist(playlist)"
               @click.stop="openInNetease(playlist)"
               class="pg-menu-item"
               role="menuitem"
@@ -102,7 +102,7 @@
               打开网易云
             </button>
             <button
-              v-if="!isTempPlaylist(playlist)"
+              v-if="!isShareShell(playlist)"
               @click.stop="copyShareLink(playlist)"
               class="pg-menu-item"
               role="menuitem"
@@ -110,7 +110,7 @@
               复制分享链接
             </button>
             <button
-              v-if="!isTempPlaylist(playlist)"
+              v-if="!isShareShell(playlist)"
               @click.stop="deletePlaylistDownloads(playlist)"
               class="pg-menu-item"
               role="menuitem"
@@ -140,7 +140,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { downloadsApi } from '../api/downloads'
 import { copyText, shareOrCopy } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
-import { isLocalPlaylistId } from '../lib/song'
+import { isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
 import { toast, pixelConfirm } from '../lib/feedback'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -203,7 +203,9 @@ export default {
         // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空。
         // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 5 项悬空更安全
         const currentPlaylist = props.userPlaylists.find(p => p.id === playlistId)
-        const itemCount = !currentPlaylist || isTempPlaylist(currentPlaylist) ? 1 : 5
+        const itemCount = !currentPlaylist ? 1
+          : isShareShell(currentPlaylist) ? 1
+          : isNeteasePlaylist(currentPlaylist) ? 5 : 4
         const menuHeight = itemCount * 39 + 4 // 实测项高 ≈39（含发丝分隔）
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -232,8 +234,22 @@ export default {
     }
 
     // 分享链带 view=songs&pl=ID：冷启动后主区直接落在该歌单歌曲页，不停在首页
+    // 本地单无远端 id——?mix=<name>~<ids> 内容携带链，接收端按 id 重解析
+    const MIX_ID_CAP = 300 // URL 长度预算：300×~12B ≈ 4KB 内
+    const shareUrlFor = (playlist) => {
+      if (!isLocalPlaylistId(playlist?.id)) {
+        return `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
+      }
+      const ids = (playlist.tracks || [])
+        .map(t => String(t.id)).filter(id => /^\d+$/.test(id) || id.startsWith('bv_'))
+        .slice(0, MIX_ID_CAP)
+      return `${window.location.origin}/?mix=${encodeURIComponent(playlist.name)}~${ids.join(',')}`
+    }
     const copyShareLink = async (playlist) => {
-      const url = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
+      const url = shareUrlFor(playlist)
+      if (/[?&]mix=/.test(url) && url.endsWith('~')) {
+        toast('歌单里没有可分享的歌曲', 'info'); closeMenu(); return
+      }
       const ok = await copyText(url)
       // 与歌曲分享同款的反馈闭环：成功也要给戳记，否则用户不知道复制生效
       toast(ok ? '分享链接已复制到剪贴板' : '复制失败，请手动复制链接', ok ? 'success' : 'error')
@@ -242,7 +258,11 @@ export default {
 
     // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
     const sharePlaylist = async (playlist) => {
-      const shareUrl = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
+      const shareUrl = shareUrlFor(playlist)
+      if (/[?&]mix=/.test(shareUrl) && shareUrl.endsWith('~')) {
+        toast('歌单里没有可分享的歌曲', 'info')
+        return
+      }
       const result = await shareOrCopy({
         title: `🎵 歌单：${playlist.name}`,
         text: `来看看这个歌单：${playlist.name}`,
@@ -263,7 +283,12 @@ export default {
     }
 
     // 本地内存态歌单（单曲分享/队列存盘）服务端无对应持久行——不提供分享/下载入口
+    // 歌单级入口门槛：single_song_ 壳不显示分享/下载（单曲级分享已覆盖）；
+    // local_pl_/saved_queue_ 经 ?mix= 内容链与服务端镜像拿到远端单同款能力；
+    // 打开网易云仅远端数字 id 单有意义
+    const isShareShell = (playlist) => isSingleSongShellId(playlist?.id)
     const isTempPlaylist = (playlist) => isLocalPlaylistId(playlist?.id)
+    const isNeteasePlaylist = (playlist) => /^\d+$/.test(String(playlist?.id ?? ''))
 
     // 下载歌单——同一歌单在途请求合并：双击/连点不发第二个 POST，
     // 服务端对活跃队列本就 409，这里省掉那条注定失败的往返与错误 toast
@@ -277,6 +302,12 @@ export default {
       }
       downloadingIds.add(pid)
       try {
+        let mirrorNote = ''
+        if (isLocalPlaylistId(playlist.id)) {
+          const mirror = await downloadsApi.mirrorLocalPlaylist(playlist)
+          const skipped = mirror.data?.data?.skipped || 0
+          if (skipped) mirrorNote = `（跳过 ${skipped} 首非网易云曲目）`
+        }
         const res = await downloadsApi.quickDownloadPlaylist(playlist.id, {
           bitrate: 320000,
           downloadAudio: true,
@@ -289,7 +320,7 @@ export default {
         // 复活且任务全数完好 = 没有东西要下，"继续下载"的文案会误导
         const queue = res.data?.data
         toast(!queue?.reused
-          ? '下载队列已创建，正在后台下载'
+          ? `下载队列已创建，正在后台下载${mirrorNote}`
           : queue.totalTasks > 0 && queue.completedTasks === queue.totalTasks
             ? '该歌单已全部下载'
             : '继续下载该歌单的已有队列', 'success')
@@ -347,6 +378,8 @@ export default {
        downloadPlaylist,
        deletePlaylistDownloads,
        isTempPlaylist,
+       isShareShell,
+       isNeteasePlaylist,
        getMenuPosition,
        httpsCover
      }

@@ -279,6 +279,16 @@ export const musicApi = {
     throw new Error('歌曲不存在')
   },
 
+  // 批量歌曲详情（mix 分享链重解析用）：上游 ids 逗号串接受数组口径
+  getSongsDetail: async (ids, abortSignal = null) => {
+    if (!ids?.length) return []
+    const response = await withRetry(() =>
+      api.get('/song_detail', { params: { ids: ids.join(',') }, signal: abortSignal })
+    )
+    const data = unwrapBody(response)
+    return data.songs || []
+  },
+
   // B 站导入：解析 BV/av/URL → 视频元信息 + 歌名提取 + 网易云匹配。
   // 服务端串三次上游（view/tags/playurl + 云搜），链路最坏 ~20s，放宽超时
   resolveBilibili: async (input, abortSignal = null) => {
