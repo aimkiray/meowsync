@@ -933,10 +933,12 @@ export default {
     // 重复导入原地刷新曲目与元信息而不是再复制一份
     const importQQPlaylist = async (disstid) => {
       selectReqId++
+      const myReq = ++mediaImportSeq  // 大千曲歌单分页在途时，迟到的回包不得抢视图
       loadingSongs.value = false
       try {
         toast('正在导入 QQ 歌单…', 'info', 30000)
         const data = await musicApi.getQQPlaylist(disstid)
+        if (myReq !== mediaImportSeq) return
         const tracks = (data.tracks || []).map(buildQQSong)
         if (!tracks.length) {
           toast('QQ 歌单为空或全部不可解析', 'error')
@@ -1091,7 +1093,8 @@ export default {
             // bilibili/neteaseId 是 B 站导入曲的播放源与歌词源——剥掉就退化成不可播对象
             id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege,
             bilibili: t.bilibili, neteaseId: t.neteaseId,
-            youtube: t.youtube // YouTube 导入曲的播放源——与 bilibili/neteaseId 同理不可剥
+            youtube: t.youtube, // YouTube 导入曲的播放源——与 bilibili/neteaseId 同理不可剥
+            qq: t.qq // QQ 导入曲同理：剥掉后播放/分享/词源键全退化
           }))
         }
         return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
@@ -1854,6 +1857,11 @@ export default {
           await addPickedSong(song)
           return
         }
+        // QQ 歌单链接在点歌台无落点（歌单导入走顶栏）——给指向性提示而非噪声搜索
+        if (extractQQPlaylistId(q)) {
+          toast('这是 QQ 歌单链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
         if (isQQInput(q)) {
           action = '解析'
           toast('正在解析 QQ 音乐…', 'info', 30000)
@@ -1868,12 +1876,25 @@ export default {
           return
         }
         // qq: 前缀触发 QQ 曲库搜索——补「网易云没有的那首歌」缺口。
-        // 结果经 buildQQSong 归一成 qq_* 曲（歌词/下载/分享链全通）
+        // 结果经 buildQQSong 归一成 qq_* 曲（歌词/下载/分享链全通）。
+        // qq:<mid 形态>先试 resolve（显式 mid 直解），失败才回落关键词搜索
         if (/^qq[:：]/i.test(q)) {
           action = 'QQ 搜索'
           const kw = q.replace(/^qq[:：]/i, '').trim()
           if (!kw) return
-          const list = await musicApi.searchQQSongs(kw, 20)
+          if (/^[0-9A-Za-z]{10,20}$/.test(kw)) {
+            try {
+              const data = await musicApi.resolveQQ(`qq:${kw}`)
+              if (mySeq !== pickerSeq || !songPickerOpen.value) return
+              const song = buildQQSong(data)
+              songPickerResults.value = [song,
+                ...songPickerResults.value.filter(r => String(r.id) !== String(song.id))]
+              songPickerQuery.value = ''
+              await addPickedSong(song)
+              return
+            } catch { /* mid 形态的关键词——resolve 失败按搜索处理 */ }
+          }
+          const list = await musicApi.searchQQSongs(kw)
           if (mySeq !== pickerSeq || !songPickerOpen.value) return
           songPickerResults.value = (list || []).map(buildQQSong)
           if (!songPickerResults.value.length) toast('QQ 音乐没有找到相关歌曲', 'info')
@@ -2183,7 +2204,7 @@ export default {
           : song.youtube
             ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio') }
             : song.qq
-              ? { url: musicApi.qqStreamUrl(song.qq.mid, 'audio', '', song.qq.mediaMid) }
+              ? { url: musicApi.qqStreamUrl(song.qq.mid, '', song.qq.mediaMid) }
               : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
@@ -3142,7 +3163,7 @@ export default {
             if (s) tracks.push(s); else skipped++
             continue
           }
-          // bv_/yt_ 共用客户端 resolve 预算——同链混排外部曲总数封顶（服务端两端点分桶各 12/min）
+          // bv_/yt_/qq_ 共用客户端 resolve 预算——同链混排外部曲总数封顶（服务端三端点分桶各 12/min）
           if (++resolveCount > MIX_RESOLVE_CAP) { skipped++; continue }
           const ym = /^yt_([A-Za-z0-9_-]{11})$/.exec(id)
           if (ym) {
@@ -3219,7 +3240,7 @@ export default {
     const consumeUrlShareParams = () => {
       const url = new URL(window.location.href)
       let changed = false
-      for (const key of ['song', 'playlist', 'playlists', 'bili', 'yt', 'p', 'mix']) {
+      for (const key of ['song', 'playlist', 'playlists', 'bili', 'yt', 'qq', 'p', 'mix']) {
         if (url.searchParams.has(key)) {
           url.searchParams.delete(key)
           changed = true

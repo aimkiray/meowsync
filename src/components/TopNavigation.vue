@@ -187,6 +187,18 @@ export default {
         emit('search-qq', query)
         return
       }
+      // qq: 前缀=QQ 曲库语义（与点歌台同语法）——mid 形态直解，其余剥前缀搜索
+      const qqPref = query.match(/^qq[:：](.+)$/i)
+      if (qqPref) {
+        const kw = qqPref[1].trim()
+        if (!kw) return
+        if (/^[0-9A-Za-z]{10,20}$/.test(kw)) {
+          emit('search-qq', `qq:${kw}`)
+          return
+        }
+        emit('search', kw, query)
+        return
+      }
       const playlistId = extractPlaylistId(query)
       emit(playlistId ? 'search-by-id' : 'search', playlistId || query, query)
     }

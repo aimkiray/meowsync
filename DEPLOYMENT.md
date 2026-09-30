@@ -51,7 +51,7 @@ cp .env.example .env
 | AI_MODEL | - | 可选：模型名（如 `deepseek-v4.1-flash`）。启用后：解锁检索元数据规整、B 站/YouTube 匹配复核与兜底、外部曲歌词归属核验、无译文歌词自动中文翻译 |
 | AI_TIMEOUT_MS | 30000 | AI 单次请求超时（毫秒） |
 | BILI_COOKIE | - | 可选：B 站登录 Cookie（`SESSDATA=…; bili_jct=…`）。杜比/Hi-Res 音轨只对登录账号下发（Hi-Res 通常需大会员）；不配则 B 站下载回落最高码率 AAC |
-| QQ_COOKIE | - | 可选：QQ 音乐登录 Cookie（`uin=…; qm_keyst=…`）。无损/Hi-Res 与 VIP 档只对登录账号下发，不配则匿名态仅常规档。同时充当网易云灰曲的解锁兜底源。**务必用小号**（账号风控有先例）；QQ 源对服务器 IP 有地域风控，海外机房部署基本不可用 |
+| QQ_COOKIE | - | 可选：QQ 音乐登录 Cookie（`uin=…; qm_keyst=…`）。无损/Hi-Res 与 VIP 档只对登录账号下发，不配则匿名态仅常规档。同时充当网易云灰曲的解锁兜底源（unm 自动续期会写运行时 `NEW_QQ_COOKIE`，无需配置）。**务必用小号**（账号风控有先例）；QQ 源对服务器 IP 有地域风控，海外机房部署基本不可用 |
 | NODE_ENV | development | 环境标识（约定变量，服务代码不直接读取；镜像与 compose 已内置 `production`） |
 
 ## 部署步骤

@@ -10,35 +10,34 @@ const qq = require('../lib/qq');
 
 // qq_<songmid> 曲目的服务端下载分发：QQ 有真实元数据与权威歌词，与 bv_/yt_
 // 的「跳过服务端下载」不同——按前缀分发到 qq 原语，回落路径与网易云链同构。
-// 流地址宿主限定腾讯音乐 CDN 两族（sip 可能回裸 IP——后缀判定天然拒绝）
+// 流地址宿主与 routes/qq.js 共用 lib/qq.js 的 QQ_STREAM_HOST_OK（sip 可能回
+// 裸 IP——后缀判定天然拒绝）
 const QQ_ID_RE = /^qq_([0-9A-Za-z]{10,20})$/;
-const QQ_STREAM_HOST_OK = (h) => h === 'qqmusic.qq.com' || h.endsWith('.qqmusic.qq.com')
-  || h === 'tc.qq.com' || h.endsWith('.tc.qq.com');
 const QQ_TIER_BR = { RS01: null, F000: null, M800: 320000, M500: 128000, C400: 96000 };
 
-// vkey 档梯取第一条能过代理校验的回链（与 routes/qq.js pickStream 同口径）
-async function qqPickStreamUrl(mid, signal) {
-  const cands = await qq.getStreamCandidates(mid, null, qq.BEST_LADDER, signal);
-  for (const cand of cands) {
-    const url = cand.urls.find(u => {
-      const checked = normalizeOutboundUrl(u);
-      return checked.ok && QQ_STREAM_HOST_OK(checked.url.hostname);
-    });
-    if (url) return { url, tier: cand.tier };
+// 任务码率映射档梯：bitrate 是"目标下限"语义——<320k 的队列请求说明用户只要
+// 省流量档，不给拉无损；>=320k（含默认）走完整档梯，归档取最优
+const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADDER);
+
+// 选链与 routes/qq.js 共用 lib/qq.js pickStreamUrl（宿主校验/mediaMid 回填一份实现）
+const qqPickStreamUrl = (mid, signal, bitrate) =>
+  qq.pickStreamUrl(mid, { ladder: qqLadderFor(bitrate), signal });
+
+// LRC 译文合并：同刻时间戳的译文行插到原文行后（标准合并格式）；
+// 译文无对应时间戳的孤儿行丢弃——贴错行比没译文更糟
+function mergeLrcTrans(lrc, trans) {
+  if (!trans || typeof trans !== 'string') return lrc;
+  const transMap = new Map();
+  for (const line of trans.split('\n')) {
+    const m = line.match(/^(\[[\d:.]+\])\s*(.+)$/);
+    if (m) transMap.set(m[1], m[2]);
   }
-  // filename 需 media_mid——与 songmid 不等时拿详情回填重试（routes/qq.js 同逻辑）
-  const detail = await qq.getSongDetail(mid, signal).catch(() => null);
-  if (detail?.mediaMid && detail.mediaMid !== mid) {
-    const retry = await qq.getStreamCandidates(mid, detail.mediaMid, qq.BEST_LADDER, signal);
-    for (const cand of retry) {
-      const url = cand.urls.find(u => {
-        const checked = normalizeOutboundUrl(u);
-        return checked.ok && QQ_STREAM_HOST_OK(checked.url.hostname);
-      });
-      if (url) return { url, tier: cand.tier };
-    }
-  }
-  return null;
+  if (!transMap.size) return lrc;
+  return lrc.split('\n').map(line => {
+    const m = line.match(/^(\[[\d:.]+\])/);
+    const t = m && transMap.get(m[1]);
+    return t ? `${line}\n${m[1]}${t}` : line;
+  }).join('\n');
 }
 
 // 下载 URL 来自上游 API/歌单元数据（网易云/解锁源），不是直接用户输入——但明文 http 源站
@@ -358,7 +357,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     // qq_<songmid> 分发：QQ 源直链（BEST 档梯）→ 同一条 fetchStream 守卫管线
     const qqM = String(songId).match(QQ_ID_RE);
     if (qqM) {
-      const hit = await qqPickStreamUrl(qqM[1], signal);
+      const hit = await qqPickStreamUrl(qqM[1], signal, bitrate);
       if (!hit) throw fatalError('QQ 音乐无可用音源（可能需要 VIP 权限或地域限制）');
       throwIfAborted(signal);
       const finalPath = pathWithExt(outputPath, qq.QUALITY_TIERS[hit.tier]?.ext || 'm4a');
@@ -460,8 +459,20 @@ async function downloadLyrics(songId, outputPath, signal) {
       throw err;
     }
     const qqLm = String(songId).match(QQ_ID_RE);
+    // qq 侧：无词曲（空 lyric 或上游业务码 -1901/-1301 等）映射成 NO_LYRICS——
+    // 与网易云链同口径判「缺词不算失败」，否则音画已下完的任务会因歌词段重试
+    // 耗尽被标 failed；传输层错误（无 bizCode 标记）照旧抛走重试
     const response = qqLm
-      ? await qq.getLyric(qqLm[1], signal).then(r => ({ body: { code: r.lyric ? 200 : 404, lrc: { lyric: r.lyric } } }))
+      ? await qq.getLyric(qqLm[1], signal)
+        .then(r => ({ body: { code: 200, lrc: { lyric: r.lyric || '' }, trans: r.trans || '' } }))
+        .catch(e => {
+          if (e && e.bizCode !== undefined) {
+            const err = new Error('歌词不存在');
+            err.code = 'NO_LYRICS';
+            throw err;
+          }
+          throw e;
+        })
       : await callNeteaseApi('lyric', { id: songId });
     if (signal?.aborted) {
       const err = new Error('已取消');
@@ -482,12 +493,17 @@ async function downloadLyrics(songId, outputPath, signal) {
       throw err;
     }
 
+    // 官方译文按同刻时间戳插到原文行后落盘（标准合并 LRC 格式——播放器
+    // 同刻双行显示原文+译文；网易 tlyric 与 QQ trans 同口径处理）
+    const trans = qqLm ? response.body.trans : response.body.tlyric?.lyric;
+    const lyricText = mergeLrcTrans(lrc.lyric, trans);
+
     throwIfAborted(signal);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
     const partPath = `${outputPath}.part`;
     try {
-      fs.writeFileSync(partPath, lrc.lyric, 'utf-8');
+      fs.writeFileSync(partPath, lyricText, 'utf-8');
       fs.renameSync(partPath, outputPath);
     } catch (writeError) {
       removePartial(partPath); // 写一半失败不留孤儿 .lrc.part
@@ -496,7 +512,7 @@ async function downloadLyrics(songId, outputPath, signal) {
 
     return {
       path: outputPath,
-      size: Buffer.byteLength(lrc.lyric, 'utf-8')
+      size: Buffer.byteLength(lyricText, 'utf-8')
     };
   } catch (error) {
     if (error.code === 'NO_LYRICS') {

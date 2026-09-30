@@ -390,7 +390,7 @@ export const musicApi = {
   // 流地址：服务端每次重取 vkey（签名 ~22h 过期且绑 IP）再 302 进
   // /audio-proxy。prefer=best 走 RS01/F000 无损档梯（需 QQ_COOKIE 登录态），
   // 播放默认匿名稳态档（M800/M500/C400 逐档回落）
-  qqStreamUrl: (mid, kind = 'audio', prefer = '', mmid = '') => {
+  qqStreamUrl: (mid, prefer = '', mmid = '') => {
     const params = new URLSearchParams({ mid })
     if (mmid) params.set('mmid', mmid)
     if (prefer) params.set('prefer', prefer)
@@ -403,7 +403,7 @@ export const musicApi = {
     if (!q?.mid) throw new Error('不是 QQ 音乐曲')
     const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
     return saveStreamAsFile(
-      musicApi.qqStreamUrl(q.mid, 'audio', 'best', q.mediaMid),
+      musicApi.qqStreamUrl(q.mid, 'best', q.mediaMid),
       `${artists} - ${song.name}.m4a`)
   },
 
@@ -421,8 +421,8 @@ export const musicApi = {
     return { lyrics: mergeTranslations(lyrics, translations) }
   },
 
-  // QQ 曲库搜索（点歌台 qq: 前缀）
-  searchQQSongs: async (q, limit = 20) => {
+  // QQ 曲库搜索（点歌台 qq: 前缀；服务端固定回 20 条）
+  searchQQSongs: async (q) => {
     const response = await api.get('/qq/search', { params: { q } }).catch(err => {
       if (err?.response?.data?.message) throw new Error(err.response.data.message)
       throw err
