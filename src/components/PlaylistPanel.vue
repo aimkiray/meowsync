@@ -392,7 +392,8 @@ export default {
 @media (min-width: 768px) and (max-width: 1023.98px) {
   .app-sidebar:not(.app-sidebar--open) .playlist-scroll { scrollbar-gutter: auto; }
   .app-sidebar:not(.app-sidebar--open) .pl-row { margin: 0 4px; }
-  /* 窄轨行块 ~55px：64px 操作簇保留位会挤垮 44px 封面——对称 6px 居中 */
+  /* 窄轨行块 ~55px：操作簇在该态已 display:none（style.css ~:738），
+     64px 保留位无物可让——回收为对称 6px 让封面居中 */
   .app-sidebar:not(.app-sidebar--open) .pl-row-main { padding: 9px 6px; }
 }
 

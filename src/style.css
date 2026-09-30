@@ -738,9 +738,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   .app-sidebar:not(.app-sidebar--open) .pl-actions,
   .app-sidebar:not(.app-sidebar--open) .pl-foot,
   .app-sidebar:not(.app-sidebar--open) .panel-state { display: none; }
+  /* 窄轨 padding 归组件侧媒体块管（PlaylistPanel.vue ~:396，特异度更高）——
+     这里只留居中兜底 */
   .app-sidebar:not(.app-sidebar--open) .pl-row-main {
     justify-content: center;
-    padding: 6px 0;
   }
   /* 窄轨里 hover 播放遮罩会盖满 44px 封面截胡点击——封面只管打开歌单 */
   .app-sidebar:not(.app-sidebar--open) .playlist-play-overlay { display: none; }
