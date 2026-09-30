@@ -55,7 +55,7 @@
 
       <!-- 音量 -->
       <div class="rc-volume-wrap">
-        <span class="rc-vol-icon"><PixelIcon name="vol-mute" :size="16" /></span>
+        <span class="rc-vol-icon"><PixelIcon name="vol-low" :size="16" /></span>
         <input
           type="range"
           class="rc-slider pg-range pg-range--on-ink"
@@ -85,7 +85,7 @@
             :class="{ 'rc-queue-row--current': i === state.queueIndex }"
             @click="send('play_song', s.id)"
           >
-            <span class="rc-queue-idx"><PixelIcon v-if="i === state.queueIndex" name="play" :size="10" /><template v-else>{{ i + 1 }}</template></span>
+            <span class="rc-queue-idx"><PixelIcon v-if="i === state.queueIndex" name="play" :size="11" /><template v-else>{{ i + 1 }}</template></span>
             <span class="rc-queue-name">{{ s.name }}</span>
             <span class="rc-queue-artist">{{ queueArtist(s) }}</span>
           </button>

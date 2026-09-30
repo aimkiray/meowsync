@@ -42,7 +42,7 @@
       <div class="fullscreen-player__bottom">
         <div class="fullscreen-player__controls">
           <div class="fullscreen-player__buttons">
-            <button @click="$emit('previous-song')" class="fullscreen-player__control-button" title="上一首" aria-label="上一首">◀◀</button>
+            <button @click="$emit('previous-song')" class="fullscreen-player__control-button" title="上一首" aria-label="上一首"><PixelIcon name="prev" :size="22" /></button>
             <button
               @click="$emit('toggle-play')"
               :disabled="songSwitching"
@@ -50,8 +50,8 @@
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
               :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
               :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-            ><span class="fullscreen-player__control-icon" :class="{ 'fullscreen-player__control-icon--pause': isPlaying && !songSwitching, 'fullscreen-player__control-icon--loading': songSwitching }">{{ songSwitching ? '⏳' : (isPlaying ? '⏸' : '▶') }}</span></button>
-            <button @click="$emit('next-song')" class="fullscreen-player__control-button" title="下一首" aria-label="下一首">▶▶</button>
+            ><PixelIcon :name="songSwitching ? 'sand' : (isPlaying ? 'pause' : 'play')" :size="songSwitching ? 20 : (isPlaying ? 28 : 22)" /></button>
+            <button @click="$emit('next-song')" class="fullscreen-player__control-button" title="下一首" aria-label="下一首"><PixelIcon name="next" :size="22" /></button>
           </div>
 
           <div class="fullscreen-player__info-row">
@@ -62,7 +62,7 @@
             </div>
 
             <div class="fullscreen-player__volume">
-              <span class="fullscreen-player__volume-icon" aria-hidden="true">🔊</span>
+              <span class="fullscreen-player__volume-icon" aria-hidden="true"><PixelIcon name="vol" :size="16" /></span>
               <input
                 :value="Number(volume)"
                 type="range"
@@ -86,8 +86,8 @@
         />
         <div
           v-else
-          class="fullscreen-player__cover flex items-center justify-center text-4xl text-pink-300"
-        >♪</div>
+          class="fullscreen-player__cover flex items-center justify-center text-pink-300"
+        ><PixelIcon name="note" :size="40" /></div>
       </div>
 
       <div
@@ -103,13 +103,15 @@
 <script>
 import { computed, onMounted, onUnmounted } from 'vue'
 import TextAliveLyricCanvas from './TextAliveLyricCanvas.vue'
+import PixelIcon from './PixelIcon.vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 
 export default {
   name: 'FullscreenPlayer',
   components: {
-    TextAliveLyricCanvas
+    TextAliveLyricCanvas,
+    PixelIcon
   },
   props: {
     currentSong: {
@@ -370,25 +372,6 @@ export default {
   background: rgba(182, 125, 158, 0.32);
   border: none;
   backdrop-filter: none;
-}
-
-.fullscreen-player__control-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1em;
-  min-height: 1em;
-  font-size: 22px;
-  line-height: 1;
-}
-
-.fullscreen-player__control-icon--pause {
-  font-size: 28px;
-  line-height: 0.85;
-}
-
-.fullscreen-player__control-icon--loading {
-  font-size: 20px;
 }
 
 .fullscreen-player__volume :deep(.jirai-slider) {
