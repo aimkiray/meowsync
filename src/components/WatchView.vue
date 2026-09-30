@@ -554,9 +554,21 @@ export default {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: var(--hairline);
-  /* gap 24 → padding 24：发丝线两侧留白对称 */
+  position: relative;
+  /* gap 24 → padding 24：栏界标尺两侧留白对称 */
   padding-left: 24px;
+}
+
+/* 栏界羽化标尺：ink-30 细线、两端渐隐、上下内缩——暗示分栏而非一堵墨墙 */
+.watch-side::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 24px;
+  bottom: 24px;
+  width: 1.2px;
+  background: linear-gradient(to bottom, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
+  pointer-events: none;
 }
 
 /* 状态横幅：纸面发丝盒 + 等宽标签（warn:/error:） */
@@ -708,10 +720,19 @@ export default {
   .watch-cover { width: min(64vw, 320px); }
 
   .watch-side {
-    border-left: none;
-    border-top: var(--hairline);
     padding-left: 0;
     padding-top: 10px;
+  }
+
+  /* 单列态栏界转横——同源羽化标尺 */
+  .watch-side::before {
+    left: 24px;
+    right: 24px;
+    top: 0;
+    bottom: auto;
+    width: auto;
+    height: 1.2px;
+    background: linear-gradient(to right, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
   }
 
   /* 不再限高内滚——YTM 是整页滚动，队列随页流 */
