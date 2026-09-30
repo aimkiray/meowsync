@@ -81,11 +81,16 @@ function pickYouTubeId(input) {
 // （Topic/VEVO 系自动投稿频道名即歌手名，'Title' 单独已是歌名）
 function extractYtSong(title, author) {
   // 括号修饰剥离：词边界防误伤——(Alive)/(Olive)/(Monochrome) 内嵌 live/mono
-  // 词干不该剥；内容禁含括号保证配对（嵌套/不配对的留原样总比切残片强）
+  // 词干不该剥；内容禁含括号保证配对（嵌套/不配对的留原样总比切残片强）；
+  // 回调校验开合括号同型——`(…]`/`【…)` 跨界不配对的留原样；全角括号同规则
+  const BRACKET_PAIR = { '(': ')', '（': '）', '[': ']', '【': '】' };
   const cleanTitle = String(title || '')
-    .replace(/[[(][^\[\]()]{0,80}?\b(?:official|lyrics?|audio|visuali[sz]er|video|mv|hd|4k|8k|remaster(?:ed)?|mono|explicit|live|color coded|lyric)\b[^\[\]()]{0,80}?[\])]/gi, ' ')
+    .replace(/[[(（【][^\[\]()（）【】]{0,80}?\b(?:official|lyrics?|audio|visuali[sz]er|video|mv|hd|4k|8k|remaster(?:ed)?|mono|explicit|live|color coded)\b[^\[\]()（）【】]{0,80}?[\])）】]/gi,
+      m => BRACKET_PAIR[m[0]] === m[m.length - 1] ? ' ' : m)
     .replace(/《|》/g, ' ')
     .replace(/\s+/g, ' ')
+    // 剥括号可能留下悬空分隔符（'Artist - (Explicit)' → 'Artist -'）
+    .replace(/^[-—–~～·|\s]+|[-—–~～·|\s]+$/g, '')
     .trim();
   // 频道名后缀剥皮：'Artist - Topic'（自动投稿）/'ArtistVEVO'（官方频道）
   const artistFromAuthor = String(author || '')
@@ -159,6 +164,8 @@ app.get('/youtube/resolve', async (c) => {
       matchNeteaseSong(candidates, duration, 'youtube', c.req.raw.signal), matchBudget,
     ]);
     clearTimeout(budgetTimer);
+    // matchNeteaseSong 因断连早退后，继续构造响应只是写给死 socket
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
 
     // hasVideo 只给「浏览器解得动的 avc1」——vp9/av01 流存在也不能宣称可视频；
     // progressive（formats 里的合并流）兜底也认——含音画的 360p 比没有强

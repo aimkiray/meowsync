@@ -38,6 +38,8 @@ export function extractYouTubeId(input) {
     const m = s.match(re);
     if (m) return m[1];
   }
+  // 裸 id 兜底：与服务端 pickYouTubeId 形态表对齐；前端调用点被
+  // isYouTubeInput（仅 URL 形态）门控后实际吃不到这条，保留只为表完整
   return (/^[A-Za-z0-9_-]{11}$/.test(s) && /\D/.test(s)) ? s : null;
 }
 
