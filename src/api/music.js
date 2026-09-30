@@ -277,6 +277,32 @@ export const musicApi = {
     const songs = data.songs || []
     if (songs.length > 0) return songs[0]
     throw new Error('歌曲不存在')
+  },
+
+  // B 站导入：解析 BV/av/URL → 视频元信息 + 歌名提取 + 网易云匹配。
+  // 服务端串三次上游（view/tags/playurl + 云搜），链路最坏 ~20s，放宽超时
+  resolveBilibili: async (input, abortSignal = null) => {
+    const response = await api.get('/bilibili/resolve', {
+      params: { input },
+      signal: abortSignal,
+      timeout: 60000
+    }).catch(err => {
+      // 服务端错误体 {code,message} 必须透出——axios 对非 2xx 直接 reject，
+      // 不提取的话用户只看到 "status code 502" 而非具体失败原因
+      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'B 站解析失败')
+    return data
+  },
+
+  // 流地址：服务端每次重解 playurl（CDN 签名会过期）再 302 进 /audio-proxy，
+  // 前端拿到的总是新鲜地址——直接塞给 <audio>/<video>/Howler 即可
+  bilibiliStreamUrl: (bvid, kind = 'audio', cid = null) => {
+    const params = new URLSearchParams({ bvid, kind })
+    if (cid) params.set('cid', cid)
+    return `${API_BASE_URL}/bilibili/stream?${params}`
   }
 }
 
