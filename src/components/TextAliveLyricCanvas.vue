@@ -48,6 +48,12 @@ export default {
     interactionMode: {
       type: String,
       default: 'auto'
+    },
+    // 歌词时间校准（ms，正=提前）：等效把渲染时钟拨快 offset——
+    // 与 startLyricSync 里 seek()+offset/1000 同一约定
+    lyricOffsetMs: {
+      type: Number,
+      default: 0
     }
   },
   setup(props) {
@@ -69,15 +75,18 @@ export default {
           if (!manager) return
           const { lyrics } = createLocalTextAliveLyrics(displayLyrics.value, props.duration)
           manager.setLyrics(lyrics)
-          manager.update((props.currentTime || 0) * 1000)
+          manager.update(lyricClockMs())
         })
         // 兜底 catch：加载失败已重置缓存可重试，这里避免 unhandledrejection 噪音
         .catch(err => console.warn('[textalive] lyric sync failed:', err))
     }
 
+    // 渲染时钟 = 播放时钟 + 校准（秒→ms）
+    const lyricClockMs = () => ((props.currentTime || 0) + props.lyricOffsetMs / 1000) * 1000
+
     const syncPosition = () => {
       if (!manager) return
-      manager.update((props.currentTime || 0) * 1000)
+      manager.update(lyricClockMs())
     }
 
     const syncInteractionMode = () => {
@@ -100,6 +109,8 @@ export default {
     watch(displayLyrics, syncLyrics)
     watch(() => props.duration, syncLyrics)
     watch(() => props.currentTime, syncPosition)
+    // 校准值变化即时重同步——暂停/全屏中调节也要生效，不能等下一个播放 tick
+    watch(() => props.lyricOffsetMs, syncPosition)
     watch(() => props.isPlaying, syncPosition)
     watch(() => props.interactionMode, syncInteractionMode)
 

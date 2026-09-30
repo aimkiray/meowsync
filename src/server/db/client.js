@@ -182,6 +182,11 @@ function migrateLegacyTables(database) {
     }
   }
 
+  // 同名异构预发布库的兜底：表存在但缺列时 CREATE IF NOT EXISTS 会跳过，
+  // PUT 永久 no such column 500——复用列回填自愈
+  addColumnIfMissing(database, 'song_lyric_meta', 'offset_ms', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(database, 'song_lyric_meta', 'updated_at', "TEXT NOT NULL DEFAULT ''");
+
   // upsertPlaylist 依赖 ON CONFLICT(netease_playlist_id)——老库若没有该唯一
   // 约束，导入/刷新会永久报 "ON CONFLICT clause does not match"。约束缺失时
   // 先去重再补索引（保留最小 id，脏行引用由后续逻辑兜底）
