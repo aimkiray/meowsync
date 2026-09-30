@@ -85,7 +85,7 @@
             :class="{ 'rc-queue-row--current': i === state.queueIndex }"
             @click="send('play_song', s.id)"
           >
-            <span class="rc-queue-idx"><PixelIcon v-if="i === state.queueIndex" name="play" :size="11" /><template v-else>{{ i + 1 }}</template></span>
+            <span class="rc-queue-idx"><PixelIcon v-if="i === state.queueIndex" name="play" :size="16" /><template v-else>{{ i + 1 }}</template></span>
             <span class="rc-queue-name">{{ s.name }}</span>
             <span class="rc-queue-artist">{{ queueArtist(s) }}</span>
           </button>

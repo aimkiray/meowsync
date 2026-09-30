@@ -40,7 +40,7 @@
         >
           <span class="song-result-index">
             <span class="song-result-index-num">{{ i + 1 }}</span>
-            <span class="song-result-index-play"><PixelIcon name="play" :size="11" /></span>
+            <span class="song-result-index-play"><PixelIcon name="play" :size="16" /></span>
           </span>
           <img
             v-if="song.al?.picUrl || song.album?.picUrl"

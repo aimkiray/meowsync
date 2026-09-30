@@ -44,7 +44,7 @@
               title="播放歌单"
               aria-label="播放歌单"
               @click.stop="$emit('play-playlist', playlist)"
-            ><PixelIcon name="play" :size="14" /></button>
+            ><PixelIcon name="play" :size="22" /></button>
           </div>
           <div class="pl-info">
             <h3 class="pl-name">{{ playlist.name }}</h3>
