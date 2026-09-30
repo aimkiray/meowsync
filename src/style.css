@@ -1011,6 +1011,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .queue-row:hover { background: var(--ink-06); }
 .queue-row--current { background: var(--ink-10); }
+/* 当前行 v-if 不渲染移除键——补其占位（24px 键 + 6px 行 gap），时长列才与全列对齐不跳位 */
+.queue-row--current .queue-row-main { margin-right: 30px; }
 /* 当前行 ▶ 用墨色——火烈鸟 accent 在 teal/ink-10 底上仅 ~1.8:1，不达图形 3:1 线 */
 .queue-row--current .queue-row-index { color: var(--ink); font-weight: 700; }
 
