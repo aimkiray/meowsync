@@ -1021,14 +1021,18 @@ export default {
     // 队列归属本地临时歌单（单曲分享/saved_queue_*）——底栏据此禁用随机键
     const playerIsTemp = computed(() => isLocalPlaylistId(playingPlaylistId.value))
 
-    // 播放条 ☰/词 开关 → 打开 watch 页对应 tab（YTM：UP NEXT/歌词都是页内栏位）
+    // 播放条 ☰/词 开关 → 打开 watch 页对应 tab（YTM：UP NEXT/歌词都是页内栏位）。
+    // 已在 watch 且同 tab 再点 = 收起回上一页（YTM miniplayer 同款开合）
     const openWatchPanel = (tab) => {
       if (!currentSong.value) return // 没在播的歌：空 watch 页无意义
-      watchTab.value = tab
-      if (centerView.value !== 'watch') {
-        centerView.value = 'watch'
-        pushNavState()
+      if (centerView.value === 'watch') {
+        if (watchTab.value === tab) return watchBack()
+        watchTab.value = tab
+        return
       }
+      watchTab.value = tab
+      centerView.value = 'watch'
+      pushNavState()
     }
 
     // 点歌进入 watch 播放页（YTM：任何地方点歌都导航到 /watch）。
