@@ -229,7 +229,9 @@ export default {
 
 <style scoped>
 .playlist-grid-wrap {
-  padding: 20px;
+  /* 同 .home-feed：透明 border 抬滚动条车道离页缘，内容轴不动 */
+  padding: 0 20px;
+  border-block: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
   scrollbar-gutter: stable;
