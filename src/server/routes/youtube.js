@@ -156,12 +156,21 @@ app.get('/youtube/resolve', async (c) => {
 
     // 匹配预算与 bilibili 同款：整条链超时当无匹配，不阻塞解析返回
     let budgetTimer;
+    const budgetCtrl = new AbortController();
     const matchBudget = new Promise(resolve => {
-      budgetTimer = setTimeout(() => resolve({ song: null, query: null }), 25000);
+      // 预算耗尽不只让 race 判负——abort 停掉在途的云搜/AI 复核，
+      // 否则孤儿流程继续烧上游请求与 AI 额度
+      budgetTimer = setTimeout(() => {
+        budgetCtrl.abort();
+        resolve({ song: null, query: null });
+      }, 25000);
       budgetTimer.unref?.();
     });
     const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, duration, 'youtube', c.req.raw.signal), matchBudget,
+      matchNeteaseSong(candidates, duration, 'youtube',
+        AbortSignal.any([c.req.raw.signal, budgetCtrl.signal]),
+        { title: vd.title || '', author }),
+      matchBudget,
     ]);
     clearTimeout(budgetTimer);
     // matchNeteaseSong 因断连早退后，继续构造响应只是写给死 socket

@@ -430,3 +430,6 @@ function parseLyrics(lyricText, fallbackOffsetSec = null) {
   }
   return result.sort((a, b) => a.time - b.time)
 }
+
+// 供 AI 译文回填复用——loadLyrics 拿到 tlyric 后与主歌词按时间窗合并
+export { parseLyrics, mergeTranslations }

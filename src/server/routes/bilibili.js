@@ -171,12 +171,21 @@ app.get('/bilibili/resolve', async (c) => {
     const candidates = [...new Set([songName, page?.part, cleanTitle]
       .map(c => (c || '').trim()).filter(Boolean))].slice(0, 3);
     let budgetTimer;
+    const budgetCtrl = new AbortController();
     const matchBudget = new Promise(resolve => {
-      budgetTimer = setTimeout(() => resolve({ song: null, query: null }), 25000);
+      // 预算耗尽不只让 race 判负——abort 停掉在途的云搜/AI 复核，
+      // 否则孤儿流程继续烧上游请求与 AI 额度
+      budgetTimer = setTimeout(() => {
+        budgetCtrl.abort();
+        resolve({ song: null, query: null });
+      }, 25000);
       budgetTimer.unref?.();
     });
     const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, duration, 'bilibili', c.req.raw.signal), matchBudget,
+      matchNeteaseSong(candidates, duration, 'bilibili',
+        AbortSignal.any([c.req.raw.signal, budgetCtrl.signal]),
+        { title: view.title || '', author: view.owner?.name || '' }),
+      matchBudget,
     ]);
     clearTimeout(budgetTimer);
     if (c.req.raw.signal?.aborted) return c.body(null, 499);

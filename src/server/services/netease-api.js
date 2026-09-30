@@ -3,6 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
+const { aiEnabled, askAiJson } = require('../lib/ai');
 
 // NeteaseCloudMusicApi 安装路径经 require.resolve 解析，避免依赖 process.cwd()/__dirname 布局
 function resolvePackageDir(pkg) {
@@ -162,6 +163,85 @@ const unlockCacheSet = (purpose, id, value) => {
   unlockCache.set(`${purpose}|${id}`, { ...value, at: Date.now() });
 };
 
+// ── AI 解锁辅助 ────────────────────────────────────────────────
+// unm match() 内部的 select 用 keyword（name - artists）在各源站搜候选——
+// 歌名带 "(Live)/(Remaster)/DJ版/翻自xx" 等版本修饰时，跨平台检索的命中率与
+// 准确度都会掉（搜到同名的剪辑/live 而非正主）。AI 规整出「歌曲本名+原唱」
+// 喂给 match 的 data 参数，从检索源头减少错配；时长对账仍在下游兜底。
+// 任何一步失败都返回 null → 调用方退回默认 find(id) 路径，无 AI 不变行为
+// 正缓存 30min；负缓存（模型没给规整结果/请求失败）只压 2min——AI 端点
+// 瞬时抖动不该把同曲半小时内的规整尝试全部掐掉
+const UNLOCK_INFO_TTL_MS = 30 * 60 * 1000;
+const UNLOCK_INFO_NEG_TTL_MS = 2 * 60 * 1000;
+const unlockInfoCache = new Map(); // songId -> {data, at}
+const unlockInfoInflight = new Map(); // songId -> Promise<data|null>（同曲单飞）
+
+async function aiUnlockInfoInner(songRow, signal) {
+  const artists = (songRow.ar || []).map(a => a.name).filter(Boolean);
+  const ans = await askAiJson({
+    system: '你是音乐元数据规整器。给定歌曲元数据，提取用于跨平台检索的标准形态：'
+      + '去掉版本/介质修饰（Live/Remaster/DJ版/加速版/翻自xx/完整版/剪辑版等），'
+      + '保留歌曲本名与原唱歌手；本身就规范则原样返回。只输出 JSON {"name":"...","artists":["..."]}。',
+    user: JSON.stringify({ name: songRow.name, artists, album: songRow.al?.name || '' }),
+    maxTokens: 128,
+    // 规整是检索关键词的增强而非门禁——10s 够小模型出 100 token 结果，
+    // 慢于此直接回基线（unm 自抓 detail），别把 AI 延迟放大进解锁链
+    timeoutMs: 10000,
+    signal,
+  });
+  let data = null;
+  if (ans && typeof ans.name === 'string' && ans.name.trim()) {
+    // artists 元素只收字符串——模型可能回 [{name:"x"}] 对象形态，
+    // String({}) = "[object Object]" 进检索词比不规整更糟
+    const list = Array.isArray(ans.artists)
+      ? ans.artists.filter(a => typeof a === 'string' && a.trim())
+          .map(a => a.trim().slice(0, 40)).slice(0, 4)
+      : [];
+    data = { name: ans.name.trim().slice(0, 120), artists: list.length ? list : artists };
+  }
+  return data;
+}
+
+async function aiUnlockInfo(songRow, signal) {
+  const key = String(songRow.id);
+  const hit = unlockInfoCache.get(key);
+  if (hit) {
+    const ttl = hit.data ? UNLOCK_INFO_TTL_MS : UNLOCK_INFO_NEG_TTL_MS;
+    if (Date.now() - hit.at < ttl) return hit.data;
+    unlockInfoCache.delete(key);
+  }
+  // 同 id 并发请求合到首个在途调用——批量解锁同曲重复项/并发刷新不重复扣额度
+  const gate = unlockInfoInflight.get(key);
+  if (gate) return gate;
+  const p = aiUnlockInfoInner(songRow, signal).finally(() => unlockInfoInflight.delete(key));
+  unlockInfoInflight.set(key, p);
+  const data = await p;
+  // abort 中途返回的 null 不落缓存——那不是「规整不了」而是「被打断」
+  if (signal?.aborted) return data;
+  if (unlockInfoCache.size > 512) unlockInfoCache.clear();
+  unlockInfoCache.set(key, { data, at: Date.now() });
+  return data;
+}
+
+// unm find(id, data) 的 data 形态：{id,name,alias,duration,album,artists}
+// ——注意是原始 detail 字段名（artists/album/duration），不是规整后的 ar/al/dt
+// 「注入即承诺」硬契约：data truthy 时 unm 不再自抓 detail，且 getFormatData
+// 产出空 name/非对象 album/非数组 artists 会让该源直接 reject 不回落——
+// 所以这里必须保证 name 非空 + album/artists 恒为正确形态，malformed data
+// 比 undefined 更差（undefined 走 unm 自抓，malformed 让全部源同因失败）
+function buildUnmData(songRow, info) {
+  const artists = info.artists.map(name => ({ name }));
+  if (!info.name || !artists.length) return null;
+  return {
+    id: songRow.id,
+    name: info.name,
+    alias: Array.isArray(songRow.alia) ? songRow.alia : [],
+    duration: songRow.dt || 0,
+    album: { id: songRow.al?.id, name: songRow.al?.name },
+    artists,
+  };
+}
+
 // 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）
 // - url 为空或为试听片段的条目尝试 unblockmatch 回退源
 // - 时长校验对所有源生效（kuwo 已退化为预览剪辑，校验即识别机制）；
@@ -197,13 +277,17 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   // 不该为校验基准多付一次上游往返
   const ids = unlockTargets.map(i => i.id).join(',');
   const originalDurations = {};
+  const songRows = {}; // AI 规整用——unlockInfo 需要完整 name/ar/al 字段
   if (ids && apiModules['song_detail']) {
     try {
       const detail = await withTimeout(
         apiModules['song_detail']({ ids }, request),
         UPSTREAM_TIMEOUT_MS, '上游接口 song_detail'
       );
-      (detail.body?.songs || []).forEach(s => { originalDurations[s.id] = s.dt; });
+      (detail.body?.songs || []).forEach(s => {
+        originalDurations[s.id] = s.dt;
+        songRows[s.id] = s;
+      });
     } catch (e) {
       // 静默降级会让 kuwo 剪辑漏检——留痕才能发现"上游抖动→成片剪辑入库"的因果
       console.warn(`[unlock] song_detail 获取失败，时长校验降级（逐源统计仍生效）: ${e?.message || e}`);
@@ -218,11 +302,22 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
       let resolved = unlockCacheGet(purpose, item.id);
       const wasCached = Boolean(resolved);
       if (!resolved) {
+        // AI 规整检索元数据：一次提取全源复用（unm 内部按 keyword 搜候选，
+        // 干净的 name/artists 让每个源的 select 都更准）。失败/未配置 →
+        // matchData=null → unm 走自己的 detail 抓取，行为与旧版一致
+        let matchData = null;
+        const songRow = songRows[item.id];
+        if (songRow && aiEnabled()) {
+          try {
+            const info = await aiUnlockInfo(songRow, signal);
+            matchData = info ? buildUnmData(songRow, info) : null;
+          } catch { /* AI 规整失败不阻塞解锁主路径 */ }
+        }
         for (const source of allSources) {
           throwIfAborted();
           try {
             const unblocked = await withTimeout(
-              unblockmatch(item.id, [source]),
+              unblockmatch(item.id, [source], matchData || undefined),
               UNBLOCK_TIMEOUT_MS, `解锁源 ${source}`
             );
             // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，

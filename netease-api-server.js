@@ -123,6 +123,7 @@ if (downloadToken) {
     const p = c.req.path;
     const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
       || p === '/playlists' || p.startsWith('/playlists/')
+      || p === '/ai' || p.startsWith('/ai/')
       || p === '/song-meta' || p.startsWith('/song-meta/'))
       && c.req.method !== 'GET' && c.req.method !== 'HEAD';
     if (!protectedWrite) return next();
@@ -144,6 +145,7 @@ app.route('/', require('./src/server/routes/downloads'));
 app.route('/', require('./src/server/routes/songmeta'));
 app.route('/', require('./src/server/routes/bilibili'));
 app.route('/', require('./src/server/routes/youtube'));
+app.route('/', require('./src/server/routes/ai'));
 const musicRoutes = require('./src/server/routes/music');
 app.route('/', musicRoutes);
 
@@ -153,7 +155,7 @@ app.route('/', musicRoutes);
 // 多段路径（/song_url/123）也要兜：首段命中白名单 API 名同样是 API 请求
 if (hasDist) {
   const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
-  const API_PREFIXES = ['/downloads', '/playlists', '/audio-proxy', '/remote', '/ping', '/healthz', '/bilibili', '/youtube', '/song-meta'];
+  const API_PREFIXES = ['/downloads', '/playlists', '/audio-proxy', '/remote', '/ping', '/healthz', '/bilibili', '/youtube', '/song-meta', '/ai'];
   const apiNames = musicRoutes.ALLOWED_APIS || new Set();
   // 未白名单的上游模块名（/login/xxx 之类）与 /assets/ 静态资源同样不喂 HTML：
   // 前者会让 axios 把 index.html 当 JSON 解析，后者让浏览器拿到 MIME 错乱的 200

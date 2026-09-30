@@ -343,6 +343,26 @@ function initSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- AI 歌词翻译缓存：同一词源 id 翻一次永久复用（上游歌词修订罕见——
+    -- 即便修订也是旧译文变旧而非变错，可接受不版本化）
+    CREATE TABLE IF NOT EXISTS song_lyric_translation (
+      song_id TEXT PRIMARY KEY,
+      tlyric TEXT NOT NULL,
+      model TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- AI 判定结果缓存（歌词归属核验等）：ok=0/1，kind 区分判定类型。
+    -- 记住「不符」尤其重要——同一错配不该每首歌都重复问一遍模型
+    CREATE TABLE IF NOT EXISTS song_ai_verdict (
+      song_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      detail TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (song_id, kind)
+    );
+
     -- /healthz 用写探测表：SELECT 1 是纯内存查询测不出磁盘满
     CREATE TABLE IF NOT EXISTS _healthz (ts INTEGER);
   `);
