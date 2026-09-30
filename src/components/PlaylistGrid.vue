@@ -31,30 +31,42 @@
           :key="song.id"
           class="song-result-row"
           :class="{ 'song-result-row--playing': String(currentSong?.id) === String(song.id) }"
-          @click="$emit('play-song', song)"
-          @keydown.enter="$emit('play-song', song)"
-          @keydown.space.prevent="$emit('play-song', song)"
-          tabindex="0"
-          role="button"
-          :title="`播放 ${song.name}`"
         >
-          <span class="song-result-index">
-            <span class="song-result-index-num">{{ i + 1 }}</span>
-            <span class="song-result-index-play"><PixelIcon name="play" :size="16" /></span>
-          </span>
-          <img
-            v-if="song.al?.picUrl || song.album?.picUrl"
-            :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
-            :alt="song.name"
-            class="song-result-cover"
-            loading="lazy"
-          />
-          <div v-else class="song-result-cover song-result-cover--fallback"><PixelIcon name="note" :size="16" /></div>
-          <div class="song-result-info">
-            <p class="song-result-name">{{ song.name }}</p>
-            <p class="song-result-meta">{{ songArtist(song) }}<template v-if="songAlbum(song)"> · {{ songAlbum(song) }}</template></p>
+          <!-- 点击区收进 -main：行是容器，避免 button 嵌 role=button -->
+          <div
+            class="song-result-main"
+            role="button"
+            tabindex="0"
+            :title="`播放 ${song.name}`"
+            @click="$emit('play-song', song)"
+            @keydown.enter="$emit('play-song', song)"
+            @keydown.space.prevent="$emit('play-song', song)"
+          >
+            <span class="song-result-index">
+              <span class="song-result-index-num">{{ i + 1 }}</span>
+              <span class="song-result-index-play"><PixelIcon name="play" :size="16" /></span>
+            </span>
+            <img
+              v-if="song.al?.picUrl || song.album?.picUrl"
+              :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+              :alt="song.name"
+              class="song-result-cover"
+              loading="lazy"
+            />
+            <div v-else class="song-result-cover song-result-cover--fallback"><PixelIcon name="note" :size="16" /></div>
+            <div class="song-result-info">
+              <p class="song-result-name">{{ song.name }}</p>
+              <p class="song-result-meta">{{ songArtist(song) }}<template v-if="songAlbum(song)"> · {{ songAlbum(song) }}</template></p>
+            </div>
+            <span class="song-result-duration">{{ formatSongDuration(song) }}</span>
           </div>
-          <span class="song-result-duration">{{ formatSongDuration(song) }}</span>
+          <button
+            type="button"
+            class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
+            title="添加到歌单"
+            aria-label="添加到歌单"
+            @click.stop="$emit('add-to-playlist', song)"
+          ><PixelIcon name="plus" :size="14" /></button>
         </div>
       </section>
 
@@ -157,7 +169,7 @@ export default {
       default: false
     }
   },
-  emits: ['open', 'add', 'close', 'play-song'],
+  emits: ['open', 'add', 'close', 'play-song', 'add-to-playlist'],
   setup(props, { emit }) {
     const httpsCoverUrl = httpsCover
     // 添加中的歌单 id：立即禁用按钮防连点，10s 兜底清（父组件入库后由 watch 提前清）
@@ -292,14 +304,22 @@ export default {
   color: var(--ink-64);
 }
 
-/* 歌曲行：留白节奏（无分隔线），整行可点播放（YTM 行交互） */
+/* 歌曲行：留白节奏（无分隔线），点击区收进 -main（行是容器，行尾 + 键不落播放） */
 .song-result-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
   padding: 8px 8px;
-  cursor: pointer;
   transition: background 0.12s;
+}
+
+.song-result-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
 }
 
 .song-result-row:hover {
@@ -330,14 +350,14 @@ export default {
   color: var(--ink);
 }
 
-/* 序号 ↔ ▶ 互换（与 song-row 同构） */
+/* 序号 ↔ ▶ 互换（与 song-row 同构）；焦点在 -main 上（行本体不再可聚焦） */
 .song-result-row:hover .song-result-index-num,
-.song-result-row:focus-visible .song-result-index-num,
+.song-result-main:focus-visible .song-result-index-num,
 .song-result-row--playing .song-result-index-num {
   display: none;
 }
 .song-result-row:hover .song-result-index-play,
-.song-result-row:focus-visible .song-result-index-play,
+.song-result-main:focus-visible .song-result-index-play,
 .song-result-row--playing .song-result-index-play {
   display: inline-flex;
 }
