@@ -688,10 +688,12 @@ export default {
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
-        // 非本地态歌单且非 B 站曲再多"下载到服务器"——合计 5/6/7 三档
+        // 非本地态歌单且非 B 站曲再多"下载到服务器"——合计 5/6/7 三档。
+        // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
+        const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const itemCount = 5
           + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
-          + ((!isLocalPlaylist.value && props.selectedPlaylist && !menuSong.value?.bilibili) ? 1 : 0)
+          + ((!isLocalPlaylist.value && props.selectedPlaylist && !targetSong?.bilibili) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -754,9 +756,9 @@ export default {
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
       // 带 view=watch：冷启动打开分享链后落在播放页（YTM watch 同款直达）；
-      // B 站导入曲走 ?bili=BV 链——?song= 只认网易云数值 id
+      // B 站导入曲走 ?bili=BV 链——?song= 只认网易云数值 id；分P带 p 参数
       const shareUrl = song.bilibili?.bvid
-        ? `${window.location.origin}/?bili=${song.bilibili.bvid}&view=watch`
+        ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
         : `${window.location.origin}/?song=${song.id}&view=watch`
 
       const result = await shareOrCopy({

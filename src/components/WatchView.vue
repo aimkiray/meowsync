@@ -464,17 +464,22 @@ export default {
     // 偏好持久化：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开
     const biliVideoRef = ref(null)
     const videoOn = ref(localStorage.getItem('meowsync-bili-video') !== '0')
-    watch(videoOn, v => localStorage.setItem('meowsync-bili-video', v ? '1' : '0'))
+    watch(videoOn, v => {
+      localStorage.setItem('meowsync-bili-video', v ? '1' : '0')
+      // 开视频就是用户最自然的重试入口——复位失败闩重新拉流
+      if (v) biliVideoFailed.value = false
+    })
     // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
     const biliVideoFailed = ref(false)
-    watch(() => props.currentSong?.bilibili?.bvid, () => { biliVideoFailed.value = false })
     const biliVideoActive = computed(() =>
       !!(props.currentSong?.bilibili?.hasVideo && videoOn.value && !biliVideoFailed.value)
     )
     const biliVideoUrl = computed(() => {
       const b = props.currentSong?.bilibili
-      return b?.hasVideo ? musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid) : ''
+      return b?.hasVideo ? musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page) : ''
     })
+    // 复位键用 biliVideoUrl（含 bvid+cid+page）——同 bvid 换P重导时新分P该重新尝试
+    watch(biliVideoUrl, () => { biliVideoFailed.value = false })
 
     // 音画同步：视频元素静音播放，时钟完全听 Howler——每帧对比 currentTime，
     // 漂移超阈值才 seek（RAF 每帧触发，此处只做减法+偶尔 seek，开销可忽略）。
@@ -487,7 +492,10 @@ export default {
       if (!v || !biliVideoActive.value || v.error) return
       if (props.isPlaying && v.paused && !biliPlayTrying) {
         biliPlayTrying = true
-        v.play().catch(() => {}).finally(() => { biliPlayTrying = false })
+        // play() 在极端旧内核可同步抛错——try 兜底防 biliPlayTrying 卡死
+        try {
+          Promise.resolve(v.play()).catch(() => {}).finally(() => { biliPlayTrying = false })
+        } catch { biliPlayTrying = false }
       } else if (!props.isPlaying && !v.paused) v.pause()
       if (Math.abs(v.currentTime - props.currentTime) > BILI_DRIFT_SEC) {
         v.currentTime = props.currentTime
@@ -512,9 +520,9 @@ export default {
     const shareSong = async () => {
       const song = props.currentSong
       if (!song) return
-      // B 站导入曲的分享链是 ?bili=BVxxx——?song= 只认网易云数值 id
+      // B 站导入曲的分享链是 ?bili=BVxxx——?song= 只认网易云数值 id；分P带 p 参数
       const shareUrl = song.bilibili?.bvid
-        ? `${window.location.origin}/?bili=${song.bilibili.bvid}&view=watch`
+        ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
         : `${window.location.origin}/?song=${song.id}&view=watch`
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistText.value}`,

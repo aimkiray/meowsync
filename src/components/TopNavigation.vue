@@ -161,7 +161,7 @@ export default {
     // B 站输入识别：BV 号（真实 bvid 恒 BV1 头+9 位）、av 号、
     // bilibili.com/b23.tv 链接。先于歌单ID判定；\b 词边界防长 token 误吞
     const isBilibiliInput = (input) =>
-      /\bBV1[0-9A-Za-z]{9}\b/.test(input) ||
+      /\bBV1[0-9A-Za-z]{9}\b/i.test(input) || // 小写 bv 也收下——服务端会校验真实 bvid
       /bilibili\.com|b23\.tv/i.test(input) ||
       /(?:^|\/)av\d+/i.test(input)
 
