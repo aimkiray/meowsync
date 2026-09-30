@@ -1,7 +1,7 @@
 <template>
   <!-- 歌单库侧栏："library" 媒体库列表，发丝线行排 -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
-    <p class="pg-label panel-label">library 我的歌单</p>
+    <p class="pg-label panel-label"><GlitchText text="library 我的歌单" /></p>
 
     <div v-if="loading" class="panel-state">
       <div class="pixel-loading" aria-hidden="true"></div>
@@ -143,10 +143,11 @@ import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId } from '../lib/song'
 import { toast, pixelConfirm } from '../lib/feedback'
 import PixelIcon from './PixelIcon.vue'
+import GlitchText from './GlitchText.vue'
 
 export default {
   name: 'PlaylistPanel',
-  components: { PixelIcon },
+  components: { PixelIcon, GlitchText },
   props: {
     userPlaylists: {
       type: Array,

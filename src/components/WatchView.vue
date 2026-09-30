@@ -21,7 +21,7 @@
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
         </div>
 
-        <h2 class="watch-title" data-nosnippet>{{ currentSong?.name || '未播放' }}</h2>
+        <h2 class="watch-title" data-nosnippet><GlitchText :text="currentSong?.name || '未播放'" /></h2>
         <p class="watch-meta">
           {{ artistText }}<template v-if="albumText"> · {{ albumText }}</template>
           <template v-if="duration"> · {{ formatTime(duration) }}</template>
@@ -239,6 +239,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music'
 import PixelIcon from './PixelIcon.vue'
+import GlitchText from './GlitchText.vue'
 import { shareOrCopy } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
@@ -246,7 +247,7 @@ import { httpsCover } from '../lib/url'
 
 export default {
   name: 'WatchView',
-  components: { PixelIcon },
+  components: { PixelIcon, GlitchText },
   props: {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },

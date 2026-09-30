@@ -4,7 +4,7 @@
   <div class="home-feed">
     <header class="home-head">
       <p class="pg-label">home · discover</p>
-      <h2 class="home-title" data-nosnippet>发现音乐</h2>
+      <h2 class="home-title" data-nosnippet><GlitchText text="发现音乐" /></h2>
     </header>
 
     <!-- 热搜 chips（点击直接搜） -->
@@ -114,10 +114,11 @@
 import { httpsCover } from '../lib/url'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
+import GlitchText from './GlitchText.vue'
 
 export default {
   name: 'HomeFeed',
-  components: { PrintMarks, PixelIcon },
+  components: { PrintMarks, PixelIcon, GlitchText },
   props: {
     toplists: {
       type: Array,
