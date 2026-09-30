@@ -96,7 +96,7 @@
                 class="pg-chip pg-chip--static song-tag"
                 title="已下载到服务器"
                 aria-label="已下载到服务器"
-              ><PixelIcon name="check" :size="10" /></span>
+              ><PixelIcon name="check" :size="11" /></span>
             </h4>
             <p class="song-artist">
               {{ song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') }}
@@ -166,7 +166,7 @@
             @keydown.enter="addToQueueFromMenu"
             @keydown.space.prevent="addToQueueFromMenu"
           >
-            <PixelIcon name="save" :size="13" /> 加入队列末尾
+            <PixelIcon name="plus" :size="13" /> 加入队列末尾
           </div>
           <div
             class="pg-menu-item"

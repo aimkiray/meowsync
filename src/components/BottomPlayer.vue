@@ -483,12 +483,6 @@ export default {
 }
 .pg-icobtn--on-ink:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
 
-.queue-glyph {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  line-height: 1;
-}
-
 /* 待机条：与激活条同高（40 内容 + 10×2 padding + 1.2 顶线 = 61.2），首次点歌不跳主区 */
 .player-idle {
   display: grid;

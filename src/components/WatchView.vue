@@ -103,7 +103,7 @@
                 @keydown.space.prevent="jumpTo(index)"
               >
               <span class="queue-row-index">
-                <template v-if="String(song.id) === String(currentSong?.id)"><PixelIcon name="play" :size="10" /></template>
+                <template v-if="String(song.id) === String(currentSong?.id)"><PixelIcon name="play" :size="11" /></template>
                 <template v-else>{{ index + 1 }}</template>
               </span>
               <img
