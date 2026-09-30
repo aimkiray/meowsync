@@ -405,8 +405,9 @@ export default {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 右侧 56px 留给常显的 .pl-actions（分享+⋯）；左 4px 让封面与行块缘留呼吸 */
-  padding: 9px 48px 9px 4px;
+  /* 右侧 58px 留给常显 .pl-actions（right:4 + 双 24px 键 + 2gap = 54，+4 气隙）；
+     48 会让长名省略号滑进分享键命中盒；左 4px 让封面与行块缘留呼吸 */
+  padding: 9px 58px 9px 4px;
   cursor: pointer;
   transition: background .12s;
 }

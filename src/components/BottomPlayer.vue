@@ -425,7 +425,7 @@ export default {
   color: var(--paper);
   border: 1.2px solid transparent;
   cursor: pointer;
-  transition: color .2s, border-color .2s;
+  transition: color .2s, border-color .2s, opacity .15s;
 }
 /* hover 统一语言：墨色底上纸色发丝框 + 品红字（play 键常驻框只是强调主键） */
 .transport:hover:not(:disabled) { color: var(--accent-magenta-on-ink); border-color: var(--paper); }
@@ -438,8 +438,9 @@ export default {
 }
 .transport--play:hover:not(:disabled) { border-color: var(--accent-magenta); }
 
-/* 切换中：不换字形，整键灰化（与 :disabled 同档） */
-.transport--switching { opacity: .45; }
+/* 切换中：不换字形，整键灰化。busy≠disabled——仍可按（togglePlay 内有
+   howl 守卫），用 progress 光标区分于死键；opacity .15s 柔化瞬闪 */
+.transport--switching { opacity: .45; cursor: progress; }
 
 /* watch 页已打开对应 tab 时的按下态（纸面反白） */
 .pg-icobtn--pressed {

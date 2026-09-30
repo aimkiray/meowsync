@@ -3,7 +3,7 @@
   <div class="pg-panel dql-panel h-full flex flex-col">
     <div class="dql-head">
       <div class="dql-head-info">
-        <h2 class="dql-title">{{ title }}</h2>
+        <h2 class="dql-title"><GlitchText :text="title" /></h2>
         <p class="pg-label pg-label--dim dql-sub">左侧选队列，右侧看详情喵~</p>
       </div>
       <span class="pg-chip pg-chip--static dql-count">{{ queues.length }} 条</span>
@@ -162,6 +162,7 @@
 import { onBeforeUnmount, ref } from 'vue';
 import { httpsCover } from '../lib/url';
 import PixelIcon from './PixelIcon.vue';
+import GlitchText from './GlitchText.vue';
 
 const props = defineProps({
   queues: {

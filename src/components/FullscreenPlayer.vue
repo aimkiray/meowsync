@@ -45,11 +45,10 @@
             <button @click="$emit('previous-song')" class="fullscreen-player__control-button" title="上一首" aria-label="上一首"><PixelIcon name="prev" :size="22" /></button>
             <button
               @click="$emit('toggle-play')"
-              :disabled="songSwitching"
               class="fullscreen-player__control-button fullscreen-player__control-button--primary"
-              :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
-              :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-              :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
+              :class="{ 'opacity-50 cursor-progress': songSwitching }"
+              :title="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
+              :aria-label="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
             ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 28 : 32" /></button>
             <button @click="$emit('next-song')" class="fullscreen-player__control-button" title="下一首" aria-label="下一首"><PixelIcon name="next" :size="22" /></button>
           </div>

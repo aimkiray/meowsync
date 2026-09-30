@@ -3,7 +3,7 @@
   <div class="pg-panel dtl-panel h-full flex flex-col">
     <div class="dtl-head">
       <div class="dtl-head-info">
-        <h2 class="dtl-title">下载任务</h2>
+        <h2 class="dtl-title"><GlitchText text="下载任务" /></h2>
         <p v-if="selectedQueue" class="pg-label pg-label--dim dtl-sub">
           {{ selectedQueue.name }} · {{ tasks.length }} 条任务
         </p>
@@ -125,6 +125,7 @@
 import { computed, h, ref, watch } from 'vue';
 import { httpsCover } from '../lib/url';
 import PixelIcon from './PixelIcon.vue';
+import GlitchText from './GlitchText.vue';
 
 const props = defineProps({
   tasks: {
