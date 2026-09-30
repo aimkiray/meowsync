@@ -155,7 +155,10 @@ export default {
 
 <style scoped>
 .home-feed {
-  padding: 20px;
+  /* 滚动条车道上下内缩：透明 border 把轨道抬离页缘 20px，
+     与内容首行轴齐平；padding-block 让位同量，内容几何不动 */
+  padding: 0 20px;
+  border-block: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
   scrollbar-gutter: stable;
