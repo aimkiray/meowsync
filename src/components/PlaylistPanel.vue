@@ -386,22 +386,26 @@ export default {
   scrollbar-gutter: stable;
 }
 
-/* 窄轨（768-1023 未展开）只剩 64px 封面列——10px 死车道会把居中封面掰偏，此处回收 */
+/* 窄轨（768-1023 未展开）只剩 64px 封面列——10px 死车道会把居中封面掰偏，此处回收；
+   行块内收也回收（64px 轨里 12px×2 放不下 44px 封面） */
 @media (min-width: 768px) and (max-width: 1023.98px) {
   .app-sidebar:not(.app-sidebar--open) .playlist-scroll { scrollbar-gutter: auto; }
+  .app-sidebar:not(.app-sidebar--open) .pl-row { margin: 0 4px; }
 }
 
-/* 歌单行：留白节奏（无分隔线），整行可点 */
+/* 歌单行：留白节奏（无分隔线），整行可点；
+   行块左右内收 12px——淡底/accent 尺的可视边缘与 panel-label 标题同轴起落 */
 .pl-row {
   position: relative;
+  margin: 0 12px;
 }
 
 .pl-row-main {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 右侧 56px 留给常显的 .pl-actions（分享+⋯） */
-  padding: 9px 56px 9px 12px;
+  /* 右侧 56px 留给常显的 .pl-actions（分享+⋯）；左 4px 让封面与行块缘留呼吸 */
+  padding: 9px 48px 9px 4px;
   cursor: pointer;
   transition: background .12s;
 }
