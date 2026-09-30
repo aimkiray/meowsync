@@ -140,6 +140,14 @@ export const downloadsApi = {
     return http.delete(`${API_BASE_URL}/downloads/local/mirror/${encodeURIComponent(localId)}`);
   },
 
+  // 歌曲级歌词时间校准：GET 无行时返回 offsetMs:0；PUT 写绝对值（0=删行复位）
+  getSongMeta: (songId) => {
+    return http.get(`${API_BASE_URL}/song-meta/${encodeURIComponent(songId)}`);
+  },
+  saveLyricOffset: (songId, offsetMs) => {
+    return http.put(`${API_BASE_URL}/song-meta/${encodeURIComponent(songId)}`, { offsetMs });
+  },
+
   // 快速下载歌单（建队列 + 启动即返回，后台跑）；歌单未导入时同样要先走上游
   // 导入（detail+tracks 两次往返），超时后重试会撞"已有进行中队列"的 409——给 60s
   quickDownloadPlaylist: (playlistId, options = {}) => {

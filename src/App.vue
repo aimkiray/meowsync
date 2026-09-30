@@ -96,10 +96,13 @@
           :lyrics="lyrics"
           :current-lyric-index="currentLyricIndex"
           :loading-lyrics="loadingLyrics"
+          :lyric-offset-ms="lyricOffsetMs"
           :playback-error="playbackError"
           :duration-warning="durationWarning"
           v-model:tab="watchTab"
           v-model:autoplay="autoplayOn"
+          @lyric-offset-adjust="adjustLyricOffset"
+          @lyric-offset-reset="resetLyricOffset"
           @back="watchBack"
           @open-fullscreen="openFullscreenPlayer"
           @queue-jump="queueJump"
@@ -343,6 +346,9 @@ export default {
     let queueOriginalOrder = null // 打乱前的队列原序——关掉随机时还原
     const lyrics = ref([])
     const currentLyricIndex = ref(0)
+    // 歌词时间校准（ms，正值=提前显示，同 LRC [offset:] 约定）——
+    // 按歌词源 id 存服务端 song_lyric_meta，跨歌单/跨壳共享同一词源的校准
+    const lyricOffsetMs = ref(0)
     // watch 播放页：右栏 tab（待播/歌词/相关）与 YTM UP NEXT 自动播放开关
     const watchTab = ref('queue')
     const autoplayOn = ref(false)
@@ -2208,6 +2214,7 @@ export default {
       if (song?.bilibili && !song.neteaseId) {
         lyrics.value = []
         currentLyricIndex.value = 0
+        lyricOffsetMs.value = 0
         return
       }
       const lyricId = song?.neteaseId ?? song?.id
@@ -2216,10 +2223,16 @@ export default {
         loadingLyrics.value = true
         console.log('📝 加载歌词:', lyricId)
 
+        // 校准随词源走（neteaseId 优先）：同一网易云词源在本地单/远端单/壳间共享。
+        // meta 查询失败不阻塞歌词——校准只是修饰，降级为 0
+        const metaPromise = downloadsApi.getSongMeta(lyricId).catch(() => null)
         const lyricsData = await musicApi.getLyrics(lyricId, signal)
         // 切歌/取消后直接丢弃，不写回共享状态
         if (signal?.aborted || currentPlayingId !== song.id) return
+        const meta = await metaPromise
+        if (signal?.aborted || currentPlayingId !== song.id) return
 
+        lyricOffsetMs.value = meta?.data?.offsetMs ?? 0
         lyrics.value = lyricsData?.lyrics || []
         currentLyricIndex.value = 0
 
@@ -2248,7 +2261,8 @@ export default {
       lyricTimer = setInterval(() => {
         if (!howl || !isPlaying.value || lyrics.value.length === 0) return
 
-        const currentTimeSeconds = howl.seek()
+        // lyricOffsetMs>0（提前）⇔ 播放时钟拨快 offset 再比时间戳
+        const currentTimeSeconds = howl.seek() + lyricOffsetMs.value / 1000
 
         // 找到当前时间对应的歌词行
         let newIndex = 0
@@ -2263,6 +2277,42 @@ export default {
           currentLyricIndex.value = newIndex
         }
       }, 100)
+    }
+
+    // 歌词时间校准：±0.5s 步进，±300s 封顶（对齐服务端 MAX_OFFSET_MS）。
+    // 无词源曲（bv_ 未匹配网易云）不给校准——写了也没人消费
+    const LYRIC_OFFSET_STEP = 500
+    const LYRIC_OFFSET_MAX = 5 * 60 * 1000
+    let lyricOffsetSaveTimer = null
+    const lyricOffsetKey = computed(() => {
+      const s = currentSong.value
+      if (!s || (s.bilibili && !s.neteaseId)) return null
+      return s.neteaseId ?? s.id ?? null
+    })
+    const scheduleLyricOffsetSave = () => {
+      // key/ms 调度时捕获——防抖窗口内切歌，旧保存仍写旧曲不串到新曲
+      const key = lyricOffsetKey.value
+      const ms = lyricOffsetMs.value
+      if (key == null) return
+      clearTimeout(lyricOffsetSaveTimer)
+      lyricOffsetSaveTimer = setTimeout(() => {
+        downloadsApi.saveLyricOffset(key, ms)
+          .catch(err => toast(`时间校准保存失败：${err?.message || '网络错误'}`, 'error'))
+      }, 400)
+    }
+    const adjustLyricOffset = (deltaMs) => {
+      if (lyricOffsetKey.value == null) {
+        toast('当前歌曲没有歌词源，无法校准', 'info')
+        return
+      }
+      lyricOffsetMs.value = Math.max(-LYRIC_OFFSET_MAX,
+        Math.min(LYRIC_OFFSET_MAX, lyricOffsetMs.value + deltaMs))
+      scheduleLyricOffsetSave()
+    }
+    const resetLyricOffset = () => {
+      if (lyricOffsetKey.value == null || lyricOffsetMs.value === 0) return
+      lyricOffsetMs.value = 0
+      scheduleLyricOffsetSave() // PUT 0 = 服务端删行复位
     }
 
     // 播放进度更新（单条 rAF 循环：startProgressLoop 幂等，避免重复并发循环）
@@ -3144,6 +3194,9 @@ export default {
       durationWarning,
       playbackError,
       loadingLyrics,
+      lyricOffsetMs,
+      adjustLyricOffset,
+      resetLyricOffset,
       centerView,
       sidebarOpen,
       watchTab,
