@@ -1,7 +1,7 @@
 <template>
   <div class="bottom-player" role="region" aria-label="播放器">
-    <!-- 当前播放歌曲的迷你信息与走带（仅在有歌曲时显示完整控制区） -->
-    <div class="player-content" v-if="currentSong">
+    <!-- 当前播放歌曲的迷你信息与走带（无歌曲时同构骨架：控件禁用、占位兜底） -->
+    <div class="player-content">
       <!-- 进度条：沉在墨条顶缘，按下即 seek + 拖拽（按 .1s 量化读数） -->
       <div
         class="player-progress-bar bp-progress"
@@ -50,8 +50,8 @@
             <div v-else class="track-cover track-cover--fallback"><PixelIcon name="note" :size="16" /></div>
           </div>
           <div class="track-text">
-            <p class="track-name">{{ currentSong.name }}</p>
-            <p class="track-artist">{{ songArtists(currentSong) }} · {{ currentSong.al?.name || '未知专辑' }}</p>
+            <p class="track-name">{{ currentSong?.name || '选择歌曲开始播放' }}</p>
+            <p class="track-artist">{{ currentSong ? `${songArtists(currentSong)} · ${currentSong.al?.name || '未知专辑'}` : 'meowsync' }}</p>
           </div>
         </div>
 
@@ -62,33 +62,35 @@
             class="transport"
             :class="{ 'transport--active': shuffleOn }"
             :aria-pressed="shuffleOn"
-            :disabled="isTempPlaylist"
+            :disabled="!currentSong || isTempPlaylist"
             aria-label="随机播放"
             title="随机播放"
           ><PixelIcon name="shuffle" :size="16" /></button>
           <button
             @click="$emit('previous')"
             class="transport"
-            :disabled="atQueueStart"
+            :disabled="!currentSong || atQueueStart"
             aria-label="上一首"
             title="上一首"
           ><PixelIcon name="prev" :size="16" /></button>
           <button
             @click="$emit('toggle-play')"
             class="transport transport--play"
+            :disabled="!currentSong"
             :aria-label="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
             :title="songSwitching ? '切换歌曲中…' : (isPlaying ? '暂停' : '播放')"
           ><PixelIcon v-if="!songSwitching" :name="isPlaying ? 'pause' : 'play'" :size="18" /><span v-else class="switching-glyph">…</span></button>
           <button
             @click="$emit('next')"
             class="transport"
-            :disabled="atQueueEnd"
+            :disabled="!currentSong || atQueueEnd"
             aria-label="下一首"
             title="下一首"
           ><PixelIcon name="next" :size="16" /></button>
           <button
             @click="$emit('toggle-play-mode')"
             class="transport"
+            :disabled="!currentSong"
             :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
           ><PixelIcon :name="playModeIcon" :size="16" /></button>
@@ -123,6 +125,7 @@
           <button
             class="pg-icobtn pg-icobtn--on-ink"
             :class="{ 'pg-icobtn--pressed': sidePanelOpen && panelTab === 'queue' }"
+            :disabled="!currentSong"
             :aria-pressed="sidePanelOpen && panelTab === 'queue'"
             @click="$emit('open-watch', 'queue')"
             aria-label="待播队列"
@@ -133,6 +136,7 @@
           <button
             class="pg-icobtn pg-icobtn--on-ink bp-xtra"
             :class="{ 'pg-icobtn--pressed': sidePanelOpen && panelTab === 'lyrics' }"
+            :disabled="!currentSong"
             :aria-pressed="sidePanelOpen && panelTab === 'lyrics'"
             @click="$emit('open-watch', 'lyrics')"
             aria-label="歌词"
@@ -142,6 +146,7 @@
           </button>
           <button
             class="pg-icobtn pg-icobtn--on-ink bp-xtra"
+            :disabled="!currentSong"
             @click="$emit('enter-fullscreen')"
             aria-label="沉浸模式"
             title="沉浸模式"
@@ -150,12 +155,6 @@
           </button>
         </div>
       </div>
-    </div>
-
-    <!-- 无歌曲时的待机条：品牌戳 + 进度占位 -->
-    <div class="player-idle" v-else>
-      <span class="pg-label pg-label--on-ink">meowsync</span>
-      <span class="pg-label pg-label--on-ink player-idle-hint">选择歌曲开始播放</span>
     </div>
   </div>
 </template>
@@ -278,22 +277,25 @@ export default {
       return Math.min(1, Math.max(0, x / rect.width))
     }
 
-    // seek 契约：emit 归一化比例 0-1（App.seekTo 负责换算秒）
+    // seek 契约：emit 归一化比例 0-1（App.seekTo 负责换算秒）。无歌曲时进度条仅作骨架占位
     const seekTo = (e) => {
+      if (!props.currentSong) return
       emit('seek', positionFromEvent(e, e.currentTarget))
     }
 
     const seekToPosition = (pos) => {
+      if (!props.currentSong) return
       emit('seek', pos)
     }
 
     const nudgeSeek = (sec) => {
+      if (!props.currentSong) return
       const target = Math.max(0, Math.min(props.duration || 0, props.currentTime + sec))
       emit('seek', props.duration ? target / props.duration : 0)
     }
 
     const onProgressPointerDown = (e) => {
-      if (e.button !== 0) return
+      if (e.button !== 0 || !props.currentSong) return
       const bar = e.currentTarget
       bar.setPointerCapture?.(e.pointerId)
       dragActive.value = true
@@ -488,20 +490,6 @@ export default {
   background: transparent;
   color: var(--accent-magenta-on-ink);
 }
-
-/* 待机条：与激活条同高（40 内容 + 10×2 padding + 1.2 顶线 = 61.2），首次点歌不跳主区 */
-.player-idle {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr; /* 中列自适应居中——右缘件已删 */
-  align-items: center;
-  gap: 12px;
-  height: 61.2px;
-  padding: 0 16px;
-  max-width: 1440px;
-  margin: 0 auto;
-}
-.pg-label--on-ink { color: var(--label-grey); }
-.player-idle-hint { color: var(--white-80); grid-column: 2; }
 
 @media (max-width: 640px) {
   .player-inner { gap: 10px; padding: 8px 10px; }
