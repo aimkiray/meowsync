@@ -245,8 +245,9 @@
   width: 112px;
   height: 112px;
   flex-shrink: 0;
-  /* pg-corners 角标外扩 7px，四周留呼吸位防贴邻 */
-  margin: 8px;
+  /* pg-corners 角标外扩 7px，竖向留呼吸位防贴邻；
+     横向左缘与歌曲行条带（song-row 盒缘）齐平——角标左标线伸进页内边距属标线正常悬出 */
+  margin: 8px 8px 8px 0;
 }
 
 .playlist-hero-cover {
