@@ -437,6 +437,13 @@ export default {
     const NAV_VIEWS = new Set(['home', 'songs', 'search', 'watch', 'downloads'])
     let suppressNavPush = false // popstate 回放时不再重复入栈
 
+    // 首帧视图种子：onMounted 的恢复链是 await 串行（歌单详情/续播动辄秒级），
+    // 等 applyUrlNav 落定会先渲一帧首页再跳回刷新前视图——此处按 ?view= 预置，
+    // 合法性（pl 存在/歌曲恢复成功）仍由 applyUrlNav 终局修正；
+    // search 冷加载必无结果必弹回首页，不预置
+    const initialView = new URLSearchParams(window.location.search).get('view')
+    if (['songs', 'watch', 'downloads'].includes(initialView)) centerView.value = initialView
+
     // 导航 URL 构造：push 与初始化 normalize 共用，保证 pl 语义一致。
     // playlist 显式传入——调用处先 push 再 selectPlaylist，读 selectedPlaylist
     // 会记成"上一个"歌单（off-by-one 历史错位）
