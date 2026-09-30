@@ -231,6 +231,7 @@ export default {
   padding: 20px;
   height: 100%;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 /* 页头：等宽微标签 + 大字标题 + 发丝方键关闭 */
@@ -261,7 +262,7 @@ export default {
   align-items: center;
   gap: 12px;
   padding: 64px 16px;
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
 }
 
 .grid-state-text {
@@ -271,7 +272,7 @@ export default {
 
 /* 分区：发丝线起头 + 微标签节题 */
 .result-section {
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
   padding-top: 12px;
   margin-bottom: 26px;
 }
@@ -288,14 +289,13 @@ export default {
   color: var(--ink-64);
 }
 
-/* 歌曲行：发丝下缘分隔，整行可点播放（YTM 行交互） */
+/* 歌曲行：留白节奏（无分隔线），整行可点播放（YTM 行交互） */
 .song-result-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 8px;
+  padding: 8px 8px;
   cursor: pointer;
-  border-bottom: var(--hairline-soft);
   transition: background 0.12s;
 }
 
@@ -419,7 +419,7 @@ export default {
 }
 
 .grid-foot {
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
   padding: 12px 0;
   text-align: center;
 }

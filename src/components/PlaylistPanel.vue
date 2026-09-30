@@ -364,7 +364,7 @@ export default {
 }
 
 .panel-state {
-  border-top: var(--hairline); /* 与列表态 .playlist-scroll 同位不断线 */
+  border-top: var(--hairline-soft); /* 与列表态 .playlist-scroll 同位不断线 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -383,13 +383,13 @@ export default {
 }
 
 .playlist-scroll {
-  border-top: var(--hairline);
+  border-top: var(--hairline-soft);
+  scrollbar-gutter: stable;
 }
 
-/* 歌单行：发丝下缘分隔，整行可点 */
+/* 歌单行：留白节奏（无分隔线），整行可点 */
 .pl-row {
   position: relative;
-  border-bottom: var(--hairline-soft);
 }
 
 .pl-row-main {

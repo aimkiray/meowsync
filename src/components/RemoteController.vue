@@ -477,7 +477,7 @@ onUnmounted(() => {
 
 .rc-btn-main:active { background: var(--label-grey); }
 
-/* 待播队列：发丝分隔行，当前行品红左记 */
+/* 待播队列：留白节奏行，当前行品红左记 */
 .rc-queue {
   width: 100%;
   max-width: 360px;
@@ -496,6 +496,7 @@ onUnmounted(() => {
 .rc-queue-list {
   max-height: 240px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   /* 暗面上的滚动条柄要换浅柄——全局 ink 柄在此不可见 */
   scrollbar-color: var(--label-grey) transparent;
 }
@@ -514,7 +515,6 @@ onUnmounted(() => {
   background: none;
   border: none;
   border-left: 1.2px solid transparent;
-  border-bottom: 1.2px solid var(--white-16);
   color: var(--white-80);
   font-size: 13px;
   text-align: left;

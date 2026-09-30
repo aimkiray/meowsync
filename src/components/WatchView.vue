@@ -494,6 +494,7 @@ export default {
 .watch-main {
   min-width: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -598,6 +599,7 @@ export default {
 .watch-side-body {
   flex: 1;
   min-height: 0;
+  scrollbar-gutter: stable;
   overflow-y: auto;
   padding-top: 8px;
 }
@@ -670,8 +672,7 @@ export default {
   font-size: 12px;
   color: var(--ink-86);
   cursor: pointer;
-  border-top: var(--hairline-soft);
-  margin-top: 4px;
+  margin-top: 8px;
   transition: background .12s;
 }
 .watch-autoplay:hover { background: var(--ink-06); }

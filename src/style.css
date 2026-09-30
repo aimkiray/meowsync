@@ -525,15 +525,15 @@ button {
 /* 反白行上的展开态改纸色——墨环在墨行上不可见 */
 .song-row--playing [aria-expanded="true"].song-menu-btn { outline-color: var(--paper); }
 
-/* 细滚动条：透明轨道 + 镂空墨块柄；Firefox 走 scrollbar-* 双属性 */
-* { scrollbar-width: thin; scrollbar-color: var(--ink) transparent; }
+/* 细滚动条：透明轨道 + 镂空墨块柄——常态 ink-30 耳语、hover 回墨；Firefox 走 scrollbar-* 双属性 */
+* { scrollbar-width: thin; scrollbar-color: var(--ink-30) transparent; }
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--ink);
+  background: var(--ink-30);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -1018,8 +1018,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 6px 4px 4px;
-  border-bottom: var(--hairline-soft);
+  padding: 6px 6px 6px 4px;
   transition: background .12s;
 }
 .queue-row-main {
