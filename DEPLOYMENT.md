@@ -114,7 +114,12 @@ docker run -d -p 3101:3002 -v meowsync-data:/app/data --name meowsync meowsync
 Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_BASE_PATH`/
 `VITE_REMOTE_TOKEN`/`VITE_DOWNLOAD_TOKEN`（缺省回落到 `DOWNLOAD_TOKEN`，即
 compose 下单设 `DOWNLOAD_TOKEN` 即可），并从同一 `.env` 读取 `CORS_ORIGINS`/
-`REMOTE_TOKEN`/`DOWNLOAD_TOKEN`/`TRUST_PROXY` 注入容器运行环境。
+`REMOTE_TOKEN`/`DOWNLOAD_TOKEN`/`TRUST_PROXY`/`AI_*`/`BILI_COOKIE` 注入容器运行环境。
+
+> `BILI_COOKIE` + 公网暴露 = 任何访客都能用你的大会员轨（`prefer=best`）。
+> 配置了 BILI_COOKIE 且开启公网访问时，务必同时设 `DOWNLOAD_TOKEN`——
+> `/bilibili/stream?prefer=best` 在该组合下要求 `x-download-token` 才放行
+> 高规格轨，匿名访客自动回落常规 AAC（播放链不受影响）。
 注意：改了令牌变量后要 `docker compose up -d --build` 重建镜像——旧 bundle
 没有令牌会在写接口上全部 401。
 
