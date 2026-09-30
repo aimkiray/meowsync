@@ -539,10 +539,12 @@ onUnmounted(() => {
 .rc-queue-idx {
   width: 18px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--label-grey);
-  text-align: center;
 }
 
 .rc-queue-row--current .rc-queue-idx {
