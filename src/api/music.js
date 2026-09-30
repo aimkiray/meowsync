@@ -314,20 +314,23 @@ export const musicApi = {
 
   // 流地址：服务端每次重解 playurl（CDN 签名会过期）再 302 进 /audio-proxy，
   // 前端拿到的总是新鲜地址——直接塞给 <audio>/<video>/Howler 即可
-  bilibiliStreamUrl: (bvid, kind = 'audio', cid = null, page = 1) => {
+  bilibiliStreamUrl: (bvid, kind = 'audio', cid = null, page = 1, prefer = '') => {
     const params = new URLSearchParams({ bvid, kind })
     if (cid) params.set('cid', cid)
     if (page > 1) params.set('p', page)
+    if (prefer) params.set('prefer', prefer)
     return `${API_BASE_URL}/bilibili/stream?${params}`
   },
 
-  // B 站曲的"获取源文件"：同源 fetch /bilibili/stream（已含代理链）拿 m4a blob
+  // B 站曲的"获取源文件"：prefer=best 优先 Hi-Res FLAC/杜比轨
+  // （需服务端 BILI_COOKIE 登录态下发，无则回落最高码率 AAC），
+  // 扩展名按实际 Content-Type 落地（flac→.flac，aac→.m4a）
   downloadBilibiliSong: async (song) => {
     const b = song?.bilibili
     if (!b?.bvid) throw new Error('不是 B 站导入曲')
     const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
     return saveStreamAsFile(
-      musicApi.bilibiliStreamUrl(b.bvid, 'audio', b.cid, b.page),
+      musicApi.bilibiliStreamUrl(b.bvid, 'audio', b.cid, b.page, 'best'),
       `${artists} - ${song.name}.m4a`)
   },
 
@@ -371,7 +374,8 @@ export const musicApi = {
 // webm/opus 而非调用方猜的 m4a，容器名对不上播不了的播放器会懵
 const STREAM_EXT = {
   'audio/mp4': '.m4a', 'audio/webm': '.webm', 'audio/ogg': '.ogg',
-  'audio/mpeg': '.mp3', 'video/mp4': '.mp4', 'video/webm': '.webm'
+  'audio/mpeg': '.mp3', 'audio/flac': '.flac', 'audio/x-flac': '.flac',
+  'video/mp4': '.mp4', 'video/webm': '.webm'
 }
 async function saveStreamAsFile(url, fileName) {
   const resp = await fetch(url)

@@ -7,10 +7,13 @@ const { matchNeteaseSong } = require('../lib/netease-match');
 
 const app = new Hono();
 
-// B 站 API 统一请求头：Referer 是防盗链硬门槛（缺它 403），UA 伪造浏览器
+// B 站 API 统一请求头：Referer 是防盗链硬门槛（缺它 403），UA 伪造浏览器。
+// BILI_COOKIE 可选登录态——杜比/Hi-Res 音轨只对有权限的账号下发
+// （Hi-Res 通常需大会员），Cookie 只发给 api.bilibili.com 不外泄
 const BILI_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Referer': 'https://www.bilibili.com',
+  ...(process.env.BILI_COOKIE ? { Cookie: process.env.BILI_COOKIE } : {}),
 };
 const BILI_TIMEOUT_MS = 15000;
 
@@ -118,12 +121,22 @@ function extractSongName(tagNames, title) {
 }
 
 // playurl 选流：音频按 bandwidth 降序（30280≈192k > 30232≈108k > 30216≈64k）；
+// prefer='best'（下载档）把 dash.flac.audio（Hi-Res 无损）与 dash.dolby.audio
+// （杜比）排在常规 AAC 前——flac > dolby > aac：无损严格优于有损空间音频，
+// 这两条轨需要 fnval 相应位标志且大多要登录态，缺席时自然回落常规档。
 // 视频优先 avc1（H.264 全浏览器可放）再按分辨率降序——hevc/av01 老设备放不了。
 // 返回排序后的完整数组——单档流的备份 URL 全被端口策略拒时还能降级到下一档
-function pickStreamList(data, kind) {
+function pickStreamList(data, kind, prefer = '') {
   const dash = data?.dash || {};
   if (kind === 'audio') {
-    return (dash.audio || []).slice().sort((a, b) => b.bandwidth - a.bandwidth);
+    const regular = (dash.audio || []).slice().sort((a, b) => b.bandwidth - a.bandwidth);
+    if (prefer === 'best') {
+      const hasUrl = (f) => f && (f.baseUrl || f.base_url);
+      const flac = [dash.flac?.audio].filter(hasUrl);
+      const dolby = (dash.dolby?.audio || []).filter(hasUrl);
+      return [...flac, ...dolby, ...regular];
+    }
+    return regular;
   }
   const avc = (dash.video || []).filter(v => (v.codecs || '').startsWith('avc1'));
   return (avc.length ? avc : dash.video || [])
@@ -160,7 +173,7 @@ app.get('/bilibili/resolve', async (c) => {
     const duration = page?.duration ?? view.duration;
     const [tagRes, playurl] = await Promise.all([
       biliFetch(`/x/tag/archive/tags?bvid=${view.bvid}`, c.req.raw.signal).catch(() => []),
-      biliFetch(`/x/player/playurl?bvid=${view.bvid}&cid=${cid}&fnval=16`, c.req.raw.signal),
+      biliFetch(`/x/player/playurl?bvid=${view.bvid}&cid=${cid}&fnval=4048`, c.req.raw.signal),
     ]);
     const tagNames = Array.isArray(tagRes) ? tagRes.map(t => t.tag_name).filter(Boolean) : [];
     const songName = extractSongName(tagNames, view.title);
@@ -252,18 +265,18 @@ app.get('/bilibili/stream', async (c) => {
     }
     let playurl;
     try {
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=16`, c.req.raw.signal);
+      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048`, c.req.raw.signal);
     } catch (e) {
       // cid 过期自愈：稿件被 UP 主换源/调 P 后库存 cid 失效——按 p 重查对应分P
       // 的 cid（不能回落 view.cid——那是 P1，会把分P导入的曲静默拉回第一P）。
       // 仅对「调用方传了合法数字 cid」自愈——刚查来的 cid 失败重试无意义
       if (!/^\d+$/.test(c.req.query('cid') || '')) throw e;
       const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${pickCidFromView(view)}&fnval=16`, c.req.raw.signal);
+      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${pickCidFromView(view)}&fnval=4048`, c.req.raw.signal);
     }
     // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
     // audio-proxy 端口策略会拒——用同一校验器预筛，拿第一个能过代理的地址
-    const streams = pickStreamList(playurl, kind);
+    const streams = pickStreamList(playurl, kind, c.req.query('prefer'));
     // hasVideo 语义 = 「存在浏览器解得动的 avc1」——kind=video 下若整档只有
     // hevc/av01，302 过去也是黑屏，按无流 404（与 resolve 的 hasVideo 口径一致）
     if (kind === 'video' && !streams.some(s => (s.codecs || '').startsWith('avc1'))) {
