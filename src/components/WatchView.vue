@@ -187,6 +187,30 @@
           </label>
         </div>
 
+        <!-- 歌词工具条：字号调节（本机偏好）+ 时间校准（按词源入库）。
+             不挂进滚动体——面板滚动时工具条恒可见 -->
+        <div v-if="tab === 'lyrics' && currentSong" class="lyric-tools">
+          <div class="lyric-tools-group" role="group" aria-label="歌词字号">
+            <button class="lyric-tool" :disabled="lyricFontSize <= LYRIC_FS_MIN"
+              @click="lyricFontSize--" title="歌词字号减小" aria-label="减小字号">A−</button>
+            <span class="lyric-tool-val" aria-live="polite">{{ lyricFontSize }}</span>
+            <button class="lyric-tool" :disabled="lyricFontSize >= LYRIC_FS_MAX"
+              @click="lyricFontSize++" title="歌词字号增大" aria-label="增大字号">A+</button>
+          </div>
+          <div class="lyric-tools-group" role="group" aria-label="歌词时间校准">
+            <button class="lyric-tool" :disabled="!lyrics.length"
+              @click="$emit('lyric-offset-adjust', -500)"
+              title="歌词延后 0.5 秒">−0.5s</button>
+            <button class="lyric-tool lyric-tool-val lyric-tool-reset"
+              :disabled="!lyrics.length || lyricOffsetMs === 0"
+              @click="$emit('lyric-offset-reset')"
+              :title="`当前校准 ${lyricOffsetLabel}，点击复位`">{{ lyricOffsetLabel }}</button>
+            <button class="lyric-tool" :disabled="!lyrics.length"
+              @click="$emit('lyric-offset-adjust', 500)"
+              title="歌词提前 0.5 秒">+0.5s</button>
+          </div>
+        </div>
+
         <!-- 歌词 -->
         <div
           id="watch-panel-lyrics"
@@ -207,7 +231,7 @@
               <p>加载歌词中喵...</p>
             </div>
             <div v-else-if="!lyrics.length" class="watch-empty">暂无歌词</div>
-            <div v-else class="watch-lyric-list">
+            <div v-else class="watch-lyric-list" :style="{ '--lyric-fs': lyricFontSize + 'px' }">
               <div
                 v-for="(lyric, index) in lyrics"
                 :key="index"
@@ -304,6 +328,8 @@ export default {
     lyrics: { type: Array, default: () => [] },
     currentLyricIndex: { type: Number, default: -1 },
     loadingLyrics: { type: Boolean, default: false },
+    // 歌词时间校准（ms，正=提前）——值与持久化都在 App 侧，这里只做调节入口
+    lyricOffsetMs: { type: Number, default: 0 },
     playbackError: { type: String, default: '' },
     durationWarning: { type: String, default: '' },
     tab: { type: String, default: 'queue' },
@@ -313,11 +339,27 @@ export default {
     'back', 'open-fullscreen',
     'update:tab', 'update:autoplay',
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
-    'play-song', 'open-source', 'add-to-playlist'
+    'play-song', 'open-source', 'add-to-playlist',
+    'lyric-offset-adjust', 'lyric-offset-reset'
   ],
   setup(props, { emit }) {
     const queueContainer = ref(null)
     const lyricContainer = ref(null)
+
+    // 歌词字号：本机偏好存 localStorage（不像时间校准那样随歌曲入库）。
+    // CSS 变量 --lyric-fs 挂在列表上，当前行/译文用 calc 相对值随动
+    const LYRIC_FS_MIN = 10
+    const LYRIC_FS_MAX = 24
+    const lyricFontSize = ref(
+      Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MIN,
+        parseInt(localStorage.getItem('meowsync-lyric-fs')) || 13)))
+    watch(lyricFontSize, v => {
+      localStorage.setItem('meowsync-lyric-fs', String(v))
+    })
+    const lyricOffsetLabel = computed(() => {
+      const s = props.lyricOffsetMs / 1000
+      return (s >= 0 ? '+' : '') + s.toFixed(1) + 's'
+    })
     const dragIndex = ref(-1)
 
     const coverUrl = computed(() =>
@@ -536,6 +578,10 @@ export default {
     return {
       queueContainer,
       lyricContainer,
+      lyricFontSize,
+      LYRIC_FS_MIN,
+      LYRIC_FS_MAX,
+      lyricOffsetLabel,
       dragIndex,
       coverUrl,
       artistText,
@@ -832,7 +878,7 @@ export default {
 .watch-lyric-line {
   text-align: center;
   padding: 3px 4px;
-  font-size: 13px;
+  font-size: var(--lyric-fs, 13px);
   color: var(--ink-64);
   transition: color .25s;
 }
@@ -840,15 +886,45 @@ export default {
 .watch-lyric-line--current {
   color: var(--ink);
   font-weight: 700;
-  font-size: 15px;
+  font-size: calc(var(--lyric-fs, 13px) + 2px);
 }
 
 .watch-lyric-translation {
   /* opacity .75 叠在 ink-86 上画布对比度会跌破 3.5:1——升 .9 保读 */
   margin-top: 2px;
-  font-size: 11px;
+  font-size: calc(var(--lyric-fs, 13px) - 2px);
   opacity: .9;
 }
+
+/* 歌词工具条：字号 / 时间校准两组，顶在歌词面板上方 */
+.lyric-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: var(--hairline);
+  flex-shrink: 0;
+}
+.lyric-tools-group { display: flex; align-items: center; gap: 4px; }
+.lyric-tool {
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border: var(--hairline);
+  background: transparent;
+  color: var(--ink-64);
+  cursor: pointer;
+  min-width: 22px;
+}
+.lyric-tool:hover:not(:disabled) { background: var(--ink-06); color: var(--ink); }
+.lyric-tool:disabled { opacity: .38; cursor: default; }
+.lyric-tool-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-64);
+}
+/* 校准值键：复位功能藏在读数上，hover 提示才显语义 */
+.lyric-tool-reset { min-width: 44px; }
 
 /* 窄屏：单列——封面→信息 在上、tab 区在下 */
 @media (max-width: 900px) {

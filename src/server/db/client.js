@@ -329,6 +329,15 @@ function initSchema(database) {
       UNIQUE (playlist_id, song_id)
     );
 
+    -- 歌曲级歌词校准：按歌词源 id（neteaseId 优先）存用户调校的时间偏移。
+    -- offset_ms 沿用 LRC [offset:] 约定——正值=歌词整体提前显示。
+    -- 与播放进度无关，是「这首歌词源本身偏了」的修正，故永久行而非会话态
+    CREATE TABLE IF NOT EXISTS song_lyric_meta (
+      song_id TEXT PRIMARY KEY,
+      offset_ms INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- /healthz 用写探测表：SELECT 1 是纯内存查询测不出磁盘满
     CREATE TABLE IF NOT EXISTS _healthz (ts INTEGER);
   `);
