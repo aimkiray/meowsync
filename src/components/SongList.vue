@@ -40,10 +40,10 @@
           </button>
           <!-- 单向同步：静默重拉远端并合并本地增删（本地单没有远端可拉，隐藏） -->
           <button
-            v-if="!isSingleSongPlaylist && selectedPlaylist"
+            v-if="!isLocalPlaylist"
             @click="$emit('sync-playlist')"
             class="ink-btn ink-btn--ghost"
-            title="从远端同步歌单：拉入新增曲目，本地添加/移除不受影响"
+            title="与远端同步曲目：远端增删会生效，本地添加/移除保留"
           ><PixelIcon name="m-loop" :size="14" /> 同步</button>
         </div>
       </div>
@@ -186,9 +186,10 @@
           >
             <PixelIcon name="m-list" :size="13" /> 添加到歌单
           </div>
-          <!-- 从歌单移除：远端曲写墓碑防同步复活，本地追加/本地单曲直接删 -->
+          <!-- 从歌单移除：远端曲写墓碑防同步复活，本地追加/本地单曲直接删。
+               分享壳（single_song_）隐藏——移除唯一曲只会留个待剪枝的空壳 -->
           <div
-            v-if="selectedPlaylist"
+            v-if="selectedPlaylist && !isShareShell"
             class="pg-menu-item pg-menu-item--danger"
             role="menuitem"
             tabindex="0"
@@ -224,7 +225,7 @@
           <!-- 下载到服务器 / 删除已下载（临时单曲歌单没有服务端持久化意义，隐藏；
                未选歌单时选了也只会 alert，同样不渲染） -->
           <div
-            v-if="!isSingleSongPlaylist && selectedPlaylist"
+            v-if="!isLocalPlaylist && selectedPlaylist"
             class="pg-menu-item"
             :class="{ 'pg-menu-item--danger': serverDownloadedStates[showDownloadMenu] }"
             role="menuitem"
@@ -664,8 +665,12 @@ export default {
     )
 
     // 本地内存态歌单（单曲分享/队列存盘）服务端没有对应持久行，不提供服务器下载
-    const isSingleSongPlaylist = computed(() =>
+    const isLocalPlaylist = computed(() =>
       isLocalPlaylistId(props.selectedPlaylist?.id)
+    )
+    // 单曲分享壳：本地态但语义是"一张曲的分享容器"——不提供移除曲目入口
+    const isShareShell = computed(() =>
+      String(props.selectedPlaylist?.id || '').startsWith('single_song_')
     )
 
     // 切换下载菜单显示
@@ -682,11 +687,11 @@ export default {
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
-        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；已选歌单多"从歌单移除"，
-        // 非临时歌单再多"下载到服务器"——合计 5/6/7 三档
+        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
+        // 非本地态歌单再多"下载到服务器"——合计 5/6/7 三档
         const itemCount = 5
-          + (props.selectedPlaylist ? 1 : 0)
-          + ((!isSingleSongPlaylist.value && props.selectedPlaylist) ? 1 : 0)
+          + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
+          + ((!isLocalPlaylist.value && props.selectedPlaylist) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -795,7 +800,7 @@ export default {
     const checkAllSongsDownloadStatus = async () => {
       const seq = ++statusCheckSeq
       const playlistId = props.selectedPlaylist?.id
-      if (!playlistId || !props.songs.length || isSingleSongPlaylist.value) {
+      if (!playlistId || !props.songs.length || isLocalPlaylist.value) {
         serverDownloadedStates.value = {}
         serverDownloadingStates.value = {} // 在途标记同属旧歌单，一并清
         return
@@ -976,7 +981,8 @@ export default {
     return {
       filteredSongs,
       menuSong,
-      isSingleSongPlaylist,
+      isLocalPlaylist,
+      isShareShell,
       formatDuration,
       isVipSong,
       isCurrent,

@@ -765,7 +765,16 @@ export default {
       // 本地内存态歌单（单曲分享/队列存盘）无法从接口重拉，tracks 必须保留
       const toStore = userPlaylists.value.map(p => {
         if (isLocalPlaylistId(p.id)) return p
-        const { tracks, ...rest } = p
+        // trackIds 是 detail 响应带进的完整成员表（千曲单 ~10KB+），客户端不读它——
+        // 与 lastRemoteIds 职责重复，持久化剥掉
+        const { tracks, trackIds, ...rest } = p
+        // addedTracks 瘦身到渲染+播放所需字段——接口返回的全对象（alia/嵌套 privilege 等）
+        // 单曲 ~2-3KB，长期累积会撞 localStorage 配额
+        if (Array.isArray(rest.addedTracks)) {
+          rest.addedTracks = rest.addedTracks.map(t => t && ({
+            id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege
+          }))
+        }
         return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
       })
       writeJSON(PLAYLISTS_STORAGE_KEY, toStore)
@@ -774,8 +783,16 @@ export default {
     const loadPlaylistsFromStorage = () => {
       const savedPlaylists = readJSON(PLAYLISTS_STORAGE_KEY)
       if (Array.isArray(savedPlaylists)) {
-        // 过滤 null/无 id 的脏条目，避免后续 String(p.id) 访问抛异常
-        const validPlaylists = savedPlaylists.filter(p => p && p.id != null)
+        // 过滤 null/无 id 的脏条目，避免后续 String(p.id) 访问抛异常；
+        // 同步字段若非数组（旧数据/手工改坏）会在合并/添加路径抛异常——load 时净化
+        const validPlaylists = savedPlaylists
+          .filter(p => p && p.id != null)
+          .map(p => ({
+            ...p,
+            addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks : undefined,
+            removedTrackIds: Array.isArray(p.removedTrackIds) ? p.removedTrackIds : undefined,
+            lastRemoteIds: Array.isArray(p.lastRemoteIds) ? p.lastRemoteIds : undefined
+          }))
         userPlaylists.value.push(...validPlaylists)
         console.log('✅ 从本地存储加载歌单:', validPlaylists.length, '个')
       }
@@ -890,15 +907,32 @@ export default {
           const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
           if (myReq !== selectReqId) return false // 已被更新的选择取代，丢弃过期数据
           const fetchedTracks = fullPlaylist?.tracks || []
-          const fetchedIds = new Set(fetchedTracks.map(t => String(t.id)))
-          // 单向同步合并：远端曲 − 本地墓碑 + 本地追加排尾。
           // 读库对象而非调用方传入的 playlist——搜索结果/stub 打开同一库中单时
           // 参数对象上没有 addedTracks/removedTrackIds（视图会丢追加曲且 trackCount 被回写成远端值）
           const libPl = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
+          // 空拉取防御：上游抖动/接口错误返空时照常合并会整批净化墓碑+清同步基线
+          //（不可逆数据丢失）——歌单声称有曲却拉到空 = 按失败处理（服务端 playlist-sync 同款判定）
+          if (!fetchedTracks.length && (
+            (fullPlaylist?.trackCount ?? 0) > 0
+            || (fullPlaylist?.trackIds?.length ?? 0) > 0
+            || (libPl?.lastRemoteIds?.length ?? 0) > 0
+          )) {
+            throw new Error('歌单曲目接口返回为空')
+          }
+          const fetchedIds = new Set(fetchedTracks.map(t => String(t.id)))
+          // 权威远端成员集：trackIds 是 detail 响应自带的完整成员表；
+          // fetchedTracks 可能被分页/漂移截断——墓碑净化与同步基线都按权威集判，
+          // 否则截断页会把"还在远端"的墓碑误净化、把半截列表记成基线
+          const authoritativeIds = new Set(
+            (fullPlaylist?.trackIds?.length ? fullPlaylist.trackIds : fetchedTracks)
+              .map(t => String(t.id))
+          )
+          // 单向同步合并：远端曲 − 本地墓碑 + 本地追加排尾
           const removedSet = new Set((libPl?.removedTrackIds ?? playlist.removedTrackIds ?? []).map(String))
           // 墓碑净化：远端已不含的墓碑剪掉（远端删曲后墓碑失效；远端重加同 id 自然复活 = 镜像语义）
-          const keptRemoved = [...removedSet].filter(id => fetchedIds.has(id))
-          // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧。
+          const keptRemoved = [...removedSet].filter(id => authoritativeIds.has(id))
+          // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧——
+          // 对 fetchedIds 消歧而非权威集：远端有但本页没拉到的曲保留追加条目仍能渲染
           const addedTracks = (libPl?.addedTracks ?? playlist.addedTracks ?? [])
             .filter(t => t && !fetchedIds.has(String(t.id)))
           if (libPl) {
@@ -907,8 +941,8 @@ export default {
             if (libPl.addedTracks && libPl.addedTracks.length !== addedTracks.length) {
               libPl.addedTracks = addedTracks
             }
-            // 同步基线：最近一次远端 id 快照——手动同步/添加墓碑判重都靠它
-            libPl.lastRemoteIds = [...fetchedIds]
+            // 同步基线：最近一次远端成员集——手动同步 diff/墓碑恢复判重都靠它
+            libPl.lastRemoteIds = [...authoritativeIds]
             libPl.lastSyncedAt = Date.now()
           }
           const visibleTracks = fetchedTracks.filter(t => !removedSet.has(String(t.id)))
@@ -917,11 +951,18 @@ export default {
 
           // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
           // 本地增删（addedTracks/墓碑）要计入 trackCount——远端计数不含它们
-          const merged = { ...playlist, ...(fullPlaylist || {}) }
+          // 剥掉 playlist 参数上的同步键——传入的陈旧快照不能回退 libPl 刚写的值
+          const { addedTracks: _a, removedTrackIds: _r, lastRemoteIds: _l, lastSyncedAt: _s, ...plBase } = playlist
+          const merged = { ...plBase, ...(fullPlaylist || {}) }
           const localDelta = addedTracks.length - keptRemoved.length
           if (localDelta) {
-            merged.trackCount = Math.max(0, (fullPlaylist?.trackCount ?? fetchedTracks.length) + localDelta)
+            // 基数取实际拉到的行数——远端 trackCount 是展示计数会滞后
+            merged.trackCount = Math.max(0, fetchedTracks.length + localDelta)
           }
+          // 快照也带基线：搜索结果直开的非库歌单没有 libPl，
+          // syncPlaylist 的 `|| pl` 回退靠它做增量 diff
+          merged.lastRemoteIds = [...authoritativeIds]
+          merged.lastSyncedAt = Date.now()
           selectedPlaylist.value = merged
 
           // 更新本地歌单库中的数据
@@ -948,8 +989,9 @@ export default {
         }
         return false
       } finally {
-        // 仅最新请求负责复位 loading；过期请求直接跳过，loading 由新请求收尾
-        if (myReq === selectReqId && !silent) loadingSongs.value = false
+        // 仅最新请求负责复位 loading——silent 同步也要复位：它可能顶掉了置起
+        // loading 的非 silent 请求，那个请求已被抢占不会再来收尾
+        if (myReq === selectReqId) loadingSongs.value = false
       }
     }
 
@@ -1263,8 +1305,11 @@ export default {
       const song = addTargetSong.value
       if (!song || !pl || pl.id == null) return
       const sid = String(song.id)
-      // 命中墓碑 = 恢复被本地移除的远端曲：清墓碑即可，不进 addedTracks（曲归远端所有）
-      if ((pl.removedTrackIds || []).map(String).includes(sid)) {
+      // 命中墓碑 = 恢复被本地移除的远端曲：清墓碑即可，不进 addedTracks（曲归远端所有）。
+      // 但只在远端仍含该曲时（lastRemoteIds 基线命中）——远端已删的陈旧墓碑清了也恢复不了，
+      // 那种情况应落入常规添加分支进 addedTracks
+      const remoteHas = (pl.lastRemoteIds || []).map(String).includes(sid)
+      if ((pl.removedTrackIds || []).map(String).includes(sid) && remoteHas) {
         pl.removedTrackIds = pl.removedTrackIds.filter(id => String(id) !== sid)
         pl.trackCount = (pl.trackCount ?? 0) + 1
         if (String(selectedPlaylist.value?.id) === String(pl.id)) {
@@ -1279,7 +1324,9 @@ export default {
         return
       }
       const inList = (list) => (list || []).some(t => t && String(t.id) === sid)
-      if (inList(pl.tracks) || inList(pl.addedTracks)) {
+      // lastRemoteIds 是远端曲基线——开过单的歌单能拦下「远端已有」的幻影添加；
+      // 墓碑曲会先走上面的恢复分支，不会误进这里被拒
+      if (inList(pl.tracks) || inList(pl.addedTracks) || remoteHas) {
         toast(`「${song.name}」已在《${pl.name}》里`, 'info')
         addTargetSong.value = null
         return
@@ -1341,6 +1388,10 @@ export default {
         libPl.tracks = (libPl.tracks || []).filter(t => String(t.id) !== sid)
       } else if ((libPl.addedTracks || []).some(t => String(t.id) === sid)) {
         libPl.addedTracks = libPl.addedTracks.filter(t => String(t.id) !== sid)
+        // 远端在本地追加后也收录了同 id 时，光删追加下次同步会被远端副本复活——补墓碑
+        if ((libPl.lastRemoteIds || []).map(String).includes(sid)) {
+          libPl.removedTrackIds = [...(libPl.removedTrackIds || []), sid]
+        }
       } else {
         const removed = libPl.removedTrackIds || []
         if (!removed.map(String).includes(sid)) libPl.removedTrackIds = [...removed, sid]
@@ -1356,14 +1407,20 @@ export default {
 
     // 手动同步：静默重拉远端歌单并报告增量。每次拉取都刷新 lastRemoteIds 基线，
     // 故 diff 的是「上次同步以来」的净变化——单向语义：只收远端增量，本地增删不回传
+    const playlistSyncing = ref(false)
     const syncPlaylist = async () => {
       const pl = selectedPlaylist.value
-      if (!pl || pl.id == null || isLocalPlaylistId(pl.id)) return
+      if (!pl || pl.id == null || isLocalPlaylistId(pl.id) || playlistSyncing.value) return
       const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id)) || pl
       const before = new Set((libPl.lastRemoteIds || []).map(String))
+      playlistSyncing.value = true
       const ok = await selectPlaylist(libPl, { force: true, silent: true })
+      playlistSyncing.value = false
       if (!ok) {
-        toast('同步失败：远端歌单暂时拉不到', 'error')
+        // 被更新的选择抢占（同步途中用户点了别的歌单）≠ 真失败——不报错
+        if (String(selectedPlaylist.value?.id) === String(pl.id)) {
+          toast('同步失败：远端歌单暂时拉不到', 'error')
+        }
         return
       }
       const after = new Set((libPl.lastRemoteIds || []).map(String))
