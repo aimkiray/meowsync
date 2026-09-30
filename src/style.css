@@ -69,7 +69,9 @@
   --hairline: 1.2px solid var(--ink);
   --hairline-soft: 1.2px solid var(--ink-10); /* 行分隔器 */
   --font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fusion Pixel', ui-monospace, monospace;
+  /* JetBrains Mono 只覆盖拉丁——CJK 回落须走主流无衬线（PingFang/Noto），
+     若接 Fusion Pixel 则 mono 槽位汉字整段变像素字，与 glitch 主题撞脸 */
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'PingFang SC', 'Noto Sans SC', monospace;
   --font-display: 'Space Grotesk', 'Inter', 'Noto Sans SC', sans-serif;
   --font-pixel: 'Fusion Pixel', 'JetBrains Mono', monospace;
   --ease-ink: cubic-bezier(.12, .23, .5, 1); /* typesafe 签名缓动 */
