@@ -53,7 +53,7 @@
 
     <div v-else class="flex-1 min-h-0 overflow-y-auto song-rows">
       <div
-        v-for="(song, index) in paginatedSongs"
+        v-for="(song, index) in filteredSongs"
         :key="song.id"
         class="song-row"
         :class="{
@@ -72,7 +72,7 @@
         >
           <!-- 行首序号：常态等宽数字，悬停/当前曲换 ▶ -->
           <span class="song-row-index">
-            <span class="song-row-index-num">{{ (currentPage - 1) * pageSize + index + 1 }}</span>
+            <span class="song-row-index-num">{{ index + 1 }}</span>
             <span class="song-row-index-play"><PixelIcon name="play" :size="11" /></span>
           </span>
           <div
@@ -102,6 +102,8 @@
               {{ song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') }}
             </p>
           </div>
+          <!-- YTM 曲目行第四列：专辑名（窄屏让位） -->
+          <div class="song-album">{{ song.al?.name || song.album?.name || '—' }}</div>
           <div class="song-duration">{{ formatDuration(song.dt || song.duration) }}</div>
         </div>
 
@@ -120,19 +122,11 @@
         </div>
       </div>
 
-      <!-- 统计 + 分页合并为一行 -->
+      <!-- YTM 曲目列表全滚动：底部只留计数（分页器拆除） -->
       <div class="song-list-footer">
         <span class="pg-label pg-label--dim">
-          {{ filteredSongs.length === 0 ? 0 : (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, filteredSongs.length) }} / 共 {{ filteredSongs.length }} 首<template v-if="!showVipSongs && songs.length > filteredSongs.length">（隐藏 {{ songs.length - filteredSongs.length }} 首VIP）</template>
+          共 {{ filteredSongs.length }} 首<template v-if="!showVipSongs && songs.length > filteredSongs.length">（隐藏 {{ songs.length - filteredSongs.length }} 首VIP）</template>
         </span>
-        <PaginationControls
-          v-if="totalPages > 1"
-          :current-page="currentPage"
-          :total-pages="totalPages"
-          @go-to-page="$emit('go-to-page', $event)"
-          @prev-page="$emit('prev-page')"
-          @next-page="$emit('next-page')"
-        />
       </div>
     </div>
 
@@ -185,7 +179,7 @@
             <PixelIcon name="share" :size="13" /> 分享歌曲
           </div>
 
-          <!-- 获取源文件（浏览器下载）。菜单跨分页时 paginatedSongs 里找不到目标，必须查全量 props.songs -->
+          <!-- 获取源文件（浏览器下载）。菜单目标从全量 props.songs 查，不依赖渲染切片 -->
           <div
             class="pg-menu-item"
             role="menuitem"
@@ -318,6 +312,9 @@
 .song-row {
   position: relative;
   border-bottom: var(--hairline-soft);
+  /* 全滚动大歌单的渲染摊销：屏外行跳布局/绘制（YTM 虚拟列表的廉价版） */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
 }
 
 /* VIP 曲弱化：不压整行透明度（.55 让歌名掉到 3.01:1），改降级文字色 + VIP 戳记 */
@@ -449,6 +446,21 @@
   margin-top: 2px;
 }
 
+/* YTM 曲目行第四列：专辑名——与信息列均分剩余，窄屏让位 */
+.song-album {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.song-row--playing .song-album { color: var(--label-grey); }
+@media (max-width: 700px) {
+  .song-album { display: none; }
+}
+
 .song-duration {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -512,7 +524,17 @@
   }
 }
 
-/* ── 统计 + 分页脚 ── */
+/* 窄屏 hero 单列化：与 watch 页同向（YTM 歌单头双栏→单列折叠） */
+@media (max-width: 640px) {
+  .playlist-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .playlist-hero-cover-wrap { width: 88px; height: 88px; margin: 4px; }
+}
+
+/* ── 统计脚 ── */
 .song-list-footer {
   display: flex;
   align-items: center;
@@ -536,7 +558,6 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { httpsCover } from '../lib/url'
-import PaginationControls from './PaginationControls.vue'
 import PixelIcon from './PixelIcon.vue'
 import { formatDuration } from '../lib/format'
 import { isVipSong, isLocalPlaylistId } from '../lib/song'
@@ -546,7 +567,6 @@ import { toast, pixelConfirm } from '../lib/feedback'
 export default {
   name: 'SongList',
   components: {
-    PaginationControls,
     PixelIcon
   },
   props: {
@@ -570,14 +590,6 @@ export default {
       type: Boolean,
       default: false
     },
-    currentPage: {
-      type: Number,
-      default: 1
-    },
-    pageSize: {
-      type: Number,
-      default: 10
-    },
     selectedPlaylist: {
       type: Object,
       default: null
@@ -587,7 +599,7 @@ export default {
       default: 0
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'toggle-vip-songs', 'go-to-page', 'prev-page', 'next-page'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'toggle-vip-songs'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const downloadingStates = ref({})
@@ -609,18 +621,7 @@ export default {
       }
     })
 
-    // 分页计算属性
-    const totalPages = computed(() => {
-      return Math.ceil(filteredSongs.value.length / props.pageSize)
-    })
-
-    const paginatedSongs = computed(() => {
-      const start = (props.currentPage - 1) * props.pageSize
-      const end = start + props.pageSize
-      return filteredSongs.value.slice(start, end)
-    })
-
-    // 菜单打开的目标歌曲：从全量 songs 里查——菜单跨分页/重渲染时 paginatedSongs 已换页会拿到 undefined
+    // 菜单打开的目标歌曲：从全量 songs 里查（不依赖渲染切片）
     const menuSong = computed(() =>
       props.songs.find(s => String(s.id) === String(showDownloadMenu.value)) || null
     )
@@ -919,8 +920,6 @@ export default {
 
     return {
       filteredSongs,
-      totalPages,
-      paginatedSongs,
       menuSong,
       isSingleSongPlaylist,
       formatDuration,

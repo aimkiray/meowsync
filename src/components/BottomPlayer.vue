@@ -29,8 +29,16 @@
       </div>
 
       <div class="player-inner">
-        <!-- 当前歌曲缩略信息（左列） -->
-        <div class="track-meta">
+        <!-- 当前歌曲缩略信息（左列）——YTM：点击回 watch 播放页（肌肉记忆入口） -->
+        <div
+          class="track-meta"
+          role="button"
+          tabindex="0"
+          title="打开播放页"
+          @click="$emit('open-watch', 'queue')"
+          @keydown.enter="$emit('open-watch', 'queue')"
+          @keydown.space.prevent="$emit('open-watch', 'queue')"
+        >
           <div class="cover-wrap">
             <img
               v-if="coverUrl"
@@ -84,13 +92,14 @@
             :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
           ><PixelIcon :name="playModeIcon" :size="16" /></button>
-        </div>
-
-        <!-- 时间与右簇（音量 + watch/词/沉浸入口） -->
-        <div class="player-right">
+          <!-- YTM：time-info 在中列走带簇尾部（repeat 之后），不在右簇 -->
           <span class="player-time hidden lg:inline">
             {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
           </span>
+        </div>
+
+        <!-- 右簇（音量 + watch/词/沉浸入口） -->
+        <div class="player-right">
           <div class="vol-wrap">
             <button
               @click="$emit('toggle-mute')"
@@ -221,6 +230,10 @@ export default {
     panelTab: {
       type: String,
       default: 'queue'
+    },
+    autoplayOn: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['toggle-play', 'previous', 'next', 'update-volume', 'toggle-mute', 'toggle-shuffle', 'toggle-play-mode', 'open-watch', 'enter-fullscreen', 'seek'],
@@ -240,11 +253,13 @@ export default {
     })
 
     // 队尾判定：仅 list 顺序模式在队尾时禁「下一首」——loop 回卷 / single 自循环始终有效。
+    // autoplay 开启时队尾可续播相关曲，不锁键（YTM：Up next 永远有下一首）。
     // 临时歌单（single_song/saved_queue）不豁免：它们队尾点下一首只会静默空转
     const atQueueEnd = computed(() =>
       props.playMode === 'list' &&
       props.playbackList.length > 0 &&
-      props.currentIndex >= props.playbackList.length - 1
+      props.currentIndex >= props.playbackList.length - 1 &&
+      !props.autoplayOn
     )
     // 队首同款：list 模式在第一首时禁「上一首」（点了也是静默 return）
     const atQueueStart = computed(() =>
@@ -355,7 +370,9 @@ export default {
   gap: 10px;
   min-width: 0;
   flex: 1;
+  cursor: pointer;
 }
+.track-meta:focus-visible { outline: 1.2px solid var(--paper); outline-offset: 2px; }
 .cover-wrap { width: 40px; height: 40px; flex-shrink: 0; }
 .track-cover {
   width: 100%;
@@ -488,11 +505,14 @@ export default {
 
 @media (max-width: 640px) {
   .player-inner { gap: 10px; padding: 8px 10px; }
-  .vol-wrap, .player-time { display: none; }
+  .vol-wrap { display: none; }
 }
 
-/* ≤420px：墨条塞不下全簇——词/沉浸键收进 watch 页路径可达，保队列入口 */
+/* ≤420px：YTM miniplayer 稀疏化——shuffle/repeat 藏入，
+   留 prev/play/next 三键；词/沉浸键收进 watch 页路径可达，保队列入口 */
 @media (max-width: 420px) {
+  .player-controls .transport:first-child,
+  .player-controls .transport:nth-child(5) { display: none; }
   .bp-xtra { display: none; }
   .transport { width: 30px; height: 30px; }
   .transport--play { width: 36px; height: 36px; }

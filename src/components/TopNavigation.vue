@@ -47,6 +47,14 @@
             aria-label="清除搜索"
             @mousedown.prevent="clearQuery"
           ><PixelIcon name="close" :size="12" /></button>
+          <!-- YTM：提交收进框内右缘（歌单名/ID/链接三合一由 handler 分流） -->
+          <button
+            class="topnav-search-go"
+            :disabled="!searchQuery.trim()"
+            title="搜索 / 按ID添加歌单"
+            aria-label="搜索"
+            @click="handleSearch"
+          ><PixelIcon name="chev-r" :size="13" /></button>
           <!-- typeahead 下拉：搜索建议（文本+实体名），↑↓ 可选 -->
           <div v-if="suggestOpen && suggestions.length" class="topnav-suggest" id="topnav-suggest-list" role="listbox">
             <div
@@ -65,11 +73,6 @@
             </div>
           </div>
         </div>
-        <button
-          @click="handleSearch"
-          class="ink-btn topnav-search-btn"
-          :disabled="!searchQuery.trim()"
-        >{{ extractPlaylistId(searchQuery.trim()) ? '添加' : '搜索' }}</button>
       </div>
 
       <div class="topnav-actions">
@@ -487,10 +490,22 @@ export default {
   padding: 1px 6px;
 }
 
-.topnav-search-btn {
-  height: 36px;
+/* 框内提交键：与清除键同族裸字，禁用态降淡 */
+.topnav-search-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 6px;
   flex-shrink: 0;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  cursor: pointer;
 }
+.topnav-search-go:disabled { color: var(--ink-64); cursor: default; }
+.topnav-search-go:hover:not(:disabled) { color: var(--accent-magenta-ink); }
 
 .topnav-actions {
   display: flex;

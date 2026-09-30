@@ -53,8 +53,6 @@
           :current-song="currentSong"
           :is-playing="isPlaying"
           :show-vip-songs="showVipSongs"
-          :current-page="currentPage"
-          :page-size="pageSize"
           :selected-playlist="selectedPlaylist"
           :playlist-downloads-refresh-key="playlistDownloadsRefreshKey"
           @play-song="openWatchSong"
@@ -63,9 +61,6 @@
           @play-next="playNextInQueue"
           @add-to-queue="addToQueueEnd"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
-          @go-to-page="goToPage"
-          @prev-page="prevPage"
-          @next-page="nextPage"
         />
         <PlaylistGrid
           v-else-if="centerView === 'search'"
@@ -88,6 +83,7 @@
           :song-switching="songSwitching"
           :queue="playingSongs"
           :queue-title="queueTitle"
+          :queue-owner="queueOwner"
           :lyrics="lyrics"
           :current-lyric-index="currentLyricIndex"
           :loading-lyrics="loadingLyrics"
@@ -103,6 +99,7 @@
           @save-queue="saveQueueAsPlaylist"
           @clear-queue="clearQueue"
           @play-song="playSongFromRelated"
+          @open-source="openQueueSource"
         />
         <AdminPanel v-else />
       </main>
@@ -126,6 +123,7 @@
       :play-mode="playMode"
       :play-mode-text="getPlayModeText()"
       :shuffle-on="shuffleOn"
+      :autoplay-on="autoplayOn"
       @toggle-play="togglePlay"
       @previous="previousSong"
       @next="nextSong"
@@ -245,10 +243,6 @@ export default {
     const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
     let restorePlayerState = null
     let lastSavedWholeSecond = -1
-
-    // 分页相关数据（仅歌曲列表保留分页；歌单库是全滚动）
-    const currentPage = ref(1)
-    const pageSize = ref(10)
 
     // YTM 式布局状态：主区视图（首页/歌曲/搜索结果/下载管理）+ 两个按需抽屉
     const centerView = ref('home') // 'home' | 'songs' | 'search' | 'watch' | 'downloads'
@@ -439,35 +433,6 @@ export default {
       }
     })
     
-    // 分页计算属性
-    const totalPages = computed(() => {
-      return Math.ceil(filteredSongs.value.length / pageSize.value)
-    })
-
-    // 列表缩短时页码收敛，避免空白页
-    watch(() => filteredSongs.value.length, () => {
-      const max = Math.max(1, totalPages.value)
-      if (currentPage.value > max) currentPage.value = max
-    })
-    // 分页控制函数
-    const goToPage = (page) => {
-      if (page >= 1 && page <= totalPages.value) {
-        currentPage.value = page
-      }
-    }
-    
-    const prevPage = () => {
-      if (currentPage.value > 1) {
-        currentPage.value--
-      }
-    }
-    
-    const nextPage = () => {
-      if (currentPage.value < totalPages.value) {
-        currentPage.value++
-      }
-    }
-
     // ── URL 导航（YTM 式：视图/歌单可寻址，浏览器前进后退生效） ──
     const NAV_VIEWS = new Set(['home', 'songs', 'search', 'watch', 'downloads'])
     let suppressNavPush = false // popstate 回放时不再重复入栈
@@ -846,7 +811,6 @@ export default {
       try {
         loadingSongs.value = true
         selectedPlaylist.value = playlist
-        currentPage.value = 1 // 重置分页
 
         console.log('🎵 加载歌单歌曲:', playlist.name)
 
@@ -1046,6 +1010,14 @@ export default {
       return playingPlaylistId.value ? '未知歌单' : '当前队列'
     })
 
+    // YTM「Playing from」来源名可点回歌单页——归属歌单仍在库时才给链接
+    const queueOwner = computed(() =>
+      userPlaylists.value.find(p => String(p.id) === String(playingPlaylistId.value)) || null
+    )
+    const openQueueSource = () => {
+      if (queueOwner.value) selectPlaylistAndShow(queueOwner.value)
+    }
+
     // 队列归属本地临时歌单（单曲分享/saved_queue_*）——底栏据此禁用随机键
     const playerIsTemp = computed(() => isLocalPlaylistId(playingPlaylistId.value))
 
@@ -1138,9 +1110,10 @@ export default {
       toast(`已存为歌单「${pl.name}」`, 'success')
     }
 
-    // 相关 tab 点歌：单曲独立成队（与搜索结果点歌同构）
-    const playSongFromRelated = (song) => {
-      setQueue([song], null)
+    // 相关 tab 点歌：YTM 以相关流接续——整个相关列表进队列（autoplay off 时队尾也有下一首）
+    const playSongFromRelated = (song, list) => {
+      const seed = Array.isArray(list) && list.length ? list.slice() : [song]
+      setQueue(seed, null)
       playingPlaylistId.value = null
       playSong(song, { preserveContext: true })
     }
@@ -1632,7 +1605,11 @@ export default {
           continueWithRelated().then(ok => { if (!ok) stopAtQueueEnd() })
           return
         } else if (!opts.autoplay) {
-          // 手动点「下一首」但已在队尾（list 模式）：静默无效——该键不该变成"停止"键
+          // 手动点「下一首」在队尾：autoplay 开着就接相关曲续播（YTM 队列无尽头），
+          // 关了才静默无效——该键不该变成"停止"键
+          if (autoplayOn.value) {
+            continueWithRelated().then(ok => { if (!ok) stopAtQueueEnd() })
+          }
           return
         } else {
           stopAtQueueEnd()
@@ -1842,6 +1819,16 @@ export default {
           e.preventDefault()
           updateVolume(volume.value - 5)
           break
+        case 'k': case 'K':
+          // YTM 键序：k=播放/暂停（k 无原生激活语义，不必像空格那样让位按钮焦点）
+          togglePlay()
+          break
+        case 'j': case 'J':
+          seekBy(-10) // YTM：j/l = ±10s
+          break
+        case 'l': case 'L':
+          seekBy(10)
+          break
         case 'm': case 'M':
           toggleMute()
           break
@@ -1875,11 +1862,6 @@ export default {
       fullscreenInteractionMode
     ], () => {
       savePlayerStateToStorage()
-    })
-
-    // 监听VIP歌曲显示状态变化，重置分页
-    watch(showVipSongs, () => {
-      currentPage.value = 1
     })
 
     // host 模式：状态变化时立即推送
@@ -2220,8 +2202,6 @@ export default {
       durationWarning,
       playbackError,
       loadingLyrics,
-      currentPage,
-      pageSize,
       centerView,
       sidebarOpen,
       watchTab,
@@ -2233,6 +2213,7 @@ export default {
       playMode,
       playingSongs,
       queueTitle,
+      queueOwner,
       topNavRef,
       homeToplists,
       homePersonalized,
@@ -2240,9 +2221,6 @@ export default {
       homeLoading,
 
       // 方法
-      goToPage,
-      prevPage,
-      nextPage,
       loadPlaylistByIdAndAdd,
       loadPlaylistById,
       addPlaylistToLibrary,
@@ -2272,6 +2250,7 @@ export default {
       playPlaylistAndWatch,
       watchBack,
       playSongFromRelated,
+      openQueueSource,
       toggleShuffle,
       toggleMute,
       togglePlay,
