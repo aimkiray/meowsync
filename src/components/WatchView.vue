@@ -35,13 +35,14 @@
             <PixelIcon name="share" :size="14" /> 分享歌曲
           </button>
         </div>
+
+        <!-- 播放错误/警告在操作行下方——归属左栏信息区，不占右栏 tab 顶部 -->
+        <div v-if="durationWarning" class="watch-banner" role="status"><span class="watch-banner-tag">warn:</span> {{ durationWarning }}</div>
+        <div v-if="playbackError" class="watch-banner" role="alert"><span class="watch-banner-tag">error:</span> {{ playbackError }}</div>
       </div>
 
       <!-- ══ 右栏：待播 / 歌词 / 相关 ══ -->
       <aside class="watch-side" aria-label="待播与歌词">
-        <!-- 播放错误/警告在 tab 条上方——全 tab 共享可见，不能藏在歌词页里静默失败 -->
-        <div v-if="durationWarning" class="watch-banner" role="status"><span class="watch-banner-tag">warn:</span> {{ durationWarning }}</div>
-        <div v-if="playbackError" class="watch-banner" role="alert"><span class="watch-banner-tag">error:</span> {{ playbackError }}</div>
 
         <div class="pg-tabs watch-tabs" role="tablist" aria-label="播放页侧栏面板">
           <button
@@ -571,15 +572,18 @@ export default {
   pointer-events: none;
 }
 
-/* 状态横幅：纸面发丝盒 + 等宽标签（warn:/error:） */
+/* 状态横幅：纸面发丝盒 + 等宽标签（warn:/error:）——居左栏沉浸键下方，宽与封面同轴 */
 .watch-banner {
-  margin-bottom: 10px;
+  margin-top: 14px;
   padding: 8px 10px;
   font-size: 11px;
   background: var(--paper);
   border: var(--hairline);
   color: var(--ink);
   flex-shrink: 0;
+  width: min(46vh, 420px);
+  max-width: 100%;
+  text-align: left;
 }
 
 .watch-banner-tag {
@@ -588,9 +592,6 @@ export default {
   letter-spacing: .05em;
   color: var(--accent-danger-ink);
 }
-
-/* 横幅态右栏整体下移——浮层沉浸键 otherwise 压在横幅右端 */
-.watch-side:has(.watch-banner) { padding-top: 44px; }
 
 .watch-tabs { flex-shrink: 0; }
 
