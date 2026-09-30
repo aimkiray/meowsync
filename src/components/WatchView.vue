@@ -2,9 +2,13 @@
   <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
   <div class="watch-view">
-    <header class="watch-header">
+    <!-- 浮层顶行：不占流——右栏待播区的顶部空间随之释放 -->
+    <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="13" />返回</button>
-    </header>
+      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('open-fullscreen')" title="全屏歌词模式">
+        <PixelIcon name="expand" :size="13" /> 沉浸
+      </button>
+    </div>
 
     <div class="watch-layout">
       <!-- ══ 左栏 ══ -->
@@ -18,12 +22,6 @@
             :class="{ 'playing-animation': isPlaying }"
           />
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
-          <button
-            class="pg-icobtn watch-cover-expand"
-            @click="$emit('open-fullscreen')"
-            aria-label="沉浸模式"
-            title="全屏歌词模式"
-          ><PixelIcon name="expand" :size="14" /></button>
         </div>
 
         <h2 class="watch-title" data-nosnippet>{{ currentSong?.name || '未播放' }}</h2>
@@ -463,16 +461,8 @@ export default {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
-
-.watch-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px 20px 10px; /* 顶 20 与全站首行轴齐平；底 10 收紧与内容区的距 */
-  flex-shrink: 0;
-}
-/* 头行按钮走 --sm 自然高（32px）——侧栏同高对象已随首页键一起移除 */
 
 .watch-layout {
   flex: 1;
@@ -480,8 +470,24 @@ export default {
   display: grid;
   grid-template-columns: minmax(0, 1fr) min(400px, 38vw);
   gap: 24px;
-  padding: 0 20px 20px;
+  padding: 20px 20px 20px; /* 顶 20 与全站首行轴齐平（头行已并入左栏） */
 }
+
+/* 浮层顶行：返回钉左页角 / 沉浸钉右页角；不占流——待播栏顶部空间整体释放。
+   pointer-events:none 带子让下方内容可点，仅按键自身接收点击 */
+.watch-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  pointer-events: none;
+}
+.watch-top > * { pointer-events: auto; }
 
 /* ── 左栏：封面 + 信息 + 操作 ── */
 .watch-main {
@@ -513,23 +519,6 @@ export default {
   justify-content: center;
   color: var(--ink-64);
   background: var(--paper);
-}
-
-.watch-cover-wrap { position: relative; }
-
-/* 封面右上角沉浸入口：墨底纸字——叠在任意封面上都保可读 */
-.watch-cover-expand {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: var(--ink);
-  color: var(--paper);
-  border-color: var(--paper);
-}
-.watch-cover-expand:hover:not(:disabled) {
-  background: var(--ink);
-  color: var(--accent-magenta-on-ink);
-  border-color: var(--paper);
 }
 
 .watch-title {
@@ -709,6 +698,7 @@ export default {
     flex-direction: column;
     gap: 16px;
     overflow: visible;
+    padding-top: 56px; /* 浮层顶行净空——单列时内容从键位下方起 */
   }
 
   .watch-main { overflow: visible; }
