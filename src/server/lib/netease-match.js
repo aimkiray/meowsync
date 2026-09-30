@@ -14,17 +14,20 @@ const shareName = (a, b) => {
 
 // candidates 按优先级排（提取名/频道歌手组合 → 清洗标题），逐个云搜；
 // 每个候选内两遍优选：歌名包含是最强信号（跨语翻唱同名必中），时长命中
-// 取差最小者——顺序「首个过线」会让时长恰好在窗内的噪声压过排后的正主
-async function matchNeteaseSong(candidates, durationSec, tag = 'import') {
+// 取差最小者——顺序「首个过线」会让时长恰好在窗内的噪声压过排后的正主。
+// signal：客户端断连/调用方主动作废时早退，不刷无意义的上游云搜
+async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal = null) {
   for (const q of candidates) {
-    if (!q) continue;
+    if (!q || signal?.aborted) continue;
     try {
       const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '5' });
       const songs = res.body?.result?.songs;
       if (!Array.isArray(songs) || !songs.length) continue;
       const byName = songs.find(s => shareName(s.name, q));
       if (byName) return { song: byName, query: q };
-      if (Number.isFinite(durationSec)) {
+      // 时长 sanity 只在有真实时长时启用——源时长 0（live/首映/字段缺失）会把
+      // ≤45s 的短曲错配（|x-0|≤45 窗口对 0 恒成立的方向性失真）
+      if (Number.isFinite(durationSec) && durationSec > 0) {
         const byDur = songs
           .map(s => ({ s, diff: Math.abs((s.dt || s.duration || 0) / 1000 - durationSec) }))
           .filter(x => x.diff <= MATCH_DUR_TOLERANCE_SEC)

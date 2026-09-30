@@ -789,7 +789,7 @@ export default {
     const buildYouTubeSong = (data) => ({
       id: `yt_${data.videoId}`,
       name: data.matched?.name || data.songName || data.title,
-      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.author || 'YouTube' }],
+      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.authorClean || data.author || 'YouTube' }],
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
@@ -1613,7 +1613,7 @@ export default {
       addTargetSong.value = null
     }
 
-    // ── 点歌台（歌单 hero「添加歌曲」）：搜索网易云 / 粘歌曲链接/ID / B 站链接，
+    // ── 点歌台（歌单 hero「添加歌曲」）：搜索网易云 / 粘歌曲链接/ID / B 站、YouTube 链接，
     // 向当前打开的单一连追加。single_song_ 壳不开（壳=单曲容器，SongList 已藏键）。
     // 逐首追加不关窗——加多首是常态；每行带封面与「已在单」态
     const songPickerOpen = ref(false)
@@ -2837,7 +2837,8 @@ export default {
     const getYtFromUrl = () => {
       const urlParams = new URLSearchParams(window.location.search)
       const yt = urlParams.get('yt')
-      if (!yt || !/^[A-Za-z0-9_-]{11}$/.test(yt.trim())) return null
+      // \D 与服务端 pickYouTubeId 裸 id 口径对齐——纯数字 11 位过去也会被 400
+      if (!yt || !/^[A-Za-z0-9_-]{11}$/.test(yt.trim()) || !/\D/.test(yt.trim())) return null
       console.log('▶️ 从URL获取 YouTube 视频:', yt.trim())
       return yt.trim()
     }
@@ -2852,7 +2853,7 @@ export default {
     }
 
     const MIX_IMPORT_CAP = 300      // 与生成侧 shareUrlFor 的截断对齐
-    const MIX_RESOLVE_CAP = 10      // bv_/yt_ 逐项 resolve 受限流（12/min）约束——两端点共用一桶
+    const MIX_RESOLVE_CAP = 10      // bv_/yt_ 逐项 resolve——客户端预算共桶（服务端两端点各 12/min 分桶）
     const importMixPlaylist = async (mix) => {
       const sep = mix.lastIndexOf('~')
       // [...str] 按码点切——slice 按 code unit 会斩断 emoji 代理对留孤代理
@@ -2911,12 +2912,14 @@ export default {
             if (s) tracks.push(s); else skipped++
             continue
           }
-          // bv_/yt_ 共用 resolve 限流桶——两个端点同键刷的是同一个上游扇出预算
+          // bv_/yt_ 共用客户端 resolve 预算——同链混排外部曲总数封顶（服务端两端点分桶各 12/min）
           if (++resolveCount > MIX_RESOLVE_CAP) { skipped++; continue }
           const ym = /^yt_([A-Za-z0-9_-]{11})$/.exec(id)
           if (ym) {
             try {
-              tracks.push(buildYouTubeSong(await musicApi.resolveYouTube(ym[1])))
+              // 传 ?yt= 形态而非裸 id——服务端 [?&]yt= 分支无 \D 要求，
+              // 全数字 videoId（理论存在）也能解
+              tracks.push(buildYouTubeSong(await musicApi.resolveYouTube(`?yt=${ym[1]}`)))
             } catch { skipped++ }
             continue
           }

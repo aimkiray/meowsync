@@ -22,22 +22,31 @@ export function isBilibiliInput(input) {
     || /(?:^|\/)av\d+/i.test(s);
 }
 
-// YouTube 视频 id 提取：watch?v= / youtu.be/ / shorts/embed/live/v / 本站 ?yt= 分享链 /
-// 裸 11 位 id。与服务端 pickYouTubeId 同一套形态表（顺序敏感：URL 形态优先）
+// YouTube URL 形态表（顺序敏感）——与服务端 pickYouTubeId 前半段逐字符一致
+const YT_URL_RES = [
+  /(?:youtube(?:-nocookie)?\.com|music\.youtube\.com)\/(?:watch\?[^ ]*?\bv=|shorts\/|embed\/|live\/|v\/)([A-Za-z0-9_-]{11})/i,
+  /youtu\.be\/([A-Za-z0-9_-]{11})/i,
+  /[?&]yt=([A-Za-z0-9_-]{11})/i,
+];
+
+// YouTube 视频 id 提取：URL 形态 + 裸 11 位 id（须含非数字，纯数字与网易云 id 撞型）。
+// 与服务端 pickYouTubeId 同一套形态表
 export function extractYouTubeId(input) {
   const s = String(input || '').trim();
   if (!s) return null;
-  const m = s.match(/(?:youtube(?:-nocookie)?\.com|music\.youtube\.com)\/(?:watch\?[^ ]*?\bv=|shorts\/|embed\/|live\/|v\/)([A-Za-z0-9_-]{11})/i)
-    || s.match(/youtu\.be\/([A-Za-z0-9_-]{11})/i)
-    || s.match(/[?&]yt=([A-Za-z0-9_-]{11})/i);
-  if (m) return m[1];
-  // 裸 id 须含非数字字符——纯数字 11 位与网易云歌曲 id 撞型
+  for (const re of YT_URL_RES) {
+    const m = s.match(re);
+    if (m) return m[1];
+  }
   return (/^[A-Za-z0-9_-]{11}$/.test(s) && /\D/.test(s)) ? s : null;
 }
 
-// YouTube 输入识别：任何能提取出 id 的输入都算（与 B 站 isBilibiliInput 同职）
+// YouTube 输入识别：只认无歧义的 URL 形态——裸 11 位串与搜索关键词天然歧义
+// （`lofi1234567` 这类 11 位词会被误当 videoId 劫持进导入流程），裸 id 输入
+// 走正常搜索；想用裸 id 可以拼 youtu.be/<id>
 export function isYouTubeInput(input) {
-  return extractYouTubeId(input) != null;
+  const s = String(input || '').trim();
+  return !!s && YT_URL_RES.some(re => re.test(s));
 }
 
 // 网易云歌曲 id 提取：music.163.com/song?id= / song/N / ?song=N / 裸数字。

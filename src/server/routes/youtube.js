@@ -13,6 +13,8 @@ const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 // 公开 web 客户端 key（嵌在 youtube.com 前端里，供匿名访客调 youtubei）。
 // ANDROID/IOS 客户端的 streamingData 直返可播 url（无 signatureCipher 混淆
 // 签名）——正是不需要 yt-dlp 的原因；ANDROID 优先，被风控/改版时退 IOS
+// key/客户端版本号摘自 youtube.com 前端与 yt-dlp 上游（会随 YouTube 改版过期——
+// resolve 报「无流数据」率升高时对照 yt-dlp 仓库同步 clientVersion）
 const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 const INNERTUBE_CLIENTS = [
   {
@@ -53,6 +55,8 @@ async function fetchPlayer(videoId, extraSignal) {
       return body;
     } catch (e) {
       lastErr = e;
+      // 客户端断连引发的 abort 不算上游失败——不打误导性 warn
+      if (extraSignal?.aborted) throw new Error('aborted');
       console.warn(`[youtube] ${form.name} 客户端取流失败:`, e.message);
     }
   }
@@ -76,8 +80,10 @@ function pickYouTubeId(input) {
 // 先剥括号修饰串，再按 ' - ' 切——左侧是歌手；无分隔符时用频道名兜底
 // （Topic/VEVO 系自动投稿频道名即歌手名，'Title' 单独已是歌名）
 function extractYtSong(title, author) {
+  // 括号修饰剥离：词边界防误伤——(Alive)/(Olive)/(Monochrome) 内嵌 live/mono
+  // 词干不该剥；内容禁含括号保证配对（嵌套/不配对的留原样总比切残片强）
   const cleanTitle = String(title || '')
-    .replace(/[[(][^\])]*(?:official|lyrics?|audio|visuali[sz]er|video|mv|hd|4k|8k|remaster(?:ed)?|mono|explicit|live|color coded|lyric)[^\])]*[\])]/gi, ' ')
+    .replace(/[[(][^\[\]()]{0,80}?\b(?:official|lyrics?|audio|visuali[sz]er|video|mv|hd|4k|8k|remaster(?:ed)?|mono|explicit|live|color coded|lyric)\b[^\[\]()]{0,80}?[\])]/gi, ' ')
     .replace(/《|》/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -100,11 +106,13 @@ function extractYtSong(title, author) {
     // 无 ' - ' 分隔时频道名是唯一的歌手线索——组合串优先于裸标题
     candidates = [`${artistFromAuthor} ${cleanTitle}`, cleanTitle];
   }
-  return { songName, candidates: [...new Set(candidates.filter(c => c && c.trim()))].slice(0, 3) };
+  // 先 trim 再去重——author 为空时组合串退化成 ' name' 会与 name 判异白占一席
+  candidates = [...new Set(candidates.map(c => c.trim()).filter(Boolean))].slice(0, 3);
+  return { songName, candidates, artistFromAuthor };
 }
 
 // 选流：音频优先 mp4a/m4a 容器（audio/mp4——webm opus 在 Safari 的 <audio>
-// 不通）；video 取 adaptive avc1（H.264 全浏览器可放），itag 从高到低。
+// 不通）；video 取 adaptive avc1（H.264 全浏览器可放），按分辨率/bitrate 降序。
 // signatureCipher 混淆流（无 url 只有签名参数）跳过——本服务不做签名反解
 function pickStreamList(data, kind) {
   const adaptive = Array.isArray(data?.adaptiveFormats) ? data.adaptiveFormats : [];
@@ -118,7 +126,11 @@ function pickStreamList(data, kind) {
   const avc = adaptive.filter(f =>
     usable(f) && (f.mimeType || '').startsWith('video/mp4')
     && (f.mimeType || '').includes('avc1'));
-  return (avc.length ? avc : progressive.filter(usable))
+  // progressive 兜底同样限 video/mp4——webm 合并流 Safari 放不了，宁缺毋滥
+  // （hasVideo 语义 = 浏览器解得动的流存在）
+  const mp4Progressive = progressive.filter(f =>
+    usable(f) && (f.mimeType || '').startsWith('video/mp4'));
+  return (avc.length ? avc : mp4Progressive)
     .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
 }
 
@@ -134,7 +146,8 @@ app.get('/youtube/resolve', async (c) => {
     const vd = player.videoDetails || {};
     const duration = parseInt(vd.lengthSeconds, 10) || 0;
     const author = vd.author || '';
-    const { songName, candidates } = extractYtSong(vd.title, author);
+    // artistFromAuthor 是剥掉 ' - Topic'/'VEVO' 后的干净歌手名——前端兜底显示用
+    const { songName, candidates, artistFromAuthor } = extractYtSong(vd.title, author);
 
     // 匹配预算与 bilibili 同款：整条链超时当无匹配，不阻塞解析返回
     let budgetTimer;
@@ -143,7 +156,7 @@ app.get('/youtube/resolve', async (c) => {
       budgetTimer.unref?.();
     });
     const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, duration, 'youtube'), matchBudget,
+      matchNeteaseSong(candidates, duration, 'youtube', c.req.raw.signal), matchBudget,
     ]);
     clearTimeout(budgetTimer);
 
@@ -160,6 +173,7 @@ app.get('/youtube/resolve', async (c) => {
       title: vd.title || '',
       author,
       duration,
+      authorClean: artistFromAuthor || null,
       cover: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
       songName,
       matched: matched ? {

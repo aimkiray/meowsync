@@ -324,7 +324,7 @@ export default {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },
     duration: { type: Number, default: 0 },
-    // 音频时钟（秒，RAF 更新）——B 站视频模式的画面以此锚定做漂移校正
+    // 音频时钟（秒，RAF 更新）——外部导入曲视频模式的画面以此锚定做漂移校正
     currentTime: { type: Number, default: 0 },
     songSwitching: { type: Boolean, default: false },
     queue: { type: Array, default: () => [] },
@@ -715,7 +715,7 @@ export default {
   background: var(--paper);
 }
 
-/* B 站视频模式：16:9 信箱（B 站视频多为横屏，方形裁切会砍画面）；
+/* 外部导入曲视频模式：16:9 信箱（外部视频多为横屏，方形裁切会砍画面）；
    image-rendering 像素化是封面的印刷效果，视频不该继承。
    视频是主内容、须明显大于方形封面：宽顶满栏位，上限 62vh 反推宽
    （封面 min(46vh,420px) 面积约 17.6万px²；960×540 ≈ 51.8万，~3×） */

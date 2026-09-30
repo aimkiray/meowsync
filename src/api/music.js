@@ -331,7 +331,7 @@ export const musicApi = {
       `${artists} - ${song.name}.m4a`)
   },
 
-  // YouTube 导入：解析 URL/BV 形态/裸 id → videoDetails + 歌名提取 + 网易云
+  // YouTube 导入：解析 watch/youtu.be/shorts 等 URL 形态 → videoDetails + 歌名提取 + 网易云
   // 匹配。服务端串 Innertube + 云搜，超时放宽与 B 站同款
   resolveYouTube: async (input, abortSignal = null) => {
     const response = await api.get('/youtube/resolve', {
@@ -369,16 +369,17 @@ async function saveStreamAsFile(url, fileName) {
   if (!resp.ok) throw new Error(`下载失败: HTTP ${resp.status}`)
   const blob = await resp.blob()
   const objectUrl = URL.createObjectURL(blob)
+  const safeName = fileName.replace(/[\\/:*?"<>|]/g, '_')
   const link = document.createElement('a')
   link.href = objectUrl
-  link.download = fileName.replace(/[\\/:*?"<>|]/g, '_')
+  link.download = safeName
   link.style.display = 'none'
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
   // 吊销必须延迟：click 同步触发但浏览器取流是异步的
   setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-  return { success: true, fileName }
+  return { success: true, fileName: safeName }
 }
 
 // 歌词与翻译数组均按时间排序，双指针合并 O(n+m)

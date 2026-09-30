@@ -109,7 +109,7 @@ export const downloadsApi = {
 
   // 本地歌单（local_pl_*/saved_queue_*）先镜像到服务端 DB，之后所有下载路由
   // 用 playlist.id 直调（服务端 findExistingPlaylistId 按 netease_playlist_id 解析镜像）。
-  // 返回 {playlistId, mirrored, skipped}——skipped = 非网易云曲目（bv_*）数
+  // 返回 {playlistId, mirrored, skipped}——skipped = 非网易云曲目（bv_*/yt_*）数
   mirrorLocalPlaylist: (playlist) => {
     // 瘦身投影：服务端只消费 id/name/ar/al/dt。本地 tracks 存的是全量曲对象
     // （~2-3KB/首），原样上载 ~400 首就撞 1MB body 上限；投影后 2000 曲 ≈600KB
