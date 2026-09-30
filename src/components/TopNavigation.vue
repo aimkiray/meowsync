@@ -430,6 +430,9 @@ export default {
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
   padding: 2px 6px;
   color: var(--ink-86);
