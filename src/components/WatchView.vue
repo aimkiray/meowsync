@@ -665,7 +665,7 @@ export default {
 .watch-queue-foot {
   display: flex;
   gap: 8px;
-  padding: 12px 4px 4px;
+  padding: 12px 4px; /* 底距对齐上距——末行按钮与滚动区下缘同距呼吸 */
 }
 
 .watch-autoplay {
