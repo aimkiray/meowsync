@@ -101,17 +101,41 @@ async function askAiJson({ system, user, maxTokens = 1024, timeoutMs = AI_TIMEOU
   };
   try {
     // 优先请求结构化输出；不兼容 response_format 的实现回退裸文本 + 自行解析
+    // （回退同时去掉 reasoning_effort——严格校验的网关可能正是被这类
+    // 非标准参数 400 掉的）
     let res = await postChat({ ...baseBody, response_format: { type: 'json_object' } }, timeoutMs, signal);
+    let bare = false;
+    const retryBare = async () => {
+      bare = true;
+      const { reasoning_effort, ...rest } = baseBody;
+      return postChat(rest, timeoutMs, signal);
+    };
     if (!res.ok && (res.status === 400 || res.status === 404 || res.status === 422)) {
       // 重试前 drain 响应体——undici keep-alive 下未消费体会占住 socket 到 GC
       await res.arrayBuffer().catch(() => {});
-      res = await postChat(baseBody, timeoutMs, signal);
+      res = await retryBare();
     }
     if (!res.ok) {
       console.warn(`[ai] chat 请求失败 HTTP ${res.status}`);
+      await res.arrayBuffer().catch(() => {}); // drain：同 keep-alive 理由
       return null;
     }
-    const data = await res.json();
+    let data = await res.json();
+    // 聚合网关会把上游失败包成 200 + {error:{...}}（one-api/new-api 常见）——
+    // 若首次带 response_format 且疑似参数不兼容，按裸请求再试一次
+    if ((data?.error || !Array.isArray(data?.choices)) && !bare) {
+      res = await retryBare();
+      if (!res.ok) {
+        console.warn(`[ai] chat 重试失败 HTTP ${res.status}`);
+        await res.arrayBuffer().catch(() => {});
+        return null;
+      }
+      data = await res.json();
+    }
+    if (data?.error) {
+      console.warn('[ai] 上游返回错误:', data.error?.message || data.error);
+      return null;
+    }
     const content = data?.choices?.[0]?.message?.content;
     const parsed = parseJsonContent(content);
     if (parsed == null) {

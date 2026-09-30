@@ -2326,7 +2326,8 @@ export default {
 
         // AI 后处理挂后台不阻塞显示：外部曲核验歌词归属 + 无官方译文的
         // 自动翻译。结果回来时词属主可能已换——写回前逐项复查
-        void postProcessLyrics(song, lyricId, seq, signal).catch(() => {})
+        void postProcessLyrics(song, lyricId, seq, signal)
+          .catch(e => console.warn('AI 歌词后处理异常:', e))
       } catch (error) {
         if (signal?.aborted || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
         console.error('❌ 加载歌词失败:', error)
@@ -2375,15 +2376,21 @@ export default {
           ? { title: song.bilibili.title, author: song.bilibili.author || '' }
           : null
       if (ext?.title && ownsLyric()) {
-        const vkey = `${lyricId}|${ext.title}|${ext.author}`
+        // 含模型维度——与服务端 vkey 同口径：换模型后旧判定不应再挡路
+        const vkey = JSON.stringify([lyricId, ext.title, ext.author, st.model || ''])
         let ok = aiLyricVerdicts.get(vkey)
-        if (ok === undefined) {
+        const fresh = ok === undefined // 缓存命中的否决静默生效，不重复打扰
+        if (fresh) {
           try {
-            // verify 秒级任务随切歌一起 abort；translate 则刻意不接 signal——
-            // 服务端完成后按词源落库，中断只会丢掉本次缓存收益
+            // verify 秒级任务随切歌一起 abort；translate 刻意不接 signal——
+            // 切歌不断连，服务端仍可完成并落库（页面关闭则连服务端一起中止）
             const v = await aiApi.verifyLyric(lyricId, ext.title, ext.author, signal)
             ok = v?.ok !== false
-            if (v && typeof v.ok === 'boolean') aiLyricVerdicts.set(vkey, v.ok)
+            // inconclusive（服务端故障放行）不缓存——恢复后重播要能重验，
+            // 与服务端不落库 inconclusive 的口径一致
+            if (v && typeof v.ok === 'boolean' && !v.inconclusive) {
+              aiLyricVerdicts.set(vkey, v.ok)
+            }
           } catch { ok = true /* 核验通道故障放行——AI 是增强不是门禁 */ }
         }
         if (!ok) {
@@ -2391,7 +2398,7 @@ export default {
             lyrics.value = []
             currentLyricIndex.value = 0
             lyricOwnerKey.value = null
-            toast('歌词与歌曲疑似不匹配，已隐藏', 'info')
+            if (fresh) toast('歌词与歌曲疑似不匹配，已隐藏', 'info')
           }
           return // 词源错了就不必再翻译错词
         }
