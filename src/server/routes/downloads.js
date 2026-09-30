@@ -321,9 +321,11 @@ app.post('/downloads/local/mirror', async (c) => {
     }
     const allTracks = Array.isArray(body.tracks) ? body.tracks : [];
     if (!allTracks.length) return fail(c, 400, '歌单中没有歌曲');
-    // 只留可下载的网易云曲目（数字 id）；bv_/yt_ 等跳过并回传计数让前端提示。
-    // 先过滤后截断：前 2000 个可下载曲进入镜像；skipped=非数字 id，truncated=超上限截尾
-    const numeric = allTracks.filter(t => t && /^\d+$/.test(String(t.id ?? '')));
+    // 只留服务端可下载的曲目（网易云数字 id + qq_<songmid> 直链源）；bv_/yt_
+    // 等跳过并回传计数让前端提示。
+    // 先过滤后截断：前 2000 个可下载曲进入镜像；skipped=不支持 id，truncated=超上限截尾
+    const numeric = allTracks.filter(t => t && (/^\d+$/.test(String(t.id ?? ''))
+      || /^qq_[0-9A-Za-z]{10,20}$/.test(String(t.id ?? ''))));
     const tracks = numeric.slice(0, 2000)
       .map(t => ({
         id: String(t.id),

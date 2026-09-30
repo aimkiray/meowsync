@@ -18,6 +18,8 @@
       @search-by-id="previewPlaylistById"
       @search-bili="importBilibili"
       @search-yt="importYouTube"
+      @search-qq="importQQ"
+      @search-qq-pl="importQQPlaylist"
     />
 
     <div class="app-body">
@@ -302,7 +304,7 @@ import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover, isBilibiliInput, isYouTubeInput, extractNeteaseSongId, extractYouTubeId } from './lib/url'
+import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractNeteaseSongId, extractYouTubeId } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -807,6 +809,31 @@ export default {
       neteaseId: data.matched?.id || null
     })
 
+    // QQ 导入曲对象：id 用 qq_<songmid> 前缀。与 bv/yt 的关键差异是 QQ 自带
+    // 真实元数据（name/artists/album/duration/cover 就是正主而非提取的噪声
+    // 标题）与权威双语歌词——matched 仅作封面退化兜底与 neteaseId 词源备胎
+    const buildQQSong = (data) => ({
+      id: `qq_${data.mid}`,
+      name: data.name || data.matched?.name || '未知歌曲',
+      ar: data.artists?.length
+        ? data.artists.map(n => ({ name: n }))
+        : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'QQ 音乐' }]),
+      al: {
+        id: data.matched?.al?.id ?? null,
+        name: data.album || data.matched?.al?.name || '',
+        // QQ 封面（gtimg 无防盗链）优先于匹配封面——错配时脏封面的观感损失更大
+        picUrl: httpsCover(data.cover || '') || data.matched?.al?.picUrl || ''
+      },
+      dt: (data.duration || 0) * 1000,
+      qq: {
+        mid: data.mid, mediaMid: data.mediaMid || data.mid,
+        songId: data.songId, albummid: data.albummid || '',
+        payPlay: !!data.payPlay, vipOnly: !!data.vipOnly,
+        matchedBy: data.matchedBy || null
+      },
+      neteaseId: data.matched?.id || null
+    })
+
     // 外部媒体导入共用骨架：B 站/YouTube 同一形态「resolve → 幂等壳 → 开播进
     // watch」，差异只在解析端点/壳 id/显示名——收进 spec 防两份逻辑漂移
     const MEDIA_IMPORT_SPECS = {
@@ -825,6 +852,14 @@ export default {
         shellIdOf: d => `single_song_yt_${d.videoId}`,
         shellNameOf: song => `YouTube导入 - ${song.name}`,
         creator: 'YouTube 导入'
+      },
+      qq: {
+        tag: 'QQ音乐', icon: '🐧',
+        resolve: input => musicApi.resolveQQ(input),
+        build: buildQQSong,
+        shellIdOf: d => `single_song_qq_${d.mid}`,
+        shellNameOf: song => `QQ音乐 - ${song.name}`,
+        creator: 'QQ 导入'
       }
     }
     let mediaImportSeq = 0
@@ -891,6 +926,40 @@ export default {
     }
     const importBilibili = (input) => importExternalMedia(input, 'bilibili')
     const importYouTube = (input) => importExternalMedia(input, 'youtube')
+    const importQQ = (input) => importExternalMedia(input, 'qq')
+
+    // QQ 歌单导入：disstid → 归一曲目 → 幂等壳 local_pl_qq_<id>——与手动建单
+    // 同权（local_pl_ 前缀全链已通：mix 内容分享链/服务端镜像下载/持久化）。
+    // 重复导入原地刷新曲目与元信息而不是再复制一份
+    const importQQPlaylist = async (disstid) => {
+      selectReqId++
+      loadingSongs.value = false
+      try {
+        toast('正在导入 QQ 歌单…', 'info', 30000)
+        const data = await musicApi.getQQPlaylist(disstid)
+        const tracks = (data.tracks || []).map(buildQQSong)
+        if (!tracks.length) {
+          toast('QQ 歌单为空或全部不可解析', 'error')
+          return
+        }
+        const shellId = `local_pl_qq_${disstid}`
+        let pl = userPlaylists.value.find(p => String(p.id) === shellId)
+        if (!pl) {
+          pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
+          userPlaylists.value.unshift(pl)
+        }
+        pl.name = data.name || `QQ 歌单 ${disstid}`
+        pl.coverImgUrl = data.cover || tracks[0]?.al?.picUrl || ''
+        pl.creator = { nickname: data.creator || 'QQ 音乐' }
+        pl.tracks = tracks
+        pl.trackCount = tracks.length
+        savePlaylistsToStorage()
+        selectPlaylistAndShow(pl)
+        toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首）`, 'success')
+      } catch (e) {
+        toast(`QQ 歌单导入失败：${e.message}`, 'error', 5000)
+      }
+    }
 
     const addPlaylistToLibrary = async (playlist) => {
       try {
@@ -1785,6 +1854,31 @@ export default {
           await addPickedSong(song)
           return
         }
+        if (isQQInput(q)) {
+          action = '解析'
+          toast('正在解析 QQ 音乐…', 'info', 30000)
+          pickerAbort = new AbortController()
+          const data = await musicApi.resolveQQ(q, pickerAbort.signal)
+          if (mySeq !== pickerSeq || !songPickerOpen.value) return
+          const song = buildQQSong(data)
+          songPickerResults.value = [song,
+            ...songPickerResults.value.filter(r => String(r.id) !== String(song.id))]
+          songPickerQuery.value = ''
+          await addPickedSong(song)
+          return
+        }
+        // qq: 前缀触发 QQ 曲库搜索——补「网易云没有的那首歌」缺口。
+        // 结果经 buildQQSong 归一成 qq_* 曲（歌词/下载/分享链全通）
+        if (/^qq[:：]/i.test(q)) {
+          action = 'QQ 搜索'
+          const kw = q.replace(/^qq[:：]/i, '').trim()
+          if (!kw) return
+          const list = await musicApi.searchQQSongs(kw, 20)
+          if (mySeq !== pickerSeq || !songPickerOpen.value) return
+          songPickerResults.value = (list || []).map(buildQQSong)
+          if (!songPickerResults.value.length) toast('QQ 音乐没有找到相关歌曲', 'info')
+          return
+        }
         const songId = extractNeteaseSongId(q)
         if (songId) {
           action = '添加'
@@ -1982,7 +2076,8 @@ export default {
         dt: song.dt ?? song.duration, fee: song.fee, privilege: song.privilege,
         // B 站导入曲的播放源/歌词源字段——丢了从历史点回会退成不可播
         bilibili: song.bilibili, neteaseId: song.neteaseId,
-        youtube: song.youtube // YouTube 导入曲同理——丢了从历史点回会退成不可播
+        youtube: song.youtube, // YouTube 导入曲同理——丢了从历史点回会退成不可播
+        qq: song.qq // qq_<mid> 同理——播放源与词源键都在里面
       }
       playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
       writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
@@ -2087,7 +2182,9 @@ export default {
           ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
           : song.youtube
             ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio') }
-            : await musicApi.getSongUrl(song.id, abortSignal)
+            : song.qq
+              ? { url: musicApi.qqStreamUrl(song.qq.mid, 'audio', '', song.qq.mediaMid) }
+              : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
         if (abortSignal.aborted) {
@@ -2132,7 +2229,7 @@ export default {
 
             if (Math.abs(expectedDuration - actualDuration) > 5) {
               // 外部导入曲的时长差是稿件换源/分P错位而非 VIP 试听，文案区分避免误报
-              durationWarning.value = (song.bilibili || song.youtube)
+              durationWarning.value = (song.bilibili || song.youtube || song.qq)
                 ? `音画时长不一致：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
                 : `VIP 歌曲试听版本：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
             }
@@ -2284,7 +2381,8 @@ export default {
     // 外部导入曲（B 站/YouTube）的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_*/yt_* id
     // ——过期判定锚 song.id，不锚歌词请求的 id
     const loadLyrics = async (song, signal = null) => {
-      // 外部导入曲未匹配到网易云时无歌词源——bv_*/yt_* id 打 /lyric 必死还拖三重试，直接置空
+      // 外部导入曲未匹配到网易云时无歌词源——bv_*/yt_* id 打 /lyric 必死还拖三重试，直接置空；
+      // qq_ 不在此列——QQ 曲有自家权威词源（/qq/lyric），无匹配也能出词
       if ((song?.bilibili || song?.youtube) && !song.neteaseId) {
         lyrics.value = []
         currentLyricIndex.value = 0
@@ -2292,7 +2390,10 @@ export default {
         lyricOwnerKey.value = null
         return
       }
-      const lyricId = song?.neteaseId ?? song?.id
+      // 词源选择：qq_ 曲首选 QQ 自带词（qq_<mid> 作词源 id——AI 翻译/校准
+      // 缓存都认这个键）；QQ 词源空且匹配到网易云时回落网易云词源（嫁接词，
+      // postProcess 会走归属核验）
+      let lyricId = song?.qq ? `qq_${song.qq.mid}` : (song?.neteaseId ?? song?.id)
       if (lyricId == null) return
       lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
       try {
@@ -2300,12 +2401,22 @@ export default {
         console.log('📝 加载歌词:', lyricId)
 
         // 校准随词源走（neteaseId 优先）：同一网易云词源在本地单/远端单/壳间共享。
-        // meta 查询失败不阻塞歌词——校准只是修饰，降级为 0
-        const metaPromise = downloadsApi.getSongMeta(lyricId).catch(() => null)
-        const lyricsData = await musicApi.getLyrics(lyricId, signal)
+        // meta 查询失败不阻塞歌词——校准只是修饰，降级为 0。
+        // qq 词源要等 fetch 后才知道是否回落，meta 延到词源定稿再查
+        const metaPromise = song?.qq ? null : downloadsApi.getSongMeta(lyricId).catch(() => null)
+        let lyricsData = song?.qq
+          ? await musicApi.getQQLyric(song.qq.mid, signal).catch(() => null)
+          : await musicApi.getLyrics(lyricId, signal)
         // 切歌/取消后直接丢弃，不写回共享状态
         if (signal?.aborted || currentPlayingId !== song.id) return
-        const meta = await metaPromise
+        if (song?.qq && !lyricsData?.lyrics?.length && song.neteaseId) {
+          lyricId = song.neteaseId
+          lyricsData = await musicApi.getLyrics(lyricId, signal)
+          if (signal?.aborted || currentPlayingId !== song.id) return
+        }
+        const meta = song?.qq
+          ? await downloadsApi.getSongMeta(lyricId).catch(() => null)
+          : await metaPromise
         if (signal?.aborted || currentPlayingId !== song.id) return
 
         lyricOffsetMs.value = meta?.data?.offsetMs ?? 0
@@ -2369,12 +2480,15 @@ export default {
         && lyricOwnerKey.value === lyricId && currentPlayingId === song.id
 
       // ① 外部曲歌词归属核验（bilibili/youtube 经匹配才来的词源有风险；
-      //    纯网易云曲的词源天然属本曲，不验）
+      //    qq 曲用自家词源时不验——词曲同属一台天然正确；仅当回落到匹配的
+      //    网易云词源（lyricId==neteaseId）才是嫁接词，照样过核验）
       const ext = song?.youtube
         ? { title: song.youtube.title, author: song.youtube.author || '' }
         : song?.bilibili
           ? { title: song.bilibili.title, author: song.bilibili.author || '' }
-          : null
+          : (song?.qq && String(lyricId) === String(song.neteaseId))
+            ? { title: song.name, author: song.ar?.map(a => a.name).join(' ') || '' }
+            : null
       if (ext?.title && ownsLyric()) {
         // 含模型维度——与服务端 vkey 同口径：换模型后旧判定不应再挡路
         const vkey = JSON.stringify([lyricId, ext.title, ext.author, st.model || ''])
@@ -2948,6 +3062,16 @@ export default {
       return `?yt=${yt.trim()}`
     }
 
+    // 从URL参数获取 QQ 导入标识（?qq=<songmid> 分享链）——同 ?yt= 口径：
+    // 传 ?qq= 形态让失败还原后仍命中 isQQInput 可回车重试
+    const getQQFromUrl = () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const qq = urlParams.get('qq')
+      if (!qq || !/^[0-9A-Za-z]{10,20}$/.test(qq.trim())) return null
+      console.log('🐧 从URL获取 QQ 音乐曲目:', qq.trim())
+      return `?qq=${qq.trim()}`
+    }
+
     // ?mix=<name>~id1,id2,bv_X_pN,yt_<vid> 本地歌单内容携带链：数字 id 走网易云
     // 批量详情，bv_/yt_ 段逐个 resolve。~ 用 lastIndexOf 取——name 里本身可以含 ~
     const getMixFromUrl = () => {
@@ -2968,7 +3092,8 @@ export default {
       for (const raw of mix.slice(sep + 1).split(',')) {
         const id = raw.trim()
         if (!(/^\d+$/.test(id) || /^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id)
-          || /^yt_[A-Za-z0-9_-]{11}$/.test(id))) continue
+          || /^yt_[A-Za-z0-9_-]{11}$/.test(id)
+          || /^qq_[0-9A-Za-z]{10,20}$/.test(id))) continue
         if (seen.has(id)) continue
         seen.add(id)
         ids.push(id)
@@ -3025,6 +3150,13 @@ export default {
               // 传 ?yt= 形态而非裸 id——服务端 [?&]yt= 分支无 \D 要求，
               // 全数字 videoId（理论存在）也能解
               tracks.push(buildYouTubeSong(await musicApi.resolveYouTube(`?yt=${ym[1]}`)))
+            } catch { skipped++ }
+            continue
+          }
+          const qm = /^qq_([0-9A-Za-z]{10,20})$/.exec(id)
+          if (qm) {
+            try {
+              tracks.push(buildQQSong(await musicApi.resolveQQ(`?qq=${qm[1]}`)))
             } catch { skipped++ }
             continue
           }
@@ -3235,6 +3367,7 @@ export default {
       const songId = getSongIdFromUrl()
       const biliInput = getBiliFromUrl()
       const ytInput = getYtFromUrl()
+      const qqInput = getQQFromUrl()
       const mixInput = getMixFromUrl()
       // 所有参数读取已完毕——消费掉，避免下次刷新重新劫持恢复逻辑
       consumeUrlShareParams()
@@ -3244,6 +3377,9 @@ export default {
       } else if (ytInput) {
         // ?yt= 分享链同理
         await importYouTube(ytInput)
+      } else if (qqInput) {
+        // ?qq= 分享链同理
+        await importQQ(qqInput)
       } else if (mixInput) {
         // ?mix= 本地歌单内容链：重建 local_pl_mix_ 壳
         await importMixPlaylist(mixInput)
@@ -3432,6 +3568,8 @@ export default {
       collectSelectedPlaylist,
       importBilibili,
       importYouTube,
+      importQQ,
+      importQQPlaylist,
       importMixPlaylist,
       addPlaylistToLibrary,
       removePlaylistFromLibrary,

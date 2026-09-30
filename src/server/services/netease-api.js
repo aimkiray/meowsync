@@ -52,8 +52,10 @@ const DURATION_TOLERANCE = { ytdlp: 0.4, default: 0.2 };
 // - ytdlp：googlevideo 完整文件，但需本机 yt-dlp 且解析有秒级延迟
 // - kuwo：antiserver/trackmedia 现已退化为 ~11s 预览剪辑，只作兜底——
 //   时长校验会识别剪辑并跳过，不会把残片当完整曲下发
-const PLAYBACK_SOURCES = ['pyncmd', 'ytdlp', 'bodian', 'kuwo'];
-const DOWNLOAD_SOURCES = ['pyncmd', 'bodian', 'ytdlp', 'kuwo'];
+// qq：unm 自带的 QQ 音乐源（musicu.fcg vkey 链）——给网易云灰曲兜底，
+// 读 QQ_COOKIE 环境变量解锁 VIP 档；排末位（需要 QQ 侧不地域限制+额度健康）
+const PLAYBACK_SOURCES = ['pyncmd', 'ytdlp', 'bodian', 'kuwo', 'qq'];
+const DOWNLOAD_SOURCES = ['pyncmd', 'bodian', 'ytdlp', 'kuwo', 'qq'];
 
 // 通过 Content-Length + 码率估算音频时长（毫秒）
 function estimateDuration(contentLength, br) {

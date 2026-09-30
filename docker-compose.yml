@@ -36,6 +36,8 @@ services:
       - AI_TIMEOUT_MS=${AI_TIMEOUT_MS:-}
       # 可选：B 站登录 Cookie（杜比/Hi-Res 音轨只对登录账号下发，Hi-Res 通常需大会员）
       - BILI_COOKIE=${BILI_COOKIE:-}
+      # 可选：QQ 音乐登录 Cookie（uin+qm_keyst；VIP/无损档下发前提，务必小号）
+      - QQ_COOKIE=${QQ_COOKIE:-}
       # 数据目录（SQLite + 下载文件）；默认 /app/data，与下方挂载卷一致
       - DATA_DIR=${DATA_DIR:-}
       - DOWNLOAD_DIR=${DOWNLOAD_DIR:-}

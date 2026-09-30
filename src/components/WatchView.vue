@@ -592,12 +592,14 @@ export default {
     const shareSong = async () => {
       const song = props.currentSong
       if (!song) return
-      // B 站导入曲的分享链是 ?bili=BVxxx、YouTube 是 ?yt=<id>——?song= 只认网易云数值 id；分P带 p 参数
+      // B 站导入曲的分享链是 ?bili=BVxxx、YouTube 是 ?yt=<id>、QQ 是 ?qq=<mid>——?song= 只认网易云数值 id；分P带 p 参数
       const shareUrl = song.bilibili?.bvid
         ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
         : song.youtube?.videoId
           ? `${window.location.origin}/?yt=${song.youtube.videoId}&view=watch`
-          : `${window.location.origin}/?song=${song.id}&view=watch`
+          : song.qq?.mid
+            ? `${window.location.origin}/?qq=${song.qq.mid}&view=watch`
+            : `${window.location.origin}/?song=${song.id}&view=watch`
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistText.value}`,
         text: `来听听这首歌：${song.name} - ${artistText.value}`,
