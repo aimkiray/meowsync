@@ -426,7 +426,7 @@ export default {
   color: var(--paper);
   border: 1.2px solid transparent;
   cursor: pointer;
-  transition: color .2s, border-color .2s, opacity .15s;
+  transition: color .2s, opacity .15s;
 }
 /* hover 统一语言：仅品红字色，不出框——墨条自身即铬，框是多余装饰 */
 .transport:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
@@ -465,6 +465,8 @@ export default {
   top: 50%;
   transform: translateY(-50%);
   margin-left: 8px;
+  pointer-events: none; /* 压在 player-right 空置区上，勿吞点击 */
+  user-select: none;
   font-family: var(--font-mono);
   font-weight: 400; /* 数值档——标签才是 300 */
   font-size: 12px;
@@ -495,17 +497,26 @@ export default {
   color: var(--accent-magenta-on-ink);
 }
 
-@media (max-width: 640px) {
-  .player-inner { gap: 10px; padding: 8px 10px; }
+/* ≤735px 收掉音量组：右簇 min-content 240px 在 641–735 触底会顶推
+   控件簇左移（播放键偏中心最多 ~48px）——提前隐藏保住居中承诺 */
+@media (max-width: 735px) {
   .vol-wrap { display: none; }
 }
 
-/* ≤420px：YTM miniplayer 稀疏化——shuffle/repeat 藏入，
-   留 prev/play/next 三键；词/沉浸键收进 watch 页路径可达，保队列入口 */
-@media (max-width: 420px) {
-  .player-controls .transport:first-child,
-  .player-controls .transport:nth-child(5) { display: none; }
+@media (max-width: 640px) {
+  .player-inner { gap: 10px; padding: 8px 10px; }
+}
+
+/* ≤455px：词/沉浸键收进 watch 页路径可达——421–455 档三键簇 112px
+   同样触底推偏播放键（~18px），与 ≤420 的 YTM 稀疏化合并收口 */
+@media (max-width: 455px) {
   .bp-xtra { display: none; }
+}
+
+@media (max-width: 420px) {
+  /* nth-of-type 按 button 计位——免疫 .player-time span 在簇内的位置漂移 */
+  .player-controls .transport:nth-of-type(1),
+  .player-controls .transport:nth-of-type(5) { display: none; }
   .transport { width: 30px; height: 30px; }
   .transport--play { width: 36px; height: 36px; }
   .pg-icobtn--on-ink { width: 30px; height: 30px; } /* 与 transport 同收——否则 30<32 倒挂 */

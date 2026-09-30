@@ -349,8 +349,8 @@ export default {
   -webkit-appearance: none;
 }
 /* 厂商伪元素不可混写进同一选择器列表——浏览器遇到不认识的伪元素
-   会让整条规则作废（Chrome 不认 -moz，Firefox 不认 -webkit），
-   且伪类必须写在伪元素前（:hover::thumb 而非 ::thumb:hover） */
+   会让整条规则作废（Chrome 不认 -moz，Firefox 不认 -webkit）；
+   伪类写宿主上也最稳（:hover::thumb 对 input 任意处 hover 生效） */
 .fullscreen-player__volume :deep(.jirai-slider::-webkit-slider-thumb),
 .fullscreen-player__volume :deep(.jirai-slider:hover::-webkit-slider-thumb),
 .fullscreen-player__volume :deep(.jirai-slider:active::-webkit-slider-thumb) {
@@ -369,6 +369,13 @@ export default {
   filter: none !important;
   transform: none !important;
   appearance: none;
+}
+/* Firefox 专有：track/progress 伪元素盖在 input 半透明底之上——
+   必须透明化，否则露出基类的像素黑条旧皮肤 */
+.fullscreen-player__volume :deep(.jirai-slider::-moz-range-track),
+.fullscreen-player__volume :deep(.jirai-slider::-moz-range-progress) {
+  background: transparent !important;
+  border: none !important;
 }
 
 /* 进度填充不在上面的 transform 重置里——scaleX 就是它的进度值 */
