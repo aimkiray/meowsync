@@ -104,6 +104,41 @@
       </div>
     </section>
 
+    <!-- 最近播放的专辑货架（从最近播放歌曲的 al 派生，按专辑去重） -->
+    <section v-if="recentAlbums.length" class="home-section">
+      <div class="home-section-head">
+        <p class="pg-label">albums</p>
+        <span class="home-section-sub">最近播放的专辑</span>
+      </div>
+      <div class="home-shelf">
+        <div
+          v-for="al in recentAlbums"
+          :key="al.key"
+          class="grid-card"
+          @click="$emit('play-song', al.song, recents)"
+          @keydown.enter="$emit('play-song', al.song, recents)"
+          @keydown.space.prevent="$emit('play-song', al.song, recents)"
+          tabindex="0"
+          role="button"
+          :title="`播放《${al.name}》来源曲 ${al.song.name}`"
+        >
+          <div class="grid-card-cover">
+            <img
+              v-if="al.picUrl"
+              :src="httpsCover(al.picUrl)"
+              :alt="al.name"
+              loading="lazy"
+            />
+            <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
+          </div>
+          <div class="grid-card-body">
+            <h3 class="grid-card-name">{{ al.name }}</h3>
+            <p class="grid-card-meta">{{ al.artist }}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- 页脚收版：版本戳 -->
     <footer class="home-foot">
       <PrintMarks variant="stamp" />
@@ -142,7 +177,20 @@ export default {
   emits: ['open', 'play-song'],
   computed: {
     hasShelves() {
-      return this.toplists.length > 0 || this.recentPlaylists.length > 0
+      return this.toplists.length > 0 || this.recentPlaylists.length > 0 || this.recentAlbums.length > 0
+    },
+    /* 最近播放的专辑：按专辑去重（无 id 退 name），保留最近次序，截 12 上货架 */
+    recentAlbums() {
+      const seen = new Set()
+      const list = []
+      for (const song of this.recents) {
+        const al = song?.al || song?.album
+        const key = al?.id ?? al?.name
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        list.push({ key, name: al.name, picUrl: al.picUrl || '', artist: songArtists(song), song })
+      }
+      return list.slice(0, 12)
     }
   },
   setup() {
