@@ -427,16 +427,14 @@ export default {
   cursor: pointer;
   transition: color .2s, border-color .2s, opacity .15s;
 }
-/* hover 统一语言：墨色底上纸色发丝框 + 品红字（play 键常驻框只是强调主键） */
-.transport:hover:not(:disabled) { color: var(--accent-magenta-on-ink); border-color: var(--paper); }
+/* hover 统一语言：仅品红字色，不出框——墨条自身即铬，框是多余装饰 */
+.transport:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
 .transport:disabled { opacity: .45; cursor: default; }
 .transport--active { color: var(--accent-magenta-on-ink); }
 .transport--play {
-  border-color: var(--paper);
   width: 40px;
   height: 40px;
 }
-.transport--play:hover:not(:disabled) { border-color: var(--accent-magenta); }
 
 /* 切换中：不换字形，整键灰化。busy≠disabled——仍可按（togglePlay 内有
    howl 守卫），用 progress 光标区分于死键；opacity .15s 柔化瞬闪 */
