@@ -13,7 +13,7 @@
         <div v-else class="playlist-hero-cover playlist-hero-fallback"><PixelIcon name="note" :size="34" /></div>
       </div>
       <div class="playlist-hero-meta">
-        <h2 class="playlist-hero-name" data-nosnippet>{{ selectedPlaylist.name }}</h2>
+        <h2 class="playlist-hero-name" data-nosnippet><GlitchText :text="selectedPlaylist.name || ''" /></h2>
         <p class="playlist-hero-sub">
           {{ selectedPlaylist.creator?.nickname || '神秘创建者' }} · {{ selectedPlaylist.trackCount || songs.length }} 首
         </p>
@@ -564,6 +564,7 @@ import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
+import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
 import { isVipSong, isLocalPlaylistId } from '../lib/song'
 import { shareOrCopy } from '../lib/share'
@@ -572,7 +573,8 @@ import { toast, pixelConfirm } from '../lib/feedback'
 export default {
   name: 'SongList',
   components: {
-    PixelIcon
+    PixelIcon,
+    GlitchText
   },
   props: {
     songs: {

@@ -14,7 +14,7 @@
         class="corruptible"
         :class="{ 'char-glitch': corrupt.has(keyOf(wi, ci)) }"
         :data-glitch="corrupt.get(keyOf(wi, ci))"
-      >{{ ch }}</span></span>{{ ' ' }}</template></span>
+      >{{ ch }}</span></span>{{ word.gap ? ' ' : '' }}</template></span>
   </span>
 </template>
 
@@ -32,8 +32,28 @@ export default {
   name: 'GlitchText',
   props: { text: { type: String, required: true } },
   setup(props) {
-    // 按词分组包 .glitch-word（nowrap 保证词组不断行拆散）——规范 recipe 形态
-    const words = computed(() => props.text.split(' ').map(w => ({ chars: [...w] })))
+    // 按「断行单元」分词：空格分段的 Latin 词成组（nowrap 保词形不断拆），
+    // CJK 逐字独立成 token——中文可如常字间断行，长中文标题不再被
+    // 整句 nowrap 顶住溢出；gap 标记 token 后是否渲染空格
+    const words = computed(() => {
+      const CJK = /[　-〿㐀-䶿一-鿿豈-﫿！-･￠-￦]/
+      const out = []
+      let buf = ''
+      const flush = () => { if (buf) { out.push({ chars: [...buf], gap: false }); buf = '' } }
+      for (const ch of props.text) {
+        if (ch === ' ') {
+          flush()
+          if (out.length) out[out.length - 1].gap = true
+        } else if (CJK.test(ch)) {
+          flush()
+          out.push({ chars: [ch], gap: false })
+        } else {
+          buf += ch
+        }
+      }
+      flush()
+      return out
+    })
     const keyOf = (wi, ci) => `${wi}:${ci}` // 字符串 key——杜绝长词串位碰撞
     const corrupt = ref(new Map()) // keyOf(wi,ci) → 替身字形
     const reduced = ref(false)

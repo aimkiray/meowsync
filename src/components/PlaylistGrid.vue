@@ -5,7 +5,7 @@
     <header class="grid-head">
       <div class="grid-head-text">
         <p class="pg-label">search results</p>
-        <h2 class="grid-title" data-nosnippet>搜索结果</h2>
+        <h2 class="grid-title" data-nosnippet><GlitchText text="搜索结果" /></h2>
       </div>
       <button class="pg-icobtn" @click="$emit('close')" title="返回首页" aria-label="返回首页"><PixelIcon name="close" :size="16" /></button>
     </header>
@@ -129,10 +129,11 @@ import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
 import { formatTime } from '../lib/format'
 import PixelIcon from './PixelIcon.vue'
+import GlitchText from './GlitchText.vue'
 
 export default {
   name: 'PlaylistGrid',
-  components: { PixelIcon },
+  components: { PixelIcon, GlitchText },
   props: {
     results: {
       type: Array,
