@@ -658,7 +658,7 @@ export default {
     // 优先吃网易云匹配（封面与双语歌词的正主），标题/UP主兜底；
     // bilibili 字段挂播放所需的源信息（bvid/cid/hasVideo），neteaseId 仅作歌词源
     const buildBilibiliSong = (data) => ({
-      id: `bv_${data.bvid}`,
+      id: `bv_${data.bvid}${(data.page || 1) > 1 ? `_p${data.page}` : ''}`,
       name: data.matched?.name || data.songName || data.title,
       ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.owner || 'Bilibili' }],
       al: {
@@ -667,7 +667,10 @@ export default {
         picUrl: data.matched?.al?.picUrl || httpsCover(data.cover || '')
       },
       dt: (data.duration || 0) * 1000,
-      bilibili: { bvid: data.bvid, cid: data.cid, hasVideo: !!data.hasVideo, title: data.title },
+      bilibili: {
+        bvid: data.bvid, cid: data.cid, page: data.page || 1,
+        hasVideo: !!data.hasVideo, title: data.title, matchedBy: data.matchedBy || null
+      },
       neteaseId: data.matched?.id || null
     })
 
@@ -679,10 +682,11 @@ export default {
       // 占住 selectReqId：resolve 慢（远端多跳），期间在途的 selectPlaylist
       // 回包不得在落壳之后盖掉 selectedPlaylist/songs
       selectReqId++
+      loadingSongs.value = false // 被顶的 selectPlaylist 不会再复位 loading——收掉
       searchQuery.value = '' // 提前清框——防用户重复回车并发多个 resolve
       try {
         console.log('📺 解析 B 站视频:', input)
-        toast('正在解析 B 站视频…', 'info', 15000)
+        toast('正在解析 B 站视频…', 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
         const data = await musicApi.resolveBilibili(input)
         // 解析期间用户点了别的歌/再导入——过期意图不得抢播放+强跳视图
         if (myReq !== biliImportSeq) return
@@ -690,19 +694,20 @@ export default {
         console.log('📺 解析完成:', song.name, '网易云匹配:', data.matched?.id ?? '无', '提取歌名:', data.songName)
 
         // 与 ?song= 分享壳同款的幂等壳：同 BV 重复导入直接复用，不重复入库
-        const shellId = `single_song_bv_${data.bvid}`
+        const shellId = `single_song_bv_${data.bvid}${(data.page || 1) > 1 ? `_p${data.page}` : ''}`
         let shell = userPlaylists.value.find(p => String(p.id) === shellId)
         if (shell) {
-          // 壳在但曲目空/陈旧：原地刷新曲目与元信息（不 unshift——同 id 双壳会渲染冲突）
-          shell.tracks = [song]
-          shell.name = `B站导入 - ${song.name}`
+          // 壳在但曲目空/陈旧：原地刷新曲目与元信息（不 unshift——同 id 双壳会渲染冲突）。
+          // 锚曲放回头位，用户后来追加进壳的曲保留不丢
+          shell.tracks = [song, ...(shell.tracks || []).filter(t => String(t.id) !== String(song.id))]
+          shell.trackCount = shell.tracks.length
+          shell.name = `B站导入 - ${song.name}${(data.page || 1) > 1 ? ` (P${data.page})` : ''}`
           shell.coverImgUrl = song.al?.picUrl || ''
-          shell.trackCount = 1
           savePlaylistsToStorage()
         } else {
           shell = {
             id: shellId,
-            name: `B站导入 - ${song.name}`,
+            name: `B站导入 - ${song.name}${(data.page || 1) > 1 ? ` (P${data.page})` : ''}`,
             coverImgUrl: song.al?.picUrl || '',
             creator: { nickname: 'B 站导入' },
             trackCount: 1,
@@ -726,7 +731,9 @@ export default {
         await playSong(song)
         enterWatch()
       } catch (error) {
+        if (myReq !== biliImportSeq) return // 过期请求的失败不打扰用户
         console.error('❌ B 站导入失败:', error)
+        searchQuery.value = input // 失败还原输入——用户可直接回车重试
         toast(`B 站导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
       }
     }
@@ -970,6 +977,7 @@ export default {
       if (!playlist || playlist.id == null) return false
       if (!force && String(selectedPlaylist.value?.id) === String(playlist.id)) return true
 
+      biliImportSeq++ // 用户选了别的歌单——在途 B 站解析回包不得抢播放/强跳视图
       const myReq = ++selectReqId
       try {
         // silent（手动同步复跑）：不闪 loading，行表直接热替换
@@ -1622,6 +1630,7 @@ export default {
 
     const playSong = async (song, options = {}) => {
       if (!song || song.id == null) return
+      biliImportSeq++ // 用户点了别的歌——同上，作废在途 B 站解析
       const { autoplay = true, seekTime = 0, preserveContext = false } = options
 
       console.log('🎵 播放歌曲:', song.name)
@@ -1691,7 +1700,7 @@ export default {
         // 获取歌曲播放URL：B 站导入曲走 /bilibili/stream 端点——服务端每次
         // 重解 playurl（CDN 签名会过期）再 302 进 audio-proxy，URL 不落库
         const songUrlData = song.bilibili
-          ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid) }
+          ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
           : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
@@ -2373,8 +2382,11 @@ export default {
       const urlParams = new URLSearchParams(window.location.search)
       const bili = urlParams.get('bili')
       if (!bili || !/^(BV[0-9A-Za-z]{10}|av\d+)$/i.test(bili.trim())) return null
-      console.log('📺 从URL获取 B 站视频:', bili.trim())
-      return bili.trim()
+      // 分P分享链 ?bili=BV&p=N——拼回 input 串让服务端 pickPageParam 接住
+      const p = /^\d+$/.test(urlParams.get('p') || '') ? Number(urlParams.get('p')) : 0
+      const input = p > 1 ? `${bili.trim()}?p=${p}` : bili.trim()
+      console.log('📺 从URL获取 B 站视频:', input)
+      return input
     }
 
 
@@ -2383,7 +2395,7 @@ export default {
     const consumeUrlShareParams = () => {
       const url = new URL(window.location.href)
       let changed = false
-      for (const key of ['song', 'playlist', 'playlists', 'bili']) {
+      for (const key of ['song', 'playlist', 'playlists', 'bili', 'p']) {
         if (url.searchParams.has(key)) {
           url.searchParams.delete(key)
           changed = true
@@ -2541,6 +2553,13 @@ export default {
           // 检查是否已经存在相同的临时歌单
           const tempPlaylistId = `single_song_${songId}`
           let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
+          // 壳在但曲目空（脏数据/旧版本剥离壳）：原地补曲目——不 unshift 同 id 双壳
+          if (existingPlaylist && !existingPlaylist.tracks?.length) {
+            const songDetail = await musicApi.getSongDetail(songId)
+            existingPlaylist.tracks = [songDetail]
+            existingPlaylist.trackCount = 1
+            savePlaylistsToStorage()
+          }
 
           if (existingPlaylist && existingPlaylist.tracks?.length) {
             console.log('🎵 找到已存在的单曲分享歌单，直接使用')

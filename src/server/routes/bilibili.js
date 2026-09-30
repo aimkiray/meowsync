@@ -20,7 +20,9 @@ const BILI_LINK_HOSTS = ['b23.tv', 'bilibili.com'];
 const isBiliLinkHost = (h) => BILI_LINK_HOSTS.some(x => h === x || h.endsWith('.' + x));
 
 function pickBvidFromUrl(href) {
-  const m = href.match(/BV[0-9A-Za-z]{10}/);
+  // 大小写宽容：三层口径统一（前端 isBilibiliInput/?bili= 都收小写）——
+  // bvid 本身大小写敏感，错大小写交给上游 view API 判（-404 照常报错）
+  const m = href.match(/BV[0-9A-Za-z]{10}/i);
   if (m) return m[0];
   const av = href.match(/(?:^|[/?&=])av(\d+)/i);
   if (av) return { aid: Number(av[1]) };
@@ -31,7 +33,7 @@ function pickBvidFromUrl(href) {
 // 手动逐跳跟随（redirect:manual），每一跳都重新过 normalizeOutboundUrl
 // （限 80/443/剥 credentials）+ B 站域白名单 + 公网 IP 校验 + 钉扎建连
 // （audio-proxy 同款防线），重定向到任何非 B 站域即拒绝——防 SSRF 绕道
-async function parseBvid(input) {
+async function parseBvid(input, extraSignal) {
   const s = String(input || '').trim();
   if (!s) return null;
   const direct = pickBvidFromUrl(s);
@@ -40,6 +42,7 @@ async function parseBvid(input) {
   let href = /^https?:\/\//i.test(s) ? s : (/^b23\.tv\//i.test(s) ? `https://${s}` : null);
   if (!href) return null;
   for (let hop = 0; hop <= 3; hop++) {
+    if (extraSignal?.aborted) return null;
     const checked = normalizeOutboundUrl(href);
     if (!checked.ok) return null;
     const u = checked.url;
@@ -55,7 +58,9 @@ async function parseBvid(input) {
       const res = await fetch(u.href, {
         headers: BILI_HEADERS,
         redirect: 'manual',
-        signal: AbortSignal.timeout(10000),
+        signal: extraSignal
+          ? AbortSignal.any([AbortSignal.timeout(10000), extraSignal])
+          : AbortSignal.timeout(10000),
         dispatcher,
       });
       await res.body?.cancel().catch(() => {});
@@ -127,15 +132,22 @@ async function matchNeteaseSong(candidates, durationSec) {
       const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '5' });
       const songs = res.body?.result?.songs;
       if (!Array.isArray(songs) || !songs.length) continue;
-      const hit = songs.find(s => {
-        const durOk = Number.isFinite(durationSec)
-          && Math.abs((s.dt || s.duration || 0) / 1000 - durationSec) <= MATCH_DUR_TOLERANCE_SEC;
-        return durOk || shareName(s.name, q);
-      });
-      if (hit) return { song: hit, query: q };
+      // 两遍优选：歌名包含是最强信号（跨语翻唱同名必中）；时长命中取差最小者——
+      // 顺序「首个过线」会让时长恰好在窗内的噪声压过排后的名字包含正主
+      const byName = songs.find(s => shareName(s.name, q));
+      if (byName) return { song: byName, query: q };
+      if (Number.isFinite(durationSec)) {
+        const byDur = songs
+          .map(s => ({ s, diff: Math.abs((s.dt || s.duration || 0) / 1000 - durationSec) }))
+          .filter(x => x.diff <= MATCH_DUR_TOLERANCE_SEC)
+          .sort((a, b) => a.diff - b.diff)[0];
+        if (byDur) return { song: byDur.s, query: q };
+      }
       // 有结果但全不过 sanity：继续试下一个候选，整条候选链不过才算无匹配
     } catch (e) {
-      console.warn(`[bilibili] 网易云搜索「${q}」失败:`, e.message);
+      // 上游 reject(answer) 形态无 .message——归一化再记
+      const why = e?.message || (e?.body ? `code=${e.body.code ?? '?'}` : String(e));
+      console.warn(`[bilibili] 网易云搜索「${q}」失败:`, why);
     }
   }
   return { song: null, query: null };
@@ -164,27 +176,31 @@ function pickPageParam(input) {
   return m ? Math.max(1, parseInt(m[1], 10)) : 1;
 }
 
-// resolve 是未鉴权扇出端点（每次最多 4 次 B 站 API + 2 次云搜）——
-// 简单滑动窗限流防循环刷量把服务端 IP 送进 B 站风控
-const resolveHits = new Map();
-const RESOLVE_LIMIT = 12; // 每 IP 每分钟
-function rateLimitResolve(ip) {
+// resolve/stream 是未鉴权扇出端点——滑动窗限流防循环刷量把服务端 IP 送进 B 站风控。
+// 桶 key：TRUST_PROXY 下采信 XFF 首跳（与 requestOrigin 同语义）；否则用 socket
+// 真实地址——不信客户端自带 XFF（可伪造轮换绕过），也不让 LAN 全员挤 'local' 桶
+const rateBuckets = new Map();
+function rateLimit(c, key, limit) {
+  const trustProxy = ['1', 'true'].includes((process.env.TRUST_PROXY || '').toLowerCase());
+  const ip = (trustProxy && c.req.header('x-forwarded-for')?.split(',')[0]?.trim())
+    || c.env?.incoming?.socket?.remoteAddress
+    || 'local';
+  const bucketKey = `${key}:${ip}`;
   const now = Date.now();
-  const hits = (resolveHits.get(ip) || []).filter(t => now - t < 60000);
-  if (hits.length >= RESOLVE_LIMIT) return false;
+  const hits = (rateBuckets.get(bucketKey) || []).filter(t => now - t < 60000);
+  if (hits.length >= limit) return false;
   hits.push(now);
-  resolveHits.set(ip, hits);
-  if (resolveHits.size > 5000) resolveHits.clear(); // 防内存膨胀
+  rateBuckets.set(bucketKey, hits);
+  if (rateBuckets.size > 5000) rateBuckets.clear(); // 防内存膨胀
   return true;
 }
 
 app.get('/bilibili/resolve', async (c) => {
-  const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
-  if (!rateLimitResolve(ip)) {
+  if (!rateLimit(c, 'resolve', 12)) {
     return c.json({ code: 429, message: '解析太频繁，稍后再试' }, 429);
   }
   const input = c.req.query('input') || c.req.query('bvid');
-  const id = await parseBvid(input);
+  const id = await parseBvid(input, c.req.raw.signal);
   if (!id) return c.json({ code: 400, message: '无法从输入解析 BV/av 号' }, 400);
   try {
     const view = await biliFetch(`/x/web-interface/view?${viewQuery(id)}`, c.req.raw.signal);
@@ -200,14 +216,19 @@ app.get('/bilibili/resolve', async (c) => {
     ]);
     const tagNames = Array.isArray(tagRes) ? tagRes.map(t => t.tag_name).filter(Boolean) : [];
     const songName = extractSongName(tagNames, view.title);
-    // 候选搜索串：提取名、清洗后的标题——去重后最多两条（原标题纯噪声、
-    // 只拉长最坏耗时）；整条匹配链设预算，超了就当无匹配不阻塞解析
+    // 候选搜索串：提取名 → 分P名（多分P合集里 page.part 常是精准歌名，主标题反是噪声）
+    // → 清洗标题。原标题纯噪声不入列；整条匹配链设预算，超了当无匹配不阻塞解析
     const cleanTitle = extractSongName([], view.title);
-    const candidates = [...new Set([songName, cleanTitle])].slice(0, 2);
-    const matchBudget = new Promise(resolve => setTimeout(() => resolve({ song: null, query: null }), 25000));
+    const candidates = [...new Set([songName, page?.part, cleanTitle].filter(Boolean))].slice(0, 3);
+    let budgetTimer;
+    const matchBudget = new Promise(resolve => {
+      budgetTimer = setTimeout(() => resolve({ song: null, query: null }), 25000);
+      budgetTimer.unref?.();
+    });
     const { song: matched, query: matchedBy } = await Promise.race([
       matchNeteaseSong(candidates, duration), matchBudget,
     ]);
+    clearTimeout(budgetTimer);
     const { audio, video } = pickStreams(playurl);
     // hasVideo 只给「浏览器解得动的 avc1」——hevc/av01 流存在也不能宣称可视频
     const avcStreams = (playurl?.dash?.video || []).filter(v => (v.codecs || '').startsWith('avc1'));
@@ -236,6 +257,8 @@ app.get('/bilibili/resolve', async (c) => {
       videoQuality: video ? { id: video.id, width: video.width, height: video.height } : null,
     });
   } catch (e) {
+    // 客户端已断连：静默 499，不写错误日志（正常断连不算服务端错误）
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[bilibili] resolve 失败:', e.message);
     return c.json({ code: 502, message: `B 站解析失败: ${e.message}` }, 502);
   }
@@ -244,29 +267,48 @@ app.get('/bilibili/resolve', async (c) => {
 // 播放流地址：每次重解 playurl（CDN 签名 ~2h 过期），302 到 audio-proxy
 // 走统一代理（Referer 注入 + Range 透传 + SSRF 校验），不在此直接透流
 app.get('/bilibili/stream', async (c) => {
+  // 同样未鉴权且每次最多 3 次 B 站扇出——限流放宽些（每次播放触发一次，
+  // 音频+视频分开计），只挡异常刷量
+  if (!rateLimit(c, 'stream', 60)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
   const bvid = c.req.query('bvid');
   const kind = c.req.query('kind') === 'video' ? 'video' : 'audio';
   if (!/^BV[0-9A-Za-z]{10}$/.test(String(bvid || ''))) {
     return c.json({ code: 400, message: 'invalid bvid' }, 400);
   }
   try {
+    const pageWanted = pickPageParam(`?p=${c.req.query('p') || 1}`);
+    // 分P cid 定位器：pages[p-1].cid ?? view.cid——无 cid 与 cid 自愈两处共用
+    const pickCidFromView = (view) => {
+      const pages = Array.isArray(view?.pages) ? view.pages : [];
+      const idx = Math.min(pageWanted, Math.max(pages.length, 1)) - 1;
+      return pages[idx]?.cid ?? view.cid;
+    };
     let cid = c.req.query('cid');
     if (!cid || !/^\d+$/.test(cid)) {
       const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
-      cid = view.cid;
+      cid = pickCidFromView(view);
     }
     let playurl;
     try {
       playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=16`, c.req.raw.signal);
     } catch (e) {
-      // cid 过期自愈：稿件被 UP 主换源/调 P 后库存 cid 失效——重查 view 拿新 cid 再试
-      if (!c.req.query('cid')) throw e;
+      // cid 过期自愈：稿件被 UP 主换源/调 P 后库存 cid 失效——按 p 重查对应分P
+      // 的 cid（不能回落 view.cid——那是 P1，会把分P导入的曲静默拉回第一P）。
+      // 仅对「调用方传了合法数字 cid」自愈——刚查来的 cid 失败重试无意义
+      if (!/^\d+$/.test(c.req.query('cid') || '')) throw e;
       const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${view.cid}&fnval=16`, c.req.raw.signal);
+      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${pickCidFromView(view)}&fnval=16`, c.req.raw.signal);
     }
     // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
     // audio-proxy 端口策略会拒——用同一校验器预筛，拿第一个能过代理的地址
     const streams = pickStreamList(playurl, kind);
+    // hasVideo 语义 = 「存在浏览器解得动的 avc1」——kind=video 下若整档只有
+    // hevc/av01，302 过去也是黑屏，按无流 404（与 resolve 的 hasVideo 口径一致）
+    if (kind === 'video' && !streams.some(s => (s.codecs || '').startsWith('avc1'))) {
+      return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
+    }
     const candidates = streams.flatMap(s => {
       const backups = Array.isArray(s?.backupUrl) ? s.backupUrl
         : (Array.isArray(s?.backup_url) ? s.backup_url : []);

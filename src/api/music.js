@@ -299,9 +299,10 @@ export const musicApi = {
 
   // 流地址：服务端每次重解 playurl（CDN 签名会过期）再 302 进 /audio-proxy，
   // 前端拿到的总是新鲜地址——直接塞给 <audio>/<video>/Howler 即可
-  bilibiliStreamUrl: (bvid, kind = 'audio', cid = null) => {
+  bilibiliStreamUrl: (bvid, kind = 'audio', cid = null, page = 1) => {
     const params = new URLSearchParams({ bvid, kind })
     if (cid) params.set('cid', cid)
+    if (page > 1) params.set('p', page)
     return `${API_BASE_URL}/bilibili/stream?${params}`
   },
 
@@ -311,7 +312,7 @@ export const musicApi = {
     if (!b?.bvid) throw new Error('不是 B 站导入曲')
     const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
     const fileName = `${artists} - ${song.name}.m4a`.replace(/[\\/:*?"<>|]/g, '_')
-    const resp = await fetch(musicApi.bilibiliStreamUrl(b.bvid, 'audio', b.cid))
+    const resp = await fetch(musicApi.bilibiliStreamUrl(b.bvid, 'audio', b.cid, b.page))
     if (!resp.ok) throw new Error(`下载失败: HTTP ${resp.status}`)
     const blob = await resp.blob()
     const objectUrl = URL.createObjectURL(blob)
