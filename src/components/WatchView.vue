@@ -5,9 +5,6 @@
     <!-- 浮层顶行：不占流——右栏待播区的顶部空间随之释放 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="13" />返回</button>
-      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('open-fullscreen')" title="全屏歌词模式">
-        <PixelIcon name="expand" :size="13" /> 沉浸
-      </button>
     </div>
 
     <div class="watch-layout">
@@ -31,6 +28,9 @@
         </p>
 
         <div class="watch-actions">
+          <button class="ink-btn ink-btn--ghost watch-action" @click="$emit('open-fullscreen')" title="全屏歌词模式">
+            <PixelIcon name="expand" :size="14" /> 沉浸
+          </button>
           <button class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
             <PixelIcon name="share" :size="14" /> 分享歌曲
           </button>
