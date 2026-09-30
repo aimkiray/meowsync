@@ -116,15 +116,21 @@ function extractYtSong(title, author) {
   return { songName, candidates, artistFromAuthor };
 }
 
-// 选流：音频优先 mp4a/m4a 容器（audio/mp4——webm opus 在 Safari 的 <audio>
-// 不通）；video 取 adaptive avc1（H.264 全浏览器可放），按分辨率/bitrate 降序。
+// 选流：音频默认优先 mp4a/m4a 容器（audio/mp4——webm opus 在 Safari 的
+// <audio> 不通）；prefer='best'（下载档）直接按 bitrate 排全部音频——
+// opus itag251（~136k 全频带到 20kHz）优于 aac itag140（~130k 且 16kHz
+// 低通截断），播放器兼容性由用户本地承担，归档就该拿第一代完整频带。
+// video 取 adaptive avc1（H.264 全浏览器可放），按分辨率/bitrate 降序。
 // signatureCipher 混淆流（无 url 只有签名参数）跳过——本服务不做签名反解
-function pickStreamList(data, kind) {
+function pickStreamList(data, kind, prefer = '') {
   const adaptive = Array.isArray(data?.adaptiveFormats) ? data.adaptiveFormats : [];
   const progressive = Array.isArray(data?.formats) ? data.formats : [];
   const usable = (f) => typeof f?.url === 'string' && f.url;
   if (kind === 'audio') {
     const audios = adaptive.filter(f => usable(f) && (f.mimeType || '').startsWith('audio/'));
+    if (prefer === 'best') {
+      return audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+    }
     const mp4 = audios.filter(f => (f.mimeType || '').startsWith('audio/mp4'));
     return (mp4.length ? mp4 : audios).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
   }
@@ -224,7 +230,7 @@ app.get('/youtube/stream', async (c) => {
   }
   try {
     const player = await fetchPlayer(videoId, c.req.raw.signal);
-    const streams = pickStreamList(player.streamingData, kind);
+    const streams = pickStreamList(player.streamingData, kind, c.req.query('prefer'));
     // 候选回链逐个过代理白名单——signatureCipher 跳过、非 googlevideo
     // 域拒；第一个能过代理的地址即 302 目标
     const usable = streams

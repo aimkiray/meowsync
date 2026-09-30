@@ -348,25 +348,37 @@ export const musicApi = {
   },
 
   // 流地址：服务端每次重解 Innertube（googlevideo 签名 ~6h 过期）再 302 进
-  // /audio-proxy——kind=video 拿 avc1 adaptive（静音补画面），audio 优先 mp4a
-  youtubeStreamUrl: (videoId, kind = 'audio') =>
-    `${API_BASE_URL}/youtube/stream?v=${encodeURIComponent(videoId)}&kind=${kind}`,
+  // /audio-proxy——kind=video 拿 avc1 adaptive（静音补画面），audio 默认优先
+  // mp4a（Safari 兼容）；prefer=best 给下载归档用——按码率取最优（Opus 251
+  // 全频带，AAC 140 在 16kHz 被低通截断）
+  youtubeStreamUrl: (videoId, kind = 'audio', prefer = '') =>
+    `${API_BASE_URL}/youtube/stream?v=${encodeURIComponent(videoId)}&kind=${kind}${prefer ? `&prefer=${prefer}` : ''}`,
 
-  // YouTube 曲的"获取源文件"：音频流是 mp4a → m4a 容器
+  // YouTube 曲的"获取源文件"：prefer=best 抓 Opus 251（扩展名按实际
+  // Content-Type 落地——webm，不是强行塞 m4a）
   downloadYouTubeSong: async (song) => {
     const y = song?.youtube
     if (!y?.videoId) throw new Error('不是 YouTube 导入曲')
     const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
     return saveStreamAsFile(
-      musicApi.youtubeStreamUrl(y.videoId, 'audio'),
+      musicApi.youtubeStreamUrl(y.videoId, 'audio', 'best'),
       `${artists} - ${song.name}.m4a`)
   }
 }
 
-// 流式落盘共用：同源 fetch（已含代理链）→ blob → a[download] 触发保存
+// 流式落盘共用：同源 fetch（已含代理链）→ blob → a[download] 触发保存。
+// 扩展名以实际 Content-Type 为准——prefer=best 时 YouTube 音频可能是
+// webm/opus 而非调用方猜的 m4a，容器名对不上播不了的播放器会懵
+const STREAM_EXT = {
+  'audio/mp4': '.m4a', 'audio/webm': '.webm', 'audio/ogg': '.ogg',
+  'audio/mpeg': '.mp3', 'video/mp4': '.mp4', 'video/webm': '.webm'
+}
 async function saveStreamAsFile(url, fileName) {
   const resp = await fetch(url)
   if (!resp.ok) throw new Error(`下载失败: HTTP ${resp.status}`)
+  const ct = (resp.headers.get('content-type') || '').split(';')[0].trim()
+  const ext = STREAM_EXT[ct]
+  if (ext) fileName = fileName.replace(/\.[a-z0-9]+$/i, ext)
   const blob = await resp.blob()
   const objectUrl = URL.createObjectURL(blob)
   const safeName = fileName.replace(/[\\/:*?"<>|]/g, '_')
