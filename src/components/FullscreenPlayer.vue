@@ -340,17 +340,35 @@ export default {
 .fullscreen-player__progress,
 .fullscreen-player__volume :deep(.jirai-slider),
 .fullscreen-player__volume :deep(.jirai-slider:hover),
-.fullscreen-player__volume :deep(.jirai-slider:active),
-.fullscreen-player__volume :deep(.jirai-slider::-webkit-slider-thumb),
-.fullscreen-player__volume :deep(.jirai-slider::-webkit-slider-thumb:hover),
-.fullscreen-player__volume :deep(.jirai-slider::-webkit-slider-thumb:active),
-.fullscreen-player__volume :deep(.jirai-slider::-moz-range-thumb) {
+.fullscreen-player__volume :deep(.jirai-slider:active) {
   box-shadow: none !important;
   text-shadow: none !important;
   filter: none !important;
   transform: none !important;
   appearance: none;
   -webkit-appearance: none;
+}
+/* 厂商伪元素不可混写进同一选择器列表——浏览器遇到不认识的伪元素
+   会让整条规则作废（Chrome 不认 -moz，Firefox 不认 -webkit），
+   且伪类必须写在伪元素前（:hover::thumb 而非 ::thumb:hover） */
+.fullscreen-player__volume :deep(.jirai-slider::-webkit-slider-thumb),
+.fullscreen-player__volume :deep(.jirai-slider:hover::-webkit-slider-thumb),
+.fullscreen-player__volume :deep(.jirai-slider:active::-webkit-slider-thumb) {
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  transform: none !important;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.fullscreen-player__volume :deep(.jirai-slider::-moz-range-thumb),
+.fullscreen-player__volume :deep(.jirai-slider:hover::-moz-range-thumb),
+.fullscreen-player__volume :deep(.jirai-slider:active::-moz-range-thumb) {
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  transform: none !important;
+  appearance: none;
 }
 
 /* 进度填充不在上面的 transform 重置里——scaleX 就是它的进度值 */
