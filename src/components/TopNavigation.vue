@@ -145,7 +145,7 @@ export default {
       default: 'off'
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
@@ -158,6 +158,13 @@ export default {
       return null
     }
 
+    // B 站输入识别：BV 号、av 号、bilibili.com 全站链接、b23.tv 短链
+    // 先于歌单ID判定——BV 串里可能恰好含数字串被 ?id= 误吞
+    const isBilibiliInput = (input) =>
+      /BV[0-9A-Za-z]{10}/.test(input) ||
+      /bilibili\.com|b23\.tv/i.test(input) ||
+      /(?:^|\/)av\d+/i.test(input)
+
     // 搜索或直接按ID/URL加载歌单
     const handleSearch = () => {
       const query = props.searchQuery.trim()
@@ -166,6 +173,10 @@ export default {
       cancelSuggest()
       suggestions.value = []
       suggestOpen.value = false
+      if (isBilibiliInput(query)) {
+        emit('search-bili', query)
+        return
+      }
       const playlistId = extractPlaylistId(query)
       emit(playlistId ? 'search-by-id' : 'search', playlistId || query)
     }

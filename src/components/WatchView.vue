@@ -11,8 +11,19 @@
       <!-- ══ 左栏 ══ -->
       <div class="watch-main">
         <div class="watch-cover-wrap">
+          <!-- B 站视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
+               音频模式回落网易云匹配封面——不加载视频即省流量 -->
+          <video
+            v-if="biliVideoActive"
+            ref="biliVideoRef"
+            class="watch-cover watch-cover--video"
+            :src="biliVideoUrl"
+            muted
+            playsinline
+            preload="auto"
+          ></video>
           <img
-            v-if="coverUrl"
+            v-else-if="coverUrl"
             :src="httpsCover(coverUrl)"
             :alt="currentSong?.name"
             class="watch-cover"
@@ -34,6 +45,15 @@
           <button class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
             <PixelIcon name="share" :size="14" /> 分享歌曲
           </button>
+          <!-- 音画切换仅对有视频流的 B 站导入曲出现；关闭即只拉音频流省流量 -->
+          <button
+            v-if="currentSong?.bilibili?.hasVideo"
+            class="ink-btn ink-btn--ghost watch-action"
+            :class="{ 'watch-action--on': videoOn }"
+            @click="videoOn = !videoOn"
+            :title="videoOn ? '切到纯音频（省流量）' : '切到视频模式'"
+            :aria-pressed="videoOn"
+          ><PixelIcon name="play" :size="14" /> {{ videoOn ? '视频开' : '仅音频' }}</button>
         </div>
 
         <!-- 播放错误/警告在操作行下方——归属左栏信息区，不占右栏 tab 顶部 -->
@@ -273,6 +293,8 @@ export default {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },
     duration: { type: Number, default: 0 },
+    // 音频时钟（秒，RAF 更新）——B 站视频模式的画面以此锚定做漂移校正
+    currentTime: { type: Number, default: 0 },
     songSwitching: { type: Boolean, default: false },
     queue: { type: Array, default: () => [] },
     queueTitle: { type: String, default: '' },
@@ -436,10 +458,57 @@ export default {
       container.scrollTo({ top: container.scrollTop + scrollOffset, behavior: smooth ? 'smooth' : 'auto' })
     })
 
+    // ── B 站视频模式 ──
+    // 偏好持久化：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开
+    const biliVideoRef = ref(null)
+    const videoOn = ref(localStorage.getItem('meowsync-bili-video') !== '0')
+    watch(videoOn, v => localStorage.setItem('meowsync-bili-video', v ? '1' : '0'))
+    const biliVideoActive = computed(() =>
+      !!(props.currentSong?.bilibili?.hasVideo && videoOn.value)
+    )
+    const biliVideoUrl = computed(() => {
+      const b = props.currentSong?.bilibili
+      return b?.hasVideo ? musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid) : ''
+    })
+
+    // 音画同步：视频元素静音播放，时钟完全听 Howler——每帧对比 currentTime，
+    // 漂移超阈值才 seek（RAF 每帧触发，此处只做减法+偶尔 seek，开销可忽略）
+    const BILI_DRIFT_SEC = 0.45
+    const syncBiliVideo = () => {
+      const v = biliVideoRef.value
+      if (!v || !biliVideoActive.value) return
+      if (Math.abs(v.currentTime - props.currentTime) > BILI_DRIFT_SEC) {
+        v.currentTime = props.currentTime
+      }
+    }
+    watch(() => props.currentTime, syncBiliVideo)
+    // 播放/暂停跟随音频；muted+playsinline 下 play() 不受自动播放策略限制
+    watch(() => props.isPlaying, p => {
+      const v = biliVideoRef.value
+      if (!v || !biliVideoActive.value) return
+      if (p) v.play().catch(() => {})
+      else v.pause()
+    })
+    // 切歌/开关视频时 src 变化或元素重建——等到新 metadata 落地再对齐时钟，
+    // 避免对空 player 空 seek；监听键含 bvid（两首 B 站曲互切时 active 不变）
+    watch([biliVideoActive, () => props.currentSong?.bilibili?.bvid], async () => {
+      if (!biliVideoActive.value) return
+      await nextTick()
+      const v = biliVideoRef.value
+      if (!v) return
+      const align = () => { v.currentTime = props.currentTime }
+      if (v.readyState >= 1) align()
+      else v.addEventListener('loadedmetadata', align, { once: true })
+      if (props.isPlaying) v.play().catch(() => {})
+    })
+
     const shareSong = async () => {
       const song = props.currentSong
       if (!song) return
-      const shareUrl = `${window.location.origin}/?song=${song.id}&view=watch`
+      // B 站导入曲的分享链是 ?bili=BVxxx——?song= 只认网易云数值 id
+      const shareUrl = song.bilibili?.bvid
+        ? `${window.location.origin}/?bili=${song.bilibili.bvid}&view=watch`
+        : `${window.location.origin}/?song=${song.id}&view=watch`
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistText.value}`,
         text: `来听听这首歌：${song.name} - ${artistText.value}`,
@@ -470,7 +539,11 @@ export default {
       startDrag,
       relatedSongs,
       relatedLoading,
-      shareSong
+      shareSong,
+      biliVideoRef,
+      videoOn,
+      biliVideoActive,
+      biliVideoUrl
     }
   }
 }
@@ -546,6 +619,21 @@ export default {
   justify-content: center;
   color: var(--ink-64);
   background: var(--paper);
+}
+
+/* B 站视频模式：16:9 信箱（B 站视频多为横屏，方形裁切会砍画面）；
+   image-rendering 像素化是封面的印刷效果，视频不该继承 */
+.watch-cover--video {
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  image-rendering: auto;
+  background: #000;
+}
+
+/* 音画切换的开启态：实心反色——与 pg-tab--active 同一语义 */
+.watch-action--on {
+  background: var(--ink);
+  color: var(--paper);
 }
 
 .watch-title {

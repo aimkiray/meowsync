@@ -16,6 +16,7 @@
       @nav-home="navHome"
       @search="handlePlaylistSearch"
       @search-by-id="loadPlaylistByIdAndAdd"
+      @search-bili="importBilibili"
     />
 
     <div class="app-body">
@@ -88,6 +89,7 @@
           :queue="playingSongs"
           :queue-title="queueTitle"
           :queue-owner="queueOwner"
+          :current-time="currentTime"
           :lyrics="lyrics"
           :current-lyric-index="currentLyricIndex"
           :loading-lyrics="loadingLyrics"
@@ -652,6 +654,69 @@ export default {
       }
     }
 
+    // B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；歌曲名/封面/歌手
+    // 优先吃网易云匹配（封面与双语歌词的正主），标题/UP主兜底；
+    // bilibili 字段挂播放所需的源信息（bvid/cid/hasVideo），neteaseId 仅作歌词源
+    const buildBilibiliSong = (data) => ({
+      id: `bv_${data.bvid}`,
+      name: data.matched?.name || data.songName || data.title,
+      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.owner || 'Bilibili' }],
+      al: {
+        id: data.matched?.al?.id ?? null,
+        name: data.matched?.al?.name || data.title,
+        picUrl: data.matched?.al?.picUrl || httpsCover(data.cover || '')
+      },
+      dt: (data.duration || 0) * 1000,
+      bilibili: { bvid: data.bvid, cid: data.cid, hasVideo: !!data.hasVideo, title: data.title },
+      neteaseId: data.matched?.id || null
+    })
+
+    // B 站视频导入：搜索框粘 URL/BV 触发。解析→落成 single_song_ 壳
+    // （侧栏历史 + 刷新可恢复，壳内 tracks 内嵌不落远端）→ 直接开播进 watch
+    const importBilibili = async (input) => {
+      try {
+        console.log('📺 解析 B 站视频:', input)
+        toast('正在解析 B 站视频…', 'info', 3000)
+        const data = await musicApi.resolveBilibili(input)
+        const song = buildBilibiliSong(data)
+        console.log('📺 解析完成:', song.name, '网易云匹配:', data.matched?.id ?? '无', '提取歌名:', data.songName)
+
+        // 与 ?song= 分享壳同款的幂等壳：同 BV 重复导入直接复用，不重复入库
+        const shellId = `single_song_bv_${data.bvid}`
+        let shell = userPlaylists.value.find(p => String(p.id) === shellId)
+        if (!shell?.tracks?.length) {
+          shell = {
+            id: shellId,
+            name: `B站导入 - ${song.name}`,
+            coverImgUrl: song.al?.picUrl || '',
+            creator: { nickname: 'B 站导入' },
+            trackCount: 1,
+            tracks: [song]
+          }
+          userPlaylists.value.unshift(shell)
+          // 与单曲分享壳同一个上限桶（保留最近 10 个），倒序 splice 防下标错位
+          const tempIndexes = userPlaylists.value
+            .map((p, i) => String(p.id).startsWith('single_song_') ? i : -1)
+            .filter(i => i !== -1)
+          for (const i of tempIndexes.slice(10).reverse()) {
+            userPlaylists.value.splice(i, 1)
+          }
+          savePlaylistsToStorage()
+        }
+
+        selectedPlaylist.value = shell
+        currentSong.value = song
+        songs.value = shell.tracks || []
+        searchQuery.value = ''
+
+        await playSong(song)
+        enterWatch()
+      } catch (error) {
+        console.error('❌ B 站导入失败:', error)
+        toast(`B 站导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
+      }
+    }
+
     const addPlaylistToLibrary = async (playlist) => {
       try {
         // 防御无 id 的脏数据（如详情接口返回空壳对象/null）进入歌单库
@@ -772,7 +837,9 @@ export default {
         // 单曲 ~2-3KB，长期累积会撞 localStorage 配额
         if (Array.isArray(rest.addedTracks)) {
           rest.addedTracks = rest.addedTracks.map(t => t && ({
-            id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege
+            // bilibili/neteaseId 是 B 站导入曲的播放源与歌词源——剥掉就退化成不可播对象
+            id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege,
+            bilibili: t.bilibili, neteaseId: t.neteaseId
           }))
         }
         return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
@@ -1513,7 +1580,9 @@ export default {
       const entry = {
         id: song.id, name: song.name,
         ar: song.ar || song.artists, al: song.al || song.album,
-        dt: song.dt ?? song.duration, fee: song.fee, privilege: song.privilege
+        dt: song.dt ?? song.duration, fee: song.fee, privilege: song.privilege,
+        // B 站导入曲的播放源/歌词源字段——丢了从历史点回会退成不可播
+        bilibili: song.bilibili, neteaseId: song.neteaseId
       }
       playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
       writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
@@ -1605,8 +1674,11 @@ export default {
 
         currentSong.value = song
 
-        // 获取歌曲播放URL
-        const songUrlData = await musicApi.getSongUrl(song.id, abortSignal)
+        // 获取歌曲播放URL：B 站导入曲走 /bilibili/stream 端点——服务端每次
+        // 重解 playurl（CDN 签名会过期）再 302 进 audio-proxy，URL 不落库
+        const songUrlData = song.bilibili
+          ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid) }
+          : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
         if (abortSignal.aborted) {
@@ -1769,7 +1841,7 @@ export default {
         }, PLAYBACK_LOAD_TIMEOUT_MS)
 
         // 加载歌词（可随播放请求一起被取消）
-        await loadLyrics(song.id, abortSignal)
+        await loadLyrics(song, abortSignal)
 
         if (abortSignal.aborted) return
 
@@ -1794,15 +1866,19 @@ export default {
       }
     }
 
-    // 歌词加载和同步（支持取消 + 过期响应不落盘，防止旧歌歌词覆盖新歌）
-    const loadLyrics = async (songId, signal = null) => {
+    // 歌词加载和同步（支持取消 + 过期响应不落盘，防止旧歌歌词覆盖新歌）。
+    // B 站导入曲的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_* id
+    // ——过期判定锚 song.id，不锚歌词请求的 id
+    const loadLyrics = async (song, signal = null) => {
+      const lyricId = song?.neteaseId ?? song?.id
+      if (lyricId == null) return
       try {
         loadingLyrics.value = true
-        console.log('📝 加载歌词:', songId)
+        console.log('📝 加载歌词:', lyricId)
 
-        const lyricsData = await musicApi.getLyrics(songId, signal)
+        const lyricsData = await musicApi.getLyrics(lyricId, signal)
         // 切歌/取消后直接丢弃，不写回共享状态
-        if (signal?.aborted || currentPlayingId !== songId) return
+        if (signal?.aborted || currentPlayingId !== song.id) return
 
         lyrics.value = lyricsData?.lyrics || []
         currentLyricIndex.value = 0
@@ -1816,9 +1892,9 @@ export default {
       } catch (error) {
         if (signal?.aborted || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
         console.error('❌ 加载歌词失败:', error)
-        if (currentPlayingId === songId) lyrics.value = []
+        if (currentPlayingId === song.id) lyrics.value = []
       } finally {
-        if (!signal?.aborted && currentPlayingId === songId) {
+        if (!signal?.aborted && currentPlayingId === song.id) {
           loadingLyrics.value = false
         }
       }
@@ -2269,13 +2345,22 @@ export default {
       return songParam.trim()
     }
 
+    // 从URL参数获取 B 站导入标识（?bili=BVxxx 分享链）
+    const getBiliFromUrl = () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const bili = urlParams.get('bili')
+      if (!bili || !/^(BV[0-9A-Za-z]{10}|av\d+)$/i.test(bili.trim())) return null
+      console.log('📺 从URL获取 B 站视频:', bili.trim())
+      return bili.trim()
+    }
+
 
     // 消费掉一次性 URL 参数：不清理的话每次刷新都会重新劫持恢复逻辑
     // （?song= 会永久抢占 restorePlaybackState；?playlists= 会重复尝试导入）
     const consumeUrlShareParams = () => {
       const url = new URL(window.location.href)
       let changed = false
-      for (const key of ['song', 'playlist', 'playlists']) {
+      for (const key of ['song', 'playlist', 'playlists', 'bili']) {
         if (url.searchParams.has(key)) {
           url.searchParams.delete(key)
           changed = true
@@ -2421,9 +2506,13 @@ export default {
       
       // 如果有单首歌曲ID，尝试加载并播放
       const songId = getSongIdFromUrl()
+      const biliInput = getBiliFromUrl()
       // 所有参数读取已完毕——消费掉，避免下次刷新重新劫持恢复逻辑
       consumeUrlShareParams()
-      if (songId) {
+      if (biliInput) {
+        // ?bili= 分享链：走与搜索框导入同一条路
+        await importBilibili(biliInput)
+      } else if (songId) {
         console.log('🎵 检测到单首歌曲分享，歌曲ID:', songId)
         try {
           // 检查是否已经存在相同的临时歌单
@@ -2593,6 +2682,7 @@ export default {
       // 方法
       loadPlaylistByIdAndAdd,
       loadPlaylistById,
+      importBilibili,
       addPlaylistToLibrary,
       removePlaylistFromLibrary,
       handlePlaylistDownloadsDeleted,

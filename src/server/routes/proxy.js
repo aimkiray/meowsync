@@ -9,10 +9,14 @@ const app = new Hono();
 // 可代理的上行域白名单（收窄到实际 CDN 子域，整棵后缀域放行会把网易 NOS
 // 对象存储等用户可控内容面也纳入可代理范围）：googlevideo（ytdlp 解锁回链）、
 // music.126.net（官方曲库 CDN m*/p* 子域）、kuwo.cn（kuwo 解锁源，sycdn/kwcdn
-// 等 CDN 子域均在其下——域属酷我自营音乐平台）——前端"获取源文件"的解锁链
-// CDN 不带 ACAO 必须走同源代理。白名单只决定"能代理谁"，SSRF 防线由下方
-// 逐跳 resolvesToPublicIp 兜底
-const ALLOWED_HOSTS = ['googlevideo.com', 'music.126.net', 'kuwo.cn'];
+// 等 CDN 子域均在其下——域属酷我自营音乐平台）、bilivideo.com/.cn（B 站
+// DASH 音画分流 CDN，playurl 回链即此族；hdslb.com 为其封面图床）——前端
+// "获取源文件"的解锁链 CDN 不带 ACAO 必须走同源代理。白名单只决定"能代理谁"，
+// SSRF 防线由下方逐跳 resolvesToPublicIp 兜底
+const ALLOWED_HOSTS = ['googlevideo.com', 'music.126.net', 'kuwo.cn',
+  'bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
+// B 站 CDN 防盗链要求 Referer 头——只对 bilivideo 系注入，不给无关域透信息
+const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
 
@@ -52,12 +56,19 @@ app.get('/audio-proxy', async (c) => {
     targetUrl = parsed.href;
 
     const proxyHeaders = {
-      'User-Agent': 'Mozilla/5.0',
+      // B 站 CDN 防盗链校验 Referer（缺它 403）；真实浏览器 UA——裸 'Mozilla/5.0'
+      // 会被部分 CDN 判机器人拦下
+      'User-Agent': BILI_CDN_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h))
+        ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        : 'Mozilla/5.0',
       // 强制 identity：undici 会按响应 Content-Encoding 透明解压但不改写上游 header，
       // 若上游返回压缩响应，透传的 Content-Length/Content-Range 描述的是压缩字节，
       // 与实际发送的解压字节不符会截断流；音频本身已压缩，identity 无任何损失
       'Accept-Encoding': 'identity',
     };
+    if (BILI_CDN_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h))) {
+      proxyHeaders['Referer'] = 'https://www.bilibili.com/';
+    }
     const range = c.req.header('range');
     if (range) {
       // 多段 Range（bytes=0-1,3-5）上游会回 multipart/byteranges——与透传的
