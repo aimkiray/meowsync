@@ -310,7 +310,9 @@ export default {
 .song-result-index {
   width: 18px;
   flex-shrink: 0;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-64);

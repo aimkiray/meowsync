@@ -1045,10 +1045,12 @@ button.queue-source--link:hover { color: var(--ink); text-decoration: underline;
 .queue-row-index {
   width: 18px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-64);
-  text-align: center;
 }
 .queue-row-info { flex: 1; min-width: 0; }
 .queue-row-title {
