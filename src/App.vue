@@ -673,18 +673,33 @@ export default {
 
     // B 站视频导入：搜索框粘 URL/BV 触发。解析→落成 single_song_ 壳
     // （侧栏历史 + 刷新可恢复，壳内 tracks 内嵌不落远端）→ 直接开播进 watch
+    let biliImportSeq = 0
     const importBilibili = async (input) => {
+      const myReq = ++biliImportSeq
+      // 占住 selectReqId：resolve 慢（远端多跳），期间在途的 selectPlaylist
+      // 回包不得在落壳之后盖掉 selectedPlaylist/songs
+      selectReqId++
+      searchQuery.value = '' // 提前清框——防用户重复回车并发多个 resolve
       try {
         console.log('📺 解析 B 站视频:', input)
-        toast('正在解析 B 站视频…', 'info', 3000)
+        toast('正在解析 B 站视频…', 'info', 15000)
         const data = await musicApi.resolveBilibili(input)
+        // 解析期间用户点了别的歌/再导入——过期意图不得抢播放+强跳视图
+        if (myReq !== biliImportSeq) return
         const song = buildBilibiliSong(data)
         console.log('📺 解析完成:', song.name, '网易云匹配:', data.matched?.id ?? '无', '提取歌名:', data.songName)
 
         // 与 ?song= 分享壳同款的幂等壳：同 BV 重复导入直接复用，不重复入库
         const shellId = `single_song_bv_${data.bvid}`
         let shell = userPlaylists.value.find(p => String(p.id) === shellId)
-        if (!shell?.tracks?.length) {
+        if (shell) {
+          // 壳在但曲目空/陈旧：原地刷新曲目与元信息（不 unshift——同 id 双壳会渲染冲突）
+          shell.tracks = [song]
+          shell.name = `B站导入 - ${song.name}`
+          shell.coverImgUrl = song.al?.picUrl || ''
+          shell.trackCount = 1
+          savePlaylistsToStorage()
+        } else {
           shell = {
             id: shellId,
             name: `B站导入 - ${song.name}`,
@@ -707,7 +722,6 @@ export default {
         selectedPlaylist.value = shell
         currentSong.value = song
         songs.value = shell.tracks || []
-        searchQuery.value = ''
 
         await playSong(song)
         enterWatch()
@@ -1722,7 +1736,10 @@ export default {
             const actualDuration = newHowl.duration()
 
             if (Math.abs(expectedDuration - actualDuration) > 5) {
-              durationWarning.value = `VIP 歌曲试听版本：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
+              // B 站曲的时长差是稿件换源/分P错位而非 VIP 试听，文案区分避免误报
+              durationWarning.value = song.bilibili
+                ? `音画时长不一致：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
+                : `VIP 歌曲试听版本：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
             }
 
             songSwitching.value = false
@@ -1870,6 +1887,12 @@ export default {
     // B 站导入曲的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_* id
     // ——过期判定锚 song.id，不锚歌词请求的 id
     const loadLyrics = async (song, signal = null) => {
+      // B 站曲未匹配到网易云时无歌词源——bv_* id 打 /lyric 必死还拖三重试，直接置空
+      if (song?.bilibili && !song.neteaseId) {
+        lyrics.value = []
+        currentLyricIndex.value = 0
+        return
+      }
       const lyricId = song?.neteaseId ?? song?.id
       if (lyricId == null) return
       try {

@@ -303,6 +303,28 @@ export const musicApi = {
     const params = new URLSearchParams({ bvid, kind })
     if (cid) params.set('cid', cid)
     return `${API_BASE_URL}/bilibili/stream?${params}`
+  },
+
+  // B 站曲的"获取源文件"：同源 fetch /bilibili/stream（已含代理链）拿 m4a blob
+  downloadBilibiliSong: async (song) => {
+    const b = song?.bilibili
+    if (!b?.bvid) throw new Error('不是 B 站导入曲')
+    const artists = song.ar?.map(a => a.name).join(', ') || '未知艺术家'
+    const fileName = `${artists} - ${song.name}.m4a`.replace(/[\\/:*?"<>|]/g, '_')
+    const resp = await fetch(musicApi.bilibiliStreamUrl(b.bvid, 'audio', b.cid))
+    if (!resp.ok) throw new Error(`下载失败: HTTP ${resp.status}`)
+    const blob = await resp.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = fileName
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    // 吊销必须延迟：click 同步触发但浏览器取流是异步的
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+    return { success: true, fileName }
   }
 }
 

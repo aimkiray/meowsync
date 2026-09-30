@@ -219,13 +219,13 @@
             @keydown.enter="downloadSongDirect(menuSong, 320000)"
             @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
-            <PixelIcon name="download" :size="13" /> 获取源文件 (320k)
+            <PixelIcon name="download" :size="13" /> {{ menuSong?.bilibili ? '获取源文件 (m4a)' : '获取源文件 (320k)' }}
           </div>
 
           <!-- 下载到服务器 / 删除已下载（临时单曲歌单没有服务端持久化意义，隐藏；
-               未选歌单时选了也只会 alert，同样不渲染） -->
+               B 站曲无服务端持久化路径同样不渲染；未选歌单时选了也只会 alert） -->
           <div
-            v-if="!isLocalPlaylist && selectedPlaylist"
+            v-if="!isLocalPlaylist && selectedPlaylist && !menuSong?.bilibili"
             class="pg-menu-item"
             :class="{ 'pg-menu-item--danger': serverDownloadedStates[showDownloadMenu] }"
             role="menuitem"
@@ -688,10 +688,10 @@ export default {
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
-        // 非本地态歌单再多"下载到服务器"——合计 5/6/7 三档
+        // 非本地态歌单且非 B 站曲再多"下载到服务器"——合计 5/6/7 三档
         const itemCount = 5
           + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
-          + ((!isLocalPlaylist.value && props.selectedPlaylist) ? 1 : 0)
+          + ((!isLocalPlaylist.value && props.selectedPlaylist && !menuSong.value?.bilibili) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -753,8 +753,11 @@ export default {
     // 分享歌曲
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
-      // 带 view=watch：冷启动打开分享链后落在播放页（YTM watch 同款直达）
-      const shareUrl = `${window.location.origin}/?song=${song.id}&view=watch`
+      // 带 view=watch：冷启动打开分享链后落在播放页（YTM watch 同款直达）；
+      // B 站导入曲走 ?bili=BV 链——?song= 只认网易云数值 id
+      const shareUrl = song.bilibili?.bvid
+        ? `${window.location.origin}/?bili=${song.bilibili.bvid}&view=watch`
+        : `${window.location.origin}/?song=${song.id}&view=watch`
 
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistNames}`,
@@ -784,7 +787,9 @@ export default {
         downloadingStates.value[song.id] = true
         // blob 下载全程无浏览器自带进度提示——先给一个开始戳记，终点由浏览器下载栏呈现
         toast(`正在获取「${song.name}」…`, 'info')
-        await musicApi.downloadSong(song, bitrate)
+        // B 站导入曲没有网易云下载链——拉自己的 /bilibili/stream（m4a）
+        if (song.bilibili?.bvid) await musicApi.downloadBilibiliSong(song)
+        else await musicApi.downloadSong(song, bitrate)
       } catch (error) {
         console.error('下载失败:', error)
         toast('下载失败: ' + extractErrorMessage(error), 'error')
