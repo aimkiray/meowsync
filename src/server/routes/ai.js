@@ -47,9 +47,12 @@ function parseLrcLines(lrc) {
   return out;
 }
 
+// meta 行重建为 [tag:value]——值里的内嵌括号剥掉，源 lrc 里形如
+// [ti:x [00:01] y] 的行否则会把幻影时间戳带进下发 tlyric
 const lrcMetaLines = (lrc) => String(lrc || '').split('\n')
-  .map(l => l.trim())
-  .filter(l => /^\[(ti|ar|al|by|offset|re|ve):/i.test(l));
+  .map(l => l.trim().match(/^\[(ti|ar|al|by|offset|re|ve):(.*)\]$/i))
+  .filter(Boolean)
+  .map(m => `[${m[1]}:${m[2].replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim()}]`);
 
 // CJK 占比：日文假名/韩文谚文计入分母（它们同样需要翻译）
 function cjkRatio(text) {
@@ -82,7 +85,7 @@ app.post('/ai/lyric-translate', async (c) => {
   try {
     body = await readJsonBody(c, 16 * 1024);
   } catch (e) {
-    if (e?.status === 413) return fail(c, 413, '请求体过大');
+    if (e?.exposed === true && e?.status === 413) return fail(c, 413, '请求体过大');
     body = {};
   }
   const id = String(body?.id ?? '');
@@ -91,13 +94,19 @@ app.post('/ai/lyric-translate', async (c) => {
 
   const db = getDb();
   // 行存在即命中——skip 哨兵（tlyric=''）也是有效缓存项，防止
-  // already-zh/无词曲每次重播都重打上游 lyric
+  // already-zh/无词曲每次重播都重打上游 lyric。但 skip 是启发式判定
+  // 的结果（cjkRatio/credit 行都可能误判），给 7 天 TTL：过期按未命中
+  // 重判一次，避免一次瞬时误判被永久固化；重新判为 skip 时 DO UPDATE
+  // 刷新 updated_at 续期
   const rowOf = () => db.prepare(
-    'SELECT tlyric FROM song_lyric_translation WHERE song_id = ?'
+    `SELECT tlyric FROM song_lyric_translation WHERE song_id = ?
+     AND NOT (model LIKE 'skip:%' AND updated_at < datetime('now', '-7 days'))`
   ).get(id);
   const skipInsert = (reason) => db.prepare(
     `INSERT INTO song_lyric_translation (song_id, tlyric, model)
-     VALUES (?, '', ?) ON CONFLICT(song_id) DO NOTHING`).run(id, `skip:${reason}`);
+     VALUES (?, '', ?) ON CONFLICT(song_id) DO UPDATE SET
+     model = excluded.model, updated_at = CURRENT_TIMESTAMP
+     WHERE song_lyric_translation.model LIKE 'skip:%'`).run(id, `skip:${reason}`);
   const cached0 = rowOf();
   if (cached0) {
     return c.json({ code: 200, tlyric: cached0.tlyric || null, cached: true });
@@ -119,6 +128,8 @@ app.post('/ai/lyric-translate', async (c) => {
   inflightTranslate.set(id, myGate);
 
   try {
+    // 排队期间客户端可能已断连——拿到 gate 后先查 aborted，别再烧上游+AI
+    if (signal?.aborted) return c.body(null, 499);
     const { lrc, tlyric: rawTlyric } = await fetchLyricRaw(id);
     const tlyric = typeof rawTlyric === 'string' ? rawTlyric : String(rawTlyric || '');
     if (tlyric.trim()) {
@@ -133,7 +144,11 @@ app.post('/ai/lyric-translate', async (c) => {
       skipInsert('no-lyric');
       return fail(c, 404, '该歌曲无歌词');
     }
-    if (lines.length > MAX_LYRIC_LINES) return fail(c, 400, '歌词行数超出翻译上限');
+    if (lines.length > MAX_LYRIC_LINES) {
+      // 也记 skip——超长判定确定但每次重播重打上游 lyric 没必要（TTL 兜底修订）
+      skipInsert('too-long');
+      return fail(c, 400, '歌词行数超出翻译上限');
+    }
 
     const allText = lines.map(l => l.text).join('\n');
     if (cjkRatio(allText) >= CJK_SKIP_RATIO) {
@@ -150,7 +165,8 @@ app.post('/ai/lyric-translate', async (c) => {
     const seenTexts = new Set();
     const jobs = [];
     for (const l of lines) {
-      if (NON_LYRIC_RE.test(l.text) || seenTexts.has(l.text)) continue;
+      // 输入侧限长与输出侧 500 对齐——巨型 UGC 行整行进 prompt 不经济
+      if (NON_LYRIC_RE.test(l.text) || l.text.length > 500 || seenTexts.has(l.text)) continue;
       seenTexts.add(l.text);
       jobs.push({ text: l.text });
     }
@@ -160,9 +176,28 @@ app.post('/ai/lyric-translate', async (c) => {
       return c.json({ code: 200, tlyric: null, skipped: 'no-translatable' });
     }
     const translated = new Map(); // 原文 -> 译文
-    for (let off = 0; off < jobs.length; off += TRANSLATE_CHUNK) {
-      if (signal?.aborted) return c.body(null, 499);
-      const chunk = jobs.slice(off, off + TRANSLATE_CHUNK);
+    // 最坏时长收进客户端 axios 300s 包线内：块数封顶 5（=200 个去重文本）
+    // × 55s 块超时 = 275s + 上游 lyric ≈30s < 300s。超出的尾部行显示原文
+    // （未译行回填原文，见下），不会有错译文；循环内 signal 检查保证断连即停
+    const startedAt = Date.now();
+    // 译文净化：歌词原文来自 UGC、模型输出可被 prompt 注入带偏——
+    // 剥换行；成对 [..] 段整体移除（模型回显的 [mm:ss] 连数字一起剥，
+    // 只剥括号字符会残留 "05:00" 裸数字进展示文本），落单括号再清；
+    // \p{Cf} 剥零宽/BOM 等格式字符（比不可见字面量稳，格式化工具碰不坏）；
+    // 限长防异常膨胀。全角【】不受影响（LRC 只认 ASCII）。产出会永久落库下发
+    const cleanText = (v) => typeof v === 'string'
+      ? v.replace(/[\r\n]+/g, ' ')
+        .replace(/\[[^\]]*\]/g, ' ')
+        .replace(/[\[\]]/g, ' ')
+        .replace(/\p{Cf}/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      : '';
+    // 返回 [{src, text}]——idx 已就地解析成原文，对半拆重试时索引不错位。
+    // 推理模型偶发把 token 预算烧在 reasoning 上致 content 截断（finish=length）：
+    // 块失败时对半拆降输出需求重试一轮；split 受 150s 时间闸约束，
+    // 闸后不再补救（再加 ~2×55s 就顶穿客户端 300s 包线）
+    const translateChunk = async (chunk, allowSplit) => {
       const ans = await askAiJson({
         system: '你是歌词翻译器。输入是 {行号:歌词行} 对象，逐行翻译成简体中文：'
           + '键名与输入行号一一对应；语气贴合歌词文体；专名可音译或保留；'
@@ -170,49 +205,52 @@ app.post('/ai/lyric-translate', async (c) => {
           + '只输出 JSON {"t":{"0":"译文","1":"译文",...}}',
         user: JSON.stringify(Object.fromEntries(chunk.map((j, k) => [k, j.text]))),
         maxTokens: Math.min(8192, chunk.length * 96 + 512),
-        timeoutMs: 90000,
+        timeoutMs: 55000,
         signal,
       });
       // 兼容两种回包：键控对象（首选）或等长数组（老 prompt 习惯）
       const t = ans?.t;
-      const pairs = t && typeof t === 'object' && !Array.isArray(t)
+      const rawPairs = t && typeof t === 'object' && !Array.isArray(t)
         ? Object.entries(t)
         : Array.isArray(t) ? t.map((v, k) => [k, v]) : null;
-      if (!pairs || !pairs.length) {
-        if (signal?.aborted) return c.body(null, 499);
-        return fail(c, 502, 'AI 未返回有效翻译');
+      const pairs = (rawPairs || [])
+        .map(([k, v]) => ({ src: chunk[Number(k)]?.text, text: cleanText(v) }))
+        .filter(p => p.src != null && p.text && p.text.length <= 500);
+      if (pairs.length) return pairs;
+      if (signal?.aborted) return 'aborted';
+      if (allowSplit && chunk.length > 1 && Date.now() - startedAt < 150000) {
+        const mid = Math.ceil(chunk.length / 2);
+        const a = await translateChunk(chunk.slice(0, mid), false);
+        if (a === 'aborted') return 'aborted';
+        const b = await translateChunk(chunk.slice(mid), false);
+        if (b === 'aborted') return 'aborted';
+        return [...(a || []), ...(b || [])]; // 仍失败的半边贡献为空
       }
-      for (const [k, v] of pairs) {
-        const idx = Number(k);
-        // 译文净化：歌词原文来自 UGC、模型输出可被 prompt 注入带偏——
-        // 剥换行+全部 ASCII 方括号（行中 [mm:ss] 照样能被客户端当时间戳
-        // 展开成幻影行，只查行首不够）；剥零宽字符；限长防异常膨胀。
-        // 全角【】不受影响（LRC 只认 ASCII）。这里产出的文本会永久落库下发
-        const text = typeof v === 'string'
-          ? v.replace(/[\r\n]+/g, ' ')
-            .replace(/[\[\]]/g, '')
-            .replace(/[​-‏﻿]/g, '')
-            .trim()
-          : '';
-        if (Number.isInteger(idx) && idx >= 0 && idx < chunk.length
-          && text && text.length <= 500) {
-          translated.set(chunk[idx].text, text);
-        }
-      }
+      return null;
+    };
+    for (let off = 0; off < Math.min(jobs.length, TRANSLATE_CHUNK * 5); off += TRANSLATE_CHUNK) {
+      if (signal?.aborted) return c.body(null, 499);
+      const res = await translateChunk(jobs.slice(off, off + TRANSLATE_CHUNK), true);
+      if (res === 'aborted') return c.body(null, 499);
+      // 整块失败只损失该块覆盖（行显示原文），不连带整曲 502
+      for (const p of res || []) translated.set(p.src, p.text);
     }
 
+    if (!translated.size) return fail(c, 502, 'AI 未返回有效翻译');
     const out = [...lrcMetaLines(lrc)];
     for (const l of lines) {
       const t = translated.get(l.text);
-      if (t) out.push(`${l.tag}${t}`);
+      // 未译行回填原文占住自己的时间戳：客户端 mergeTranslations 用
+      // 0.5s 邻近窗取最近译文，没有占位行会把邻行译文错贴到本行头上；
+      // 同文即未译，前端展示层自行判同文不显示
+      out.push(`${l.tag}${t || l.text}`);
     }
-    if (!translated.size) return fail(c, 502, 'AI 未返回有效翻译');
     const result = out.join('\n');
     db.prepare(`INSERT INTO song_lyric_translation (song_id, tlyric, model)
       VALUES (?, ?, ?) ON CONFLICT(song_id) DO UPDATE SET
       tlyric = excluded.tlyric, model = excluded.model, updated_at = CURRENT_TIMESTAMP`
     ).run(id, result, AI_MODEL);
-    return c.json({ code: 200, tlyric: result, lines: translated.size, source: 'ai' });
+    return c.json({ code: 200, tlyric: result, lines: translated.size, total: lines.length, source: 'ai' });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
     console.error('[ai] lyric-translate 失败:', e?.message || e);
@@ -234,7 +272,7 @@ app.post('/ai/lyric-verify', async (c) => {
   try {
     body = await readJsonBody(c, 64 * 1024);
   } catch (e) {
-    if (e?.status === 413) return fail(c, 413, '请求体过大');
+    if (e?.exposed === true && e?.status === 413) return fail(c, 413, '请求体过大');
     body = {};
   }
   const id = String(body?.id ?? '');
@@ -270,25 +308,27 @@ app.post('/ai/lyric-verify', async (c) => {
     await inflightVerify.get(vkey).catch(() => {});
     const hit = verdictOf();
     if (hit) return c.json({ code: 200, ok: !!hit.ok, cached: true });
-    // 在途者判定失败（不落库）则由本次自行重试——跳出循环抢 gate
-    if (!inflightVerify.has(vkey)) break;
+    // 在途者判定失败（不落库）则循环条件放行，由本次自行重试抢 gate
   }
   let release;
   const myGate = new Promise(r => { release = r; });
   inflightVerify.set(vkey, myGate);
 
   try {
+    if (signal?.aborted) return c.body(null, 499);
     const { lrc } = await fetchLyricRaw(id);
     const lines = parseLrcLines(lrc);
     if (!lines.length) {
       // 没词可验——无词显示不算错配
       return c.json({ code: 200, ok: true, reason: 'no-lyric' });
     }
-    // 抽样而非全文：首 4 行抓歌名植入（很多歌词开头点题），中段 6 行看主题
+    // 抽样而非全文：首 4 行抓歌名植入（很多歌词开头点题），中段 6 行看主题；
+    // 同文行（多时间戳副歌展开）去重，不浪费采样位
+    const seenSample = new Set();
     const sample = [...lines.slice(0, 4), ...lines.slice(4).filter((_, i) => i % Math.max(1, Math.floor(lines.length / 6)) === 0)]
-      .slice(0, 10)
       .map(l => sanitizePrompt(l.text).slice(0, 200))
-      .filter(Boolean);
+      .filter(t => t && !seenSample.has(t) && seenSample.add(t))
+      .slice(0, 10);
 
     const ans = await askAiJson({
       system: '你是音乐内容核验助手。给定来源音/视频的标题与作者，以及从音乐平台配到的歌词抽样，'

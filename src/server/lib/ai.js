@@ -132,11 +132,12 @@ async function askAiJson({ system, user, maxTokens = 1024, timeoutMs = AI_TIMEOU
       }
       data = await res.json();
     }
-    if (data?.error) {
+    const content = data?.choices?.[0]?.message?.content;
+    // error 与有效 choices 共存的网关回包以内容为准——只在拿不到内容时才算失败
+    if (data?.error && (content == null || content === '')) {
       console.warn('[ai] 上游返回错误:', data.error?.message || data.error);
       return null;
     }
-    const content = data?.choices?.[0]?.message?.content;
     const parsed = parseJsonContent(content);
     if (parsed == null) {
       // 空 content 多半是被推理挤爆 max_tokens（finish=length）——
