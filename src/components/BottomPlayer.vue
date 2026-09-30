@@ -76,10 +76,11 @@
           <button
             @click="$emit('toggle-play')"
             class="transport transport--play"
+            :class="{ 'transport--switching': songSwitching }"
             :disabled="!currentSong"
             :aria-label="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
             :title="songSwitching ? '切换歌曲中…' : (isPlaying ? '暂停' : '播放')"
-          ><PixelIcon v-if="!songSwitching" :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 18 : 22" /><span v-else class="switching-glyph">…</span></button>
+          ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 18 : 22" /></button>
           <button
             @click="$emit('next')"
             class="transport"
@@ -437,16 +438,8 @@ export default {
 }
 .transport--play:hover:not(:disabled) { border-color: var(--accent-magenta); }
 
-.switching-glyph {
-  font-family: var(--font-mono);
-  font-size: 16px;
-  line-height: 1;
-  animation: bpBlink 1s steps(2) infinite;
-}
-@keyframes bpBlink { 50% { opacity: .3; } }
-@media (prefers-reduced-motion: reduce) {
-  .switching-glyph { animation: none; }
-}
+/* 切换中：不换字形，整键灰化（与 :disabled 同档） */
+.transport--switching { opacity: .45; }
 
 /* watch 页已打开对应 tab 时的按下态（纸面反白） */
 .pg-icobtn--pressed {
