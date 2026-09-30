@@ -239,10 +239,10 @@
           </div>
 
           <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
-               local_pl_/saved_queue_ 经镜像链走既有路由。外部导入曲中 B 站/YouTube
-               无服务端下载源不渲染，qq_ 有直链源（file-downloader 前缀分发）照常显示 -->
+               B 站/YouTube 无服务端下载源不渲染；qq_ 只在本地歌单显示（镜像链
+               投影进曲目表后 file-downloader 前缀分发可达），远端单里必 404 -->
           <div
-            v-if="!isShareShell && selectedPlaylist && !menuSong?.bilibili && !menuSong?.youtube && !String(menuSong?.id ?? '').startsWith('bv_') && !String(menuSong?.id ?? '').startsWith('yt_')"
+            v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong)"
             class="pg-menu-item"
             :class="{ 'pg-menu-item--danger': serverDownloadedStates[showDownloadMenu] }"
             role="menuitem"
@@ -692,6 +692,16 @@ export default {
       isLocalPlaylistId(props.selectedPlaylist?.id)
     )
     // 单曲分享壳：本地态但语义是"一张曲的分享容器"——不提供移除/服务器下载入口
+    // 「下载到服务器」可见性：网易云数字 id 全场景可下；qq_ 只在本地歌单可下
+    // （镜像链投影进曲目表），远端歌单里的 qq_ 追曲不在服务端曲目表必 404
+    const canServerDownload = (song) => {
+      if (!song) return false
+      const id = String(song.id ?? '')
+      if (song.bilibili || song.youtube || id.startsWith('bv_') || id.startsWith('yt_')) return false
+      if (/^\d+$/.test(id)) return true
+      return isLocalPlaylist.value && /^qq_[0-9A-Za-z]{10,20}$/.test(id)
+    }
+
     const isShareShell = computed(() =>
       isSingleSongShellId(props.selectedPlaylist?.id)
     )
@@ -711,12 +721,13 @@ export default {
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
-        // 除分享壳的歌单且非外部导入曲（bv_/yt_）再多"下载到服务器"——合计 5/6/7 三档。
+        // 除分享壳的歌单且曲目可达服务端下载链（网易云 id；本地单的 qq_）再多
+        // "下载到服务器"——合计 5/6/7 三档。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const itemCount = 5
           + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
-          + ((!isShareShell.value && props.selectedPlaylist && !targetSong?.bilibili && !targetSong?.youtube && !String(targetSong?.id ?? '').startsWith('bv_') && !String(targetSong?.id ?? '').startsWith('yt_')) ? 1 : 0)
+          + ((!isShareShell.value && props.selectedPlaylist && canServerDownload(targetSong)) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight

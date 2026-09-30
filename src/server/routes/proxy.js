@@ -1,5 +1,6 @@
 const { Hono } = require('hono');
 const { Agent } = require('undici');
+const { rateLimit } = require('../lib/rate-limit');
 // 私网/保留段判定与 DNS 解析校验抽在 src/server/lib/net-guard.js，
 // 与 file-downloader 的下载地址校验共用同一份实现
 const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
@@ -15,9 +16,11 @@ const app = new Hono();
 // SSRF 防线由下方逐跳 resolvesToPublicIp 兜底
 const ALLOWED_HOSTS = ['googlevideo.com', 'music.126.net', 'kuwo.cn',
   'bilivideo.com', 'bilivideo.cn', 'hdslb.com',
-  // QQ 音流：ws./isure./dl.stream.qqmusic.qq.com 与 aqqmusic.tc.qq.com 系
-  // sip 偶发返回裸 IP 宿主——后缀匹配天然拒绝 IP 字面量，候选自动降级
-  'qqmusic.qq.com', 'tc.qq.com'];
+  // QQ 音流：qqmusic.qq.com 全族（ws./isure./dl./cc.stream.qqmusic.qq.com 等
+  // sip 宿主）+ tc.qq.com 只收音乐子族——tc.qq.com 是腾讯通用 CDN（视频/小程序
+  // /广告都在其下），整棵后缀放行会把开放代理面扩到无关业务；sip 偶发返回裸 IP
+  // 宿主——后缀匹配天然拒绝 IP 字面量，候选自动降级
+  'qqmusic.qq.com', 'aqqmusic.tc.qq.com', 'qqmusic.tc.qq.com', 'music.tc.qq.com'];
 // B 站 CDN 防盗链要求 Referer 头——只对 bilivideo 系注入，不给无关域透信息
 const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
 const MAX_REDIRECTS = 5;
@@ -33,6 +36,11 @@ function isAllowedHost(hostname) {
 
 // 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
 app.get('/audio-proxy', async (c) => {
+  // 全站唯一"任意人可让服务器代发大流量"的端点——白名单域也是开放中转面，
+  // 补 per-IP 限流（一次播放=1 次请求，seek 重试量级小，300/min 宽裕）
+  if (!rateLimit(c, 'audio-proxy', 300)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
   let targetUrl = c.req.query('url');
   if (!targetUrl) return c.json({ code: 400, message: 'missing url' }, 400);
 

@@ -1,11 +1,10 @@
 const { Hono } = require('hono');
-const { normalizeOutboundUrl } = require('../lib/net-guard');
-const { isAllowedHost } = require('./proxy');
+const { createHash, timingSafeEqual } = require('crypto');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../lib/netease-match');
 const {
-  QQ_COOKIE, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
-  getSongDetail, getStreamCandidates, getLyric, getPlaylist, searchSongs,
+  hasQqCookie, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
+  getSongDetail, pickStreamUrl, getLyric, getPlaylist, searchSongs,
   resolveQqInput,
 } = require('../lib/qq');
 
@@ -31,37 +30,24 @@ const trackJson = (t) => ({
   vipOnly: t.vipOnly,
 });
 
-// vkey 档梯挑选：midurlinfo 逐档 purl 为空即无权限，跳过；
-// sip 逐条过代理校验（normalizeOutboundUrl+host 白名单——sip 可能回裸 IP
-// 条目，isAllowedHost 对 IP 字面量天然拒绝，自动降到下一条域名 sip）
-async function pickStream(mid, mediaMid, prefer, extraSignal) {
-  const tryLadder = async (mm) => {
-    const cands = await getStreamCandidates(mid, mm, prefer === 'best' ? BEST_LADDER : PLAY_LADDER, extraSignal);
-    for (const cand of cands) {
-      const usable = cand.urls.find(u => {
-        const checked = normalizeOutboundUrl(u);
-        return checked.ok && isAllowedHost(checked.url.hostname);
-      });
-      if (usable) return { url: usable, tier: cand.tier };
-    }
-    return null;
-  };
-  let hit = await tryLadder(mediaMid);
-  if (!hit && !mediaMid) {
-    // filename 需 media_mid——多数歌 media_mid==songmid，不等时拿详情回填重试
-    const detail = await getSongDetail(mid, extraSignal);
-    if (detail?.mediaMid && detail.mediaMid !== mid) hit = await tryLadder(detail.mediaMid);
-  }
-  return hit;
-}
+// vkey 档梯挑选：与 file-downloader 共用 lib/qq.js 的 pickStreamUrl
+// （midurlinfo 逐档 purl 为空即无权限；sip 逐条过 normalizeOutboundUrl+
+// QQ_STREAM_HOST_OK——sip 可能回裸 IP 条目，后缀判定天然拒绝自动降级）
+const pickStream = (mid, mediaMid, prefer, extraSignal) =>
+  pickStreamUrl(mid, {
+    mediaMid, signal: extraSignal,
+    ladder: prefer === 'best' ? BEST_LADDER : PLAY_LADDER,
+  });
 
 app.get('/qq/resolve', async (c) => {
   if (!rateLimit(c, 'qq-resolve', 12)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
   }
   const parsed = await resolveQqInput(c.req.query('input') || '', c.req.raw.signal);
+  if (c.req.raw.signal?.aborted) return c.body(null, 499);
   if (!parsed?.mid && !parsed?.songid) {
     if (parsed?.disstid) return c.json({ code: 400, message: '这是 QQ 歌单链接，请在顶部搜索框粘贴导入' }, 400);
+    if (parsed?.albummid) return c.json({ code: 400, message: '这是专辑链接，暂不支持（可用单曲/歌单链接）' }, 400);
     return c.json({ code: 400, message: '无法从输入解析 QQ 音乐歌曲（支持 songDetail/分享链接/songmid/songid）' }, 400);
   }
   try {
@@ -120,8 +106,11 @@ app.get('/qq/stream', async (c) => {
   // QQ_COOKIE+DOWNLOAD_TOKEN 时要求 x-download-token，匿名请求静默回落常规档
   const wantBest = c.req.query('prefer') === 'best';
   const token = process.env.DOWNLOAD_TOKEN || '';
-  const prefer = wantBest && (!QQ_COOKIE || !token
-    || c.req.header('x-download-token') === token) ? 'best' : '';
+  const tokenOk = (t) => timingSafeEqual(
+    createHash('sha256').update(String(t || '')).digest(),
+    createHash('sha256').update(token).digest());
+  const prefer = wantBest && (!hasQqCookie() || !token
+    || tokenOk(c.req.header('x-download-token'))) ? 'best' : '';
   try {
     const hit = await pickStream(mid, mmid, prefer, c.req.raw.signal);
     if (!hit) {
