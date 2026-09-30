@@ -609,7 +609,7 @@ export default {
 .watch-related-row { cursor: pointer; }
 
 .queue-row--dragging {
-  outline: 1.2px solid var(--accent-magenta); /* 全站唯一 dashed 已归一 */
+  outline: 1.2px solid var(--accent-magenta-ink); /* 纸面指示线走深档（火烈鸟本色 ~2.3:1 过浅） */
   outline-offset: -4px;
   background: var(--paper);
 }

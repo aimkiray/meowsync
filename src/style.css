@@ -43,11 +43,11 @@
   /* 每视图一张饱和纸色 —— 色彩即页面身份；新主题改画布只覆盖本组值 */
   --canvas-teal: #09aea1;
   --canvas-sage: #abbab9;
-  --canvas-pink: #f386a1;
-  --accent-magenta: #d45bb6;       /* 链接 hover / 激活态点缀（图形/边框） */
+  --canvas-pink: #fc8eac;
+  --accent-magenta: #fc8eac;       /* 火烈鸟粉：链接 hover / 激活态点缀（图形/边框） */
   --accent-green: #03aa5c;         /* 成功戳记（图形/边框） */
   /* 深档语义色：专供纸面小字——accent 本色在 paper 上 <4.5:1 不达标 */
-  --accent-magenta-ink: #a5358c;
+  --accent-magenta-ink: #a83a54;
   --accent-green-ink: #027a45;
   /* 极性配对：墨面文字/图标用的 accent——暗色主题里墨面翻浅时应指向深档 */
   --accent-magenta-on-ink: var(--accent-magenta);
@@ -819,7 +819,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   cursor: pointer;
   transition: color .5s var(--ease-ink), background .2s;
 }
-.pg-icobtn:hover:not(:disabled) { color: var(--accent-magenta); }
+.pg-icobtn:hover:not(:disabled) { color: var(--accent-magenta-ink); } /* 纸面文字走 -ink 档——火烈鸟本色过浅 */
 .pg-icobtn--bare { border-color: transparent; }
 .pg-icobtn--sm { width: 24px; height: 24px; } /* 行内尾键档：⋯/分享 */
 .pg-icobtn:disabled { opacity: .45; cursor: default; }
