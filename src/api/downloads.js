@@ -111,12 +111,30 @@ export const downloadsApi = {
   // 用 playlist.id 直调（服务端 findExistingPlaylistId 按 netease_playlist_id 解析镜像）。
   // 返回 {playlistId, mirrored, skipped}——skipped = 非网易云曲目（bv_*）数
   mirrorLocalPlaylist: (playlist) => {
+    // 瘦身投影：服务端只消费 id/name/ar/al/dt。本地 tracks 存的是全量曲对象
+    // （~2-3KB/首），原样上载 ~400 首就撞 1MB body 上限；投影后 2000 曲 ≈600KB
+    const tracks = (playlist.tracks || []).map(t => t && ({
+      id: t.id,
+      name: t.name,
+      ar: (Array.isArray(t.ar) ? t.ar : t.artists || []).map(a => ({ name: a?.name })),
+      al: {
+        name: t.al?.name || t.album?.name || '',
+        picUrl: t.al?.picUrl || t.album?.picUrl || ''
+      },
+      dt: t.dt || t.duration || 0
+    }))
     return http.post(`${API_BASE_URL}/downloads/local/mirror`, {
       localId: playlist.id,
       name: playlist.name,
       coverImgUrl: playlist.coverImgUrl || '',
-      tracks: playlist.tracks || []
+      tracks
     }, { timeout: 30000 });
+  },
+
+  // 本地单从库中移除时清服务端镜像（行+任务+文件级联）。fire-and-forget 即可——
+  // 失败仅留孤儿行，不阻塞前端删除
+  removeLocalMirror: (localId) => {
+    return http.delete(`${API_BASE_URL}/downloads/local/mirror/${encodeURIComponent(localId)}`);
   },
 
   // 快速下载歌单（建队列 + 启动即返回，后台跑）；歌单未导入时同样要先走上游

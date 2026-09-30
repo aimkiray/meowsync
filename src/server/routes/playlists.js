@@ -90,6 +90,11 @@ app.post('/playlists/:id/refresh', async (c) => {
     if (!existing) {
       return c.json({ code: 404, message: '歌单不存在' }, 404);
     }
+    // 本地歌单镜像行（netease_playlist_id='local_pl_*'）没有远端可刷新源——
+    // 直接 400，省一次注定失败的上游往返
+    if (!/^\d+$/.test(String(existing.neteasePlaylistId || ''))) {
+      return c.json({ code: 400, message: '本地歌单不支持刷新' }, 400);
+    }
     // 删除窗口内的刷新会复活行（事务交错：refresh 的 upsert 在 cascade 的
     // delete 后提交）——前置拒绝；窗口外的并发仍由事务序列化兜底
     if (deletingPlaylists.has(id)) {

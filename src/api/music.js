@@ -286,6 +286,11 @@ export const musicApi = {
       api.get('/song_detail', { params: { ids: ids.join(',') }, signal: abortSignal })
     )
     const data = unwrapBody(response)
+    // 上游业务码非 200（限流/参数错）必须抛错——静默 [] 会让 mix 导入把整块
+    // 记成 skipped 产出残缺单，而幂等壳短路会让它永久无法补齐
+    if (data.code != null && data.code !== 200) {
+      throw new Error(`歌曲详情接口异常（code ${data.code}）`)
+    }
     return data.songs || []
   },
 

@@ -223,6 +223,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { Howl } from 'howler'
 import { musicApi } from './api/music'
+import { downloadsApi } from './api/downloads'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId } from './lib/song'
@@ -795,6 +796,12 @@ export default {
             removedIds.push(String(playlistId))
             writeJSON(REMOVED_DEFAULT_PLAYLISTS_KEY, removedIds)
           }
+        }
+
+        // 本地单可能有服务端镜像产物（镜像行+下载任务+文件）——通知服务端级联清；
+        // 失败仅留孤儿行，本地删除照常生效
+        if (isLocalPlaylistId(playlist.id)) {
+          downloadsApi.removeLocalMirror(playlist.id).catch(() => {})
         }
 
         savePlaylistsToStorage()
@@ -2403,7 +2410,8 @@ export default {
     const MIX_BILI_CAP = 10         // bv_ 逐项 resolveBilibili 受限流（12/min）约束
     const importMixPlaylist = async (mix) => {
       const sep = mix.lastIndexOf('~')
-      const name = (mix.slice(0, sep).trim() || '分享歌单').slice(0, 60)
+      // [...str] 按码点切——slice 按 code unit 会斩断 emoji 代理对留孤代理
+      const name = [...(mix.slice(0, sep).trim() || '分享歌单')].slice(0, 60).join('')
       const seen = new Set()
       const ids = []
       for (const raw of mix.slice(sep + 1).split(',')) {
@@ -2425,6 +2433,11 @@ export default {
       const mixId = `local_pl_mix_${h.toString(36)}`
       const existing = userPlaylists.value.find(p => String(p.id) === mixId)
       if (existing?.tracks?.length) {
+        // 同 ids 改名重分享：壳 id 锚内容，名字跟随最新链接自愈
+        if (name !== '分享歌单' && existing.name !== name) {
+          existing.name = name
+          savePlaylistsToStorage()
+        }
         selectPlaylistAndShow(existing)
         toast(`歌单「${existing.name}」已在库中`, 'info')
         return
@@ -2460,6 +2473,7 @@ export default {
             tracks.push(buildBilibiliSong(await musicApi.resolveBilibili(input)))
           } catch { skipped++ }
         }
+        if (myReq !== biliImportSeq) return
         if (!tracks.length) {
           toast('歌单曲目全部解析失败，请稍后重试', 'error')
           return
@@ -2474,6 +2488,10 @@ export default {
         pl.trackCount = tracks.length
         if (!pl.coverImgUrl) pl.coverImgUrl = tracks[0]?.al?.picUrl || ''
         if (!existing) userPlaylists.value.unshift(pl)
+        // mix 壳是分享导入的快照，封顶 20 个（最新的在头）——防长期累积撞配额
+        let mixSeen = 0
+        userPlaylists.value = userPlaylists.value.filter(p =>
+          !String(p.id).startsWith('local_pl_mix_') || ++mixSeen <= 20)
         savePlaylistsToStorage()
         selectPlaylistAndShow(pl)
         toast(`已导入「${name}」（${tracks.length} 首${skipped ? `，跳过 ${skipped} 首` : ''}）`, 'success')

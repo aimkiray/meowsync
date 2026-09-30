@@ -664,13 +664,14 @@ export default {
       props.songs.find(s => String(s.id) === String(showDownloadMenu.value)) || null
     )
 
-    // 本地内存态歌单（单曲分享/队列存盘）服务端没有对应持久行，不提供服务器下载
+    // 本地内存态歌单：local_pl_/saved_queue_ 经镜像链有服务端下载能力，
+    // 同步等远端专属能力仍按本谓词隐藏
     const isLocalPlaylist = computed(() =>
       isLocalPlaylistId(props.selectedPlaylist?.id)
     )
-    // 单曲分享壳：本地态但语义是"一张曲的分享容器"——不提供移除曲目入口
+    // 单曲分享壳：本地态但语义是"一张曲的分享容器"——不提供移除/服务器下载入口
     const isShareShell = computed(() =>
-      String(props.selectedPlaylist?.id || '').startsWith('single_song_')
+      isSingleSongShellId(props.selectedPlaylist?.id)
     )
 
     // 切换下载菜单显示
@@ -688,7 +689,7 @@ export default {
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
-        // 非本地态歌单且非 B 站曲再多"下载到服务器"——合计 5/6/7 三档。
+        // 除分享壳的歌单且非 B 站曲再多"下载到服务器"——合计 5/6/7 三档。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const itemCount = 5
@@ -801,13 +802,14 @@ export default {
     }
 
     // 批量查询所有歌曲的下载状态：一次 listTasks 拉回该歌单全部任务本地映射，
-    // 避免逐曲 N+1 请求（歌单未导入时服务端返回空数组，天然无副作用）
+    // 避免逐曲 N+1 请求（歌单未导入/未镜像时服务端返回空数组，天然无副作用）
     // 请求序号守卫：切歌单时旧歌单的 in-flight 响应不能写状态（跨歌单同 songId 会串标）
     let statusCheckSeq = 0
     const checkAllSongsDownloadStatus = async () => {
       const seq = ++statusCheckSeq
       const playlistId = props.selectedPlaylist?.id
-      // single_song_ 壳无服务端镜像面，本地单经 findExistingPlaylistId 自然解析
+      // single_song_ 壳无服务端镜像面；local_pl_/saved_queue_ 经镜像行
+      // findExistingPlaylistId 自然解析——无需前置镜像
       if (!playlistId || !props.songs.length || isShareShell.value) {
         serverDownloadedStates.value = {}
         serverDownloadingStates.value = {} // 在途标记同属旧歌单，一并清
