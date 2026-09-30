@@ -10,7 +10,7 @@
     <div class="watch-layout">
       <!-- ══ 左栏 ══ -->
       <div class="watch-main">
-        <div class="watch-cover-wrap">
+        <div class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': biliVideoActive }">
           <!-- B 站视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
                音频模式回落网易云匹配封面——不加载视频即省流量 -->
           <video
@@ -638,13 +638,20 @@ export default {
 }
 
 /* B 站视频模式：16:9 信箱（B 站视频多为横屏，方形裁切会砍画面）；
-   image-rendering 像素化是封面的印刷效果，视频不该继承 */
+   image-rendering 像素化是封面的印刷效果，视频不该继承。
+   视频是主内容、须明显大于方形封面：宽顶满栏位，上限 62vh 反推宽
+   （封面 min(46vh,420px) 面积约 17.6万px²；960×540 ≈ 51.8万，~3×） */
 .watch-cover--video {
+  width: min(100%, 1080px, calc(62vh * 16 / 9));
   aspect-ratio: 16 / 9;
   object-fit: contain;
   image-rendering: auto;
   background: #000;
 }
+
+/* 视频态 wrap 必须占满栏宽：wrap 在 align-items:center 的 flex 栏里是
+   shrink-to-fit，否则视频 width:% 与 wrap 构成循环约束、退回片源内建宽 */
+.watch-cover-wrap--video { width: 100%; }
 
 /* 音画切换的开启态：实心反色——与 pg-tab--active 同一语义 */
 .watch-action--on {
@@ -858,6 +865,8 @@ export default {
 
   .watch-main { overflow: visible; }
   .watch-cover { width: min(64vw, 320px); }
+  /* 视频例外：单列态占满栏宽（整页滚动，高度不占视口预算） */
+  .watch-cover--video { width: 100%; }
 
   .watch-side {
     padding-left: 0;
