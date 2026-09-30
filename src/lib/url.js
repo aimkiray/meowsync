@@ -27,7 +27,9 @@ export function isBilibiliInput(input) {
 export function extractNeteaseSongId(input) {
   const s = String(input || '').trim();
   if (!s) return null;
-  const m = s.match(/song\?[^ ]*?[?&]id=(\d+)/i)      // music.163.com/song?id=N
+  // song\? 吃掉字面 ? 后接 \bid=——id 是首参（song?id=N）或非首参（song?x=1&id=N）
+  // 都命中；不要再要求第二个 [?&]，否则主流形式全灭退回关键词搜索
+  const m = s.match(/song\?[^ ]*?\bid=(\d+)/i)        // music.163.com/[#/]song?id=N
     || s.match(/\/song\/(\d+)/i)                      // .../song/N
     || s.match(/[?&]song=(\d+)/i);                    // 本站 ?song=N 分享链
   if (m) return m[1];
