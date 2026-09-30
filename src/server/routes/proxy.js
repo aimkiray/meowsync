@@ -1,38 +1,19 @@
 const { Hono } = require('hono');
 const { Agent } = require('undici');
 const { rateLimit } = require('../lib/rate-limit');
-// 私网/保留段判定与 DNS 解析校验抽在 src/server/lib/net-guard.js，
-// 与 file-downloader 的下载地址校验共用同一份实现
-const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
+// 私网/保留段判定、DNS 解析校验与代理白名单都抽在 src/server/lib/net-guard.js，
+// 与 file-downloader/netease-api（选源预筛）共用同一份实现
+const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllowedHost } = require('../lib/net-guard');
 
 const app = new Hono();
 
-// 可代理的上行域白名单（收窄到实际 CDN 子域，整棵后缀域放行会把网易 NOS
-// 对象存储等用户可控内容面也纳入可代理范围）：googlevideo（ytdlp 解锁回链）、
-// music.126.net（官方曲库 CDN m*/p* 子域）、kuwo.cn（kuwo 解锁源，sycdn/kwcdn
-// 等 CDN 子域均在其下——域属酷我自营音乐平台）、bilivideo.com/.cn（B 站
-// DASH 音画分流 CDN，playurl 回链即此族；hdslb.com 为其封面图床）——前端
-// "获取源文件"的解锁链 CDN 不带 ACAO 必须走同源代理。白名单只决定"能代理谁"，
-// SSRF 防线由下方逐跳 resolvesToPublicIp 兜底
-const ALLOWED_HOSTS = ['googlevideo.com', 'music.126.net', 'kuwo.cn',
-  'bilivideo.com', 'bilivideo.cn', 'hdslb.com',
-  // QQ 音流：qqmusic.qq.com 全族（ws./isure./dl./cc.stream.qqmusic.qq.com 等
-  // sip 宿主）+ tc.qq.com 只收音乐子族——tc.qq.com 是腾讯通用 CDN（视频/小程序
-  // /广告都在其下），整棵后缀放行会把开放代理面扩到无关业务；sip 偶发返回裸 IP
-  // 宿主——后缀匹配天然拒绝 IP 字面量，候选自动降级
-  'qqmusic.qq.com', 'aqqmusic.tc.qq.com', 'qqmusic.tc.qq.com', 'music.tc.qq.com'];
+// 白名单只决定"能代理谁"，SSRF 防线由下方逐跳 resolvesToPublicIp 兜底；
+// 域枚举与收窄理由见 net-guard.js PROXY_ALLOWED_HOSTS 注释
+const isAllowedHost = isProxyAllowedHost;
 // B 站 CDN 防盗链要求 Referer 头——只对 bilivideo 系注入，不给无关域透信息
 const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
-
-// endsWith 前缀点避免误伤 xgooglevideo.com 这类域名。
-// 安全性依赖 URL parser 的规范化：hostname 已小写化、IPv4 数字形式（0x7f000001/2130706433）
-// 归一化为点分十进制、IDN 转 punycode、Unicode 点（。）归一化为 '.'——因此通过校验的
-// 必然是以白名单域结尾的真实域名；最终仍由每跳公网 IP 校验兜底
-function isAllowedHost(hostname) {
-  return ALLOWED_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
-}
 
 // 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
 app.get('/audio-proxy', async (c) => {
