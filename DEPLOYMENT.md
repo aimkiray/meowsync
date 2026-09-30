@@ -50,6 +50,7 @@ cp .env.example .env
 | AI_API_KEY | - | 可选：OpenAI 兼容接口的 Bearer key |
 | AI_MODEL | - | 可选：模型名（如 `deepseek-v4.1-flash`）。启用后：解锁检索元数据规整、B 站/YouTube 匹配复核与兜底、外部曲歌词归属核验、无译文歌词自动中文翻译 |
 | AI_TIMEOUT_MS | 30000 | AI 单次请求超时（毫秒） |
+| BILI_COOKIE | - | 可选：B 站登录 Cookie（`SESSDATA=…; bili_jct=…`）。杜比/Hi-Res 音轨只对登录账号下发（Hi-Res 通常需大会员）；不配则 B 站下载回落最高码率 AAC |
 | NODE_ENV | development | 环境标识（约定变量，服务代码不直接读取；镜像与 compose 已内置 `production`） |
 
 ## 部署步骤
