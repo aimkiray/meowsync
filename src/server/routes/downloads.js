@@ -2,6 +2,8 @@ const { Hono } = require('hono');
 const downloadManager = require('../services/download-manager');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
 const downloadTasksRepo = require('../repositories/downloadTasks');
+const playlistsRepo = require('../repositories/playlists');
+const playlistTracksRepo = require('../repositories/playlistTracks');
 // 读流按字节硬截断：chunked/无 Content-Length 请求不会被声明值检查拦住
 const { readJsonBody } = require('../lib/http-body');
 const { fail, handleError } = require('../lib/http-error');
@@ -290,6 +292,51 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
     return c.json({ code: 200, data: queue.reused ? { ...progress, reused: true } : progress });
   } catch (error) {
     return handleError(c, error, '快速下载失败');
+  }
+});
+
+// 本地歌单（local_pl_*/saved_queue_*）镜像上传：客户端 tracks 活在 localStorage，
+// 服务端下载链要求 DB 行——把本地单落成 netease_playlist_id=local_<id> 的镜像行，
+// 之后既有路由（quick 建队 / 状态查询 / 文件删除）经 findExistingPlaylistId 的
+// netease_playlist_id 分支全部自然解析，零路由改动。
+// tracks 只收网易云数字 id——bv_* 等无服务端下载源的条目跳过并计数回传。
+const LOCAL_MIRROR_ID_MAX = 80;
+app.post('/downloads/local/mirror', async (c) => {
+  try {
+    const body = await readJsonBody(c);
+    const localId = String(body.localId || '').trim();
+    if (!/^(local_pl_|saved_queue_|single_song_)[\w-]{1,64}$/.test(localId)
+        || localId.length > LOCAL_MIRROR_ID_MAX) {
+      return fail(c, 400, '无效的本地歌单 ID');
+    }
+    const rawTracks = Array.isArray(body.tracks) ? body.tracks.slice(0, 2000) : [];
+    if (!rawTracks.length) return fail(c, 400, '歌单中没有歌曲');
+    // 只留可下载的网易云曲目（数字 id）；bv_ 等跳过并回传计数让前端提示
+    const tracks = rawTracks
+      .filter(t => t && /^\d+$/.test(String(t.id ?? '')))
+      .map(t => ({
+        id: String(t.id),
+        name: String(t.name || '未知歌曲').slice(0, 200),
+        ar: Array.isArray(t.ar || t.artists) ? (t.ar || t.artists).slice(0, 20) : [],
+        al: (t.al && typeof t.al === 'object') ? t.al
+          : (t.album && typeof t.album === 'object') ? t.album : {},
+        dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0)
+      }));
+    const skipped = rawTracks.length - tracks.length;
+    if (!tracks.length) return fail(c, 400, `没有可下载的网易云歌曲（跳过 ${skipped} 首非网易云曲目）`);
+    const name = String(body.name || '本地歌单').slice(0, 200);
+    const pl = playlistsRepo.upsertPlaylist({
+      neteasePlaylistId: localId,
+      name,
+      coverImgUrl: String(body.coverImgUrl || '').slice(0, 500),
+      creatorNickname: '本地歌单',
+      trackCount: tracks.length,
+      source: 'local'
+    });
+    playlistTracksRepo.replaceTracksForPlaylist(pl.id, tracks);
+    return c.json({ code: 200, data: { playlistId: pl.id, mirrored: tracks.length, skipped } });
+  } catch (error) {
+    return handleError(c, error, '本地歌单镜像失败');
   }
 });
 

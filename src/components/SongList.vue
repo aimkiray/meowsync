@@ -222,10 +222,10 @@
             <PixelIcon name="download" :size="13" /> {{ menuSong?.bilibili ? '获取源文件 (m4a)' : '获取源文件 (320k)' }}
           </div>
 
-          <!-- 下载到服务器 / 删除已下载（临时单曲歌单没有服务端持久化意义，隐藏；
-               B 站曲无服务端持久化路径同样不渲染；未选歌单时选了也只会 alert） -->
+          <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
+               local_pl_/saved_queue_ 经镜像链走既有路由。B 站曲无服务端下载源不渲染 -->
           <div
-            v-if="!isLocalPlaylist && selectedPlaylist && !menuSong?.bilibili"
+            v-if="!isShareShell && selectedPlaylist && !menuSong?.bilibili && !String(menuSong?.id ?? '').startsWith('bv_')"
             class="pg-menu-item"
             :class="{ 'pg-menu-item--danger': serverDownloadedStates[showDownloadMenu] }"
             role="menuitem"
@@ -597,7 +597,7 @@ import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
-import { isVipSong, isLocalPlaylistId } from '../lib/song'
+import { isVipSong, isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
 import { shareOrCopy } from '../lib/share'
 import { toast, pixelConfirm } from '../lib/feedback'
 
@@ -693,7 +693,7 @@ export default {
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const itemCount = 5
           + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
-          + ((!isLocalPlaylist.value && props.selectedPlaylist && !targetSong?.bilibili) ? 1 : 0)
+          + ((!isShareShell.value && props.selectedPlaylist && !targetSong?.bilibili && !String(targetSong?.id ?? '').startsWith('bv_')) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -807,7 +807,8 @@ export default {
     const checkAllSongsDownloadStatus = async () => {
       const seq = ++statusCheckSeq
       const playlistId = props.selectedPlaylist?.id
-      if (!playlistId || !props.songs.length || isLocalPlaylist.value) {
+      // single_song_ 壳无服务端镜像面，本地单经 findExistingPlaylistId 自然解析
+      if (!playlistId || !props.songs.length || isShareShell.value) {
         serverDownloadedStates.value = {}
         serverDownloadingStates.value = {} // 在途标记同属旧歌单，一并清
         return
@@ -857,6 +858,8 @@ export default {
         return
       }
 
+      // 本地单下载前先镜像——服务端任务按歌单行组织，镜像后 playlist.id
+      // 经 findExistingPlaylistId 解析即可复用全部既有路由
       const isDownloaded = serverDownloadedStates.value[song.id]
       // 请求在途时用户可能已切换歌单——响应落地后写状态会污染新歌单的同 id 歌曲
       // （状态 map 是"当前歌单"的视图，写前必须确认归属未变）
@@ -891,6 +894,9 @@ export default {
         // 长下载不会被反代/浏览器超时切断，重试也不会撞出脏响应）
         try {
           serverDownloadingStates.value[song.id] = true
+          if (isLocalPlaylist.value) {
+            await downloadsApi.mirrorLocalPlaylist(props.selectedPlaylist)
+          }
           const response = await downloadsApi.downloadSongToServer(ownerPlaylistId, song.id, {
             bitrate: 320000,
             downloadAudio: true,

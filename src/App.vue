@@ -1444,7 +1444,7 @@ export default {
     }
 
     // 用户新建歌单用 local_pl_ 前缀：isLocalPlaylistId 全链路（持久化保留 tracks /
-    // 内嵌加载 / 不进 URL / 隐藏分享下载入口）现成正确，且不继承 saved_queue_
+    // 内嵌加载 / ?mix= 内容分享链 / 镜像服务端下载）现成正确，且不继承 saved_queue_
     // 的「播放上下文物件」语义（playerIsTemp 不禁随机）
     const createPlaylistAndAdd = () => {
       const name = newPlaylistName.value.trim()
@@ -2390,12 +2390,106 @@ export default {
     }
 
 
+    // ?mix=<name>~id1,id2,bv_X_pN 本地歌单内容携带链：数字 id 走网易云批量详情，
+    // bv_ 段逐个 resolveBilibili。~ 用 lastIndexOf 取——name 里本身可以含 ~
+    const getMixFromUrl = () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const mix = urlParams.get('mix')
+      if (!mix || !mix.includes('~')) return null
+      return mix
+    }
+
+    const MIX_IMPORT_CAP = 300      // 与生成侧 shareUrlFor 的截断对齐
+    const MIX_BILI_CAP = 10         // bv_ 逐项 resolveBilibili 受限流（12/min）约束
+    const importMixPlaylist = async (mix) => {
+      const sep = mix.lastIndexOf('~')
+      const name = (mix.slice(0, sep).trim() || '分享歌单').slice(0, 60)
+      const seen = new Set()
+      const ids = []
+      for (const raw of mix.slice(sep + 1).split(',')) {
+        const id = raw.trim()
+        if (!(/^\d+$/.test(id) || /^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id))) continue
+        if (seen.has(id)) continue
+        seen.add(id)
+        ids.push(id)
+        if (ids.length >= MIX_IMPORT_CAP) break
+      }
+      if (!ids.length) {
+        toast('分享链接里没有可导入的歌曲', 'info')
+        return
+      }
+
+      // 确定性壳 id（fnv-1a32）：同一链接重复打开复用壳而非复制
+      let h = 0x811c9dc5
+      for (const ch of ids.join(',')) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0 }
+      const mixId = `local_pl_mix_${h.toString(36)}`
+      const existing = userPlaylists.value.find(p => String(p.id) === mixId)
+      if (existing?.tracks?.length) {
+        selectPlaylistAndShow(existing)
+        toast(`歌单「${existing.name}」已在库中`, 'info')
+        return
+      }
+
+      const myReq = ++biliImportSeq
+      selectReqId++
+      loadingSongs.value = false
+      toast(`正在导入分享歌单「${name}」…`, 'info', 30000)
+      try {
+        const numericIds = ids.filter(id => /^\d+$/.test(id))
+        const detailMap = new Map()
+        // 批量详情按 50/块切分——上游单请求 ids 串过长会被截断
+        for (let i = 0; i < numericIds.length; i += 50) {
+          const chunk = await musicApi.getSongsDetail(numericIds.slice(i, i + 50))
+          for (const s of chunk) detailMap.set(String(s.id), s)
+        }
+        const tracks = []
+        let biliCount = 0
+        let skipped = 0
+        for (const id of ids) {
+          if (myReq !== biliImportSeq) return
+          if (/^\d+$/.test(id)) {
+            const s = detailMap.get(id)
+            if (s) tracks.push(s); else skipped++
+            continue
+          }
+          if (++biliCount > MIX_BILI_CAP) { skipped++; continue }
+          const m = /^bv_(BV[0-9A-Za-z]{10})(?:_p(\d+))?$/i.exec(id)
+          if (!m) { skipped++; continue }
+          try {
+            const input = m[2] ? `${m[1]}?p=${m[2]}` : m[1]
+            tracks.push(buildBilibiliSong(await musicApi.resolveBilibili(input)))
+          } catch { skipped++ }
+        }
+        if (!tracks.length) {
+          toast('歌单曲目全部解析失败，请稍后重试', 'error')
+          return
+        }
+        const pl = existing || {
+          id: mixId, name,
+          coverImgUrl: tracks[0]?.al?.picUrl || '',
+          creator: { nickname: '分享导入' },
+          trackCount: 0, tracks: [], isLocal: true
+        }
+        pl.tracks = tracks
+        pl.trackCount = tracks.length
+        if (!pl.coverImgUrl) pl.coverImgUrl = tracks[0]?.al?.picUrl || ''
+        if (!existing) userPlaylists.value.unshift(pl)
+        savePlaylistsToStorage()
+        selectPlaylistAndShow(pl)
+        toast(`已导入「${name}」（${tracks.length} 首${skipped ? `，跳过 ${skipped} 首` : ''}）`, 'success')
+      } catch (error) {
+        if (myReq !== biliImportSeq) return
+        console.error('mix 导入失败:', error)
+        toast(`导入分享歌单失败：${error.message || '请稍后重试'}`, 'error', 5000)
+      }
+    }
+
     // 消费掉一次性 URL 参数：不清理的话每次刷新都会重新劫持恢复逻辑
     // （?song= 会永久抢占 restorePlaybackState；?playlists= 会重复尝试导入）
     const consumeUrlShareParams = () => {
       const url = new URL(window.location.href)
       let changed = false
-      for (const key of ['song', 'playlist', 'playlists', 'bili', 'p']) {
+      for (const key of ['song', 'playlist', 'playlists', 'bili', 'p', 'mix']) {
         if (url.searchParams.has(key)) {
           url.searchParams.delete(key)
           changed = true
@@ -2542,11 +2636,15 @@ export default {
       // 如果有单首歌曲ID，尝试加载并播放
       const songId = getSongIdFromUrl()
       const biliInput = getBiliFromUrl()
+      const mixInput = getMixFromUrl()
       // 所有参数读取已完毕——消费掉，避免下次刷新重新劫持恢复逻辑
       consumeUrlShareParams()
       if (biliInput) {
         // ?bili= 分享链：走与搜索框导入同一条路
         await importBilibili(biliInput)
+      } else if (mixInput) {
+        // ?mix= 本地歌单内容链：重建 local_pl_mix_ 壳
+        await importMixPlaylist(mixInput)
       } else if (songId) {
         console.log('🎵 检测到单首歌曲分享，歌曲ID:', songId)
         try {
@@ -2725,6 +2823,7 @@ export default {
       loadPlaylistByIdAndAdd,
       loadPlaylistById,
       importBilibili,
+      importMixPlaylist,
       addPlaylistToLibrary,
       removePlaylistFromLibrary,
       handlePlaylistDownloadsDeleted,

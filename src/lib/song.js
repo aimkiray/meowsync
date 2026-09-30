@@ -24,6 +24,15 @@ export function isEphemeralPlaylistId(id) {
   return s.startsWith('single_song_') || s.startsWith('saved_queue_')
 }
 
+/**
+ * 单曲分享壳（single_song_*）——只装一首分享曲的容器，不提供歌单级
+ * 分享/下载入口（单条曲目级分享已覆盖）。local_pl_/saved_queue_ 是正经
+ * 内容歌单，享受远端单同款能力（mix 分享链 + 服务端镜像下载）。
+ */
+export function isSingleSongShellId(id) {
+  return String(id ?? '').startsWith('single_song_')
+}
+
 /** 艺人名兜底：ar||artists 数组 → "a, b"，空则 未知艺术家 */
 export function songArtists(song) {
   const list = song?.ar || song?.artists || []
