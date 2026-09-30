@@ -4,9 +4,6 @@
   <div class="watch-view">
     <header class="watch-header">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="13" />返回</button>
-      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('open-fullscreen')" title="全屏歌词模式">
-        <PixelIcon name="expand" :size="13" /> 沉浸
-      </button>
     </header>
 
     <div class="watch-layout">
@@ -21,6 +18,12 @@
             :class="{ 'playing-animation': isPlaying }"
           />
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
+          <button
+            class="pg-icobtn watch-cover-expand"
+            @click="$emit('open-fullscreen')"
+            aria-label="沉浸模式"
+            title="全屏歌词模式"
+          ><PixelIcon name="expand" :size="14" /></button>
         </div>
 
         <h2 class="watch-title" data-nosnippet>{{ currentSong?.name || '未播放' }}</h2>
@@ -510,6 +513,23 @@ export default {
   justify-content: center;
   color: var(--ink-64);
   background: var(--paper);
+}
+
+.watch-cover-wrap { position: relative; }
+
+/* 封面右上角沉浸入口：墨底纸字——叠在任意封面上都保可读 */
+.watch-cover-expand {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--paper);
+}
+.watch-cover-expand:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--accent-magenta-on-ink);
+  border-color: var(--paper);
 }
 
 .watch-title {
