@@ -470,7 +470,8 @@ export default {
 .pl-actions {
   position: absolute;
   top: 50%;
-  right: 6px;
+  /* 与封面侧同档：块内右 4px（块外 margin 12 两侧已对称 → 栏缘到内容左右各 16px） */
+  right: 4px;
   transform: translateY(-50%);
   display: flex;
   gap: 2px;
