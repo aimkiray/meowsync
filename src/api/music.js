@@ -393,7 +393,8 @@ function mergeTranslations(lyrics, translations) {
     const translation = translations[j] && Math.abs(translations[j].time - lyric.time) < 0.5
       ? translations[j].text
       : ''
-    return { ...lyric, translation }
+    // AI 译文里未译行回填的是原文（占住时间戳防邻行错贴）——同文即未译不显示
+    return { ...lyric, translation: translation === lyric.text ? '' : translation }
   })
 }
 

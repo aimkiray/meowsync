@@ -13,11 +13,17 @@ const shareName = (a, b) => {
   return na.length >= 2 && nb.length >= 2 && (na.includes(nb) || nb.includes(na));
 };
 
+// 进 prompt 的字段统一净化：来源标题/频道名是 UGC、上游歌名/歌手/专辑
+// 是第三方数据——剥换行与方括号，至少让注入无法伪造消息边界/候选行
+const cleanPrompt = (s) => String(s ?? '')
+  .replace(/[\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+
 const songDesc = (s) => {
-  const artists = (s.ar || s.artists || []).map(a => a.name).filter(Boolean).join('/') || '未知';
-  const dur = Math.round((s.dt || s.duration || 0) / 1000);
-  const album = s.al?.name || s.album?.name || '未知';
-  return `${s.name} — ${artists}（${dur}s，专辑《${album}》）`;
+  const arr = Array.isArray(s?.ar || s?.artists) ? (s.ar || s.artists) : [];
+  const artists = arr.map(a => a?.name).filter(Boolean).join('/') || '未知';
+  const dur = Math.round((s?.dt || s?.duration || 0) / 1000);
+  const album = s?.al?.name || s?.album?.name || '未知';
+  return `${cleanPrompt(s?.name)} — ${cleanPrompt(artists)}（${dur}s，专辑《${cleanPrompt(album)}》）`;
 };
 
 // AI 确认：时长-only 命中是错配高发场景（歌名不互包含只靠时长窗）——
@@ -27,7 +33,7 @@ async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
     system: '你是音乐识别助手。判断候选歌曲与来源音/视频是不是同一首歌'
       + '（同一录音、官方版本，或同一首歌的不同平台发布）。歌名不同语言/译名差异属正常。'
       + '只输出 JSON {"match":true|false}。',
-    user: `来源：${sourceInfo.title || ''} — ${sourceInfo.author || '未知'}（${durationSec || '?'}s）\n候选：${songDesc(song)}`,
+    user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s）\n候选：${songDesc(song)}`,
     maxTokens: 32,
     signal,
   });
@@ -47,7 +53,7 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
     system: '你是音乐识别助手。从候选列表选出与来源音/视频同一首歌的编号'
       + '（同一录音/官方版本/同名同曲的不同发布都算；翻唱/混音/live 版本不算）。'
       + '都不符返回 {"match":0}，能确定返回 {"match":编号}。只输出 JSON。',
-    user: `来源：${sourceInfo.title || ''} — ${sourceInfo.author || '未知'}（${durationSec || '?'}s）\n候选：\n${desc}`,
+    user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s）\n候选：\n${desc}`,
     maxTokens: 32,
     signal,
   });
@@ -86,12 +92,15 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       if (!Array.isArray(songs) || !songs.length) continue;
       for (const s of songs) if (s?.id != null) seenSongs.set(s.id, s);
       const byName = songs.find(s => shareName(s.name, q));
+      // name 命中不查 vetoedIds——确定性的歌名互包含是强证据，
+      // 优先于弱证据（纯时长）场景下模型给出的否决
       if (byName) return { song: byName, query: q };
       // 时长 sanity 只在有真实时长时启用——源时长 0（live/首映/字段缺失）会把
       // ≤45s 的短曲错配（|x-0|≤45 窗口对 0 恒成立的方向性失真）
       if (Number.isFinite(durationSec) && durationSec > 0) {
-        // 被 AI 否决过的歌直接从时长候选池剔除——本串不再重问（省额度），
-        // 也让窗内次优候选有机会被复核；后续候选串同理不重问
+        // 被 AI 否决过的歌直接从时长候选池剔除——本串及后续串都不再重问
+        // （省额度的一票否决）；本串否决即 continue 不重选次优，次优只能在
+        // 后续串的搜索结果里因正主被过滤而胜出时才获得复核机会
         const byDur = songs
           .map(s => ({ s, diff: Math.abs((s.dt || s.duration || 0) / 1000 - durationSec) }))
           .filter(x => x.diff <= MATCH_DUR_TOLERANCE_SEC && !vetoedIds.has(x.s.id))

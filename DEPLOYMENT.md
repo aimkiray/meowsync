@@ -156,7 +156,10 @@ server {
 > 剩余长耗时请求是音频流代理与歌单首次导入（上游往返两次），300s 足够。
 
 > 使用反向代理时在 `.env` 设置 `TRUST_PROXY=1`，使 `/song_url` 解锁
-> 下发的 `/audio-proxy` 地址使用正确的 `https://` 对外地址。
+> 下发的 `/audio-proxy` 地址使用正确的 `https://` 对外地址——同时它也是
+> IP 级限流的正确分桶前提：未设 TRUST_PROXY 时所有客户端共享反代出口 IP，
+> `with-nginx` profile 已回传 `X-Forwarded-For`，两个配置须成对出现，
+> 否则 `/ai/*`、`/downloads/*` 等按 IP 限流的接口会退化成全局单桶互相饿死。
 
 ## 远程遥控
 
