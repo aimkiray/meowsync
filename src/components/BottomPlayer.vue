@@ -352,7 +352,7 @@ export default {
   cursor: pointer;
   z-index: 2;
 }
-.bp-progress-fill { background: var(--paper); }
+.bp-progress-fill { background: var(--accent-magenta); } /* 已播部分=accent 本色（retro 火烈鸟粉 / glitch teal 同覆写） */
 
 .player-content { position: relative; }
 

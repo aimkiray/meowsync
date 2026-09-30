@@ -322,7 +322,7 @@ onUnmounted(() => {
   --white-16: rgba(255, 255, 255, .16);
   --white-40: rgba(255, 255, 255, .40);
   --white-80: rgba(255, 255, 255, .8);
-  --accent-magenta: #d45bb6;
+  --accent-magenta: #fc8eac;
   --accent-magenta-on-ink: var(--accent-magenta);
   /* 字体也 pin——glitch 主题会把 --font-* 整体翻成像素族 */
   --font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
