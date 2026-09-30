@@ -235,7 +235,7 @@
             @keydown.enter="downloadSongDirect(menuSong, 320000)"
             @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
-            <PixelIcon name="download" :size="13" /> {{ (menuSong?.bilibili || menuSong?.youtube) ? '获取源文件 (m4a)' : '获取源文件 (320k)' }}
+            <PixelIcon name="download" :size="13" /> {{ (menuSong?.bilibili || menuSong?.youtube) ? '获取源文件（最优音质）' : '获取源文件 (320k)' }}
           </div>
 
           <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
@@ -813,7 +813,8 @@ export default {
         downloadingStates.value[song.id] = true
         // blob 下载全程无浏览器自带进度提示——先给一个开始戳记，终点由浏览器下载栏呈现
         toast(`正在获取「${song.name}」…`, 'info')
-        // 外部导入曲没有网易云下载链——拉自己的 /bilibili|youtube/stream（m4a）
+        // 外部导入曲没有网易云下载链——拉自己的 /bilibili|youtube/stream
+        // （prefer=best：B 站可拿 Hi-Res FLAC/杜比，YouTube 拿 Opus 251）
         if (song.bilibili?.bvid) await musicApi.downloadBilibiliSong(song)
         else if (song.youtube?.videoId) await musicApi.downloadYouTubeSong(song)
         else await musicApi.downloadSong(song, bitrate)

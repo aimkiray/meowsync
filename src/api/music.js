@@ -354,8 +354,11 @@ export const musicApi = {
   // /audio-proxy——kind=video 拿 avc1 adaptive（静音补画面），audio 默认优先
   // mp4a（Safari 兼容）；prefer=best 给下载归档用——按码率取最优（Opus 251
   // 全频带，AAC 140 在 16kHz 被低通截断）
-  youtubeStreamUrl: (videoId, kind = 'audio', prefer = '') =>
-    `${API_BASE_URL}/youtube/stream?v=${encodeURIComponent(videoId)}&kind=${kind}${prefer ? `&prefer=${prefer}` : ''}`,
+  youtubeStreamUrl: (videoId, kind = 'audio', prefer = '') => {
+    const params = new URLSearchParams({ v: videoId, kind })
+    if (prefer) params.set('prefer', prefer)
+    return `${API_BASE_URL}/youtube/stream?${params}`
+  },
 
   // YouTube 曲的"获取源文件"：prefer=best 抓 Opus 251（扩展名按实际
   // Content-Type 落地——webm，不是强行塞 m4a）
@@ -377,13 +380,41 @@ const STREAM_EXT = {
   'audio/mpeg': '.mp3', 'audio/flac': '.flac', 'audio/x-flac': '.flac',
   'video/mp4': '.mp4', 'video/webm': '.webm'
 }
+// 文件头魔数 → 扩展名：flac 'fLaC' / webm+mkv EBML / mp4族 'ftyp' 在第5字节 /
+// ogg 'OggS' / mp3 'ID3' 或帧同步 0xFFEx。读前 12 字节足够
+async function sniffExt(blob) {
+  const buf = new Uint8Array(await blob.slice(0, 12).arrayBuffer())
+  const hex = [...buf].map(b => b.toString(16).padStart(2, '0')).join('')
+  if (hex.startsWith('664c6143')) return '.flac'
+  if (hex.startsWith('1a45dfa3')) return '.webm'
+  if (hex.slice(8, 16) === '66747970') return '.m4a'
+  if (hex.startsWith('4f676753')) return '.ogg'
+  if (hex.startsWith('494433') || hex.startsWith('ffe')) return '.mp3'
+  return null
+}
+// prefer=best 在配了 DOWNLOAD_TOKEN+BILI_COOKIE 的部署要令牌——带上无妨，
+// 未配令牌门的服务端会忽略它
+const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
 async function saveStreamAsFile(url, fileName) {
-  const resp = await fetch(url)
-  if (!resp.ok) throw new Error(`下载失败: HTTP ${resp.status}`)
-  const ct = (resp.headers.get('content-type') || '').split(';')[0].trim()
-  const ext = STREAM_EXT[ct]
-  if (ext) fileName = fileName.replace(/\.[a-z0-9]+$/i, ext)
+  const resp = await fetch(url, {
+    headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
+  })
+  if (!resp.ok) {
+    // 服务端错误体是 {code,message}——「该视频没有可代理的音频流」这类
+    // 具体原因上屏好过裸状态码
+    const msg = await resp.json().then(d => d?.message).catch(() => null)
+    throw new Error(msg || `下载失败: HTTP ${resp.status}`)
+  }
   const blob = await resp.blob()
+  const ct = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+  // 魔数优先于 Content-Type：代理对缺 CT 的上游兜 audio/mp4，魔数是字节
+  // 真相——flac 字节流被存成 .m4a 比没扩展名更误导；两者都缺再回落调用方
+  const ext = await sniffExt(blob) || STREAM_EXT[ct]
+  if (ext) {
+    fileName = /\.[a-z0-9]+$/i.test(fileName)
+      ? fileName.replace(/\.[a-z0-9]+$/i, ext)
+      : fileName + ext
+  }
   const objectUrl = URL.createObjectURL(blob)
   const safeName = fileName.replace(/[\\/:*?"<>|]/g, '_')
   const link = document.createElement('a')

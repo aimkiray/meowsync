@@ -127,7 +127,11 @@ function pickStreamList(data, kind, prefer = '') {
   const progressive = Array.isArray(data?.formats) ? data.formats : [];
   const usable = (f) => typeof f?.url === 'string' && f.url;
   if (kind === 'audio') {
-    const audios = adaptive.filter(f => usable(f) && (f.mimeType || '').startsWith('audio/'));
+    // 多配音/口述影像轨（MrBeast 类稿件）带 audioTrack 元数据——非默认轨
+    // 不该按码率赢过原声轨（否则下载/播放拿到外语配音）
+    const audios = adaptive.filter(f => usable(f)
+      && (f.mimeType || '').startsWith('audio/')
+      && f.audioTrack?.audioIsDefault !== false);
     if (prefer === 'best') {
       return audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
     }
