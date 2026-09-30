@@ -294,6 +294,16 @@
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
 }
+/* 添加到歌单模态 = dialog 族（同 fb-dialog 档：8px 半径 + .18 深影 + fade 入场）；
+   overflow:hidden 防 pg-menu-item 方角 hover 底戳穿圆角 */
+:root[data-theme="glitch-restoration"] .atp-dialog {
+  border-color: transparent;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+  overflow: hidden;
+  animation: .3s glitchFadeIn;
+}
+:root[data-theme="glitch-restoration"] .atp-new input { border-radius: 4px; }
 
 /* teal 本色在纸面仅 ~2.1:1——纸面文字/图标 hover 一律走 accent-deep；
    墨面变体排除掉（accent-deep 在 slate 上仅 ~1.5:1 隐形），另行走亮档 */
@@ -489,7 +499,7 @@ button {
 
 /* 盒件内环（印刷签名）：发丝线内收 4px 的描边 */
 .ink-btn:focus-visible, .pg-icobtn:focus-visible, .pg-tab:focus-visible,
-.pg-chip:focus-visible, .pg-field:focus-within, .queue-row:focus-visible,
+.pg-chip:focus-visible, .pg-field:focus-within,
 .song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
 .pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
 .song-result-main:focus-visible,
@@ -991,7 +1001,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-field:focus-within { outline: 2px solid currentColor; outline-offset: -1px; }
 /* iOS 防缩放：<16px 的 input 聚焦会触发整页 zoom */
 @media (max-width: 700px) {
-  .pg-field input { font-size: 16px; }
+  /* iOS：<16px 文字输入聚焦触发整页 zoom（atp 对话框打开即 autofocus） */
+  .pg-field input, .atp-new input { font-size: 16px; }
 }
 
 /* 浮动菜单（teleport 到 body 脱离组件作用域——必须全局类） */
@@ -1001,7 +1012,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border: var(--hairline);
   z-index: var(--z-menu);
   min-width: 160px;
-  overflow: hidden;
+  overflow-y: auto;
+  /* 矮视口防截底：6 项菜单 ~278px，vh < ~290 时翻上后仍会出底缘——可滚兜底 */
+  max-height: calc(100vh - 16px);
 }
 .pg-menu-head {
   padding: 9px 12px;
@@ -1042,7 +1055,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, .18);
+  background: var(--scrim); /* 与 fb-overlay/sidebar-scrim 同令牌，主题随动 */
 }
 .atp-dialog {
   width: min(300px, 86vw);
@@ -1052,15 +1065,13 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   background: var(--paper);
   border: var(--hairline);
 }
-.atp-list { overflow-y: auto; }
-.atp-item { width: 100%; }
+.atp-list { overflow-y: auto; min-height: 0; } /* 显式化收缩意图（overflow 已隐式清零，注释防回归） */
 .atp-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
 }
 .atp-count {
   flex-shrink: 0;
@@ -1076,6 +1087,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .atp-new {
   display: flex;
+  align-items: center; /* input 28px vs ink-btn--sm 32px——不居中会底沿悬空 4px */
   gap: 8px;
   padding: 8px;
   border-top: var(--hairline-soft);
@@ -1091,6 +1103,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   font-family: var(--font-mono);
   font-size: 12px;
 }
+/* 内陷环与 border 连成 ~2.4px 墨带——与 .pg-field:focus-within 同构的「加粗框」签名 */
 .atp-new input:focus-visible { outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
 
 /* 待播队列行（watch 侧栏共用）：行是容器，点击区收进 .queue-row-main

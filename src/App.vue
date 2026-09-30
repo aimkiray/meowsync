@@ -147,7 +147,6 @@
         v-if="addTargetSong"
         class="atp-overlay"
         @click="addTargetSong = null"
-        @keydown.esc="addTargetSong = null"
       >
         <div
           class="atp-dialog"
@@ -159,7 +158,7 @@
           <div class="pg-menu-head">添加到歌单 · {{ addTargetSong.name }}</div>
           <div class="atp-list">
             <button
-              v-for="pl in userPlaylists"
+              v-for="pl in addablePlaylists"
               :key="pl.id"
               class="pg-menu-item atp-item"
               :title="`加入《${pl.name}》`"
@@ -169,7 +168,7 @@
               <span class="atp-name">{{ pl.name }}</span>
               <span class="atp-count">{{ pl.trackCount ?? pl.tracks?.length ?? 0 }} 首</span>
             </button>
-            <p v-if="!userPlaylists.length" class="atp-empty">还没有歌单，在下面建一个</p>
+            <p v-if="!addablePlaylists.length" class="atp-empty">还没有歌单，在下面建一个</p>
           </div>
           <div class="atp-new">
             <input
@@ -222,7 +221,7 @@ import { Howl } from 'howler'
 import { musicApi } from './api/music'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
-import { isVipSong, isLocalPlaylistId } from './lib/song'
+import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId } from './lib/song'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
 import { httpsCover } from './lib/url'
@@ -888,9 +887,17 @@ export default {
           const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
           if (myReq !== selectReqId) return false // 已被更新的选择取代，丢弃过期数据
           const fetchedTracks = fullPlaylist?.tracks || []
-          // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧
-          const addedTracks = (playlist.addedTracks || [])
+          // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧。
+          // 读库对象而非调用方传入的 playlist——搜索结果/stub 打开同一库中单时
+          // 参数对象上没有 addedTracks（视图会丢追加曲且 trackCount 被回写成远端值）
+          const libPl = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
+          const addedTracks = (libPl?.addedTracks ?? playlist.addedTracks ?? [])
             .filter(t => t && !fetchedTracks.some(f => String(f.id) === String(t.id)))
+          // 净化回写：远端已含的追加条目永久清掉，堵幻影持久化/僵尸复活通道
+          if (libPl?.addedTracks && libPl.addedTracks.length !== addedTracks.length) {
+            libPl.addedTracks = addedTracks
+            savePlaylistsToStorage()
+          }
           songs.value = [...fetchedTracks, ...addedTracks]
           console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
 
@@ -1095,8 +1102,9 @@ export default {
       if (queueOwner.value) selectPlaylistAndShow(queueOwner.value)
     }
 
-    // 队列归属本地临时歌单（单曲分享/saved_queue_*）——底栏据此禁用随机键
-    const playerIsTemp = computed(() => isLocalPlaylistId(playingPlaylistId.value))
+    // 队列归属播放上下文物件（单曲分享壳/saved_queue_* 队列快照）——底栏据此禁用随机键；
+    // local_pl_* 用户歌单不在此列（是正经歌单，随机可用）
+    const playerIsTemp = computed(() => isEphemeralPlaylistId(playingPlaylistId.value))
 
     // 播放条 ☰/词 开关 → 打开 watch 页对应 tab（YTM：UP NEXT/歌词都是页内栏位）。
     // 已在 watch 且同 tab 再点 = 收起回上一页（YTM miniplayer 同款开合）
@@ -1206,22 +1214,29 @@ export default {
 
     // ── 添加到歌单（待播/相关/歌单页/搜索结果行尾键共用入口） ──
     // 远端歌单不能整表存 tracks——本地追加记 addedTracks，selectPlaylist 拉取后合并；
-    // 本地歌单（saved_queue_ 系）tracks 直接追加，持久化整条保留
+    // 本地歌单（local_pl_/saved_queue_ 系）tracks 直接追加，持久化整条保留
     const addTargetSong = ref(null)
     const newPlaylistName = ref('')
     const atpInput = ref(null)
+    // 可选目标排除 single_song_ 分享壳：它会被「超 10 个剪枝」自动销毁，
+    // 用户加进去的曲会随壳静默消失（数据丢失通道）
+    const addablePlaylists = computed(() =>
+      userPlaylists.value.filter(p => !String(p.id).startsWith('single_song_'))
+    )
     const openAddToPlaylist = (song) => {
-      if (!song || song.id == null) return
+      if (!song || song.id == null) {
+        toast('这首歌无法加入歌单', 'error')
+        return
+      }
       newPlaylistName.value = ''
       addTargetSong.value = song
     }
-    // 对话框开启期间：Esc 全局可关（overlay 上的 keydown 只在焦点位于框内时冒泡到），
-    // 焦点移入输入框——键盘流可立即输入新歌单名
+    // 对话框开启期间：焦点移入输入框（键盘流可立即输入新歌单名）；
+    // Esc 由 onGlobalKeydown 统一冻结处理，此处只管焦点归还（还给触发键）
     watch(addTargetSong, async (v, _prev, onCleanup) => {
       if (!v) return
-      const onKey = (e) => { if (e.key === 'Escape') addTargetSong.value = null }
-      document.addEventListener('keydown', onKey)
-      onCleanup(() => document.removeEventListener('keydown', onKey))
+      const prevFocus = document.activeElement
+      onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus() })
       await nextTick()
       atpInput.value?.focus()
     })
@@ -1235,30 +1250,38 @@ export default {
         addTargetSong.value = null
         return
       }
-      const entry = { ...song, __localAdded: true }
+      const entry = { ...song }
+      // 正打开着这张单——行表即时追加，不等下次拉取。
+      // 本地单必须走这里：selectPlaylist 的 `songs = pl.tracks` 共享引用会被
+      // 下面的 [...] 重赋值断开，不追加则本会话内该单永远少这首
+      const isOpenTarget = String(selectedPlaylist.value?.id) === String(pl.id)
       if (isLocalPlaylistId(pl.id)) {
         pl.tracks = [...(pl.tracks || []), entry]
       } else {
         pl.addedTracks = [...(pl.addedTracks || []), entry]
-        // 正打开着这张歌单——行表即时追加，不等下次拉取
-        if (String(selectedPlaylist.value?.id) === String(pl.id)) {
-          songs.value = [...songs.value, entry]
-        }
       }
       pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1
+      if (isOpenTarget) {
+        songs.value = [...songs.value, entry]
+        // 远端单的 selectedPlaylist 是 merge 快照（非库对象代理），hero 计数手动同步
+        if (selectedPlaylist.value !== pl) {
+          selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: pl.trackCount }
+        }
+      }
       savePlaylistsToStorage()
       toast(`已加入《${pl.name}》`, 'success')
       addTargetSong.value = null
     }
 
-    // 新建歌单借 saved_queue_ 前缀：isLocalPlaylistId 全链路（持久化保留 tracks /
-    // 内嵌加载 / 不进 URL / 隐藏分享下载入口）对它语义现成正确
+    // 用户新建歌单用 local_pl_ 前缀：isLocalPlaylistId 全链路（持久化保留 tracks /
+    // 内嵌加载 / 不进 URL / 隐藏分享下载入口）现成正确，且不继承 saved_queue_
+    // 的「播放上下文物件」语义（playerIsTemp 不禁随机）
     const createPlaylistAndAdd = () => {
       const name = newPlaylistName.value.trim()
       const song = addTargetSong.value
       if (!name || !song) return
       const pl = {
-        id: `saved_queue_${Date.now()}`,
+        id: `local_pl_${Date.now()}`,
         name,
         coverImgUrl: song.al?.picUrl || song.album?.picUrl || '',
         creator: { nickname: '我' },
@@ -1267,7 +1290,8 @@ export default {
         isLocal: true
       }
       userPlaylists.value.unshift(pl)
-      addSongToPlaylist(pl)
+      // 传回库内响应式代理而非裸字面量——addSongToPlaylist 的字段赋值才走依赖
+      addSongToPlaylist(userPlaylists.value.find(p => p.id === pl.id) || pl)
     }
 
     // 相关 tab 点歌：YTM 以相关流接续——整个相关列表进队列（autoplay off 时队尾也有下一首）
@@ -1981,6 +2005,11 @@ export default {
         if (e.key === 'Escape') resolveConfirm(false) // 兜底：焦点逃出 overlay 时仍能关
         return
       }
+      // 添加到歌单模态同款冻结——否则 Tab 到框外后 /、f、空格全部穿透生效
+      if (addTargetSong.value) {
+        if (e.key === 'Escape') addTargetSong.value = null
+        return
+      }
       if (e.key === 'Escape') {
         if (sidebarOpen.value) sidebarOpen.value = false
         return
@@ -2469,6 +2498,7 @@ export default {
       addTargetSong,
       newPlaylistName,
       atpInput,
+      addablePlaylists,
       openAddToPlaylist,
       addSongToPlaylist,
       createPlaylistAndAdd
