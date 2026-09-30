@@ -237,7 +237,7 @@ export default {
   },
   emits: ['toggle-play', 'previous', 'next', 'update-volume', 'toggle-mute', 'toggle-shuffle', 'toggle-play-mode', 'open-watch', 'enter-fullscreen', 'seek'],
   setup(props, { emit }) {
-    // 搜索结果曲目常无 picUrl（字段在 al/album 上）——三路兜底防裂图
+    // 封面三路兜底：picUrl / al.picUrl（cloudsearch）/ album.picUrl（legacy search 与详情态）防裂图
     const coverUrl = computed(() =>
       props.currentSong?.picUrl || props.currentSong?.al?.picUrl || props.currentSong?.album?.picUrl || ''
     )
