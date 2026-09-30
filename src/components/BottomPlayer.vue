@@ -79,7 +79,7 @@
             :disabled="!currentSong"
             :aria-label="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
             :title="songSwitching ? '切换歌曲中…' : (isPlaying ? '暂停' : '播放')"
-          ><PixelIcon v-if="!songSwitching" :name="isPlaying ? 'pause' : 'play'" :size="18" /><span v-else class="switching-glyph">…</span></button>
+          ><PixelIcon v-if="!songSwitching" :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 18 : 22" /><span v-else class="switching-glyph">…</span></button>
           <button
             @click="$emit('next')"
             class="transport"
