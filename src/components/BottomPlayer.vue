@@ -482,6 +482,12 @@ export default {
   color: var(--paper);
 }
 .pg-icobtn--on-ink:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
+/* 墨条上的按下态=变色图标：纸底白块会与 --on-ink 纸字叠成空白方块，改 accent 字色无底色 */
+.pg-icobtn--on-ink.pg-icobtn--pressed,
+.pg-icobtn--on-ink.pg-icobtn--pressed:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent-magenta-on-ink);
+}
 
 /* 待机条：与激活条同高（40 内容 + 10×2 padding + 1.2 顶线 = 61.2），首次点歌不跳主区 */
 .player-idle {
