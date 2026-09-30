@@ -153,6 +153,14 @@ watch(() => props.selectedQueue?.id, () => {
   showCompleted.value = false;
 });
 
+// 全量下载成功的队列默认展开 completed 组——否则右栏只剩一条收起行，面板是空的。
+// watch 只在 allDone false→true 时触发，用户手动收起后不打扰
+watch(
+  () => props.tasks.length > 0 && props.tasks.every(t => t.status === 'completed'),
+  (allDone) => { if (allDone) showCompleted.value = true; },
+  { immediate: true }
+);
+
 const taskStats = computed(() => ({
   total: props.tasks.length,
   pending: props.tasks.filter(task => task.status === 'pending').length,
