@@ -96,10 +96,12 @@ export const musicApi = {
     return data.result || {}
   },
 
-  // 歌曲搜索（type=1）：结果直接可播，点击即播
+  // 歌曲搜索（type=1）：结果直接可播，点击即播。
+  // 走 cloudsearch 而非 legacy /search——后者 album 只有 picId 无 picUrl，
+  // 行封面全掉 fallback；cloudsearch 返回完整 al/ar/dt/privilege 字段
   searchSongs: async (keywords, limit = 30, abortSignal = null) => {
     const response = await withRetry(() =>
-      api.get('/search', { params: { keywords, type: 1, limit }, signal: abortSignal })
+      api.get('/cloudsearch', { params: { keywords, type: 1, limit }, signal: abortSignal })
     )
     const data = unwrapBody(response)
     return data.result?.songs || []
