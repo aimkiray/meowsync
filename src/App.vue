@@ -40,10 +40,10 @@
         <HomeFeed
           v-if="centerView === 'home'"
           :toplists="homeToplists"
-          :personalized="homePersonalized"
+          :recent-playlists="playlistHistory"
           :recents="playHistory"
           :loading="homeLoading"
-          @open="openSearchPlaylist"
+          @open="openShelfPlaylist"
           @play-song="openWatchRecent"
         />
         <SongList
@@ -241,6 +241,7 @@ export default {
     const PLAYER_STATE_STORAGE_KEY = 'meowsync-player-state'
     const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
     const PLAY_HISTORY_STORAGE_KEY = 'meowsync-play-history'
+    const PLAYLIST_HISTORY_STORAGE_KEY = 'meowsync-playlist-history'
     const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
     let restorePlayerState = null
     let lastSavedWholeSecond = -1
@@ -253,10 +254,10 @@ export default {
     const playlistDownloadsRefreshKey = ref(0)
     const topNavRef = ref(null) // 「/」快捷键聚焦搜索框
 
-    // 首页发现流数据（toplist/personalized）+ 最近播放历史
+    // 首页发现流数据（toplist）+ 最近播放历史（歌曲/歌单两条线）
     const homeToplists = ref([])
-    const homePersonalized = ref([])
     const playHistory = ref([])
+    const playlistHistory = ref([])
     const homeLoading = ref(false)
     
     let howl = null
@@ -1068,6 +1069,13 @@ export default {
       playSongFromRelated(song, list)
     }
 
+    // 货架卡片（榜单/最近歌单共用）：歌单还在库时用活副本——
+    // 本地歌单（saved_queue_*）的 tracks 只在库里，stub 打开会空列表
+    const openShelfPlaylist = (pl) => {
+      const live = userPlaylists.value.find(p => String(p.id) === String(pl.id))
+      openSearchPlaylist(live || pl)
+    }
+
     const playPlaylistAndWatch = (shuffle) => {
       enterWatch()
       playPlaylist(shuffle)
@@ -1174,16 +1182,15 @@ export default {
       homeLoaded = true
       homeLoading.value = true
       const settled = Promise.allSettled([
-        musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) }),
-        musicApi.getPersonalized(12).then(list => { homePersonalized.value = list })
+        musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) })
       ])
       settled.then(results => {
         // allSettled 吞掉每路报错——留个脚印，否则全挂时控制台静默
         results.forEach(r => {
           if (r.status === 'rejected') console.warn('[home]', r.reason?.message || r.reason)
         })
-        // 两路全空（全失败/全空数组）解开一次性闩锁——回到首页或网络恢复时可重试
-        if (!homeToplists.value.length && !homePersonalized.value.length) {
+        // 全空（失败/空数组）解开一次性闩锁——回到首页或网络恢复时可重试
+        if (!homeToplists.value.length) {
           homeLoaded = false
         }
       })
@@ -1210,6 +1217,24 @@ export default {
       }
       playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
       writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
+    }
+
+    // 最近播放的歌单：记播放上下文的归属歌单（playingPlaylistId，已在快照时锁死）。
+    // single_song_ 单曲分享是临时壳不算歌单；saved_queue_ 是用户歌单照记。
+    // 对象优先查 userPlaylists 活副本（本地歌单的 tracks 只有那里有），查不到才落 stub
+    const recordPlaylistHistory = () => {
+      const pid = playingPlaylistId.value
+      if (pid == null || String(pid).startsWith('single_song_')) return
+      const pl = userPlaylists.value.find(p => String(p.id) === String(pid))
+        || (String(selectedPlaylist.value?.id) === String(pid) ? selectedPlaylist.value : null)
+      if (!pl) return
+      const entry = {
+        id: pl.id, name: pl.name,
+        coverImgUrl: pl.coverImgUrl || pl.picUrl || '',
+        trackCount: pl.trackCount ?? pl.tracks?.length
+      }
+      playlistHistory.value = [entry, ...playlistHistory.value.filter(p => String(p.id) !== String(pid))].slice(0, 20)
+      writeJSON(PLAYLIST_HISTORY_STORAGE_KEY, playlistHistory.value)
     }
 
     const playSong = async (song, options = {}) => {
@@ -1354,6 +1379,7 @@ export default {
             isPlaying.value = true
             playbackError.value = '' // 重试成功后清掉"播放被阻止"等提示
             recordPlayHistory(song) // 真实起播才计入最近播放（加载失败/恢复态不记）
+            recordPlaylistHistory() // 同口径记归属歌单——首页「最近播放的歌单」数据源
             startProgressLoop()
           },
           onpause: () => {
@@ -2067,11 +2093,15 @@ export default {
 
       // 单曲分享：侧栏抽屉默认收起，主区直接呈现歌曲——无需额外处理
 
-      // 加载保存的歌单与最近播放历史（首页 recent 区块数据源）
+      // 加载保存的歌单与最近播放历史（首页 recent/history 区块数据源）
       loadPlaylistsFromStorage()
       const savedHistory = readJSON(PLAY_HISTORY_STORAGE_KEY)
       if (Array.isArray(savedHistory)) {
         playHistory.value = savedHistory.filter(s => s && s.id != null)
+      }
+      const savedPlHistory = readJSON(PLAYLIST_HISTORY_STORAGE_KEY)
+      if (Array.isArray(savedPlHistory)) {
+        playlistHistory.value = savedPlHistory.filter(p => p && p.id != null)
       }
       restorePlayerState = loadPlayerStateFromStorage()
       restoreUiState(restorePlayerState)
@@ -2251,7 +2281,7 @@ export default {
       queueOwner,
       topNavRef,
       homeToplists,
-      homePersonalized,
+      playlistHistory,
       playHistory,
       homeLoading,
 
@@ -2283,6 +2313,7 @@ export default {
       openWatchSong,
       openWatchSearchSong,
       openWatchRecent,
+      openShelfPlaylist,
       playPlaylistAndWatch,
       watchBack,
       playSongFromRelated,
