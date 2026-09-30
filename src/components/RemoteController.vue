@@ -327,7 +327,8 @@ onUnmounted(() => {
   --ink-64: rgba(255, 255, 255, .64);
   --accent-magenta: #fc8eac;
   --accent-magenta-on-ink: var(--accent-magenta);
-  /* 字体也 pin——glitch 主题会把 --font-* 整体翻成像素族 */
+  /* 字体也 pin——glitch 主题会把 --font-* 整体翻成像素族；
+     mono 链与 style.css:74 保持一致，改链需双同步 */
   --font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'PingFang SC', 'Noto Sans SC', monospace;
   --font-display: 'Space Grotesk', 'Inter', 'Noto Sans SC', sans-serif;

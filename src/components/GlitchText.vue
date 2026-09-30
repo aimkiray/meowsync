@@ -14,7 +14,7 @@
         class="corruptible"
         :class="{ 'char-glitch': corrupt.has(keyOf(wi, ci)) }"
         :data-glitch="corrupt.get(keyOf(wi, ci))"
-      >{{ ch }}</span></span>{{ word.gap ? ' ' : '' }}</template></span>
+      >{{ ch }}</span></span>{{ word.gap || '' }}</template></span>
   </span>
 </template>
 
@@ -32,23 +32,25 @@ export default {
   name: 'GlitchText',
   props: { text: { type: String, required: true } },
   setup(props) {
-    // 按「断行单元」分词：空格分段的 Latin 词成组（nowrap 保词形不断拆），
-    // CJK 逐字独立成 token——中文可如常字间断行，长中文标题不再被
-    // 整句 nowrap 顶住溢出；gap 标记 token 后是否渲染空格
+    // 按「断行单元」分词：字素簇粒度（Intl.Segmenter——ZWJ emoji/肤色修饰/
+    // 组合符保持整簇，腐蚀不落半字符）；CJK 系（汉字/假名/谚文/注音/增补
+    // 平面）逐字独立 token 可字间断行，长东亚标题不被 nowrap 顶住溢出；
+    // 空白符（含全角空格）不入腐蚀池，记为前 token 的 gap 原样渲染
+    const CJK = /[\u2E80-\u2FDF\u3005-\u303B\u3040-\u30FF\u31A0-\u31BF\u31C0-\u31EF\u31F0-\u31FF\u3100-\u312F\u3130-\u318F\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF\u1100-\u11FF\uFF66-\uFF9F\uFF01-\uFF65\uFFE0-\uFFE6]|[\u{20000}-\u{2FA1F}]/u
+    const grapheme = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
     const words = computed(() => {
-      const CJK = /[　-〿㐀-䶿一-鿿豈-﫿！-･￠-￦]/
       const out = []
-      let buf = ''
-      const flush = () => { if (buf) { out.push({ chars: [...buf], gap: false }); buf = '' } }
-      for (const ch of props.text) {
-        if (ch === ' ') {
+      let buf = [] // 连续非 CJK 字素簇 → 一个 Latin 词 token（nowrap 保词形）
+      const flush = () => { if (buf.length) { out.push({ chars: buf, gap: null }); buf = [] } }
+      for (const { segment } of grapheme.segment(props.text)) {
+        if (/^\s$/u.test(segment)) {
           flush()
-          if (out.length) out[out.length - 1].gap = true
-        } else if (CJK.test(ch)) {
+          if (out.length) out[out.length - 1].gap = segment
+        } else if (CJK.test(segment)) {
           flush()
-          out.push({ chars: [ch], gap: false })
+          out.push({ chars: [segment], gap: null })
         } else {
-          buf += ch
+          buf.push(segment)
         }
       }
       flush()
@@ -68,10 +70,12 @@ export default {
       // （skill 原版即此序：glitched 在 add 之前取样）
       const glitched = [...corrupt.value.keys()]
       const clean = []
+      let total = 0
       words.value.forEach((word, wi) =>
-        word.chars.forEach((_, ci) => { if (!corrupt.value.has(keyOf(wi, ci))) clean.push(keyOf(wi, ci)) })
+        word.chars.forEach((_, ci) => { total++; if (!corrupt.value.has(keyOf(wi, ci))) clean.push(keyOf(wi, ci)) })
       )
-      if (clean.length) {
+      // 短文本并发腐蚀封顶 ~1/6（至少 1 个）——4 字标题不会近半句皆替身
+      if (clean.length && corrupt.value.size < Math.max(1, Math.ceil(total / 6))) {
         const i = clean[Math.random() * clean.length | 0]
         corrupt.value.set(i, POOL[Math.random() * POOL.length | 0])
       }
@@ -102,7 +106,8 @@ export default {
       if (on) { stop(); timer = setInterval(tick, 1100) }
       else stop()
     }, { immediate: true })
-    watch(() => props.text, () => { corrupt.value.clear() })
+    // text 变更连 burst 回净表一起清——否则旧 timer 会误抹新文本的 tick 腐蚀
+    watch(() => props.text, () => { clearTimeout(burstTimer); corrupt.value.clear() })
     // 共享世代爬升 → 全屏所有实例同代 burst（主题外激活也无副作用，
     // 但仍在 active 下才做 DOM 写入）
     watch(glitchGen, (n, o) => { if (n > o && active.value) burst() })

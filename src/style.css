@@ -405,9 +405,12 @@
 }
 
 /* ── 字符腐蚀（GlitchText 驱动，仅本主题激活时渲染替身符） ── */
-/* SR 正本：视觉隐藏但保留在 a11y 树（替身符整层 aria-hidden） */
+/* SR 正本：视觉隐藏但保留在 a11y 树（替身符整层 aria-hidden）。
+   user-select:none 挡选区/复制串接——clip 式隐藏文本仍会进选区，
+   否则 Ctrl+A 复制得到「发现音乐发现音乐」式双份文本 */
 .glitch-sr {
   position: absolute;
+  user-select: none;
   width: 1px;
   height: 1px;
   overflow: hidden;
@@ -415,8 +418,8 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
-/* nowrap 防词组拆行——注意现消费全是 Latin 短词；中文无空格会并成
-   单 word 整句 nowrap，接中文消费前须改分词策略 */
+/* nowrap 保 Latin 词形不拆行；CJK 系字符经 GlitchText 分词已逐字独立
+   token，字间断行由 UAX#14 正常生效——单字 token 上 nowrap 是 no-op */
 :root[data-theme="glitch-restoration"] .glitch-word { display: inline; white-space: nowrap; }
 :root[data-theme="glitch-restoration"] .corruptible { display: inline; position: relative; }
 :root[data-theme="glitch-restoration"] .char-glitch { visibility: hidden; }
@@ -433,6 +436,10 @@
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="glitch-restoration"] .char-glitch { visibility: visible; }
   :root[data-theme="glitch-restoration"] .char-glitch::after { content: none; }
+  /* 色温渐变收 reduce 门：glitch body 的 .8s 主题渐变 +
+     全局 .app-shell 的 .4s 视图换画布（后者非主题限定，一并豁免） */
+  :root[data-theme="glitch-restoration"] body,
+  .app-shell { transition: none; }
 }
 
 @tailwind base;
@@ -520,6 +527,9 @@ button {
   .topnav-suggest-item--active, .rc-queue-row--current {
     outline: 1.2px solid transparent;
   }
+  /* 透明 border 被强制色刷成 ButtonText 实心条——滚动条内缩车道退化为
+     padding（滚动条恢复顶到页缘，HC 下可读性优先于车道美学） */
+  .home-feed, .playlist-grid-wrap { border-block: 0; padding-block: 20px; }
 }
 /* teleport 菜单触发器语态 */
 [aria-expanded="true"].song-menu-btn,
