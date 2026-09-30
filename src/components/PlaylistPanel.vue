@@ -364,7 +364,7 @@ export default {
 }
 
 .panel-state {
-  border-top: var(--hairline-soft); /* 与列表态 .playlist-scroll 同位不断线 */
+  /* 与列表态 .playlist-scroll 同律：标题下方纯留白，无分隔线 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -383,7 +383,6 @@ export default {
 }
 
 .playlist-scroll {
-  border-top: var(--hairline-soft);
   scrollbar-gutter: stable;
 }
 
