@@ -249,7 +249,8 @@ export default {
       let budget = MIX_IDS_BUDGET
       for (const t of playlist.tracks || []) {
         const id = String(t.id)
-        if (!/^\d+$/.test(id) && !/^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id)) continue
+        if (!/^\d+$/.test(id) && !/^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id)
+          && !/^yt_[A-Za-z0-9_-]{11}$/.test(id)) continue
         if (ids.length >= MIX_ID_CAP || id.length + 1 > budget) break
         budget -= id.length + 1
         ids.push(id)

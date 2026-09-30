@@ -17,6 +17,7 @@
       @search="handlePlaylistSearch"
       @search-by-id="previewPlaylistById"
       @search-bili="importBilibili"
+      @search-yt="importYouTube"
     />
 
     <div class="app-body">
@@ -199,7 +200,7 @@
       </div>
     </Teleport>
 
-    <!-- 点歌台：搜索网易云 / 粘歌曲链接或 ID / B 站链接，向当前歌单一连追加。
+    <!-- 点歌台：搜索网易云 / 粘歌曲链接或 ID / B 站、YouTube 链接，向当前歌单一连追加。
          复用 atp 模态皮，加宽成 asp-dialog 容纳结果行 -->
     <Teleport to="body">
       <div
@@ -219,7 +220,7 @@
             <input
               ref="songPickerInput"
               v-model="songPickerQuery"
-              placeholder="搜歌名 / 粘歌曲链接、ID 或 B 站链接"
+              placeholder="搜歌名 / 粘歌曲链接、ID 或 B 站/YouTube 链接"
               aria-label="搜索或粘贴歌曲"
               @keydown.enter="!$event.isComposing && songPickerSearch()"
             />
@@ -255,7 +256,7 @@
               >{{ pickerTakenIds.has(String(song.id)) || songPickerAdded.has(String(song.id)) ? '已在单' : '添加' }}</button>
             </div>
             <p v-if="!songPickerResults.length && !songPickerSearching" class="atp-empty">
-              输入歌名搜索，或直接粘贴歌曲链接 / ID / B 站 BV 号
+              输入歌名搜索，或直接粘贴歌曲链接 / ID / B 站 BV 号 / YouTube 链接
             </p>
             <p v-if="songPickerSearching" class="atp-empty">搜索中…</p>
           </div>
@@ -300,7 +301,7 @@ import { formatTime } from './lib/format'
 import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover, isBilibiliInput, extractNeteaseSongId } from './lib/url'
+import { httpsCover, isBilibiliInput, isYouTubeInput, extractNeteaseSongId, extractYouTubeId } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -782,42 +783,81 @@ export default {
       neteaseId: data.matched?.id || null
     })
 
-    // B 站视频导入：搜索框粘 URL/BV 触发。解析→落成 single_song_ 壳
-    // （侧栏历史 + 刷新可恢复，壳内 tracks 内嵌不落远端）→ 直接开播进 watch
-    let biliImportSeq = 0
-    const importBilibili = async (input) => {
-      const myReq = ++biliImportSeq
+    // YouTube 导入曲对象：id 用 yt_ 前缀与 bv_/网易云数值隔离；youtube 字段
+    // 挂播放源（videoId/hasVideo），neteaseId 仍仅作歌词源。封面走 ytimg
+    // 服务端回链（matched 的网易云封面优先——高清且无防盗链风险）
+    const buildYouTubeSong = (data) => ({
+      id: `yt_${data.videoId}`,
+      name: data.matched?.name || data.songName || data.title,
+      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.author || 'YouTube' }],
+      al: {
+        id: data.matched?.al?.id ?? null,
+        name: data.matched?.al?.name || data.title,
+        picUrl: data.matched?.al?.picUrl || httpsCover(data.cover || '')
+      },
+      dt: (data.duration || 0) * 1000,
+      youtube: {
+        videoId: data.videoId, hasVideo: !!data.hasVideo,
+        title: data.title, author: data.author, matchedBy: data.matchedBy || null
+      },
+      neteaseId: data.matched?.id || null
+    })
+
+    // 外部媒体导入共用骨架：B 站/YouTube 同一形态「resolve → 幂等壳 → 开播进
+    // watch」，差异只在解析端点/壳 id/显示名——收进 spec 防两份逻辑漂移
+    const MEDIA_IMPORT_SPECS = {
+      bilibili: {
+        tag: 'B 站', icon: '📺',
+        resolve: input => musicApi.resolveBilibili(input),
+        build: buildBilibiliSong,
+        shellIdOf: d => `single_song_bv_${d.bvid}${(d.page || 1) > 1 ? `_p${d.page}` : ''}`,
+        shellNameOf: (song, d) => `B站导入 - ${song.name}${(d.page || 1) > 1 ? ` (P${d.page})` : ''}`,
+        creator: 'B 站导入'
+      },
+      youtube: {
+        tag: 'YouTube', icon: '▶️',
+        resolve: input => musicApi.resolveYouTube(input),
+        build: buildYouTubeSong,
+        shellIdOf: d => `single_song_yt_${d.videoId}`,
+        shellNameOf: song => `YouTube导入 - ${song.name}`,
+        creator: 'YouTube 导入'
+      }
+    }
+    let mediaImportSeq = 0
+    const importExternalMedia = async (input, kind) => {
+      const spec = MEDIA_IMPORT_SPECS[kind]
+      const myReq = ++mediaImportSeq
       // 占住 selectReqId：resolve 慢（远端多跳），期间在途的 selectPlaylist
       // 回包不得在落壳之后盖掉 selectedPlaylist/songs
       selectReqId++
       loadingSongs.value = false // 被顶的 selectPlaylist 不会再复位 loading——收掉
       searchQuery.value = '' // 提前清框——防用户重复回车并发多个 resolve
       try {
-        console.log('📺 解析 B 站视频:', input)
-        toast('正在解析 B 站视频…', 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
-        const data = await musicApi.resolveBilibili(input)
+        console.log(`${spec.icon} 解析 ${spec.tag} 视频:`, input)
+        toast(`正在解析 ${spec.tag} 视频…`, 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
+        const data = await spec.resolve(input)
         // 解析期间用户点了别的歌/再导入——过期意图不得抢播放+强跳视图
-        if (myReq !== biliImportSeq) return
-        const song = buildBilibiliSong(data)
-        console.log('📺 解析完成:', song.name, '网易云匹配:', data.matched?.id ?? '无', '提取歌名:', data.songName)
+        if (myReq !== mediaImportSeq) return
+        const song = spec.build(data)
+        console.log(`${spec.icon} 解析完成:`, song.name, '网易云匹配:', data.matched?.id ?? '无', '提取歌名:', data.songName)
 
-        // 与 ?song= 分享壳同款的幂等壳：同 BV 重复导入直接复用，不重复入库
-        const shellId = `single_song_bv_${data.bvid}${(data.page || 1) > 1 ? `_p${data.page}` : ''}`
+        // 与 ?song= 分享壳同款的幂等壳：同视频重复导入直接复用，不重复入库
+        const shellId = spec.shellIdOf(data)
         let shell = userPlaylists.value.find(p => String(p.id) === shellId)
         if (shell) {
           // 壳在但曲目空/陈旧：原地刷新曲目与元信息（不 unshift——同 id 双壳会渲染冲突）。
           // 锚曲放回头位，用户后来追加进壳的曲保留不丢
           shell.tracks = [song, ...(shell.tracks || []).filter(t => String(t.id) !== String(song.id))]
           shell.trackCount = shell.tracks.length
-          shell.name = `B站导入 - ${song.name}${(data.page || 1) > 1 ? ` (P${data.page})` : ''}`
+          shell.name = spec.shellNameOf(song, data)
           shell.coverImgUrl = song.al?.picUrl || ''
           savePlaylistsToStorage()
         } else {
           shell = {
             id: shellId,
-            name: `B站导入 - ${song.name}${(data.page || 1) > 1 ? ` (P${data.page})` : ''}`,
+            name: spec.shellNameOf(song, data),
             coverImgUrl: song.al?.picUrl || '',
-            creator: { nickname: 'B 站导入' },
+            creator: { nickname: spec.creator },
             trackCount: 1,
             tracks: [song]
           }
@@ -839,12 +879,14 @@ export default {
         await playSong(song)
         enterWatch()
       } catch (error) {
-        if (myReq !== biliImportSeq) return // 过期请求的失败不打扰用户
-        console.error('❌ B 站导入失败:', error)
+        if (myReq !== mediaImportSeq) return // 过期请求的失败不打扰用户
+        console.error(`❌ ${spec.tag} 导入失败:`, error)
         searchQuery.value = input // 失败还原输入——用户可直接回车重试
-        toast(`B 站导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
+        toast(`${spec.tag} 导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
       }
     }
+    const importBilibili = (input) => importExternalMedia(input, 'bilibili')
+    const importYouTube = (input) => importExternalMedia(input, 'youtube')
 
     const addPlaylistToLibrary = async (playlist) => {
       try {
@@ -975,7 +1017,8 @@ export default {
           rest.addedTracks = rest.addedTracks.map(t => t && ({
             // bilibili/neteaseId 是 B 站导入曲的播放源与歌词源——剥掉就退化成不可播对象
             id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege,
-            bilibili: t.bilibili, neteaseId: t.neteaseId
+            bilibili: t.bilibili, neteaseId: t.neteaseId,
+            youtube: t.youtube // YouTube 导入曲的播放源——与 bilibili/neteaseId 同理不可剥
           }))
         }
         return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
@@ -1092,7 +1135,7 @@ export default {
       if (!playlist || playlist.id == null) return false
       if (!force && String(selectedPlaylist.value?.id) === String(playlist.id)) return true
 
-      biliImportSeq++ // 用户选了别的歌单——在途 B 站解析回包不得抢播放/强跳视图
+      mediaImportSeq++ // 用户选了别的歌单——在途外部媒体解析回包不得抢播放/强跳视图
       previewSeq++     // 同上，作废在途的 id 预览（防回包强跳视图）
       const myReq = ++selectReqId
       try {
@@ -1717,6 +1760,26 @@ export default {
           await addPickedSong(song)
           return
         }
+        if (isYouTubeInput(q)) {
+          action = '解析'
+          // 裸 11 位/URL 形态都能本地推出 yt_<id>——已在单短路省 resolve
+          const vid = extractYouTubeId(q)
+          if (vid && pickerTakenIds.value.has(`yt_${vid}`)) {
+            toast('该视频已在歌单里', 'info')
+            songPickerQuery.value = ''
+            return
+          }
+          toast('正在解析 YouTube 视频…', 'info', 30000)
+          pickerAbort = new AbortController()
+          const data = await musicApi.resolveYouTube(q, pickerAbort.signal)
+          if (mySeq !== pickerSeq || !songPickerOpen.value) return
+          const song = buildYouTubeSong(data)
+          songPickerResults.value = [song,
+            ...songPickerResults.value.filter(r => String(r.id) !== String(song.id))]
+          songPickerQuery.value = ''
+          await addPickedSong(song)
+          return
+        }
         const songId = extractNeteaseSongId(q)
         if (songId) {
           action = '添加'
@@ -1913,7 +1976,8 @@ export default {
         ar: song.ar || song.artists, al: song.al || song.album,
         dt: song.dt ?? song.duration, fee: song.fee, privilege: song.privilege,
         // B 站导入曲的播放源/歌词源字段——丢了从历史点回会退成不可播
-        bilibili: song.bilibili, neteaseId: song.neteaseId
+        bilibili: song.bilibili, neteaseId: song.neteaseId,
+        youtube: song.youtube // YouTube 导入曲同理——丢了从历史点回会退成不可播
       }
       playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
       writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
@@ -1939,7 +2003,7 @@ export default {
 
     const playSong = async (song, options = {}) => {
       if (!song || song.id == null) return
-      biliImportSeq++ // 用户点了别的歌——同上，作废在途 B 站解析
+      mediaImportSeq++ // 用户点了别的歌——同上，作废在途外部媒体解析
       previewSeq++     // 同上，作废在途的 id 预览
       const { autoplay = true, seekTime = 0, preserveContext = false } = options
 
@@ -2016,7 +2080,9 @@ export default {
         // 重解 playurl（CDN 签名会过期）再 302 进 audio-proxy，URL 不落库
         const songUrlData = song.bilibili
           ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
-          : await musicApi.getSongUrl(song.id, abortSignal)
+          : song.youtube
+            ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio') }
+            : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
         if (abortSignal.aborted) {
@@ -2060,8 +2126,8 @@ export default {
             const actualDuration = newHowl.duration()
 
             if (Math.abs(expectedDuration - actualDuration) > 5) {
-              // B 站曲的时长差是稿件换源/分P错位而非 VIP 试听，文案区分避免误报
-              durationWarning.value = song.bilibili
+              // 外部导入曲的时长差是稿件换源/分P错位而非 VIP 试听，文案区分避免误报
+              durationWarning.value = (song.bilibili || song.youtube)
                 ? `音画时长不一致：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
                 : `VIP 歌曲试听版本：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
             }
@@ -2210,11 +2276,11 @@ export default {
     }
 
     // 歌词加载和同步（支持取消 + 过期响应不落盘，防止旧歌歌词覆盖新歌）。
-    // B 站导入曲的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_* id
+    // 外部导入曲（B 站/YouTube）的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_*/yt_* id
     // ——过期判定锚 song.id，不锚歌词请求的 id
     const loadLyrics = async (song, signal = null) => {
-      // B 站曲未匹配到网易云时无歌词源——bv_* id 打 /lyric 必死还拖三重试，直接置空
-      if (song?.bilibili && !song.neteaseId) {
+      // 外部导入曲未匹配到网易云时无歌词源——bv_*/yt_* id 打 /lyric 必死还拖三重试，直接置空
+      if ((song?.bilibili || song?.youtube) && !song.neteaseId) {
         lyrics.value = []
         currentLyricIndex.value = 0
         lyricOffsetMs.value = 0
@@ -2767,8 +2833,17 @@ export default {
     }
 
 
-    // ?mix=<name>~id1,id2,bv_X_pN 本地歌单内容携带链：数字 id 走网易云批量详情，
-    // bv_ 段逐个 resolveBilibili。~ 用 lastIndexOf 取——name 里本身可以含 ~
+    // 从URL参数获取 YouTube 导入标识（?yt=<videoId> 分享链）
+    const getYtFromUrl = () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const yt = urlParams.get('yt')
+      if (!yt || !/^[A-Za-z0-9_-]{11}$/.test(yt.trim())) return null
+      console.log('▶️ 从URL获取 YouTube 视频:', yt.trim())
+      return yt.trim()
+    }
+
+    // ?mix=<name>~id1,id2,bv_X_pN,yt_<vid> 本地歌单内容携带链：数字 id 走网易云
+    // 批量详情，bv_/yt_ 段逐个 resolve。~ 用 lastIndexOf 取——name 里本身可以含 ~
     const getMixFromUrl = () => {
       const urlParams = new URLSearchParams(window.location.search)
       const mix = urlParams.get('mix')
@@ -2777,7 +2852,7 @@ export default {
     }
 
     const MIX_IMPORT_CAP = 300      // 与生成侧 shareUrlFor 的截断对齐
-    const MIX_BILI_CAP = 10         // bv_ 逐项 resolveBilibili 受限流（12/min）约束
+    const MIX_RESOLVE_CAP = 10      // bv_/yt_ 逐项 resolve 受限流（12/min）约束——两端点共用一桶
     const importMixPlaylist = async (mix) => {
       const sep = mix.lastIndexOf('~')
       // [...str] 按码点切——slice 按 code unit 会斩断 emoji 代理对留孤代理
@@ -2786,7 +2861,8 @@ export default {
       const ids = []
       for (const raw of mix.slice(sep + 1).split(',')) {
         const id = raw.trim()
-        if (!(/^\d+$/.test(id) || /^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id))) continue
+        if (!(/^\d+$/.test(id) || /^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id)
+          || /^yt_[A-Za-z0-9_-]{11}$/.test(id))) continue
         if (seen.has(id)) continue
         seen.add(id)
         ids.push(id)
@@ -2813,7 +2889,7 @@ export default {
         return
       }
 
-      const myReq = ++biliImportSeq
+      const myReq = ++mediaImportSeq
       selectReqId++
       loadingSongs.value = false
       toast(`正在导入分享歌单「${name}」…`, 'info', 30000)
@@ -2826,16 +2902,24 @@ export default {
           for (const s of chunk) detailMap.set(String(s.id), s)
         }
         const tracks = []
-        let biliCount = 0
+        let resolveCount = 0
         let skipped = 0
         for (const id of ids) {
-          if (myReq !== biliImportSeq) return
+          if (myReq !== mediaImportSeq) return
           if (/^\d+$/.test(id)) {
             const s = detailMap.get(id)
             if (s) tracks.push(s); else skipped++
             continue
           }
-          if (++biliCount > MIX_BILI_CAP) { skipped++; continue }
+          // bv_/yt_ 共用 resolve 限流桶——两个端点同键刷的是同一个上游扇出预算
+          if (++resolveCount > MIX_RESOLVE_CAP) { skipped++; continue }
+          const ym = /^yt_([A-Za-z0-9_-]{11})$/.exec(id)
+          if (ym) {
+            try {
+              tracks.push(buildYouTubeSong(await musicApi.resolveYouTube(ym[1])))
+            } catch { skipped++ }
+            continue
+          }
           const m = /^bv_(BV[0-9A-Za-z]{10})(?:_p(\d+))?$/i.exec(id)
           if (!m) { skipped++; continue }
           try {
@@ -2843,7 +2927,7 @@ export default {
             tracks.push(buildBilibiliSong(await musicApi.resolveBilibili(input)))
           } catch { skipped++ }
         }
-        if (myReq !== biliImportSeq) return
+        if (myReq !== mediaImportSeq) return
         if (!tracks.length) {
           toast('歌单曲目全部解析失败，请稍后重试', 'error')
           return
@@ -2884,7 +2968,7 @@ export default {
         selectPlaylistAndShow(pl, { force: true })
         toast(`已导入「${name}」（${tracks.length} 首${skipped ? `，跳过 ${skipped} 首` : ''}）`, 'success')
       } catch (error) {
-        if (myReq !== biliImportSeq) return
+        if (myReq !== mediaImportSeq) return
         console.error('mix 导入失败:', error)
         toast(`导入分享歌单失败：${error.message || '请稍后重试'}`, 'error', 5000)
       }
@@ -2895,7 +2979,7 @@ export default {
     const consumeUrlShareParams = () => {
       const url = new URL(window.location.href)
       let changed = false
-      for (const key of ['song', 'playlist', 'playlists', 'bili', 'p', 'mix']) {
+      for (const key of ['song', 'playlist', 'playlists', 'bili', 'yt', 'p', 'mix']) {
         if (url.searchParams.has(key)) {
           url.searchParams.delete(key)
           changed = true
@@ -3042,12 +3126,16 @@ export default {
       // 如果有单首歌曲ID，尝试加载并播放
       const songId = getSongIdFromUrl()
       const biliInput = getBiliFromUrl()
+      const ytInput = getYtFromUrl()
       const mixInput = getMixFromUrl()
       // 所有参数读取已完毕——消费掉，避免下次刷新重新劫持恢复逻辑
       consumeUrlShareParams()
       if (biliInput) {
         // ?bili= 分享链：走与搜索框导入同一条路
         await importBilibili(biliInput)
+      } else if (ytInput) {
+        // ?yt= 分享链同理
+        await importYouTube(ytInput)
       } else if (mixInput) {
         // ?mix= 本地歌单内容链：重建 local_pl_mix_ 壳
         await importMixPlaylist(mixInput)
@@ -3235,6 +3323,7 @@ export default {
       selectedPlaylistInLibrary,
       collectSelectedPlaylist,
       importBilibili,
+      importYouTube,
       importMixPlaylist,
       addPlaylistToLibrary,
       removePlaylistFromLibrary,

@@ -22,6 +22,24 @@ export function isBilibiliInput(input) {
     || /(?:^|\/)av\d+/i.test(s);
 }
 
+// YouTube 视频 id 提取：watch?v= / youtu.be/ / shorts/embed/live/v / 本站 ?yt= 分享链 /
+// 裸 11 位 id。与服务端 pickYouTubeId 同一套形态表（顺序敏感：URL 形态优先）
+export function extractYouTubeId(input) {
+  const s = String(input || '').trim();
+  if (!s) return null;
+  const m = s.match(/(?:youtube(?:-nocookie)?\.com|music\.youtube\.com)\/(?:watch\?[^ ]*?\bv=|shorts\/|embed\/|live\/|v\/)([A-Za-z0-9_-]{11})/i)
+    || s.match(/youtu\.be\/([A-Za-z0-9_-]{11})/i)
+    || s.match(/[?&]yt=([A-Za-z0-9_-]{11})/i);
+  if (m) return m[1];
+  // 裸 id 须含非数字字符——纯数字 11 位与网易云歌曲 id 撞型
+  return (/^[A-Za-z0-9_-]{11}$/.test(s) && /\D/.test(s)) ? s : null;
+}
+
+// YouTube 输入识别：任何能提取出 id 的输入都算（与 B 站 isBilibiliInput 同职）
+export function isYouTubeInput(input) {
+  return extractYouTubeId(input) != null;
+}
+
 // 网易云歌曲 id 提取：music.163.com/song?id= / song/N / ?song=N / 裸数字。
 // 点歌框语境下裸数字即歌曲 id（歌单 id 歧义由外层语义决定）
 export function extractNeteaseSongId(input) {
