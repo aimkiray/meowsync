@@ -18,7 +18,8 @@ const shareName = (a, b) => {
 // signal：客户端断连/调用方主动作废时早退，不刷无意义的上游云搜
 async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal = null) {
   for (const q of candidates) {
-    if (!q || signal?.aborted) continue;
+    if (signal?.aborted) break;
+    if (!q) continue;
     try {
       const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '5' });
       const songs = res.body?.result?.songs;

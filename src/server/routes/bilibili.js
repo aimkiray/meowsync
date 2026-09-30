@@ -167,7 +167,9 @@ app.get('/bilibili/resolve', async (c) => {
     // 候选搜索串：提取名 → 分P名（多分P合集里 page.part 常是精准歌名，主标题反是噪声）
     // → 清洗标题。原标题纯噪声不入列；整条匹配链设预算，超了当无匹配不阻塞解析
     const cleanTitle = extractSongName([], view.title);
-    const candidates = [...new Set([songName, page?.part, cleanTitle].filter(Boolean))].slice(0, 3);
+    // 先 trim 再去重——page.part 带空白会带脏串进云搜（与 youtube.js 同口径）
+    const candidates = [...new Set([songName, page?.part, cleanTitle]
+      .map(c => (c || '').trim()).filter(Boolean))].slice(0, 3);
     let budgetTimer;
     const matchBudget = new Promise(resolve => {
       budgetTimer = setTimeout(() => resolve({ song: null, query: null }), 25000);
@@ -177,6 +179,7 @@ app.get('/bilibili/resolve', async (c) => {
       matchNeteaseSong(candidates, duration, 'bilibili', c.req.raw.signal), matchBudget,
     ]);
     clearTimeout(budgetTimer);
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     const { audio, video } = pickStreams(playurl);
     // hasVideo 只给「浏览器解得动的 avc1」——hevc/av01 流存在也不能宣称可视频
     const avcStreams = (playurl?.dash?.video || []).filter(v => (v.codecs || '').startsWith('avc1'));
@@ -273,6 +276,8 @@ app.get('/bilibili/stream', async (c) => {
     }
     return c.redirect(`/audio-proxy?url=${encodeURIComponent(usable)}`, 302);
   } catch (e) {
+    // 客户端断连不算服务端错误（与 resolve/audio-proxy 同口径）
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[bilibili] stream 失败:', e.message);
     return c.json({ code: 502, message: `B 站流地址获取失败: ${e.message}` }, 502);
   }

@@ -789,7 +789,9 @@ export default {
     const buildYouTubeSong = (data) => ({
       id: `yt_${data.videoId}`,
       name: data.matched?.name || data.songName || data.title,
-      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.authorClean || data.author || 'YouTube' }],
+      // 未匹配时频道名兜底——authorClean 已剥 ' - Topic'/'VEVO' 后缀；
+      // 频道名被整体剥光（如恰叫 'VEVO'）时回 'YouTube' 而非脏原值
+      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.authorClean || 'YouTube' }],
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
@@ -1762,7 +1764,8 @@ export default {
         }
         if (isYouTubeInput(q)) {
           action = '解析'
-          // 裸 11 位/URL 形态都能本地推出 yt_<id>——已在单短路省 resolve
+          // URL 形态可本地推出 yt_<id>（isYouTubeInput 收窄后裸 id 不入此分支）——
+          // 已在单短路省 resolve
           const vid = extractYouTubeId(q)
           if (vid && pickerTakenIds.value.has(`yt_${vid}`)) {
             toast('该视频已在歌单里', 'info')
@@ -2837,10 +2840,12 @@ export default {
     const getYtFromUrl = () => {
       const urlParams = new URLSearchParams(window.location.search)
       const yt = urlParams.get('yt')
-      // \D 与服务端 pickYouTubeId 裸 id 口径对齐——纯数字 11 位过去也会被 400
-      if (!yt || !/^[A-Za-z0-9_-]{11}$/.test(yt.trim()) || !/\D/.test(yt.trim())) return null
+      if (!yt || !/^[A-Za-z0-9_-]{11}$/.test(yt.trim())) return null
       console.log('▶️ 从URL获取 YouTube 视频:', yt.trim())
-      return yt.trim()
+      // 传 ?yt= 形态而非裸 id：服务端 [?&]yt= 分支无 \D 要求（全数字 videoId
+      // 也可解），且 resolve 失败还原进搜索框后仍是 isYouTubeInput 形态——
+      // 回车重试不会退化关键词搜索（isYouTubeInput 收窄后裸 id 不再命中）
+      return `?yt=${yt.trim()}`
     }
 
     // ?mix=<name>~id1,id2,bv_X_pN,yt_<vid> 本地歌单内容携带链：数字 id 走网易云
