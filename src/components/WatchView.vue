@@ -4,7 +4,7 @@
   <div class="watch-view">
     <!-- 浮层顶行：不占流——右栏待播区的顶部空间随之释放 -->
     <div class="watch-top">
-      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="13" />返回</button>
+      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
     </div>
 
     <div class="watch-layout">
@@ -94,7 +94,7 @@
                 @keydown.up.prevent.stop="moveRow(index, -1)"
                 @keydown.down.prevent.stop="moveRow(index, 1)"
                 @click.stop
-              ><PixelIcon name="grip" :size="11" /></button>
+              ><PixelIcon name="grip" :size="13" /></button>
               <div
                 class="queue-row-main"
                 role="button"
@@ -113,7 +113,7 @@
                 :alt="song.name"
                 class="watch-queue-thumb"
               />
-              <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="12" /></div>
+              <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
               <div class="queue-row-info">
                 <p class="queue-row-title">{{ song.name }}</p>
                 <p class="queue-row-artist">{{ songArtist(song) }}</p>
@@ -127,7 +127,7 @@
                 title="从队列移除"
                 aria-label="从队列移除"
                 @click.stop="$emit('queue-remove', index)"
-              ><PixelIcon name="close" :size="13" /></button>
+              ><PixelIcon name="close" :size="14" /></button>
             </div>
           </template>
 
@@ -221,7 +221,7 @@
               :alt="song.name"
               class="watch-queue-thumb"
             />
-            <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="12" /></div>
+            <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
             <div class="queue-row-info">
               <p class="queue-row-title">{{ song.name }}</p>
               <p class="queue-row-artist">{{ songArtist(song) }}</p>

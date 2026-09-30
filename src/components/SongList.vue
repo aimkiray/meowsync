@@ -23,12 +23,12 @@
             @click="$emit('play-all')"
             class="ink-btn"
             title="播放全部"
-          ><PixelIcon name="play" :size="13" /> 播放</button>
+          ><PixelIcon name="play" :size="18" /> 播放</button>
           <button
             @click="$emit('play-shuffle')"
             class="ink-btn ink-btn--ghost"
             title="随机播放"
-          ><PixelIcon name="shuffle" :size="13" /> 随机</button>
+          ><PixelIcon name="shuffle" :size="15" /> 随机</button>
           <button
             @click="$emit('toggle-vip-songs')"
             class="pg-chip"
@@ -156,7 +156,7 @@
             @keydown.enter="playNextFromMenu"
             @keydown.space.prevent="playNextFromMenu"
           >
-            <PixelIcon name="next" :size="13" /> 下一首播放
+            <PixelIcon name="next" :size="15" /> 下一首播放
           </div>
           <div
             class="pg-menu-item"

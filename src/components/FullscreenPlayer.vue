@@ -50,7 +50,7 @@
               :class="{ 'opacity-50 cursor-not-allowed': songSwitching }"
               :title="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
               :aria-label="songSwitching ? '加载中' : (isPlaying ? '暂停' : '播放')"
-            ><PixelIcon :name="songSwitching ? 'sand' : (isPlaying ? 'pause' : 'play')" :size="songSwitching ? 20 : (isPlaying ? 28 : 22)" /></button>
+            ><PixelIcon :name="songSwitching ? 'sand' : (isPlaying ? 'pause' : 'play')" :size="songSwitching ? 20 : (isPlaying ? 28 : 32)" /></button>
             <button @click="$emit('next-song')" class="fullscreen-player__control-button" title="下一首" aria-label="下一首"><PixelIcon name="next" :size="22" /></button>
           </div>
 
