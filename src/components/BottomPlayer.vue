@@ -467,6 +467,9 @@ export default {
   display: flex;
   align-items: center;
   gap: 4px;
+  /* 音量组与视图入口三键组的组间分隔抬到 16px——与 player-inner 右缘
+     内距同档（三键组左边 8px 档距 vs 页缘 16px 曾是不对称书挡） */
+  margin-right: 8px;
 }
 .vol-range { width: 76px; }
 
