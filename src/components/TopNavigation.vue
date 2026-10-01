@@ -376,9 +376,11 @@ export default {
 
     const themeIndex = computed(() => Math.max(0, THEMES.findIndex(t => t.id === currentTheme.value)))
 
-    // 登出：作废服务端 session 后整页重载（与登录成功同一收束路径）
+    // 登出：作废服务端 session 后整页重载（与登录成功同一收束路径）。
+    // 网络失败时 HttpOnly cookie 前端删不掉——重载后 status 若仍认证会
+    // 直接回应用（登出未生效），而非误以为已登出，这比重载进死门好
     const logout = async () => {
-      try { await authApi.logout() } catch { /* 网络失败也本地登出 */ }
+      try { await authApi.logout() } catch { /* 服务端登出可能未生效 */ }
       authState.authenticated = false
       window.location.reload()
     }

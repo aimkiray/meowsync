@@ -24,7 +24,7 @@ export function useRemoteControl(deps) {
   const remoteToken = import.meta.env.VITE_REMOTE_TOKEN || ''
   // token 优先走 Sec-WebSocket-Protocol 子协议——?token= 会落进反代 access log
   // 与浏览器历史。协议值须为 RFC7230 token 字符集，含其他字符时回退 URL 参数
-  const tokenSafeForProto = /^[A-Za-z0-9._~-]+$/.test(remoteToken)
+  const tokenSafeForProto = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(remoteToken)
   const remoteWsProtocols = remoteToken && tokenSafeForProto ? [`remote.${remoteToken}`] : undefined
   const remoteTokenParam = remoteToken && !tokenSafeForProto
     ? `&token=${encodeURIComponent(remoteToken)}` : ''

@@ -12,10 +12,20 @@ function tokenId(rawToken) {
   return crypto.createHash('sha256').update(String(rawToken)).digest('hex');
 }
 
+// 单用户会话行上限：持凭证端可无限登录堆行（库体积膨胀面）；
+// 超限逐最旧（created_at 最小者先走），语义可预期
+const MAX_SESSIONS_PER_USER = 64;
+
 function createSession(userId, { ip = '', userAgent = '' } = {}) {
   const db = getDb();
   const now = Date.now();
   const raw = crypto.randomBytes(32).toString('base64url');
+  db.prepare(`
+    DELETE FROM sessions WHERE id IN (
+      SELECT id FROM sessions WHERE user_id = ?
+      ORDER BY created_at DESC LIMIT -1 OFFSET ?
+    )
+  `).run(userId, MAX_SESSIONS_PER_USER - 1);
   db.prepare(`
     INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, not_after, ip, user_agent)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -74,7 +84,7 @@ function deleteAllForUser(userId) {
 
 // 过期行清扫（启动即跑 + 每小时，定时器 unref 不拦退出）
 function sweepExpired() {
-  getDb().prepare('DELETE FROM sessions WHERE expires_at < ? OR not_after < ?')
+  getDb().prepare('DELETE FROM sessions WHERE expires_at <= ? OR not_after <= ?')
     .run(Date.now(), Date.now());
 }
 

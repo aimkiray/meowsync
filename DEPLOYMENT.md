@@ -43,9 +43,9 @@ cp .env.example .env
 | PORT | - | `API_PORT` 的备用变量（Heroku/Railway 等 PaaS 自动注入；`API_PORT` 优先） |
 | HOST | 0.0.0.0 | 绑定地址 |
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
-| REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 须带令牌（子协议 `remote.<token>` 优先，`?token=` 兼容兜底）。公网/共享网络部署务必配置——未设时任何可达客户端都能接管主机端 |
+| REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 须带令牌（子协议 `remote.<token>` 优先，`?token=` 兼容兜底）。公网/共享网络部署务必配置——未设且未启用登录时任何可达客户端都能接管主机端（启用登录后由会话 cookie 鉴权兜底） |
 | DOWNLOAD_TOKEN | - | 可选：非 GET 的 `/downloads`、`/playlists`、`/song-meta`、`/ai` 请求须带 `x-download-token`（脚本/服务对服务旁路凭据）。**启用登录后浏览器不再需要它**——会话 cookie 等效放行；`VITE_DOWNLOAD_TOKEN` 仅保留给无登录老部署 |
-| TRUST_PROXY | - | 可选：设为 `1`/`true` 时采信 `X-Forwarded-Proto/Host` |
+| TRUST_PROXY | - | 可信反代跳数：`1`/`true` = 单层反代；多级链（CDN→nginx→应用）填实际跳数。采信 `X-Forwarded-Proto/Host`，并按跳数从 XFF 右起取真实客户端 IP 做限流分桶 |
 | AI_BASE_URL | - | 可选：OpenAI 兼容接口根地址（如本地 CLIProxyAPI `http://127.0.0.1:8317/v1`）。与 `AI_API_KEY`、`AI_MODEL` 三项全配才启用 AI 辅助 |
 | AI_API_KEY | - | 可选：OpenAI 兼容接口的 Bearer key |
 | AI_MODEL | - | 可选：模型名（如 `deepseek-v4.1-flash`）。启用后：解锁检索元数据规整、B 站/YouTube 匹配复核与兜底、外部曲歌词归属核验、无译文歌词自动中文翻译 |
@@ -149,12 +149,16 @@ server {
     listen 80;
     server_name your-domain.com;
 
+    client_max_body_size 10m;                           # 镜像导入/封面 blob 上传
+
     location / {
         proxy_pass http://localhost:3101;  # 宿主机部署的监听端口（容器内才是 3002）
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;        # WebSocket 必需
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # TRUST_PROXY 限流分桶的生命线——漏配会让全站客户端共享反代出口 IP 挤一个限流桶
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 300s;                        # 音频流长连接
     }
@@ -194,14 +198,39 @@ server {
 
 ### 公网部署步骤（推荐顺序）
 
-1. **先在本机/内网完成 `/auth/setup`**——空 `users` 表暴露公网 = 先到者建号接管。
-   服务监听 `0.0.0.0` 且未初始化时会打启动警告
-2. TLS 反代在前（nginx/Caddy/Traefik），**只有反代端口对外开放**；
+**接管窗口警告**：`/auth/setup` 在空 `users` 表时对任何可达者开放——
+直接把服务绑上公网再去开浏览器，窗口期内扫描器/先到者一条
+`curl -X POST /auth/setup` 即接管实例。务必**先建号，再暴露**：
+
+```bash
+# 第一步：容器只绑 loopback，公网不可达
+docker run -d --name meowsync -p 127.0.0.1:3101:3002 \
+  -v meowsync-data:/app/data meowsync
+
+# 第二步：经 SSH 隧道或本机直接完成建号（浏览器开 http://localhost:3101 进建号页）
+ssh -L 3101:127.0.0.1:3101 user@your-vps    # 远程 VPS 场景
+
+# 第三步：确认 users 非空后，再换公网映射/挂反代重建容器
+docker rm -f meowsync && docker run -d --name meowsync -p 3101:3002 \
+  -v meowsync-data:/app/data meowsync    # 或交给反代独占对外
+```
+
+compose 用户等价做法：先把 `ports` 改成 `"127.0.0.1:3101:3002"` 起服务
+完成建号，再改回公网映射 `docker compose up -d --force-recreate`。
+
+建号完成后继续：
+
+1. TLS 反代在前（nginx/Caddy/Traefik），**只有反代端口对外开放**；
    应用端口只绑内网/loopback，或 docker 网络内不 publish
-3. `.env` 设 `TRUST_PROXY=1`（cookie `Secure` 判定、限流分桶、解锁回链的
-   `https://` 前缀全部依赖真实外部协议）
-4. `CORS_ORIGINS=https://your-domain.com` 显式收紧（默认同源已够，跨域部署才需要）
-5. `docker compose -v` 挂载 `/app/data`（users/sessions 与下载文件同卷持久化）
+2. `.env` 设 `TRUST_PROXY=1`（cookie `Secure` 判定、限流分桶、解锁回链的
+   `https://` 前缀全部依赖真实外部协议）——**反代必须回传
+   `X-Forwarded-For`**（上面的 nginx 示例已含；漏配会让全站客户端
+   挤进同一个限流桶，任一用户锁死所有人的登录额度）
+3. `CORS_ORIGINS=https://your-domain.com` 显式收紧（默认同源已够，跨域部署才需要）
+4. compose `volumes:` 挂载 `/app/data`（users/sessions 与下载文件同卷持久化）
+
+> 服务监听 `0.0.0.0` 且 `users` 为空时启动日志会打 `[auth]` 接管窗口警告；
+> 看到它就该意识到「现在暴露 = 谁先建号归谁」。
 
 > 分享出去的 `/audio-proxy/t/<token>` 播放链对未登录者仍有效（vault 令牌
 > 本身即能力凭证——这是设计意图，mint 入口已全部在门内）；但
@@ -223,10 +252,13 @@ server {
 sqlite3 <DATA_DIR>/meowsync.sqlite "DELETE FROM sessions; DELETE FROM users;"
 ```
 
-容器内没有 sqlite3 CLI——用容器自带的 Node + better-sqlite3：
+容器内没有 sqlite3 CLI——用容器自带的 Node + better-sqlite3。
+按你的启动方式二选一（compose 服务名与容器名无关，第二种最稳）：
 
 ```bash
 docker exec meowsync node -e "const D=require('better-sqlite3');new D('/app/data/meowsync.sqlite').exec('DELETE FROM sessions; DELETE FROM users')"
+# compose 部署的容器名是 meowsync-app——用服务名执行不受容器名影响：
+docker compose exec meowsync node -e "const D=require('better-sqlite3');new D('/app/data/meowsync.sqlite').exec('DELETE FROM sessions; DELETE FROM users')"
 ```
 
 ### 已知边界
@@ -240,6 +272,11 @@ docker exec meowsync node -e "const D=require('better-sqlite3');new D('/app/data
   的接收方必须登录；对未登录者有效的分享面只有 `/audio-proxy/t/` 播放链
 - **单进程假设**：PM2/cluster 多实例会让限流桶与 stream-vault 各自为政——
   `instances` 恒为 1
+- **无会话管理 API**：没有改密/「登出所有设备」端点；吊销一切会话 = 上节
+  的清表恢复命令；已建立的 `/remote` WebSocket 连接在 logout 后不断线
+  （鉴权只在握手时），需要强制踢线就重启服务
+- **`?token=` 落 access_log**：REMOTE_TOKEN 走 URL 兜底形态会写进反代日志——
+  token 用 RFC7230 字符集（字母数字+`!#$%&'*+-.^_`|~`）会优先走子协议不落 URL
 - 本会话内已登录页继续播放不受踢门影响（流已下发）；门控只管 API/WS
 
 ## 远程遥控

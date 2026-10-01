@@ -74,7 +74,14 @@ async function authGate(c, next) {
 // auth.js 的 POST 检查与这里共用本函数——两处口径漂移=一处放行绕过
 function csrfOriginOk(c) {
   const origin = c.req.header('origin');
-  if (!origin) return true;
+  if (!origin) {
+    // Origin 缺失放行（非浏览器客户端不发）。二级纵深：现代浏览器
+    // 跨站写必带 Sec-Fetch-Site: cross-site——Origin 被代理剥掉的
+    // 链路里这道信号仍能拦下跨站写（login CSRF 残面）
+    const sfs = (c.req.header('sec-fetch-site') || '').toLowerCase();
+    if (sfs === 'cross-site') return false;
+    return true;
+  }
   try {
     const o = new URL(origin);
     const proto = o.protocol === 'http:' || o.protocol === 'https:';

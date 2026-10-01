@@ -65,6 +65,9 @@ async function verifyPassword(password, stored) {
     } else if (algo === 'scrypt') {
       const N = +m, r = +t, pp = +p;
       if (!(N > 0) || !(r > 0) || !(pp > 0) || N > 2 ** 20 || r > 64 || pp > 8) return false;
+      // keylen 上界与 a2id 的 tagLength 界同口径——篡改串的超大 dkLen
+      // 会让 scrypt 分配/计算失控（需 DB 写权限才能放，纵深对齐）
+      if (expected.length < 4 || expected.length > 512) return false;
       // maxmem 是固定上限而非随参数放大——防止篡改串强行要求 GB 级内存
       const need = 128 * N * r * pp * 2;
       if (need > 512 * 1024 * 1024) return false;

@@ -7,8 +7,8 @@ const { getCookie, setCookie, deleteCookie } = require('hono/cookie');
 const { fail } = require('../lib/http-error');
 const { parseJsonBody } = require('../lib/validate');
 const { authCredentialsBody } = require('../../shared/contracts.js');
-const { rateLimit, rateLimitByKey } = require('../lib/rate-limit');
-const { trustProxyEnabled } = require('../lib/env');
+const { rateLimit, rateLimitByKey, refundByKey } = require('../lib/rate-limit');
+const { trustProxyEnabled, clientIp } = require('../lib/env');
 // CSRF 判定与 authGate 同一份实现——login/setup/logout 是公开路由，
 // authGate 的写请求 Origin 校验不会覆盖 /auth/*，必须各自显式调用；
 // COOKIE_NAME 同源复用防两处字面量漂移
@@ -26,13 +26,6 @@ function requestIsHttps(c) {
     if (fwd) return fwd.split(',')[0].trim().toLowerCase() === 'https';
   }
   return new URL(c.req.url).protocol === 'https:';
-}
-
-function clientIp(c) {
-  const trustProxy = trustProxyEnabled();
-  return (trustProxy && c.req.header('x-forwarded-for')?.split(',')[0]?.trim())
-    || c.env?.incoming?.socket?.remoteAddress
-    || 'local';
 }
 
 function setSessionCookie(c, rawToken) {
@@ -112,6 +105,7 @@ app.post('/auth/login', async (c) => {
     || !rateLimitByKey(`auth-login:acct:${body.username.trim().toLowerCase()}`, 8, 10 * 60 * 1000)) {
     return fail(c, 429, '尝试太频繁，请 10 分钟后再试');
   }
+  const acctKey = `auth-login:acct:${body.username.trim().toLowerCase()}`;
   const user = usersRepo.findByUsername(body.username.trim());
   // 用户不存在也对 dummy hash 跑完整校验——「用户不存在」与「密码错误」
   // 在响应文案和时序上都必须不可区分
@@ -121,6 +115,9 @@ app.post('/auth/login', async (c) => {
     console.warn(`[auth] 登录失败 user=${body.username} ip=${clientIp(c)}`);
     return fail(c, 401, '用户名或密码错误');
   }
+  // 成功的登录把账号桶这一拍退回——爆破防御针对的是失败尝试，
+  // 合法用户不该被 8 次/10min 自锁（cookie 反复失效场景）
+  refundByKey(acctKey);
   // 参数落后基线的旧 hash 透明升档
   if (needsRehash(user.password_hash)) {
     hashPassword(body.password)
@@ -152,7 +149,9 @@ app.post('/auth/logout', (c) => {
 app.get('/auth/me', (c) => {
   c.header('Cache-Control', 'no-store');
   const raw = getCookie(c, COOKIE_NAME);
-  const sess = raw ? sessionsRepo.resolveSession(raw) : null;
+  // 与 /auth/status 同用只读 peek——滑动续期由 authGate 覆盖的业务请求承担，
+  // GET 探测端点自身不带写副作用
+  const sess = raw ? sessionsRepo.peekSession(raw) : null;
   if (!sess) return fail(c, 401, '未登录');
   return c.json({ code: 200, data: { username: sess.username, role: sess.role } });
 });
