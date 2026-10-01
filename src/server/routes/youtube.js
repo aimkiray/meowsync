@@ -69,6 +69,11 @@ function extractYtSong(title, author) {
   const cleanTitle = String(title || '')
     .replace(/[[(（【][^\[\]()（）【】]{0,80}?\b(?:official|lyrics?|audio|visuali[sz]er|video|mv|hd|4k|8k|remaster(?:ed)?|mono|explicit|live|color coded)\b[^\[\]()（）【】]{0,80}?[\])）】]/gi,
       m => BRACKET_PAIR[m[0]] === m[m.length - 1] ? ' ' : m)
+    // 韩翻/搬运号常见竖线分隔「歌名┃频道 COVER」「歌名｜频道」——首个即截，
+    // 尾段是频道与标记噪声（Mela!┃미녕이 COVER → Mela!）
+    .replace(/\s*[┃│｜▏].*$/u, ' ')
+    // 尾巴上的翻唱标记：'COVER by xx'、裸 'COVER'/'커버'/'翻唱'/'cover'
+    .replace(/\s+(?:cover(?:\s+by\s+.+)?|커버|翻唱|翻弹|演奏)\s*$/i, ' ')
     .replace(/《|》/g, ' ')
     .replace(/\s+/g, ' ')
     // 剥括号可能留下悬空分隔符（'Artist - (Explicit)' → 'Artist -'）

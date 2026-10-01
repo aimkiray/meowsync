@@ -26,7 +26,8 @@ function extractSongName(tagNames, title) {
     .replace(/【[^】]*】/g, ' ')            // 【UP主】【翻唱】等角标前缀
     .replace(/（[^（）]*(?:翻唱|cover|翻弹|演奏)[^（）]*）/gi, ' ')
     .replace(/\([^()]*(?:翻唱|cover|翻弹|演奏)[^()]*\)/gi, ' ')
-    .replace(/[-—–_|~～].*$/u, '')          // 首个分隔符后的修饰尾巴
+    .replace(/[-—–_|~～┃│｜▏].*$/u, '')     // 首个分隔符后的修饰尾巴（含韩翻 ┃）
+    .replace(/\s+(?:cover(?:\s+by\s+.+)?|커버)\s*$/i, '') // 尾巴裸 COVER/커버
     .replace(/《|》/g, ' ')
     .trim();
   return t || String(title || '').trim();
