@@ -11,8 +11,9 @@ const API_DOMAIN = 'https://interface.music.163.com';
 const DEFAULT_TIMEOUT_MS = 30000;
 
 // 进程级稳定标识（上游用 global.deviceId/WNMCID 同款惰性语义——原实现里
-// global.deviceId 从未被赋值恒 undefined；此处生成随机 hex 仅改善指纹一致性）
-const DEVICE_ID = crypto.randomBytes(16).toString('hex');
+// global.deviceId 从未被赋值恒 undefined；此处生成随机 hex 仅改善指纹一致性。
+// 真机格式对齐上游 data/deviceid.txt：52 字符大写 hex）
+const DEVICE_ID = crypto.randomBytes(26).toString('hex').toUpperCase();
 const WNMCID = (() => {
   let s = '';
   for (let i = 0; i < 6; i++) s += 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)];
@@ -60,7 +61,7 @@ const hex = (n) => crypto.randomBytes(n).toString('hex');
 // 无 MUSIC_U 时注空 MUSIC_A——对齐 init-anonymous-token 建空文件的现状语义
 function buildCookie(cookie) {
   if (typeof cookie === 'string') cookie = cookieToJson(cookie);
-  if (typeof cookie !== 'object' || !cookie) return { map: {}, headerStr: '' };
+  if (typeof cookie !== 'object' || !cookie) return { map: {} };
   const nuid = hex(32);
   const os = OS_MAP[cookie.os] || OS_MAP.iphone;
   const map = {
@@ -77,7 +78,11 @@ function buildCookie(cookie) {
     channel: cookie.channel || os.channel,
     appver: cookie.appver || os.appver,
   };
-  return { map, headerStr: cookieObjToString(map) };
+  // MUSIC_A 兜底在 merge 内而非单通道分支——上游 request.js:113-116 同位置
+  // 且仍带 !MUSIC_U 门（登录态不该多写 MUSIC_A 键位）；匿名 token 非空时
+  // 两通道都应携带（当前空 token 下 wire 等价）
+  if (!map.MUSIC_U) map.MUSIC_A = map.MUSIC_A || '';
+  return { map };
 }
 
 /**
@@ -93,10 +98,8 @@ async function request(uri, data, { crypto: mode = 'eapi', cookie, timeoutMs = D
   const payload = { ...data };
 
   if (mode === 'weapi') {
-    // headerStr 不解构——NMTID/MUSIC_A 在 merge 后才注入，需重新序列化
     const { map } = buildCookie(cookieObj);
     if (uri.indexOf('login') === -1) map.NMTID = hex(16);
-    if (!map.MUSIC_U) map.MUSIC_A = map.MUSIC_A || '';
     headers.Referer = DOMAIN;
     headers['User-Agent'] = UA.weapi;
     headers.Cookie = cookieObjToString(map);

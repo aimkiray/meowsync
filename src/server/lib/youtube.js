@@ -60,42 +60,15 @@ async function fetchPlayer(videoId, extraSignal) {
 // 客户端表回落与 fetchPlayer 同口径：Innertube 风控按客户端形态整体生效，
 // ANDROID 被封时 search 若写死单形态会在 player 回落链之前就整源死亡
 async function innertubeSearch(keyword, extraSignal, limit = 5) {
-  let body = null;
-  let lastErr = null;
-  for (const form of INNERTUBE_CLIENTS) {
-    if (extraSignal?.aborted) throw new Error('aborted');
-    try {
-      const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...form.headers },
-        body: JSON.stringify({
-          context: { client: form.client },
-          query: String(keyword || ''),
-          // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
-          params: 'EgIQAQ==',
-        }),
-        signal: timedSignal(extraSignal),
-      });
-      if (!res.ok) throw new Error(`innertube search HTTP ${res.status}`);
-      body = await res.json();
-      break;
-    } catch (e) {
-      lastErr = e;
-      if (extraSignal?.aborted) throw new Error('aborted');
-      console.warn(`[youtube] ${form.name} 客户端搜索失败:`, e.message);
-    }
-  }
-  if (!body) throw lastErr || new Error('所有客户端形态搜索均失败');
-  const out = [];
-  const seen = new Set(); // 同 videoId 会在主结果与相关推荐栏重复出现——去重防重复打 player
   // 递归扫 videoRenderer（web 客户端形态）与 compactVideoRenderer
   // （ANDROID/IOS 移动客户端形态）——twoColumnSearchResultsRenderer 的
   // 嵌套深度随 YouTube 改版漂移，按节点形状收集比按路径深取稳
   const textOf = (n) => (n?.runs || []).map(r => r.text).join('') || n?.simpleText || '';
-  const walk = (node) => {
+  const seen = new Set(); // 同 videoId 会在主结果与相关推荐栏重复出现——去重防重复打 player
+  const walk = (node, out) => {
     if (!node || typeof node !== 'object' || out.length >= limit) return;
     if (Array.isArray(node)) {
-      for (const item of node) walk(item);
+      for (const item of node) walk(item, out);
       return;
     }
     const v = node.videoRenderer || node.compactVideoRenderer;
@@ -117,11 +90,39 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
     }
     for (const key of Object.keys(node)) {
       if (key === 'videoRenderer' || key === 'compactVideoRenderer') continue;
-      walk(node[key]);
+      walk(node[key], out);
     }
   };
-  walk(body?.contents);
-  return out;
+  let lastErr = null;
+  for (const form of INNERTUBE_CLIENTS) {
+    if (extraSignal?.aborted) throw new Error('aborted');
+    try {
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...form.headers },
+        body: JSON.stringify({
+          context: { client: form.client },
+          query: String(keyword || ''),
+          // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
+          params: 'EgIQAQ==',
+        }),
+        signal: timedSignal(extraSignal),
+      });
+      if (!res.ok) throw new Error(`innertube search HTTP ${res.status}`);
+      const body = await res.json();
+      const out = [];
+      walk(body?.contents, out);
+      // 空壳响应（风控时常见 200+无 renderer）视为失败换下一客户端——
+      // 与 fetchPlayer 的「无 streamingData 即换形态」同口径
+      if (!out.length) throw new Error('搜索结果无候选（空壳响应/风控）');
+      return out;
+    } catch (e) {
+      lastErr = e;
+      if (extraSignal?.aborted) throw new Error('aborted');
+      console.warn(`[youtube] ${form.name} 客户端搜索失败:`, e.message);
+    }
+  }
+  throw lastErr || new Error('所有客户端形态搜索均失败');
 }
 
 // 选流：音频默认优先 mp4a/m4a 容器（audio/mp4——webm opus 在 Safari 的

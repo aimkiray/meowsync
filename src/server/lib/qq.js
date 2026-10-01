@@ -35,34 +35,52 @@ const hasQqCookie = () => Boolean(qqCookie());
 // 到期前 600s 窗口内触发续期——老 key 在此窗口仍有效，后台续期无缝交接
 const QQ_KEY_LIFETIME_SEC = 259200;
 const QQ_RENEW_WINDOW_SEC = 600;
+// 失败退避：refresh_token 死了/上游持续拒时，没有冷却会变成「每个 QQ
+// 请求一次 Login 外呼」——频控维度上比不续期更糟
+const QQ_RENEW_COOLDOWN_MS = 10 * 60 * 1000;
 let renewalInflight = null;
+let lastRenewAttemptAt = 0;
 
 // LoginServer/Login 用 refresh_token 换新 musickey，回写 NEW_QQ_COOKIE。
 // 只在 qqCookie() 里惰性触发——读 cookie 的请求自然带上续期检查。
-// musicid 走 qqUin（剥 o 前缀、兼容 wxuin/p_luin 微信态）：裸 parseInt('o123')
-// 恒 NaN 会让续期对文档化 cookie 形态静默空转。musickey 与请求侧 qqKey
-// 同序（qm_keyst 优先）——两键并存值不同时续期与请求必须拿同一把
+// 字段名兼容真实导出形态：QQ 网页 cookie 的 refresh 键是 psrf_ 前缀族
+// （unm 靠无锚定子串匹配顺带命中）；微信态走 wxrefresh_token。
+// musicid 直接以数字字面量拼 JSON——wxuin 有 19 位超 MAX_SAFE_INTEGER，
+// parseInt/JSON.stringify 双截断会把 musicid 写坏（上游要求 Number 类型）
 async function renewQqCookie(cookie) {
-  const refreshToken = cookieVal(cookie, 'qqrefresh_token') || cookieVal(cookie, 'wxrefresh_token');
-  const musickey = qqKey(cookie);
-  const musicid = parseInt(qqUin(cookie) || '0', 10);
-  if (!refreshToken || !musickey || !musicid) return;
+  const refreshToken = cookieVal(cookie, 'psrf_qqrefresh_token')
+    || cookieVal(cookie, 'qqrefresh_token')
+    || cookieVal(cookie, 'wxrefresh_token');
+  const musickey = qqKey(cookie)
+    || cookieVal(cookie, 'psrf_qqmusic_key') || cookieVal(cookie, 'psrf_qm_keyst');
+  const uinDigits = qqUin(cookie); // qqUin 已保证纯数字
+  if (!refreshToken || !musickey || !uinDigits) {
+    console.warn('[qq] cookie 续期缺字段（refresh_token/musickey/uin），跳过——'
+      + '到期后 QQ 源将降级匿名档');
+    return;
+  }
   try {
     const res = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Cookie: cookie },
-      body: JSON.stringify({
-        req: {
-          module: 'music.login.LoginServer', method: 'Login',
-          param: { refresh_token: refreshToken, musickey, musicid },
-        },
-      }),
+      // musicid 拼裸数字串绕过 MAX_SAFE_INTEGER 精度截断
+      body: `{"req":{"module":"music.login.LoginServer","method":"Login",`
+        + `"param":{"refresh_token":${JSON.stringify(refreshToken)},`
+        + `"musickey":${JSON.stringify(musickey)},"musicid":${uinDigits}}}}`,
       signal: AbortSignal.timeout(10000),
     });
     const body = await res.json();
-    const data = body?.req?.data || {};
-    if (!data.musickey || !data.musickeyCreateTime) {
-      console.warn('[qq] cookie 续期应答缺 musickey/musickeyCreateTime（上游可能拒登）');
+    const req = body?.req || {};
+    const data = req.data || {};
+    if (req.code !== 0 || !data.musickey) {
+      console.warn(`[qq] cookie 续期被拒（code=${req.code} ${data.errMsg || req.errMsg || ''}）——`
+        + 'refresh_token 可能已失效，需重新导出 cookie');
+      return;
+    }
+    // createtime 必须是 epoch 整数——上游若回 "2024-08-03 22:05:59" 形态，
+    // 写回后 parseInt 出 2024 → 永远判定在续期窗内 → 每请求一次外呼死循环
+    if (!Number.isFinite(+data.musickeyCreateTime) || +data.musickeyCreateTime < 1e9) {
+      console.warn('[qq] cookie 续期应答的 musickeyCreateTime 非 epoch 秒，放弃写回');
       return;
     }
     // 按名重写而非正则子串：'qqmusic_key=' 是 'psrf_qqmusic_key=' 的子串、
@@ -71,18 +89,32 @@ async function renewQqCookie(cookie) {
     // 都触发一次续期外呼死循环。缺失键补尾部（导出的 cookie 未必带齐变体）
     const renewMap = {
       qqmusic_key: data.musickey, qm_keyst: data.musickey,
-      musickey_createtime: data.musickeyCreateTime,
-      psrf_musickey_createtime: data.musickeyCreateTime,
+      musickey_createtime: String(+data.musickeyCreateTime),
+      psrf_musickey_createtime: String(+data.musickeyCreateTime),
     };
+    // 上游若轮换 refresh_token/access_token 则落回对应名（仅非空才覆盖——
+    // 部分应答形态回空串，盲写会清掉现有 token）；只重写已存在的键
+    if (data.refresh_token) {
+      for (const n of ['psrf_qqrefresh_token', 'qqrefresh_token', 'wxrefresh_token']) {
+        if (cookieVal(cookie, n)) renewMap[n] = data.refresh_token;
+      }
+    }
+    if (data.access_token) {
+      for (const n of ['psrf_qqaccess_token', 'qqaccess_token', 'wxaccess_token']) {
+        if (cookieVal(cookie, n)) renewMap[n] = data.access_token;
+      }
+    }
     const seen = new Set();
     const parts = cookie.split(';').map(p => p.trim()).filter(Boolean)
       .map(p => {
-        const n = p.slice(0, p.indexOf('=')).trim();
+        const eq = p.indexOf('=');
+        if (eq === -1) return p; // 无等号裸片段不动
+        const n = p.slice(0, eq).trim();
         if (!(n in renewMap)) return p;
         seen.add(n);
         return `${n}=${renewMap[n]}`;
       });
-    for (const n of Object.keys(renewMap)) {
+    for (const n of ['qqmusic_key', 'qm_keyst', 'musickey_createtime', 'psrf_musickey_createtime']) {
       if (!seen.has(n)) parts.push(`${n}=${renewMap[n]}`);
     }
     process.env.NEW_QQ_COOKIE = parts.join('; ');
@@ -95,14 +127,22 @@ async function renewQqCookie(cookie) {
 // 参数化 cookie 快照而非回读 qqCookie()——后者会再次进入本函数形成
 // 无限互递归（renewalInflight 赋值在 await 之前，拦不住同步段）。
 // 触发键兼容 psrf_ 变体：只导出 psrf_musickey_createtime 的 cookie
-// 形态不能让续期永远判定「不在窗口」
+// 形态不能让续期永远判定「不在窗口」；无时间戳但有 refresh_token 的
+// cookie 视为「需要续期」，直接发起
 function maybeRenewQqCookie(cookie) {
   if (renewalInflight || !cookie) return;
+  if (Date.now() - lastRenewAttemptAt < QQ_RENEW_COOLDOWN_MS) return;
   const created = parseInt(cookieVal(cookie, 'musickey_createtime'), 10)
     || parseInt(cookieVal(cookie, 'psrf_musickey_createtime'), 10);
-  if (!created) return;
-  if (created + QQ_KEY_LIFETIME_SEC - Date.now() / 1000 >= QQ_RENEW_WINDOW_SEC) return;
-  renewalInflight = renewQqCookie(cookie).finally(() => { renewalInflight = null; });
+  const hasRefresh = cookieVal(cookie, 'psrf_qqrefresh_token')
+    || cookieVal(cookie, 'qqrefresh_token') || cookieVal(cookie, 'wxrefresh_token');
+  if (!created && !hasRefresh) return;
+  if (created && created + QQ_KEY_LIFETIME_SEC - Date.now() / 1000 >= QQ_RENEW_WINDOW_SEC) return;
+  lastRenewAttemptAt = Date.now();
+  // .catch 兜住提取段理论上的同步抛——finally 链保留 rejection 会成 unhandled
+  renewalInflight = renewQqCookie(cookie)
+    .catch(() => {})
+    .finally(() => { renewalInflight = null; });
 }
 
 // cookie 里的登录参数：uin（QQ 登录，"o0956…" 形态需剥 o 前缀与前导零）或

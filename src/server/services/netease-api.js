@@ -256,8 +256,14 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         songRows[s.id] = s;
       });
     } catch (e) {
-      // 静默降级会让剪辑错配漏检——留痕才能发现"上游抖动→成片剪辑入库"的因果
-      console.warn(`[unlock] song_detail 获取失败，时长校验降级（逐源统计仍生效）: ${e?.message || e}`);
+      // 客户端断连的 abort 会经 request.js 包成 {status:502} answer——非 Error
+      // 打不出 message，这里按 aborted 跳过避免「[object Object]」误导日志
+      if (!signal?.aborted) {
+        const msg = e?.message || (typeof e === 'object' && e !== null
+          ? `answer.status=${e.status}` : String(e));
+        // 静默降级会让剪辑错配漏检——留痕才能发现"上游抖动→成片剪辑入库"的因果
+        console.warn(`[unlock] song_detail 获取失败，时长校验降级（逐源统计仍生效）: ${msg}`);
+      }
     }
   }
 
@@ -359,9 +365,14 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             resolved = {
               url: checked.url.toString(), br: unblocked.br || null, source,
               // 真实文件形态写回：试听片的 time/size/type 透给下载端会
-              // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件
+              // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件。
+              // size 优先 provider/HEAD 实测值；youtube/qq 无 size 但知道
+              // br+durationSec——按 br×时长估值（标称码率，量级对即可，
+              // 至少比残片字节数更接近真相）
               ext: extOf(checked.url),
-              size: sizeBytes || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null),
+              size: sizeBytes
+                || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null)
+                || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),
               timeMs: estMs || originalDt || null,
             };
             unlockCacheSet(purpose, item.id, resolved);
@@ -425,4 +436,4 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   return items;
 }
 
-module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock };
+module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock, MAX_UNLOCK_ITEMS };
