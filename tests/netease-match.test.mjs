@@ -121,6 +121,7 @@ test('组合查询名命中·艺人零交集 → 过 AI 复核（翻唱判 true 
   const r = await matchNeteaseSong(['coverer Lemon', 'Lemon'], 200, 't', null, { title: 'Lemon covered', author: 'coverer' });
   assert.equal(r.song.id, 1);
   assert.equal(r.query, 'coverer Lemon');
+  assert.equal(aiScript.length, 0);  // 复核确实发生且只问一次——组合名命中不免检
 });
 
 test('组合名命中被否 → veto 拦阻后续裸名查询复活同一错配', async () => {
@@ -130,6 +131,8 @@ test('组合名命中被否 → veto 拦阻后续裸名查询复活同一错配'
   aiScript = [{ match: false }, { queries: [] }, { match: 0 }];
   const r = await matchNeteaseSong(['coverer Lemon', 'Lemon'], 200, 't', null, { title: 'Lemon', author: 'coverer' });
   assert.equal(r.song, null);       // 第二串 'Lemon' 名命中被 veto 拦住
+  assert.equal(aiScript.length, 1); // confirm 消费 match:false、extract 消费 queries:[]——
+                                    // pick 池被 veto 清空，{match:0} 剩着 = 没白问
 });
 
 test('组合查询名命中·艺人有交集 → 不过 AI（确定性放行）', async () => {

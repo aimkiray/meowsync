@@ -32,8 +32,10 @@ const sanitizePrompt = (s) => String(s || '')
 // 可能被不同视频匹配到，A 视频的错配不能污染 B 视频的正常取用；换模型后
 // 旧判定自动失效重判（避免旧模型的误判被永久固化）
 function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor) {
+  // sig 输入在键函数内单边收口（slice 口径 = mirror 投影的 300/120）——
+  // 播放链传全量、下载链传投影截断值，两侧对同一首歌必须产同一个键
   const sig = createHash('sha1')
-    .update(`${String(sourceTitle).toLowerCase().trim()}|${String(sourceAuthor).toLowerCase().trim()}`)
+    .update(`${String(sourceTitle).toLowerCase().trim().slice(0, 300)}|${String(sourceAuthor).toLowerCase().trim().slice(0, 120)}`)
     .digest('hex').slice(0, 12);
   return `${lyricId}@${AI_MODEL}@${sig}`;
 }

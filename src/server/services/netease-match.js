@@ -15,10 +15,18 @@ const normToken = (s) => String(s || '')
 // 艺人与（源作者 ∪ 查询内 token）零交集 → 同名错配风险真实存在。
 // 单 token 纯歌名查询的名互包含是强证据，不为它多花一次模型调用；
 // 候选艺人字段缺失同样判不出交集——按「需要复核」处理
+// 查询串里的修饰 token 不算艺人引用——'recovery' 含 'cover'、'olive' 含
+// 'live' 这类子串碰撞会制造假 overlap 跳过本应触发的复核
+const QUERY_NOISE = new Set([
+  'cover', 'covers', 'covered', 'coverver', '커버', '翻唱', '翻弹', '演奏',
+  'live', 'official', 'mv', 'audio', 'video', 'lyric', 'lyrics',
+  'hd', '4k', '8k', 'remix', 'full', '完整版',
+]);
 const nameHitNeedsConfirm = (song, q, sourceInfo) => {
   const tokens = String(q).trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) return false;
-  const refs = [sourceInfo?.author, ...tokens].map(normToken).filter(x => x.length >= 2);
+  const refs = [sourceInfo?.author, ...tokens.filter(t => !QUERY_NOISE.has(normToken(t)))]
+    .map(normToken).filter(x => x.length >= 2);
   const arts = (Array.isArray(song.ar || song.artists) ? (song.ar || song.artists) : [])
     .map(a => normToken(a?.name)).filter(x => x.length >= 2);
   return !arts.some(a => refs.some(r => a.includes(r) || r.includes(a)));
@@ -146,7 +154,9 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     for (const s of songs) if (s.id != null) { seenSongs.set(s.id, s); collect?.add(s.id); }
     const byName = songs.find(s => !vetoedIds.has(s.id) && shareName(s.name, q));
     // veto 是「(源,候选)对」级判定与证据类型无关——被否的 id 不经任何
-    // 路径复活（含后续串的名命中），否则同一错配换个查询串就钻回来
+    // 路径复活（含后续串的名命中），否则同一错配换个查询串就钻回来。
+    // 接受的代价：模型误否的正主在本请求内不再被名命中救回——
+    // 漏配（退回源站元数据）优于错配（固化错词源），与文件头哲学一致
     if (byName) {
       // 「艺人 歌名」组合查询的名命中是同名错配高发口：查询串含艺人成分时
       // 任何同名曲都满足双向包含（'coverer Lemon' 搜出 米津玄師 的 Lemon）。
@@ -159,7 +169,7 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
           console.info(`[${tag}] AI 否决组合名命中: ${songDesc(byName)} ← ${q}`);
           return null;
         }
-        return { song: byName, query: q, nameHit: true, aiConfirmed: true };
+        return { song: byName, query: q, nameHit: true, aiChecked: true };
       }
       return { song: byName, query: q, nameHit: true };
     }
@@ -224,8 +234,9 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
         if (!hit) continue;
         // 再生轮的名命中必过一次复核（模型产出的查询串离 ground truth 远
         // 一跳，臆造真实歌名会被 shareName 确定性放行）；searchOnce 内已
-        // 复核过的同对（aiConfirmed）不重复问
-        if (hit.nameHit && !hit.aiConfirmed) {
+        // 问过的同对（aiChecked——verdict 为 null 的哑火也标，同请求内
+        // AI 哑是粘性的重问白烧）不重复问
+        if (hit.nameHit && !hit.aiChecked) {
           const verdict = await aiConfirmMatch(hit.song, sourceInfo, durationSec, signal);
           if (verdict === false) {
             vetoedIds.add(hit.song.id);

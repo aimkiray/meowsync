@@ -130,10 +130,18 @@ export const downloadsApi = {
       dt: t.dt || t.duration || 0,
       // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返
       ...(t.qq?.mediaMid ? { qq: { mediaMid: t.qq.mediaMid } } : {}),
-      // bv_/yt_ 曲的自有源流定位 + neteaseId 词源——缺了也能按 id 前缀自愈
-      // 重解（cid 会多一次 view 往返、歌词段拿不到词源），带上更省
-      ...(t.bilibili?.bvid ? { bilibili: { bvid: t.bilibili.bvid, cid: t.bilibili.cid, page: t.bilibili.page } } : {}),
-      ...(t.youtube?.videoId ? { youtube: { videoId: t.youtube.videoId } } : {}),
+      // bv_/yt_ 曲的自有源流定位 + neteaseId 词源 + title/author——歌词
+      // 归属核验的 verdict 签名靠来源标题/作者；缺了也能按 id 前缀自愈
+      // 重解（cid 会多一次 view 往返、歌词段拿不到词源），带上更省。
+      // 截断收口在服务端单边做，这里原样透传
+      ...(t.bilibili?.bvid ? { bilibili: {
+        bvid: t.bilibili.bvid, cid: t.bilibili.cid, page: t.bilibili.page,
+        title: t.bilibili.title, author: t.bilibili.author
+      } } : {}),
+      ...(t.youtube?.videoId ? { youtube: {
+        videoId: t.youtube.videoId,
+        title: t.youtube.title, author: t.youtube.author
+      } } : {}),
       ...(t.neteaseId ? { neteaseId: t.neteaseId } : {})
     }))
     return http.post(`/downloads/local/mirror`, {
