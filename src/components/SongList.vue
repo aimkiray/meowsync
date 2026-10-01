@@ -1102,6 +1102,7 @@ export default {
       shareFromMenu,
       shareSong,
       downloadSongDirect,
+      canServerDownload,
       toggleServerDownload,
       getMenuPosition,
       closeDownloadMenu,
