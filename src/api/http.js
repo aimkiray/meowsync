@@ -17,13 +17,17 @@ const http = axios.create({
   withCredentials: true,
   headers: {
     'Accept': '*/*',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    ...(DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {})
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
   }
 })
 
 http.interceptors.request.use(
   config => {
+    // 令牌只发自己的 API：按目标 URL 条件注入而非实例默认头——默认头会
+    // 跟着任何混进本实例的绝对 URL 外泄（当前无此调用方，属加固）
+    if (DOWNLOAD_TOKEN && config.url && !/^https?:/i.test(config.url)) {
+      config.headers['x-download-token'] = DOWNLOAD_TOKEN
+    }
     // 不污染调用方传入的 params 对象
     config.params = { ...config.params, _t: Date.now() }
     return config
@@ -43,6 +47,9 @@ http.interceptors.response.use(
       && marker === 'required'
       && !url.startsWith('/auth/')) {
       authState.enabled = true
+      // 服务端既已要求登录，users 必非空——清掉探活期留下的陈旧
+      // setupRequired，否则略过 setup 的用户被踢后看到建号页而非登录页
+      authState.setupRequired = false
       authState.authenticated = false
       authState.expired = true
     }

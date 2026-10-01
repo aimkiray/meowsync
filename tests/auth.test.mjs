@@ -134,14 +134,18 @@ test('sessionFromCookieHeader：name 匹配/URI 解码/空值', () => {
 
 // ── CSRF Origin 判定 ──
 
-function fakeCtx({ origin, url = 'https://app.example.com/x', host = 'app.example.com', xfh } = {}) {
-  const headers = { origin, host, 'x-forwarded-host': xfh };
+function fakeCtx({ origin, url = 'https://app.example.com/x', host = 'app.example.com', xfh, xff, socketIp, sfs } = {}) {
+  const headers = {
+    origin, host, 'x-forwarded-host': xfh,
+    'x-forwarded-for': xff, 'sec-fetch-site': sfs
+  };
   return {
     req: {
       method: 'POST',
       header: (n) => headers[n.toLowerCase()],
       url
-    }
+    },
+    env: socketIp ? { incoming: { socket: { remoteAddress: socketIp } } } : undefined
   };
 }
 
@@ -179,4 +183,102 @@ test('csrfOriginOk：TRUST_PROXY 下采信 X-Forwarded-Host（反代重写 Host 
   });
   assert.equal(authGate.csrfOriginOk(evil), false);
   delete process.env.TRUST_PROXY;
+});
+
+// ── CSRF 边界补测 ──
+
+test('csrfOriginOk：TRUST_PROXY 关闭时伪造 XFH 不采信', () => {
+  delete process.env.TRUST_PROXY;
+  // 直连部署：攻击者自带的 X-Forwarded-Host 必须被忽略——否则异源 Origin
+  // 配上伪造 XFH 就把 CSRF 检查洗成同源
+  const forged = fakeCtx({
+    origin: 'https://evil.example.com',
+    host: 'app.example.com',
+    xfh: 'evil.example.com'
+  });
+  assert.equal(authGate.csrfOriginOk(forged), false);
+});
+
+test('csrfOriginOk：Origin null/端口错配/尾点 FQDN 均拒', () => {
+  assert.equal(authGate.csrfOriginOk(fakeCtx({ origin: 'null' })), false);
+  // Origin 带显式端口 vs Host 无端口 → host 不等 → 拒
+  assert.equal(authGate.csrfOriginOk(fakeCtx({
+    origin: 'https://app.example.com:8443'
+  })), false);
+  // 尾随点 FQDN（DNS 等价但 host 串不等）——fail-closed 误拒不误放
+  assert.equal(authGate.csrfOriginOk(fakeCtx({
+    origin: 'https://app.example.com.'
+  })), false);
+});
+
+// ── rate-limit.js ──
+
+test('rateLimitByKey：窗口计数/满容拒新不洗存量桶/refund 回退', async () => {
+  const { rateLimitByKey, refundByKey } = require('../src/server/lib/rate-limit.js');
+  // 正常计数
+  const k = 'test:acct:victim';
+  for (let i = 0; i < 3; i++) assert.equal(rateLimitByKey(k, 3, 60000), true);
+  assert.equal(rateLimitByKey(k, 3, 60000), false);  // 第 4 次拒
+  // refund：成功路径退回最新一拍 → 再获准一次
+  refundByKey(k);
+  assert.equal(rateLimitByKey(k, 3, 60000), true);
+  assert.equal(rateLimitByKey(k, 3, 60000), false);
+  // 窗口外放行（用 1ms 窗让桶自然过期）
+  const short = 'test:short';
+  assert.equal(rateLimitByKey(short, 1, 1), true);
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(rateLimitByKey(short, 1, 1), true);
+});
+
+test('rateLimitByKey：满容拒新——洪泛的随机 key 自限，存量桶不丢', () => {
+  const { rateLimitByKey } = require('../src/server/lib/rate-limit.js');
+  // 受害者先建桶
+  const victim = 'flood:victim';
+  assert.equal(rateLimitByKey(victim, 8, 60000), true);
+  // 灌桶：5000+ 个随机新 key。桶满后新 key 被拒（return false）——
+  // 它们计数不到但占桶成功；关键断言是受害者桶不被逐
+  let rejected = 0;
+  for (let i = 0; i < 5200; i++) {
+    if (!rateLimitByKey(`flood:attacker:${i}`, 1, 60000)) rejected++;
+  }
+  assert.ok(rejected > 0, '满容后新 key 应被拒');
+  // 受害者桶仍健在：第 2 拍正常计数，第 8 拍后拒绝语义不变
+  for (let i = 0; i < 7; i++) assert.equal(rateLimitByKey(victim, 8, 60000), true);
+  assert.equal(rateLimitByKey(victim, 8, 60000), false);
+});
+
+// ── clientIp：XFF 右起第 N 跳（可信反代追加位）──
+
+test('clientIp：TRUST_PROXY=1 取 XFF 末位（追加的直连对端），伪造首跳无效', () => {
+  const { clientIp } = require('../src/server/lib/env.js');
+  process.env.TRUST_PROXY = '1';
+  // 客户端伪造 XFF 首跳经 append 型反代（$proxy_add_x_forwarded_for）后：
+  // 伪造值, 真实对端 —— 右起第 1 个是不可伪造的真实 IP
+  assert.equal(clientIp(fakeCtx({ xff: '6.6.6.6, 1.2.3.4' })), '1.2.3.4');
+  // 覆写型反代（XFF=remote_addr 单值）同样取末位
+  assert.equal(clientIp(fakeCtx({ xff: '1.2.3.4' })), '1.2.3.4');
+  // 缺 XFF（直连/链路异常）回落 socket 对端
+  assert.equal(clientIp(fakeCtx({ socketIp: '10.0.0.9' })), '10.0.0.9');
+  delete process.env.TRUST_PROXY;
+  // 关闭时 XFF 完全不可信——socket 兜底
+  assert.equal(clientIp(fakeCtx({ xff: '6.6.6.6', socketIp: '10.0.0.9' })), '10.0.0.9');
+});
+
+test('clientIp：TRUST_PROXY=N 多级链取右起第 N 个，链不足回落 socket', () => {
+  const { clientIp } = require('../src/server/lib/env.js');
+  process.env.TRUST_PROXY = '2';
+  // CDN→nginx→app：XFF = 客户端声称值, CDN 见值, nginx 见值 → 右起第 2 = 客户端
+  assert.equal(clientIp(fakeCtx({ xff: 'spoofed, 1.2.3.4, 10.9.9.9' })), '1.2.3.4');
+  // 链短于配置跳数（绕过外层直连内层）——伪造不出真实身份，回落 socket
+  assert.equal(clientIp(fakeCtx({ xff: '1.2.3.4', socketIp: '10.0.0.1' })), '10.0.0.1');
+  delete process.env.TRUST_PROXY;
+});
+
+test('csrfOriginOk：Origin 缺失时 Sec-Fetch-Site: cross-site 仍拒（剥头链路纵深）', () => {
+  // Origin 被代理/老 UA 剥掉的跨站写——Sec-Fetch-Site 二级信号接住
+  assert.equal(authGate.csrfOriginOk(fakeCtx({ sfs: 'cross-site' })), false);
+  // 同源/同站/无该头（非浏览器客户端）照常放行
+  assert.equal(authGate.csrfOriginOk(fakeCtx({ sfs: 'same-origin' })), true);
+  assert.equal(authGate.csrfOriginOk(fakeCtx({ sfs: 'same-site' })), true);
+  assert.equal(authGate.csrfOriginOk(fakeCtx({})), true);
 });

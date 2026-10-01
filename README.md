@@ -189,6 +189,12 @@ docker build -t meowsync .
 docker run -d -p 3101:3002 -v meowsync-data:/app/data meowsync
 ```
 
+> **公网暴露前必读**：`/auth/setup` 在空用户表时对任何可达者开放——
+> 直接公网发布会被先到者建号接管。先绑 `127.0.0.1:3101`（或内网）完成
+> 管理员初始化再放开端口；完整流程与 TLS/反代配置见
+> `DEPLOYMENT.md`「公网部署与登录系统」。局域网自用不受影响
+> （空表 = 未启用登录，全放行）。
+
 > **注意**：本项目依赖服务端代理播放与 WebSocket 遥控，需 Node.js 运行时，不适用于纯静态托管平台（Vercel/Netlify）。请使用 Docker 或 VPS 部署。
 
 ### 环境变量配置

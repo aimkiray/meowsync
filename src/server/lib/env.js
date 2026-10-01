@@ -1,8 +1,36 @@
 // 环境变量单一解析点：同一开关多处解析会随时间漂移（TRUST_PROXY 曾散在
 // music.js/rate-limit.js/remote.js 三处各写一遍）。
 // 懒读函数形态而非启动快照——进程内改 env 的测试/续期场景不拿陈值。
+// TRUST_PROXY 语义=可信反代跳数：'1'/'true'/'yes' → 1（单层反代，最常见）；
+// 数字 N → N 跳可信链（CDN→nginx→app）。0/false/未设 → 不采信任何转发头
+function trustProxyHops() {
+  const v = (process.env.TRUST_PROXY || '').trim().toLowerCase();
+  if (!v || v === '0' || v === 'false') return 0;
+  if (['1', 'true', 'yes'].includes(v)) return 1;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 && n <= 10 ? n : 0;
+}
+
 function trustProxyEnabled() {
-  return ['1', 'true'].includes((process.env.TRUST_PROXY || '').toLowerCase());
+  return trustProxyHops() > 0;
+}
+
+// 客户端 IP（限流分桶/日志共用——auth.js 与 rate-limit.js 曾各抄一份）。
+// XFF 语义：每层反代把自己看到的对端追加到右侧（$proxy_add_x_forwarded_for）。
+// 右起第 N 个 = 最内层可信反代的直连对端——TCP 层事实，客户端伪造不了；
+// 左起第一跳永远是客户端自填值，TRUST_PROXY 下取 [0] 等于把限流桶交给
+// 攻击者命名。链短于跳数（直连/链路异常）回落 socket 对端——共享桶退化
+// 但 fail-closed，不会把伪造值当身份
+function clientIp(c) {
+  const hops = trustProxyHops();
+  if (hops > 0) {
+    const xff = c.req.header('x-forwarded-for');
+    if (xff) {
+      const ips = xff.split(',').map(s => s.trim()).filter(Boolean);
+      if (ips.length >= hops) return ips[ips.length - hops];
+    }
+  }
+  return c.env?.incoming?.socket?.remoteAddress || 'local';
 }
 
 // CORS 白名单（origin 归一化）：HTTP cors 中间件、WS Origin 校验、
@@ -34,4 +62,4 @@ function corsOrigins() {
     }).filter(Boolean);
 }
 
-module.exports = { trustProxyEnabled, corsOrigins };
+module.exports = { trustProxyEnabled, trustProxyHops, clientIp, corsOrigins };

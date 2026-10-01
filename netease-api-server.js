@@ -54,6 +54,7 @@ app.use('*', secureHeaders());
 // 进站大门：users 表为空时全放行（向后兼容局域网无登录部署）。
 // session cookie 优先，x-download-token 作为脚本旁路
 const { authGate } = require('./src/server/lib/auth-gate');
+const { rateLimit } = require('./src/server/lib/rate-limit');
 app.use('*', authGate);
 
 // 健康检查：/ping 只探活；/healthz 探 DB 写路径（Docker HEALTHCHECK 用它）——
@@ -61,6 +62,11 @@ app.use('*', authGate);
 // 磁盘满/DB 损坏才暴露为 503 而不是"进程活着但功能全挂"
 app.get('/ping', (c) => c.json({ ok: true }));
 app.get('/healthz', (c) => {
+  // 未认证的写探测端点必须限流——每调一次就是一趟 WAL fsync，
+  // 裸奔会被刷成 IO 放大型 DoS（SD 卡/廉价 VPS 盘上真实）
+  if (!rateLimit(c, 'healthz', 30)) {
+    return c.json({ ok: false, message: 'rate limited' }, 429);
+  }
   try {
     const db = getDb();
     // 共享连接正在跑别的写事务时 BEGIN IMMEDIATE 会抛嵌套事务错——
@@ -103,11 +109,8 @@ if (hasDist) {
 // 登录态（session cookie）视为等效凭据：启用登录后浏览器不再构建期注入 token
 const downloadToken = process.env.DOWNLOAD_TOKEN || '';
 if (downloadToken) {
-  const crypto = require('crypto');
   const { sessionFromCookieHeader } = require('./src/server/lib/auth-gate');
-  // 双方先 sha256 再比较：等长摘要消除长度侧信道（长度不同的猜测耗时更短），
-  // 与 ws/remote.js 的 REMOTE_TOKEN 校验同一写法
-  const expectedHash = crypto.createHash('sha256').update(downloadToken).digest();
+  const { tokenMatches } = require('./src/server/lib/token-eq');
   app.use('*', async (c, next) => {
     const p = c.req.path;
     const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
@@ -118,10 +121,9 @@ if (downloadToken) {
     if (!protectedWrite) return next();
     // 已登录会话放行（authGate 已验过并 set('user')——直接消费不二次查库）
     if (c.get('user') || sessionFromCookieHeader(c.req.header('cookie'))) return next();
-    const providedHash = crypto.createHash('sha256')
-      .update(c.req.header('x-download-token') || '')
-      .digest();
-    if (!crypto.timingSafeEqual(providedHash, expectedHash)) {
+    // 与 authGate/remote.js/qq.js 同一份 tokenMatches——手写 sha256+timingSafeEqual
+    // 的第四处拷贝会漂（且裸 digest 比较缺 tokenMatches 的空值保护）
+    if (!tokenMatches(c.req.header('x-download-token'), downloadToken)) {
       return c.json({ code: 401, message: '未授权：缺少或错误的下载令牌' }, 401);
     }
     return next();

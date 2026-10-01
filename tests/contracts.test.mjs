@@ -40,3 +40,20 @@ test('aiLyricBody / importPlaylistBody', () => {
   assert.ok(importPlaylistBody.safeParse({}).success); // body 可空（query 兜底）
   assert.ok(importPlaylistBody.safeParse({ neteasePlaylistId: '7014347621' }).success);
 });
+
+test('authCredentialsBody：用户名白名单字符集 + 密码 8-128 硬边界', async () => {
+  const { authCredentialsBody } = await import('../src/shared/contracts.js');
+  assert.ok(authCredentialsBody.safeParse({ username: 'alice', password: 'password-one' }).success);
+  // 用户名白名单 [\w.@-]：空格/引号/HTML 字符一律拒（日志与 UI 注入面）
+  assert.ok(!authCredentialsBody.safeParse({ username: 'a b', password: 'password-one' }).success);
+  assert.ok(!authCredentialsBody.safeParse({ username: '<script>', password: 'password-one' }).success);
+  assert.ok(!authCredentialsBody.safeParse({ username: "a'b", password: 'password-one' }).success);
+  // 边界：8 位收下，7 位拒；128 位收下，129 拒
+  assert.ok(authCredentialsBody.safeParse({ username: 'a', password: '12345678' }).success);
+  assert.ok(!authCredentialsBody.safeParse({ username: 'a', password: '1234567' }).success);
+  assert.ok(authCredentialsBody.safeParse({ username: 'a', password: 'x'.repeat(128) }).success);
+  assert.ok(!authCredentialsBody.safeParse({ username: 'a', password: 'x'.repeat(129) }).success);
+  // 缺字段/空串
+  assert.ok(!authCredentialsBody.safeParse({ username: 'a' }).success);
+  assert.ok(!authCredentialsBody.safeParse({ username: '', password: 'password-one' }).success);
+});

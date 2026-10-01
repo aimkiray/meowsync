@@ -15,7 +15,9 @@ services:
     container_name: meowsync-app
     restart: unless-stopped
     ports:
-      # 单进程：API + WS + 静态前端同端口；本分支默认对外 3101
+      # 单进程：API + WS + 静态前端同端口；本分支默认对外 3101。
+      # 公网部署：先改 "127.0.0.1:3101:3002" 完成 /auth/setup 再放开——
+      # 空 users 表时 setup 端点对任何可达者开放（DEPLOYMENT「公网部署步骤」）
       - "${API_PORT:-3101}:3002"
     environment:
       - NODE_ENV=production

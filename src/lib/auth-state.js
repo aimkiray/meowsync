@@ -12,9 +12,12 @@ export const authState = reactive({
   username: null,
   expired: false,       // 运行中收到服务端 401 标记 → 弹回登录（session 过期/被清）
   // 建号引导可被「暂不设置」略过——局域网自用不想开登录的合法路径；
-  // localStorage 记忆，公网部署者照常看到建号页
-  setupDismissed: typeof localStorage !== 'undefined'
-    && localStorage.getItem(SETUP_DISMISS_KEY) === '1'
+  // localStorage 记忆，公网部署者照常看到建号页。
+  // try 包裹：cookies 全禁/严格隐私模式下访问 localStorage 直接抛 SecurityError，
+  // 模块顶层裸读会让 import 失败 → createApp 不执行 → 整站白屏
+  setupDismissed: (() => {
+    try { return localStorage.getItem(SETUP_DISMISS_KEY) === '1' } catch { return false }
+  })()
 })
 
 export function dismissSetup() {

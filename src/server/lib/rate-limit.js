@@ -1,32 +1,34 @@
 // 滑动窗限流（进程内）：resolve/stream 类未鉴权扇出端点共用——防循环刷量
-// 把服务端 IP 送进上游风控。桶 key：TRUST_PROXY 下采信 XFF 首跳（与
-// requestOrigin 同语义）；否则用 socket 真实地址——不信客户端自带 XFF
-// （可伪造轮换绕过），也不让 LAN 全员挤 'local' 桶
-const { trustProxyEnabled } = require('./env');
+// 把服务端 IP 送进上游风控。桶 key 的 IP 来自共享 clientIp——TRUST_PROXY
+// 下取 XFF 右起第 N 跳（可信反代追加位，客户端伪造不了）；直连用 socket
+// 真实地址——不信客户端自带 XFF（可伪造轮换绕过），也不让 LAN 全员挤
+// 'local' 桶
+const { clientIp } = require('./env');
 const rateBuckets = new Map();
 // rateLimitByKey 走独立 Map：与 IP 桶共用一张表时，灌满 5000 触发清扫/全清
 // 会把分钟级登录桶（key 存活窗口不同）提前抹掉——攻击者能用垃圾 key 灌桶
 // 把 per-account 爆破限额冲回零。两张表互不清对方
 const keyBuckets = new Map();
 
+// 满容策略（两表共用语义）：先按各表窗口扫过期键，仍超上限则拒绝为新 key
+// 建桶——灌桶方的每个新 key 都被拒（自食其果），存量桶的限流语义不受洪泛
+// 影响。绝不能用「逐最旧 key」：Map 插入序下受害者桶（先插入）比攻击者的
+// 新鲜 key 先被逐——洪泛反而成了洗限流计数的工具
+const MAX_BUCKETS = 5000;
+
 function rateLimit(c, key, limit) {
-  const trustProxy = trustProxyEnabled();
-  const ip = (trustProxy && c.req.header('x-forwarded-for')?.split(',')[0]?.trim())
-    || c.env?.incoming?.socket?.remoteAddress
-    || 'local';
-  const bucketKey = `${key}:${ip}`;
+  const bucketKey = `${key}:${clientIp(c)}`;
   const now = Date.now();
   const hits = (rateBuckets.get(bucketKey) || []).filter(t => now - t < 60000);
   if (hits.length >= limit) return false;
   hits.push(now);
-  rateBuckets.set(bucketKey, hits);
-  if (rateBuckets.size > 5000) {
-    // 先扫过期键再整表清——共享 map 的粗粒度 clear 会把别的路由的活桶连坐清掉
+  if (!rateBuckets.has(bucketKey) && rateBuckets.size >= MAX_BUCKETS) {
     for (const [k, v] of rateBuckets) {
       if (!v.some(t => now - t < 60000)) rateBuckets.delete(k);
     }
-    if (rateBuckets.size > 5000) rateBuckets.clear();
+    if (rateBuckets.size >= MAX_BUCKETS) return false; // 满容拒新——存量桶不受影响
   }
+  rateBuckets.set(bucketKey, hits);
   return true;
 }
 
@@ -39,19 +41,23 @@ function rateLimitByKey(key, limit, windowMs = 60000) {
   const hits = (entry ? entry.hits : []).filter(t => now - t < windowMs);
   if (hits.length >= limit) return false;
   hits.push(now);
-  keyBuckets.set(key, { hits, windowMs });
-  if (keyBuckets.size > 5000) {
+  if (!entry && keyBuckets.size >= MAX_BUCKETS) {
     for (const [k, v] of keyBuckets) {
       if (!v.hits.some(t => now - t < v.windowMs)) keyBuckets.delete(k);
     }
-    // 兜底仍超上限：逐最旧 key（Map 有序）而非 clear()——攻击者灌桶最多
-    // 挤掉别的键控桶，自己的限流语义不被全表清空绕过
-    while (keyBuckets.size > 5000) {
-      const oldest = keyBuckets.keys().next().value;
-      keyBuckets.delete(oldest);
-    }
+    if (keyBuckets.size >= MAX_BUCKETS) return false; // 满容拒新：洪泛的随机 key 全部自限
   }
+  keyBuckets.set(key, { hits, windowMs });
   return true;
 }
 
-module.exports = { rateLimit, rateLimitByKey };
+// 成功回退一记：rateLimitByKey 先计后验（含成功请求）——登录成功把
+// 账号桶的最新一拍退回，防「反复失会话的合法用户 8 次登录即自锁」；
+// 只退 acct 桶，IP 桶保持全量计数（20/10min 对单人是宽上限）
+function refundByKey(key) {
+  const entry = keyBuckets.get(key);
+  if (!entry || !entry.hits.length) return;
+  entry.hits.pop();
+}
+
+module.exports = { rateLimit, rateLimitByKey, refundByKey };
