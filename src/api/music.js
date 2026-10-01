@@ -230,8 +230,12 @@ export const musicApi = {
     // 解锁源 CDN（kuwo/googlevideo 等）基本不带 ACAO，fetch 会被 CORS 拒——
     // 一律先走同源 /audio-proxy 中转（白名单域 http/https 都放、逐跳公网校验）；
     // 白名单外目标或代理上游失败回退直连（官方 CDN 带 ACAO 的能直连成功，
-    // 无 ACAO 的也只是与代理相同的失败，不回退体验）
-    const proxyUrl = `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
+    // 无 ACAO 的也只是与代理相同的失败，不回退体验）。
+    // 服务端已 vault 化的回链（/audio-proxy/t/…）是成品同源地址——直接 fetch，
+    // 再包一层 ?url= 会得到代理套代理的坏链
+    const alreadyProxied = downloadData.url.includes('/audio-proxy/')
+    const proxyUrl = alreadyProxied ? downloadData.url
+      : `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
     let blobResponse = await fetch(proxyUrl).catch(() => null)
     if (!blobResponse || !blobResponse.ok) {
       blobResponse = await fetch(downloadData.url).catch(error => {
@@ -424,8 +428,9 @@ export const musicApi = {
   // QQ 凭据状态：{loggedIn}——配了 VIP QQ_COOKIE 的部署里 qq payPlay 曲可播，
   // 前端"隐藏VIP"过滤据此放行（失败保守回落未登录）
   getQqStatus: async () => {
-    const response = await api.get('/qq/status', { timeout: 5000 }).catch(() => null)
-    return { loggedIn: Boolean(response?.data?.loggedIn) }
+    // api 拦截器已剥 axios 壳——resolve 值就是 body {code, loggedIn}，无 .data 层
+    const body = await api.get('/qq/status', { timeout: 5000 }).catch(() => null)
+    return { loggedIn: Boolean(body?.loggedIn) }
   },
 
   // QQ 曲库搜索（点歌台 qq: 前缀；服务端固定回 20 条）

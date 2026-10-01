@@ -1,5 +1,5 @@
 const { Hono } = require('hono');
-const { createHash, timingSafeEqual } = require('crypto');
+const { tokenMatches } = require('../lib/token-eq');
 const { rateLimit } = require('../lib/rate-limit');
 const { streamVault } = require('./proxy');
 const { matchNeteaseSong } = require('../lib/netease-match');
@@ -113,11 +113,8 @@ app.get('/qq/stream', async (c) => {
   // QQ_COOKIE+DOWNLOAD_TOKEN 时要求 x-download-token，匿名请求静默回落常规档
   const wantBest = c.req.query('prefer') === 'best';
   const token = process.env.DOWNLOAD_TOKEN || '';
-  const tokenOk = (t) => timingSafeEqual(
-    createHash('sha256').update(String(t || '')).digest(),
-    createHash('sha256').update(token).digest());
   const prefer = wantBest && (!hasQqCookie() || !token
-    || tokenOk(c.req.header('x-download-token'))) ? 'best' : '';
+    || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
   try {
     const hit = await pickStream(mid, mmid, prefer, c.req.raw.signal);
     if (!hit) {

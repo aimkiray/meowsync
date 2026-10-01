@@ -302,7 +302,7 @@ import { downloadsApi } from './api/downloads'
 import { aiApi } from './api/ai'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
-import { isVipSong, isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
+import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
@@ -3632,6 +3632,7 @@ export default {
       closeSearchView,
       navHome,
       handlePlaylistSearch,
+      handleQQSongSearch,
       playSong,
       playPlaylist,
       playPlaylistFromSidebar,

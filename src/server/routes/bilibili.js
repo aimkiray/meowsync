@@ -4,6 +4,7 @@ const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require(
 const { isAllowedHost, streamVault } = require('./proxy');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../lib/netease-match');
+const { tokenMatches } = require('../lib/token-eq');
 
 const app = new Hono();
 
@@ -317,7 +318,7 @@ app.get('/bilibili/stream', async (c) => {
     const wantBest = c.req.query('prefer') === 'best';
     const token = process.env.DOWNLOAD_TOKEN || '';
     const prefer = wantBest && (!BILI_COOKIE || !token
-      || c.req.header('x-download-token') === token) ? 'best' : '';
+      || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
     const streams = pickStreamList(playurl, kind, prefer);
     // hasVideo 语义 = 「存在浏览器解得动的 avc1」——kind=video 下若整档只有
     // hevc/av01，302 过去也是黑屏，按无流 404（与 resolve 的 hasVideo 口径一致）

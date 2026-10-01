@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+const { tokenMatches } = require('../lib/token-eq');
 const { WebSocketServer } = require('ws');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
@@ -150,17 +150,6 @@ function rejectUpgrade(socket, code, message) {
       '\r\n' +
       body
   );
-}
-
-/**
- * token 比较：先 sha256 再 timingSafeEqual——摘要等长，既消除逐字节
- * 时序差也避免长度差提前返回。握手拒绝路径本身对时序不敏感，
- * 但该写法成本极低，顺带防御局域网内的时序侧信道探测
- */
-function tokenMatches(provided, expected) {
-  const a = crypto.createHash('sha256').update(provided ?? '').digest();
-  const b = crypto.createHash('sha256').update(expected).digest();
-  return crypto.timingSafeEqual(a, b);
 }
 
 /**
