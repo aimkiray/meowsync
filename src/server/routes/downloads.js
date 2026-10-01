@@ -1,4 +1,6 @@
 const { Hono } = require('hono');
+const fs = require('fs');
+const path = require('path');
 const downloadManager = require('../services/download-manager');
 const { mirrorLocalPlaylist } = require('../services/local-mirror');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
@@ -10,7 +12,7 @@ const { parseJsonBody } = require('../lib/validate');
 const {
   downloadTaskBody, quickDownloadBody, mirrorBody
 } = require('../../shared/contracts.js');
-const { MIRROR_PLAYLIST_ID_RE, parseNumericId, QQ_SONG_ID_RE, SONGMID_RE } = require('../../shared/predicates.js');
+const { MIRROR_PLAYLIST_ID_RE, parseNumericId, QQ_SONG_ID_RE, SONGMID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, BVID_RE, YT_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
@@ -24,13 +26,15 @@ function parseIdParam(c, name = 'id') {
 
 // 队列/单曲下载的可选参数规范化：脏值回落默认，concurrentLimit 限定 1-10
 function normalizeDownloadOptions(body) {
-  const { bitrate, downloadAudio, downloadLyrics, downloadCover, concurrentLimit } = body;
+  const { bitrate, downloadAudio, downloadLyrics, downloadCover, downloadVideo, concurrentLimit } = body;
   return {
     // 网易云端常见码率 128k-999k：越界值静默回落默认（上游要么忽略要么产空文件）
     bitrate: Number.isInteger(bitrate) && bitrate >= 64000 && bitrate <= 999000 ? bitrate : 320000,
     downloadAudio: downloadAudio !== false,
     downloadLyrics: downloadLyrics !== false,
     downloadCover: downloadCover !== false,
+    // 视频是显式 opt-in：默认 off 防止批量下载悄悄把每个外部曲拉一遍几百 MB
+    downloadVideo: downloadVideo === true,
     concurrentLimit: Number.isInteger(concurrentLimit)
       ? Math.min(Math.max(concurrentLimit, 1), 10)
       : 3
@@ -239,6 +243,59 @@ app.get('/downloads/songs/:songId/status', async (c) => {
   }
 });
 
+// 已下载工件的本地回放：在线流被上游闸控/签名失效时，前端回落播落盘文件。
+// 单段 Range（seek 必需），与 proxy.js 同口径拒多段/反段；kind=video 给
+// videoPath（WatchView 视频模式播本地档）
+const ARTIFACT_MIME = {
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+  ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', webm: 'audio/webm',
+  mp4: 'video/mp4'
+};
+app.get('/downloads/songs/:songId/file', async (c) => {
+  try {
+    const songId = c.req.param('songId');
+    const { playlistId, kind } = c.req.query();
+    if (!playlistId) return fail(c, 400, '缺少 playlistId 参数');
+    const filePath = downloadManager.getTaskArtifactPath(playlistId, songId, kind);
+    if (!filePath) return fail(c, 404, '文件不存在或尚未下载完成');
+    const stat = fs.statSync(filePath);
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const type = ARTIFACT_MIME[ext] || (kind === 'video' ? 'video/mp4' : 'application/octet-stream');
+
+    let start = 0;
+    let end = stat.size - 1;
+    let status = 200;
+    const range = c.req.header('range');
+    if (range) {
+      const m = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
+      if (!m || (!m[1] && !m[2])) {
+        return c.json({ code: 400, message: 'unsupported range' }, 400);
+      }
+      if (!m[1]) {
+        // 后缀区间 bytes=-N：末尾 N 字节
+        start = Math.max(0, stat.size - parseInt(m[2], 10));
+      } else {
+        start = parseInt(m[1], 10);
+        if (m[2]) end = Math.min(parseInt(m[2], 10), stat.size - 1);
+      }
+      if (start > end || start >= stat.size) {
+        return c.body(null, 416, { 'Content-Range': `bytes */${stat.size}` });
+      }
+      status = 206;
+    }
+    const headers = {
+      'Content-Type': type,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': String(end - start + 1),
+      'Access-Control-Allow-Origin': '*'
+    };
+    if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
+    return c.body(fs.createReadStream(filePath, { start, end }), status, headers);
+  } catch (error) {
+    return handleError(c, error, '读取下载文件失败');
+  }
+});
+
 // 删除已下载的歌曲文件
 app.delete('/downloads/songs/:songId', async (c) => {
   try {
@@ -296,7 +353,8 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
 // 服务端下载链要求 DB 行——把本地单落成 netease_playlist_id=local_<id> 的镜像行，
 // 之后既有路由（quick 建队 / 状态查询 / 文件删除）经 findExistingPlaylistId 的
 // netease_playlist_id 分支全部自然解析，零路由改动。
-// tracks 只收网易云数字 id 与 qq_<songmid>——bv_*/yt_* 等无服务端下载源的条目跳过并计数回传。
+// tracks 收网易云数字 id、qq_<songmid>、bv_<bvid>[_pN]、yt_<videoId>——
+// 后三类走各源自有流直取（不经解锁链），provider 定位字段随 track 落库。
 const LOCAL_MIRROR_ID_MAX = 80;
 app.post('/downloads/local/mirror', async (c) => {
   try {
@@ -317,11 +375,13 @@ app.post('/downloads/local/mirror', async (c) => {
     }
     const allTracks = Array.isArray(body.tracks) ? body.tracks : [];
     if (!allTracks.length) return fail(c, 400, '歌单中没有歌曲');
-    // 只留服务端可下载的曲目（网易云数字 id + qq_<songmid> 直链源）；bv_/yt_
-    // 等跳过并回传计数让前端提示。
+    // 只留服务端可下载的曲目：网易云数字 id + qq_/bv_/yt_ 自有源前缀；
+    // 其余形态跳过并回传计数让前端提示。
     // 先过滤后截断：前 2000 个可下载曲进入镜像；skipped=不支持 id，truncated=超上限截尾
     const numeric = allTracks.filter(t => t && (/^\d+$/.test(String(t.id ?? ''))
-      || QQ_SONG_ID_RE.test(String(t.id ?? ''))));
+      || QQ_SONG_ID_RE.test(String(t.id ?? ''))
+      || BV_TRACK_ID_RE.test(String(t.id ?? ''))
+      || YT_TRACK_ID_RE.test(String(t.id ?? ''))));
     const tracks = numeric.slice(0, 2000)
       .map(t => ({
         id: String(t.id),
@@ -336,7 +396,19 @@ app.post('/downloads/local/mirror', async (c) => {
         // qq 源私有字段只收 mediaMid（vkey filename 键）——其余下载链用不上；
         // 形态校验防任意对象进 raw_json
         ...(t.qq && SONGMID_RE.test(String(t.qq.mediaMid || ''))
-          ? { qq: { mediaMid: String(t.qq.mediaMid) } } : {})
+          ? { qq: { mediaMid: String(t.qq.mediaMid) } } : {}),
+        // bv_/yt_ 曲同理只收流定位字段（bvid/cid/page、videoId）+ neteaseId
+        // 词源——下载分发与歌词段靠它们，不整只落 provider 对象
+        ...(t.bilibili && BVID_RE.test(String(t.bilibili.bvid || ''))
+          ? { bilibili: {
+              bvid: String(t.bilibili.bvid),
+              cid: /^\d+$/.test(String(t.bilibili.cid ?? '')) ? String(t.bilibili.cid) : null,
+              page: Math.max(1, parseInt(t.bilibili.page, 10) || 1)
+            } } : {}),
+        ...(t.youtube && YT_ID_RE.test(String(t.youtube.videoId || ''))
+          ? { youtube: { videoId: String(t.youtube.videoId) } } : {}),
+        ...(NETEASE_ID_RE.test(String(t.neteaseId ?? ''))
+          ? { neteaseId: String(t.neteaseId) } : {})
       }));
     const skipped = allTracks.length - numeric.length;
     const truncated = numeric.length - tracks.length;

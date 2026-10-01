@@ -4,15 +4,19 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
+const { spawn, spawnSync } = require('child_process');
 const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
 const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
 const qq = require('../lib/qq');
+const { resolveBiliAudio, resolveBiliMedia, BILI_PUBLIC_HEADERS } = require('../lib/bilibili');
+const { fetchPlayer: ytFetchPlayer, pickStreamList: ytPickStreamList } = require('../lib/youtube');
 
-// qq_<songmid> 曲目的服务端下载分发：QQ 有真实元数据与权威歌词，与 bv_/yt_
-// 的「跳过服务端下载」不同——按前缀分发到 qq 原语，回落路径与网易云链同构。
+// qq_<songmid> / bv_<bvid>[_pN] / yt_<videoId> 曲目的服务端下载分发：
+// 各源自有流直取（不经网易云解锁链——别家曲库不是它们的源），
+// 回落路径与网易云链同构（fetchStream SSRF 守卫 + streamToFile .part 对账）。
 // 流地址宿主与 routes/qq.js 共用 lib/qq.js 的 QQ_STREAM_HOST_OK（sip 可能回
 // 裸 IP——后缀判定天然拒绝）
-const QQ_ID_RE = require('../../shared/predicates.js').QQ_SONG_ID_RE;
+const { QQ_SONG_ID_RE: QQ_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
 // RS01/F000=null：FLAC/Hi-Res 是 VBR，无固定码率可算——download-manager 的
 // durationLooksTruncated 对 falsy br 短路跳过，完整性由 streamToFile 的
 // content-length 对账兜底
@@ -169,7 +173,7 @@ function hasNonIdentityEncoding(headers) {
 
 // 手动逐跳跟随重定向：axios maxRedirects 内部跟随、每跳不再过校验，
 // 302→http://169.254.169.254 之类的重定向投毒必须逐跳拦截
-async function fetchStream(rawUrl, { timeout, signal }) {
+async function fetchStream(rawUrl, { timeout, signal, headers }) {
   let url = rawUrl;
   // 整次请求（含全部重定向跳）共享一张 pin 表：URL 阶段 checkHostPublic 与
   // 实际建连是两次独立解析（TOCTOU），socket 层 lookup 强制每次建连只能落
@@ -213,7 +217,8 @@ async function fetchStream(rawUrl, { timeout, signal }) {
         // 落盘字节与声明 content-length 不一致会让对账确定性误判"下载不完整"。
         // 关掉解压后若上游仍回编码内容，响应头里能看到——按上游违规判 fatal
         decompress: false,
-        headers: { 'Accept-Encoding': 'identity' },
+        // 源站自带防盗链头的提供商（B 站 CDN 缺 Referer/UA 直接 403）由调用方下传
+        headers: { 'Accept-Encoding': 'identity', ...headers },
         // 3xx 由本层处理以便逐跳校验；其余状态码进 catch 统一处理
         validateStatus: s => s >= 200 && s < 400
       });
@@ -358,11 +363,363 @@ function pathWithExt(outputPath, ext) {
   return outputPath.replace(/\.[a-z0-9]+$/i, `.${ext}`);
 }
 
-// providerData：任务行快照的源私有字段（{qq:{mediaMid}}）——mediaMid 是 vkey
-// filename 键，带了可省一次注定失败的 vkey 空调用 + detail 回填往返；
-// 缺省/过期都安全，pickStreamUrl 内部仍兜底
+// 外部导入曲（bv_/yt_）下载：从各自网站直取最优音轨——prefer='best' 下
+// B 站拿 Hi-Res FLAC/杜比轨（BILI_COOKIE 有权限才下发，否则回落最高码率
+// AAC），YouTube 拿 opus251；不经网易云解锁链。候选档降序铺开，单链
+// 403/断流换下一档——备份 URL 已在 resolve 侧摊平成同一数组。
+// 一轮全灭重解一次：每次 resolve 拿到的签名批绑到同一 CDN 边缘节点，
+// 实测 googlevideo 出现过整批 403 换批即愈——单批候选间换档救不了这种故障
+// 部分 googlevideo 流拒全量 GET（实测 403）——bytes=0- 语义等同全量，
+// 走 206 通道绕开；B 站 CDN 带上也无副作用（其防盗链只认 Referer/UA）
+const RANGE_ALL = { Range: 'bytes=0-' };
+
+// streamingData.formats 里的 progressive mp4 合流档——SABR 闸控视频下
+// 唯一可全量拉取的物料（自适应流的 Range 只放首段窗，实测中段/全量
+// 一律 403）。按分辨率降序，音视频相位共用同一张兜底表
+function pickYtProgressive(sd) {
+  return (Array.isArray(sd?.formats) ? sd.formats : [])
+    .filter(f => typeof f?.url === 'string' && f.url
+      && (f.mimeType || '').startsWith('video/mp4'))
+    .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)))
+    .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null }));
+}
+
+async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, providerData) {
+  // B 站 CDN 缺 Referer/UA 直接 403；googlevideo 自带签名不需要附加头
+  const headers = bvM ? { ...BILI_PUBLIC_HEADERS, ...RANGE_ALL } : RANGE_ALL;
+  // 每轮解析给两类物料：自适应音轨（优先，纯音轨体积小/频带宽）与
+  // progressive 合流兜底（仅 yt——B 站侧无闸控形态观测，不徒增复杂度）
+  const resolveCandidates = async () => {
+    if (bvM) {
+      const b = providerData?.bilibili || {};
+      return {
+        adaptive: await resolveBiliAudio({
+          bvid: b.bvid || bvM[1],
+          cid: b.cid,
+          page: +b.page || +bvM[2] || 1,
+          signal
+        }),
+        progressive: []
+      };
+    }
+    const videoId = providerData?.youtube?.videoId || ytM[1];
+    const player = await ytFetchPlayer(videoId, signal);
+    const sd = player.streamingData || {};
+    return {
+      adaptive: ytPickStreamList(sd, 'audio', 'best')
+        .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null })),
+      progressive: pickYtProgressive(sd)
+    };
+  };
+  let lastErr = null;
+  for (let round = 0; round < 2; round++) {
+    let lists;
+    try {
+      lists = await resolveCandidates();
+    } catch (e) {
+      // abort 是最高优先语义——上游库抛的 Error('aborted') 无 aborted 标记，
+      // 以 signal 为地面真相，别让取消被吞成可重试失败
+      throwIfAborted(signal);
+      // resolve 段的非致命上游错（412 风控/瞬断）也吃重解红利；fatal/abort 穿透
+      if (e?.fatal || e?.aborted) throw e;
+      lastErr = e;
+      continue;
+    }
+    if (!lists.adaptive.length && !lists.progressive.length) {
+      throw fatalError(`${bvM ? 'B 站' : 'YouTube'} 无可下载音轨`);
+    }
+    for (const cand of lists.adaptive) {
+      throwIfAborted(signal);
+      try {
+        const resp = await fetchStream(cand.url, { timeout: 300000, signal, headers });
+        if (resp.status !== 200 && resp.status !== 206) {
+          resp.data.destroy();
+          continue;
+        }
+        // 扩展名按真实容器判：响应 Content-Type（最诚实）→ 流表 mimeType → URL
+        // mime=/path——B 站 flac 轨 url 无后缀，靠 content-type 落 .flac
+        const mime = (String(resp.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+          || String(cand.mimeType || '').split(';')[0].trim().toLowerCase());
+        const ext = MIME_EXT[mime] || extFromUrl(cand.url, AUDIO_EXTS, 'm4a');
+        const finalPath = pathWithExt(outputPath, ext);
+        fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+        const saved = await streamToFile(resp, finalPath, {
+          maxBytes: MAX_AUDIO_BYTES, onProgress, maxTotalMs: 300000
+        });
+        return {
+          path: saved.path, size: saved.size, url: cand.url,
+          // br 供时长对账：B 站 bandwidth / YouTube bitrate 都是 bps 真实码率；
+          // 均非解锁回链——unblocked 保持 false，source 仅留痕不进徽章语义
+          br: cand.br ?? null,
+          unblocked: false, unblockedSource: null
+        };
+      } catch (e) {
+        throwIfAborted(signal);   // fetch 的 AbortError DOMException 同样无标记
+        if (e?.aborted) throw e;  // 取消语义穿透候选循环
+        // 上游 4xx fatal 只判死本条 URL；带 errno 的本地确定性失败才穿透
+        if (e?.fatal && e?.code) throw e;
+        lastErr = e;
+      }
+    }
+    // 自适应全灭（闸控视频）→ progressive 合流兜底：ffmpeg 在则 -vn
+    // -c:a copy 抽 AAC 轨落 m4a；缺席则合流 mp4 原样作音频工件——
+    // 浏览器按容器嗅探照播，代价是文件里多带一路视频轨
+    for (const cand of lists.progressive) {
+      throwIfAborted(signal);
+      const tmpPath = `${outputPath}.prog.mp4`;
+      try {
+        const resp = await fetchStream(cand.url, { timeout: 300000, signal, headers });
+        if (resp.status !== 200 && resp.status !== 206) {
+          resp.data.destroy();
+          continue;
+        }
+        fs.mkdirSync(path.dirname(tmpPath), { recursive: true });
+        const saved = await streamToFile(resp, tmpPath, {
+          maxBytes: MAX_VIDEO_BYTES, onProgress, maxTotalMs: 300000
+        });
+        // progressive 的 f.bitrate 是音画容器总码率——抽出来的纯音轨/或是
+        // 留下的 mp4 都不能拿它当音频码率报，给下游对账一个错值不如给 null
+        if (!FFMPEG_OK) {
+          const finalPath = pathWithExt(outputPath, 'mp4');
+          fs.renameSync(saved.path, finalPath);
+          return {
+            path: finalPath, size: saved.size, url: cand.url,
+            br: null, unblocked: false, unblockedSource: null
+          };
+        }
+        const finalPath = pathWithExt(outputPath, 'm4a');
+        await ffmpegExtractAudio(saved.path, finalPath, signal);
+        return {
+          path: finalPath, size: fs.statSync(finalPath).size, url: cand.url,
+          br: null, unblocked: false, unblockedSource: null
+        };
+      } catch (e) {
+        throwIfAborted(signal);
+        if (e?.aborted || (e?.fatal && e?.code)) throw e;
+        lastErr = e;
+      } finally {
+        // ffmpeg 抽完/全灭后清掉合流中间件——它不该成为最终工件
+        try { fs.unlinkSync(tmpPath); } catch { /* 未产即空/已改名 */ }
+      }
+    }
+  }
+  throw lastErr || fatalError('外部源所有候选流均失败');
+}
+
+// ── 外部源视频下载（bv_/yt_ 任务的 downloadVideo 工件）──────────────────
+// ffmpeg 在：adaptive 最高画质视频轨（avc1 分辨率降序）+ AAC 音轨 -c copy 合流，
+//   不重编码即真·源画质；音轨刻意用常规档——opus/flac/杜比塞不进 mp4 容器。
+// ffmpeg 缺席：回落源站 MP4 合流档（YouTube formats / B 站 fnval=1 durl），
+//   分辨率受合流档限制但产物自包含可播；两者皆无才报失败。
+const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
+
+const FFMPEG_OK = (() => {
+  try {
+    return spawnSync('ffmpeg', ['-hide_banner', '-version'], { stdio: 'ignore' }).status === 0;
+  } catch { return false; }
+})();
+
+// -c copy 纯封装不重编码：音乐视频尺度下秒级完成。out 先落 .mux 再 rename——
+// ffmpeg 直接写最终路径时崩溃会留半截 .mp4，与 .part 语义同构
+function ffmpegMux(videoPath, audioPath, outPath, signal) {
+  return new Promise((resolve, reject) => {
+    const muxPath = `${outPath}.mux`;
+    const child = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', videoPath, '-i', audioPath,
+      // .mux 中间态后缀 ffmpeg 猜不出封装格式——必须显式 -f mp4
+      '-c', 'copy', '-f', 'mp4', '-movflags', '+faststart', muxPath
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let errTail = '';
+    child.stderr.on('data', d => { errTail = (errTail + d).slice(-500); });
+    const onAbort = () => { try { child.kill('SIGKILL'); } catch { /* 进程已退 */ } };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    child.on('error', (e) => { signal?.removeEventListener('abort', onAbort); reject(e); });
+    child.on('close', (code) => {
+      signal?.removeEventListener('abort', onAbort);
+      if (signal?.aborted) {
+        const e = new Error('已取消');
+        e.aborted = true;
+        return reject(e);
+      }
+      if (code !== 0) return reject(new Error(`ffmpeg 合流失败(${code}): ${errTail || '无输出'}`));
+      try {
+        fs.renameSync(muxPath, outPath);
+        resolve(outPath);
+      } catch (e) { reject(errnoToFatal(e)); }
+    });
+  });
+}
+
+// progressive mp4 → 抽 AAC 音轨落 m4a（SABR 闸控视频的音频兜底产物）。
+// 与 ffmpegMux 同构：.mux 中间态 + 崩溃不留半截最终件 + abort 杀进程
+function ffmpegExtractAudio(inPath, outPath, signal) {
+  return new Promise((resolve, reject) => {
+    const muxPath = `${outPath}.mux`;
+    const child = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', inPath, '-vn', '-c:a', 'copy',
+      // m4a 的规范封装是 ipod muxer（MP4 变体）；.mux 中间态后缀不可推断，显式给
+      '-f', 'ipod', muxPath
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let errTail = '';
+    child.stderr.on('data', d => { errTail = (errTail + d).slice(-500); });
+    const onAbort = () => { try { child.kill('SIGKILL'); } catch { /* 进程已退 */ } };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    child.on('error', (e) => { signal?.removeEventListener('abort', onAbort); reject(e); });
+    child.on('close', (code) => {
+      signal?.removeEventListener('abort', onAbort);
+      if (signal?.aborted) {
+        const e = new Error('已取消');
+        e.aborted = true;
+        return reject(e);
+      }
+      if (code !== 0) return reject(new Error(`ffmpeg 抽轨失败(${code}): ${errTail || '无输出'}`));
+      try {
+        fs.renameSync(muxPath, outPath);
+        resolve(outPath);
+      } catch (e) { reject(errnoToFatal(e)); }
+    });
+  });
+}
+
+async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, providerData) {
+  const headers = bvM ? { ...BILI_PUBLIC_HEADERS, ...RANGE_ALL } : RANGE_ALL;
+  // 一轮解析给三类物料：自适应视频轨、合流用 AAC 音轨、MP4 合流兜底
+  const resolveMedia = async () => {
+    if (bvM) {
+      const b = providerData?.bilibili || {};
+      return await resolveBiliMedia({
+        bvid: b.bvid || bvM[1], cid: b.cid, page: +b.page || +bvM[2] || 1, signal
+      });
+    }
+    const videoId = providerData?.youtube?.videoId || ytM[1];
+    const player = await ytFetchPlayer(videoId, signal);
+    const sd = player.streamingData || {};
+    return {
+      videos: ytPickStreamList(sd, 'video', 'best')
+        .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null })),
+      audios: ytPickStreamList(sd, 'audio')
+        .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null })),
+      progressive: async () => pickYtProgressive(sd)
+    };
+  };
+  const fetchTo = async (cand, dest, base, span) => {
+    const resp = await fetchStream(cand.url, { timeout: 300000, signal, headers });
+    if (resp.status !== 200 && resp.status !== 206) {
+      resp.data.destroy();
+      throw new Error(`上游返回 ${resp.status}`);
+    }
+    return await streamToFile(resp, dest, {
+      maxBytes: MAX_VIDEO_BYTES,
+      onProgress: onProgress && ((p) => onProgress(base + Math.floor(p * span / 100))),
+      maxTotalMs: 300000
+    });
+  };
+  let lastErr = null;
+  for (let round = 0; round < 2; round++) {
+    let media;
+    try {
+      media = await resolveMedia();
+    } catch (e) {
+      throwIfAborted(signal);
+      if (e?.fatal || e?.aborted) throw e;
+      lastErr = e;
+      continue;
+    }
+    const videoDir = path.dirname(outputPath);
+    fs.mkdirSync(videoDir, { recursive: true });
+    if (FFMPEG_OK && media.videos.length) {
+      // 音轨跨视频候选复用——换视频档重下音轨是纯浪费
+      let audioTmp = null;
+      try {
+        for (const v of media.videos) {
+          throwIfAborted(signal);
+          const videoTmp = `${outputPath}.v${media.videos.indexOf(v)}`;
+          try {
+            await fetchTo(v, videoTmp, 0, 75);
+            if (!audioTmp) {
+              audioTmp = `${outputPath}.audio`;
+              let audioOk = false;
+              for (const a of media.audios) {
+                try { await fetchTo(a, audioTmp, 75, 15); audioOk = true; break; } catch (e) {
+                  throwIfAborted(signal);
+                  if (e?.fatal && e?.code) throw e;
+                  lastErr = e;
+                }
+              }
+              if (!audioOk) throw lastErr || new Error('音轨候选全部失败');
+            }
+            await ffmpegMux(videoTmp, audioTmp, outputPath, signal);
+            onProgress && onProgress(100);
+            const size = fs.statSync(outputPath).size;
+            return { path: outputPath, size, url: v.url };
+          } catch (e) {
+            throwIfAborted(signal);
+            // 上游 4xx 的 fatal 只判死这一条 URL——换候选；带 errno 的本地
+            // 确定性失败（ENOSPC/EROFS）才是真穿透，候选级循环不该为它空转
+            if (e?.fatal && e?.code) throw e;
+            lastErr = e;
+          } finally {
+            try { fs.unlinkSync(videoTmp); } catch { /* 未产即空 */ }
+          }
+        }
+      } finally {
+        if (audioTmp) { try { fs.unlinkSync(audioTmp); } catch { /* 已清 */ } }
+      }
+    }
+    // 无 ffmpeg 或本轮无自适应档（老稿件只有 progressive）→ MP4 合流兜底
+    const progressive = await media.progressive().catch(() => []);
+    for (const cand of progressive) {
+      throwIfAborted(signal);
+      try {
+        const saved = await fetchTo(cand, outputPath, 0, 100);
+        return { path: saved.path, size: saved.size, url: cand.url };
+      } catch (e) {
+        throwIfAborted(signal);
+        if (e?.fatal && e?.code) throw e;
+        lastErr = e;
+      }
+    }
+    if (!FFMPEG_OK && !progressive.length) {
+      lastErr = fatalError(
+        `${bvM ? 'B 站' : 'YouTube'} 未提供合流格式且未检测到 ffmpeg——安装 ffmpeg 才能下载高画质视频`
+      );
+    }
+  }
+  throw lastErr || fatalError('外部源视频流全部候选均失败');
+}
+
+// 视频工件分发：只有 bv_/yt_ 有源站视频可取——别的源不该带 download_video 位
+async function downloadVideo(songId, outputPath, onProgress, signal, providerData) {
+  try {
+    const bvM = String(songId).match(BV_TRACK_ID_RE);
+    const ytM = !bvM && String(songId).match(YT_TRACK_ID_RE);
+    if (!bvM && !ytM) {
+      throw fatalError('该来源不支持视频下载');
+    }
+    return await downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, providerData);
+  } catch (error) {
+    errnoToFatal(error);
+    const err = new Error(`下载视频失败: ${describeError(error)}`);
+    err.code = error.code;
+    err.aborted = Boolean(error.aborted) || error.code === 'ERR_CANCELED' || signal?.aborted;
+    err.fatal = Boolean(error.fatal);
+    throw err;
+  }
+}
+
+// providerData：任务行快照的源私有字段（{qq:{mediaMid}}/{bilibili:{bvid,cid,page}}/
+// {youtube:{videoId}}）——mediaMid 是 vkey filename 键，带了可省一次注定失败的
+// vkey 空调用 + detail 回填往返；缺省/过期都安全，各解析器内部仍兜底
 async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal, providerData) {
   try {
+    // bv_<bvid>[_pN] / yt_<videoId> 分发：自有站直链
+    const bvM = String(songId).match(BV_TRACK_ID_RE);
+    const ytM = !bvM && String(songId).match(YT_TRACK_ID_RE);
+    if (bvM || ytM) {
+      return await downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, providerData);
+    }
     // qq_<songmid> 分发：QQ 源直链（BEST 档梯）→ 同一条 fetchStream 守卫管线
     const qqM = String(songId).match(QQ_ID_RE);
     if (qqM) {
@@ -462,7 +819,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
   }
 }
 
-async function downloadLyrics(songId, outputPath, signal) {
+async function downloadLyrics(songId, outputPath, signal, providerData) {
   try {
     // 上游 lyric 模块是进程内调用，请求级 abort 传不进去——在调用前后各查一次
     // signal，取消语义不丢（请求本身时长很短，段间检查足够）
@@ -471,7 +828,16 @@ async function downloadLyrics(songId, outputPath, signal) {
       err.aborted = true;
       throw err;
     }
-    const qqLm = String(songId).match(QQ_ID_RE);
+    // bv_/yt_ 导入曲的词源是导入时匹配到的网易云 id（providerData.neteaseId）——
+    // 无匹配即无词源，按 NO_LYRICS 判「缺词不算失败」，别让外部曲死等歌词段
+    const extM = String(songId).match(BV_TRACK_ID_RE) || String(songId).match(YT_TRACK_ID_RE);
+    if (extM && !NETEASE_ID_RE.test(String(providerData?.neteaseId ?? ''))) {
+      const err = new Error('歌词不存在');
+      err.code = 'NO_LYRICS';
+      throw err;
+    }
+    const lyricId = extM ? String(providerData.neteaseId) : songId;
+    const qqLm = String(lyricId).match(QQ_ID_RE);
     // qq 侧：无词曲（空 lyric 或上游业务码 -1901/-1301 等）映射成 NO_LYRICS——
     // 与网易云链同口径判「缺词不算失败」，否则音画已下完的任务会因歌词段重试
     // 耗尽被标 failed；传输层错误（无 bizCode 标记）照旧抛走重试
@@ -486,7 +852,7 @@ async function downloadLyrics(songId, outputPath, signal) {
           }
           throw e;
         })
-      : await callNeteaseApi('lyric', { id: songId });
+      : await callNeteaseApi('lyric', { id: lyricId });
     if (signal?.aborted) {
       const err = new Error('已取消');
       err.aborted = true;
@@ -576,5 +942,6 @@ module.exports = {
   downloadAudio,
   downloadLyrics,
   downloadCover,
+  downloadVideo,
   sanitizeFilename
 };

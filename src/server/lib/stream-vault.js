@@ -14,15 +14,22 @@ const MAX_TTL_MS = 24 * 3600e3;      // 绝对上限：对齐最长上游签名�
 const MAX_ENTRIES = 2048;
 const SWEEP_INTERVAL_MS = 10 * 60e3;
 
-const vault = new Map(); // token -> { url, expiresAt, notAfter }
+const vault = new Map(); // token -> { urls, idx, expiresAt, notAfter }
 
-function mint(url, { ttlMs = SLIDING_TTL_MS } = {}) {
+// urlOrUrls 支持候选数组：部分 YouTube 视频的自适应流被 SABR 闸控
+// （只有 progressive 合流档可拉），代理侧逐个候选试到 2xx 为止并把 idx
+// 钉在成功位——后续 Range 直吃可用档，不再每跳白探一遍死链
+function mint(urlOrUrls, { ttlMs = SLIDING_TTL_MS } = {}) {
   const token = randomBytes(24).toString('base64url');
   const now = Date.now();
+  const urls = (Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls])
+    .filter(u => typeof u === 'string' && u).map(String);
+  if (!urls.length) return null;
   // 容量上限淘汰最旧条目——长期运行防内存膨胀
   if (vault.size >= MAX_ENTRIES) vault.delete(vault.keys().next().value);
   vault.set(token, {
-    url: String(url),
+    urls,
+    idx: 0,
     expiresAt: now + ttlMs,
     notAfter: now + MAX_TTL_MS,
   });
@@ -42,7 +49,7 @@ function resolve(token) {
   // 否则满容淘汰按"最早插入"先杀掉正在播放的旧 token（net-guard dnsCache 同款）
   vault.delete(token);
   vault.set(token, e);
-  return e.url;
+  return e;
 }
 
 // 惰性过期之外加周期清扫：mint 的突发批次没人命中也要释放

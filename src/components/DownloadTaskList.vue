@@ -290,6 +290,7 @@ const TaskRow = {
         ]),
         h('div', { class: 'dtr-flags' }, [
           rowProps.task.downloadAudio ? h('span', { class: 'dtr-flag' }, '音频') : null,
+          rowProps.task.downloadVideo ? h('span', { class: 'dtr-flag' }, '视频') : null,
           rowProps.task.downloadLyrics ? h('span', { class: 'dtr-flag' }, '歌词') : null,
           rowProps.task.downloadCover ? h('span', { class: 'dtr-flag' }, '封面') : null
         ].filter(Boolean)),

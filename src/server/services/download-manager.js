@@ -12,6 +12,7 @@ const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
 const { deletingPlaylists, deletingQueues, deletingNeteasePlaylists, isNeteasePlaylistDeleting, markNeteasePlaylistDeleted } = require('../lib/deletion-locks');
 const { stripAbsolutePaths } = require('../lib/sanitize');
+const { BV_TRACK_ID_RE, YT_TRACK_ID_RE } = require('../../shared/predicates.js');
 
 // 下载文件根目录：<dataDir>/downloads，可用 DOWNLOAD_DIR 覆盖（容器内指到挂载卷）
 // resolve 归一化：路径安全比较依赖绝对路径
@@ -55,6 +56,11 @@ let shuttingDown = false;
 const retryAfter = new Map();
 const retryDelayMs = (retryCount) => Math.min(2000 * (2 ** retryCount), 30000);
 
+// 外部源曲（自有站媒体）判定：只有它们存在可下载的源站视频工件——
+// downloadVideo 位对网易云/QQ 曲无意义，入队即裁
+const isExternalSongId = (id) =>
+  BV_TRACK_ID_RE.test(String(id)) || YT_TRACK_ID_RE.test(String(id));
+
 // 落盘后时长对账：HEAD 探测失败会跳过解锁端的时长校验，预览剪辑就此溜过——
 // 用真实字节数+真实码率（解锁源用 unblockedBr）估算时长，显著短于元数据即是
 // 剪辑（只查"短"，不查"长"：
@@ -77,6 +83,29 @@ function drainWithTimeout(promise, ms = DRAIN_TIMEOUT_MS) {
       t.unref?.();
     })
   ]);
+}
+
+// 任务行快照的源私有字段：qq=mediaMid（vkey filename 键）；bv_/yt_ 导
+// 入曲带自有源流定位（bilibili=bvid/cid/page、youtube=videoId）+ neteaseId
+// （匹配到的网易词源）——落 provider_data 让任务跨重启可重放、
+// 词源不依赖内存态歌单对象
+function providerDataOf(track) {
+  if (track.qq) return { qq: { mediaMid: track.qq.mediaMid } };
+  const neteaseId = /^\d+$/.test(String(track.neteaseId ?? '')) ? String(track.neteaseId) : null;
+  if (track.bilibili?.bvid) {
+    return {
+      bilibili: {
+        bvid: String(track.bilibili.bvid),
+        cid: /^\d+$/.test(String(track.bilibili.cid ?? '')) ? String(track.bilibili.cid) : null,
+        page: Math.max(1, parseInt(track.bilibili.page, 10) || 1)
+      },
+      neteaseId
+    };
+  }
+  if (track.youtube?.videoId) {
+    return { youtube: { videoId: String(track.youtube.videoId) }, neteaseId };
+  }
+  return null;
 }
 
 // 仅查本地、绝不触发远端导入：GET/DELETE 等读/删操作不允许产生写副作用
@@ -153,7 +182,8 @@ function toPublicTask(task) {
     filesIntact: task.status !== 'completed' || taskFilesIntact(task),
     audioPath: rel(task.audioPath),
     lyricsPath: rel(task.lyricsPath),
-    coverPath: rel(task.coverPath)
+    coverPath: rel(task.coverPath),
+    videoPath: rel(task.videoPath)
   };
 }
 
@@ -246,6 +276,7 @@ async function createDownloadQueue(playlistId, options = {}) {
         downloadAudio: options.downloadAudio !== false,
         downloadLyrics: options.downloadLyrics !== false,
         downloadCover: options.downloadCover !== false,
+        downloadVideo: options.downloadVideo === true,
         concurrentLimit: options.concurrentLimit || 3
       })
       : downloadQueuesRepo.createQueue({
@@ -256,6 +287,7 @@ async function createDownloadQueue(playlistId, options = {}) {
         downloadAudio: options.downloadAudio !== false,
         downloadLyrics: options.downloadLyrics !== false,
         downloadCover: options.downloadCover !== false,
+        downloadVideo: options.downloadVideo === true,
         concurrentLimit: options.concurrentLimit || 3
       });
 
@@ -318,7 +350,8 @@ async function createDownloadQueue(playlistId, options = {}) {
               bitrate: queue.bitrate,
               downloadAudio: queue.downloadAudio,
               downloadLyrics: queue.downloadLyrics,
-              downloadCover: queue.downloadCover
+              downloadCover: queue.downloadCover,
+              downloadVideo: queue.downloadVideo && isExternalSongId(songId)
             }));
           // 重跑前清路径同时也要清旧文件：行先清、文件后删（崩溃留孤儿文件
           // 由 reap 兜底，比幻影登记路径安全）。扩展名现已随源浮动，不删会
@@ -328,7 +361,7 @@ async function createDownloadQueue(playlistId, options = {}) {
           // 否则日后复位重跑会白等最长 30s 退避
           adoptedTaskIds.push(existing.id);
           if (!keepCompleted) {
-            adoptedPaths.push(existing.audioPath, existing.lyricsPath, existing.coverPath);
+            adoptedPaths.push(existing.audioPath, existing.lyricsPath, existing.coverPath, existing.videoPath);
           }
           // 旧属主队列的计数器虚高（任务被搬走后不再重算）——记录待回调；
           // 属主即本队列时不记：末尾 recountQueueCounters(queue.id) 已覆盖
@@ -354,11 +387,13 @@ async function createDownloadQueue(playlistId, options = {}) {
         album: albumName,
         coverUrl,
         bitrate: queue.bitrate,
-        providerData: track.qq ? { qq: { mediaMid: track.qq.mediaMid } } : null,
+        providerData: providerDataOf(track),
         durationMs: track.dt || track.duration || 0,
         downloadAudio: queue.downloadAudio,
         downloadLyrics: queue.downloadLyrics,
-        downloadCover: queue.downloadCover
+        downloadCover: queue.downloadCover,
+        // 视频工件只对 bv_/yt_ 存在——网易云/QQ 任务带位也是空转，入队即裁
+        downloadVideo: Boolean(queue.downloadVideo) && isExternalSongId(songId)
       });
     }
 
@@ -706,7 +741,7 @@ const INTACT_CACHE_TTL_MS = 3000;
 const intactCache = new Map(); // taskId -> { fp, result, at }
 function taskFilesIntact(task) {
   if (!task || task.status !== 'completed') return false;
-  const fp = `${task.audioPath}|${task.lyricsPath}|${task.coverPath}`;
+  const fp = `${task.audioPath}|${task.lyricsPath}|${task.coverPath}|${task.videoPath}`;
   const hit = intactCache.get(task.id);
   if (hit && hit.fp === fp && Date.now() - hit.at < INTACT_CACHE_TTL_MS) {
     return hit.result;
@@ -714,7 +749,8 @@ function taskFilesIntact(task) {
   const result =
     !(task.downloadAudio && !(task.audioPath && pathPresent(task.audioPath)))
     && !(task.lyricsPath && !pathPresent(task.lyricsPath))
-    && !(task.coverPath && !pathPresent(task.coverPath));
+    && !(task.coverPath && !pathPresent(task.coverPath))
+    && !(task.videoPath && !pathPresent(task.videoPath));
   if (intactCache.size > 4096) intactCache.clear();
   intactCache.set(task.id, { fp, result, at: Date.now() });
   return result;
@@ -758,6 +794,9 @@ const taskLockKeys = (task) => {
     task.downloadLyrics ? path.join(outputDir, 'lyrics', `${baseFilename}.lrc`) : null,
     (task.downloadCover && task.coverUrl)
       ? path.join(outputDir, 'covers', `${safeSongId}.jpg`)
+      : null,
+    (task.downloadVideo && isExternalSongId(task.songId))
+      ? path.join(outputDir, 'videos', `${baseFilename}.mp4`)
       : null
   ].filter(Boolean);
 };
@@ -803,6 +842,9 @@ async function processTask(task, queueId, signal) {
     const coverPath = (task.downloadCover && task.coverUrl)
       ? lockKeys.find(k => k.endsWith('.jpg'))
       : null;
+    const videoPath = (task.downloadVideo && isExternalSongId(task.songId))
+      ? lockKeys.find(k => k.endsWith('.mp4'))
+      : null;
 
     // 任务行可能在入队快照后被 DELETE——复查存在性再动工，否则写出无人认领的孤儿文件。
     // 必须在 try 内执行：此处 updateTask 抛错（SQLITE_BUSY 等）若越过 try，
@@ -825,11 +867,20 @@ async function processTask(task, queueId, signal) {
         downloadTasksRepo.updateTask(task.id, { progress: rounded });
       } catch { /* 行可能已被删 */ }
     };
-    const weights = {
-      audio: task.downloadAudio ? 70 : 0,
-      lyrics: task.downloadLyrics ? 15 : 0,
-      cover: task.downloadCover ? 15 : 0
-    };
+    // 视频相位拉走大头权重：音频 70→45，视频 35（两脚下载+合流远超一段音频）
+    const weights = videoPath
+      ? {
+        audio: task.downloadAudio ? 45 : 0,
+        video: 35,
+        lyrics: task.downloadLyrics ? 10 : 0,
+        cover: task.downloadCover ? 10 : 0
+      }
+      : {
+        audio: task.downloadAudio ? 70 : 0,
+        video: 0,
+        lyrics: task.downloadLyrics ? 15 : 0,
+        cover: task.downloadCover ? 15 : 0
+      };
 
     if (audioPath) {
       // 分阶段幂等：上次尝试已完成的分段（abort/重试复位不清路径字段）跳过重下——
@@ -846,8 +897,12 @@ async function processTask(task, queueId, signal) {
           task.providerData
         );
         // 落盘后时长对账：HEAD 探测失败时解锁端校验会漏放预览剪辑——
-        // 真实字节数+真实码率是最后一道闸门（只查"短"，见 durationLooksTruncated）
-        if (durationLooksTruncated(result.size, result.br, task.durationMs)) {
+        // 真实字节数+真实码率是最后一道闸门（只查"短"，见 durationLooksTruncated）。
+        // 外部源（bv_/yt_）豁免：其 durationMs 是匹配到的网易云曲元数据时长，
+        // 与源站真实时长天然漂移（实测同曲差 37s）——对账只会误伤；
+        // 且自有源没有"试听剪辑"这一失效形态，闸门防的是不存在的东西
+        if (!isExternalSongId(task.songId)
+            && durationLooksTruncated(result.size, result.br, task.durationMs)) {
           // 剪辑已 rename 就位但永不登记——就地删掉，否则每次重试换扩展名
           // 时旧剪辑以未登记文件无限期滞留（reap 只在启动期跑）
           try { fs.unlinkSync(result.path); } catch { /* 删失败留给 reap */ }
@@ -873,11 +928,35 @@ async function processTask(task, queueId, signal) {
     // 取消不必等下一段请求自然超时才生效
     throwIfAborted();
 
+    if (videoPath) {
+      const existingVideo = current.videoPath && fs.existsSync(current.videoPath);
+      if (!existingVideo) {
+        const result = await fileDownloader.downloadVideo(
+          task.songId,
+          videoPath,
+          (progress) => reportProgress(totalProgress + Math.floor(progress * weights.video / 100)),
+          signal,
+          task.providerData
+        );
+        const videoRow = downloadTasksRepo.updateTask(task.id, {
+          videoPath: result.path,
+          progress: totalProgress + weights.video
+        });
+        // 行在写盘窗口被删：新文件永不登记——就地回收（同音频段处理）
+        if (!videoRow) {
+          try { fs.unlinkSync(result.path); } catch { /* 留给 reap */ }
+          return;
+        }
+      }
+      totalProgress += weights.video;
+      throwIfAborted();
+    }
+
     if (lyricsPath) {
       const existingLyrics = current.lyricsPath && fs.existsSync(current.lyricsPath);
       if (!existingLyrics) {
         try {
-          const lrcResult = await fileDownloader.downloadLyrics(task.songId, lyricsPath, signal);
+          const lrcResult = await fileDownloader.downloadLyrics(task.songId, lyricsPath, signal, task.providerData);
           const lrcRow = downloadTasksRepo.updateTask(task.id, {
             lyricsPath: lrcResult.path,
             progress: totalProgress + weights.lyrics
@@ -1050,6 +1129,7 @@ const resetTaskFields = (extra = {}) => ({
   audioPath: null,
   lyricsPath: null,
   coverPath: null,
+  videoPath: null,
   fileSize: null,
   ...extra
 });
@@ -1193,7 +1273,7 @@ async function deleteQueue(queueId) {
   // 行先删、文件后删（理由同 deleteTask）；显式删行不依赖 FK——老库的
   // queue_id 列是 ALTER 补的、没有级联声明。事务化：半途 SQLITE_BUSY/IOERR
   // 不留"子行删一半、队列行还在"的不一致
-  const filePaths = tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath]);
+  const filePaths = tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath]);
   getDb().transaction(() => {
     for (const task of tasks) {
       downloadTasksRepo.deleteTask(task.id);
@@ -1281,7 +1361,7 @@ function deleteTask(taskId) {
     if (task.queueId) recountQueueCounters(task.queueId);
   })();
   retryAfter.delete(taskId); // 行已不存在，退避条目失去意义
-  const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]);
+  const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath, task.videoPath]);
   return { success: true, deletedFiles };
 }
 
@@ -1435,14 +1515,15 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
         bitrate: options.bitrate || 320000,
         downloadAudio: options.downloadAudio !== false,
         downloadLyrics: options.downloadLyrics !== false,
-        downloadCover: options.downloadCover !== false
+        downloadCover: options.downloadCover !== false,
+        downloadVideo: options.downloadVideo === true && isExternalSongId(queueTask.songId)
       }));
       // 死队列不再走收尾重算：接管会让其计数器永久虚高，顺手回调对齐
       recountQueueCounters(queueTask.queueId);
     })();
     retryAfter.delete(queueTask.id);
     // 行清后删文件：清路径却不删文件会让旧文件（可能不同扩展名）成运行期孤儿
-    deleteFiles([queueTask.audioPath, queueTask.lyricsPath, queueTask.coverPath]);
+    deleteFiles([queueTask.audioPath, queueTask.lyricsPath, queueTask.coverPath, queueTask.videoPath]);
     return dispatchStandalone(downloadTasksRepo.findTaskById(queueTask.id) || queueTask);
   }
 
@@ -1452,7 +1533,19 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     || existing.find(t => !t.queueId);
 
   if (task && task.status === 'completed' && taskFilesIntact(task)) {
-    return task;
+    // 已下载行上的「补视频」请求：翻 pending 让协程只跑缺失的视频相位——
+    // audioPath/lyricsPath/coverPath 保留，分段幂等自动跳过已落盘工件
+    if (options.downloadVideo === true && isExternalSongId(songId) && !task.videoPath) {
+      task = downloadTasksRepo.updateTask(task.id, {
+        status: 'pending',
+        progress: 0,
+        errorMessage: null,
+        completedAt: null,
+        downloadVideo: true
+      });
+    } else {
+      return task;
+    }
   }
   // 只看内存态：DB 里残留的 downloading 孤儿行不在 standaloneRunning 里，
   // 不挡下载（原地重跑即自愈）；真正在跑的任务才冲突
@@ -1460,7 +1553,17 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     throw httpError(409, '该歌曲正在下载中');
   }
 
-  if (!task) {
+  if (task) {
+    // 既有 pending/failed standalone 行按本次请求同步下载选项——否则「补视频」
+    // 这类请求会拿建行时的旧 flag 跑，downloadVideo 位永远缺席
+    task = downloadTasksRepo.updateTask(task.id, {
+      bitrate: options.bitrate || 320000,
+      downloadAudio: options.downloadAudio !== false,
+      downloadLyrics: options.downloadLyrics !== false,
+      downloadCover: options.downloadCover !== false,
+      downloadVideo: options.downloadVideo === true && isExternalSongId(songId)
+    }) || task;
+  } else {
     task = downloadTasksRepo.createTask({
       playlistId: resolvedPlaylistId,
       queueId: null,
@@ -1470,11 +1573,12 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       album: albumName,
       coverUrl,
       bitrate: options.bitrate || 320000,
-      providerData: track.qq ? { qq: { mediaMid: track.qq.mediaMid } } : null,
+      providerData: providerDataOf(track),
       durationMs: track.dt || track.duration || 0,
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,
-      downloadCover: options.downloadCover !== false
+      downloadCover: options.downloadCover !== false,
+      downloadVideo: options.downloadVideo === true && isExternalSongId(songId)
     });
   }
 
@@ -1497,6 +1601,25 @@ async function getSongDownloadStatus(playlistId, songId) {
     downloaded: Boolean(task && task.status === 'completed' && taskFilesIntact(task)),
     task: toPublicTask(task || null)
   };
+}
+
+// 已下载工件的盘内绝对路径寻址——/downloads/songs/:id/file 端点专用。
+// 只认 completed 且文件真在盘上的行（与 status 端点同口径）；路径一律再
+// 过 isUnderDownloadDir——DB 字段可信但纵深校验不留「读库直接开文件」通道
+function getTaskArtifactPath(playlistId, songId, kind = 'audio') {
+  const resolvedPlaylistId = findExistingPlaylistId(playlistId);
+  if (resolvedPlaylistId === null) {
+    throw httpError(404, '歌单不存在');
+  }
+  const field = kind === 'video' ? 'videoPath' : 'audioPath';
+  const tasks = downloadTasksRepo.listTasksByPlaylist(resolvedPlaylistId)
+    .filter(t => t.songId === String(songId) && t.status === 'completed');
+  for (const t of tasks) {
+    if (t[field] && isUnderDownloadDir(t[field]) && fs.existsSync(t[field])) {
+      return t[field];
+    }
+  }
+  return null;
 }
 
 // 删除歌曲文件：同一首歌可能同时有独立任务和队列任务（队列全量重跑会重复落盘同一文件），
@@ -1537,7 +1660,7 @@ async function deleteSongFiles(playlistId, songId) {
     for (const qid of affectedQueues) recountQueueCounters(qid);
   })();
   for (const task of tasks) retryAfter.delete(task.id);
-  const allPaths = [...new Set(tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath]))];
+  const allPaths = [...new Set(tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath]))];
   const deletedFiles = deleteFiles(allPaths);
 
   return { success: true, deletedFiles };
@@ -1578,7 +1701,7 @@ async function deletePlaylistDownloadedFiles(playlistId) {
   })();
   for (const task of downloadedTasks) retryAfter.delete(task.id);
   const allPaths = [...new Set(
-    downloadedTasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath])
+    downloadedTasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath])
   )];
   const deletedFiles = deleteFiles(allPaths);
 
@@ -1666,7 +1789,7 @@ async function deletePlaylistFiles(playlistId) {
     // 只收集不删——文件 unlink 推迟到行删除事务提交后（行先删、文件后删：
     // 崩溃留孤儿文件可被整目录清扫兜底，幻影 completed 行却会静默缺歌）
     return downloadTasksRepo.listTasksByPlaylist(playlistId)
-      .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath]);
+      .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath]);
   }
 }
 
@@ -1676,7 +1799,7 @@ function cleanupPlaylistFilesAndDirs(playlistId, filePaths) {
   const playlistDir = path.join(DOWNLOAD_BASE_DIR, String(playlistId));
   try {
     if (isUnderDownloadDir(playlistDir)) {
-      for (const sub of ['audio', 'lyrics', 'covers']) {
+      for (const sub of ['audio', 'lyrics', 'covers', 'videos']) {
         const subDir = path.join(playlistDir, sub);
         if (fs.existsSync(subDir) && fs.readdirSync(subDir).length === 0) {
           fs.rmdirSync(subDir);
@@ -1789,7 +1912,7 @@ async function retryTask(taskId) {
     }
   })();
   retryAfter.delete(taskId); // 人工重试即用户明确再等——退避不该挡它
-  deleteFiles([task.audioPath, task.lyricsPath, task.coverPath]); // 行先清文件后删
+  deleteFiles([task.audioPath, task.lyricsPath, task.coverPath, task.videoPath]); // 行先清文件后删
 
   if (queue) {
     // 队列置回 pending 后没有消费者——"重试"语义上应当即跑，
@@ -1849,7 +1972,7 @@ async function retryQueue(queueId) {
   getDb().transaction(() => {
     for (const task of failedTasks) {
       downloadTasksRepo.updateTask(task.id, resetTaskFields());
-      resetPaths.push(task.audioPath, task.lyricsPath, task.coverPath);
+      resetPaths.push(task.audioPath, task.lyricsPath, task.coverPath, task.videoPath);
     }
     // completedTasks 不动：失败任务从未计入完成数；复位后的计数由任务行重算
     downloadQueuesRepo.updateQueue(queueId, {
@@ -1974,7 +2097,7 @@ function reapOrphanFiles() {
         };
         const referenced = new Set(
           downloadTasksRepo.listTasksByPlaylist(playlistId)
-            .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath])
+            .flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath])
             .filter(Boolean)
             .map(normalizePath)
         );
@@ -1986,7 +2109,7 @@ function reapOrphanFiles() {
           console.warn(`[downloads] 歌单 ${playlistId} 存在下载根之外的登记路径（疑似目录搬迁/脏行），跳过清扫`);
           continue;
         }
-        for (const sub of ['audio', 'lyrics', 'covers']) {
+        for (const sub of ['audio', 'lyrics', 'covers', 'videos']) {
           const subDir = path.join(playlistDir, sub);
           // lstat 不跟随：symlink 子目录整段跳过——顺着链接会删到目标目录的真文件
           if (!fs.existsSync(subDir) || !fs.lstatSync(subDir).isDirectory()) continue;
@@ -2070,6 +2193,7 @@ module.exports = {
   listTasks,
   downloadSingleSong,
   getSongDownloadStatus,
+  getTaskArtifactPath,
   toPublicTask,
   deleteSongFiles,
   deletePlaylistDownloadedFiles,
