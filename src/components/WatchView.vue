@@ -47,6 +47,16 @@
           <button class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
             <PixelIcon name="share" :size="14" /> 分享歌曲
           </button>
+          <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）；
+               noreferrer 不给源站带去本站 Referer -->
+          <a
+            v-if="sourceUrl"
+            class="ink-btn ink-btn--ghost watch-action"
+            :href="sourceUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            :title="`回源：在${sourceName}打开原页`"
+          ><PixelIcon name="external" :size="14" /> 回源 · {{ sourceName }}</a>
           <!-- 音画切换仅对有视频流的外部导入曲（B 站/YouTube）出现；关闭即只拉音频流省流量 -->
           <button
             v-if="currentSong?.bilibili?.hasVideo || currentSong?.youtube?.hasVideo"
@@ -325,6 +335,7 @@ import { shareOrCopy } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
+import { songSourceUrl, songSourceName } from '../lib/song'
 
 export default {
   name: 'WatchView',
@@ -641,6 +652,10 @@ export default {
       else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
+    // 回源：跳到曲目在源站的原页——B站视频（含分P）/YouTube watch/QQ 详情/网易云 song
+    const sourceUrl = computed(() => songSourceUrl(props.currentSong))
+    const sourceName = computed(() => songSourceName(props.currentSong) || '源站')
+
     return {
       queueContainer,
       lyricContainer,
@@ -672,6 +687,8 @@ export default {
       relatedSongs,
       relatedLoading,
       shareSong,
+      sourceUrl,
+      sourceName,
       mediaVideoRef,
       videoOn,
       mediaVideoFailed,

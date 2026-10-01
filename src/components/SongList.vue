@@ -240,6 +240,20 @@
             <PixelIcon name="share" :size="13" /> 分享歌曲
           </div>
 
+          <!-- 回源：新页打开曲目在源站的原页面（B站/YouTube/QQ/网易云）。
+               分享壳也亮——纯外链跳转无服务端语义 -->
+          <div
+            v-if="menuSourceUrl"
+            class="pg-menu-item"
+            role="menuitem"
+            tabindex="0"
+            @click="openSourceFromMenu"
+            @keydown.enter="openSourceFromMenu"
+            @keydown.space.prevent="openSourceFromMenu"
+          >
+            <PixelIcon name="external" :size="13" /> 回源 · {{ menuSourceName }}
+          </div>
+
           <!-- 获取源文件（浏览器下载）。菜单目标从全量 props.songs 查，不依赖渲染切片 -->
           <div
             class="pg-menu-item"
@@ -652,7 +666,7 @@ import { httpsCover, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../li
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
-import { isVipSong, isVipUnplayable, isLocalPlaylistId, isSingleSongShellId, songSource } from '../lib/song'
+import { isVipSong, isVipUnplayable, isLocalPlaylistId, isSingleSongShellId, songSource, songSourceName, songSourceUrl } from '../lib/song'
 import { serverCaps } from '../lib/caps'
 import { shareOrCopy } from '../lib/share'
 import { toast, pixelConfirm } from '../lib/feedback'
@@ -783,13 +797,14 @@ export default {
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
-        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
-        // 可达服务端下载链多"下载到服务器"，外部有视频流的再多"下载视频到服务器"——
-        // 合计 5/6/7/8 四档。
+        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；可回源多"回源"，有已选歌单
+        // （除分享壳）多"从歌单移除"，可达服务端下载链多"下载到服务器"，外部
+        // 有视频流的再多"下载视频到服务器"。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const serverOk = !isShareShell.value && props.selectedPlaylist && canServerDownload(targetSong)
         const itemCount = 5
+          + (songSourceUrl(targetSong) ? 1 : 0)
           + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
           + (serverOk ? 1 : 0)
           + (serverOk && canServerVideo(targetSong) ? 1 : 0)
@@ -849,6 +864,16 @@ export default {
       const song = menuSong.value
       closeDownloadMenu()
       if (song) shareSong(song)
+    }
+
+    // 回源：menuSong 维度的源站 URL 与来源名（菜单项显隐+文案）
+    const menuSourceUrl = computed(() => songSourceUrl(menuSong.value))
+    const menuSourceName = computed(() => songSourceName(menuSong.value) || '源站')
+    const openSourceFromMenu = () => {
+      const url = menuSourceUrl.value
+      closeDownloadMenu()
+      // noreferrer：不给源站带去本站 Referer（自托管实例域名属于用户资产信息）
+      if (url) window.open(url, '_blank', 'noopener,noreferrer')
     }
 
     // 分享歌曲
@@ -1136,6 +1161,9 @@ export default {
       addToPlaylistFromMenu,
       removeFromPlaylistFromMenu,
       shareFromMenu,
+      menuSourceUrl,
+      menuSourceName,
+      openSourceFromMenu,
       shareSong,
       downloadSongDirect,
       canServerDownload,
