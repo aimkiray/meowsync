@@ -4,7 +4,7 @@
 // HTTP 语义留在路由。两份实现漂移会让"能播不能下/能下不能播"互不知情
 const { Agent } = require('undici');
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('./net-guard');
-const { BVID_RE, BVID_IN_TEXT_RE } = require('../../shared/predicates.js');
+const { BVID_RE, BVID_IN_TEXT_RE, extractBiliFavlistId } = require('../../shared/predicates.js');
 
 // B 站 API 统一请求头：Referer 是防盗链硬门槛（缺它 403），UA 伪造浏览器。
 // BILI_COOKIE 可选登录态——杜比/Hi-Res 音轨只对有权限的账号下发
@@ -56,16 +56,25 @@ function pickBvidFromUrl(href) {
   return null;
 }
 
-// bvid 解析：BV 号 / av 号 / 完整 URL。b23.tv 短链本身不含 BV——
-// 手动逐跳跟随（redirect:manual），每一跳都重新过 normalizeOutboundUrl
-// （限 80/443/剥 credentials）+ B 站域白名单 + 公网 IP 校验 + 钉扎建连
-// （audio-proxy 同款防线），重定向到任何非 B 站域即拒绝——防 SSRF 绕道
-async function parseBvid(input, extraSignal) {
+// B 站链接归一化：BV/av/完整 URL 归 {kind:'video', id}，收藏夹链
+// （favlist?fid=/medialist/mlN）归 {kind:'favlist', fid}。
+// b23.tv 短链本身不含目标——手动逐跳跟随（redirect:manual），每一跳都
+// 重新过 normalizeOutboundUrl（限 80/443/剥 credentials）+ B 站域白名单
+// + 公网 IP 校验 + 钉扎建连（audio-proxy 同款防线），重定向到任何非
+// B 站域即拒绝——防 SSRF 绕道
+async function resolveBiliLink(input, extraSignal) {
   const s = String(input || '').trim();
   if (!s) return null;
-  const direct = pickBvidFromUrl(s);
+  const pick = (href) => {
+    const v = pickBvidFromUrl(href);
+    if (v) return { kind: 'video', id: v };
+    const fid = extractBiliFavlistId(href);
+    return fid ? { kind: 'favlist', fid } : null;
+  };
+  const direct = pick(s);
   if (direct) return direct;
-  // 裸短链补协议头（b23.tv/xxx 无 scheme 时 new URL 抛错直接拒）
+  // 裸短链补协议头（b23.tv/xxx 无 scheme 时 new URL 抛错直接拒）——
+  // bilibili.com 域名内容 pick 已先行命中，进循环的只有待跳转短链
   let href = /^https?:\/\//i.test(s) ? s : (/^b23\.tv\//i.test(s) ? `https://${s}` : null);
   if (!href) return null;
   for (let hop = 0; hop <= 3; hop++) {
@@ -75,7 +84,7 @@ async function parseBvid(input, extraSignal) {
     const u = checked.url;
     if (!isBiliLinkHost(u.hostname)) return null;
     if (!(await resolvesToPublicIp(u.hostname))) return null;
-    const found = pickBvidFromUrl(u.href);
+    const found = pick(u.href);
     if (found) return found;
     const dispatcher = new Agent({
       connect: { lookup: makeGuardedLookup() },
@@ -104,6 +113,12 @@ async function parseBvid(input, extraSignal) {
     }
   }
   return null;
+}
+
+// 单曲口径薄壳：只取 video 判别（favlist 判给 /bilibili/favlist 路由处理）
+async function parseBvid(input, extraSignal) {
+  const r = await resolveBiliLink(input, extraSignal);
+  return r?.kind === 'video' ? r.id : null;
 }
 
 // extraSignal 级联客户端断连——上游请求不随客户端断开变僵尸（audio-proxy 同款语义）。
@@ -258,6 +273,6 @@ module.exports = {
   // 其他 fnval/非 api 域请求会错配或泄 cookie；公共面只有 BILI_PUBLIC_HEADERS
   BILI_COOKIE, BILI_PUBLIC_HEADERS, BILI_TIMEOUT_MS, QN_HEIGHT,
   biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView,
-  viewQuery, parseBvid, isBiliLinkHost, resolveBiliAudio, resolveBiliMedia,
+  viewQuery, parseBvid, resolveBiliLink, isBiliLinkHost, resolveBiliAudio, resolveBiliMedia,
   BVID_RE,
 };

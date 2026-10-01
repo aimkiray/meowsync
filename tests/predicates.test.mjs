@@ -7,7 +7,8 @@ import {
   SINGLE_SONG_PREFIX, SAVED_QUEUE_PREFIX, MIRROR_PLAYLIST_ID_RE,
   isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
   parseNumericId, extractYouTubeId, isYouTubeInput,
-  isQQInput, pickQqFromUrl, extractQQPlaylistId, extractNeteaseSongId
+  isQQInput, pickQqFromUrl, extractQQPlaylistId, extractNeteaseSongId,
+  extractBiliFavlistId
 } from '../src/shared/predicates.js';
 
 test('songmid：QQ songmid 形态', () => {
@@ -24,6 +25,20 @@ test('BV：12 位全形态；11 位是非法', () => {
   assert.ok(isBilibiliInput('BV1GJ411x7h7'));
   assert.ok(!isBilibiliInput('https://y.qq.com/n/ryqq/songDetail/BV1GJ411x7h7'));
   assert.ok(!isBilibiliInput('qq:BV1GJ411x7h7'));
+});
+
+test('B 站收藏夹链识别：favlist?fid= / medialist mlN / 裸 mlN', () => {
+  assert.equal(extractBiliFavlistId('https://space.bilibili.com/2/favlist?fid=1052622027'), '1052622027');
+  assert.equal(extractBiliFavlistId('https://space.bilibili.com/2/favlist?fid=1&type=create'), '1');
+  assert.equal(extractBiliFavlistId('https://www.bilibili.com/medialist/detail/ml1052622027'), '1052622027');
+  assert.equal(extractBiliFavlistId('https://www.bilibili.com/medialist/play/ml1052622027?business=space'), '1052622027');
+  assert.equal(extractBiliFavlistId('ml1052622027'), '1052622027');
+  // 通用 fid 参数不带 favlist 语境不抢；非 B 站域的 favlist 同不抢
+  assert.equal(extractBiliFavlistId('https://weibo.com/u/page?fid=12345'), null);
+  assert.equal(extractBiliFavlistId('https://example.com/favlist?fid=12345'), null);
+  // 视频链不判成收藏夹；句中混进的 ml 字样不算
+  assert.equal(extractBiliFavlistId('https://www.bilibili.com/video/BV1GJ411x7h7'), null);
+  assert.equal(extractBiliFavlistId('看看这个 ml123 的视频'), null);
 });
 
 test('播放列表 id 三族：网易云数字 / local_pl_ / saved_queue_', () => {

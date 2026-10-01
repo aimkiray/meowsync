@@ -34,6 +34,7 @@ export {
   isSingleSongShellId,
   parseNumericId,
   isBilibiliInput,
+  extractBiliFavlistId,
   extractYouTubeId,
   isYouTubeInput,
   isQQInput,

@@ -7,7 +7,7 @@ const { tokenMatches } = require('../lib/token-eq');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
-const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, viewQuery, parseBvid, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
+const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, viewQuery, parseBvid, resolveBiliLink, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
 
 const app = new Hono();
 
@@ -41,7 +41,13 @@ app.get('/bilibili/resolve', async (c) => {
     return c.json({ code: 429, message: '解析太频繁，稍后再试' }, 429);
   }
   const input = c.req.query('input') || c.req.query('bvid');
-  const id = await parseBvid(input, c.req.raw.signal);
+  // 收藏夹链（含 b23 跳解出来的 medialist/favlist 落地页）走歌单导入——
+  // favlist 字段带下去前端自动转 /bilibili/favlist，与 disstid 同口径
+  const link = await resolveBiliLink(input, c.req.raw.signal);
+  if (link?.kind === 'favlist') {
+    return c.json({ code: 400, message: '这是 B 站收藏夹链接，正在为你导入歌单', favlist: link.fid }, 400);
+  }
+  const id = link?.kind === 'video' ? link.id : null;
   if (!id) return c.json({ code: 400, message: '无法从输入解析 BV/av 号' }, 400);
   try {
     const view = await biliFetch(`/x/web-interface/view?${viewQuery(id)}`, c.req.raw.signal);
@@ -122,6 +128,111 @@ app.get('/bilibili/resolve', async (c) => {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[bilibili] resolve 失败:', e.message);
     return c.json({ code: 502, message: `B 站解析失败: ${e.message}` }, 502);
+  }
+});
+
+// 收藏夹导入：favlist?fid=/medialist/mlN/b23 短链 → 归一曲目列表。
+// x/v3/fav/resource/list 公开夹匿名可读（私有/隐藏夹上游拒——确定性错误）；
+// ps 上限 20 逐页拉全，截断到 FAV_MAX_ITEMS。词源匹配是预算制并发池：
+// 收藏夹动辄上百条，串行匹配不可行——预算耗尽剩余曲目 matched=null
+// 照常可播可下（词源缺失按 NO_LYRICS 已降级，非任务失败）
+const FAV_PAGE_SIZE = 20;
+const FAV_MAX_ITEMS = 200;
+const FAV_MATCH_BUDGET_MS = 45000;
+const FAV_MATCH_CONCURRENCY = 3;
+
+app.get('/bilibili/favlist', async (c) => {
+  if (!rateLimit(c, 'favlist', 6)) {
+    return c.json({ code: 429, message: '导入太频繁，稍后再试' }, 429);
+  }
+  const signal = c.req.raw.signal;
+  const raw = c.req.query('input') || c.req.query('fid') || '';
+  const link = await resolveBiliLink(raw, signal);
+  // resolveBiliLink 不识别的裸数字按 fid 兜底（直达 API 用）——顶栏裸数字
+  // 走网易云歌单，到不了这里
+  const fid = link?.kind === 'favlist' ? link.fid
+    : (/^\d{1,15}$/.test(raw.trim()) ? raw.trim() : null);
+  if (!fid) return c.json({ code: 400, message: '无法从输入解析收藏夹（支持 space favlist?fid=/medialist/mlN 链接）' }, 400);
+  try {
+    let info = null;
+    let skipped = 0;
+    const tracks = [];
+    for (let pn = 1; pn <= Math.ceil(FAV_MAX_ITEMS / FAV_PAGE_SIZE); pn++) {
+      if (signal?.aborted) return c.body(null, 499);
+      const data = await biliFetch(
+        `/x/v3/fav/resource/list?media_id=${fid}&ps=${FAV_PAGE_SIZE}&pn=${pn}&platform=web`, signal);
+      info = info || data?.info || null;
+      const medias = Array.isArray(data?.medias) ? data.medias : [];
+      if (!medias.length) break;
+      for (const m of medias) {
+        if (tracks.length >= FAV_MAX_ITEMS) break;
+        // 非视频条目/已失效（无 bvid 或标题哨兵）跳过——计数透出给前端
+        if (m?.type !== 2 || !m.bvid || m.title === '已失效视频') { skipped++; continue; }
+        tracks.push({
+          bvid: m.bvid,
+          cid: null,                    // cid 由播放/下载链自愈（view 兜底）
+          page: 1,                      // 收藏夹条目对整稿——多分P取P1与单曲导入同口径
+          pageCount: m.page || 1,
+          title: m.title || '',
+          cover: m.cover || '',
+          duration: m.duration || 0,
+          owner: m.upper?.name || '',
+          songName: extractSongName([], m.title),
+          hasVideo: true,               // favlist 不给 playurl——avc1 可用性按乐观值，流链兜底降级
+          matched: null,
+          matchedBy: null,
+        });
+      }
+      const total = info?.media_count ?? tracks.length;
+      if (medias.length < FAV_PAGE_SIZE || tracks.length + skipped >= total) break;
+    }
+    if (!info) {
+      return c.json({ code: 404, message: '收藏夹不存在或不可公开访问' }, 404);
+    }
+
+    // 词源匹配并发池：总预算到点 abort，在途判定被掐断的曲目按无匹配回落
+    const budgetCtrl = new AbortController();
+    const matchSignal = AbortSignal.any([signal, budgetCtrl.signal]);
+    const budgetTimer = setTimeout(() => budgetCtrl.abort(), FAV_MATCH_BUDGET_MS);
+    budgetTimer.unref?.();
+    let cursor = 0;
+    let matchedCount = 0;
+    const worker = async () => {
+      while (cursor < tracks.length && !matchSignal.aborted) {
+        const t = tracks[cursor++];
+        const candidates = [...new Set([t.songName, t.title]
+          .map(x => (x || '').trim()).filter(Boolean))].slice(0, 3);
+        const { song: matched, query } = await matchNeteaseSong(
+          candidates, t.duration, 'bilibili-fav', matchSignal,
+          { title: t.title, author: t.owner }).catch(() => ({ song: null }));
+        if (matched && !matchSignal.aborted) {
+          t.matched = { id: matched.id, name: matched.name, ar: matched.ar || matched.artists || [], al: matched.al || matched.album || {} };
+          t.matchedBy = query;
+          matchedCount++;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(FAV_MATCH_CONCURRENCY, tracks.length) }, worker));
+    clearTimeout(budgetTimer);
+    if (signal?.aborted) return c.body(null, 499);
+
+    return c.json({
+      code: 200,
+      fid,
+      name: info.title || '',
+      cover: info.cover || '',
+      creator: info.upper?.name || '',
+      mediaCount: info.media_count ?? tracks.length,
+      skipped,
+      matchedCount,
+      truncated: tracks.length >= FAV_MAX_ITEMS,
+      tracks,
+    });
+  } catch (e) {
+    if (signal?.aborted) return c.body(null, 499);
+    console.error('[bilibili] favlist 失败:', e.message);
+    // 上游业务码透出（私有夹/风控有可识别的 -400/-403/112xx 形态）
+    return c.json({ code: 502, message: `收藏夹获取失败: ${e.message}` }, 502);
   }
 });
 

@@ -29,7 +29,7 @@
       @search="handlePlaylistSearch"
       @search-by-id="previewPlaylistById"
       @search-song="importNeteaseSongById"
-      @search-bili="importBilibili"
+      @search-bili="importBilibiliOrFav"
       @search-yt="importYouTube"
       @search-qq="importQQ"
       @search-qq-pl="importQQPlaylist"
@@ -328,7 +328,7 @@ import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSong
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from './lib/url'
+import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -859,11 +859,16 @@ export default {
         await playSong(song)
         enterWatch()
       } catch (error) {
-        // 服务端把输入解成了 QQ 歌单（编码 p= 形态前端谓词看不穿）——
-        // 按结构化 disstid 自动转歌单导入，别让"请粘到顶栏"的提示死循环
-        const disstid = error?.response?.data?.disstid
-        if (disstid) {
-          importQQPlaylist(disstid)
+        // 服务端把输入解成了 QQ 歌单/B 站收藏夹（短链跳解形态前端谓词看不穿）——
+        // 按结构化字段自动转歌单导入，别让"请粘到顶栏"的提示死循环。
+        // resolve 重抛的 Error 经 .data 保字段，裸 axios 错走 .response.data
+        const errData = error?.data || error?.response?.data
+        if (errData?.disstid) {
+          importQQPlaylist(errData.disstid)
+          return
+        }
+        if (errData?.favlist) {
+          importBiliFavlist(errData.favlist)
           return
         }
         if (myReq !== mediaImportSeq) return // 过期请求的失败不打扰用户
@@ -875,6 +880,10 @@ export default {
     const importBilibili = (input) => importExternalMedia(input, 'bilibili')
     const importYouTube = (input) => importExternalMedia(input, 'youtube')
     const importQQ = (input) => importExternalMedia(input, 'qq')
+    // 收藏夹输入先判——favlist/medialist URL 也满足 isBilibiliInput，
+    // 顶栏分发已挡一遍，这里是 ?bili= 分享链/直调路径的双保险
+    const importBilibiliOrFav = (input) =>
+      extractBiliFavlistId(input) ? importBiliFavlist(input) : importBilibili(input)
 
     // QQ 歌单导入：disstid → 归一曲目 → 幂等壳 local_pl_qq_<id>——与手动建单
     // 同权（local_pl_ 前缀全链已通：mix 内容分享链/服务端镜像下载/持久化）。
@@ -913,6 +922,50 @@ export default {
       } catch (e) {
         if (myReq !== mediaImportSeq) return  // 过期请求的失败不打扰用户
         toast(`QQ 歌单导入失败：${e.message}`, 'error', 5000)
+      }
+    }
+
+    // B 站收藏夹导入：fid/mlN/分享链 → local_pl_bili_<fid> 幂等壳——
+    // 与 QQ 歌单同一形态（手动歌单同权：mix 分享/镜像下载/追加保留全通）。
+    // 服务端已按预算跑过词源匹配，matchedCount/skipped 透出给用户
+    const importBiliFavlist = async (input) => {
+      selectReqId++
+      const myReq = ++mediaImportSeq
+      loadingSongs.value = false
+      try {
+        toast('正在导入 B 站收藏夹…', 'info', 120000)  // 翻页+匹配预算最坏 ~60s+
+        const data = await musicApi.getBiliFavlist(input)
+        if (myReq !== mediaImportSeq) return
+        const tracks = (data.tracks || []).map(buildBilibiliSong)
+        if (!tracks.length) {
+          toast('收藏夹为空或条目全部失效', 'error')
+          return
+        }
+        const shellId = `local_pl_bili_${data.fid}`
+        let pl = userPlaylists.value.find(p => String(p.id) === shellId)
+        if (!pl) {
+          pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
+          userPlaylists.value.unshift(pl)
+        }
+        pl.name = data.name || `B 站收藏夹 ${data.fid}`
+        pl.coverImgUrl = httpsCover(data.cover || '') || tracks[0]?.al?.picUrl || ''
+        pl.creator = { nickname: data.creator || 'Bilibili' }
+        // 重导保留本地追加曲目（与 QQ 歌单同口径）；新集曲目原地替换
+        const newIds = new Set(tracks.map(t => String(t.id)))
+        pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
+        pl.trackCount = pl.tracks.length
+        savePlaylistsToStorage()
+        selectPlaylistAndShow(pl)
+        searchQuery.value = ''
+        const note = [
+          data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
+          data.skipped ? `跳过失效 ${data.skipped}` : '',
+          data.truncated ? '超出上限部分未导入' : '',
+        ].filter(Boolean).join('，')
+        toast(`已导入 B 站收藏夹「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
+      } catch (e) {
+        if (myReq !== mediaImportSeq) return
+        toast(`收藏夹导入失败：${e.message || '请检查链接后重试'}`, 'error', 5000)
       }
     }
 
@@ -1835,6 +1888,12 @@ export default {
       songPickerSearching.value = true
       let action = '搜索' // 失败 toast 名头按分支换——直加路径挂「搜索失败」误导
       try {
+        // 收藏夹链接在点歌台无落点（整单导入走顶栏）——先于 isBilibiliInput
+        // 判，否则 favlist URL 会被当单曲送去 resolve 再弹回
+        if (extractBiliFavlistId(q)) {
+          toast('这是 B 站收藏夹链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
         if (isBilibiliInput(q)) {
           action = '解析'
           // 裸 BV(+可选 ?p=N) 能本地推出确定 id——已在单就短路，省下 resolve 的上游
@@ -3445,8 +3504,8 @@ export default {
       // 所有参数读取已完毕——消费掉，避免下次刷新重新劫持恢复逻辑
       consumeUrlShareParams()
       if (biliInput) {
-        // ?bili= 分享链：走与搜索框导入同一条路
-        await importBilibili(biliInput)
+        // ?bili= 分享链：走与搜索框导入同一条路（收藏夹链也经此转 favlist 导入）
+        await importBilibiliOrFav(biliInput)
       } else if (ytInput) {
         // ?yt= 分享链同理
         await importYouTube(ytInput)
@@ -3569,6 +3628,8 @@ export default {
       selectedPlaylistInLibrary,
       collectSelectedPlaylist,
       importBilibili,
+      importBilibiliOrFav,
+      importBiliFavlist,
       importYouTube,
       importQQ,
       importQQPlaylist,
