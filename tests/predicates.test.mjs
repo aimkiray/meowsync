@@ -32,7 +32,12 @@ test('B 站收藏夹链识别：favlist?fid= / medialist mlN / 裸 mlN', () => {
   assert.equal(extractBiliFavlistId('https://space.bilibili.com/2/favlist?fid=1&type=create'), '1');
   assert.equal(extractBiliFavlistId('https://www.bilibili.com/medialist/detail/ml1052622027'), '1052622027');
   assert.equal(extractBiliFavlistId('https://www.bilibili.com/medialist/play/ml1052622027?business=space'), '1052622027');
+  // /list/mlN 连播页（canonical）+ medialist 播放页带 bvid 参数（复制地址栏常态形态）
+  assert.equal(extractBiliFavlistId('https://www.bilibili.com/list/ml1052622027'), '1052622027');
+  assert.equal(extractBiliFavlistId('https://www.bilibili.com/medialist/play/ml1052622027?bvid=BV1GJ411x7h7'), '1052622027');
   assert.equal(extractBiliFavlistId('ml1052622027'), '1052622027');
+  // 裸 mlN 收 6+ 位——短形态更像搜索词不抢
+  assert.equal(extractBiliFavlistId('ml12345'), null);
   // 通用 fid 参数不带 favlist 语境不抢；非 B 站域的 favlist 同不抢
   assert.equal(extractBiliFavlistId('https://weibo.com/u/page?fid=12345'), null);
   assert.equal(extractBiliFavlistId('https://example.com/favlist?fid=12345'), null);

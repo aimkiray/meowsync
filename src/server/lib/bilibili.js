@@ -66,10 +66,12 @@ async function resolveBiliLink(input, extraSignal) {
   const s = String(input || '').trim();
   if (!s) return null;
   const pick = (href) => {
-    const v = pickBvidFromUrl(href);
-    if (v) return { kind: 'video', id: v };
+    // favlist 先判：medialist/play/mlN?bvid=BV…（连播页复制地址栏的常态
+    // 形态）同时含两种信号——收藏夹语境更具体，与前端分发顺序同口径
     const fid = extractBiliFavlistId(href);
-    return fid ? { kind: 'favlist', fid } : null;
+    if (fid) return { kind: 'favlist', fid };
+    const v = pickBvidFromUrl(href);
+    return v ? { kind: 'video', id: v } : null;
   };
   const direct = pick(s);
   if (direct) return direct;
