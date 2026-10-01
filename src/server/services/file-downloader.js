@@ -12,7 +12,7 @@ const qq = require('../lib/qq');
 // 的「跳过服务端下载」不同——按前缀分发到 qq 原语，回落路径与网易云链同构。
 // 流地址宿主与 routes/qq.js 共用 lib/qq.js 的 QQ_STREAM_HOST_OK（sip 可能回
 // 裸 IP——后缀判定天然拒绝）
-const QQ_ID_RE = /^qq_([0-9A-Za-z]{10,20})$/;
+const QQ_ID_RE = require('../../shared/predicates.js').QQ_SONG_ID_RE;
 // RS01/F000=null：FLAC/Hi-Res 是 VBR，无固定码率可算——download-manager 的
 // durationLooksTruncated 对 falsy br 短路跳过，完整性由 streamToFile 的
 // content-length 对账兜底

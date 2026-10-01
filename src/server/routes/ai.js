@@ -12,8 +12,9 @@ const app = new Hono();
 
 // 词源相关端点只认网易云数字 id 与 qq_<songmid>（QQ 曲吃自家权威歌词做词源）——
 // bv_/yt_ 等外部 id 没有可翻译词源，放行只会空耗一次上游 lyric 调用再 404
-const NETEASE_ID_RE = /^\d{1,20}$/;
-const LYRIC_ID_RE = /^qq_[0-9A-Za-z]{10,20}$/;
+const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE } = require('../../shared/predicates.js');
+const NETEASE_ID_RE = NETEASE_ID_BOUNDED_RE;
+const LYRIC_ID_RE = QQ_SONG_ID_RE;
 // 翻译负载上限：千行级歌词多半是滚动歌词逐字拆分（字数标记），整单 AI 翻译
 // 既不经济也无必要——超量直接拒
 const MAX_LYRIC_LINES = 400;
@@ -69,7 +70,7 @@ const NON_LYRIC_RE = /^(?:(?:纯音乐|instrumental|作曲|作词|编曲|监制|
 // callNeteaseApi 不透传 signal——上游 lyric 请求会跑到自身超时（有界），
 // 调用点在拿到结果后靠 ownsLyric/abort 检查丢弃迟到的数据
 async function fetchLyricRaw(id, signal) {
-  const qqM = id.match(/^qq_([0-9A-Za-z]{10,20})$/);
+  const qqM = id.match(QQ_SONG_ID_RE);
   if (qqM) {
     const { getLyric } = require('../lib/qq');
     const r = await getLyric(qqM[1], signal);

@@ -183,7 +183,7 @@ function pickPageParam(input) {
   return m ? Math.max(1, parseInt(m[1], 10)) : 1;
 }
 
-// 限流/匹配实现移入 src/server/lib（rate-limit.js / netease-match.js）——
+// 限流/匹配实现：src/server/lib/rate-limit.js + src/server/services/netease-match.js——
 // 与 youtube.js 共用同一桶表与同一 sanity 判据，防两处漂移
 
 app.get('/bilibili/resolve', async (c) => {

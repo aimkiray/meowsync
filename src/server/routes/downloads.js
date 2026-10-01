@@ -10,7 +10,7 @@ const { parseJsonBody } = require('../lib/validate');
 const {
   downloadTaskBody, quickDownloadBody, mirrorBody
 } = require('../../shared/contracts.js');
-const { MIRROR_PLAYLIST_ID_RE, parseNumericId } = require('../../shared/predicates.js');
+const { MIRROR_PLAYLIST_ID_RE, parseNumericId, QQ_SONG_ID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
@@ -321,7 +321,7 @@ app.post('/downloads/local/mirror', async (c) => {
     // 等跳过并回传计数让前端提示。
     // 先过滤后截断：前 2000 个可下载曲进入镜像；skipped=不支持 id，truncated=超上限截尾
     const numeric = allTracks.filter(t => t && (/^\d+$/.test(String(t.id ?? ''))
-      || /^qq_[0-9A-Za-z]{10,20}$/.test(String(t.id ?? ''))));
+      || QQ_SONG_ID_RE.test(String(t.id ?? ''))));
     const tracks = numeric.slice(0, 2000)
       .map(t => ({
         id: String(t.id),
