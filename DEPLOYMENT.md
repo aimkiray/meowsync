@@ -44,7 +44,7 @@ cp .env.example .env
 | HOST | 0.0.0.0 | 绑定地址 |
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
 | REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 须带令牌（子协议 `remote.<token>` 优先，`?token=` 兼容兜底）。公网/共享网络部署务必配置——未设时任何可达客户端都能接管主机端 |
-| DOWNLOAD_TOKEN | - | 可选：设置后非 GET 的 `/downloads`、`/playlists`、`/song-meta`、`/ai` 请求须带 `x-download-token`；前端需同时设置 `VITE_DOWNLOAD_TOKEN`。公网/共享网络部署务必配置——未设时本地歌单镜像接口允许任意调用者创建含任意曲目的歌单并触发下载 |
+| DOWNLOAD_TOKEN | - | 可选：非 GET 的 `/downloads`、`/playlists`、`/song-meta`、`/ai` 请求须带 `x-download-token`（脚本/服务对服务旁路凭据）。**启用登录后浏览器不再需要它**——会话 cookie 等效放行；`VITE_DOWNLOAD_TOKEN` 仅保留给无登录老部署 |
 | TRUST_PROXY | - | 可选：设为 `1`/`true` 时采信 `X-Forwarded-Proto/Host` |
 | AI_BASE_URL | - | 可选：OpenAI 兼容接口根地址（如本地 CLIProxyAPI `http://127.0.0.1:8317/v1`）。与 `AI_API_KEY`、`AI_MODEL` 三项全配才启用 AI 辅助 |
 | AI_API_KEY | - | 可选：OpenAI 兼容接口的 Bearer key |
@@ -170,6 +170,58 @@ server {
 > IP 级限流的正确分桶前提：未设 TRUST_PROXY 时所有客户端共享反代出口 IP，
 > `with-nginx` profile 已回传 `X-Forwarded-For`，两个配置须成对出现，
 > 否则 `/ai/*`、`/downloads/*` 等按 IP 限流的接口会退化成全局单桶互相饿死。
+
+## 公网部署与登录系统
+
+自托管公网暴露的核心矛盾是「cookie 认证 ↔ `<audio>` 无法带 Authorization 头」。
+本项目用 **SQLite 不透明会话 + HttpOnly cookie** 解决——媒体请求同源自动携带，
+浏览器无需任何令牌。
+
+### 认证模型
+
+- `users` 表为空 = **登录未启用**：全部放行（局域网自用兼容路径，与
+  `DOWNLOAD_TOKEN`「未配即开放」同口径）
+- 首个管理员经 **`POST /auth/setup`** 创建（页面打开即自动进建号页）——
+  一次性，`users` 非空后该端点恒 409
+- 登录得 `HttpOnly` + `SameSite=Lax` cookie（HTTPS 下自动加 `Secure`）；
+  服务端只存 token 的 SHA-256——数据库泄露不等于会话泄露
+- 会话 = 14 天空闲滑动过期 + 90 天绝对上限；过期行每小时清扫
+- 密码 KDF：Node ≥24.7 用内置 `crypto.argon2`（Argon2id），旧版回落 `scrypt`；
+  PHC 自描述串，参数升档后登录时透明重哈希
+- 登录端点双键限流（per-IP 20 次/10min + per-account 8 次/10min），
+  用户不存在也跑完整 KDF——「用户不存在」与「密码错误」时序不可区分
+- 写请求带 `Origin` 头时强制同源/`CORS_ORIGINS` 白名单（cookie 会话的 CSRF 纵深）
+
+### 公网部署步骤（推荐顺序）
+
+1. **先在本机/内网完成 `/auth/setup`**——空 `users` 表暴露公网 = 先到者建号接管。
+   服务监听 `0.0.0.0` 且未初始化时会打启动警告
+2. TLS 反代在前（nginx/Caddy/Traefik），**只有反代端口对外开放**；
+   应用端口只绑内网/loopback，或 docker 网络内不 publish
+3. `.env` 设 `TRUST_PROXY=1`（cookie `Secure` 判定、限流分桶、解锁回链的
+   `https://` 前缀全部依赖真实外部协议）
+4. `CORS_ORIGINS=https://your-domain.com` 显式收紧（默认同源已够，跨域部署才需要）
+5. `docker compose -v` 挂载 `/app/data`（users/sessions 与下载文件同卷持久化）
+
+> 分享出去的 `/audio-proxy/t/<token>` 播放链对未登录者仍有效（vault 令牌
+> 本身即能力凭证——这是设计意图，mint 入口已全部在门内）；但
+> `/audio-proxy?url=` 开放中转在启用登录后不再裸露。
+
+### 会话/API 客户端
+
+- 浏览器：`fetch`/axios `withCredentials` 已内置，媒体元素同源自动带 cookie
+- 脚本/CLI：继续可用 `x-download-token`（`DOWNLOAD_TOKEN` 未失效，降级为
+  服务对服务凭据）；不建议再往前端 bundle 注入 `VITE_DOWNLOAD_TOKEN`
+- `/remote` WebSocket：浏览器握手自动带 cookie；非浏览器客户端仍可用
+  `REMOTE_TOKEN` 子协议。登录启用后两者皆无的连接一律 401
+
+### 忘记密码/锁死恢复
+
+容器或宿主机直接进 sqlite 清表即回到「未启用」态（首次访问重新进建号页）：
+
+```bash
+sqlite3 <DATA_DIR>/meowsync.db "DELETE FROM sessions; DELETE FROM users;"
+```
 
 ## 远程遥控
 

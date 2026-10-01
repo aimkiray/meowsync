@@ -209,9 +209,9 @@ export const musicApi = {
     const alreadyProxied = downloadData.url.includes('/audio-proxy/')
     const proxyUrl = alreadyProxied ? downloadData.url
       : `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
-    let blobResponse = await fetch(proxyUrl).catch(() => null)
+    let blobResponse = await fetch(proxyUrl, { credentials: 'include' }).catch(() => null)
     if (!blobResponse || !blobResponse.ok) {
-      blobResponse = await fetch(downloadData.url).catch(error => {
+      blobResponse = await fetch(downloadData.url, { credentials: 'include' }).catch(error => {
         throw new Error(`下载失败: ${error.message || '网络错误'}`)
       })
     }
@@ -456,6 +456,7 @@ async function sniffExt(blob) {
 const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
 async function saveStreamAsFile(url, fileName) {
   const resp = await fetch(url, {
+    credentials: 'include', // 跨域部署（VITE_API_BASE_URL ≠ 页面源）也要带会话 cookie
     headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
   })
   if (!resp.ok) {

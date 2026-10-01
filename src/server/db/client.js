@@ -368,6 +368,28 @@ function initSchema(database) {
 
     -- /healthz 用写探测表：SELECT 1 是纯内存查询测不出磁盘满
     CREATE TABLE IF NOT EXISTS _healthz (ts INTEGER);
+
+    -- 登录体系：users 空表 = 未启用登录（向后兼容局域网部署，authGate 全放行）
+    -- schema 支持多用户；产品面 v1 只暴露首个管理员 setup
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'admin',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 会话：id 存 sha256(token)——库泄不等于会话泄；滑动空闲 TTL + 绝对上限
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      not_after INTEGER NOT NULL,
+      ip TEXT,
+      user_agent TEXT
+    );
   `);
 
   // 索引必须在列迁移之后创建——老库若缺被索引的列（如 playlist_tracks.song_id），
@@ -382,7 +404,8 @@ function initSchema(database) {
     ['idx_download_tasks_status', 'download_tasks', 'status'],
     ['idx_download_queues_status', 'download_queues', 'status'],
     // cascade/建队列查重/属主判定都按 playlist_id 过滤——队列表全表扫
-    ['idx_download_queues_playlist', 'download_queues', 'playlist_id']
+    ['idx_download_queues_playlist', 'download_queues', 'playlist_id'],
+    ['idx_sessions_expires', 'sessions', 'expires_at']
   ];
   for (const [name, table, column] of INDEX_COLUMNS) {
     // hasColumn 缺列场景不建（索引缺失可继续跑，比启动即崩可恢复）；

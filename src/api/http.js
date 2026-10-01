@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { resolveApiBaseUrl } from '../lib/api-base'
+import { authState } from '../lib/auth-state'
 
 export const API_BASE_URL = resolveApiBaseUrl()
 
@@ -32,7 +33,18 @@ http.interceptors.request.use(
 
 http.interceptors.response.use(
   response => response.data,
-  error => Promise.reject(error)
+  error => {
+    // 会话过期/被服务端清扫：踢回登录门。/auth/* 自身（login 401 错误密码）
+    // 不触发——那是业务结果不是会话失效
+    const url = error?.config?.url || ''
+    if (error?.response?.status === 401
+      && !url.startsWith('/auth/')
+      && authState.enabled) {
+      authState.authenticated = false
+      authState.expired = true
+    }
+    return Promise.reject(error)
+  }
 )
 
 export default http
