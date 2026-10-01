@@ -115,6 +115,11 @@
           <div class="song-info">
             <h4 class="song-title">
               <span class="song-title-text">{{ song.name }}</span>
+              <span
+                v-if="songSource(song)"
+                class="pg-chip pg-chip--static song-tag"
+                :title="`来源：${songSource(song)} 导入`"
+              >{{ songSource(song) }}</span>
               <span v-if="isVipSong(song)" class="pg-chip pg-chip--static song-tag">VIP</span>
               <span
                 v-if="serverDownloadedStates[song.id]"
@@ -631,7 +636,7 @@ import { httpsCover, QQ_SONG_ID_RE } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
-import { isVipSong, isVipUnplayable, isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
+import { isVipSong, isVipUnplayable, isLocalPlaylistId, isSingleSongShellId, songSource } from '../lib/song'
 import { serverCaps } from '../lib/caps'
 import { shareOrCopy } from '../lib/share'
 import { toast, pixelConfirm } from '../lib/feedback'
@@ -1088,6 +1093,7 @@ export default {
       isShareShell,
       formatDuration,
       isVipSong,
+      songSource,
       isCurrent,
 
       showDownloadMenu,

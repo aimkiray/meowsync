@@ -24,3 +24,30 @@ export function songArtists(song) {
   const list = song?.ar || song?.artists || []
   return list.map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
 }
+
+/** 导入来源标签：youtube/bilibili/qq 字段即持久化的来源凭据（行内小牌用） */
+export function songSource(song) {
+  if (song?.bilibili) return 'B站'
+  if (song?.youtube) return 'YouTube'
+  if (song?.qq) return 'QQ音乐'
+  return null
+}
+
+/**
+ * 外部导入曲的演唱者口径：归真实上传者——YouTube=频道名、B站=UP主名，
+ * 不用匹配到的网易云艺人（导入的是「这个视频的演唱」，matched 只供封面/词源）。
+ * 服务端 resolve 已给 authorClean（剥 ' - Topic'/'VEVO' 后缀）；旧持久化曲
+ * 只有原始 author——本地同口径再剥一次，存量数据加载时自愈
+ */
+export function externalArtistName(song) {
+  if (song?.youtube) {
+    const clean = song.youtube.authorClean
+      || String(song.youtube.author || '')
+        .replace(/\s*-\s*Topic$/i, '')
+        .replace(/VEVO$/i, '')
+        .trim()
+    return clean || 'YouTube'
+  }
+  if (song?.bilibili) return song.bilibili.author || 'Bilibili'
+  return null // qq 曲的 ar 本身就是真实元数据，不走此口径
+}
