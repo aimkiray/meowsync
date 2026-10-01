@@ -6,7 +6,8 @@ const {
 } = require('../services/playlist-sync');
 const { findPlaylistById, findPlaylistByNeteaseId } = require('../repositories/playlists');
 const { deletePlaylistCascade } = require('../services/download-manager');
-const { readJsonBody } = require('../lib/http-body');
+const { parseJsonBody } = require('../lib/validate');
+const { importPlaylistBody } = require('../../shared/contracts.js');
 const { fail, handleError } = require('../lib/http-error');
 const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
 const { parseNumericId } = require('../../shared/predicates.js');
@@ -46,7 +47,8 @@ app.get('/playlists/:id', (c) => {
 
 app.post('/playlists/import', async (c) => {
   try {
-    const body = await readJsonBody(c);
+    const { data: body, error } = await parseJsonBody(c, importPlaylistBody);
+    if (error) return error;
     // 前导零归一化：'000123' 与 '123' 是同一远端歌单，不归一化会建重复本地行；
     // 只收纯数字（长度封顶）——脏输入打一次无效上游往返才失败，前置拦截
     const neteasePlaylistId = String(
