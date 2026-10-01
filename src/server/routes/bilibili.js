@@ -7,7 +7,7 @@ const { tokenMatches } = require('../lib/token-eq');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
-const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, viewQuery, parseBvid, BILI_COOKIE } = require('../lib/bilibili');
+const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, viewQuery, parseBvid, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
 
 const app = new Hono();
 
@@ -170,18 +170,37 @@ app.get('/bilibili/stream', async (c) => {
     if (kind === 'video' && !streams.some(s => (s.codecs || '').startsWith('avc1'))) {
       return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
     }
-    const candidates = streams.flatMap(s => {
+    // 匿名 DASH 在低热度稿封顶 480p——durl 合流档（fnval=1&qn=80）能反超到
+    // 720p。只在自适应最优低于 720p 时多打这一跳；反超则把合流档前插候选
+    // 链首（它是完整 mp4 自带音轨，代理链天然能放）
+    const dashBestH = streams[0]?.height || 0;
+    let durlUrls = [];
+    if (kind === 'video' && dashBestH < 720) {
+      try {
+        const pd = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=1&qn=80&fourk=1`, c.req.raw.signal, 1);
+        if ((QN_HEIGHT[pd.quality] || 0) > dashBestH) {
+          durlUrls = (Array.isArray(pd.durl) ? pd.durl : [])
+            .flatMap(d => [d?.url, ...(Array.isArray(d?.backup_url) ? d.backup_url : [])])
+            .filter(u => typeof u === 'string' && u);
+        }
+      } catch (e) {
+        if (c.req.raw.signal?.aborted) throw e;
+        // 合流档拉取失败不挡自适应主链
+      }
+    }
+    const candidates = [...durlUrls, ...streams.flatMap(s => {
       const backups = Array.isArray(s?.backupUrl) ? s.backupUrl
         : (Array.isArray(s?.backup_url) ? s.backup_url : []);
       return [s?.baseUrl, s?.base_url, ...backups];
-    }).filter(u => typeof u === 'string' && u);
+    })].filter(u => typeof u === 'string' && u);
     // 与 audio-proxy 放行业务对齐：归一化 + host 白名单（DNS/端口已由
-    // normalizeOutboundUrl 覆盖端口面，建连 IP 钉扎在代理层再查一次）
-    const usable = candidates.find(u => {
+    // normalizeOutboundUrl 覆盖端口面，建连 IP 钉扎在代理层再查一次）——
+    // 整条链随 token 下发，代理侧试到第一个能通的档
+    const usable = candidates.filter(u => {
       const checked = normalizeOutboundUrl(u);
       return checked.ok && isAllowedHost(checked.url.hostname);
     });
-    if (!usable) {
+    if (!usable.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
     // vault token 化——登录态 baseUrl 带 mid/uipk/deadline，不出进程
