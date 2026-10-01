@@ -8,16 +8,117 @@ const YT_TIMEOUT_MS = 15000;
 const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 const INNERTUBE_CLIENTS = [
   {
-    name: 'ANDROID',
+    name: 'ANDROID', clientId: 3,
     client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30, hl: 'zh' },
     headers: { 'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip' },
   },
   {
-    name: 'IOS',
+    name: 'IOS', clientId: 5,
     client: { clientName: 'IOS', clientVersion: '20.10.4', deviceModel: 'iPhone16,2', hl: 'zh' },
     headers: { 'User-Agent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_4 like Mac OS X)' },
   },
+  {
+    // 反 SABR 闸控档：部分视频 ANDROID/IOS 回的自适应流只吃首段窗外全 403，
+    // 同视频 VISIONOS 签名却完全不受限（实测 itag251 全量 200、任意 Range 206）。
+    // 排最后：正常视频轮不到它，前两形态失败/流被闸时才上场
+    name: 'VISIONOS', clientId: 101, needsVisitor: true,
+    client: {
+      clientName: 'VISIONOS', clientVersion: '1.02', deviceMake: 'Apple',
+      deviceModel: 'RealityDevice17,1', osName: 'visionOS', osVersion: '26.5.23O471',
+      // context 内嵌 UA 与 HTTP 头一致是风控校验点——缺了会吃 LOGIN_REQUIRED
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15',
+      hl: 'zh'
+    },
+    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15' },
+  },
 ];
+
+// X-YouTube-Client-* 是 Innertube 形态自证头——与 context 不一致会触发风控
+const clientHeaders = (form, vd) => ({
+  'Content-Type': 'application/json',
+  'X-YouTube-Client-Name': String(form.clientId),
+  'X-YouTube-Client-Version': String(form.client.clientVersion),
+  ...(vd ? { 'X-Goog-Visitor-Id': vd } : {}),
+  ...form.headers
+});
+
+// visitorData 是 Innertube 风控的匿名会话凭据（yt-dlp 同款来源：抓
+// youtube.com 首页 ytcfg 提取）——VISIONOS 无匿名通路必挂，其余客户端
+// 吃 LOGIN_REQUIRED 时挂上原地重试一次。模块级缓存 30min
+let visitorDataCache = null;
+let visitorDataAt = 0;
+const VISITOR_TTL_MS = 30 * 60e3;
+const DESKTOP_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+
+async function getVisitorData(extraSignal) {
+  if (visitorDataCache && Date.now() - visitorDataAt < VISITOR_TTL_MS) {
+    return visitorDataCache;
+  }
+  const res = await fetch('https://www.youtube.com', {
+    headers: { 'User-Agent': DESKTOP_UA },
+    signal: timedSignal(extraSignal),
+  });
+  if (!res.ok) throw new Error(`visitorData 抓取 HTTP ${res.status}`);
+  const html = await res.text();
+  const m = html.match(/"VISITOR_DATA":"([^"]+)"/);
+  if (!m) throw new Error('visitorData 提取失败');
+  visitorDataCache = m[1];
+  visitorDataAt = Date.now();
+  return visitorDataCache;
+}
+
+// 指定客户端形态直解：clientName 用于「已知 ANDROID 流被闸」的升级路径——
+// 跳过无谓的前两形态白打，直接拿 VISIONOS 签名批。
+// 每形态至多两试：首试裸匿名，LOGIN_REQUIRED 后补 visitorData 原地重试
+async function fetchPlayerWith(videoId, extraSignal, clientName) {
+  const forms = clientName
+    ? INNERTUBE_CLIENTS.filter(f => f.name === clientName)
+    : INNERTUBE_CLIENTS;
+  let lastErr = null;
+  for (const form of forms) {
+    let formErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (extraSignal?.aborted) throw new Error('aborted');
+      // needsVisitor 形态（VISIONOS）首试就挂；其余形态第二试才补——
+      // 缓存热时顺手带给所有形态（白来的风控豁免）
+      const vd = visitorDataCache
+        || (form.needsVisitor || attempt > 0
+          ? await getVisitorData(extraSignal).catch(() => null)
+          : null);
+      let body;
+      try {
+        const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_KEY}`, {
+          method: 'POST',
+          headers: clientHeaders(form, vd),
+          body: JSON.stringify({
+            context: { client: vd ? { ...form.client, visitorData: vd } : form.client },
+            videoId
+          }),
+          signal: timedSignal(extraSignal),
+        });
+        if (!res.ok) throw new Error(`innertube HTTP ${res.status}`);
+        body = await res.json();
+      } catch (e) {
+        formErr = lastErr = e;
+        if (extraSignal?.aborted) throw new Error('aborted');
+        break;  // 网络层失败重试同形态无意义——换下一形态
+      }
+      const ps = body?.playabilityStatus;
+      // OK / LIVE_EDGE 才有流；LOGIN_REQUIRED/ERROR 等带 reason 落 formErr
+      if (!ps?.status || ['OK', 'LIVE_EDGE'].includes(ps.status)) {
+        if (body?.streamingData) return body;
+        formErr = lastErr = new Error('无流数据');
+        break;
+      }
+      formErr = lastErr = new Error(`不可播放: ${ps.reason || ps.status}`);
+      // 匿名被风控 → 补 visitorData 原地重试一次（二试必带 vd）
+      if (ps.status === 'LOGIN_REQUIRED' && attempt === 0) continue;
+      break;
+    }
+    console.warn(`[youtube] ${form.name} 客户端取流失败:`, formErr.message);
+  }
+  throw lastErr || new Error('所有客户端形态均失败');
+}
 
 const timedSignal = (extraSignal, ms = YT_TIMEOUT_MS) => extraSignal
   ? AbortSignal.any([AbortSignal.timeout(ms), extraSignal])
@@ -25,35 +126,7 @@ const timedSignal = (extraSignal, ms = YT_TIMEOUT_MS) => extraSignal
 
 // 播放器响应：依次尝试客户端形态，第一个给出可用流的为准。
 // extraSignal 级联客户端断连——上游请求不随客户端断开变僵尸
-async function fetchPlayer(videoId, extraSignal) {
-  let lastErr = null;
-  for (const form of INNERTUBE_CLIENTS) {
-    if (extraSignal?.aborted) throw new Error('aborted');
-    try {
-      const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...form.headers },
-        body: JSON.stringify({ context: { client: form.client }, videoId }),
-        signal: timedSignal(extraSignal),
-      });
-      if (!res.ok) throw new Error(`innertube HTTP ${res.status}`);
-      const body = await res.json();
-      const ps = body?.playabilityStatus;
-      // OK / LIVE_EDGE 才有流；LOGIN_REQUIRED/ERROR 等直接带 reason 抛
-      if (ps?.status && !['OK', 'LIVE_EDGE'].includes(ps.status)) {
-        throw new Error(`不可播放: ${ps.reason || ps.status}`);
-      }
-      if (!body?.streamingData) throw new Error('无流数据');
-      return body;
-    } catch (e) {
-      lastErr = e;
-      // 客户端断连引发的 abort 不算上游失败——不打误导性 warn
-      if (extraSignal?.aborted) throw new Error('aborted');
-      console.warn(`[youtube] ${form.name} 客户端取流失败:`, e.message);
-    }
-  }
-  throw lastErr || new Error('所有客户端形态均失败');
-}
+const fetchPlayer = (videoId, extraSignal) => fetchPlayerWith(videoId, extraSignal);
 
 // 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
 // spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强。
@@ -99,9 +172,9 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
     try {
       const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...form.headers },
+        headers: clientHeaders(form, visitorDataCache),
         body: JSON.stringify({
-          context: { client: form.client },
+          context: { client: visitorDataCache ? { ...form.client, visitorData: visitorDataCache } : form.client },
           query: String(keyword || ''),
           // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
           params: 'EgIQAQ==',
@@ -158,4 +231,4 @@ function pickStreamList(data, kind, prefer = '') {
     .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
 }
 
-module.exports = { fetchPlayer, innertubeSearch, pickStreamList, YT_TIMEOUT_MS };
+module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, pickStreamList, YT_TIMEOUT_MS };
