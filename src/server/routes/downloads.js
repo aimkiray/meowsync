@@ -4,10 +4,12 @@ const { mirrorLocalPlaylist } = require('../services/local-mirror');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 const playlistsRepo = require('../repositories/playlists');
-// 读流按字节硬截断：chunked/无 Content-Length 请求不会被声明值检查拦住
-const { readJsonBody } = require('../lib/http-body');
 const { fail, handleError } = require('../lib/http-error');
 const { isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
+const { parseJsonBody } = require('../lib/validate');
+const {
+  downloadTaskBody, quickDownloadBody, mirrorBody
+} = require('../../shared/contracts.js');
 const { MIRROR_PLAYLIST_ID_RE, parseNumericId } = require('../../shared/predicates.js');
 
 const app = new Hono();
@@ -37,10 +39,8 @@ function normalizeDownloadOptions(body) {
 
 app.post('/downloads/queues', async (c) => {
   try {
-    const body = await readJsonBody(c);
-    if (body.playlistId === undefined || body.playlistId === null || body.playlistId === '') {
-      return fail(c, 400, '缺少 playlistId 参数');
-    }
+    const { data: body, error } = await parseJsonBody(c, downloadTaskBody);
+    if (error) return error;
 
     const queue = await downloadManager.createDownloadQueue(body.playlistId, normalizeDownloadOptions(body));
     return c.json({ code: 200, data: queue });
@@ -212,11 +212,8 @@ app.delete('/downloads/tasks/:id', async (c) => {
 app.post('/downloads/songs/:songId', async (c) => {
   try {
     const songId = c.req.param('songId');
-    const body = await readJsonBody(c);
-
-    if (body.playlistId === undefined || body.playlistId === null || body.playlistId === '') {
-      return fail(c, 400, '缺少 playlistId 参数');
-    }
+    const { data: body, error } = await parseJsonBody(c, downloadTaskBody);
+    if (error) return error;
 
     const task = await downloadManager.downloadSingleSong(body.playlistId, songId, normalizeDownloadOptions(body));
     return c.json({ code: 200, data: downloadManager.toPublicTask(task) });
@@ -274,7 +271,8 @@ app.delete('/downloads/playlists/:playlistId/files', async (c) => {
 app.post('/downloads/playlists/:playlistId/quick', async (c) => {
   try {
     const playlistId = c.req.param('playlistId');
-    const body = await readJsonBody(c);
+    const { data: body, error } = await parseJsonBody(c, quickDownloadBody);
+    if (error) return error;
 
     const queue = await downloadManager.createDownloadQueue(playlistId, normalizeDownloadOptions(body));
     try {
@@ -305,7 +303,8 @@ app.post('/downloads/local/mirror', async (c) => {
     // 前端按瘦身投影上载（~300B/曲，2000 曲 ≈600KB）；上限放宽到 8MB
     // 兜底未瘦身的旧端/手工调用发全量对象（~2-3KB/曲）——1MB 默认上限会在
     // ~400 曲处截死整个歌单
-    const body = await readJsonBody(c, 8 * 1024 * 1024);
+    const { data: body, error } = await parseJsonBody(c, mirrorBody, 8 * 1024 * 1024);
+    if (error) return error;
     const localId = String(body.localId || '').trim();
     if (!MIRROR_PLAYLIST_ID_RE.test(localId)
         || localId.length > LOCAL_MIRROR_ID_MAX) {

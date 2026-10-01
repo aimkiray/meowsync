@@ -1,7 +1,8 @@
 const { createHash } = require('crypto');
 const { Hono } = require('hono');
 const lyricAiRepo = require('../repositories/lyricAi');
-const { readJsonBody } = require('../lib/http-body');
+const { parseJsonBody } = require('../lib/validate');
+const { aiLyricBody } = require('../../shared/contracts.js');
 const { fail } = require('../lib/http-error');
 const { rateLimit } = require('../lib/rate-limit');
 const { callNeteaseApi } = require('../services/netease-api');
@@ -86,14 +87,9 @@ async function fetchLyricRaw(id, signal) {
 // 幂等：缓存命中/官方译文直回都不消耗 AI 额度
 app.post('/ai/lyric-translate', async (c) => {
   if (!aiEnabled()) return fail(c, 503, 'AI 未配置', { enabled: false });
-  let body;
-  try {
-    body = await readJsonBody(c, 16 * 1024);
-  } catch (e) {
-    if (e?.exposed === true && e?.status === 413) return fail(c, 413, '请求体过大');
-    body = {};
-  }
-  const id = String(body?.id ?? '');
+  const { data: body, error } = await parseJsonBody(c, aiLyricBody, 16 * 1024);
+  if (error) return error;
+  const id = String(body.id ?? '');
   if (!NETEASE_ID_RE.test(id) && !LYRIC_ID_RE.test(id)) return fail(c, 400, '非法 songId');
   const signal = c.req.raw.signal;
 
@@ -261,21 +257,16 @@ app.post('/ai/lyric-translate', async (c) => {
 // 判定按词源 id 落库（song_ai_verdict kind='lyric'）——同一错配不重复问模型
 app.post('/ai/lyric-verify', async (c) => {
   if (!aiEnabled()) return fail(c, 503, 'AI 未配置', { enabled: false });
-  let body;
-  try {
-    body = await readJsonBody(c, 64 * 1024);
-  } catch (e) {
-    if (e?.exposed === true && e?.status === 413) return fail(c, 413, '请求体过大');
-    body = {};
-  }
-  const id = String(body?.id ?? '');
+  const { data: body, error } = await parseJsonBody(c, aiLyricBody, 64 * 1024);
+  if (error) return error;
+  const id = String(body.id ?? '');
   if (!NETEASE_ID_RE.test(id)) return fail(c, 400, '非法 songId');
   // 进 prompt 的输入剥换行/方括号——标题作者与歌词原文都是不可信输入，
   // 去掉结构字符至少让注入不能伪造消息边界/键控协议
   const sanitizePrompt = (s) => String(s || '')
     .replace(/[\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const sourceTitle = sanitizePrompt(body?.sourceTitle).slice(0, 500);
-  const sourceAuthor = sanitizePrompt(body?.sourceAuthor).slice(0, 200);
+  const sourceTitle = sanitizePrompt(body.sourceTitle).slice(0, 500);
+  const sourceAuthor = sanitizePrompt(body.sourceAuthor).slice(0, 200);
   if (!sourceTitle) return fail(c, 400, '缺少 sourceTitle');
   const signal = c.req.raw.signal;
 
