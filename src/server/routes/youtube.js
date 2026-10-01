@@ -20,9 +20,12 @@ const gateCache = new Map();
 
 // 闸控指纹：自适应流首段窗内的 Range 放行、窗外有界 Range 一律 403、全量
 // GET 同拒。窗口不是精确 1MiB——实测紧贴 1MiB 边界的 1KiB 探测会假阴，
-// 2MiB 深处才稳定 403。2xx/416 判未闸（416 是文件小于窗长的边界），403
-// 判闸控，其余失败视同未闸（候选链自带兜底）
+// 2MiB 深处才稳定 403。返回三态：false=未闸（2xx/416），true=闸控（403），
+// null=无定论（超时/5xx/白名单外——不写缓存，逐请求退化照常走兜底链）。
+// abort 穿透不写缓存：断连被吞成"未闸"会污染 30min 判定
 async function probeGated(url, signal) {
+  const checked = normalizeOutboundUrl(url);
+  if (!checked.ok || !isAllowedHost(checked.url.hostname)) return null;
   try {
     const resp = await fetchStream(url, {
       timeout: 10000, signal,
@@ -31,7 +34,9 @@ async function probeGated(url, signal) {
     resp.data.destroy();
     return false;
   } catch (e) {
-    return Boolean(e?.fatal && /403/.test(e.message));
+    if (signal?.aborted) throw e;
+    if (e?.fatal && e.message === '上游返回 403') return true;
+    return null;
   }
 }
 
@@ -183,20 +188,24 @@ app.get('/youtube/stream', async (c) => {
 
     // SABR 闸控探测（结果缓存）：被闸的视频换 VISIONOS 客户端重解——
     // 同一批自适应流它签的 URL 完全不受限，能放回真最高档（实测 itag251
-    // 全量 200）；探测失败/VISIONOS 也倒都优雅退化——原批+progressive
-    // 链照常兜底，只是音质回到合流档
+    // 全量 200）。只有确定性判定（2xx/403）才写缓存——超时/断连等
+    // 无定论结果落缓存会把一次抖动放大成 30min 的误判
     let gate = gateCache.get(videoId);
-    if (!gate || Date.now() - gate.ts > GATE_TTL_MS) {
-      const gated = streams.length
-        ? await probeGated(streams[0].url, c.req.raw.signal)
-        : false;
-      gate = { gated, ts: Date.now() };
-      if (gateCache.size >= GATE_CACHE_MAX) {
-        gateCache.delete(gateCache.keys().next().value);
+    let gated = null;
+    if (gate && Date.now() - gate.ts <= GATE_TTL_MS) {
+      gated = gate.gated;
+    } else if (streams.length) {
+      gated = await probeGated(streams[0].url, c.req.raw.signal);
+      if (gated !== null) {
+        gate = { gated, ts: Date.now() };
+        if (gateCache.size >= GATE_CACHE_MAX) {
+          gateCache.delete(gateCache.keys().next().value);
+        }
+        gateCache.set(videoId, gate);
       }
-      gateCache.set(videoId, gate);
     }
-    if (gate.gated) {
+    if (gated) {
+      console.info(`[youtube] ${videoId} SABR 闸控命中——VISIONOS 客户端重解`);
       try {
         const vp = await fetchPlayerWith(videoId, c.req.raw.signal, 'VISIONOS');
         if (vp?.streamingData) {
@@ -205,7 +214,11 @@ app.get('/youtube/stream', async (c) => {
           const prog = pickProgressiveMp4(sd);
           if (prog.length) progressive = prog;
         }
-      } catch { /* VISIONOS 也拿不到就用原批——链尾合流档照样能播 */ }
+      } catch (e) {
+        // VISIONOS 也拿不到就用原批——链尾合流档照样能播；abort 穿透
+        if (c.req.raw.signal?.aborted) throw e;
+        console.warn(`[youtube] ${videoId} VISIONOS 重解失败，回落原批:`, e.message);
+      }
     }
     // 候选回链逐个过代理白名单——signatureCipher 跳过、非 googlevideo
     // 域拒；整条链随 token 下发，代理侧试到第一个能通的档
