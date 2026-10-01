@@ -322,6 +322,23 @@ export const musicApi = {
     return data
   },
 
+  // YouTube 歌单导入：playlist?list=/watch?list=/裸 PL → 歌单元信息 +
+  // 归一曲目（服务端 continuation 翻页 + 预算制词源匹配）。最坏 ~60s+，
+  // 超时放宽到 120s
+  getYouTubePlaylist: async (input, abortSignal = null) => {
+    const response = await api.get('/youtube/playlist', {
+      params: { input },
+      signal: abortSignal,
+      timeout: 120000
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || '歌单获取失败')
+    return data
+  },
+
   // 流地址：服务端每次重解 playurl（CDN 签名会过期）再 302 进 /audio-proxy，
   // 前端拿到的总是新鲜地址——直接塞给 <audio>/<video>/Howler 即可。
   // kind=video 下匿名低热度稿可能被 durl 合流档反超（服务端内部比高）

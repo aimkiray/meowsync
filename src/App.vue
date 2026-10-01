@@ -30,7 +30,7 @@
       @search-by-id="previewPlaylistById"
       @search-song="importNeteaseSongById"
       @search-bili="importBilibiliOrFav"
-      @search-yt="importYouTube"
+      @search-yt="importYouTubeOrPlaylist"
       @search-qq="importQQ"
       @search-qq-pl="importQQPlaylist"
       @search-qq-songs="handleQQSongSearch"
@@ -328,7 +328,7 @@ import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSong
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, toastDismiss, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from './lib/url'
+import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -872,6 +872,10 @@ export default {
           importBiliFavlist(errData.favlist)
           return
         }
+        if (errData?.playlist) {
+          importYouTubePlaylist(errData.playlist)
+          return
+        }
         console.error(`❌ ${spec.tag} 导入失败:`, error)
         searchQuery.value = input // 失败还原输入——用户可直接回车重试
         toast(`${spec.tag} 导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
@@ -880,10 +884,13 @@ export default {
     const importBilibili = (input) => importExternalMedia(input, 'bilibili')
     const importYouTube = (input) => importExternalMedia(input, 'youtube')
     const importQQ = (input) => importExternalMedia(input, 'qq')
-    // 收藏夹输入先判——favlist/medialist URL 也满足 isBilibiliInput，
-    // 顶栏分发已挡一遍，这里是 ?bili= 分享链/直调路径的双保险
+    // 收藏夹/歌单输入先判——favlist/medialist URL 也满足 isBilibiliInput、
+    // watch?v=&list= 也满足 isYouTubeInput，顶栏分发已挡一遍，这里是
+    // ?bili=/?yt= 分享链/直调路径的双保险
     const importBilibiliOrFav = (input) =>
       extractBiliFavlistId(input) ? importBiliFavlist(input) : importBilibili(input)
+    const importYouTubeOrPlaylist = (input) =>
+      extractYouTubePlaylistId(input) ? importYouTubePlaylist(input) : importYouTube(input)
 
     // QQ 歌单导入：disstid → 归一曲目 → 幂等壳 local_pl_qq_<id>——与手动建单
     // 同权（local_pl_ 前缀全链已通：mix 内容分享链/服务端镜像下载/持久化）。
@@ -970,6 +977,52 @@ export default {
         toast(`收藏夹导入失败：${e.message || '请检查链接后重试'}`, 'error', 5000)
       } finally {
         toastDismiss(progressToast) // 进度 toast 完成即退——stale/失败路径也收
+      }
+    }
+
+    // YouTube 歌单导入：listId/分享链 → local_pl_yt_<id> 幂等壳——与
+    // B 站收藏夹同一形态（重导保留本地追加，matchedCount/skipped 透出）。
+    // 服务端已按预算跑过词源匹配
+    const importYouTubePlaylist = async (input) => {
+      selectReqId++
+      const myReq = ++mediaImportSeq
+      loadingSongs.value = false
+      searchQuery.value = ''
+      const progressToast = toast('正在导入 YouTube 歌单…', 'info', 120000)
+      try {
+        const data = await musicApi.getYouTubePlaylist(input)
+        if (myReq !== mediaImportSeq) return
+        const tracks = (data.tracks || []).map(buildYouTubeSong)
+        if (!tracks.length) {
+          toast('歌单为空或条目全部失效', 'error')
+          return
+        }
+        const shellId = `local_pl_yt_${data.listId}`
+        let pl = userPlaylists.value.find(p => String(p.id) === shellId)
+        if (!pl) {
+          pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
+          userPlaylists.value.unshift(pl)
+        }
+        pl.name = data.name || `YouTube 歌单 ${data.listId}`
+        pl.coverImgUrl = httpsCover(data.cover || '') || tracks[0]?.al?.picUrl || ''
+        pl.creator = { nickname: data.creator || 'YouTube' }
+        const newIds = new Set(tracks.map(t => String(t.id)))
+        pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
+        pl.trackCount = pl.tracks.length
+        savePlaylistsToStorage()
+        selectPlaylistAndShow(pl)
+        const note = [
+          data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
+          data.skipped ? `跳过失效 ${data.skipped}` : '',
+          data.truncated ? '超出上限部分未导入' : '',
+        ].filter(Boolean).join('，')
+        toast(`已导入 YouTube 歌单「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
+      } catch (e) {
+        if (myReq !== mediaImportSeq) return
+        searchQuery.value = input
+        toast(`歌单导入失败：${e.message || '请检查链接后重试'}`, 'error', 5000)
+      } finally {
+        toastDismiss(progressToast)
       }
     }
 
@@ -1927,6 +1980,12 @@ export default {
           await addPickedSong(song)
           return
         }
+        // 歌单链接在点歌台无落点（整单导入走顶栏）——先于 isYouTubeInput
+        // 判，否则 watch?v=&list= 会被当单曲解析
+        if (extractYouTubePlaylistId(q)) {
+          toast('这是 YouTube 歌单链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
         if (isYouTubeInput(q)) {
           action = '解析'
           // URL 形态可本地推出 yt_<id>（isYouTubeInput 收窄后裸 id 不入此分支）——
@@ -2023,6 +2082,10 @@ export default {
         const errData = error?.data || error?.response?.data
         if (errData?.favlist) {
           toast('这是 B 站收藏夹链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
+        if (errData?.playlist) {
+          toast('这是 YouTube 歌单链接，请在顶部搜索框粘贴导入', 'info')
           return
         }
         console.error('点歌台失败:', error)
@@ -3193,11 +3256,15 @@ export default {
     }
 
 
-    // 从URL参数获取 YouTube 导入标识（?yt=<videoId> 分享链）
+    // 从URL参数获取 YouTube 导入标识（?yt=<videoId> 分享链；歌单 URL/listId
+    // 也放行——下游 importYouTubeOrPlaylist 自己分单曲/歌单，?yt= 是歌单的
+    // 按引用分享通道）
     const getYtFromUrl = () => {
       const urlParams = new URLSearchParams(window.location.search)
-      const yt = urlParams.get('yt')
-      if (!yt || !/^[A-Za-z0-9_-]{11}$/.test(yt.trim())) return null
+      const yt = urlParams.get('yt')?.trim()
+      if (!yt) return null
+      if (extractYouTubePlaylistId(yt)) return yt
+      if (!/^[A-Za-z0-9_-]{11}$/.test(yt)) return null
       console.log('▶️ 从URL获取 YouTube 视频:', yt.trim())
       // 传 ?yt= 形态而非裸 id：服务端 [?&]yt= 分支无 \D 要求（全数字 videoId
       // 也可解），且 resolve 失败还原进搜索框后仍是 isYouTubeInput 形态——
@@ -3522,8 +3589,8 @@ export default {
         // ?bili= 分享链：走与搜索框导入同一条路（收藏夹链也经此转 favlist 导入）
         await importBilibiliOrFav(biliInput)
       } else if (ytInput) {
-        // ?yt= 分享链同理
-        await importYouTube(ytInput)
+        // ?yt= 分享链同理（歌单链也经此转 playlist 导入）
+        await importYouTubeOrPlaylist(ytInput)
       } else if (qqInput) {
         // ?qq= 分享链同理
         await importQQ(qqInput)
@@ -3646,6 +3713,8 @@ export default {
       importBilibiliOrFav,
       importBiliFavlist,
       importYouTube,
+      importYouTubeOrPlaylist,
+      importYouTubePlaylist,
       importQQ,
       importQQPlaylist,
       importNeteaseSongById,

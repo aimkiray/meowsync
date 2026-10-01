@@ -3,13 +3,13 @@ const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../
 const streamVault = require('../lib/stream-vault');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../services/netease-match');
-const { extractYouTubeId, YT_ID_RE } = require('../../shared/predicates.js');
+const { extractYouTubeId, extractYouTubePlaylistId, YT_ID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
 // Innertube 原语（fetchPlayer/pickStreamList/innertubeSearch）在 lib/youtube.js
 // ——解锁层 services/unlock/youtube.js 复用同一实现，不维护两份客户端表
-const { fetchPlayer, fetchPlayerWith, pickStreamList } = require('../lib/youtube');
+const { fetchPlayer, fetchPlayerWith, pickStreamList, fetchYtPlaylistPage } = require('../lib/youtube');
 const { fetchStream } = require('../services/file-downloader');
 
 // 「SABR 闸控」探测缓存：videoId → {gated, ts}。自适应流被闸时签名批
@@ -116,6 +116,12 @@ app.get('/youtube/resolve', async (c) => {
     return c.json({ code: 429, message: '解析太频繁，稍后再试' }, 429);
   }
   const input = c.req.query('input') || c.req.query('v');
+  // 歌单链（watch?v=&list= 复合形态、playlist?list=、裸 PL 前缀）走歌单导入——
+  // playlist 字段带下去前端自动转 /youtube/playlist，与 bilibili favlist 同口径
+  const playlistId = extractYouTubePlaylistId(input);
+  if (playlistId) {
+    return c.json({ code: 400, message: '这是 YouTube 歌单链接，正在为你导入歌单', playlist: playlistId }, 400);
+  }
   const videoId = pickYouTubeId(input);
   if (!videoId) return c.json({ code: 400, message: '无法从输入解析 YouTube 视频 id' }, 400);
   try {
@@ -180,6 +186,121 @@ app.get('/youtube/resolve', async (c) => {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] resolve 失败:', e.message);
     return c.json({ code: 502, message: `YouTube 解析失败: ${e.message}` }, 502);
+  }
+});
+
+// 歌单导入：playlist?list=/watch?v=&list=/裸 PL 前缀 → 归一曲目列表。
+// Innertube browse 公开单匿名可读（私有/不存在回 ERROR alert——确定性
+// 失败映射 404）；continuation 翻页，截断到 PL_MAX_ITEMS。词源匹配是
+// 预算制并发池：预算耗尽剩余曲目 matched=null 照常可播可下
+const PL_MAX_ITEMS = 200;
+const PL_MATCH_BUDGET_MS = 45000;
+const PL_MATCH_CONCURRENCY = 3;
+
+app.get('/youtube/playlist', async (c) => {
+  if (!rateLimit(c, 'yt-playlist', 6)) {
+    return c.json({ code: 429, message: '导入太频繁，稍后再试' }, 429);
+  }
+  const signal = c.req.raw.signal;
+  const raw = c.req.query('input') || c.req.query('list') || '';
+  const listId = extractYouTubePlaylistId(raw)
+    // 谓词不收的形态按裸 id 兜底（VL 前缀写法/未知前缀——browseId 直拼）
+    || (/^[A-Za-z0-9_-]{10,80}$/.test(raw.trim()) ? raw.trim() : null);
+  if (!listId) {
+    return c.json({ code: 400, message: '无法从输入解析歌单（支持 playlist?list=/watch?list= 链接）' }, 400);
+  }
+  try {
+    let name = '', cover = '', creator = '', mediaCount = null;
+    let skipped = 0;
+    let exhausted = false; // 上游无续页——truncated 的权威判据
+    const tracks = [];
+    const seenIds = new Set();
+    let continuation = null;
+    for (let page = 0; page < 8 && tracks.length < PL_MAX_ITEMS; page++) {
+      if (signal?.aborted) return c.body(null, 499);
+      let data;
+      try {
+        data = await fetchYtPlaylistPage({ listId, continuation, extraSignal: signal });
+      } catch (e) {
+        if (!tracks.length && page === 0) throw e; // 首页即挂——整体失败走 catch
+        break;                                     // 续页翻车：保住已扫部分按截断返回
+      }
+      if (page === 0) {
+        name = data.title; cover = data.cover; creator = data.owner;
+        mediaCount = data.mediaCount;
+      }
+      skipped += data.skipped;
+      for (const it of data.items) {
+        if (tracks.length >= PL_MAX_ITEMS || seenIds.has(it.videoId)) continue;
+        seenIds.add(it.videoId);
+        const { songName, candidates, artistFromAuthor } = extractYtSong(it.title, it.owner);
+        tracks.push({
+          videoId: it.videoId,
+          title: it.title || '',
+          author: it.owner || '',
+          authorClean: artistFromAuthor || null,
+          duration: it.durationSec || 0,
+          cover: `https://i.ytimg.com/vi/${it.videoId}/hqdefault.jpg`, // 与 resolve 同款确定性缩略图
+          songName,
+          candidates,
+          hasVideo: true,          // browse 不给 streamingData——avc1 可用性乐观值，流链兜底降级
+          matched: null,
+          matchedBy: null,
+        });
+      }
+      continuation = data.continuation;
+      // 见底只看上游续页 token——整页条目全失效的页不该误标 exhausted
+      if (!continuation) { exhausted = true; break; }
+    }
+    // info 缺省=不可用（与 favlist 同口径）；首页空且无续页=空单
+    if (!name && !tracks.length) {
+      return c.json({ code: 404, message: '歌单不存在或不可公开访问' }, 404);
+    }
+
+    // 词源匹配并发池：总预算到点 abort，在途判定被掐断的曲目按无匹配回落
+    const budgetCtrl = new AbortController();
+    const matchSignal = AbortSignal.any([signal, budgetCtrl.signal]);
+    const budgetTimer = setTimeout(() => budgetCtrl.abort(), PL_MATCH_BUDGET_MS);
+    budgetTimer.unref?.();
+    let cursor = 0;
+    let matchedCount = 0;
+    const worker = async () => {
+      while (cursor < tracks.length && !matchSignal.aborted) {
+        const t = tracks[cursor++];
+        const { song: matched, query } = await matchNeteaseSong(
+          t.candidates, t.duration, 'youtube-pl', matchSignal,
+          { title: t.title, author: t.author }).catch(() => ({ song: null }));
+        if (matched && !matchSignal.aborted) {
+          t.matched = { id: matched.id, name: matched.name, ar: matched.ar || matched.artists || [], al: matched.al || matched.album || {} };
+          t.matchedBy = query;
+          matchedCount++;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PL_MATCH_CONCURRENCY, tracks.length) }, worker));
+    clearTimeout(budgetTimer);
+    if (signal?.aborted) return c.body(null, 499);
+
+    return c.json({
+      code: 200,
+      listId,
+      name,
+      cover,
+      creator,
+      mediaCount: mediaCount ?? tracks.length,
+      skipped,
+      matchedCount,
+      truncated: !exhausted,
+      tracks: tracks.map(({ candidates, ...t }) => t), // 内部匹配用字段不下发
+    });
+  } catch (e) {
+    if (signal?.aborted) return c.body(null, 499);
+    console.error('[youtube] playlist 失败:', e.message);
+    // 上游 ERROR alert（私有/不存在/被删）对用户是「不可访问」非网关故障
+    if (e.upstreamCode === 'ALERT_ERROR' || /HTTP (400|404)/.test(e.message || '')) {
+      return c.json({ code: 404, message: '歌单不存在或不可公开访问' }, 404);
+    }
+    return c.json({ code: 502, message: `歌单获取失败: ${e.message}` }, 502);
   }
 });
 
