@@ -2,7 +2,7 @@ const { tokenMatches } = require('../lib/token-eq');
 const { trustProxyEnabled } = require('../lib/env');
 const { WebSocketServer } = require('ws');
 // 控制面契约与共享表对齐（src/shared/protocol.js）——controller/host 三端同源
-const { CONTROL_TYPES, CONTROL_PAYLOAD_GUARDS, REMOTE_LIMITS } = require('../../shared/protocol.js');
+const { CONTROL_TYPES, CONTROL_PAYLOAD_GUARDS, REMOTE_LIMITS, MSG_TYPES } = require('../../shared/protocol.js');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_PAYLOAD_BYTES = REMOTE_LIMITS.MAX_PAYLOAD_BYTES;
@@ -33,7 +33,7 @@ function broadcastToControllers(msg) {
 
 function notifyControllerCount() {
   if (hostSocket && hostSocket.readyState === hostSocket.OPEN) {
-    send(hostSocket, { type: 'info', payload: { controllers: controllers.size } });
+    send(hostSocket, { type: MSG_TYPES.INFO, payload: { controllers: controllers.size } });
   }
 }
 
@@ -318,11 +318,11 @@ function attachRemoteControl(server, options = {}) {
       hostSocket = ws;
       console.log('[remote] host connected');
       // controllers 需要知道 host 就位（区别于从未有过 host 的空态）
-      broadcastToControllers({ type: 'host_joined' });
+      broadcastToControllers({ type: MSG_TYPES.HOST_JOINED });
       // 新 host 可能刚接管：主动要一次状态，controller 立即拿到当前曲目
-      send(ws, { type: 'request_state' });
+      send(ws, { type: MSG_TYPES.REQUEST_STATE });
 
-      send(ws, { type: 'info', payload: { controllers: controllers.size } });
+      send(ws, { type: MSG_TYPES.INFO, payload: { controllers: controllers.size } });
 
       ws.on('message', (data) => {
         if (!allowMessage(ws, HOST_MSG_PER_SEC)) {
@@ -333,10 +333,10 @@ function attachRemoteControl(server, options = {}) {
         // host sends state_update → forward to all controllers。
         // payload 经服务端白名单序列化——host 不可信，畸形对象会崩掉
         // 所有 controller 的渲染（artistName computed 对 song.ar 无守卫）
-        if (msg && msg.type === 'state_update') {
+        if (msg && msg.type === MSG_TYPES.STATE_UPDATE) {
           const payload = sanitizeStatePayload(msg.payload);
           if (payload) {
-            broadcastToControllers({ type: 'state_update', payload });
+            broadcastToControllers({ type: MSG_TYPES.STATE_UPDATE, payload });
           }
         }
       });
@@ -346,7 +346,7 @@ function attachRemoteControl(server, options = {}) {
         if (hostSocket === ws) {
           hostSocket = null;
           console.log('[remote] host disconnected');
-          broadcastToControllers({ type: 'host_disconnected' });
+          broadcastToControllers({ type: MSG_TYPES.HOST_DISCONNECTED });
         }
       });
 
@@ -359,9 +359,9 @@ function attachRemoteControl(server, options = {}) {
       // If host is connected, ask it to send current state；无 host 时明示空态
       // （controller UI 靠 host_disconnected/host_absent 区分"断了"与"从未有过"）
       if (hostSocket && hostSocket.readyState === hostSocket.OPEN) {
-        send(hostSocket, { type: 'request_state' });
+        send(hostSocket, { type: MSG_TYPES.REQUEST_STATE });
       } else {
-        send(ws, { type: 'host_absent' });
+        send(ws, { type: MSG_TYPES.HOST_ABSENT });
       }
 
       ws.on('message', (data) => {

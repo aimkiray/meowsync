@@ -6,7 +6,8 @@ import {
   BVID_RE, BVID_IN_TEXT_RE, isBilibiliInput,
   SINGLE_SONG_PREFIX, SAVED_QUEUE_PREFIX, MIRROR_PLAYLIST_ID_RE,
   isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
-  parseNumericId
+  parseNumericId, extractYouTubeId, isYouTubeInput,
+  isQQInput, pickQqFromUrl, extractQQPlaylistId, extractNeteaseSongId
 } from '../src/shared/predicates.js';
 
 test('songmid：QQ songmid 形态', () => {
@@ -52,4 +53,44 @@ test('BVID_IN_TEXT_RE：内嵌提取', () => {
   const m = '看 https://www.bilibili.com/video/BV1GJ411x7h7?t=3'.match(BVID_IN_TEXT_RE);
   assert.equal(m?.[0], 'BV1GJ411x7h7');
   assert.ok(NETEASE_ID_RE.test('186016'));
+});
+
+test('parseNumericId 边界：0/前导零/超大/空', () => {
+  assert.equal(parseNumericId('0'), null);       // id 须 >0
+  assert.equal(parseNumericId('007'), 7);        // 前导零归一（与路由导入一致口径）
+  assert.equal(parseNumericId('9'.repeat(30)), null); // 超 safeInteger
+  assert.equal(parseNumericId(null), null);
+});
+
+test('extractYouTubeId：URL 形态表 + 裸 id 歧义守卫', () => {
+  assert.equal(extractYouTubeId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
+  assert.equal(extractYouTubeId('https://youtu.be/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
+  assert.equal(extractYouTubeId('https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=x'), 'dQw4w9WgXcQ');
+  assert.equal(extractYouTubeId('dQw4w9WgXcQ'), 'dQw4w9WgXcQ');       // 裸 id 含字母→收
+  assert.equal(extractYouTubeId('12345678901'), null);               // 纯数字 11 位与网易云 id 撞型→拒
+  assert.equal(extractYouTubeId('lofi beats'), null);
+  // isYouTubeInput 只认 URL 形态——裸 id 必须拼 youtu.be（搜索词不误伤）
+  assert.ok(isYouTubeInput('https://youtu.be/dQw4w9WgXcQ'));
+  assert.ok(!isYouTubeInput('dQw4w9WgXcQ'));
+});
+
+test('isQQInput / pickQqFromUrl / extractQQPlaylistId', () => {
+  assert.ok(isQQInput('https://y.qq.com/n/ryqq/songDetail/004Z8Ihr0JIu5s'));
+  assert.ok(isQQInput('qqmusic://qq.com/song?p=x'));
+  assert.ok(!isQQInput('qq:billieeilish'));          // qq: 是搜索前缀不是链接
+  assert.ok(!isQQInput('https://y.qq.com/n/ryqq/playlist/7014347621')); // 歌单走歌单分支
+  assert.deepEqual(pickQqFromUrl('https://y.qq.com/n/ryqq/songDetail/004Z8Ihr0JIu5s'), { mid: '004Z8Ihr0JIu5s' });
+  // 歌单优先于内嵌 songmid（playlist?id=N&p={"songmid":...} 形态）
+  assert.deepEqual(pickQqFromUrl('https://i.y.qq.com/v8/playsong.html?playlistId=0&p=%7B%22disstid%22%3A%227014%22%7D'), { disstid: '7014' });
+  assert.equal(extractQQPlaylistId('https://y.qq.com/n/ryqq/playlist/7014347621'), '7014347621');
+  assert.equal(extractQQPlaylistId('https://i.y.qq.com/n2/m/share/details/taoge.html?id=99'), '99');
+  assert.equal(extractQQPlaylistId('not a link'), null);
+});
+
+test('extractNeteaseSongId：URL/裸数字；?song= 是单曲不是歌单', () => {
+  assert.equal(extractNeteaseSongId('https://music.163.com/song?id=186016'), '186016');
+  assert.equal(extractNeteaseSongId('https://music.163.com/#/song/186016'), '186016');
+  assert.equal(extractNeteaseSongId('?song=186016&view=watch'), '186016');
+  assert.equal(extractNeteaseSongId('186016'), '186016');
+  assert.equal(extractNeteaseSongId('晴天'), null);
 });

@@ -1,6 +1,8 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { resolveApiBaseUrl } from '../lib/api-base'
 import { toast } from '../lib/feedback'
+// WS 消息类型与服务端 remote.js 同源
+import { MSG_TYPES } from '../shared/protocol.js'
 
 // 远程控制 host 端：state_update 每 2s 广播 + 指令即时响应 + 断线重连。
 // deps 由宿主注入（refs 直接传；howl 是可被置 null 重建的裸 let，用 getter 传活引用）
@@ -50,7 +52,7 @@ export function useRemoteControl(deps) {
   function sendRemoteState() {
     if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) return
     remoteWs.send(JSON.stringify({
-      type: 'state_update',
+      type: MSG_TYPES.STATE_UPDATE,
       payload: {
         isPlaying: isPlaying.value,
         currentSong: serializeRemoteSong(currentSong.value),
@@ -120,7 +122,7 @@ export function useRemoteControl(deps) {
         }
         break
       }
-      case 'request_state':
+      case MSG_TYPES.REQUEST_STATE:
         sendRemoteState()
         break
     }

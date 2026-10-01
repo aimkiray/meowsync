@@ -151,9 +151,11 @@ export default {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
 
-    // 从URL或文本中提取歌单ID：网易云 ?id= / 本站分享链 ?playlist(s)=|?song= / 纯数字
+    // 从URL或文本中提取歌单ID：网易云 ?id= / 本站歌单分享链 ?playlist(s)= / 纯数字。
+    // 不收 song=——那是本站单曲分享参数（SongList/WatchView 生成 ?song=<id>&view=watch），
+    // 收进来会把单曲链错当歌单去预览
     const extractPlaylistId = (input) => {
-      const urlMatch = input.match(/[?&](?:id|playlist|playlists|song)=(\d+)/)
+      const urlMatch = input.match(/[?&](?:id|playlist|playlists)=(\d+)/)
       if (urlMatch) return urlMatch[1]
       if (/^\d+$/.test(input.trim())) return input.trim()
       return null
