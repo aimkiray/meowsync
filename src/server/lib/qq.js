@@ -26,7 +26,7 @@ function qqCookie() {
     cookieWarned = true;
     console.warn('[qq] QQ_COOKIE 含控制字符/非 ASCII，已剔除——cookie 值应为纯 ASCII');
   }
-  maybeRenewQqCookie();
+  maybeRenewQqCookie(ascii);
   return ascii;
 }
 const hasQqCookie = () => Boolean(qqCookie());
@@ -38,11 +38,14 @@ const QQ_RENEW_WINDOW_SEC = 600;
 let renewalInflight = null;
 
 // LoginServer/Login 用 refresh_token 换新 musickey，回写 NEW_QQ_COOKIE。
-// 只在 qqCookie() 里惰性触发——读 cookie 的请求自然带上续期检查
+// 只在 qqCookie() 里惰性触发——读 cookie 的请求自然带上续期检查。
+// musicid 走 qqUin（剥 o 前缀、兼容 wxuin/p_luin 微信态）：裸 parseInt('o123')
+// 恒 NaN 会让续期对文档化 cookie 形态静默空转。musickey 与请求侧 qqKey
+// 同序（qm_keyst 优先）——两键并存值不同时续期与请求必须拿同一把
 async function renewQqCookie(cookie) {
-  const refreshToken = cookieVal(cookie, 'qqrefresh_token');
-  const musickey = cookieVal(cookie, 'qqmusic_key') || cookieVal(cookie, 'qm_keyst');
-  const musicid = parseInt(cookieVal(cookie, 'uin') || '0', 10);
+  const refreshToken = cookieVal(cookie, 'qqrefresh_token') || cookieVal(cookie, 'wxrefresh_token');
+  const musickey = qqKey(cookie);
+  const musicid = parseInt(qqUin(cookie) || '0', 10);
   if (!refreshToken || !musickey || !musicid) return;
   try {
     const res = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
@@ -58,24 +61,45 @@ async function renewQqCookie(cookie) {
     });
     const body = await res.json();
     const data = body?.req?.data || {};
-    if (!data.musickey || !data.musickeyCreateTime) return;
-    const renewed = cookie
-      .replace(/(qqmusic_key=)[^;]*/, `$1${data.musickey}`)
-      .replace(/(qm_keyst=)[^;]*/, `$1${data.musickey}`)
-      .replace(/(psrf_musickey_createtime=)[^;]*/, `$1${data.musickeyCreateTime}`)
-      .replace(/(musickey_createtime=)[^;]*/, `$1${data.musickeyCreateTime}`);
-    process.env.NEW_QQ_COOKIE = renewed;
+    if (!data.musickey || !data.musickeyCreateTime) {
+      console.warn('[qq] cookie 续期应答缺 musickey/musickeyCreateTime（上游可能拒登）');
+      return;
+    }
+    // 按名重写而非正则子串：'qqmusic_key=' 是 'psrf_qqmusic_key=' 的子串、
+    // 'musickey_createtime=' 是 'psrf_musickey_createtime=' 的子串——首个命中
+    // 语义下键序碰巧就会把独立键晾成旧值，createtime 永不前进 → 每个请求
+    // 都触发一次续期外呼死循环。缺失键补尾部（导出的 cookie 未必带齐变体）
+    const renewMap = {
+      qqmusic_key: data.musickey, qm_keyst: data.musickey,
+      musickey_createtime: data.musickeyCreateTime,
+      psrf_musickey_createtime: data.musickeyCreateTime,
+    };
+    const seen = new Set();
+    const parts = cookie.split(';').map(p => p.trim()).filter(Boolean)
+      .map(p => {
+        const n = p.slice(0, p.indexOf('=')).trim();
+        if (!(n in renewMap)) return p;
+        seen.add(n);
+        return `${n}=${renewMap[n]}`;
+      });
+    for (const n of Object.keys(renewMap)) {
+      if (!seen.has(n)) parts.push(`${n}=${renewMap[n]}`);
+    }
+    process.env.NEW_QQ_COOKIE = parts.join('; ');
     console.info('[qq] cookie 已自动续期（qm_keyst 刷新）');
   } catch (e) {
     console.warn('[qq] cookie 续期失败:', e.message);
   }
 }
 
-function maybeRenewQqCookie() {
-  if (renewalInflight) return;
-  const cookie = qqCookie();
-  if (!cookie) return;
-  const created = parseInt(cookieVal(cookie, 'musickey_createtime'), 10);
+// 参数化 cookie 快照而非回读 qqCookie()——后者会再次进入本函数形成
+// 无限互递归（renewalInflight 赋值在 await 之前，拦不住同步段）。
+// 触发键兼容 psrf_ 变体：只导出 psrf_musickey_createtime 的 cookie
+// 形态不能让续期永远判定「不在窗口」
+function maybeRenewQqCookie(cookie) {
+  if (renewalInflight || !cookie) return;
+  const created = parseInt(cookieVal(cookie, 'musickey_createtime'), 10)
+    || parseInt(cookieVal(cookie, 'psrf_musickey_createtime'), 10);
   if (!created) return;
   if (created + QQ_KEY_LIFETIME_SEC - Date.now() / 1000 >= QQ_RENEW_WINDOW_SEC) return;
   renewalInflight = renewQqCookie(cookie).finally(() => { renewalInflight = null; });

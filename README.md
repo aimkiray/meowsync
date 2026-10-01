@@ -23,14 +23,14 @@
 - **样式框架**: TailwindCSS
 - **音频播放**: Howler.js
 - **HTTP客户端**: Axios
-- **后端API**: NeteaseCloudMusicApi + Hono（单进程托管前端静态资源）
+- **后端API**: 自研 NetEase 客户端（weapi/eapi 加密通道）+ Hono（单进程托管前端静态资源）
 - **实时通信**: WebSocket（远程遥控 host/controller）
 - **字体**: Fusion Pixel
 
 ## 快速开始
 
 ### 环境要求
-- Node.js 20.3 或更高版本（推荐 22.x，与 Dockerfile 一致；音频代理依赖 `AbortSignal.any`）
+- Node.js `^20.19.0 || >=22.12.0`（与 package.json engines 一致；CJS 里 `require` ESM 共享模块需要此下限，推荐 Dockerfile 同款 24.x）
 - npm 包管理器
 
 ### 安装依赖
@@ -222,7 +222,7 @@ TRUST_PROXY=                              # 可选：设为 1 时采信 X-Forwar
 ## 配置说明
 
 ### API配置
-项目使用NeteaseCloudMusicApi提供音乐数据，支持：
+项目内置自研 NetEase 客户端提供音乐数据（网易云 weapi/eapi 双通道，替代原 NeteaseCloudMusicApi 依赖），支持：
 - 歌单搜索和详情获取
 - 歌曲URL获取和播放
 - 歌词获取和显示

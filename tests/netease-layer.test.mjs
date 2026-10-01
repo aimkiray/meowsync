@@ -10,6 +10,7 @@ const { ALLOWED_APIS } = require('../src/server/routes/music.js');
 const { pickByDuration } = require('../src/server/services/unlock/match.js');
 const { cookieToJson, cookieObjToString } = require('../src/server/services/netease/request.js');
 const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('../src/server/services/unlock/index.js');
+const { hasQqCookie } = require('../src/server/lib/qq.js');
 
 test('端点表覆盖白名单且名称双向一致', () => {
   for (const name of ALLOWED_APIS) {
@@ -55,4 +56,21 @@ test('cookieObjToString 键值均 encodeURIComponent', () => {
 test('端点 crypto 通道分布与上游一致（eapi 默认 / weapi 显式）', () => {
   const weapi = Object.keys(ENDPOINTS).filter(n => ENDPOINTS[n].crypto === 'weapi').sort();
   assert.deepEqual(weapi, ['album', 'artists', 'check_music', 'personalized', 'search_suggest', 'song_detail'].sort());
+});
+
+// 回归钉：qqCookie→maybeRenewQqCookie→qqCookie 曾互递归（cookie 非空即栈溢出，
+// 所有 QQ 功能在配了 QQ_COOKIE 的部署下静默全灭——恰是续期要保护的路径）
+test('qqCookie 非空路径不递归（惰性续期只读快照不回读）', () => {
+  const saved = { QQ_COOKIE: process.env.QQ_COOKIE, NEW_QQ_COOKIE: process.env.NEW_QQ_COOKIE };
+  // createtime 远在未来 → 在生命周期内不触发续期外呼
+  process.env.QQ_COOKIE = 'uin=o0123; musickey_createtime=9999999999; qm_keyst=abc; qqrefresh_token=rt';
+  delete process.env.NEW_QQ_COOKIE;
+  try {
+    assert.equal(hasQqCookie(), true);
+  } finally {
+    if (saved.QQ_COOKIE === undefined) delete process.env.QQ_COOKIE;
+    else process.env.QQ_COOKIE = saved.QQ_COOKIE;
+    if (saved.NEW_QQ_COOKIE === undefined) delete process.env.NEW_QQ_COOKIE;
+    else process.env.NEW_QQ_COOKIE = saved.NEW_QQ_COOKIE;
+  }
 });
