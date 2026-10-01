@@ -1,5 +1,6 @@
 // 歌单 id 谓词唯一真相源在 src/shared/predicates.js——
 // re-export 保持既有调用面（App/SongList/PlaylistPanel/WatchView 均从此导入）
+import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE } from '../shared/predicates.js'
 export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from '../shared/predicates.js'
 
 /** 歌曲是否 VIP 付费（App 与 SongList 共用同一谓词，避免两处过滤逻辑漂移） */
@@ -30,6 +31,40 @@ export function songSource(song) {
   if (song?.bilibili) return 'B站'
   if (song?.youtube) return 'YouTube'
   if (song?.qq) return 'QQ音乐'
+  return null
+}
+
+/**
+ * 回源标签：provider 对象优先、本站轨道 id 前缀兜底——镜像投影/旧持久化
+ * 形态可能缺 provider 对象但 id 仍在；网易云数字 id 也归有名（回源菜单文案）
+ */
+export function songSourceName(song) {
+  const id = String(song?.id ?? '')
+  if (song?.bilibili || BV_TRACK_ID_RE.test(id)) return 'B站'
+  if (song?.youtube || YT_TRACK_ID_RE.test(id)) return 'YouTube'
+  if (song?.qq || QQ_SONG_ID_RE.test(id)) return 'QQ音乐'
+  if (NETEASE_ID_RE.test(id)) return '网易云'
+  return null
+}
+
+/**
+ * 回源 URL：曲目在源站的原页面——B站视频页（含分P）、YouTube watch、
+ * QQ 单曲详情、网易云 song 页。与 songSourceName 同口径的对象优先/id 兜底
+ */
+export function songSourceUrl(song) {
+  if (!song) return null
+  const id = String(song.id ?? '')
+  const bvM = BV_TRACK_ID_RE.exec(id)
+  const bvid = song.bilibili?.bvid || bvM?.[1]
+  if (bvid) {
+    const page = +song.bilibili?.page || +bvM?.[2] || 0
+    return `https://www.bilibili.com/video/${bvid}${page > 1 ? `?p=${page}` : ''}`
+  }
+  const vid = song.youtube?.videoId || YT_TRACK_ID_RE.exec(id)?.[1]
+  if (vid) return `https://www.youtube.com/watch?v=${vid}`
+  const mid = song.qq?.mid || QQ_SONG_ID_RE.exec(id)?.[1]
+  if (mid) return `https://y.qq.com/n/ryqq/songDetail/${mid}`
+  if (NETEASE_ID_RE.test(id)) return `https://music.163.com/song?id=${id}`
   return null
 }
 
