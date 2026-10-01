@@ -1,0 +1,112 @@
+// 边界契约类型：API 包络 / Track / provider_data / 下载任务 / WS 遥控消息。
+// 纯类型文件——不产生运行时产物；JS 侧以 JSDoc `@type {import('../shared/types').X}`
+// 消费，本文件是阶段 4 TS 化的锚点（形状口径与 predicates/protocol/contracts 对齐）。
+
+/** 成功响应包络（服务端主导形态 {code:200, data}；少数端点平铺字段） */
+export interface ApiOk<T = unknown> {
+  code: 200;
+  data?: T;
+  [k: string]: unknown;
+}
+
+/** 失败响应包络（lib/http-error.js fail() 产出） */
+export interface ApiErr {
+  code: number;
+  message: string;
+  [k: string]: unknown;
+}
+
+export type ApiEnvelope<T = unknown> = ApiOk<T> | ApiErr;
+
+/** 跨源歌曲 id：网易云数字 | 'qq_<songmid>' | 'bv_<bvid>' | 'yt_<id>' | 'local_*' */
+export type SongId = string | number;
+
+/** QQ 源私有元数据（download_tasks.provider_data.qq → vkey filename 键） */
+export interface QqProviderData {
+  mediaMid?: string;
+  [k: string]: unknown;
+}
+
+export interface ProviderData {
+  qq?: QqProviderData;
+  [k: string]: unknown;
+}
+
+export interface Artist { name?: string; [k: string]: unknown }
+export interface Album { picUrl?: string; [k: string]: unknown }
+
+/** 轨道对象：网易云原生字段 + 各源私有挂载点（播放源/词源键全在其中） */
+export interface Track {
+  id: SongId;
+  name: string;
+  ar?: Artist[];
+  artists?: Artist[];
+  al?: Album;
+  album?: Album;
+  dt?: number;
+  duration?: number;
+  fee?: number;
+  privilege?: unknown;
+  neteaseId?: SongId;
+  qq?: QqProviderData;
+  bilibili?: { bvid?: string; cid?: number | string; [k: string]: unknown };
+  youtube?: { videoId?: string; [k: string]: unknown };
+  [k: string]: unknown;
+}
+
+export type DownloadTaskStatus =
+  | 'pending' | 'running' | 'completed' | 'failed'
+  | 'paused' | 'cancelled' | 'skipped';
+
+/** download_tasks 行（服务端持久化投影） */
+export interface DownloadTask {
+  id: number;
+  playlist_id: number;
+  song_id: string;
+  song_name: string;
+  status: DownloadTaskStatus;
+  bitrate?: number;
+  error?: string | null;
+  provider_data?: ProviderData | null;
+  [k: string]: unknown;
+}
+
+// ── WS 遥控（与 shared/protocol.js 常量一一对应）──────────────────────────
+
+export type RemoteControlType =
+  | 'play' | 'pause' | 'next' | 'prev' | 'seek' | 'volume' | 'play_song';
+
+/** controller→server→host */
+export interface RemoteControlMessage {
+  type: RemoteControlType;
+  payload?: number | string | null;
+}
+
+export interface RemoteSongSnapshot {
+  id: SongId;
+  name: string;
+  al: { picUrl: string };
+  ar: { name: string }[];
+}
+
+/** host→server→controller 的播放器状态广播 */
+export interface RemoteStatePayload {
+  isPlaying: boolean;
+  currentSong: RemoteSongSnapshot | null;
+  currentTime: number;
+  duration: number;
+  volume: number;
+  queue: RemoteSongSnapshot[];
+  queueIndex: number;
+}
+
+export type RemoteServerToHost =
+  | RemoteControlMessage
+  | { type: 'request_state' }
+  | { type: 'info'; payload: { controllers: number } };
+
+export type RemoteServerToController =
+  | { type: 'state_update'; payload: RemoteStatePayload }
+  | { type: 'host_joined' }
+  | { type: 'host_disconnected' }
+  | { type: 'host_absent' };

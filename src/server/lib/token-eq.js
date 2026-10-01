@@ -4,8 +4,11 @@
 const { createHash, timingSafeEqual } = require('crypto');
 
 function tokenMatches(provided, expected) {
-  const a = createHash('sha256').update(provided ?? '').digest();
-  const b = createHash('sha256').update(expected ?? '').digest();
+  // 空值对空值绝不命中：sha256('') === sha256('')，不挡空串会让
+  // 「expected 未配置 + provided 缺省」的调用静默放行
+  if (!provided || !expected) return false;
+  const a = createHash('sha256').update(String(provided)).digest();
+  const b = createHash('sha256').update(String(expected)).digest();
   return timingSafeEqual(a, b);
 }
 
