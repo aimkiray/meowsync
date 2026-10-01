@@ -38,7 +38,12 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
       (t.al && typeof t.al === 'object') ? (t.al.picUrl || t.al.pic_str || '') : '',
       t.dt || 0, t.qq?.mediaMid || '',
       t.bilibili?.bvid || '', t.bilibili?.cid || '', t.bilibili?.page || 0,
-      t.youtube?.videoId || '', t.neteaseId || ''
+      // 来源 title/author 入签：老镜像重传触发一次重写补齐——下载链的
+      // 歌词归属核验靠它们构造 verdict 签名
+      t.bilibili?.title || '', t.bilibili?.author || '',
+      t.youtube?.videoId || '',
+      t.youtube?.title || '', t.youtube?.author || '',
+      t.neteaseId || ''
     ]);
     const existing = playlistTracksRepo.listTracksByPlaylistId(row.id);
     const unchanged = existing.length === tracks.length

@@ -1,6 +1,6 @@
-const { createHash } = require('crypto');
 const { Hono } = require('hono');
 const lyricAiRepo = require('../repositories/lyricAi');
+const { parseLrcLines, lyricVerdictKey, judgeLyricLines } = require('../services/lyric-verify');
 const { parseJsonBody } = require('../lib/validate');
 const { aiLyricBody } = require('../../shared/contracts.js');
 const { fail } = require('../lib/http-error');
@@ -29,23 +29,6 @@ const inflightVerify = new Map();
 app.get('/ai/status', (c) => {
   return c.json({ code: 200, enabled: aiEnabled(), model: aiEnabled() ? AI_MODEL : null });
 });
-
-// 与前端 parseLyrics 同口径的 LRC 行解析（服务端无 ESM 共享，~15 行自洽）：
-// 返回 [{tag, text}]——tag 保留原始时间戳串，翻译重建时原样回贴
-function parseLrcLines(lrc) {
-  const out = [];
-  const tagRe = /\[(\d+):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
-  for (const line of String(lrc || '').split('\n')) {
-    const tags = [...line.matchAll(tagRe)];
-    if (!tags.length) continue;
-    const text = line.replace(tagRe, '')
-      .replace(/<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g, '')
-      .trim();
-    if (!text) continue;
-    for (const t of tags) out.push({ tag: t[0], text });
-  }
-  return out;
-}
 
 // meta 行重建为 [tag:value]——值里的内嵌括号剥掉，源 lrc 里形如
 // [ti:x [00:01] y] 的行否则会把幻影时间戳带进下发 tlyric
@@ -261,24 +244,13 @@ app.post('/ai/lyric-verify', async (c) => {
   if (error) return error;
   const id = String(body.id ?? '');
   if (!NETEASE_ID_BOUNDED_RE.test(id)) return fail(c, 400, '非法 songId');
-  // 进 prompt 的输入剥换行/方括号——标题作者与歌词原文都是不可信输入，
-  // 去掉结构字符至少让注入不能伪造消息边界/键控协议
-  const sanitizePrompt = (s) => String(s || '')
-    .replace(/[\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const sourceTitle = sanitizePrompt(body.sourceTitle).slice(0, 500);
-  const sourceAuthor = sanitizePrompt(body.sourceAuthor).slice(0, 200);
+  const sourceTitle = String(body.sourceTitle || '').trim();
+  const sourceAuthor = String(body.sourceAuthor || '').trim();
   if (!sourceTitle) return fail(c, 400, '缺少 sourceTitle');
   const signal = c.req.raw.signal;
+  const vkey = lyricVerdictKey(id, sourceTitle, sourceAuthor);
 
-  // 判定对象是「(词源, 来源视频, 模型) 三元组」而非词源本身：同一 neteaseId
-  // 可能被不同视频匹配到，A 视频的错配不能污染 B 视频的正常取用；换模型后
-  // 旧判定自动失效重判（避免旧模型的误判被永久固化）
-  const sig = createHash('sha1')
-    .update(`${sourceTitle.toLowerCase().trim()}|${sourceAuthor.toLowerCase().trim()}`)
-    .digest('hex').slice(0, 12);
-  const vkey = `${id}@${AI_MODEL}@${sig}`;
-
-  const verdictOf = () => lyricAiRepo.getLyricVerdict(vkey);
+  const verdictOf = () => lyricAiRepo.getVerdict(vkey, 'lyric');
   const cached = verdictOf();
   if (cached) return c.json({ code: 200, ok: !!cached.ok, cached: true });
   // 缓存未命中才吃配额
@@ -303,29 +275,12 @@ app.post('/ai/lyric-verify', async (c) => {
       // 没词可验——无词显示不算错配
       return c.json({ code: 200, ok: true, reason: 'no-lyric' });
     }
-    // 抽样而非全文：首 4 行抓歌名植入（很多歌词开头点题），中段 6 行看主题；
-    // 同文行（多时间戳副歌展开）去重，不浪费采样位
-    const seenSample = new Set();
-    const sample = [...lines.slice(0, 4), ...lines.slice(4).filter((_, i) => i % Math.max(1, Math.floor(lines.length / 6)) === 0)]
-      .map(l => sanitizePrompt(l.text).slice(0, 200))
-      .filter(t => t && !seenSample.has(t) && seenSample.add(t))
-      .slice(0, 10);
-
-    const ans = await askAiJson({
-      system: '你是音乐内容核验助手。给定来源音/视频的标题与作者，以及从音乐平台配到的歌词抽样，'
-        + '判断这份歌词是否明显属于另一首歌（完全不同的主题/内容/语言体系）。'
-        + '保守原则：只有「明显是别的歌」才判不符；拿不准、纯音乐标注、语言相符但主题难判都回 true。'
-        + '只输出 JSON {"ok":true|false}',
-      user: `来源标题：${sourceTitle}\n来源作者/频道：${sourceAuthor || '未知'}\n歌词抽样：\n${sample.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
-      maxTokens: 64,
-      signal,
-    });
-    if (ans == null || typeof ans.ok !== 'boolean') {
+    const ok = await judgeLyricLines({ vkey, lines, title: sourceTitle, author: sourceAuthor, signal });
+    if (ok === null) {
       // 模型没给判定 → 不缓存、不误伤，按「相符」放行
       return c.json({ code: 200, ok: true, inconclusive: true });
     }
-    lyricAiRepo.upsertLyricVerdict(vkey, ans.ok, sourceTitle.slice(0, 200));
-    return c.json({ code: 200, ok: ans.ok });
+    return c.json({ code: 200, ok });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
     console.error('[ai] lyric-verify 失败:', e?.message || e);

@@ -113,6 +113,33 @@ test('时长-only 命中：AI 复核否决后同 id 在后续串不再重问', a
   assert.equal(aiScript.length, 1);
 });
 
+test('组合查询名命中·艺人零交集 → 过 AI 复核（翻唱判 true 放行）', async () => {
+  reset();
+  // 'coverer Lemon' 组合串让任何叫 Lemon 的曲都 shareName 命中
+  apiScript = [[song(1, 'Lemon', 200000, '米津玄師')]];
+  aiScript = [{ match: true }];
+  const r = await matchNeteaseSong(['coverer Lemon', 'Lemon'], 200, 't', null, { title: 'Lemon covered', author: 'coverer' });
+  assert.equal(r.song.id, 1);
+  assert.equal(r.query, 'coverer Lemon');
+});
+
+test('组合名命中被否 → veto 拦阻后续裸名查询复活同一错配', async () => {
+  reset();
+  const wrong = song(1, 'Lemon', 200000, '别的歌手');
+  apiScript = [[wrong], [wrong]];   // 组合串与裸名串都搜回同一首错配
+  aiScript = [{ match: false }, { queries: [] }, { match: 0 }];
+  const r = await matchNeteaseSong(['coverer Lemon', 'Lemon'], 200, 't', null, { title: 'Lemon', author: 'coverer' });
+  assert.equal(r.song, null);       // 第二串 'Lemon' 名命中被 veto 拦住
+});
+
+test('组合查询名命中·艺人有交集 → 不过 AI（确定性放行）', async () => {
+  reset();
+  apiScript = [[song(1, 'Lemon', 200000, '米津玄師')]];
+  const r = await matchNeteaseSong(['米津玄師 Lemon', 'Lemon'], 200, 't', null, src);
+  assert.equal(r.song.id, 1);
+  assert.equal(aiScript.length, 0);  // 艺人重叠——零 AI 调用
+});
+
 test('再生批在兜底池截断窗口优先——启发式噪声挤不掉正主', async () => {
   reset();
   // 启发式串装满 12 条噪声（>10 截断窗），再生串搜出正主 id=99
