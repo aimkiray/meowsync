@@ -3,11 +3,9 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { tmpDataDir } from './helpers.mjs';
 
-process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'meowsync-test-'));
+process.env.DATA_DIR = tmpDataDir('meowsync-test-');
 const require = createRequire(import.meta.url);
 
 let songMetaRepo, lyricAiRepo;
@@ -48,4 +46,3 @@ test('lyricAi 判定缓存：vkey 键隔离、ok/detail 往返', () => {
   assert.equal(lyricAiRepo.getLyricVerdict('id@m2@sig1').ok, 1);
 });
 
-process.on('exit', () => { try { rmSync(process.env.DATA_DIR, { recursive: true, force: true }); } catch { /* */ } });

@@ -3,11 +3,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
+import { tmpDataDir } from './helpers.mjs';
 
-process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'meowsync-auth-test-'));
+process.env.DATA_DIR = tmpDataDir('meowsync-auth-test-');
 const require = createRequire(import.meta.url);
 
 let password, usersRepo, sessionsRepo, apiPath, authGate;

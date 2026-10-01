@@ -165,7 +165,7 @@
 <script>
 import { ref, computed } from 'vue'
 import { formatTime } from '../lib/format'
-import { songArtists } from '../lib/song'
+import { songArtists, songCoverUrl } from '../lib/song'
 import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 
@@ -240,10 +240,8 @@ export default {
   },
   emits: ['toggle-play', 'previous', 'next', 'update-volume', 'toggle-mute', 'toggle-shuffle', 'toggle-play-mode', 'open-watch', 'enter-fullscreen', 'seek'],
   setup(props, { emit }) {
-    // 封面三路兜底：picUrl / al.picUrl（cloudsearch）/ album.picUrl（legacy search 与详情态）防裂图
-    const coverUrl = computed(() =>
-      props.currentSong?.picUrl || props.currentSong?.al?.picUrl || props.currentSong?.album?.picUrl || ''
-    )
+    // 封面兜底收口在 lib/song.js:songCoverUrl（picUrl/al/album 三档）
+    const coverUrl = computed(() => songCoverUrl(props.currentSong))
 
     // 进度条拖拽状态：按下期间 UI 播放在这里走，不跟随 props.currentTime 抢
     const dragActive = ref(false)

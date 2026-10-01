@@ -47,8 +47,8 @@
               <span class="song-result-index-play"><PixelIcon name="play" :size="16" /></span>
             </span>
             <img
-              v-if="song.al?.picUrl || song.album?.picUrl"
-              :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+              v-if="songCoverUrl(song)"
+              :src="httpsCover(songCoverUrl(song))"
               :alt="song.name"
               class="song-result-cover"
               loading="lazy"
@@ -155,9 +155,10 @@
 <script>
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
-import { shareOrCopy } from '../lib/share'
+import { shareOrCopy, playlistShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
+import { songCoverUrl } from '../lib/song'
 import { formatTime } from '../lib/format'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -236,8 +237,8 @@ export default {
     })
 
     const sharePlaylist = async (playlist) => {
-      // 与 PlaylistPanel 同一链形态：view=songs&pl= 让接收端直落歌曲页
-      const shareUrl = `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
+      // 链形态与 PlaylistPanel 同一份（lib/share.js，含导入壳按引用分享分支）
+      const shareUrl = playlistShareUrl(playlist)
       const result = await shareOrCopy({
         title: `🎵 歌单：${playlist.name}`,
         text: `来看看这个歌单：${playlist.name}`,
@@ -269,6 +270,7 @@ export default {
 
     return {
       httpsCover: httpsCoverUrl,
+      songCoverUrl,
       adding,
       inLibrary,
       handleAdd,

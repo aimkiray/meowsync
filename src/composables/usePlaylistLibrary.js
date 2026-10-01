@@ -1,0 +1,480 @@
+import { ref, computed } from 'vue'
+import { musicApi } from '../api/music'
+import { downloadsApi } from '../api/downloads'
+import { readJSON, writeJSON } from '../lib/storage'
+import { toast } from '../lib/feedback'
+import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl } from '../lib/song'
+
+const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
+const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
+
+// 歌单库域：库 CRUD / 本地持久化 / selectPlaylist 单向同步合并 / 行级增删。
+//
+// deps（App 注入的跨域共享）：
+//   gates.select        — selectPlaylist 竞态闸（慢响应不得覆盖新选择）
+//   gates.mediaImport   — 外部导入闸（选单作废在途导入，导入也反向占住本闸）
+//   gates.preview       — id 预览闸（选单作废在途预览）
+//   playingPlaylistId   — 播放队列归属歌单 id（播放器域 ref；移除歌单时清归属）
+export function usePlaylistLibrary({ gates, playingPlaylistId }) {
+  const userPlaylists = ref([]) // 用户添加的歌单
+  const selectedPlaylist = ref(null)
+  const songs = ref([])
+  const loadingSongs = ref(false)
+  // 歌单下载徽章刷新信号：SongList 内子域下载任务删除后 bump 让英雄区计数重拉
+  const playlistDownloadsRefreshKey = ref(0)
+  const playlistSyncing = ref(false)
+
+  const getRemovedDefaultPlaylists = () => {
+    const removed = readJSON(REMOVED_DEFAULT_PLAYLISTS_KEY, [])
+    return Array.isArray(removed) ? removed.map(String) : []
+  }
+
+  const savePlaylistsToStorage = () => {
+    // 持久化时剥离大体积 tracks（selectedPlaylist 切回时会重新拉取详情），
+    // 本地内存态歌单（单曲分享/队列存盘）无法从接口重拉，tracks 必须保留
+    const toStore = userPlaylists.value.map(p => {
+      if (isLocalPlaylistId(p.id)) return p
+      // trackIds 是 detail 响应带进的完整成员表（千曲单 ~10KB+），客户端不读它——
+      // 与 lastRemoteIds 职责重复，持久化剥掉
+      const { tracks, trackIds, ...rest } = p
+      // addedTracks 瘦身到渲染+播放所需字段——接口返回的全对象（alia/嵌套 privilege 等）
+      // 单曲 ~2-3KB，长期累积会撞 localStorage 配额
+      if (Array.isArray(rest.addedTracks)) {
+        rest.addedTracks = rest.addedTracks.map(t => t && ({
+          // bilibili/neteaseId 是 B 站导入曲的播放源与歌词源——剥掉就退化成不可播对象
+          id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege,
+          bilibili: t.bilibili, neteaseId: t.neteaseId,
+          youtube: t.youtube, // YouTube 导入曲的播放源——与 bilibili/neteaseId 同理不可剥
+          qq: t.qq // QQ 导入曲同理：剥掉后播放/分享/词源键全退化
+        }))
+      }
+      return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
+    })
+    writeJSON(PLAYLISTS_STORAGE_KEY, toStore)
+  }
+
+  const loadPlaylistsFromStorage = () => {
+    const savedPlaylists = readJSON(PLAYLISTS_STORAGE_KEY)
+    if (Array.isArray(savedPlaylists)) {
+      // 过滤 null/无 id 的脏条目，避免后续 String(p.id) 访问抛异常；
+      // 同步字段若非数组（旧数据/手工改坏）会在合并/添加路径抛异常——load 时净化。
+      // healExternalAr：旧版导入曲的 ar 曾被网易云匹配艺人覆盖——按持久化的
+      // 频道/UP主名重建演唱者口径；al.picUrl 同口径自愈——视频封面是新口径
+      // （yt_ 由 videoId 推导、bv_ 吃持久化的 bilibili.cover，无此字段的旧
+      // bv_ 数据保持不动），存量导入曲加载即自愈
+      let healedAny = false
+      const healExternalAr = (t) => {
+        const ext = t && externalArtistName(t)
+        // 只在确实偏离口径时改写——无病曲不动引用，也不触发无意义回写
+        if (ext && !(t.ar?.length === 1 && t.ar[0]?.name === ext)) {
+          t.ar = [{ name: ext }]
+          healedAny = true
+        }
+        const extCover = t && externalCoverUrl(t)
+        // al 也可能是字符串形态（旧数据/上游简化对象）——只对对象形态自愈
+        if (extCover && t.al && typeof t.al === 'object' && t.al.picUrl !== extCover) {
+          t.al = { ...t.al, picUrl: extCover }
+          healedAny = true
+        }
+        return t
+      }
+      const validPlaylists = savedPlaylists
+        .filter(p => p && p.id != null)
+        .map(p => ({
+          ...p,
+          tracks: Array.isArray(p.tracks) ? p.tracks.map(healExternalAr) : p.tracks,
+          addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks.map(healExternalAr) : undefined,
+          removedTrackIds: Array.isArray(p.removedTrackIds) ? p.removedTrackIds : undefined,
+          lastRemoteIds: Array.isArray(p.lastRemoteIds) ? p.lastRemoteIds : undefined
+        }))
+      userPlaylists.value.push(...validPlaylists)
+      if (healedAny) savePlaylistsToStorage() // 自愈结果落盘——下次启动不再依赖重算
+      console.log('✅ 从本地存储加载歌单:', validPlaylists.length, '个')
+    }
+  }
+
+  const addPlaylistToLibrary = async (playlist) => {
+    try {
+      // 防御无 id 的脏数据（如详情接口返回空壳对象/null）进入歌单库
+      if (!playlist || playlist.id == null) {
+        console.warn('⚠️ 歌单数据无效，跳过添加')
+        return
+      }
+
+      // 检查是否已存在（确保ID类型一致）
+      const exists = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
+      if (exists) {
+        console.log('ℹ️ 歌单已存在:', exists.name)
+        return
+      }
+
+      // 确保歌单包含完整的tracks数据
+      let fullPlaylist = playlist
+      if (!playlist.tracks || playlist.tracks.length === 0) {
+        console.log('🔄 歌单缺少tracks数据，从服务器获取完整信息...')
+        try {
+          const detail = await musicApi.getPlaylistDetail(playlist.id)
+          // 详情可能为 null 或缺字段的空壳对象：与原始数据合并，保留原 id/name，杜绝 push(null)
+          fullPlaylist = detail ? { ...playlist, ...detail } : playlist
+          console.log('✅ 获取完整歌单数据成功，歌曲数量:', fullPlaylist.tracks?.length || 0)
+        } catch (error) {
+          console.error('❌ 获取完整歌单数据失败，使用原始数据:', error)
+          fullPlaylist = playlist
+        }
+      }
+
+      // await 期间同一歌单可能已被并行添加，push 前再查一次重（与 loadDefaultPlaylists 一致）
+      if (userPlaylists.value.some(p => String(p.id) === String(playlist.id))) {
+        console.log('ℹ️ 歌单已存在:', fullPlaylist.name)
+        return
+      }
+
+      userPlaylists.value.push(fullPlaylist)
+      savePlaylistsToStorage()
+      console.log('✅ 歌单已添加:', fullPlaylist.name)
+    } catch (error) {
+      console.error('❌ 添加歌单失败:', error)
+    }
+  }
+
+  const removePlaylistFromLibrary = (playlistId) => {
+    const index = userPlaylists.value.findIndex(p => String(p.id) === String(playlistId))
+    if (index > -1) {
+      const playlist = userPlaylists.value[index]
+      userPlaylists.value.splice(index, 1)
+
+      // 如果是默认歌单，记录到已移除列表中（统一存字符串，与 URL 参数类型一致）
+      if (playlist.isDefault) {
+        const removedIds = getRemovedDefaultPlaylists()
+        if (!removedIds.includes(String(playlistId))) {
+          removedIds.push(String(playlistId))
+          writeJSON(REMOVED_DEFAULT_PLAYLISTS_KEY, removedIds)
+        }
+      }
+
+      // 本地单可能有服务端镜像产物（镜像行+下载任务+文件）——通知服务端级联清；
+      // 失败仅留孤儿行，本地删除照常生效。single_song_ 壳从不镜像，不发空炮
+      if (isLocalPlaylistId(playlist.id) && !isSingleSongShellId(playlist.id)) {
+        downloadsApi.removeLocalMirror(playlist.id).catch(err =>
+          console.warn('镜像清理失败（留孤儿行）:', playlist.id, err?.message))
+      }
+
+      savePlaylistsToStorage()
+      console.log('✅ 歌单已移除:', playlist.name)
+
+      // 如果移除的是当前选中的歌单，清空选择
+      if (String(selectedPlaylist.value?.id) === String(playlistId)) {
+        selectedPlaylist.value = null
+        songs.value = []
+      }
+
+      // 若移除的是正在播放的歌单：快照保留（会话内续播不受影响——上一首/下一首
+      // 继续走 playingSongs，清空反而会让它们劫持到浏览列表）。只清归属 id，
+      // 否则持久化会一直写入无效 playingPlaylistId，刷新恢复时 find 落空
+      if (String(playingPlaylistId.value) === String(playlistId)) {
+        playingPlaylistId.value = null
+      }
+    }
+  }
+
+  const handlePlaylistDownloadsDeleted = (playlistId) => {
+    // playlistId 可能经路由/JSON 变成 string，统一 String 比较防静默失配
+    if (String(selectedPlaylist.value?.id) === String(playlistId)) {
+      playlistDownloadsRefreshKey.value += 1
+    }
+  }
+
+  const loadPlaylistById = async (id) => {
+    try {
+      console.log('🔍 加载歌单详情:', id)
+      const playlist = await musicApi.getPlaylistDetail(id)
+      return playlist
+    } catch (error) {
+      console.error('❌ 加载歌单详情失败:', error)
+      return null
+    }
+  }
+
+  // 歌单选择（请求序号守卫：快速连点时丢弃过期响应）
+  // 返回 true=选择生效且歌曲已就绪，false=被更新的选择抢占/加载失败；供 restorePlaybackState 判断是否继续
+  const selectPlaylist = async (playlist, { force = false, silent = false } = {}) => {
+    if (!playlist || playlist.id == null) return false
+    if (!force && String(selectedPlaylist.value?.id) === String(playlist.id)) return true
+
+    gates.mediaImport.invalidate() // 用户选了别的歌单——在途外部媒体解析回包不得抢播放/强跳视图
+    gates.preview.invalidate()     // 同上，作废在途的 id 预览（防回包强跳视图）
+    const myReq = gates.select.claim()
+    try {
+      // silent（手动同步复跑）：不闪 loading，行表直接热替换
+      if (!silent) loadingSongs.value = true
+      selectedPlaylist.value = playlist
+
+      console.log('🎵 加载歌单歌曲:', playlist.name)
+
+      // 本地内存态歌单（单曲分享/队列存盘）没有接口数据——直接用内嵌 tracks
+      if (isLocalPlaylistId(playlist.id)) {
+        songs.value = playlist.tracks || []
+        console.log('✅ 临时歌单加载完成，共', songs.value.length, '首')
+      } else {
+        // 对于正常歌单，从服务器重新获取最新的歌单信息和歌曲数据
+        console.log('🔄 从服务器获取最新歌单数据...')
+        const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
+        if (!gates.select.isCurrent(myReq)) return false // 已被更新的选择取代，丢弃过期数据
+        const fetchedTracks = fullPlaylist?.tracks || []
+        // 读库对象而非调用方传入的 playlist——搜索结果/stub 打开同一库中单时
+        // 参数对象上没有 addedTracks/removedTrackIds（视图会丢追加曲且 trackCount 被回写成远端值）
+        const libPl = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
+        // 空拉取防御：上游抖动/接口错误返空时照常合并会整批净化墓碑+清同步基线
+        //（不可逆数据丢失）——歌单声称有曲却拉到空 = 按失败处理（服务端 playlist-sync 同款判定）
+        if (!fetchedTracks.length && (
+          (fullPlaylist?.trackCount ?? 0) > 0
+          || (fullPlaylist?.trackIds?.length ?? 0) > 0
+          || (libPl?.lastRemoteIds?.length ?? 0) > 0
+        )) {
+          throw new Error('歌单曲目接口返回为空')
+        }
+        const fetchedIds = new Set(fetchedTracks.map(t => String(t.id)))
+        // 权威远端成员集：trackIds 是 detail 响应自带的完整成员表；
+        // fetchedTracks 可能被分页/漂移截断——墓碑净化与同步基线都按权威集判，
+        // 否则截断页会把"还在远端"的墓碑误净化、把半截列表记成基线
+        const authoritativeIds = new Set(
+          (fullPlaylist?.trackIds?.length ? fullPlaylist.trackIds : fetchedTracks)
+            .map(t => String(t.id))
+        )
+        // 单向同步合并：远端曲 − 本地墓碑 + 本地追加排尾
+        const removedSet = new Set((libPl?.removedTrackIds ?? playlist.removedTrackIds ?? []).map(String))
+        // 墓碑净化：远端已不含的墓碑剪掉（远端删曲后墓碑失效；远端重加同 id 自然复活 = 镜像语义）
+        const keptRemoved = [...removedSet].filter(id => authoritativeIds.has(id))
+        // 本地追加曲目（addedTracks）排在远端曲目尾；撞 id 的以远端为准自然消歧——
+        // 对 fetchedIds 消歧而非权威集：远端有但本页没拉到的曲保留追加条目仍能渲染
+        const addedTracks = (libPl?.addedTracks ?? playlist.addedTracks ?? [])
+          .filter(t => t && !fetchedIds.has(String(t.id)))
+        if (libPl) {
+          if (removedSet.size !== keptRemoved.length) libPl.removedTrackIds = keptRemoved
+          // 净化回写：远端已含的追加条目永久清掉，堵幻影持久化/僵尸复活通道
+          if (libPl.addedTracks && libPl.addedTracks.length !== addedTracks.length) {
+            libPl.addedTracks = addedTracks
+          }
+          // 同步基线：最近一次远端成员集——手动同步 diff/墓碑恢复判重都靠它
+          libPl.lastRemoteIds = [...authoritativeIds]
+          libPl.lastSyncedAt = Date.now()
+        }
+        const visibleTracks = fetchedTracks.filter(t => !removedSet.has(String(t.id)))
+        songs.value = [...visibleTracks, ...addedTracks]
+        console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
+
+        // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
+        // 本地增删（addedTracks/墓碑）要计入 trackCount——远端计数不含它们
+        // 剥掉 playlist 参数上的同步键——传入的陈旧快照不能回退 libPl 刚写的值
+        const { addedTracks: _a, removedTrackIds: _r, lastRemoteIds: _l, lastSyncedAt: _s, ...plBase } = playlist
+        const merged = { ...plBase, ...(fullPlaylist || {}) }
+        const localDelta = addedTracks.length - keptRemoved.length
+        if (localDelta) {
+          // 基数取实际拉到的行数——远端 trackCount 是展示计数会滞后
+          merged.trackCount = Math.max(0, fetchedTracks.length + localDelta)
+        }
+        // 快照也带基线：搜索结果直开的非库歌单没有 libPl，
+        // syncPlaylist 的 `|| pl` 回退靠它做增量 diff
+        merged.lastRemoteIds = [...authoritativeIds]
+        merged.lastSyncedAt = Date.now()
+        if (!libPl) {
+          // 非库预览单：merged 快照自身就是存储——净化后的墓碑/追加要随它传下去。
+          // 剥离不带（plBase 剥键是防陈旧快照回退 libPl 刚写的值），非库单没有
+          // libPl 可挡——丢了就是「本次同步消费一次墓碑，二次同步复活已删曲」
+          merged.removedTrackIds = keptRemoved
+          merged.addedTracks = addedTracks
+        }
+        selectedPlaylist.value = merged
+
+        // 更新本地歌单库中的数据
+        const playlistIndex = userPlaylists.value.findIndex(p => String(p.id) === String(playlist.id))
+        if (playlistIndex !== -1) {
+          // addedTracks 是库对象自己的键（fullPlaylist 没有）——展开合并天然保留
+          userPlaylists.value[playlistIndex] = {
+            ...userPlaylists.value[playlistIndex],
+            ...merged
+          }
+          savePlaylistsToStorage()
+          console.log('✅ 已更新本地歌单数据')
+        }
+      }
+      return true
+    } catch (error) {
+      if (!gates.select.isCurrent(myReq)) return false
+      console.error('❌ 加载歌曲失败:', error)
+      // 复位选中态：否则再次点击同一歌单会被“已选中”提前返回，永远无法重试；
+      // silent 是手动同步复跑——失败保留旧视图，不清空已渲染的行表
+      if (!silent) {
+        selectedPlaylist.value = null
+        songs.value = []
+      }
+      return false
+    } finally {
+      // 仅最新请求负责复位 loading——silent 同步也要复位：它可能顶掉了置起
+      // loading 的非 silent 请求，那个请求已被抢占不会再来收尾
+      if (gates.select.isCurrent(myReq)) loadingSongs.value = false
+    }
+  }
+
+  // 当前选中单是否已在库（hero「收藏歌单」显隐依据）
+  const selectedPlaylistInLibrary = computed(() =>
+    !!selectedPlaylist.value
+      && userPlaylists.value.some(p => String(p.id) === String(selectedPlaylist.value.id)))
+
+  let collectingPl = false
+  const collectSelectedPlaylist = async () => {
+    const pl = selectedPlaylist.value
+    if (!pl || pl.id == null || isLocalPlaylistId(pl.id)) return
+    if (selectedPlaylistInLibrary.value || collectingPl) return // 在途闸：双击不重复 toast
+    collectingPl = true
+    try {
+      await addPlaylistToLibrary(pl)
+      // 按捕获的 pl.id 直查库——await（空 tracks 会 refetch）期间用户切单
+      // 不能让「当前选中」computed 把真实的入库成功误报成失败
+      if (userPlaylists.value.some(p => String(p.id) === String(pl.id))) {
+        toast(`已收藏《${pl.name}》到歌单库`, 'success')
+      } else {
+        toast('收藏失败', 'error')
+      }
+    } finally {
+      collectingPl = false
+    }
+  }
+
+  // 追加核心：pl 必须是歌单库对象（远端 merge 快照上的写入不落库）。
+  // 返回 'restored' | 'added' | 'exists' | 'invalid'——toast/关窗由调用方决定
+  const appendSongToLibraryPlaylist = (pl, song) => {
+    if (!song || song.id == null || !pl || pl.id == null) return 'invalid'
+    const sid = String(song.id)
+    // 命中墓碑 = 恢复被本地移除的远端曲：清墓碑即可，不进 addedTracks（曲归远端所有）。
+    // 但只在远端仍含该曲时（lastRemoteIds 基线命中）——远端已删的陈旧墓碑清了也恢复不了，
+    // 那种情况应落入常规添加分支进 addedTracks
+    const remoteHas = (pl.lastRemoteIds || []).map(String).includes(sid)
+    if ((pl.removedTrackIds || []).map(String).includes(sid) && remoteHas) {
+      pl.removedTrackIds = pl.removedTrackIds.filter(id => String(id) !== sid)
+      pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1 // 与 added 支路同兜底
+      if (String(selectedPlaylist.value?.id) === String(pl.id)) {
+        songs.value = [...songs.value, { ...song }]
+        if (selectedPlaylist.value !== pl) {
+          selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: pl.trackCount }
+        }
+      }
+      savePlaylistsToStorage()
+      return 'restored'
+    }
+    const inList = (list) => (list || []).some(t => t && String(t.id) === sid)
+    // lastRemoteIds 是远端曲基线——开过单的歌单能拦下「远端已有」的幻影添加；
+    // 墓碑曲会先走上面的恢复分支，不会误进这里被拒
+    if (inList(pl.tracks) || inList(pl.addedTracks) || remoteHas) return 'exists'
+    const entry = { ...song }
+    // 正打开着这张单——行表即时追加，不等下次拉取。
+    // 本地单必须走这里：selectPlaylist 的 `songs = pl.tracks` 共享引用会被
+    // 下面的 [...] 重赋值断开，不追加则本会话内该单永远少这首
+    const isOpenTarget = String(selectedPlaylist.value?.id) === String(pl.id)
+    if (isLocalPlaylistId(pl.id)) {
+      pl.tracks = [...(pl.tracks || []), entry]
+    } else {
+      pl.addedTracks = [...(pl.addedTracks || []), entry]
+    }
+    pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1
+    if (isOpenTarget) {
+      songs.value = [...songs.value, entry]
+      // 远端单的 selectedPlaylist 是 merge 快照（非库对象代理），hero 计数手动同步
+      if (selectedPlaylist.value !== pl) {
+        selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: pl.trackCount }
+      }
+    }
+    savePlaylistsToStorage()
+    return 'added'
+  }
+
+  // 从歌单移除：本地单剪 tracks；远端单的本地追加曲剪 addedTracks；
+  // 远端单的原生曲写 removedTrackIds 墓碑——否则下次单向同步（拉取合并）会复活它。
+  // 纯库视图编辑：不动播放队列/当前曲（队列是快照语义）
+  const removeSongFromPlaylist = (song) => {
+    const pl = selectedPlaylist.value
+    if (!song || song.id == null || !pl || pl.id == null) return
+    // 读写都落库对象——selectedPlaylist 是 merge 快照，写它会丢持久化
+    const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id)) || pl
+    const sid = String(song.id)
+    if (isLocalPlaylistId(libPl.id)) {
+      libPl.tracks = (libPl.tracks || []).filter(t => String(t.id) !== sid)
+    } else if ((libPl.addedTracks || []).some(t => String(t.id) === sid)) {
+      libPl.addedTracks = libPl.addedTracks.filter(t => String(t.id) !== sid)
+      // 远端在本地追加后也收录了同 id 时，光删追加下次同步会被远端副本复活——补墓碑
+      if ((libPl.lastRemoteIds || []).map(String).includes(sid)) {
+        libPl.removedTrackIds = [...(libPl.removedTrackIds || []), sid]
+      }
+    } else {
+      const removed = libPl.removedTrackIds || []
+      if (!removed.map(String).includes(sid)) libPl.removedTrackIds = [...removed, sid]
+    }
+    libPl.trackCount = Math.max(0, (libPl.trackCount ?? songs.value.length) - 1)
+    songs.value = songs.value.filter(t => String(t.id) !== sid)
+    if (selectedPlaylist.value !== libPl) {
+      selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: libPl.trackCount }
+    }
+    savePlaylistsToStorage()
+    toast(`已从《${libPl.name}》移除「${song.name}」`, 'success')
+  }
+
+  // 手动同步：静默重拉远端歌单并报告增量。每次拉取都刷新 lastRemoteIds 基线，
+  // 故 diff 的是「上次同步以来」的净变化——单向语义：只收远端增量，本地增删不回传
+  const syncPlaylist = async () => {
+    const pl = selectedPlaylist.value
+    if (!pl || pl.id == null || isLocalPlaylistId(pl.id) || playlistSyncing.value) return
+    const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id)) || pl
+    const before = new Set((libPl.lastRemoteIds || []).map(String))
+    playlistSyncing.value = true
+    const ok = await selectPlaylist(libPl, { force: true, silent: true })
+    playlistSyncing.value = false
+    if (!ok) {
+      // 被更新的选择抢占（同步途中用户点了别的歌单）≠ 真失败——不报错
+      if (String(selectedPlaylist.value?.id) === String(pl.id)) {
+        toast('同步失败：远端歌单暂时拉不到', 'error')
+      }
+      return
+    }
+    // 用户中途换了单——diff 报告没有意义，静默收
+    if (String(selectedPlaylist.value?.id) !== String(pl.id)) return
+    // after 读 selectedPlaylist 的新 merged——非库预览单的新基线只写在那里
+    // （libPl 的 `|| pl` 回退拿到的是旧快照对象，重读它恒等于 before）
+    const after = new Set((selectedPlaylist.value.lastRemoteIds || []).map(String))
+    const added = [...after].filter(id => !before.has(id)).length
+    const gone = [...before].filter(id => !after.has(id)).length
+    if (!added && !gone) {
+      toast('已同步：与远端一致', 'info')
+    } else {
+      const parts = []
+      if (added) parts.push(`新增 ${added} 首`)
+      if (gone) parts.push(`远端移除 ${gone} 首`)
+      toast(`已同步：${parts.join('，')}`, 'success')
+    }
+  }
+
+  return {
+    // state
+    userPlaylists,
+    selectedPlaylist,
+    songs,
+    loadingSongs,
+    playlistSyncing,
+    playlistDownloadsRefreshKey,
+    // 持久化
+    savePlaylistsToStorage,
+    loadPlaylistsFromStorage,
+    getRemovedDefaultPlaylists,
+    // 库 CRUD
+    addPlaylistToLibrary,
+    removePlaylistFromLibrary,
+    handlePlaylistDownloadsDeleted,
+    loadPlaylistById,
+    collectSelectedPlaylist,
+    selectedPlaylistInLibrary,
+    // 选择与同步
+    selectPlaylist,
+    appendSongToLibraryPlaylist,
+    removeSongFromPlaylist,
+    syncPlaylist,
+  }
+}

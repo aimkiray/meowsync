@@ -18,10 +18,7 @@ let fetchPlayerImpl = async () => ({ streamingData: {} });
 let searchImpl = async () => [];
 let pickImpl = () => [];
 
-const seed = (path, exports) => {
-  const p = require.resolve(path);
-  require.cache[p] = { id: p, filename: p, loaded: true, exports };
-};
+import { seed } from './helpers.mjs';
 seed('../src/server/lib/youtube.js', {
   fetchPlayer: (...a) => fetchPlayerImpl(...a),
   innertubeSearch: (...a) => searchImpl(...a),

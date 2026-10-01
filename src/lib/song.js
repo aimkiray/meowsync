@@ -26,6 +26,19 @@ export function songArtists(song) {
   return list.map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
 }
 
+// 封面统一兜底：provider 曲封面在 al.picUrl；网易云曲另有顶层 picUrl /
+// album.picUrl 形态——展示侧收口一条，比逐处 || 链少漂移
+export function songCoverUrl(song) {
+  return song?.picUrl || song?.al?.picUrl || song?.album?.picUrl || ''
+}
+
+// 「VIP 隐藏开关」过滤谓词（App.vue filteredSongs 与 SongList 共用——
+// 此前两份手写副本）：showVip 时全量；否则滤掉 VIP 且当前凭据不可播的曲
+export function visibleSongs(list, showVip, caps) {
+  if (showVip) return list
+  return (list || []).filter(song => !isVipUnplayable(song, caps))
+}
+
 /** 导入来源标签：youtube/bilibili/qq 字段即持久化的来源凭据（行内小牌用） */
 export function songSource(song) {
   if (song?.bilibili) return 'B站'

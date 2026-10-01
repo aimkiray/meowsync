@@ -9,10 +9,7 @@ let aiScript = [];
 let verdictRows = {};
 const writes = [];
 
-const seed = (path, exports) => {
-  const p = require.resolve(path);
-  require.cache[p] = { id: p, filename: p, loaded: true, exports };
-};
+import { seed } from './helpers.mjs';
 let askCalls = 0;
 let aiOn = true;
 seed('../src/server/lib/ai.js', {

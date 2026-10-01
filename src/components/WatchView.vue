@@ -147,8 +147,8 @@
                     <template v-else>{{ index + 1 }}</template>
                   </span>
                   <img
-                    v-if="song.al?.picUrl || song.album?.picUrl"
-                    :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+                    v-if="songCoverUrl(song)"
+                    :src="httpsCover(songCoverUrl(song))"
                     :alt="song.name"
                     class="watch-queue-thumb"
                   />
@@ -309,8 +309,8 @@
               @keydown.space.prevent="$emit('play-song', song, relatedSongs)"
             >
               <img
-                v-if="song.al?.picUrl || song.album?.picUrl"
-                :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+                v-if="songCoverUrl(song)"
+                :src="httpsCover(songCoverUrl(song))"
                 :alt="song.name"
                 class="watch-queue-thumb"
               />
@@ -342,11 +342,11 @@ import { usePagedList } from '../composables/usePagedList.js'
 import { musicApi } from '../api/music'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
-import { shareOrCopy } from '../lib/share'
+import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
-import { songSourceUrl, songSourceName } from '../lib/song'
+import { songSourceUrl, songSourceName, songCoverUrl } from '../lib/song'
 
 export default {
   name: 'WatchView',
@@ -414,9 +414,7 @@ export default {
     })
     const dragIndex = ref(-1)
 
-    const coverUrl = computed(() =>
-      props.currentSong?.al?.picUrl || props.currentSong?.album?.picUrl || ''
-    )
+    const coverUrl = computed(() => songCoverUrl(props.currentSong))
     const artistText = computed(() =>
       (props.currentSong?.ar || props.currentSong?.artists || [])
         .map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
@@ -652,14 +650,8 @@ export default {
     const shareSong = async () => {
       const song = props.currentSong
       if (!song) return
-      // B 站导入曲的分享链是 ?bili=BVxxx、YouTube 是 ?yt=<id>、QQ 是 ?qq=<mid>——?song= 只认网易云数值 id；分P带 p 参数
-      const shareUrl = song.bilibili?.bvid
-        ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
-        : song.youtube?.videoId
-          ? `${window.location.origin}/?yt=${song.youtube.videoId}&view=watch`
-          : song.qq?.mid
-            ? `${window.location.origin}/?qq=${song.qq.mid}&view=watch`
-            : `${window.location.origin}/?song=${song.id}&view=watch`
+      // 链形态（?bili/?yt/?qq/?song + view=watch 直达）统一在 lib/share.js
+      const shareUrl = songShareUrl(song)
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistText.value}`,
         text: `来听听这首歌：${song.name} - ${artistText.value}`,
@@ -694,6 +686,7 @@ export default {
       formatDuration,
       formatTime,
       httpsCover,
+      songCoverUrl,
       TABS,
       setTab,
       moveTab,
