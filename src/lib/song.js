@@ -1,6 +1,6 @@
 // 歌单 id 谓词唯一真相源在 src/shared/predicates.js——
 // re-export 保持既有调用面（App/SongList/PlaylistPanel/WatchView 均从此导入）
-import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE } from '../shared/predicates.js'
+import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE, YT_ID_RE } from '../shared/predicates.js'
 export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from '../shared/predicates.js'
 
 /** 歌曲是否 VIP 付费（App 与 SongList 共用同一谓词，避免两处过滤逻辑漂移） */
@@ -70,7 +70,7 @@ export function songSourceUrl(song) {
 
 /**
  * 外部导入曲的演唱者口径：归真实上传者——YouTube=频道名、B站=UP主名，
- * 不用匹配到的网易云艺人（导入的是「这个视频的演唱」，matched 只供封面/词源）。
+ * 不用匹配到的网易云艺人（导入的是「这个视频的演唱」，matched 只供词源与封面兜底）。
  * 服务端 resolve 已给 authorClean（剥 ' - Topic'/'VEVO' 后缀）；旧持久化曲
  * 只有原始 author——本地同口径再剥一次，存量数据加载时自愈
  */
@@ -85,4 +85,15 @@ export function externalArtistName(song) {
   }
   if (song?.bilibili) return song.bilibili.author || 'Bilibili'
   return null // qq 曲的 ar 本身就是真实元数据，不走此口径
+}
+
+// 视频导入曲的「视频封面」口径：yt_ 可由 videoId 纯推导（hqdefault 恒存在，
+// maxresdefault 在无高清缩略图的视频上 404 不能用）；bv_ 无推导路径，吃
+// 导入时落库的 bilibili.cover（旧数据没有则返回 null 走不动）；qq_ 的
+// picUrl 本就是自家封面，不走此口径
+export function externalCoverUrl(song) {
+  const id = String(song?.youtube?.videoId || '')
+  if (YT_ID_RE.test(id)) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+  const cover = String(song?.bilibili?.cover || '')
+  return /^https?:\/\//i.test(cover) ? cover : null
 }
