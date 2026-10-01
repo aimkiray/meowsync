@@ -103,7 +103,7 @@
           <div v-if="queue.length === 0" class="watch-empty">队列为空喵~</div>
           <template v-else>
             <div
-              v-for="(song, index) in queue"
+              v-for="(song, index) in queueRows"
               :key="queueKeyOf(song)"
               class="queue-row"
               :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--played': index < currentQueueIndex, 'queue-row--dragging': dragIndex === index }"
@@ -161,6 +161,14 @@
                 @click.stop="$emit('add-to-playlist', song)"
               ><PixelIcon name="plus" :size="14" /></button>
             </div>
+            <!-- 渐进渲染哨兵：千曲队列不一次渲全——前缀窗保全局下标语义
+                 （drag/move/jump/remove 全是全局 index），IO 或点按扩窗 -->
+            <button
+              v-if="queueHasMore"
+              :ref="bindQueueSentinel"
+              class="ink-btn ink-btn--ghost ink-btn--sm watch-queue-more"
+              @click="loadMoreQueue()"
+            >加载更多 · {{ queueRendered }} / {{ queue.length }}</button>
           </template>
 
           <div class="watch-queue-foot" v-if="queue.length">
@@ -309,6 +317,7 @@
 
 <script>
 import { ref, computed, watch, nextTick } from 'vue'
+import { usePagedList } from '../composables/usePagedList.js'
 import { musicApi } from '../api/music'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -350,6 +359,19 @@ export default {
   setup(props, { emit }) {
     const queueContainer = ref(null)
     const lyricContainer = ref(null)
+
+    // 待播队列渐进渲染窗：前缀窗保 index==全局下标（拖拽/jump/remove 语义不破）；
+    // 快照语义不挂 resetWhen——队列替换/增删不回卷，centerCurrentRow 前
+    // ensureRendered 物化目标行。pageSize 300：队列行远轻于曲目行
+    const {
+      rows: queueRows, hasMore: queueHasMore, renderedCount: queueRendered,
+      loadMore: loadMoreQueue, ensureRendered: queueEnsureRendered,
+      bindSentinel: bindQueueSentinel,
+    } = usePagedList({
+      source: computed(() => props.queue),
+      pageSize: 300,
+      scrollRoot: () => queueContainer.value,
+    })
 
     // 歌词字号：本机偏好存 localStorage（不像时间校准那样随歌曲入库）。
     // CSS 变量 --lyric-fs 挂在列表上，当前行/译文用 calc 相对值随动
@@ -492,8 +514,12 @@ export default {
         const el = lyricContainer.value?.querySelector(`[data-lyric-index="${props.currentLyricIndex}"]`)
         el?.scrollIntoView({ block: 'center' })
       } else {
-        const el = queueContainer.value?.querySelector('.queue-row--current')
-        el?.scrollIntoView({ block: 'center' })
+        // 当前行可能在渲染窗外——先扩窗物化再定位（nextTick 等 DOM 落地）
+        queueEnsureRendered(currentQueueIndex.value)
+        nextTick(() => {
+          const el = queueContainer.value?.querySelector('.queue-row--current')
+          el?.scrollIntoView({ block: 'center' })
+        })
       }
     }
 
@@ -612,6 +638,11 @@ export default {
     return {
       queueContainer,
       lyricContainer,
+      queueRows,
+      queueHasMore,
+      queueRendered,
+      loadMoreQueue,
+      bindQueueSentinel,
       lyricFontSize,
       LYRIC_FS_MIN,
       LYRIC_FS_MAX,
@@ -884,6 +915,12 @@ export default {
   display: flex;
   gap: 8px;
   padding: 12px 4px; /* 底距对齐上距——末行按钮与滚动区下缘同距呼吸 */
+}
+
+/* 队列渐进渲染哨兵：居中 ghost 键 */
+.watch-queue-more {
+  display: flex;
+  margin: 8px auto 0;
 }
 
 .watch-autoplay {

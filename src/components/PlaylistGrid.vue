@@ -1,7 +1,7 @@
 <template>
   <!-- 搜索结果页（粉纸画布）：上"歌曲"发丝行、下"歌单"纸面卡片。
        点击卡片=打开试听（不入库），+ 收藏=收进侧栏歌单库 -->
-  <div class="playlist-grid-wrap">
+  <div ref="wrapEl" class="playlist-grid-wrap">
     <header class="grid-head">
       <div class="grid-head-text">
         <p class="pg-label">search results</p>
@@ -69,6 +69,14 @@
             @click.stop="$emit('add-to-playlist', song)"
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
+        <!-- 单曲深挖：服务端翻页（cloudsearch offset+songCount）——
+             20 首封顶的时代结束；QQ 源结果（songTotal=null）不亮此键 -->
+        <button
+          v-if="songTotal != null && songs.length < songTotal"
+          class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
+          :disabled="songLoadingMore"
+          @click="$emit('load-more-songs')"
+        >{{ songLoadingMore ? '加载中喵…' : `加载更多歌曲 · ${songs.length} / ${songTotal}` }}</button>
       </section>
 
       <section v-if="results.length" class="result-section">
@@ -78,7 +86,7 @@
         </div>
         <div class="playlist-grid">
           <div
-            v-for="playlist in results"
+            v-for="playlist in pagedResults"
             :key="playlist.id"
             class="grid-card"
           >
@@ -126,6 +134,13 @@
             </div>
           </div>
         </div>
+        <!-- 渐进渲染哨兵：IO 命中或点按扩窗（歌单卡上限 100，40/批） -->
+        <button
+          v-if="gridHasMore"
+          :ref="bindSentinel"
+          class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
+          @click="loadMoreGrid()"
+        >加载更多 · {{ gridRendered }} / {{ results.length }}</button>
       </section>
 
       <div class="grid-foot">
@@ -136,7 +151,8 @@
 </template>
 
 <script>
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { usePagedList } from '../composables/usePagedList.js'
 import { shareOrCopy } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
@@ -157,6 +173,15 @@ export default {
       type: Array,
       default: () => []
     },
+    // 服务端分页契约：null=本批不可深挖（QQ 源）；数字=上游 songCount
+    songTotal: {
+      type: Number,
+      default: null
+    },
+    songLoadingMore: {
+      type: Boolean,
+      default: false
+    },
     currentSong: {
       type: Object,
       default: null
@@ -170,7 +195,7 @@ export default {
       default: false
     }
   },
-  emits: ['open', 'add', 'close', 'play-song', 'add-to-playlist'],
+  emits: ['open', 'add', 'close', 'play-song', 'add-to-playlist', 'load-more-songs'],
   setup(props, { emit }) {
     const httpsCoverUrl = httpsCover
     // 添加中的歌单 id：立即禁用按钮防连点，10s 兜底清（父组件入库后由 watch 提前清）
@@ -227,6 +252,19 @@ export default {
 
     const formatSongDuration = (song) => formatTime((song.dt || song.duration || 0) / 1000)
 
+    // 歌单卡渐进渲染窗：搜索结果一次换整块 results（新查询=新引用=身份变化），
+    // 故 resetWhen 直接认数组引用——这不是 silent 刷新场景，回卷正确
+    const wrapEl = ref(null)
+    const {
+      rows: pagedResults, hasMore: gridHasMore, renderedCount: gridRendered,
+      loadMore: loadMoreGrid, bindSentinel,
+    } = usePagedList({
+      source: computed(() => props.results),
+      pageSize: 40,
+      resetWhen: () => props.results,
+      scrollRoot: () => wrapEl.value,
+    })
+
     return {
       httpsCover: httpsCoverUrl,
       adding,
@@ -235,7 +273,13 @@ export default {
       sharePlaylist,
       songArtist,
       songAlbum,
-      formatSongDuration
+      formatSongDuration,
+      wrapEl,
+      pagedResults,
+      gridHasMore,
+      gridRendered,
+      loadMoreGrid,
+      bindSentinel,
     }
   }
 }
@@ -249,6 +293,12 @@ export default {
   height: 100%;
   overflow-y: auto;
   scrollbar-gutter: stable;
+}
+
+/* 歌单卡渐进渲染哨兵：居中 ghost 键 */
+.grid-more {
+  display: flex;
+  margin: 14px auto 0;
 }
 
 /* 页头：等宽微标签 + 大字标题 + 发丝方键关闭 */

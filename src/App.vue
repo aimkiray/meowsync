@@ -88,6 +88,8 @@
           v-else-if="centerView === 'search'"
           :results="searchResults"
           :songs="searchSongResults"
+          :song-total="searchSongTotal"
+          :song-loading-more="searchSongLoadingMore"
           :current-song="currentSong"
           :user-playlists="userPlaylists"
           :loading="searching"
@@ -96,6 +98,7 @@
           @play-song="openWatchSearchSong"
           @add-to-playlist="openAddToPlaylist"
           @close="closeSearchView"
+          @load-more-songs="loadMoreSearchSongs"
         />
         <!-- YTM watch 播放页：点单曲进入；歌词/待播/相关都在页内右栏，不遮主区 -->
         <WatchView
@@ -359,6 +362,12 @@ export default {
     const loading = ref(false)
     const loadingSongs = ref(false)
     const searchResults = ref([]) // 搜索结果
+    const searchSongResults = ref([]) // 单曲搜索结果（与歌单结果同区展示）
+    // 单曲搜索深挖态：query/total 驱动 PlaylistGrid 的「加载更多」键；
+    // total=null 表示本批结果不可深挖（QQ 搜索等无分页源）
+    const searchSongQuery = ref('')
+    const searchSongTotal = ref(null)
+    const searchSongLoadingMore = ref(false)
     const userPlaylists = ref([]) // 用户添加的歌单
     const selectedPlaylist = ref(null)
     const songs = ref([])
@@ -404,7 +413,6 @@ export default {
     const centerView = ref('home') // 'home' | 'songs' | 'search' | 'watch' | 'downloads'
     const sidebarOpen = ref(false) // 移动端歌单库抽屉
     const searching = ref(false) // 仅驱动搜索结果网格的加载态（勿与歌单库 loading 混用）
-    const searchSongResults = ref([]) // 单曲搜索结果（与歌单结果同区展示）
     const playlistDownloadsRefreshKey = ref(0)
     const topNavRef = ref(null) // 「/」快捷键聚焦搜索框
 
@@ -517,16 +525,44 @@ export default {
       const myReq = ++searchReqId
       searching.value = true
       searchSongResults.value = []
+      searchSongTotal.value = null
       try {
         const [plRes, songRes] = await Promise.allSettled([
           musicApi.searchPlaylists(query),
-          musicApi.searchSongs(query, 20)
+          musicApi.searchSongsPage(query, { limit: 20 })
         ])
         if (myReq !== searchReqId) return
         searchResults.value = plRes.status === 'fulfilled' ? (plRes.value.playlists || []) : []
-        searchSongResults.value = songRes.status === 'fulfilled' ? (songRes.value || []) : []
+        searchSongResults.value = songRes.status === 'fulfilled' ? (songRes.value.songs || []) : []
+        searchSongQuery.value = query
+        searchSongTotal.value = songRes.status === 'fulfilled' ? songRes.value.total : null
       } finally {
         if (myReq === searchReqId) searching.value = false
+      }
+    }
+
+    // 单曲深挖：cloudsearch offset 翻页——query 快照比对挡「深挖在途时新搜索」竞态；
+    // 上游翻页间结果可能漂移重叠，按 id 去重追加
+    const loadMoreSearchSongs = async () => {
+      const q = searchSongQuery.value
+      if (!q || searchSongTotal.value == null || searchSongLoadingMore.value) return
+      if (searchSongResults.value.length >= searchSongTotal.value) return
+      searchSongLoadingMore.value = true
+      try {
+        const { songs: more, total } = await musicApi.searchSongsPage(q, {
+          limit: 20, offset: searchSongResults.value.length,
+        })
+        if (searchSongQuery.value !== q) return // 新搜索已接管
+        if (total != null) searchSongTotal.value = total
+        const seen = new Set(searchSongResults.value.map(s => String(s.id)))
+        searchSongResults.value = [
+          ...searchSongResults.value,
+          ...more.filter(s => !seen.has(String(s.id))),
+        ]
+      } catch (e) {
+        console.warn('[search] 深挖失败:', e?.message || e)
+      } finally {
+        searchSongLoadingMore.value = false
       }
     }
 
@@ -540,6 +576,8 @@ export default {
       searching.value = true
       searchResults.value = []
       searchSongResults.value = []
+      searchSongQuery.value = ''
+      searchSongTotal.value = null // QQ 搜索无服务端分页——不亮深挖键
       try {
         const list = await musicApi.searchQQSongs(kw)
         if (myReq !== searchReqId) return
@@ -3395,6 +3433,9 @@ export default {
       autoplayOn,
       searching,
       searchSongResults,
+      searchSongTotal,
+      searchSongLoadingMore,
+      loadMoreSearchSongs,
       playlistDownloadsRefreshKey,
       shuffleOn,
       playMode,

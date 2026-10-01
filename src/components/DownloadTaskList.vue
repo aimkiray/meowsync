@@ -51,19 +51,25 @@
       <p class="dtl-empty-sub">如果这是新建队列，稍等一下就会开始填充任务列表。</p>
     </div>
 
-    <div v-else class="dtl-scroll flex-1 min-h-0">
+    <div v-else ref="scrollEl" class="dtl-scroll flex-1 min-h-0">
       <section v-if="groupedTasks.failed.length" class="dtl-group">
         <div class="dtl-group-head">
           <span class="dtl-group-tag dtl-group-tag--fail">failed:</span>
           <span class="pg-label pg-label--dim">{{ groupedTasks.failed.length }} 条</span>
         </div>
         <div
-          v-for="task in groupedTasks.failed"
+          v-for="task in pgFailed.rows.value"
           :key="task.id"
           class="dtl-task"
         >
           <TaskRow :task="task" :retrying-task-id="retryingTaskId" :get-status-class="getStatusClass" :get-status-text="getStatusText" @retry-task="$emit('retry-task', $event)" />
         </div>
+        <button
+          v-if="pgFailed.hasMore.value"
+          :ref="pgFailed.bindSentinel"
+          class="ink-btn ink-btn--ghost ink-btn--sm dtl-more"
+          @click="pgFailed.loadMore()"
+        >加载更多 · {{ pgFailed.renderedCount.value }} / {{ groupedTasks.failed.length }}</button>
       </section>
 
       <section v-if="groupedTasks.downloading.length" class="dtl-group">
@@ -72,12 +78,18 @@
           <span class="pg-label pg-label--dim">{{ groupedTasks.downloading.length }} 条</span>
         </div>
         <div
-          v-for="task in groupedTasks.downloading"
+          v-for="task in pgDownloading.rows.value"
           :key="task.id"
           class="dtl-task"
         >
           <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
         </div>
+        <button
+          v-if="pgDownloading.hasMore.value"
+          :ref="pgDownloading.bindSentinel"
+          class="ink-btn ink-btn--ghost ink-btn--sm dtl-more"
+          @click="pgDownloading.loadMore()"
+        >加载更多 · {{ pgDownloading.renderedCount.value }} / {{ groupedTasks.downloading.length }}</button>
       </section>
 
       <section v-if="groupedTasks.pending.length" class="dtl-group">
@@ -86,12 +98,18 @@
           <span class="pg-label pg-label--dim">{{ groupedTasks.pending.length }} 条</span>
         </div>
         <div
-          v-for="task in groupedTasks.pending"
+          v-for="task in pgPending.rows.value"
           :key="task.id"
           class="dtl-task"
         >
           <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
         </div>
+        <button
+          v-if="pgPending.hasMore.value"
+          :ref="pgPending.bindSentinel"
+          class="ink-btn ink-btn--ghost ink-btn--sm dtl-more"
+          @click="pgPending.loadMore()"
+        >加载更多 · {{ pgPending.renderedCount.value }} / {{ groupedTasks.pending.length }}</button>
       </section>
 
       <section v-if="groupedTasks.completed.length" class="dtl-group">
@@ -109,12 +127,18 @@
         </button>
         <template v-if="showCompleted">
           <div
-            v-for="task in groupedTasks.completed"
+            v-for="task in pgCompleted.rows.value"
             :key="task.id"
             class="dtl-task"
           >
             <TaskRow :task="task" :get-status-class="getStatusClass" :get-status-text="getStatusText" />
           </div>
+          <button
+            v-if="pgCompleted.hasMore.value"
+            :ref="pgCompleted.bindSentinel"
+            class="ink-btn ink-btn--ghost ink-btn--sm dtl-more"
+            @click="pgCompleted.loadMore()"
+          >加载更多 · {{ pgCompleted.renderedCount.value }} / {{ groupedTasks.completed.length }}</button>
         </template>
       </section>
     </div>
@@ -123,6 +147,7 @@
 
 <script setup>
 import { computed, h, ref, watch } from 'vue';
+import { usePagedList } from '../composables/usePagedList.js';
 import { httpsCover } from '../lib/url';
 import PixelIcon from './PixelIcon.vue';
 import GlitchText from './GlitchText.vue';
@@ -176,6 +201,21 @@ const groupedTasks = computed(() => ({
   pending: props.tasks.filter(task => task.status === 'pending'),
   completed: props.tasks.filter(task => task.status === 'completed')
 }));
+
+// 每组独立渐进渲染窗——大队列的 pending/completed 都可上千，全量渲卡。
+// 复位只认队列身份（与 showCompleted 复位同 watch 键）；
+// 2s 轮询换 tasks 引用不回卷（前缀窗自夹，不丢滚动位置）
+const scrollEl = ref(null);
+const mkGroupWindow = (get) => usePagedList({
+  source: computed(get),
+  pageSize: 100,
+  resetWhen: () => props.selectedQueue?.id,
+  scrollRoot: () => scrollEl.value
+});
+const pgFailed = mkGroupWindow(() => groupedTasks.value.failed);
+const pgDownloading = mkGroupWindow(() => groupedTasks.value.downloading);
+const pgPending = mkGroupWindow(() => groupedTasks.value.pending);
+const pgCompleted = mkGroupWindow(() => groupedTasks.value.completed);
 
 function getStatusText(status) {
   const statusMap = {
@@ -457,6 +497,12 @@ const TaskRow = {
   font-size: 11px;
   color: var(--ink-64);
   flex-shrink: 0;
+}
+
+/* 组内渐进渲染哨兵：居中 ghost 键，IO 命中或点按扩窗 */
+.dtl-more {
+  display: flex;
+  margin: 10px auto 2px;
 }
 
 /* ── TaskRow 内部件：内联组件元素无本文件 scopeId，须 :deep() 命中 ── */
