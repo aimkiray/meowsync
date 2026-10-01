@@ -6,6 +6,7 @@
 // 每次都重取，且最终拉流要么本进程要么经 /audio-proxy 回源（不能拿 vkey 的
 // 机器与拉流的机器不同 IP）。
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('./net-guard');
+const { createHash } = require('crypto');
 const { Agent } = require('undici');
 
 const QQ_TIMEOUT_MS = 15000;
@@ -69,10 +70,27 @@ const timedSignal = (extraSignal, ms = QQ_TIMEOUT_MS) => extraSignal
   ? AbortSignal.any([AbortSignal.timeout(ms), extraSignal])
   : AbortSignal.timeout(ms);
 
+// ── zzc 签名（2024.07 现行代，SHA1 重组）：算法参照 jixunmoe/qmweb-sign（MIT）、
+// netease-qq-music-api tencent/utils.rs、lx-music tx/utils/crypto.js 三处独立
+// 实现互证。musics.fcg（网页端正主）要求 sign；musicu.fcg 匿名可用但会被风控
+// 打回 code=2001+feedbackURL（lx-music 实测）——命中该信号自动升级签名通道
+const ZZC_PART1 = [23, 14, 6, 36, 16, 40, 7, 19].filter(i => i < 40); // JS 原版 filter(i<40)：40 被丢
+const ZZC_PART2 = [16, 1, 32, 12, 19, 27, 8, 5];
+const ZZC_SCRAMBLE = [89, 39, 179, 150, 218, 82, 58, 252, 177, 52, 186, 123, 120, 64, 242, 133, 143, 161, 121, 179];
+function zzcSign(payload) {
+  const h = createHash('sha1').update(payload).digest('hex').toUpperCase();
+  const xor = Buffer.from(ZZC_SCRAMBLE.map((v, i) => v ^ parseInt(h.slice(i * 2, i * 2 + 2), 16)));
+  const b64 = xor.toString('base64').replace(/[\\/+=]/g, '');
+  const pick = (arr) => arr.map(i => h[i]).join('');
+  return `zzc${pick(ZZC_PART1)}${b64}${pick(ZZC_PART2)}`.toLowerCase();
+}
+
 // musicu.fcg 统一信封：comm 匿名档 + 可选登录字段；响应 key 与请求 key 镜像。
 // cookie 可由调用方透传同一快照——vkey 这类 param.uin 也吃 cookie 的接口
-// 若调用方与信封各读一次 env，unm 续期恰落在两次读之间会拼出跨凭据请求
-async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cookie = qqCookie()) {
+// 若调用方与信封各读一次 env，unm 续期恰落在两次读之间会拼出跨凭据请求。
+// signed=true 切 musics.fcg（签名对象是整个 body 串——必须先 stringify 再签
+// 再发，key 序逐字节一致）；风控命中时内部自动升级重试一次
+async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cookie = qqCookie(), signed = false) {
   const uin = qqUin(cookie);
   const key = qqKey(cookie);
   const comm = {
@@ -82,15 +100,23 @@ async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cook
     uin: uin || '0', g_tk: gtkOf(key), g_tk_new_20200303: gtkOf(key),
   };
   if (uin && key) comm.authst = key;
-  const res = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+  const bodyStr = JSON.stringify({ comm, [reqKey]: { module, method, param } });
+  const url = signed
+    ? `https://u.y.qq.com/cgi-bin/musics.fcg?_=${Date.now()}&sign=${zzcSign(bodyStr)}`
+    : 'https://u.y.qq.com/cgi-bin/musicu.fcg';
+  const res = await fetch(url, {
     method: 'POST',
     headers: { ...qqHeaders(cookie), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ comm, [reqKey]: { module, method, param } }),
+    body: bodyStr,
     signal: timedSignal(extraSignal),
   });
   if (!res.ok) throw new Error(`qq musicu ${module} HTTP ${res.status}`);
   const body = await res.json();
   const node = body?.[reqKey];
+  // 风控信号：code=2001 + feedbackURL 要求登录——同一 body 换签名通道重试
+  if (!signed && (node?.code === 2001 || node?.data?.feedbackURL)) {
+    return musicu(module, method, param, extraSignal, reqKey, cookie, true);
+  }
   if (body?.code !== 0 || !node || node.code !== 0) {
     throw new Error(`qq musicu ${module} code=${body?.code}/${node?.code} ${node?.data?.msg || ''}`);
   }
@@ -98,11 +124,12 @@ async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cook
 }
 
 // 旧式 fcg GET（歌单/歌词/单曲详情仍走这批端点，Referer 是硬门槛）；
-// 调用方 URL 里的 g_tk= 占位统一按本次 cookie 快照重写（登录态校验一致性）
-async function fcg(path, extraSignal) {
+// 调用方 URL 里的 g_tk= 占位统一按本次 cookie 快照重写（登录态校验一致性）。
+// host/headers 可覆写：shc.y.qq.com 是移动端 H5 口径兜底宿主（配移动 UA）
+async function fcg(path, extraSignal, { host = 'c.y.qq.com', headers } = {}) {
   const cookie = qqCookie();
-  const res = await fetch(`https://c.y.qq.com${path.replace(/g_tk=\d+/, `g_tk=${gtkOf(qqKey(cookie))}`)}`, {
-    headers: qqHeaders(cookie),
+  const res = await fetch(`https://${host}${path.replace(/g_tk=\d+/, `g_tk=${gtkOf(qqKey(cookie))}`)}`, {
+    headers: headers || qqHeaders(cookie),
     signal: timedSignal(extraSignal),
   });
   if (!res.ok) throw new Error(`qq fcg ${path.split('?')[0]} HTTP ${res.status}`);
@@ -134,6 +161,8 @@ const QUALITY_TIERS = {
 };
 const PLAY_LADDER = ['M800', 'M500', 'C400'];
 const BEST_LADDER = ['RS01', 'F000', 'M800', 'M500', 'C400'];
+// sip 兜底固定宿主（yt-dlp urljoin/Meting _CDN/UNM sip[3] 同源共识）
+const QQ_FIXED_SIPS = ['https://dl.stream.qqmusic.qq.com/', 'https://isure.stream.qqmusic.qq.com/'];
 
 // 一次请求把整条档梯丢上去：songmid/filename 数组同序复制，midurlinfo 逐条回
 // purl——为空即该档无权限，挑第一个有 purl 的。比逐档串行省 4 次上游往返
@@ -154,18 +183,23 @@ async function getStreamCandidates(mid, mediaMid, ladder, extraSignal) {
   // 排序后 https 宿主先被选，失败了才轮明文
   const sips = (data?.sip || []).filter(s => /^https?:\/\/[a-z0-9.-]+/i.test(s))
     .sort((a, b) => (b.startsWith('https:') ? 1 : 0) - (a.startsWith('https:') ? 1 : 0));
+  // sip 全被宿主白名单滤掉时的兜底：dl./isure. 是 yt-dlp/Meting/UNM 三处
+  // 验证过的固定宿主（vkey 绑 uin+IP 不绑宿主，换宿主不影响鉴权）
+  const sipPool = [...sips, ...QQ_FIXED_SIPS];
   const infos = Array.isArray(data?.midurlinfo) ? data.midurlinfo : [];
   return infos.map((info, i) => {
     const filename = info?.filename || names[i];
     // tier 按返回 filename 的前缀反查——上游若重排/丢档，位置映射会标错档
     // （影响下游扩展名选择：mp3 字节落 .flac）
     const tier = Object.keys(QUALITY_TIERS).find(t => filename.startsWith(QUALITY_TIERS[t].prefix)) || ladder[i];
-    const purl = info?.purl || info?.wifiurl || '';  // wifiurl 是部分响应的兜底链字段
+    // purl 的 uin 参数不参与鉴权（vkey 已绑 uin+IP；UNM 多年写死 uin=0 实证）——
+    // 脱敏掉登录态 uin，防它经代理 URL/日志外泄
+    const purl = (info?.purl || info?.wifiurl || '').replace(/([?&])uin=\d+/, '$1uin=0');
     return {
       tier, purl, filename,
       result: info?.result ?? data?.retcode,
       // purl 已含 filename+vkey+guid 完整 query，直接拼 sip
-      urls: purl ? sips.map(s => s + purl) : [],
+      urls: purl ? sipPool.map(s => s + purl) : [],
     };
   });
 }
@@ -214,26 +248,39 @@ async function getSongDetail(idOrMid, extraSignal, keyHint) {
   throw new Error(`qq 详情获取失败 ${idOrMid}`);
 }
 
-// 曲库搜索：实测匿名态下 DoSearchForQQMusicDesktop 与 client_search_cp 均回
-// 空列表（风控收紧），search_for_qq_cp 仍正常工作——主用它，musicu 兜底
+// 曲库搜索三层兜底：c.y.qq.com（桌面口径）→ shc.y.qq.com（移动 H5 口径，
+// 移动端 UA——eIsland/lyrix/LDDC 定位为备用通道）→ musicu
+// DoSearchForQQMusicDesktop（匿名风控空回时 musicu 自动升级签名通道）。
+// 健康空结果（code=0+空 list）不回落——真空搜索不白打上游
+const SHC_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+  'Referer': 'https://y.qq.com/',
+};
 async function searchSongs(query, limit = 20, extraSignal) {
   const n = Math.min(limit, 30);
-  try {
-    const body = await fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=1&format=json&g_tk=5381&platform=yqq&needNewCode=0`, extraSignal);
-    const list = body?.data?.song?.list;
-    // 健康空结果（code=0 + 空 list）也直接返回——匿名态下 musicu 兜底
-    // 端点已知回空，健康空再回落等于每个真空搜索白打一次上游
-    if (body?.code === 0 && Array.isArray(list)) {
-      return list.map(normalizeTrack).filter(Boolean);
+  for (const hop of [
+    () => fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=1&format=json&g_tk=5381&platform=yqq&needNewCode=0`, extraSignal),
+    () => fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=1&format=json&platform=h5&needNewCode=1&zhidaqu=1&catZhida=1&t=0&flag=1&ie=utf-8&aggr=0&perpage=${n}&remoteplace=txt.mqq.all`, extraSignal, { host: 'shc.y.qq.com', headers: SHC_HEADERS }),
+  ]) {
+    try {
+      const body = await hop();
+      const list = body?.data?.song?.list;
+      if (body?.code === 0 && Array.isArray(list)) {
+        return list.map(normalizeTrack).filter(Boolean);
+      }
+    } catch (e) {
+      if (extraSignal?.aborted) throw e;  // abort 不回落
+      /* 落到下一跳 */
     }
-  } catch (e) {
-    if (extraSignal?.aborted) throw e;  // abort 不回落——别再空打一次 musicu
-    /* 落到 musicu 兜底 */
   }
+  // searchid 用上游公式形态（netease-qq-music-api utils.rs）——
+  // 时间戳取模混入两段随机数，比 Date.now()%1e17 更像真值
+  const searchid = String(Math.floor(Math.random() * 20) * 18014398509481984
+    + Math.floor(Math.random() * 4194305) * 4294967296 + (Date.now() % 86400000));
   const data = await musicu('music.search.SearchCgiService', 'DoSearchForQQMusicDesktop', {
     query: String(query || ''), search_type: 0, page_num: 1,
-    num_per_page: n, remoteplace: 'txt.yqq.top',
-    searchid: String(Date.now() % 1e17),
+    num_per_page: n, remoteplace: 'txt.yqq.top', grp: 1, highlight: 1,
+    searchid,
   }, extraSignal, 'req_1');
   const list = data?.body?.song?.list;
   return Array.isArray(list) ? list.map(normalizeTrack).filter(Boolean) : [];

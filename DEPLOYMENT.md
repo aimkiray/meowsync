@@ -121,8 +121,9 @@ compose 下单设 `DOWNLOAD_TOKEN` 即可），并从同一 `.env` 读取 `CORS_
 > （`prefer=best`）。配置了 Cookie 且开启公网访问时，务必同时设
 > `DOWNLOAD_TOKEN`——`/bilibili/stream?prefer=best` 与 `/qq/stream?prefer=best`
 > 在该组合下要求 `x-download-token` 才放行高规格轨，匿名访客自动回落常规档
-> （播放链不受影响）。QQ_COOKIE 登录态下，302 代理 URL 的 purl 参数会携带
-> 运营者 uin——对能触发播放的访客可见（QQ 签名链固有形态）。
+> （播放链不受影响）。上游签名链（QQ purl uin、B 站 mid/uipk、googlevideo
+> ip=）一律经 `/audio-proxy/t/<token>` opaque 令牌回源，不出服务端进程——
+> 反向代理侧建议对 `/audio-proxy` 关闭 access_log 或剥离 query 落盘。
 注意：改了令牌变量后要 `docker compose up -d --build` 重建镜像——旧 bundle
 没有令牌会在写接口上全部 401。
 

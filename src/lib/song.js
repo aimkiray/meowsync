@@ -5,6 +5,17 @@ export function isVipSong(song) {
 }
 
 /**
+ * 凭据感知的"VIP 且不可播"判定（隐藏 VIP 过滤用）：qq payPlay 曲在服务端
+ * 配了 QQ_COOKIE（含 VIP）时可播，不应被隐藏。caps 缺省/未拉取按无凭据
+ * 保守处理（维持隐藏）。网易云 fee=1 无用户凭据通道，恒不可播。
+ */
+export function isVipUnplayable(song, caps) {
+  if (!isVipSong(song)) return false
+  if (song?.qq && caps?.qq?.loggedIn) return false
+  return true
+}
+
+/**
  * 本地内存态歌单 id 判定：single_song_*（单曲分享临时歌单）、saved_queue_*
  * （待播队列存成的歌单）与 local_pl_*（用户手动新建的歌单，含 mix 导入的
  * local_pl_mix_*）都是非数字 id——不进 ?pl= URL、不参与网易接口拉取。

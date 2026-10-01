@@ -1,6 +1,6 @@
 const { Hono } = require('hono');
 const { normalizeOutboundUrl } = require('../lib/net-guard');
-const { isAllowedHost } = require('./proxy');
+const { isAllowedHost, streamVault } = require('./proxy');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../lib/netease-match');
 
@@ -246,7 +246,8 @@ app.get('/youtube/stream', async (c) => {
     if (!usable) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
-    return c.redirect(`/audio-proxy?url=${encodeURIComponent(usable)}`, 302);
+    // vault token 化——googlevideo 链 ip= 即本机出口地址，不下发给访客
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(usable)}`, 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] stream 失败:', e.message);

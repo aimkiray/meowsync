@@ -1,7 +1,7 @@
 const { Hono } = require('hono');
 const { Agent } = require('undici');
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('../lib/net-guard');
-const { isAllowedHost } = require('./proxy');
+const { isAllowedHost, streamVault } = require('./proxy');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../lib/netease-match');
 
@@ -338,7 +338,8 @@ app.get('/bilibili/stream', async (c) => {
     if (!usable) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
-    return c.redirect(`/audio-proxy?url=${encodeURIComponent(usable)}`, 302);
+    // vault token 化——登录态 baseUrl 带 mid/uipk/deadline，不出进程
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(usable)}`, 302);
   } catch (e) {
     // 客户端断连不算服务端错误（与 resolve/audio-proxy 同口径）
     if (c.req.raw.signal?.aborted) return c.body(null, 499);

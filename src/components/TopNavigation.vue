@@ -146,7 +146,7 @@ export default {
       default: 'off'
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
@@ -187,8 +187,8 @@ export default {
         emit('search-qq', query)
         return
       }
-      // qq: 前缀=QQ 直解语法（与点歌台同记号）：mid 形态（字母数字混合）走
-      // QQ resolve；其余剥前缀按普通关键词搜索——顶栏没有 QQ 结果位，降级有意
+      // qq: 前缀=QQ 语法（与点歌台同记号）：mid 形态/链接走 resolve 直解，
+      // 其余关键词走 QQ 曲库搜索（结果落顶部搜索的 songs 结果区）
       if (/^qq[:：]\s*$/i.test(query)) return
       const qqPref = query.match(/^qq[:：](.+)$/i)
       if (qqPref) {
@@ -203,7 +203,7 @@ export default {
           emit('search-qq', isQQInput(kw) ? kw : `qq:${kw}`)
           return
         }
-        emit('search', kw, query)
+        emit('search-qq-songs', kw)
         return
       }
       const playlistId = extractPlaylistId(query)

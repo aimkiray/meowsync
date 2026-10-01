@@ -124,7 +124,9 @@ export const downloadsApi = {
         // 下载管理器取封面会先试 picUrl 再兜 pic_str，丢了会让封面静默缺失
         pic_str: t.al?.pic_str || t.album?.pic_str || ''
       },
-      dt: t.dt || t.duration || 0
+      dt: t.dt || t.duration || 0,
+      // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返
+      ...(t.qq?.mediaMid ? { qq: { mediaMid: t.qq.mediaMid } } : {})
     }))
     return http.post(`${API_BASE_URL}/downloads/local/mirror`, {
       localId: playlist.id,
