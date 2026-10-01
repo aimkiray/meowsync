@@ -186,7 +186,3 @@ app.get('/audio-proxy/t/:token', async (c) => {
 });
 
 module.exports = app;
-// 白名单判定导出给 bilibili/youtube 路由：/bilibili|youtube/stream 挑候选 CDN
-// 回链时用同一谓词预筛，避免选中代理必拒的域导致 302 落地后 403
-module.exports.isAllowedHost = isAllowedHost;
-module.exports.streamVault = streamVault;

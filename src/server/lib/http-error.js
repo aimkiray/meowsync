@@ -9,8 +9,9 @@ function httpError(status, message) {
   return err;
 }
 
-function fail(c, status, message) {
-  return c.json({ code: status, message }, status);
+// extra：随错误体一并下发的附加字段（如 {enabled:false} 让前端分辨「未配置」）
+function fail(c, status, message, extra = {}) {
+  return c.json({ code: status, message, ...extra }, status);
 }
 
 function handleError(c, error, tag) {

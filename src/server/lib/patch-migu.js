@@ -13,7 +13,7 @@ function resolveMiguPath() {
   try {
     return require.resolve('@unblockneteasemusic/server/src/provider/migu.js');
   } catch {
-    return path.resolve(__dirname, '../../node_modules/@unblockneteasemusic/server/src/provider/migu.js');
+    return path.resolve(__dirname, '../../../node_modules/@unblockneteasemusic/server/src/provider/migu.js');
   }
 }
 

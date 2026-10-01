@@ -1,5 +1,5 @@
-const { callNeteaseApi } = require('../services/netease-api');
-const { aiEnabled, askAiJson } = require('./ai');
+const { callNeteaseApi } = require('./netease-api');
+const { aiEnabled, askAiJson } = require('../lib/ai');
 
 // 外部导入曲（B 站/YouTube）匹配网易云词源：候选串逐个搜，第一条通过
 // sanity 校验的为准。sanity = 歌名互相包含 或 时长差 ≤45s——纯「有结果就取」

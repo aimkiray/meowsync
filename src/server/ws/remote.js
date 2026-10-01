@@ -1,4 +1,5 @@
 const { tokenMatches } = require('../lib/token-eq');
+const { trustProxyEnabled } = require('../lib/env');
 const { WebSocketServer } = require('ws');
 // 控制面契约与共享表对齐（src/shared/protocol.js）——controller/host 三端同源
 const { CONTROL_TYPES, CONTROL_PAYLOAD_GUARDS, REMOTE_LIMITS } = require('../../shared/protocol.js');
@@ -220,7 +221,7 @@ function attachRemoteControl(server, options = {}) {
     // 可能把 Host 重写为内部地址，此时同源比较应基于 X-Forwarded-Host
     // （浏览器无法设置该头，仅代理想写入，采信是安全的）
     const origin = req.headers.origin;
-    const trustProxy = ['1', 'true'].includes((process.env.TRUST_PROXY || '').toLowerCase());
+    const trustProxy = trustProxyEnabled();
     const fwdHost = trustProxy
       ? (req.headers['x-forwarded-host'] || '').split(',')[0].trim()
       : '';

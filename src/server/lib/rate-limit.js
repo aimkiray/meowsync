@@ -2,10 +2,11 @@
 // 把服务端 IP 送进上游风控。桶 key：TRUST_PROXY 下采信 XFF 首跳（与
 // requestOrigin 同语义）；否则用 socket 真实地址——不信客户端自带 XFF
 // （可伪造轮换绕过），也不让 LAN 全员挤 'local' 桶
+const { trustProxyEnabled } = require('./env');
 const rateBuckets = new Map();
 
 function rateLimit(c, key, limit) {
-  const trustProxy = ['1', 'true'].includes((process.env.TRUST_PROXY || '').toLowerCase());
+  const trustProxy = trustProxyEnabled();
   const ip = (trustProxy && c.req.header('x-forwarded-for')?.split(',')[0]?.trim())
     || c.env?.incoming?.socket?.remoteAddress
     || 'local';

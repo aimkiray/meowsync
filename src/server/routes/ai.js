@@ -1,7 +1,8 @@
 const { createHash } = require('crypto');
 const { Hono } = require('hono');
-const { getDb } = require('../db/client');
+const lyricAiRepo = require('../repositories/lyricAi');
 const { readJsonBody } = require('../lib/http-body');
+const { fail } = require('../lib/http-error');
 const { rateLimit } = require('../lib/rate-limit');
 const { callNeteaseApi } = require('../services/netease-api');
 const { aiEnabled, askAiJson, AI_MODEL } = require('../lib/ai');
@@ -18,9 +19,6 @@ const MAX_LYRIC_LINES = 400;
 const TRANSLATE_CHUNK = 40;
 // CJK 占比 ≥30% 视为已是中文语境歌词（含日汉混排误判方向——宁可不翻不错翻）
 const CJK_SKIP_RATIO = 0.3;
-
-const fail = (c, status, message, extra = {}) =>
-  c.json({ code: status, message, ...extra }, status);
 
 // 同 id/vkey 在途去重（值只是完成信号，不载数据——见各路由内注释）
 const inflightTranslate = new Map();
@@ -99,21 +97,13 @@ app.post('/ai/lyric-translate', async (c) => {
   if (!NETEASE_ID_RE.test(id) && !LYRIC_ID_RE.test(id)) return fail(c, 400, '非法 songId');
   const signal = c.req.raw.signal;
 
-  const db = getDb();
   // 行存在即命中——skip 哨兵（tlyric=''）也是有效缓存项，防止
   // already-zh/无词曲每次重播都重打上游 lyric。但 skip 是启发式判定
   // 的结果（cjkRatio/credit 行都可能误判），给 7 天 TTL：过期按未命中
   // 重判一次，避免一次瞬时误判被永久固化；重新判为 skip 时 DO UPDATE
-  // 刷新 updated_at 续期
-  const rowOf = () => db.prepare(
-    `SELECT tlyric FROM song_lyric_translation WHERE song_id = ?
-     AND NOT (model LIKE 'skip:%' AND updated_at < datetime('now', '-7 days'))`
-  ).get(id);
-  const skipInsert = (reason) => db.prepare(
-    `INSERT INTO song_lyric_translation (song_id, tlyric, model)
-     VALUES (?, '', ?) ON CONFLICT(song_id) DO UPDATE SET
-     model = excluded.model, updated_at = CURRENT_TIMESTAMP
-     WHERE song_lyric_translation.model LIKE 'skip:%'`).run(id, `skip:${reason}`);
+  // 刷新 updated_at 续期（SQL 细节收敛在 repositories/lyricAi.js）
+  const rowOf = () => lyricAiRepo.getCachedTranslation(id);
+  const skipInsert = (reason) => lyricAiRepo.markTranslationSkip(id, reason);
   const cached0 = rowOf();
   if (cached0) {
     return c.json({ code: 200, tlyric: cached0.tlyric || null, cached: true });
@@ -142,9 +132,7 @@ app.post('/ai/lyric-translate', async (c) => {
     if (tlyric.trim()) {
       // 官方译文直回——也落库，下次连上游都不用打（model 记录词源而非固定 netease）
       const srcModel = id.startsWith('qq_') ? 'qq' : 'netease';
-      db.prepare(`INSERT INTO song_lyric_translation (song_id, tlyric, model)
-        VALUES (?, ?, ?) ON CONFLICT(song_id) DO UPDATE SET
-        tlyric = excluded.tlyric, model = excluded.model, updated_at = CURRENT_TIMESTAMP`).run(id, tlyric, srcModel);
+      lyricAiRepo.upsertTranslation(id, tlyric, srcModel);
       return c.json({ code: 200, tlyric, source: srcModel });
     }
     const lines = parseLrcLines(lrc);
@@ -254,10 +242,7 @@ app.post('/ai/lyric-translate', async (c) => {
       out.push(`${l.tag}${t || l.text}`);
     }
     const result = out.join('\n');
-    db.prepare(`INSERT INTO song_lyric_translation (song_id, tlyric, model)
-      VALUES (?, ?, ?) ON CONFLICT(song_id) DO UPDATE SET
-      tlyric = excluded.tlyric, model = excluded.model, updated_at = CURRENT_TIMESTAMP`
-    ).run(id, result, AI_MODEL);
+    lyricAiRepo.upsertTranslation(id, result, AI_MODEL);
     return c.json({ code: 200, tlyric: result, lines: translated.size, total: lines.length, source: 'ai' });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
@@ -302,10 +287,7 @@ app.post('/ai/lyric-verify', async (c) => {
     .digest('hex').slice(0, 12);
   const vkey = `${id}@${AI_MODEL}@${sig}`;
 
-  const db = getDb();
-  const verdictOf = () => db.prepare(
-    "SELECT ok FROM song_ai_verdict WHERE song_id = ? AND kind = 'lyric'"
-  ).get(vkey);
+  const verdictOf = () => lyricAiRepo.getLyricVerdict(vkey);
   const cached = verdictOf();
   if (cached) return c.json({ code: 200, ok: !!cached.ok, cached: true });
   // 缓存未命中才吃配额
@@ -351,10 +333,7 @@ app.post('/ai/lyric-verify', async (c) => {
       // 模型没给判定 → 不缓存、不误伤，按「相符」放行
       return c.json({ code: 200, ok: true, inconclusive: true });
     }
-    db.prepare(`INSERT INTO song_ai_verdict (song_id, kind, ok, detail)
-      VALUES (?, 'lyric', ?, ?) ON CONFLICT(song_id, kind) DO UPDATE SET
-      ok = excluded.ok, detail = excluded.detail, updated_at = CURRENT_TIMESTAMP`
-    ).run(vkey, ans.ok ? 1 : 0, sourceTitle.slice(0, 200));
+    lyricAiRepo.upsertLyricVerdict(vkey, ans.ok, sourceTitle.slice(0, 200));
     return c.json({ code: 200, ok: ans.ok });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);

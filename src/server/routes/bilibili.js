@@ -1,9 +1,9 @@
 const { Hono } = require('hono');
 const { Agent } = require('undici');
-const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('../lib/net-guard');
-const { isAllowedHost, streamVault } = require('./proxy');
+const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
+const streamVault = require('../lib/stream-vault');
 const { rateLimit } = require('../lib/rate-limit');
-const { matchNeteaseSong } = require('../lib/netease-match');
+const { matchNeteaseSong } = require('../services/netease-match');
 const { tokenMatches } = require('../lib/token-eq');
 const { BVID_RE, BVID_IN_TEXT_RE } = require('../../shared/predicates.js');
 
