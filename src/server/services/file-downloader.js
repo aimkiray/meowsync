@@ -408,6 +408,9 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
     // 第二轮起升级 VISIONOS 直解：ANDROID/IOS 批被 SABR 闸控（首段窗外全
     // 403）时换签名体系——实测同一批自适应流它完全不受限，能拿到真最高
     // 音质 opus251；首轮解析自身失败时它也顺带当第三客户端兜底
+    if (clientEscalated) {
+      console.info(`[youtube] ${videoId} 自适应流批次不可用——升级 VISIONOS 签名批重解`);
+    }
     const player = clientEscalated
       ? await ytFetchPlayerWith(videoId, signal, 'VISIONOS')
       : await ytFetchPlayer(videoId, signal);
@@ -440,6 +443,9 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
     if (!lists.adaptive.length && !lists.progressive.length) {
       throw fatalError(`${bvM ? 'B 站' : 'YouTube'} 无可下载音轨`);
     }
+    // mkdir 提到候选循环外：ENOSPC/EACCES 这类确定性 errno 若在 try 内会
+    // 因无 fatal 标记而遍历所有候选空转——放外面直接穿透到顶层 errnoToFatal
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     for (const cand of lists.adaptive) {
       throwIfAborted(signal);
       try {
@@ -454,7 +460,6 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
           || String(cand.mimeType || '').split(';')[0].trim().toLowerCase());
         const ext = MIME_EXT[mime] || extFromUrl(cand.url, AUDIO_EXTS, 'm4a');
         const finalPath = pathWithExt(outputPath, ext);
-        fs.mkdirSync(path.dirname(finalPath), { recursive: true });
         const saved = await streamToFile(resp, finalPath, {
           maxBytes: MAX_AUDIO_BYTES, onProgress, maxTotalMs: 300000
         });
@@ -557,11 +562,16 @@ function ffmpegMux(videoPath, audioPath, outPath, signal) {
         e.aborted = true;
         return reject(e);
       }
-      if (code !== 0) return reject(new Error(`ffmpeg 合流失败(${code}): ${errTail || '无输出'}`));
+      const fail = (err) => {
+        // reject 路径清 .mux 半截——别让残片活到下次启动 reap
+        try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
+        reject(err);
+      };
+      if (code !== 0) return fail(new Error(`ffmpeg 合流失败(${code}): ${errTail || '无输出'}`));
       try {
         fs.renameSync(muxPath, outPath);
         resolve(outPath);
-      } catch (e) { reject(errnoToFatal(e)); }
+      } catch (e) { fail(errnoToFatal(e)); }
     });
   });
 }
@@ -589,11 +599,15 @@ function ffmpegExtractAudio(inPath, outPath, signal) {
         e.aborted = true;
         return reject(e);
       }
-      if (code !== 0) return reject(new Error(`ffmpeg 抽轨失败(${code}): ${errTail || '无输出'}`));
+      const fail = (err) => {
+        try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
+        reject(err);
+      };
+      if (code !== 0) return fail(new Error(`ffmpeg 抽轨失败(${code}): ${errTail || '无输出'}`));
       try {
         fs.renameSync(muxPath, outPath);
         resolve(outPath);
-      } catch (e) { reject(errnoToFatal(e)); }
+      } catch (e) { fail(errnoToFatal(e)); }
     });
   });
 }
@@ -613,6 +627,9 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     const videoId = providerData?.youtube?.videoId || ytM[1];
     // 同音频侧口径：第二轮升级 VISIONOS 签名批，闸控视频换它才拿得到
     // 自适应高画质轨
+    if (clientEscalated) {
+      console.info(`[youtube] ${videoId} 自适应视频批不可用——升级 VISIONOS 签名批重解`);
+    }
     const player = clientEscalated
       ? await ytFetchPlayerWith(videoId, signal, 'VISIONOS')
       : await ytFetchPlayer(videoId, signal);
@@ -665,16 +682,22 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
           try {
             await fetchTo(v, videoTmp, 0, 75);
             if (!audioTmp) {
-              audioTmp = `${outputPath}.audio`;
+              // 音轨落盘成功才置位——置位先行会让下一个视频候选对着不
+              // 存在的 .audio 合流，且整批音轨失去重试机会
+              const tmp = `${outputPath}.audio`;
               let audioOk = false;
               for (const a of media.audios) {
-                try { await fetchTo(a, audioTmp, 75, 15); audioOk = true; break; } catch (e) {
+                try { await fetchTo(a, tmp, 75, 15); audioOk = true; break; } catch (e) {
                   throwIfAborted(signal);
                   if (e?.fatal && e?.code) throw e;
                   lastErr = e;
                 }
               }
-              if (!audioOk) throw lastErr || new Error('音轨候选全部失败');
+              if (!audioOk) {
+                try { fs.unlinkSync(tmp); } catch { /* 未产即空 */ }
+                throw lastErr || new Error('音轨候选全部失败');
+              }
+              audioTmp = tmp;
             }
             await ffmpegMux(videoTmp, audioTmp, outputPath, signal);
             onProgress && onProgress(100);
@@ -698,9 +721,15 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     // 不受闸的高画质轨；合流兜底只在客户端阶梯用尽后出场
   }
   // 自适应阶梯用尽/无 ffmpeg → MP4 合流兜底（B 站 thunk 懒取 durl；
-  // yt 走跨轮结转的 formats 批——VISIONOS 不回 formats 时仍有 ANDROID 的）
+  // yt 走跨轮结转的 formats 批——VISIONOS 不回 formats 时仍有 ANDROID 的）。
+  // thunk 瞬时失败记 lastErr 而非吞成"无合流格式"——412/超时这类错误
+  // 是可重试的，不能因为消息撒谎再叠个 fatal 把重试权判死
   const progressive = lastMedia
-    ? await lastMedia.progressive().catch(() => progressiveCarry)
+    ? await lastMedia.progressive().catch(e => {
+        throwIfAborted(signal);
+        lastErr = e;
+        return progressiveCarry;
+      })
     : progressiveCarry;
   for (const cand of progressive.length ? progressive : progressiveCarry) {
     throwIfAborted(signal);
@@ -713,7 +742,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
       lastErr = e;
     }
   }
-  if (!FFMPEG_OK && !progressive.length && !progressiveCarry.length) {
+  if (!FFMPEG_OK && !progressive.length && !progressiveCarry.length && !lastErr) {
     lastErr = fatalError(
       `${bvM ? 'B 站' : 'YouTube'} 未提供合流格式且未检测到 ffmpeg——安装 ffmpeg 才能下载高画质视频`
     );

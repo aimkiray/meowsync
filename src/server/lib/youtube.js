@@ -47,24 +47,40 @@ const clientHeaders = (form, vd) => ({
 // 吃 LOGIN_REQUIRED 时挂上原地重试一次。模块级缓存 30min
 let visitorDataCache = null;
 let visitorDataAt = 0;
+let visitorDataFailAt = 0;          // 抓取失败负缓存——首页不可达时别每请求白打
 const VISITOR_TTL_MS = 30 * 60e3;
+const VISITOR_FAIL_TTL_MS = 2 * 60e3;
 const DESKTOP_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
 
+// 只读取用：新鲜才给、过期/null 都回 null——不发请求。给「有则带上、
+// 无则匿名」的消费方（innertubeSearch/各形态首试）用，不触发网络
+const freshVisitorData = () =>
+  (visitorDataCache && Date.now() - visitorDataAt < VISITOR_TTL_MS)
+    ? visitorDataCache : null;
+
+// 主动取用：新鲜直返、过期重抓、失败冷却期直接 null（不抛）。
+// 「必须带凭据」的消费方（VISIONOS/LOGIN_REQUIRED 重试）统一走这里——
+// 新鲜度判断集中在这一个入口，别处裸读缓存会把过期凭据无限期发出去
 async function getVisitorData(extraSignal) {
-  if (visitorDataCache && Date.now() - visitorDataAt < VISITOR_TTL_MS) {
+  if (freshVisitorData()) return visitorDataCache;
+  if (Date.now() - visitorDataFailAt < VISITOR_FAIL_TTL_MS) return null;
+  try {
+    const res = await fetch('https://www.youtube.com', {
+      headers: { 'User-Agent': DESKTOP_UA },
+      signal: timedSignal(extraSignal),
+    });
+    if (!res.ok) throw new Error(`visitorData 抓取 HTTP ${res.status}`);
+    const html = await res.text();
+    const m = html.match(/"VISITOR_DATA":"([^"]+)"/);
+    if (!m) throw new Error('visitorData 提取失败');
+    visitorDataCache = m[1];
+    visitorDataAt = Date.now();
     return visitorDataCache;
+  } catch (e) {
+    visitorDataFailAt = Date.now();
+    if (extraSignal?.aborted) throw e;
+    return null;
   }
-  const res = await fetch('https://www.youtube.com', {
-    headers: { 'User-Agent': DESKTOP_UA },
-    signal: timedSignal(extraSignal),
-  });
-  if (!res.ok) throw new Error(`visitorData 抓取 HTTP ${res.status}`);
-  const html = await res.text();
-  const m = html.match(/"VISITOR_DATA":"([^"]+)"/);
-  if (!m) throw new Error('visitorData 提取失败');
-  visitorDataCache = m[1];
-  visitorDataAt = Date.now();
-  return visitorDataCache;
 }
 
 // 指定客户端形态直解：clientName 用于「已知 ANDROID 流被闸」的升级路径——
@@ -74,17 +90,17 @@ async function fetchPlayerWith(videoId, extraSignal, clientName) {
   const forms = clientName
     ? INNERTUBE_CLIENTS.filter(f => f.name === clientName)
     : INNERTUBE_CLIENTS;
+  if (!forms.length) throw new Error(`未知客户端形态: ${clientName}`);
   let lastErr = null;
   for (const form of forms) {
     let formErr = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (extraSignal?.aborted) throw new Error('aborted');
-      // needsVisitor 形态（VISIONOS）首试就挂；其余形态第二试才补——
-      // 缓存热时顺手带给所有形态（白来的风控豁免）
-      const vd = visitorDataCache
-        || (form.needsVisitor || attempt > 0
-          ? await getVisitorData(extraSignal).catch(() => null)
-          : null);
+      // needsVisitor 形态（VISIONOS）/重试轮主动取（过期自动重抓）；
+      // 其余形态首试只用热缓存——不触发网络，缓存过期视同匿名
+      const vd = form.needsVisitor || attempt > 0
+        ? await getVisitorData(extraSignal)
+        : freshVisitorData();
       let body;
       try {
         const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_KEY}`, {
@@ -111,11 +127,12 @@ async function fetchPlayerWith(videoId, extraSignal, clientName) {
         break;
       }
       formErr = lastErr = new Error(`不可播放: ${ps.reason || ps.status}`);
-      // 匿名被风控 → 补 visitorData 原地重试一次（二试必带 vd）
-      if (ps.status === 'LOGIN_REQUIRED' && attempt === 0) continue;
+      // 匿名被风控 → 补 visitorData 原地重试一次。已带 vd 还吃
+      // LOGIN_REQUIRED 时重试是逐字节相同请求——注定重败，直接换形态
+      if (ps.status === 'LOGIN_REQUIRED' && attempt === 0 && !vd) continue;
       break;
     }
-    console.warn(`[youtube] ${form.name} 客户端取流失败:`, formErr.message);
+    console.warn(`[youtube] ${form.name} 客户端取流失败:`, formErr?.message || '未知错误');
   }
   throw lastErr || new Error('所有客户端形态均失败');
 }
@@ -170,11 +187,12 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
   for (const form of INNERTUBE_CLIENTS) {
     if (extraSignal?.aborted) throw new Error('aborted');
     try {
+      const vd = freshVisitorData();
       const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
         method: 'POST',
-        headers: clientHeaders(form, visitorDataCache),
+        headers: clientHeaders(form, vd),
         body: JSON.stringify({
-          context: { client: visitorDataCache ? { ...form.client, visitorData: visitorDataCache } : form.client },
+          context: { client: vd ? { ...form.client, visitorData: vd } : form.client },
           query: String(keyword || ''),
           // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
           params: 'EgIQAQ==',
