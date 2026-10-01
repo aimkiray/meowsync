@@ -1,4 +1,5 @@
 const { Hono } = require('hono');
+const { fail } = require('../lib/http-error');
 const { tokenMatches } = require('../lib/token-eq');
 const { rateLimit } = require('../lib/rate-limit');
 const streamVault = require('../lib/stream-vault');
@@ -52,7 +53,9 @@ app.get('/qq/resolve', async (c) => {
   const parsed = await resolveQqInput(c.req.query('input') || '', c.req.raw.signal);
   if (c.req.raw.signal?.aborted) return c.body(null, 499);
   if (!parsed?.mid && !parsed?.songid) {
-    if (parsed?.disstid) return c.json({ code: 400, message: '这是 QQ 歌单链接，请在顶部搜索框粘贴导入' }, 400);
+    // disstid 带字段下发——前端收到后自动转歌单导入（编码 p= 形态前端谓词看不穿，
+    // 只能由服务端跳解兜底；裸提示会让已粘顶栏的用户陷入死循环指引）
+    if (parsed?.disstid) return fail(c, 400, '这是 QQ 歌单链接，正在为你导入歌单', { disstid: parsed.disstid });
     if (parsed?.albummid) return c.json({ code: 400, message: '这是专辑链接，暂不支持（可用单曲/歌单链接）' }, 400);
     return c.json({ code: 400, message: '无法从输入解析 QQ 音乐歌曲（支持 songDetail/分享链接/songmid/songid）' }, 400);
   }

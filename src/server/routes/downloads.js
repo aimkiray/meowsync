@@ -10,7 +10,7 @@ const { parseJsonBody } = require('../lib/validate');
 const {
   downloadTaskBody, quickDownloadBody, mirrorBody
 } = require('../../shared/contracts.js');
-const { MIRROR_PLAYLIST_ID_RE, parseNumericId, QQ_SONG_ID_RE } = require('../../shared/predicates.js');
+const { MIRROR_PLAYLIST_ID_RE, parseNumericId, QQ_SONG_ID_RE, SONGMID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
@@ -326,13 +326,16 @@ app.post('/downloads/local/mirror', async (c) => {
       .map(t => ({
         id: String(t.id),
         name: String(t.name || '未知歌曲').slice(0, 200),
-        ar: Array.isArray(t.ar || t.artists) ? (t.ar || t.artists).slice(0, 20) : [],
+        // ar 收窄成 {name} 标量组——客户端投影同口径；任意形状对象不该整只落 raw_json
+        ar: (Array.isArray(t.ar || t.artists) ? (t.ar || t.artists) : [])
+          .slice(0, 20)
+          .map(a => ({ name: String(typeof a === 'string' ? a : a?.name ?? '').slice(0, 200) })),
         al: (t.al && typeof t.al === 'object') ? t.al
           : (t.album && typeof t.album === 'object') ? t.album : {},
         dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0),
         // qq 源私有字段只收 mediaMid（vkey filename 键）——其余下载链用不上；
         // 形态校验防任意对象进 raw_json
-        ...(t.qq && /^[0-9A-Za-z]{10,20}$/.test(String(t.qq.mediaMid || ''))
+        ...(t.qq && SONGMID_RE.test(String(t.qq.mediaMid || ''))
           ? { qq: { mediaMid: String(t.qq.mediaMid) } } : {})
       }));
     const skipped = allTracks.length - numeric.length;

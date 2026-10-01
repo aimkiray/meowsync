@@ -120,7 +120,7 @@
 <script>
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
-import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, isSongmidLike } from '../lib/url.js'
+import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -146,7 +146,7 @@ export default {
       default: 'off'
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
     const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
@@ -207,6 +207,15 @@ export default {
         }
         emit('search-qq-songs', kw)
         return
+      }
+      // 单曲链接先于歌单 id 提取——music.163.com/song?id=N 的 ?id= 会撞
+      // extractPlaylistId 的歌单兜底；裸数字仍按歌单惯例走（限含 song 的输入）
+      if (/song/i.test(query)) {
+        const songId = extractNeteaseSongId(query)
+        if (songId) {
+          emit('search-song', songId)
+          return
+        }
       }
       const playlistId = extractPlaylistId(query)
       emit(playlistId ? 'search-by-id' : 'search', playlistId || query, query)

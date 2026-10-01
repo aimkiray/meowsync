@@ -141,7 +141,7 @@ import { downloadsApi } from '../api/downloads'
 import { copyText, shareOrCopy } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
-import { isNeteasePlaylist } from '../shared/predicates.js'
+import { isNeteasePlaylist, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../shared/predicates.js'
 import { toast, pixelConfirm } from '../lib/feedback'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -250,9 +250,9 @@ export default {
       let budget = MIX_IDS_BUDGET
       for (const t of playlist.tracks || []) {
         const id = String(t.id)
-        if (!/^\d+$/.test(id) && !/^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id)
-          && !/^yt_[A-Za-z0-9_-]{11}$/.test(id)
-          && !/^qq_[0-9A-Za-z]{10,20}$/.test(id)) continue
+        if (!/^\d+$/.test(id) && !BV_TRACK_ID_RE.test(id)
+          && !YT_TRACK_ID_RE.test(id)
+          && !QQ_SONG_ID_RE.test(id)) continue
         if (ids.length >= MIX_ID_CAP || id.length + 1 > budget) break
         budget -= id.length + 1
         ids.push(id)
