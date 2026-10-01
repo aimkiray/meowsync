@@ -69,9 +69,12 @@ function requestOrigin(c) {
 // 注意：NeteaseCloudMusicApi 的 request() 对非 200 响应是 reject(answer) 而非 resolve，
 // 因此该函数同时供 try（resolve 路径）与 catch（reject 路径）复用
 function sendUpstreamResult(c, answer) {
-  // Cookie 回传：上游的 Set-Cookie（登录态/匿名token）透传给客户端
+  // Cookie 回传：上游的 Set-Cookie（登录态/匿名token）透传给客户端。
+  // 滤掉与本站会话同名的项——上游若下发 ms_session=xxx 会覆盖客户端的
+  // 有效会话 cookie（造不出合法 token，但能把用户踢回登录页）
   if (Array.isArray(answer.cookie)) {
     for (const cookieStr of answer.cookie) {
+      if (/^ms_session=/i.test(String(cookieStr).trim())) continue;
       c.header('Set-Cookie', cookieStr, { append: true });
     }
   }

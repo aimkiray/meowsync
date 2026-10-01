@@ -217,11 +217,30 @@ server {
 
 ### 忘记密码/锁死恢复
 
-容器或宿主机直接进 sqlite 清表即回到「未启用」态（首次访问重新进建号页）：
+清掉两张表即回到「未启用」态（下次访问重新进建号页）。宿主机有 sqlite3：
 
 ```bash
-sqlite3 <DATA_DIR>/meowsync.db "DELETE FROM sessions; DELETE FROM users;"
+sqlite3 <DATA_DIR>/meowsync.sqlite "DELETE FROM sessions; DELETE FROM users;"
 ```
+
+容器内没有 sqlite3 CLI——用容器自带的 Node + better-sqlite3：
+
+```bash
+docker exec meowsync node -e "const D=require('better-sqlite3');new D('/app/data/meowsync.sqlite').exec('DELETE FROM sessions; DELETE FROM users')"
+```
+
+### 已知边界
+
+- **`a2id$` 哈希仅 Node ≥24.7 可验**：库文件在 Docker（node:24）建号后
+  拿到裸机 Node 20/22 跑会永远「密码错误」——换回来或按上节清表重建
+- **跨「站点」部署不送 cookie**：`SameSite=Lax` 下异 eTLD+1（或 http↔https）
+  的浏览器请求一律不带会话——前后端分离部署必须在同站（同 eTLD+1）；
+  跨站遥控端改用 `REMOTE_TOKEN` 子协议
+- **内容分享链需要账号**：启用登录后 `?mix=`/`?bili=`/`?yt=`/`?qq=` 链接
+  的接收方必须登录；对未登录者有效的分享面只有 `/audio-proxy/t/` 播放链
+- **单进程假设**：PM2/cluster 多实例会让限流桶与 stream-vault 各自为政——
+  `instances` 恒为 1
+- 本会话内已登录页继续播放不受踢门影响（流已下发）；门控只管 API/WS
 
 ## 远程遥控
 
@@ -229,7 +248,8 @@ sqlite3 <DATA_DIR>/meowsync.db "DELETE FROM sessions; DELETE FROM users;"
 - 遥控端：扫描主机端二维码，或直接访问同一服务的 `/?mode=controller`
   （遥控页从当前页面推导 WS 地址，无需额外参数；跨域分离部署时靠 `VITE_API_BASE_URL` 指定 API 地址）
 - 设置 `REMOTE_TOKEN`（后端）与 `VITE_REMOTE_TOKEN`（构建期）启用令牌校验；
-  未设置时遥控通道对该服务地址的任何可达者开放，仅适合受信任的局域网自用
+  启用登录后浏览器遥控端经会话 cookie 鉴权，无需再配 VITE_REMOTE_TOKEN；
+  两者皆无且未登录的连接一律 401
 - WebSocket 校验 Origin：默认同源或 `CORS_ORIGINS` 白名单内来源；controller 连接数上限 32，逐连接消息限流
 
 ## 故障排除

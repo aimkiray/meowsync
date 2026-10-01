@@ -315,10 +315,11 @@ app.get('/bilibili/stream', async (c) => {
     // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
     // audio-proxy 端口策略会拒——用同一校验器预筛，拿第一个能过代理的地址
     // prefer=best 消耗的是运营者大会员轨——配了 DOWNLOAD_TOKEN 的部署里
-    // 要求带令牌才放行，匿名访客按常规档处理（不报错，静默回落）
+    // 要求带令牌才放行，匿名访客按常规档处理（不报错，静默回落）。
+    // 已登录会话与令牌等效（c.get('user') 由 authGate 验过）
     const wantBest = c.req.query('prefer') === 'best';
     const token = process.env.DOWNLOAD_TOKEN || '';
-    const prefer = wantBest && (!BILI_COOKIE || !token
+    const prefer = wantBest && (!BILI_COOKIE || !token || c.get('user')
       || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
     const streams = pickStreamList(playurl, kind, prefer);
     // hasVideo 语义 = 「存在浏览器解得动的 avc1」——kind=video 下若整档只有

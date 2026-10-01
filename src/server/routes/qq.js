@@ -113,10 +113,12 @@ app.get('/qq/stream', async (c) => {
   }
   const mmid = SONGMID_RE.test(c.req.query('mmid') || '') ? c.req.query('mmid') : '';
   // prefer=best 消耗登录态 VIP/无损档——与 bilibili 同款令牌门：配了
-  // QQ_COOKIE+DOWNLOAD_TOKEN 时要求 x-download-token，匿名请求静默回落常规档
+  // QQ_COOKIE+DOWNLOAD_TOKEN 时要求 x-download-token，匿名请求静默回落常规档。
+  // 已登录会话（c.get('user')，authGate 验过）与令牌等效——启用登录的部署
+  // 里浏览器不带 x-download-token，否则会话用户被静默降档
   const wantBest = c.req.query('prefer') === 'best';
   const token = process.env.DOWNLOAD_TOKEN || '';
-  const prefer = wantBest && (!hasQqCookie() || !token
+  const prefer = wantBest && (!hasQqCookie() || !token || c.get('user')
     || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
   try {
     const hit = await pickStream(mid, mmid, prefer, c.req.raw.signal);

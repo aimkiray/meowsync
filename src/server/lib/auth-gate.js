@@ -2,9 +2,8 @@
 // users 表空 → 全放行（向后兼容现有局域网无登录部署——与 DOWNLOAD_TOKEN
 // 「未配即开放」同口径；公网部署请完成 /auth/setup）。
 // 注册顺序见 netease-api-server.js：cors → 本中间件 → 静态 → 路由。
-const crypto = require('crypto');
 const { isApiPath } = require('./api-path');
-const { corsOrigins } = require('./env');
+const { corsOrigins, trustProxyEnabled } = require('./env');
 const { fail } = require('./http-error');
 const usersRepo = require('../repositories/users');
 const sessionsRepo = require('../repositories/sessions');
@@ -39,27 +38,6 @@ function sessionFromCookieHeader(cookieHeader) {
   return sessionsRepo.resolveSession(token);
 }
 
-const downloadTokenHash = process.env.DOWNLOAD_TOKEN
-  ? crypto.createHash('sha256').update(process.env.DOWNLOAD_TOKEN).digest()
-  : null;
-
-// CSRF：cookie 自动携带使跨站表单/脚本天然带上登录态。写请求且 Origin 存在时
-// 必须同源（Origin.host === Host）或命中 CORS 白名单；Origin 缺失放行
-// （非浏览器客户端不发——它们也拿不到 cookie，不在 CSRF 威胁模型里；
-// 浏览器跨站 POST/fetch 必发 Origin，SameSite=Lax 兜住剩余表单场景）。
-// auth.js 的 POST 检查与这里共用本函数——两处口径漂移=一处放行绕过
-function csrfOriginOk(c) {
-  const origin = c.req.header('origin');
-  if (!origin) return true;
-  try {
-    const o = new URL(origin);
-    const proto = o.protocol === 'http:' || o.protocol === 'https:';
-    return (proto && o.host === new URL(c.req.url).host) || corsOrigins().includes(o.origin);
-  } catch {
-    return false;
-  }
-}
-
 async function authGate(c, next) {
   if (isPublic(c)) return next();
   if (!authEnabled()) return next(); // 未启用登录：全放行
@@ -70,16 +48,44 @@ async function authGate(c, next) {
       return fail(c, 403, 'Forbidden');
     }
     c.set('user', sess);
-    return next();
+    await next();
+    // 登录态 API 响应禁缓存——CDN/共享缓存不得回放带会话语义的 200
+    if (!c.res.headers.has('Cache-Control')) c.res.headers.set('Cache-Control', 'no-store');
+    return;
   }
   // x-download-token 降级为「服务对服务/脚本」旁路凭据——浏览器不再需要
-  // 构建期注入 VITE_DOWNLOAD_TOKEN（bundle 内嵌等于向全体访客发口令）
-  if (downloadTokenHash) {
-    const provided = crypto.createHash('sha256')
-      .update(c.req.header('x-download-token') || '').digest();
-    if (crypto.timingSafeEqual(provided, downloadTokenHash)) return next();
+  // 构建期注入 VITE_DOWNLOAD_TOKEN（bundle 内嵌等于向全体访客发口令）。
+  // 懒读 env 而非启动快照——与 env.js 「不拿陈值」承诺同口径
+  if (tokenMatches(c.req.header('x-download-token'), process.env.DOWNLOAD_TOKEN)) {
+    return next();
   }
+  // x-ms-auth 标记：前端拦截器只认本头踢门——上游透传的裸 401 不误触发登出
+  c.header('X-Ms-Auth', 'required');
+  c.header('Cache-Control', 'no-store');
   return c.json({ code: 401, message: '未登录' }, 401);
+}
+
+// CSRF：cookie 自动携带使跨站表单/脚本天然带上登录态。写请求且 Origin 存在时
+// 必须同源（Origin.host === 请求有效 host）或命中 CORS 白名单；Origin 缺失放行
+// （非浏览器客户端不发——它们也拿不到 cookie，不在 CSRF 威胁模型里；
+// 浏览器跨站 POST/fetch 必发 Origin，SameSite=Lax 兜住剩余表单场景）。
+// 「有效 host」与 WS 同源判定同口径：TRUST_PROXY 下先取 X-Forwarded-Host——
+// 反代把 Host 重写成内部地址时，只比 Host 会把自家前端的 Origin 也误判成异源
+// auth.js 的 POST 检查与这里共用本函数——两处口径漂移=一处放行绕过
+function csrfOriginOk(c) {
+  const origin = c.req.header('origin');
+  if (!origin) return true;
+  try {
+    const o = new URL(origin);
+    const proto = o.protocol === 'http:' || o.protocol === 'https:';
+    const host = (trustProxyEnabled()
+      && (c.req.header('x-forwarded-host') || '').split(',')[0].trim())
+      || c.req.header('host') || '';
+    return (proto && host && o.host.toLowerCase() === host.toLowerCase())
+      || corsOrigins().includes(o.origin);
+  } catch {
+    return false;
+  }
 }
 
 // 登录启用态：users 空表 = 未启用（authGate 与 WS 共用同一判定，防两边漂移）

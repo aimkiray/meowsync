@@ -116,8 +116,8 @@ if (downloadToken) {
       || p === '/song-meta' || p.startsWith('/song-meta/'))
       && c.req.method !== 'GET' && c.req.method !== 'HEAD';
     if (!protectedWrite) return next();
-    // 已登录会话放行（authGate 已验过，这里再查一次保中间件独立成立）
-    if (sessionFromCookieHeader(c.req.header('cookie'))) return next();
+    // 已登录会话放行（authGate 已验过并 set('user')——直接消费不二次查库）
+    if (c.get('user') || sessionFromCookieHeader(c.req.header('cookie'))) return next();
     const providedHash = crypto.createHash('sha256')
       .update(c.req.header('x-download-token') || '')
       .digest();
@@ -236,18 +236,19 @@ const remote = attachRemoteControl(server, {
 });
 // 开放监听 + 无遥控令牌：同网段任意主机都能接管 host 角色/操控播放——
 // 局域网自用可忽略，公网/共享网络部署必须设 REMOTE_TOKEN。
-// 覆盖所有"监听全网卡"写法：0.0.0.0/::/::0/[::]/0（Node 对这些都绑定全网卡）
-if (!process.env.REMOTE_TOKEN && ['0.0.0.0', '::', '::0', '[::]', '0'].includes(HOST.trim())) {
-  console.warn('[remote] REMOTE_TOKEN 未设置且监听所有网卡：任何可达客户端都能控制播放。公网部署请配置 REMOTE_TOKEN');
+// 覆盖所有"监听全网卡"写法：0.0.0.0/::/::0/[::]/0（Node 对这些都绑定全网卡）。
+// 登录启用后 WS 有会话门——两条警告的共同前提都是「门全空」
+const { authEnabled } = require('./src/server/lib/auth-gate');
+const authReady = (() => { try { return authEnabled(); } catch { return false } })();
+const onAllInterfaces = ['0.0.0.0', '::', '::0', '[::]', '0'].includes(HOST.trim());
+if (!process.env.REMOTE_TOKEN && !authReady && onAllInterfaces) {
+  console.warn('[remote] REMOTE_TOKEN 未设置且登录未启用：任何可达客户端都能控制播放。公网部署请配置 REMOTE_TOKEN 或完成 /auth/setup');
 }
 // 空 users 表 = 登录未启用 = 公网裸奔窗口：任何先到者都能 POST /auth/setup
 // 接管管理员。启动时大声提示，文档中要求先完成 setup 再对外开放端口
-try {
-  const { authEnabled } = require('./src/server/lib/auth-gate');
-  if (!authEnabled() && ['0.0.0.0', '::', '::0', '[::]', '0'].includes(HOST.trim())) {
-    console.warn('[auth] 登录体系未初始化：对外监听时任何人都能执行 /auth/setup 建号。请先完成初始化再开放端口');
-  }
-} catch { /* 表未就绪不影响启动 */ }
+if (!authReady && onAllInterfaces) {
+  console.warn('[auth] 登录体系未初始化：对外监听时任何人都能执行 /auth/setup 建号。请先完成初始化再开放端口');
+}
 
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
 // WS 连接由 remote.close() 立即 terminate（升级 socket 不归 close()/
