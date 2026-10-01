@@ -212,6 +212,8 @@ const mkGroupWindow = (get) => usePagedList({
   resetWhen: () => props.selectedQueue?.id,
   scrollRoot: () => scrollEl.value
 });
+// pgXxx 是普通对象——模板里 pgXxx.rows.value 的 .value 是必须的：
+// Vue 只自动解包渲染上下文顶层 ref，嵌套在普通对象内的 ref 永不自动解包
 const pgFailed = mkGroupWindow(() => groupedTasks.value.failed);
 const pgDownloading = mkGroupWindow(() => groupedTasks.value.downloading);
 const pgPending = mkGroupWindow(() => groupedTasks.value.pending);

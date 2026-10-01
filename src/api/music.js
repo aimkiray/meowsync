@@ -81,11 +81,14 @@ export const musicApi = {
   },
 
   // 单曲搜索深挖：cloudsearch 上游带 offset 翻页 + songCount 总数。
-  // 与 searchSongs 分离——返回形带 total，调用面互不污染
+  // 与 searchSongs 分离——返回形带 total，调用面互不污染；同样裹 withRetry
+  // （首屏腿与深挖腿共用，瞬断时与旧 searchSongs 同口径自愈）
   searchSongsPage: async (keywords, { limit = 20, offset = 0, signal } = {}) => {
-    const response = await api.get('/cloudsearch', {
-      params: { keywords, type: 1, limit, offset }, signal
-    })
+    const response = await withRetry(() =>
+      api.get('/cloudsearch', {
+        params: { keywords, type: 1, limit, offset }, signal
+      })
+    )
     const data = unwrapBody(response)
     return { songs: data.result?.songs || [], total: data.result?.songCount ?? null }
   },

@@ -437,6 +437,9 @@ export default {
     const moveRow = (index, dir) => {
       const to = index + dir
       if (to < 0 || to >= props.queue.length) return
+      // 窗边界排序：目标行在窗外时先物化——否则行移出前缀窗后
+      // DOM（含聚焦的握把）卸载，焦点掉回 body，后续 ↑↓ 会命中全局音量热键
+      queueEnsureRendered(to)
       emit('queue-move', { from: index, to })
     }
 
@@ -445,6 +448,9 @@ export default {
       event.preventDefault()
       const container = queueContainer.value
       if (!container) return
+      // 拖拽的落点域是全队列——渲染窗必须物化到底，
+      // 否则 querySelectorAll 只数得到已渲行，向下拖会被窗底截断
+      queueEnsureRendered(props.queue.length - 1)
       const pid = event.pointerId
       dragIndex.value = index
 

@@ -702,7 +702,9 @@ export default {
     // 渐进渲染窗：千曲歌单不再一次渲全量 DOM——前缀窗 150 起步，
     // 哨兵行（IO 命中或手动点按）扩窗。复位只认歌单身份：
     // silent 同步/单曲增删换 songs 引用时不回卷（不踢滚动位置）；
-    // showVipSongs 过滤开关同理不回卷（前缀窗自夹）
+    // showVipSongs 过滤开关同理不回卷（前缀窗自夹）。
+    // 已签收代价：窗外行不在 DOM——Ctrl+F/读屏只能覆盖已渲段
+    // （虚拟化常态代价；哨兵键可聚焦，键盘仍能扩窗触达全表）
     const rowsEl = ref(null)
     const {
       rows: pagedRows, hasMore: pgHasMore, renderedCount,
