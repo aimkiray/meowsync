@@ -2532,14 +2532,15 @@ export default {
     const postProcessLyrics = async (song, lyricId, seq, signal = null) => {
       if (!lyrics.value.length) return
       const st = await aiApi.status()
-      if (!st?.enabled) return
       // 词属主复查：每个 await 后都可能已切歌/重载——写回前必须确认
       const ownsLyric = () => lyricProcSeq === seq
         && lyricOwnerKey.value === lyricId && currentPlayingId === song.id
 
       // ① 外部曲歌词归属核验（bilibili/youtube 经匹配才来的词源有风险；
       //    qq 曲用自家词源时不验——词曲同属一台天然正确；仅当回落到匹配的
-      //    网易云词源（lyricId==neteaseId）才是嫁接词，照样过核验）
+      //    网易云词源（lyricId==neteaseId）才是嫁接词，照样过核验）。
+      //    不因 enabled=false 跳过：服务端先回已落库的判定缓存，命中即生效
+      //    ——AI 关停后旧否决仍能挡住错词；未命中才 503 由 catch 放行
       const ext = song?.youtube
         ? { title: song.youtube.title, author: song.youtube.author || '' }
         : song?.bilibili
@@ -2577,7 +2578,8 @@ export default {
       }
 
       // ② 无官方译文 + 非中文语境 → 自动翻译（普通网易云外语曲同样受益）
-      if (!ownsLyric() || !lyrics.value.length) return
+      //    AI 未配置时 503 会每首歌重发，这里直接早退省一跳
+      if (!st?.enabled || !ownsLyric() || !lyrics.value.length) return
       if (lyrics.value.some(l => l.translation)) return
       if (lyricCjkDominant(lyrics.value)) return
       try {
@@ -2587,7 +2589,9 @@ export default {
           const r = await aiApi.translateLyric(lyricId)
           tlyric = r?.tlyric || null
           lines = r?.lines
-          if (tlyric) aiLyricTranslations.set(lyricId, tlyric)
+          // 负结果也入会期缓存（skip 哨兵/already-zh/无词）——否则每播
+          // 一次同首歌都重打一次 translate；请求异常走 catch 不缓存
+          aiLyricTranslations.set(lyricId, tlyric)
         }
         if (!tlyric || !ownsLyric()) return
         // 服务端 tlyric 已回贴原时间戳并透传 [offset:] 标签——parse 后时序

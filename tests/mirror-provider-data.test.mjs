@@ -12,11 +12,12 @@ import { join } from 'node:path';
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'meowsync-mirror-'));
 const require = createRequire(import.meta.url);
 
-let mirror, tracksRepo, providerDataOf;
+let mirror, tracksRepo, providerDataOf, downloadTasksRepo;
 before(() => {
   mirror = require('../src/server/services/local-mirror.js');
   tracksRepo = require('../src/server/repositories/playlistTracks.js');
   providerDataOf = require('../src/server/services/download-manager.js').providerDataOf;
+  downloadTasksRepo = require('../src/server/repositories/downloadTasks.js');
 });
 
 const track = (over = {}) => ({
@@ -67,4 +68,33 @@ test('老镜像（无 title/author）重传补齐：签名变化触发重写', (
   assert.equal(pd.bilibili.title, '新标题');
   assert.equal(pd.bilibili.author, 'UP');
   assert.equal(pd.neteaseId, '777');
+});
+
+test('providerDataOf 边界：qq 分支带回落词源签名 / 纯网易云曲为 null / 缺 provider 字段的外部曲保底 neteaseId', () => {
+  // qq 曲：mediaMid + 回落核验签名（名/艺人）+ neteaseId 全带
+  const qqPd = providerDataOf({ id: 'qq_001', name: 'QQ曲', ar: [{ name: '歌手甲' }], qq: { mediaMid: 'mid1' }, neteaseId: '555' });
+  assert.deepEqual(qqPd, {
+    qq: { mediaMid: 'mid1' }, neteaseId: '555', title: 'QQ曲', author: '歌手甲'
+  });
+  // 纯网易云曲：providerData 为 null（词源=自身 id，无需快照）
+  assert.equal(providerDataOf({ id: '12345', name: 'x', ar: [], al: {} }), null);
+  // 外部曲缺 provider 定位字段但有匹配词源——neteaseId 单独落库保词源
+  assert.deepEqual(providerDataOf({ id: 'bv_BV1xx411c7mD', name: 'x', neteaseId: '88' }), { neteaseId: '88' });
+  // 数字 id 曲即便混进 neteaseId 字段也不产 providerData（自身即词源）
+  assert.equal(providerDataOf({ id: '12345', name: 'x', neteaseId: '12345' }), null);
+});
+
+test('updateTask 白名单：providerData 写入往返 + null 清列', () => {
+  const row = mirror.mirrorLocalPlaylist('local_pl_d', '歌单', '', [track()]);
+  const task = downloadTasksRepo.createTask({
+    playlistId: row.id, queueId: null, songId: 'bv_BV1xx411c7mD', songName: '歌名', artist: 'UP',
+    providerData: { bilibili: { bvid: 'BV1xx411c7mD', title: '旧标题' } }
+  });
+  assert.equal(task.providerData.bilibili.title, '旧标题');
+  // 复位路径的刷新形态：新快照覆盖
+  downloadTasksRepo.updateTask(task.id, { providerData: { bilibili: { bvid: 'BV1xx411c7mD', title: '新标题' } } });
+  assert.equal(downloadTasksRepo.findTaskById(task.id).providerData.bilibili.title, '新标题');
+  // null 显式清列——providerDataOf 判 null 时别留旧快照
+  downloadTasksRepo.updateTask(task.id, { providerData: null });
+  assert.equal(downloadTasksRepo.findTaskById(task.id).providerData, null);
 });

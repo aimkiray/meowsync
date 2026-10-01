@@ -27,8 +27,32 @@ export interface QqProviderData {
   [k: string]: unknown;
 }
 
+/** B 站源私有元数据（download_tasks.provider_data.bilibili → 流定位 + 核验签名） */
+export interface BiliProviderData {
+  bvid: string;
+  cid?: string | null;
+  page?: number;
+  /** 来源视频标题/UP 主——歌词归属核验的 verdict 签名输入 */
+  title?: string | null;
+  author?: string | null;
+}
+
+/** YouTube 源私有元数据（provider_data.youtube → 流定位 + 核验签名） */
+export interface YouTubeProviderData {
+  videoId: string;
+  title?: string | null;
+  author?: string | null;
+}
+
 export interface ProviderData {
   qq?: QqProviderData;
+  bilibili?: BiliProviderData;
+  youtube?: YouTubeProviderData;
+  /** 匹配到的网易云词源 id——外部曲的歌词/核验都经它寻址 */
+  neteaseId?: string | null;
+  /** qq 嫁接网易词源的核验签名（曲自身名/艺人） */
+  title?: string | null;
+  author?: string | null;
   [k: string]: unknown;
 }
 

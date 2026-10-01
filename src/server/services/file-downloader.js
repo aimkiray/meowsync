@@ -10,9 +10,8 @@ const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('..
 const qq = require('../lib/qq');
 const { resolveBiliAudio, resolveBiliMedia, BILI_PUBLIC_HEADERS } = require('../lib/bilibili');
 const { fetchPlayer: ytFetchPlayer, fetchPlayerWith: ytFetchPlayerWith, pickStreamList: ytPickStreamList } = require('../lib/youtube');
-const { aiEnabled } = require('../lib/ai');
 const lyricAiRepo = require('../repositories/lyricAi');
-const { parseLrcLines, lyricVerdictKey, judgeLyricLines } = require('./lyric-verify');
+const { verifyDownloadOwnership } = require('./lyric-verify');
 
 // qq_<songmid> / bv_<bvid>[_pN] / yt_<videoId> 曲目的服务端下载分发：
 // 各源自有流直取（不经网易云解锁链——别家曲库不是它们的源），
@@ -34,8 +33,10 @@ const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADD
 // 键归一到毫秒：lrc [00:01.23] 与 trans [00:01.230] 精度/补零不同
 // 时严格字符串相等会静默丢整曲译文
 function lrcTsKey(tag) {
-  const m = tag.match(/^\[(\d+):(\d+(?:\.\d+)?)\]$/);
-  return m ? Math.round((+m[1] * 60 + +m[2]) * 1000) : null;
+  // [mm:ss.xxx] 与 [mm:ss:xx] 两种毫秒分隔都认（parseLrcLines 同口径）
+  const m = tag.match(/^\[(\d+):(\d+(?:[.:]\d+)?)\]$/);
+  if (!m) return null;
+  return Math.round((+m[1] * 60 + +m[2].replace(':', '.')) * 1000);
 }
 function mergeLrcTrans(lrc, trans) {
   if (!trans || typeof trans !== 'string') return lrc;
@@ -49,7 +50,12 @@ function mergeLrcTrans(lrc, trans) {
   return lrc.split('\n').map(line => {
     const m = line.match(/^(\[[\d:.]+\])/);
     const hit = m && transMap.get(lrcTsKey(m[1]));
-    return hit ? `${line}\n${m[1]}${hit.text}` : line;
+    if (!hit) return line;
+    // AI 译文缓存里未译行是「原文占位」（占住时间戳防邻行错贴）——
+    // 播放端 mergeTranslations 判同文不显示，落盘文件同理跳过，否则
+    // 未译行会落成同刻双行「原文+原文」
+    const srcText = line.slice(m[1].length).trim();
+    return hit.text.trim() === srcText ? line : `${line}\n${m[1]}${hit.text}`;
   }).join('\n');
 }
 
@@ -944,23 +950,38 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
       err.code = 'NO_LYRICS';
       throw err;
     }
-    const lyricId = extM ? String(providerData.neteaseId) : songId;
+    let lyricId = extM ? String(providerData.neteaseId) : songId;
     const qqLm = String(lyricId).match(QQ_ID_RE);
     // qq 侧：无词曲（空 lyric 或上游业务码 -1901/-1301 等）映射成 NO_LYRICS——
     // 与网易云链同口径判「缺词不算失败」，否则音画已下完的任务会因歌词段重试
     // 耗尽被标 failed；传输层错误（无 bizCode 标记）照旧抛走重试
-    const response = qqLm
+    let qqDefinitiveEmpty = false;
+    let response = qqLm
       ? await qq.getLyric(qqLm[1], signal)
         .then(r => ({ body: { code: 200, lrc: { lyric: r.lyric || '' }, trans: r.trans || '' } }))
         .catch(e => {
-          if (e && e.bizCode !== undefined) {
-            const err = new Error('歌词不存在');
-            err.code = 'NO_LYRICS';
-            throw err;
-          }
+          if (e && e.bizCode !== undefined) { qqDefinitiveEmpty = true; return null; }
           throw e;
         })
-      : await callNeteaseApi('lyric', { id: lyricId });
+      : await callNeteaseApi('lyric', { id: lyricId }, { signal });
+    // qq 词源缺词时回落已匹配的网易云词源（与播放链同口径）——嫁接词过
+    // 下方同一个归属核验（来源即 QQ 曲自身的名/艺人快照）
+    let qqGrafted = false;
+    if (qqLm && !response?.body?.lrc?.lyric
+        && NETEASE_ID_RE.test(String(providerData?.neteaseId ?? ''))) {
+      const fb = await callNeteaseApi('lyric', { id: String(providerData.neteaseId) }, { signal })
+        .catch(() => null);
+      if (fb?.body?.code === 200 && fb.body.lrc?.lyric) {
+        response = fb;
+        lyricId = String(providerData.neteaseId);
+        qqGrafted = true;
+      }
+    }
+    if (qqDefinitiveEmpty && !response?.body?.lrc?.lyric) {
+      const err = new Error('歌词不存在');
+      err.code = 'NO_LYRICS';
+      throw err;
+    }
     if (signal?.aborted) {
       const err = new Error('已取消');
       err.aborted = true;
@@ -980,36 +1001,25 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
       throw err;
     }
 
-    // 错词不落盘：bv_/yt_ 导入曲的网易云词源可能是错配——下载链与播放链
-    // 同 verdict 签名核验归属（命中缓存零成本；无 title/author 或 AI 关
-    // 则跳过，按原样落盘）。AI 判不符 → NO_LYRICS 跳过而非带错词落盘
-    const extSrc = String(songId).startsWith('bv_')
-      ? providerData?.bilibili : providerData?.youtube;
-    if (extM && aiEnabled() && extSrc?.title?.trim()) {
-      try {
-        const vkey = lyricVerdictKey(lyricId, extSrc.title, extSrc.author || '');
-        const cached = lyricAiRepo.getVerdict(vkey, 'lyric');
-        // 无时间戳的纯文本词 parse 出 0 行——没东西可验，按「无词」放过
-        const lines = cached ? null : parseLrcLines(lrc.lyric);
-        const ok = cached ? !!cached.ok : (!lines.length ? true
-          : await judgeLyricLines({ vkey, lines, title: extSrc.title, author: extSrc.author || '', signal }));
-        if (ok === false) {
-          console.info(`[download] ${songId} 歌词归属核验不符，跳过落盘: ${String(extSrc.title).slice(0, 80)}`);
-          const err = new Error('歌词与来源不匹配');
-          err.code = 'NO_LYRICS';
-          throw err;
-        }
-      } catch (e) {
-        if (e?.code === 'NO_LYRICS' || e?.aborted) throw e;
-        // 核验通道故障放行——AI 是增强不是门禁
-        console.warn(`[download] ${songId} 歌词核验失败放行:`, e?.message || e);
+    // 错词不落盘：嫁接词源（bv_/yt_ 经匹配、qq 缺词回落网易云）可能是错配——
+    // 与播放链同 verdict 签名核验归属，决策收敛在 lyric-verify：
+    // 已落库判定不随 aiEnabled 旁路；AI 关只影响新判定的来源
+    if (extM || qqGrafted) {
+      const ownership = await verifyDownloadOwnership({
+        songId, lyricId, providerData, grafted: qqGrafted, lrc: lrc.lyric, signal
+      });
+      if (ownership === false) {
+        console.info(`[download] ${songId} 歌词归属核验不符，跳过落盘`);
+        const err = new Error('歌词与来源不匹配');
+        err.code = 'NO_LYRICS';
+        throw err;
       }
     }
 
     // 官方译文按同刻时间戳插到原文行后落盘（标准合并 LRC 格式——播放器
-    // 同刻双行显示原文+译文；网易 tlyric 与 QQ trans 同口径处理）；
-    // 无官方译文时吃 AI/历史译文缓存——播过已译的歌下载不该丢译文
-    const trans = (qqLm ? response.body.trans : response.body.tlyric?.lyric)
+    // 同刻双行显示原文+译文；网易 tlyric 与 QQ trans 同口径处理，qq 嫁接
+    // 网易云的回落响应也是 tlyric 形态）；无官方译文时吃 AI/历史译文缓存
+    const trans = (response.body.tlyric?.lyric || response.body.trans)
       || lyricAiRepo.getCachedTranslation(lyricId)?.tlyric || '';
     const lyricText = mergeLrcTrans(lrc.lyric, trans);
 

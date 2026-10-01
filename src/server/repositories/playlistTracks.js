@@ -32,6 +32,48 @@ function replaceTracksForPlaylist(playlistId, tracks) {
   transaction();
 }
 
+const parseJsonColumn = (text, fallback) => {
+  try {
+    const parsed = JSON.parse(text || '');
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+function trackFromRow(row) {
+  // 单行 JSON 损坏不该让整个歌单/建队列 500——退化到列字段重建；
+  // 非对象/非数组形态同理（下游会对 ar 跑 .filter 之类数组方法）
+  const rawObj = parseJsonColumn(row.raw_json, {});
+  const raw = typeof rawObj === 'object' ? rawObj : {};
+  const artists = Array.isArray(raw.ar) ? raw.ar : parseJsonColumn(row.artist_json, []);
+  const rawAlbum = (raw.al && typeof raw.al === 'object' && !Array.isArray(raw.al))
+    ? raw.al : parseJsonColumn(row.album_json, {});
+  const album = (rawAlbum && typeof rawAlbum === 'object' && !Array.isArray(rawAlbum))
+    ? rawAlbum : {};
+  return {
+    ...raw,
+    id: raw.id ?? row.song_id,
+    name: raw.name ?? row.name,
+    ar: Array.isArray(artists) ? artists : [],
+    al: album,
+    dt: raw.dt ?? row.duration_ms
+  };
+}
+
+// 单条查询：retry 类路径只需要一首歌的镜像行，全表 list+parse 是 N+1
+function findTrackBySongId(playlistId, songId) {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT *
+    FROM playlist_tracks
+    WHERE playlist_id = ? AND song_id = ?
+    ORDER BY position ASC
+    LIMIT 1
+  `).get(playlistId, String(songId));
+  return row ? trackFromRow(row) : null;
+}
+
 function listTracksByPlaylistId(playlistId) {
   const db = getDb();
   const rows = db.prepare(`
@@ -41,37 +83,11 @@ function listTracksByPlaylistId(playlistId) {
     ORDER BY position ASC
   `).all(playlistId);
 
-  const parseJsonColumn = (text, fallback) => {
-    try {
-      const parsed = JSON.parse(text || '');
-      return parsed ?? fallback;
-    } catch {
-      return fallback;
-    }
-  };
-
-  return rows.map(row => {
-    // 单行 JSON 损坏不该让整个歌单/建队列 500——退化到列字段重建；
-    // 非对象/非数组形态同理（下游会对 ar 跑 .filter 之类数组方法）
-    const rawObj = parseJsonColumn(row.raw_json, {});
-    const raw = typeof rawObj === 'object' ? rawObj : {};
-    const artists = Array.isArray(raw.ar) ? raw.ar : parseJsonColumn(row.artist_json, []);
-    const rawAlbum = (raw.al && typeof raw.al === 'object' && !Array.isArray(raw.al))
-      ? raw.al : parseJsonColumn(row.album_json, {});
-    const album = (rawAlbum && typeof rawAlbum === 'object' && !Array.isArray(rawAlbum))
-      ? rawAlbum : {};
-    return {
-      ...raw,
-      id: raw.id ?? row.song_id,
-      name: raw.name ?? row.name,
-      ar: Array.isArray(artists) ? artists : [],
-      al: album,
-      dt: raw.dt ?? row.duration_ms
-    };
-  });
+  return rows.map(trackFromRow);
 }
 
 module.exports = {
   replaceTracksForPlaylist,
-  listTracksByPlaylistId
+  listTracksByPlaylistId,
+  findTrackBySongId
 };
