@@ -11,6 +11,7 @@ const { pickByDuration } = require('../src/server/services/unlock/match.js');
 const { cookieToJson, cookieObjToString } = require('../src/server/services/netease/request.js');
 const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('../src/server/services/unlock/index.js');
 const { hasQqCookie } = require('../src/server/lib/qq.js');
+const { isApiPath } = require('../src/server/lib/api-path.js');
 
 test('端点表覆盖白名单且名称双向一致', () => {
   for (const name of ALLOWED_APIS) {
@@ -68,6 +69,64 @@ test('qqCookie 非空路径不递归（惰性续期只读快照不回读）', ()
   try {
     assert.equal(hasQqCookie(), true);
   } finally {
+    if (saved.QQ_COOKIE === undefined) delete process.env.QQ_COOKIE;
+    else process.env.QQ_COOKIE = saved.QQ_COOKIE;
+    if (saved.NEW_QQ_COOKIE === undefined) delete process.env.NEW_QQ_COOKIE;
+    else process.env.NEW_QQ_COOKIE = saved.NEW_QQ_COOKIE;
+  }
+});
+
+// isApiPath 收口钉：摘除的上游路由家族仍判 API（JSON 404），SPA 路径不被误伤
+test('isApiPath：旧上游家族判 API，SPA/静态与真端点不误伤', () => {
+  for (const p of ['/login/qr/check', '/user/detail', '/playlist/create', '/comment/like']) {
+    assert.equal(isApiPath(p), true, `${p} 应判为 API 路径`);
+  }
+  // 真端点与自有前缀仍在
+  assert.equal(isApiPath('/song_url'), true);
+  assert.equal(isApiPath('/downloads/list'), true);
+  // SPA 壳与未知前端路径仍非 API
+  for (const p of ['/', '/index.html', '/assets/index.js', '/settings']) {
+    assert.equal(isApiPath(p), false, `${p} 不应判为 API`);
+  }
+});
+
+// 续期 fire 路径回归钉：真实 QQ cookie 的 refresh 键是 psrf_qqrefresh_token
+// （unm 靠无锚定子串命中），锚定 cookieVal 曾让续期对文档化形态整链失效；
+// createtime 到期 + fetch stub 回新 key → NEW_QQ_COOKIE 四键重写
+test('QQ 续期：psrf_qqrefresh_token 命中 + 按名重写 NEW_QQ_COOKIE', async () => {
+  const saved = {
+    QQ_COOKIE: process.env.QQ_COOKIE,
+    NEW_QQ_COOKIE: process.env.NEW_QQ_COOKIE,
+    fetch: globalThis.fetch,
+  };
+  // musickey_createtime 极旧 → 必然落在续期窗内
+  process.env.QQ_COOKIE = 'uin=o123456; psrf_qqrefresh_token=RT_OLD; qqmusic_key=MK_OLD; '
+    + 'musickey_createtime=1; psrf_musickey_createtime=1';
+  delete process.env.NEW_QQ_COOKIE;
+  const seen = [];
+  globalThis.fetch = async (url, opts) => {
+    seen.push({ url, body: opts?.body });
+    return new Response(JSON.stringify({
+      req: { code: 0, data: { musickey: 'MK_NEW', musickeyCreateTime: 1999999999 } },
+    }), { status: 200 });
+  };
+  try {
+    assert.equal(hasQqCookie(), true); // 惰性触发续期
+    // 等 microtask+inflight 完成（finally 清 inflight）
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(seen.length, 1, '应恰好一次 LoginServer 外呼');
+    assert.match(seen[0].url, /u\.y\.qq\.com/);
+    const sent = JSON.parse(seen[0].body);
+    assert.equal(sent.req.param.refresh_token, 'RT_OLD'); // psrf_ 键被命中
+    assert.equal(sent.req.param.musickey, 'MK_OLD');
+    assert.equal(sent.req.param.musicid, 123456); // uin=o123456 剥前缀
+    const renewed = process.env.NEW_QQ_COOKIE || '';
+    assert.match(renewed, /qqmusic_key=MK_NEW/);
+    assert.match(renewed, /qm_keyst=MK_NEW/); // 缺失键补尾
+    assert.match(renewed, /musickey_createtime=1999999999/);
+    assert.match(renewed, /psrf_qqrefresh_token=RT_OLD/); // 无轮换应答则保留
+  } finally {
+    globalThis.fetch = saved.fetch;
     if (saved.QQ_COOKIE === undefined) delete process.env.QQ_COOKIE;
     else process.env.QQ_COOKIE = saved.QQ_COOKIE;
     if (saved.NEW_QQ_COOKIE === undefined) delete process.env.NEW_QQ_COOKIE;

@@ -1,5 +1,5 @@
 const { Hono } = require('hono');
-const { apiModules, callNeteaseApi, resolveSongUrls, needsUnlock } = require('../services/netease-api');
+const { apiModules, callNeteaseApi, resolveSongUrls, needsUnlock, MAX_UNLOCK_ITEMS } = require('../services/netease-api');
 // 流式限长读取：Content-Length 只是声明值，chunked 请求必须读流按字节截断
 const { readParamsBody } = require('../lib/http-body');
 const { stripAbsolutePaths } = require('../lib/sanitize');
@@ -208,8 +208,8 @@ app.all('/:apiName', async (c) => {
     // 大批量不该被 20 阈值误拒（MAX_UNLOCK_ITEMS 语义对齐）
     if (['song_url', 'song_url_v1'].includes(apiName) && Array.isArray(result.body?.data)) {
       const count = result.body.data.filter(needsUnlock).length;
-      if (count > 20) {
-        return c.json({ code: 400, message: `一次最多处理 20 首歌曲的解锁（待解锁 ${count}）` }, 400);
+      if (count > MAX_UNLOCK_ITEMS) {
+        return c.json({ code: 400, message: `一次最多处理 ${MAX_UNLOCK_ITEMS} 首歌曲的解锁（待解锁 ${count}）` }, 400);
       }
       await resolveSongUrls(result.body.data, {
         purpose,
