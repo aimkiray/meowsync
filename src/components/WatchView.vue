@@ -1007,14 +1007,24 @@ export default {
   padding: 3px 4px;
   font-size: var(--lyric-fs, 18px);
   color: var(--ink-64);
-  transition: color .25s;
+  transition: color .25s, font-size .25s;
 }
 
+/* 当前行三层强调：accent 深档字色（双主题都过纸面对比度线）+ 放一档
+   字号 + 行内三角界标。字号差拉大后普通行淡色与之层级清晰 */
 .watch-lyric-line--current {
-  color: var(--ink);
+  color: var(--accent-magenta-ink);
   font-weight: 700;
-  font-size: calc(var(--lyric-fs, 18px) + 2px);
+  font-size: calc(var(--lyric-fs, 18px) + 4px);
 }
+/* 界标挂首个 <p> 的内联伪元素——随居中文字流两侧对称占位，不破坏居中 */
+.watch-lyric-line--current > p:first-child::before,
+.watch-lyric-line--current > p:first-child::after {
+  font-size: .8em;
+  font-weight: 400;
+}
+.watch-lyric-line--current > p:first-child::before { content: '▸'; margin-right: .5em; }
+.watch-lyric-line--current > p:first-child::after { content: '◂'; margin-left: .5em; }
 
 .watch-lyric-translation {
   /* opacity .75 叠在 ink-86 上画布对比度会跌破 3.5:1——升 .9 保读；
