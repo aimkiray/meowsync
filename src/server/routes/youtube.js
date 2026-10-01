@@ -9,7 +9,40 @@ const app = new Hono();
 
 // Innertube 原语（fetchPlayer/pickStreamList/innertubeSearch）在 lib/youtube.js
 // ——解锁层 services/unlock/youtube.js 复用同一实现，不维护两份客户端表
-const { fetchPlayer, pickStreamList } = require('../lib/youtube');
+const { fetchPlayer, fetchPlayerWith, pickStreamList } = require('../lib/youtube');
+const { fetchStream } = require('../services/file-downloader');
+
+// 「SABR 闸控」探测缓存：videoId → {gated, ts}。自适应流被闸时签名批
+// 寿命 ~6h，探测结果缓存 30min 同量级——连播/重试不重复白打上游
+const GATE_TTL_MS = 30 * 60e3;
+const GATE_CACHE_MAX = 512;
+const gateCache = new Map();
+
+// 闸控指纹：自适应流首段窗内的 Range 放行、窗外有界 Range 一律 403、全量
+// GET 同拒。窗口不是精确 1MiB——实测紧贴 1MiB 边界的 1KiB 探测会假阴，
+// 2MiB 深处才稳定 403。2xx/416 判未闸（416 是文件小于窗长的边界），403
+// 判闸控，其余失败视同未闸（候选链自带兜底）
+async function probeGated(url, signal) {
+  try {
+    const resp = await fetchStream(url, {
+      timeout: 10000, signal,
+      headers: { Range: 'bytes=2097152-2098175' }
+    });
+    resp.data.destroy();
+    return false;
+  } catch (e) {
+    return Boolean(e?.fatal && /403/.test(e.message));
+  }
+}
+
+// formats 里的 progressive mp4 合流档——闸控视频唯一确定能拉全的形态，
+// 也是 VISIONOS 批不保证回的部分；两处候选链拼尾共用同一挑选口径
+function pickProgressiveMp4(sd) {
+  return (Array.isArray(sd?.formats) ? sd.formats : [])
+    .filter(f => typeof f?.url === 'string' && f.url
+      && (f.mimeType || '').startsWith('video/mp4'))
+    .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
+}
 
 // videoId 提取委托共享形态表 extractYouTubeId（src/shared/predicates.js）：
 // watch?v= / youtu.be/ / shorts/ / embed/ / live/ / 本站 ?yt= 分享链 / 裸 11 位 id。
@@ -142,17 +175,38 @@ app.get('/youtube/stream', async (c) => {
     return c.json({ code: 400, message: 'invalid video id' }, 400);
   }
   try {
-    const player = await fetchPlayer(videoId, c.req.raw.signal);
-    const sd = player.streamingData;
-    const streams = pickStreamList(sd, kind, c.req.query('prefer'));
-    // 部分视频的自适应流被 SABR 闸控：全量 GET 与越过首段窗的 Range 一律
-    // 403，只有 formats 里的 progressive 合流档能拉全——把它挂进候选链尾
-    // 兜底。audio kind 同样放：合流 mp4 含 AAC 轨，<audio> 按容器嗅探照播。
-    // 正常视频首候选即通（idx 钉住），progressive 只在闸控时被触及
-    const progressive = (Array.isArray(sd?.formats) ? sd.formats : [])
-      .filter(f => typeof f?.url === 'string' && f.url
-        && (f.mimeType || '').startsWith('video/mp4'))
-      .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
+    let sd = (await fetchPlayer(videoId, c.req.raw.signal)).streamingData;
+    let streams = pickStreamList(sd, kind, c.req.query('prefer'));
+    // progressive 合流档是闸控视频的保底命——无条件拼链尾；audio kind
+    // 同样放：合流 mp4 含 AAC 轨，<audio> 按容器嗅探照播
+    let progressive = pickProgressiveMp4(sd);
+
+    // SABR 闸控探测（结果缓存）：被闸的视频换 VISIONOS 客户端重解——
+    // 同一批自适应流它签的 URL 完全不受限，能放回真最高档（实测 itag251
+    // 全量 200）；探测失败/VISIONOS 也倒都优雅退化——原批+progressive
+    // 链照常兜底，只是音质回到合流档
+    let gate = gateCache.get(videoId);
+    if (!gate || Date.now() - gate.ts > GATE_TTL_MS) {
+      const gated = streams.length
+        ? await probeGated(streams[0].url, c.req.raw.signal)
+        : false;
+      gate = { gated, ts: Date.now() };
+      if (gateCache.size >= GATE_CACHE_MAX) {
+        gateCache.delete(gateCache.keys().next().value);
+      }
+      gateCache.set(videoId, gate);
+    }
+    if (gate.gated) {
+      try {
+        const vp = await fetchPlayerWith(videoId, c.req.raw.signal, 'VISIONOS');
+        if (vp?.streamingData) {
+          sd = vp.streamingData;
+          streams = pickStreamList(sd, kind, c.req.query('prefer'));
+          const prog = pickProgressiveMp4(sd);
+          if (prog.length) progressive = prog;
+        }
+      } catch { /* VISIONOS 也拿不到就用原批——链尾合流档照样能播 */ }
+    }
     // 候选回链逐个过代理白名单——signatureCipher 跳过、非 googlevideo
     // 域拒；整条链随 token 下发，代理侧试到第一个能通的档
     const urls = [...new Set([...streams, ...progressive]
