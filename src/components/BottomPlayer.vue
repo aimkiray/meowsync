@@ -65,14 +65,14 @@
             :disabled="!currentSong || isTempPlaylist"
             aria-label="随机播放"
             title="随机播放"
-          ><PixelIcon name="shuffle" :size="18" /></button>
+          ><PixelIcon name="shuffle" :size="20" /></button>
           <button
             @click="$emit('previous')"
             class="transport"
             :disabled="!currentSong || atQueueStart"
             aria-label="上一首"
             title="上一首"
-          ><PixelIcon name="prev" :size="18" /></button>
+          ><PixelIcon name="prev" :size="20" /></button>
           <button
             @click="$emit('toggle-play')"
             class="transport transport--play"
@@ -80,21 +80,21 @@
             :disabled="!currentSong"
             :aria-label="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
             :title="songSwitching ? '切换歌曲中…' : (isPlaying ? '暂停' : '播放')"
-          ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 18 : 22" /></button>
+          ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 20 : 26" /></button>
           <button
             @click="$emit('next')"
             class="transport"
             :disabled="!currentSong || atQueueEnd"
             aria-label="下一首"
             title="下一首"
-          ><PixelIcon name="next" :size="18" /></button>
+          ><PixelIcon name="next" :size="20" /></button>
           <button
             @click="$emit('toggle-play-mode')"
             class="transport transport--edge"
             :disabled="!currentSong"
             :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
-          ><PixelIcon :name="playModeIcon" :size="18" /></button>
+          ><PixelIcon :name="playModeIcon" :size="20" /></button>
           <!-- YTM：time-info 在中列走带簇尾部（repeat 之后），不在右簇 -->
           <span class="player-time hidden lg:inline">
             {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
@@ -418,8 +418,8 @@ export default {
   position: relative; /* player-time 挂出流的锚点 */
 }
 .transport {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -433,8 +433,8 @@ export default {
 .transport:disabled { opacity: .45; cursor: default; }
 .transport--active { color: var(--accent-magenta-on-ink); }
 .transport--play {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
 }
 
 /* 切换中：不换字形，整键灰化。busy≠disabled——仍可按（togglePlay 内有
@@ -524,8 +524,8 @@ export default {
 @media (max-width: 420px) {
   /* 类选择器标边键——免疫簇内加键/挪位导致的序号漂移（nth-of-type 脆弱） */
   .player-controls .transport--edge { display: none; }
-  .transport { width: 30px; height: 30px; }
-  .transport--play { width: 36px; height: 36px; }
+  .transport { width: 32px; height: 32px; }
+  .transport--play { width: 40px; height: 40px; }
   .pg-icobtn--on-ink { width: 30px; height: 30px; } /* 与 transport 同收——否则 30<32 倒挂 */
   .player-controls { gap: 2px; }
   .player-inner { gap: 6px; padding: 8px; }
