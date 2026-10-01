@@ -75,9 +75,9 @@
       <p class="song-state-text">从左侧选择歌单，或在顶部搜索发现新歌单喵~</p>
     </div>
 
-    <div v-else class="flex-1 min-h-0 overflow-y-auto song-rows">
+    <div v-else ref="rowsEl" class="flex-1 min-h-0 overflow-y-auto song-rows">
       <div
-        v-for="(song, index) in filteredSongs"
+        v-for="(song, index) in pagedRows"
         :key="song.id"
         class="song-row"
         :class="{
@@ -108,6 +108,7 @@
               :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
               :alt="song.name"
               class="song-cover"
+              loading="lazy"
             />
             <div v-else class="song-cover song-cover--fallback"><PixelIcon name="note" :size="16" /></div>
           </div>
@@ -145,6 +146,14 @@
           </button>
         </div>
       </div>
+
+      <!-- 渐进渲染哨兵：IO 命中自动扩窗，也是键盘可达的「加载更多」键 -->
+      <button
+        v-if="pgHasMore"
+        :ref="bindSentinel"
+        class="song-list-more ink-btn ink-btn--ghost"
+        @click="loadMoreRows()"
+      >加载更多 · 已显示 {{ renderedCount }} / {{ filteredSongs.length }}</button>
 
       <!-- YTM 曲目列表全滚动：底部只留计数（分页器拆除） -->
       <div class="song-list-footer">
@@ -597,6 +606,12 @@
   flex-wrap: wrap;
 }
 
+/* 渐进渲染哨兵行：与 footer 同款居中位，按钮几何走 ink-btn 原子不另造 */
+.song-list-more {
+  display: flex;
+  margin: 4px auto;
+}
+
 /* ── ⋯ 菜单点击捕手（菜单本体走全局 .pg-menu——teleport 出 scoped 域） ── */
 .download-menu-overlay {
   position: fixed;
@@ -608,6 +623,7 @@
 
 <script>
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
+import { usePagedList } from '../composables/usePagedList.js'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { httpsCover, QQ_SONG_ID_RE } from '../lib/url'
@@ -681,6 +697,21 @@ export default {
         // 隐藏"VIP 且不可播"——qq payPlay 在服务端有 VIP cookie 时实际可播
         return props.songs.filter(song => !isVipUnplayable(song, serverCaps.value))
       }
+    })
+
+    // 渐进渲染窗：千曲歌单不再一次渲全量 DOM——前缀窗 150 起步，
+    // 哨兵行（IO 命中或手动点按）扩窗。复位只认歌单身份：
+    // silent 同步/单曲增删换 songs 引用时不回卷（不踢滚动位置）；
+    // showVipSongs 过滤开关同理不回卷（前缀窗自夹）
+    const rowsEl = ref(null)
+    const {
+      rows: pagedRows, hasMore: pgHasMore, renderedCount,
+      loadMore: loadMoreRows, bindSentinel,
+    } = usePagedList({
+      source: filteredSongs,
+      pageSize: 150,
+      resetWhen: () => props.selectedPlaylist?.id,
+      scrollRoot: () => rowsEl.value,
     })
 
     // 菜单打开的目标歌曲：从全量 songs 里查（不依赖渲染切片）
@@ -1043,6 +1074,12 @@ export default {
 
     return {
       filteredSongs,
+      pagedRows,
+      pgHasMore,
+      renderedCount,
+      loadMoreRows,
+      bindSentinel,
+      rowsEl,
       menuSong,
       isLocalPlaylist,
       isShareShell,

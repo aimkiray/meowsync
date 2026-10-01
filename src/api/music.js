@@ -49,7 +49,7 @@ function unwrapBody(response) {
 export const musicApi = {
   // limit 默认 100：网易歌单搜索对英文/长尾关键词的召回深度很差，
   // 相关结果常排在官方第一页之外（如 "mushroom" 的相关歌单在 25 位以后），
-  // 20 条会直接漏掉。上游实测接受 100，前端已有分页负责展示切片
+  // 20 条会直接漏掉。上游实测接受 100，前端 PlaylistGrid 渐进渲染窗负责展示切片
   searchPlaylists: async (keywords, limit = 100, abortSignal = null) => {
     const response = await withRetry(() =>
       api.get('/search', { params: { keywords, type: 1000, limit }, signal: abortSignal })
@@ -78,6 +78,16 @@ export const musicApi = {
     )
     const data = unwrapBody(response)
     return data.result?.songs || []
+  },
+
+  // 单曲搜索深挖：cloudsearch 上游带 offset 翻页 + songCount 总数。
+  // 与 searchSongs 分离——返回形带 total，调用面互不污染
+  searchSongsPage: async (keywords, { limit = 20, offset = 0, signal } = {}) => {
+    const response = await api.get('/cloudsearch', {
+      params: { keywords, type: 1, limit, offset }, signal
+    })
+    const data = unwrapBody(response)
+    return { songs: data.result?.songs || [], total: data.result?.songCount ?? null }
   },
 
   getPersonalized: async (limit = 12, abortSignal = null) => {
