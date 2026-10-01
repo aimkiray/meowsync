@@ -324,7 +324,7 @@ import { useRemoteControl } from './composables/useRemoteControl'
 import { useHomeFeed } from './composables/useHomeFeed'
 import { readJSON, writeJSON } from './lib/storage'
 import { formatTime } from './lib/format'
-import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
+import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, externalArtistName } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
@@ -694,13 +694,15 @@ export default {
       }
     }
 
-    // B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；歌曲名/封面/歌手
-    // 优先吃网易云匹配（封面与双语歌词的正主），标题/UP主兜底；
+    // B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；歌曲名/封面
+    // 优先吃网易云匹配（封面与双语歌词的正主），演唱者归真实 UP 主名；
     // bilibili 字段挂播放所需的源信息（bvid/cid/hasVideo），neteaseId 仅作歌词源
     const buildBilibiliSong = (data) => ({
       id: `bv_${data.bvid}${(data.page || 1) > 1 ? `_p${data.page}` : ''}`,
       name: data.matched?.name || data.songName || data.title,
-      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.owner || 'Bilibili' }],
+      // 演唱者归真实 UP 主——导入的是「这个视频的演唱」，matched 艺人只作
+      // UP 主名缺失时的兜底（封面/词源仍走 matched）
+      ar: data.owner ? [{ name: data.owner }] : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'Bilibili' }]),
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
@@ -721,9 +723,9 @@ export default {
     const buildYouTubeSong = (data) => ({
       id: `yt_${data.videoId}`,
       name: data.matched?.name || data.songName || data.title,
-      // 未匹配时频道名兜底——authorClean 已剥 ' - Topic'/'VEVO' 后缀；
-      // 频道名被整体剥光（如恰叫 'VEVO'）时回 'YouTube' 而非脏原值
-      ar: data.matched?.ar?.length ? data.matched.ar : [{ name: data.authorClean || 'YouTube' }],
+      // 演唱者归真实频道名（authorClean 已剥 ' - Topic'/'VEVO'）——不是匹配到
+      // 的网易云艺人；频道名被整体剥光（如恰叫 'VEVO'）时退回匹配艺人再兜 'YouTube'
+      ar: data.authorClean ? [{ name: data.authorClean }] : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'YouTube' }]),
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
@@ -732,7 +734,9 @@ export default {
       dt: (data.duration || 0) * 1000,
       youtube: {
         videoId: data.videoId, hasVideo: !!data.hasVideo,
-        title: data.title, author: data.author, matchedBy: data.matchedBy || null
+        // authorClean 持久化：存量自愈/行内展示不必再剥 ' - Topic'/'VEVO'
+        title: data.title, author: data.author, authorClean: data.authorClean || null,
+        matchedBy: data.matchedBy || null
       },
       neteaseId: data.matched?.id || null
     })
@@ -1099,16 +1103,30 @@ export default {
       const savedPlaylists = readJSON(PLAYLISTS_STORAGE_KEY)
       if (Array.isArray(savedPlaylists)) {
         // 过滤 null/无 id 的脏条目，避免后续 String(p.id) 访问抛异常；
-        // 同步字段若非数组（旧数据/手工改坏）会在合并/添加路径抛异常——load 时净化
+        // 同步字段若非数组（旧数据/手工改坏）会在合并/添加路径抛异常——load 时净化。
+        // healExternalAr：旧版导入曲的 ar 曾被网易云匹配艺人覆盖——按持久化的
+        // 频道/UP主名重建演唱者口径，存量导入曲加载即自愈
+        let healedAny = false
+        const healExternalAr = (t) => {
+          const ext = t && externalArtistName(t)
+          // 只在确实偏离口径时改写——无病曲不动引用，也不触发无意义回写
+          if (ext && !(t.ar?.length === 1 && t.ar[0]?.name === ext)) {
+            t.ar = [{ name: ext }]
+            healedAny = true
+          }
+          return t
+        }
         const validPlaylists = savedPlaylists
           .filter(p => p && p.id != null)
           .map(p => ({
             ...p,
-            addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks : undefined,
+            tracks: Array.isArray(p.tracks) ? p.tracks.map(healExternalAr) : p.tracks,
+            addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks.map(healExternalAr) : undefined,
             removedTrackIds: Array.isArray(p.removedTrackIds) ? p.removedTrackIds : undefined,
             lastRemoteIds: Array.isArray(p.lastRemoteIds) ? p.lastRemoteIds : undefined
           }))
         userPlaylists.value.push(...validPlaylists)
+        if (healedAny) savePlaylistsToStorage() // 自愈结果落盘——下次启动不再依赖重算
         console.log('✅ 从本地存储加载歌单:', validPlaylists.length, '个')
       }
     }
