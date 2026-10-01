@@ -31,6 +31,14 @@ function isUnavailableTrack(songData) {
   return songData.unlockFailed || songData.freeTrialInfo != null
 }
 
+// resolve 系错误的重抛帮手：透出服务端 message 的同时保留响应 data——
+// 结构化字段（disstid 歌单跳转、favlist 收藏夹跳转）下游靠它路由
+function resolveRethrow(err) {
+  const e = new Error(err.response.data.message)
+  e.data = err.response.data
+  return e
+}
+
 // 响应形态校验：反代把 API 错指到静态服时会返回 HTML 200——不经校验的
 // `.result`/`.playlist` 会静默吞成空态（"无结果"/"空歌单"假象），必须抛错
 function unwrapBody(response) {
@@ -287,12 +295,30 @@ export const musicApi = {
       timeout: 60000
     }).catch(err => {
       // 服务端错误体 {code,message} 必须透出——axios 对非 2xx 直接 reject，
-      // 不提取的话用户只看到 "status code 502" 而非具体失败原因
-      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      // 不提取的话用户只看到 "status code 502" 而非具体失败原因。
+      // 重抛的裸 Error 带上 .data——favlist/disstid 这类结构化跳转字段
+      // 在 catch 链下游靠它自动转歌单导入，丢了会陷入「请粘顶栏」死循环
+      if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
     })
     const data = unwrapBody(response)
     if (data.code !== 200) throw new Error(data.message || 'B 站解析失败')
+    return data
+  },
+
+  // B 站收藏夹导入：favlist 链接/mlN → 收藏夹元信息 + 归一曲目（服务端
+  // 翻页拉全 + 预算制词源匹配）。大夹链路最坏 ~60s+，超时放宽到 120s
+  getBiliFavlist: async (input, abortSignal = null) => {
+    const response = await api.get('/bilibili/favlist', {
+      params: { input },
+      signal: abortSignal,
+      timeout: 120000
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || '收藏夹获取失败')
     return data
   },
 
@@ -327,7 +353,7 @@ export const musicApi = {
       signal: abortSignal,
       timeout: 60000
     }).catch(err => {
-      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
     })
     const data = unwrapBody(response)
@@ -364,7 +390,7 @@ export const musicApi = {
       signal: abortSignal,
       timeout: 60000
     }).catch(err => {
-      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
     })
     const data = unwrapBody(response)

@@ -128,7 +128,7 @@
 <script>
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
-import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
+import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import { authState } from '../lib/auth-state.js'
 import { authApi } from '../api/auth.js'
@@ -180,6 +180,12 @@ export default {
       cancelSuggest()
       suggestions.value = []
       suggestOpen.value = false
+      // B 站收藏夹链接先于视频判定——favlist/medialist URL 也含 bilibili.com，
+      // 顺序错了会被单曲导入抢走再被服务端弹回
+      if (extractBiliFavlistId(query)) {
+        emit('search-bili', query) // 载荷原样透传——App 层 importBilibiliOrFav 再分单曲/收藏夹
+        return
+      }
       if (isBilibiliInput(query)) {
         emit('search-bili', query)
         return
@@ -297,9 +303,9 @@ export default {
       emit('update:searchQuery', e.target.value)
       const q = e.target.value.trim()
       cancelSuggest()
-      // 纯数字/歌单链接/B站/QQ 输入（含 qq: 前缀）走直达路径，不弹建议
+      // 纯数字/歌单链接/B站（视频与收藏夹）/QQ 输入（含 qq: 前缀）走直达路径，不弹建议
       if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)
-        || isQQInput(q) || extractQQPlaylistId(q) || /^qq[:：]/i.test(q)) {
+        || isQQInput(q) || extractQQPlaylistId(q) || extractBiliFavlistId(q) || /^qq[:：]/i.test(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

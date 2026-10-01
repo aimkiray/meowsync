@@ -75,6 +75,22 @@ export function parseNumericId(raw) {
 }
 
 // ── Bilibili ──
+// 收藏夹链接识别（先于 isBilibiliInput 判定——favlist URL 也含 bilibili.com，
+// 顺序错了会被单曲导入抢走）：space.bilibili.com/<uid>/favlist?fid=N、
+// bilibili.com/medialist/(detail|play)/mlN、整串裸写 mlN。
+// fid= 必须跟在 favlist 语境后——通用 fid 参数（微博等）不该被抢；
+// 裸 mlN 只认整串形态，混在句子里的是普通文本
+export function extractBiliFavlistId(input) {
+  const s = String(input || '').trim();
+  if (!s) return null;
+  if (/^ml(\d{3,})$/i.test(s)) return s.slice(2);
+  // URL 形态限 B 站域——别站的 favlist/fid 参数不该被抢
+  if (!/bilibili\.com/i.test(s)) return null;
+  return s.match(/favlist[^ ]*?\bfid=(\d+)/i)?.[1]
+    || s.match(/medialist\/(?:detail|play)\/ml(\d+)/i)?.[1]
+    || null;
+}
+
 // B 站输入识别：BV 号、av 号、bilibili.com/b23.tv 链接。\b 词边界防长 token 误吞
 export function isBilibiliInput(input) {
   const s = String(input || '');
