@@ -29,8 +29,13 @@ function secureHeaders() {
         "default-src 'self'",
         "script-src 'self' 'sha256-pADVm4OreZWjbx4BMy3eguDHGUp6u17ELX/GgnIjmfQ='",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", // :style 绑定 + 内联启动样式 + 字体表
-        "img-src 'self' https: data: blob:",  // 封面直链上游 CDN
-        "media-src 'self' blob: https:",      // <audio> 同源 + blob + 上游直链兜底
+        // http: 必须保留——HTTP 部署（自托管常态）下网易图床/解锁源 CDN 的
+        // http 封面与直链若被 CSP 掐死会全灭；https 页面里浏览器本就自动升级
+        // 被动 http 资源，放开 http: 不实质削弱 https 部署的防线
+        "img-src 'self' http: https: data: blob:",  // 封面直链上游 CDN
+        // data: 是 Howler 的 unlock 占位 wav（data:audio/wav;base64,…）——
+        // 缺它 audio pool 预热被掐报 "pool exhausted"
+        "media-src 'self' blob: data: http: https:", // <audio> 同源 + blob/data + 上游直链兜底
         "font-src 'self' data: https://fonts.gstatic.com",
         "connect-src 'self' http: https: wss: ws:", // API 同源 + 跨域 http(s) 部署 + dev ws
         "object-src 'none'",
