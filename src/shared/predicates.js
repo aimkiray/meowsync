@@ -46,6 +46,28 @@ export const LOCAL_PLAYLIST_PREFIX = 'local_pl_';
 // 服务端镜像接受面：local_pl_/saved_queue_ + 长度上限（single_song_ 壳不下发镜像）
 export const MIRROR_PLAYLIST_ID_RE = /^(local_pl_|saved_queue_)[\w-]{1,64}$/;
 
+// 「接收端可解析」的本站轨道 id 判定——mix 分享链过滤（PlaylistPanel）与
+// 服务端下载白名单（routes/downloads.js）共用同一条；id 不认识源站形态的
+// 曲目（异常持久化行）两侧都该跳过而不是带病下发
+export function isResolvableTrackId(id) {
+  const s = String(id ?? '');
+  return NETEASE_ID_RE.test(s) || QQ_SONG_ID_RE.test(s) || BV_TRACK_ID_RE.test(s) || YT_TRACK_ID_RE.test(s);
+}
+
+// 外部歌单导入壳 id 的构造/解析对——生产侧 App.vue 导入器、解析侧
+// PlaylistPanel 分享链反解共用同一张表，字面量不再两处手写。
+// source: 'yt' | 'bili' | 'qq'；key 为源站单 id（listId/fid/disstid）
+export function providerPlaylistShellId(source, key) {
+  return `local_pl_${source}_${key}`;
+}
+
+// 解析外部导入壳 id：{source:'yt'|'bili'|'qq', key} | null。
+// local_pl_mix_*/local_pl_<ts> 等非导入壳返回 null（调用方按本地单处理）
+export function parseProviderShellId(id) {
+  const m = /^local_pl_(yt|bili|qq)_([A-Za-z0-9_-]+)$/.exec(String(id ?? ''));
+  return m ? { source: m[1], key: m[2] } : null;
+}
+
 // 本地内存态歌单 id 判定：三类非数字 id——不进 ?pl= URL、不参与网易接口拉取；
 // 分享走 ?mix= 内容链、下载走服务端镜像
 export function isLocalPlaylistId(id) {

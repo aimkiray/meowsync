@@ -43,6 +43,7 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import { toast, pixelConfirm } from '../lib/feedback'
 import { downloadsApi } from '../api/downloads';
+import { apiErrorMessage } from '../api/http';
 import DownloadQueueList from './DownloadQueueList.vue';
 import DownloadTaskList from './DownloadTaskList.vue';
 
@@ -252,7 +253,7 @@ async function loadQueues(options = {}) {
     console.error('加载队列失败:', error);
     // 首次加载失败给用户可见的错误态；轮询静默失败不打断界面
     if (!hasLoadedQueues.value) {
-      loadError.value = '加载失败: ' + (error.response?.data?.message || error.message);
+      loadError.value = '加载失败: ' + (apiErrorMessage(error));
     }
   } finally {
     if (!silent) {
@@ -303,7 +304,7 @@ async function startQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('启动队列失败:', error);
-    toast('启动队列失败: ' + (error.response?.data?.message || error.message), 'error');
+    toast('启动队列失败: ' + (apiErrorMessage(error)), 'error');
   }
 }
 
@@ -313,7 +314,7 @@ async function pauseQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('暂停队列失败:', error);
-    toast('暂停队列失败: ' + (error.response?.data?.message || error.message), 'error');
+    toast('暂停队列失败: ' + (apiErrorMessage(error)), 'error');
   }
 }
 
@@ -323,7 +324,7 @@ async function resumeQueue(queueId) {
     await loadQueues();
   } catch (error) {
     console.error('恢复队列失败:', error);
-    toast('恢复队列失败: ' + (error.response?.data?.message || error.message), 'error');
+    toast('恢复队列失败: ' + (apiErrorMessage(error)), 'error');
   }
 }
 
@@ -341,7 +342,7 @@ async function retryTask(taskId) {
     }
   } catch (error) {
     console.error('重试任务失败:', error);
-    toast('重试任务失败: ' + (error.response?.data?.message || error.message), 'error');
+    toast('重试任务失败: ' + (apiErrorMessage(error)), 'error');
   } finally {
     retryingTaskId.value = null;
   }
@@ -358,7 +359,7 @@ async function cancelQueue(queueId) {
     }
   } catch (error) {
     console.error('取消队列失败:', error);
-    toast('取消队列失败: ' + (error.response?.data?.message || error.message), 'error');
+    toast('取消队列失败: ' + (apiErrorMessage(error)), 'error');
   }
 }
 
@@ -371,7 +372,7 @@ async function retryQueue(queueId) {
     }
   } catch (error) {
     console.error('重试队列失败:', error);
-    toast('重试队列失败: ' + (error.response?.data?.message || error.message), 'error');
+    toast('重试队列失败: ' + (apiErrorMessage(error)), 'error');
   }
 }
 
@@ -388,7 +389,7 @@ async function deleteQueue(queueId) {
     }
   } catch (error) {
     console.error('删除队列失败:', error);
-    toast('删除队列失败: ' + (error.response?.data?.message || error.message), 'error');
+    toast('删除队列失败: ' + (apiErrorMessage(error)), 'error');
   }
 }
 

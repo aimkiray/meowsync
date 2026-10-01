@@ -58,3 +58,11 @@ http.interceptors.response.use(
 )
 
 export default http
+
+// 服务端错误统一返回 { code, message }——axios 把非 2xx 包成 error.response
+// .data，裸 Error 只有 .message。此前 「response?.data?.message || message」
+// 在 14 处手写，收口一处。注意：不经拦截器剥壳的错误（如 unwrapBody 抛的
+// 业务错）走 .message 兜底，口径不变
+export function apiErrorMessage(error) {
+  return error?.response?.data?.message || error?.message
+}

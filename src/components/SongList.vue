@@ -104,8 +104,8 @@
             :class="{ 'playing-animation': isCurrent(song) && isPlaying }"
           >
             <img
-              v-if="song.al?.picUrl || song.album?.picUrl"
-              :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+              v-if="songCoverUrl(song)"
+              :src="httpsCover(songCoverUrl(song))"
               :alt="song.name"
               class="song-cover"
               loading="lazy"
@@ -662,13 +662,14 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
-import { httpsCover, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
+import { apiErrorMessage } from '../api/http.js'
+import { httpsCover, isResolvableTrackId } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
-import { isVipSong, isVipUnplayable, isLocalPlaylistId, isSingleSongShellId, songSource, songSourceName, songSourceUrl } from '../lib/song'
+import { isVipSong, visibleSongs, isLocalPlaylistId, isSingleSongShellId, songSource, songSourceName, songSourceUrl, songCoverUrl } from '../lib/song'
 import { serverCaps } from '../lib/caps'
-import { shareOrCopy } from '../lib/share'
+import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast, pixelConfirm } from '../lib/feedback'
 
 export default {
@@ -715,7 +716,6 @@ export default {
   emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
-    const downloadingStates = ref({})
     const menuPositions = ref({})
 
     // 服务器下载状态
@@ -725,15 +725,10 @@ export default {
     // props 卸载后仍持旧值，stillCurrent 永真会让孤儿轮询空转 10min 还跨视图弹窗
     let viewDisposed = false
 
-    // 过滤后的歌曲列表（根据VIP显示设置）
-    const filteredSongs = computed(() => {
-      if (props.showVipSongs) {
-        return props.songs // 显示所有歌曲
-      } else {
-        // 隐藏"VIP 且不可播"——qq payPlay 在服务端有 VIP cookie 时实际可播
-        return props.songs.filter(song => !isVipUnplayable(song, serverCaps.value))
-      }
-    })
+    // 过滤后的歌曲列表（根据VIP显示设置）——谓词与 App.vue 同一份（lib/song.js）
+    const filteredSongs = computed(() =>
+      visibleSongs(props.songs, props.showVipSongs, serverCaps.value)
+    )
 
     // 渐进渲染窗：千曲歌单不再一次渲全量 DOM——前缀窗 150 起步，
     // 哨兵行（IO 命中或手动点按）扩窗。复位只认歌单身份：
@@ -771,7 +766,8 @@ export default {
       const id = String(song.id ?? '')
       if (/^\d+$/.test(id)) return true
       if (!isLocalPlaylist.value) return false
-      return QQ_SONG_ID_RE.test(id) || BV_TRACK_ID_RE.test(id) || YT_TRACK_ID_RE.test(id)
+      // 非数字 id 只收外部源形态（qq_/bv_/yt_）——与镜像/分享链同一份白名单
+      return isResolvableTrackId(id)
     }
 
     // 「下载视频到服务器」可见性：只有导入时确认有可放视频流（hasVideo）的
@@ -876,19 +872,10 @@ export default {
       if (url) window.open(url, '_blank', 'noopener,noreferrer')
     }
 
-    // 分享歌曲
+    // 分享歌曲——链形态（?bili/?yt/?qq/?song + view=watch 直达）统一在 lib/share.js
     const shareSong = async (song) => {
       const artistNames = song.ar?.map(artist => artist.name).join(', ') || song.artists?.map(a => a.name).join(', ') || '未知艺术家'
-      // 带 view=watch：冷启动打开分享链后落在播放页（YTM watch 同款直达）；
-      // B 站导入曲走 ?bili=BV 链、YouTube 走 ?yt=<videoId>、QQ 走 ?qq=<mid>——
-      // ?song= 只认网易云数值 id；分P带 p 参数
-      const shareUrl = song.bilibili?.bvid
-        ? `${window.location.origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
-        : song.youtube?.videoId
-          ? `${window.location.origin}/?yt=${song.youtube.videoId}&view=watch`
-          : song.qq?.mid
-            ? `${window.location.origin}/?qq=${song.qq.mid}&view=watch`
-            : `${window.location.origin}/?song=${song.id}&view=watch`
+      const shareUrl = songShareUrl(song)
 
       const result = await shareOrCopy({
         title: `🎵 ${song.name} - ${artistNames}`,
@@ -899,10 +886,8 @@ export default {
       else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
-    // 服务端错误统一返回 { code, message }，优先取 message 展示
-    const extractErrorMessage = (error) => {
-      return error.response?.data?.message || error.message
-    }
+    // 服务端错误统一返回 { code, message }——取词帮手在 api/http.js
+    const extractErrorMessage = apiErrorMessage
 
     // 直接下载（浏览器下载，最高码率）
     const downloadSongDirect = async (song, bitrate = 320000) => {
@@ -915,7 +900,6 @@ export default {
       // 留着透明 overlay 罩全屏会阻塞一切点击
       closeDownloadMenu()
       try {
-        downloadingStates.value[song.id] = true
         // blob 下载全程无浏览器自带进度提示——先给一个开始戳记，终点由浏览器下载栏呈现
         toast(`正在获取「${song.name}」…`, 'info')
         // 外部导入曲没有网易云下载链——拉自己的 /bilibili|youtube|qq/stream
@@ -928,8 +912,6 @@ export default {
       } catch (error) {
         console.error('下载失败:', error)
         toast('下载失败: ' + extractErrorMessage(error), 'error')
-      } finally {
-        downloadingStates.value[song.id] = false
       }
     }
 
@@ -1152,7 +1134,6 @@ export default {
       isCurrent,
 
       showDownloadMenu,
-      downloadingStates,
       serverDownloadedStates,
       serverDownloadingStates,
       toggleDownloadMenu,
@@ -1172,7 +1153,8 @@ export default {
       canServerVideo,
       getMenuPosition,
       closeDownloadMenu,
-      httpsCover
+      httpsCover,
+      songCoverUrl
     }
   }
 }

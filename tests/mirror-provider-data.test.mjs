@@ -5,11 +5,9 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { tmpDataDir } from './helpers.mjs';
 
-process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'meowsync-mirror-'));
+process.env.DATA_DIR = tmpDataDir('meowsync-mirror-');
 const require = createRequire(import.meta.url);
 
 let mirror, tracksRepo, providerDataOf, downloadTasksRepo;

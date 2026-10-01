@@ -138,10 +138,11 @@
 <script>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { downloadsApi } from '../api/downloads'
-import { copyText, shareOrCopy } from '../lib/share'
+import { apiErrorMessage } from '../api/http'
+import { copyText, shareOrCopy, playlistShareUrl, mixShareIds, isEmptyMixShareUrl } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
-import { isNeteasePlaylist, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../shared/predicates.js'
+import { isNeteasePlaylist } from '../shared/predicates.js'
 import { toast, pixelConfirm } from '../lib/feedback'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -240,62 +241,29 @@ export default {
       closeMenu()
     }
 
-    // 分享链带 view=songs&pl=ID：冷启动后主区直接落在该歌单歌曲页，不停在首页
-    // 本地单无远端 id——?mix=<name>~<ids> 内容携带链，接收端按 id 重解析。
-    // 按字节而非条数切：bv_ id ~24B/yt_ ~14B，300 条全 bv_ 会到 7KB 触 nginx 414 边缘
-    const MIX_ID_CAP = 300
-    const MIX_IDS_BUDGET = 3000
-    const mixIdsFor = (playlist) => {
-      const ids = []
-      let budget = MIX_IDS_BUDGET
-      for (const t of playlist.tracks || []) {
-        const id = String(t.id)
-        if (!/^\d+$/.test(id) && !BV_TRACK_ID_RE.test(id)
-          && !YT_TRACK_ID_RE.test(id)
-          && !QQ_SONG_ID_RE.test(id)) continue
-        if (ids.length >= MIX_ID_CAP || id.length + 1 > budget) break
-        budget -= id.length + 1
-        ids.push(id)
-      }
-      return ids
-    }
-    const shareUrlFor = (playlist) => {
-      if (!isLocalPlaylistId(playlist?.id)) {
-        return `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
-      }
-      // 导入壳按引用分享——接收端整单重拉，绕开 ?mix= 逐曲 resolve 的
-      // 条数上限（?yt=/?bili=/?qqpl= 在接收侧已有整单导入通道）
-      const ytM = /^local_pl_yt_([A-Za-z0-9_-]+)$/.exec(playlist.id)
-      if (ytM) {
-        return `${window.location.origin}/?yt=${encodeURIComponent(`https://www.youtube.com/playlist?list=${ytM[1]}`)}`
-      }
-      const biM = /^local_pl_bili_(\d+)$/.exec(playlist.id)
-      if (biM) {
-        return `${window.location.origin}/?bili=${encodeURIComponent(`https://www.bilibili.com/list/ml${biM[1]}`)}`
-      }
-      const qqM = /^local_pl_qq_(\d+)$/.exec(playlist.id)
-      if (qqM) return `${window.location.origin}/?qqpl=${qqM[1]}`
-      return `${window.location.origin}/?mix=${encodeURIComponent(String(playlist.name || '歌单'))}~${mixIdsFor(playlist).join(',')}`
-    }
+    // 分享链带 view=songs&pl=ID：冷启动后主区直接落在该歌单歌曲页，不停在首页。
+    // URL 构造（远端单 ?playlist= / 导入壳按引用 / 本地单 ?mix= 内容链）
+    // 与字节预算截断都收敛在 lib/share.js——参数名与接收端 readShareParams 对表
+    const overBudget = (playlist) => isLocalPlaylistId(playlist.id)
+      && mixShareIds(playlist).length < (playlist.tracks?.length || 0)
+
     const copyShareLink = async (playlist) => {
-      const url = shareUrlFor(playlist)
-      if (/[?&]mix=/.test(url) && url.endsWith('~')) {
+      const url = playlistShareUrl(playlist)
+      if (isEmptyMixShareUrl(url)) {
         toast('歌单里没有可分享的歌曲', 'info'); closeMenu(playlist.id); return
       }
       const ok = await copyText(url)
       // 与歌曲分享同款的反馈闭环：成功也要给戳记，否则用户不知道复制生效
-      const over = isLocalPlaylistId(playlist.id)
-        && mixIdsFor(playlist).length < (playlist.tracks?.length || 0)
       toast(ok
-        ? `分享链接已复制到剪贴板${over ? '（部分曲目因链接过长未包含）' : ''}`
+        ? `分享链接已复制到剪贴板${overBudget(playlist) ? '（部分曲目因链接过长未包含）' : ''}`
         : '复制失败，请手动复制链接', ok ? 'success' : 'error')
       closeMenu(playlist.id)
     }
 
     // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
     const sharePlaylist = async (playlist) => {
-      const shareUrl = shareUrlFor(playlist)
-      if (/[?&]mix=/.test(shareUrl) && shareUrl.endsWith('~')) {
+      const shareUrl = playlistShareUrl(playlist)
+      if (isEmptyMixShareUrl(shareUrl)) {
         toast('歌单里没有可分享的歌曲', 'info')
         return
       }
@@ -304,9 +272,7 @@ export default {
         text: `来看看这个歌单：${playlist.name}`,
         url: shareUrl
       })
-      const over = isLocalPlaylistId(playlist.id)
-        && mixIdsFor(playlist).length < (playlist.tracks?.length || 0)
-      if (result === 'copied') toast(`分享链接已复制到剪贴板${over ? '（部分曲目因链接过长未包含）' : ''}`, 'success')
+      if (result === 'copied') toast(`分享链接已复制到剪贴板${overBudget(playlist) ? '（部分曲目因链接过长未包含）' : ''}`, 'success')
       else if (result === 'failed') toast('分享失败，请手动复制链接', 'error')
     }
 
@@ -375,7 +341,7 @@ export default {
             : `继续下载该歌单的已有队列${mirrorNote}`, 'success')
       } catch (error) {
         console.error('创建下载队列失败:', error)
-        const message = error.response?.data?.message || error.message
+        const message = apiErrorMessage(error)
         toast('下载失败: ' + message, 'error')
       } finally {
         downloadingIds.delete(pid)
@@ -417,7 +383,7 @@ export default {
         if (deletedSongs > 0) emit('playlist-downloads-deleted', playlist.id)
       } catch (error) {
         console.error('批量删除已下载歌曲失败:', error)
-        const message = error.response?.data?.message || error.message
+        const message = apiErrorMessage(error)
         toast('删除失败: ' + message, 'error')
       } finally {
         closeMenu(playlist.id)

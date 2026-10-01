@@ -439,7 +439,7 @@ export const musicApi = {
   // 返回与 getLyrics 同形态（已合并翻译的 lyrics 数组）
   getQQLyric: async (mid, abortSignal = null) => {
     const response = await api.get('/qq/lyric', { params: { mid }, signal: abortSignal }).catch(err => {
-      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
     })
     const data = unwrapBody(response)
@@ -460,7 +460,7 @@ export const musicApi = {
   // QQ 曲库搜索（点歌台 qq: 前缀；服务端固定回 20 条）
   searchQQSongs: async (q, abortSignal = null) => {
     const response = await api.get('/qq/search', { params: { q }, signal: abortSignal }).catch(err => {
-      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
     })
     const data = unwrapBody(response)
@@ -473,7 +473,7 @@ export const musicApi = {
     const response = await api.get('/qq/playlist', {
       params: { id }, timeout: 60000
     }).catch(err => {
-      if (err?.response?.data?.message) throw new Error(err.response.data.message)
+      if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
     })
     const data = unwrapBody(response)
