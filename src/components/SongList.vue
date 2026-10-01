@@ -610,7 +610,7 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
-import { httpsCover } from '../lib/url'
+import { httpsCover, QQ_SONG_ID_RE } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
@@ -701,7 +701,7 @@ export default {
       const id = String(song.id ?? '')
       if (song.bilibili || song.youtube || id.startsWith('bv_') || id.startsWith('yt_')) return false
       if (/^\d+$/.test(id)) return true
-      return isLocalPlaylist.value && /^qq_[0-9A-Za-z]{10,20}$/.test(id)
+      return isLocalPlaylist.value && QQ_SONG_ID_RE.test(id)
     }
 
     const isShareShell = computed(() =>

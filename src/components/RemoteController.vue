@@ -100,7 +100,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 // WS 消息类型与 shared/protocol.js 同源——字面量漂移会被服务端拒收
-import { MSG_TYPES } from '../shared/protocol.js'
+import { MSG_TYPES, CONTROL_TYPES } from '../shared/protocol.js'
 import PixelIcon from './PixelIcon.vue'
 
 const props = defineProps({
@@ -212,6 +212,11 @@ function retry() {
 }
 
 function send(type, payload) {
+  // 白名单外 type 服务端会静默丢——本地先断言，拼错指令不至于无声消失
+  if (!CONTROL_TYPES.has(type)) {
+    console.warn('[remote] 未知控制指令:', type)
+    return
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, payload }))
   }

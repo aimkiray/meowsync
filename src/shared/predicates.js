@@ -28,6 +28,12 @@ export const NETEASE_ID_RE = /^\d+$/;
 export const NETEASE_ID_BOUNDED_RE = /^\d{1,20}$/;
 // qq_<songmid> 本站轨道 id（捕获组取裸 mid——ai.js/file-downloader 用）
 export const QQ_SONG_ID_RE = /^qq_([0-9A-Za-z]{10,20})$/;
+// bv_<bvid>[_pN] / yt_<videoId> 本站轨道 id（mix 导入/分享链白名单用；
+// 捕获组取裸 id 与分 p 序号——App.vue mix 恢复循环用 exec 消费）。
+// BV 段刻意宽于 BVID_RE（不强卡第 3 位 '1'）——前置过滤宽松放行，
+// 非法 bvid 由服务端 BVID_RE 严校拒收计数 skipped，别把两头收同一条
+export const BV_TRACK_ID_RE = /^bv_(BV[0-9A-Za-z]{10})(?:_p(\d+))?$/i;
+export const YT_TRACK_ID_RE = /^yt_([A-Za-z0-9_-]{11})$/;
 
 // 本地歌单 id 前缀族
 // - single_song_*：单曲分享临时壳
@@ -130,31 +136,42 @@ export function isQQInput(input) {
     || /^(?:https?:\/\/)?(?:[a-z0-9]+\.)*y\.qq\.com\//i.test(s);
 }
 
-// QQ 歌单识别：y.qq.com/n/ryqq[_v2]/playlist/<disstid>、分享页 taoge.html?id=
+// p=%7B...%7D 编码 JSON 载荷解码回明文——songmid/disstid 正则吃的是字面量。
+// 只动追加副本：原 href 保持原样，避免解码产物干扰其它参数判定
+function withDecodedPayload(href) {
+  const pEnc = String(href).match(/[?&]p=([^&]+)/i)?.[1];
+  if (pEnc && /%[0-9a-f]{2}/i.test(pEnc)) {
+    try { return href + '&' + decodeURIComponent(pEnc); } catch { /* 残缺编码不致命 */ }
+  }
+  return href;
+}
+
+// QQ 歌单识别：y.qq.com/n/ryqq[_v2]/playlist/<disstid>、分享页 taoge.html?id=、
+// ?disstid=N / p={"disstid":"N"} 编码载荷（与 pickQqFromUrl 同口径，防前端把
+// 歌单链误判成单曲送去 resolve 再被 400 弹回的死循环）
 export function extractQQPlaylistId(input) {
-  const s = String(input || '').trim();
+  let s = String(input || '').trim();
   if (!/(?:y\.qq\.com|qq\.com|qqmusic)/i.test(s)) return null;
+  s = withDecodedPayload(s);
   return s.match(/\/playlist\/(\d+)/i)?.[1]
     || s.match(/taoge\.html[^ ]*?[?&]id=(\d+)/i)?.[1]
     || s.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1]  // qqmusic://qq.com/playlist?id=N
-    || s.match(/[?&]disstid=(\d+)/i)?.[1]
+    || s.match(/\bdisstid["']?\s*[:=]\s*["']?(\d+)/i)?.[1]
     || null;
 }
 
 // 分享链接解析：提取 songmid/songid/disstid/albummid（服务端 c.y.qq.com 短链
 // 逐跳跟随前先用本表扫每个 hop 的 URL；前端 ?qq=/songmid= 分享还原也用同表）
 export function pickQqFromUrl(href) {
-  // p=%7B...%7D 编码 JSON 载荷先解码回明文——songmid/disstid 正则吃的是字面量
-  const pEnc = href.match(/[?&]p=([^&]+)/i)?.[1];
-  if (pEnc && /%[0-9a-f]{2}/i.test(pEnc)) {
-    try { href += '&' + decodeURIComponent(pEnc); } catch { /* 残缺编码不致命 */ }
-  }
+  // p= 编码 JSON 载荷先解码（与 extractQQPlaylistId 共用同一帮手）
+  href = withDecodedPayload(href);
   // 歌单形态先于 mid：playlist?id=N&p={"songmid":"x"} 这类链接语义是歌单，
-  // 内嵌 songmid 是载体噪音——先解出单曲等于把歌单丢成一首
+  // 内嵌 songmid 是载体噪音——先解出单曲等于把歌单丢成一首。
+  // \b 左边界：xdisstid/subdisstid 这类参数名前缀不得误吃
   const diss = href.match(/taoge\.html\?[^#]*?\bid=(\d+)/i)?.[1]
     || href.match(/\/playlist\/(\d+)/i)?.[1]
     || href.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1]  // qqmusic://qq.com/playlist?id=N
-    || href.match(/["']?disstid["']?\s*[:=]\s*["']?(\d+)/i)?.[1];  // ?disstid=N 或 p={"disstid":"N"}
+    || href.match(/\bdisstid["']?\s*[:=]\s*["']?(\d+)/i)?.[1];  // ?disstid=N 或 p={"disstid":"N"}
   if (diss) return { disstid: diss };
   // ?qq=<mid> 是本站分享链形态——与 ?yt= 同口径也在这里收
   const mid = href.match(/[?&]qq=([0-9A-Za-z]{10,20})/i)?.[1]
@@ -163,7 +180,7 @@ export function pickQqFromUrl(href) {
     || href.match(/\/song\/([0-9A-Za-z]{10,20})\.html/i)?.[1]
     || href.match(/["']?songmid["']?\s*:\s*["']([0-9A-Za-z]{10,20})/i)?.[1];  // qqmusic://...?p={"songmid":"x"}
   if (mid) return { mid };
-  const songid = href.match(/songid=(\d+)/i)?.[1];
+  const songid = href.match(/\bsongid["']?\s*[=:]\s*["']?(\d+)/i)?.[1];  // songid=N 或 {"songid":"N"}
   if (songid) return { songid };
   const albummid = href.match(/albumDetail\/([0-9A-Za-z]{10,20})/i)?.[1];
   if (albummid) return { albummid };

@@ -12,9 +12,8 @@ const app = new Hono();
 
 // 词源相关端点只认网易云数字 id 与 qq_<songmid>（QQ 曲吃自家权威歌词做词源）——
 // bv_/yt_ 等外部 id 没有可翻译词源，放行只会空耗一次上游 lyric 调用再 404
+// 20 位上限的 bounded 形与共享无界 NETEASE_ID_RE 语义不同——直接用共享名防遮蔽
 const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE } = require('../../shared/predicates.js');
-const NETEASE_ID_RE = NETEASE_ID_BOUNDED_RE;
-const LYRIC_ID_RE = QQ_SONG_ID_RE;
 // 翻译负载上限：千行级歌词多半是滚动歌词逐字拆分（字数标记），整单 AI 翻译
 // 既不经济也无必要——超量直接拒
 const MAX_LYRIC_LINES = 400;
@@ -91,7 +90,7 @@ app.post('/ai/lyric-translate', async (c) => {
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 16 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
-  if (!NETEASE_ID_RE.test(id) && !LYRIC_ID_RE.test(id)) return fail(c, 400, '非法 songId');
+  if (!NETEASE_ID_BOUNDED_RE.test(id) && !QQ_SONG_ID_RE.test(id)) return fail(c, 400, '非法 songId');
   const signal = c.req.raw.signal;
 
   // 行存在即命中——skip 哨兵（tlyric=''）也是有效缓存项，防止
@@ -261,7 +260,7 @@ app.post('/ai/lyric-verify', async (c) => {
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 64 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
-  if (!NETEASE_ID_RE.test(id)) return fail(c, 400, '非法 songId');
+  if (!NETEASE_ID_BOUNDED_RE.test(id)) return fail(c, 400, '非法 songId');
   // 进 prompt 的输入剥换行/方括号——标题作者与歌词原文都是不可信输入，
   // 去掉结构字符至少让注入不能伪造消息边界/键控协议
   const sanitizePrompt = (s) => String(s || '')

@@ -40,7 +40,9 @@ export function useRemoteControl(deps) {
   // （含 alias/privilege 等大字段）每 2s 全量序列化并广播
   function serializeRemoteSong(song) {
     if (!song) return null
-    const artistList = song.ar || song.artists || []
+    // ar/artists 可能是非数组脏值——无守卫的 .map 会让 2s 心跳每次抛错，广播静默死亡
+    const artistList = Array.isArray(song.ar) ? song.ar
+      : (Array.isArray(song.artists) ? song.artists : [])
     return {
       id: song.id,
       name: song.name,

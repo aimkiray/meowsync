@@ -16,6 +16,7 @@
       @nav-home="navHome"
       @search="handlePlaylistSearch"
       @search-by-id="previewPlaylistById"
+      @search-song="importNeteaseSongById"
       @search-bili="importBilibili"
       @search-yt="importYouTube"
       @search-qq="importQQ"
@@ -308,7 +309,7 @@ import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSong
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike } from './lib/url'
+import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -785,6 +786,13 @@ export default {
         await playSong(song)
         enterWatch()
       } catch (error) {
+        // 服务端把输入解成了 QQ 歌单（编码 p= 形态前端谓词看不穿）——
+        // 按结构化 disstid 自动转歌单导入，别让"请粘到顶栏"的提示死循环
+        const disstid = error?.response?.data?.disstid
+        if (disstid) {
+          importQQPlaylist(disstid)
+          return
+        }
         if (myReq !== mediaImportSeq) return // 过期请求的失败不打扰用户
         console.error(`❌ ${spec.tag} 导入失败:`, error)
         searchQuery.value = input // 失败还原输入——用户可直接回车重试
@@ -832,6 +840,77 @@ export default {
       } catch (e) {
         if (myReq !== mediaImportSeq) return  // 过期请求的失败不打扰用户
         toast(`QQ 歌单导入失败：${e.message}`, 'error', 5000)
+      }
+    }
+
+    // 网易云单曲导入：?song= 分享链与顶栏粘贴 music.163.com/song?id=N 同走此路。
+    // 幂等壳 single_song_<id>——重复导入复用壳、原地补齐空壳曲目
+    const importNeteaseSongById = async (songId) => {
+      try {
+        // 检查是否已经存在相同的临时歌单
+        const tempPlaylistId = `single_song_${songId}`
+        let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
+        // 壳在但曲目空（脏数据/旧版本剥离壳）：原地补曲目——不 unshift 同 id 双壳
+        if (existingPlaylist && !existingPlaylist.tracks?.length) {
+          const songDetail = await musicApi.getSongDetail(songId)
+          existingPlaylist.tracks = [songDetail]
+          existingPlaylist.trackCount = 1
+          savePlaylistsToStorage()
+        }
+
+        if (existingPlaylist && existingPlaylist.tracks?.length) {
+          console.log('🎵 找到已存在的单曲分享歌单，直接使用')
+          // 使用已存在的歌单
+          selectedPlaylist.value = existingPlaylist
+          currentSong.value = existingPlaylist.tracks[0]
+          songs.value = existingPlaylist.tracks || []
+
+          // 自动播放并进入 watch 播放页
+          await playSong(existingPlaylist.tracks[0])
+          enterWatch()
+        } else {
+          console.log('🎵 创建新的单曲分享歌单')
+          // 获取歌曲详情
+          const songDetail = await musicApi.getSongDetail(songId)
+          console.log('🎵 获取到歌曲详情:', songDetail)
+
+          // 创建一个临时歌单包含这首歌
+          const tempPlaylist = {
+            id: tempPlaylistId,
+            name: `单曲分享 - ${songDetail.name}`,
+            coverImgUrl: songDetail.al?.picUrl || songDetail.album?.picUrl || '',
+            creator: { nickname: '分享歌曲' },
+            trackCount: 1,
+            tracks: [songDetail]
+          }
+
+          // 添加到用户歌单列表；临时分享歌单数量设上限，每分享一首
+          // 永久长一个歌单会把列表无限撑长——保留最近 10 个
+          userPlaylists.value.unshift(tempPlaylist)
+          const tempIndexes = userPlaylists.value
+            .map((p, i) => isSingleSongShellId(p.id) ? i : -1)
+            .filter(i => i !== -1)
+          // 倒序删除：升序 splice 会让后续下标前移错位
+          for (const i of tempIndexes.slice(10).reverse()) {
+            userPlaylists.value.splice(i, 1)
+          }
+          savePlaylistsToStorage()
+
+          // 设置当前歌曲（selectedPlaylist 同步指向临时歌单：
+          // 播放快照与刷新恢复都靠它定位队列归属）
+          selectedPlaylist.value = tempPlaylist
+          currentSong.value = songDetail
+          songs.value = tempPlaylist.tracks || []
+
+          // 自动播放并进入 watch 播放页
+          await playSong(songDetail)
+          enterWatch()
+        }
+
+        console.log('✅ 单首歌曲分享加载完成并开始播放')
+      } catch (error) {
+        console.error('❌ 加载单首歌曲失败:', error)
+        toast('分享的歌曲加载失败，请稍后重试', 'error')
       }
     }
 
@@ -2888,7 +2967,7 @@ export default {
     const getQQFromUrl = () => {
       const urlParams = new URLSearchParams(window.location.search)
       const qq = urlParams.get('qq')
-      if (!qq || !/^[0-9A-Za-z]{10,20}$/.test(qq.trim())) return null
+      if (!qq || !SONGMID_RE.test(qq.trim())) return null
       console.log('🐧 从URL获取 QQ 音乐曲目:', qq.trim())
       return `?qq=${qq.trim()}`
     }
@@ -2912,9 +2991,9 @@ export default {
       const ids = []
       for (const raw of mix.slice(sep + 1).split(',')) {
         const id = raw.trim()
-        if (!(/^\d+$/.test(id) || /^bv_BV[0-9A-Za-z]{10}(_p\d+)?$/i.test(id)
-          || /^yt_[A-Za-z0-9_-]{11}$/.test(id)
-          || /^qq_[0-9A-Za-z]{10,20}$/.test(id))) continue
+        if (!(/^\d+$/.test(id) || BV_TRACK_ID_RE.test(id)
+          || YT_TRACK_ID_RE.test(id)
+          || QQ_SONG_ID_RE.test(id))) continue
         if (seen.has(id)) continue
         seen.add(id)
         ids.push(id)
@@ -2965,7 +3044,7 @@ export default {
           }
           // bv_/yt_/qq_ 共用客户端 resolve 预算——同链混排外部曲总数封顶（服务端三端点分桶各 12/min）
           if (++resolveCount > MIX_RESOLVE_CAP) { skipped++; continue }
-          const ym = /^yt_([A-Za-z0-9_-]{11})$/.exec(id)
+          const ym = YT_TRACK_ID_RE.exec(id)
           if (ym) {
             try {
               // 传 ?yt= 形态而非裸 id——服务端 [?&]yt= 分支无 \D 要求，
@@ -2974,14 +3053,14 @@ export default {
             } catch { skipped++ }
             continue
           }
-          const qm = /^qq_([0-9A-Za-z]{10,20})$/.exec(id)
+          const qm = QQ_SONG_ID_RE.exec(id)
           if (qm) {
             try {
               tracks.push(buildQQSong(await musicApi.resolveQQ(`?qq=${qm[1]}`)))
             } catch { skipped++ }
             continue
           }
-          const m = /^bv_(BV[0-9A-Za-z]{10})(?:_p(\d+))?$/i.exec(id)
+          const m = BV_TRACK_ID_RE.exec(id)
           if (!m) { skipped++; continue }
           try {
             const input = m[2] ? `${m[1]}?p=${m[2]}` : m[1]
@@ -3200,72 +3279,7 @@ export default {
         await importMixPlaylist(mixInput)
       } else if (songId) {
         console.log('🎵 检测到单首歌曲分享，歌曲ID:', songId)
-        try {
-          // 检查是否已经存在相同的临时歌单
-          const tempPlaylistId = `single_song_${songId}`
-          let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
-          // 壳在但曲目空（脏数据/旧版本剥离壳）：原地补曲目——不 unshift 同 id 双壳
-          if (existingPlaylist && !existingPlaylist.tracks?.length) {
-            const songDetail = await musicApi.getSongDetail(songId)
-            existingPlaylist.tracks = [songDetail]
-            existingPlaylist.trackCount = 1
-            savePlaylistsToStorage()
-          }
-
-          if (existingPlaylist && existingPlaylist.tracks?.length) {
-            console.log('🎵 找到已存在的单曲分享歌单，直接使用')
-            // 使用已存在的歌单
-            selectedPlaylist.value = existingPlaylist
-            currentSong.value = existingPlaylist.tracks[0]
-            songs.value = existingPlaylist.tracks || []
-
-            // 自动播放并进入 watch 播放页
-            await playSong(existingPlaylist.tracks[0])
-            enterWatch()
-          } else {
-            console.log('🎵 创建新的单曲分享歌单')
-            // 获取歌曲详情
-            const songDetail = await musicApi.getSongDetail(songId)
-            console.log('🎵 获取到歌曲详情:', songDetail)
-
-            // 创建一个临时歌单包含这首歌
-            const tempPlaylist = {
-              id: tempPlaylistId,
-              name: `单曲分享 - ${songDetail.name}`,
-              coverImgUrl: songDetail.al?.picUrl || songDetail.album?.picUrl || '',
-              creator: { nickname: '分享歌曲' },
-              trackCount: 1,
-              tracks: [songDetail]
-            }
-
-            // 添加到用户歌单列表；临时分享歌单数量设上限，每分享一首
-            // 永久长一个歌单会把列表无限撑长——保留最近 10 个
-            userPlaylists.value.unshift(tempPlaylist)
-            const tempIndexes = userPlaylists.value
-              .map((p, i) => isSingleSongShellId(p.id) ? i : -1)
-              .filter(i => i !== -1)
-            // 倒序删除：升序 splice 会让后续下标前移错位
-            for (const i of tempIndexes.slice(10).reverse()) {
-              userPlaylists.value.splice(i, 1)
-            }
-            savePlaylistsToStorage()
-
-            // 设置当前歌曲（selectedPlaylist 同步指向临时歌单：
-            // 播放快照与刷新恢复都靠它定位队列归属）
-            selectedPlaylist.value = tempPlaylist
-            currentSong.value = songDetail
-            songs.value = tempPlaylist.tracks || []
-
-            // 自动播放并进入 watch 播放页
-            await playSong(songDetail)
-            enterWatch()
-          }
-
-          console.log('✅ 单首歌曲分享加载完成并开始播放')
-        } catch (error) {
-          console.error('❌ 加载单首歌曲失败:', error)
-          toast('分享的歌曲加载失败，请稍后重试', 'error')
-        }
+        await importNeteaseSongById(songId)
       } else if (restorePlayerState) {
         await restorePlaybackState(restorePlayerState)
       }
@@ -3374,6 +3388,7 @@ export default {
       importYouTube,
       importQQ,
       importQQPlaylist,
+      importNeteaseSongById,
       importMixPlaylist,
       addPlaylistToLibrary,
       removePlaylistFromLibrary,
