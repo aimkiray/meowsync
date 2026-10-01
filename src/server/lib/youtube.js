@@ -77,8 +77,10 @@ async function getVisitorData(extraSignal) {
     visitorDataAt = Date.now();
     return visitorDataCache;
   } catch (e) {
-    visitorDataFailAt = Date.now();
+    // abort 先穿透——客户端断连不是上游故障，别拿它给失败负缓存盖章
     if (extraSignal?.aborted) throw e;
+    visitorDataFailAt = Date.now();
+    console.warn('[youtube] visitorData 抓取失败:', e.message);
     return null;
   }
 }
@@ -101,6 +103,12 @@ async function fetchPlayerWith(videoId, extraSignal, clientName) {
       const vd = form.needsVisitor || attempt > 0
         ? await getVisitorData(extraSignal)
         : freshVisitorData();
+      // 拿不到凭据就不发：VISIONOS 无匿名通路必败；重试轮没补上 vd 的
+      // 请求与首试逐字节相同，同样注定重败——两类都直接换形态
+      if ((form.needsVisitor || attempt > 0) && !vd) {
+        formErr = lastErr = new Error('visitorData 获取失败');
+        break;
+      }
       let body;
       try {
         const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_KEY}`, {
