@@ -54,20 +54,43 @@ export interface Track {
   [k: string]: unknown;
 }
 
-export type DownloadTaskStatus =
-  | 'pending' | 'running' | 'completed' | 'failed'
-  | 'paused' | 'cancelled' | 'skipped';
+/** download_tasks.status 实际值域（download-manager VALID_TASK_STATUSES） */
+export type DownloadTaskStatus = 'pending' | 'downloading' | 'completed' | 'failed';
 
-/** download_tasks 行（服务端持久化投影） */
+/** download_queues.status 实际值域（队列级状态机） */
+export type DownloadQueueStatus =
+  | 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+/** 任务 API 透出对象（repositories/downloadTasks mapTaskRow + toPublicTask 投影） */
 export interface DownloadTask {
   id: number;
-  playlist_id: number;
-  song_id: string;
-  song_name: string;
+  playlistId: number;
+  queueId: number | null;
+  songId: string;
+  songName: string;
+  artist?: string;
+  album?: string;
+  coverUrl?: string;
   status: DownloadTaskStatus;
+  progress?: number;
+  errorMessage?: string | null;
+  retryCount?: number;
+  downloadAudio?: boolean;
+  downloadLyrics?: boolean;
+  downloadCover?: boolean;
+  // toPublicTask：DOWNLOAD_BASE_DIR 内相对路径或 null（站外路径不泄）
+  audioPath?: string | null;
+  lyricsPath?: string | null;
+  coverPath?: string | null;
   bitrate?: number;
-  error?: string | null;
-  provider_data?: ProviderData | null;
+  fileSize?: number;
+  durationMs?: number;
+  /** completed 但文件被外部删除 → false（前端据此重露下载入口） */
+  filesIntact?: boolean;
+  providerData?: ProviderData | null;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string | null;
   [k: string]: unknown;
 }
 
@@ -83,7 +106,8 @@ export interface RemoteControlMessage {
 }
 
 export interface RemoteSongSnapshot {
-  id: SongId;
+  /** currentSong 的 id 可 null（queue 条目被过滤，currentSong 不过滤） */
+  id: SongId | null;
   name: string;
   al: { picUrl: string };
   ar: { name: string }[];
@@ -96,7 +120,8 @@ export interface RemoteStatePayload {
   currentTime: number;
   duration: number;
   volume: number;
-  queue: RemoteSongSnapshot[];
+  /** sanitizeStatePayload 只收数组——host 不送/送畸形时整键缺席 */
+  queue?: RemoteSongSnapshot[];
   queueIndex: number;
 }
 

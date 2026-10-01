@@ -428,6 +428,7 @@ export default {
     // 等 applyUrlNav 落定会先渲一帧首页再跳回刷新前视图——此处按 ?view= 预置，
     // 合法性（pl 存在/歌曲恢复成功）仍由 applyUrlNav 终局修正；
     // search 冷加载必无结果必弹回首页，不预置
+    const urlParams = new URLSearchParams(window.location.search)
     const initialView = urlParams.get('view')
     if (['songs', 'watch', 'downloads'].includes(initialView)) centerView.value = initialView
 
@@ -1909,13 +1910,6 @@ export default {
       }
     }
 
-    // 首页发现流 + 最近播放历史（懒加载闩锁、断网重试、storage 持久化）
-    // ——收敛 composables/useHomeFeed.js；centerView 等依赖均已就位
-    const {
-      homeToplists, playHistory, playlistHistory, homeLoading,
-      loadHomeFeed, recordPlayHistory, recordPlaylistHistory, restoreHistory
-    } = useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playingPlaylistId })
-
     // 歌曲播放逻辑
     // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
     // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
@@ -2649,6 +2643,13 @@ export default {
       playingSongs, songSwitching, filteredSongs,
       playSong, nextSong, previousSong, updateVolume, currentPlayingIndex, playbackList
     })
+
+    // 首页发现流 + 最近播放历史（懒加载闩锁、断网重试、storage 持久化）
+    // ——收敛 composables/useHomeFeed.js；remoteMode 须先于本调用定义（遥控端短路）
+    const {
+      homeToplists, playHistory, playlistHistory, homeLoading,
+      loadHomeFeed, recordPlayHistory, recordPlaylistHistory, restoreHistory
+    } = useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playingPlaylistId, remoteMode })
 
     const openFullscreenPlayer = () => {
       if (!currentSong.value) return

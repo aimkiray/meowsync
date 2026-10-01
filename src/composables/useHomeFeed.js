@@ -9,7 +9,7 @@ const PLAYLIST_HISTORY_STORAGE_KEY = 'meowsync-playlist-history'
 // 首页发现流 + 最近播放历史：榜单一次加载闩锁、断网恢复重试、
 // localStorage 持久化历史（20 条去重置顶）。
 // deps 由宿主注入：centerView 驱动懒加载，三张 ref 服务 recordPlaylistHistory 查单
-export function useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playingPlaylistId }) {
+export function useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playingPlaylistId, remoteMode }) {
   const homeToplists = ref([])
   const playHistory = ref([])
   const playlistHistory = ref([])
@@ -19,6 +19,8 @@ export function useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playi
   // 晚到的数据经响应式照常补位替换失败文案
   let homeLoaded = false
   const loadHomeFeed = () => {
+    // 遥控端没有 home 视图——online 事件不该白打 toplist 请求
+    if (remoteMode?.value === 'controller') return
     if (homeLoaded) return
     homeLoaded = true
     homeLoading.value = true

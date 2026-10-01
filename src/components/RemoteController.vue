@@ -99,6 +99,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
+// WS 消息类型与 shared/protocol.js 同源——字面量漂移会被服务端拒收
+import { MSG_TYPES } from '../shared/protocol.js'
 import PixelIcon from './PixelIcon.vue'
 
 const props = defineProps({
@@ -160,7 +162,7 @@ function connect() {
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data)
-      if (msg.type === 'state_update') {
+      if (msg.type === MSG_TYPES.STATE_UPDATE) {
         hostDisconnected.value = false
         const payload = msg.payload || {}
         // 拖动中不回写对应字段，避免 thumb 被远端旧值拽回
@@ -169,12 +171,12 @@ function connect() {
         // sanitize 后 queue 可能整个键缺席（非数组被丢）——不补默认值会留着旧队列
         if (!Array.isArray(payload.queue)) payload.queue = []
         state.value = { ...state.value, ...payload }
-      } else if (msg.type === 'host_disconnected' || msg.type === 'host_absent') {
+      } else if (msg.type === MSG_TYPES.HOST_DISCONNECTED || msg.type === MSG_TYPES.HOST_ABSENT) {
         // 断开与"从未有 host"共用空态 UI
         hostDisconnected.value = true
         // v-if 会摘除滑块元素，悬挂的拖动标志（pointerup 可能不再派发）必须复位
         resetDragState()
-      } else if (msg.type === 'host_joined') {
+      } else if (msg.type === MSG_TYPES.HOST_JOINED) {
         // host 就位（含顶替旧 host 后新主接管）：等它的 state_update，先摘掉空态遮罩
         hostDisconnected.value = false
       }

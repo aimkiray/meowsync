@@ -3,7 +3,7 @@ const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../
 const streamVault = require('../lib/stream-vault');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../services/netease-match');
-const { extractYouTubeId } = require('../../shared/predicates.js');
+const { extractYouTubeId, YT_ID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 

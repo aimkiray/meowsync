@@ -47,7 +47,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=frontend /app/dist ./dist
 COPY package.json netease-api-server.js ./
 COPY src/server ./src/server
-COPY src/lib ./src/lib
+COPY src/shared ./src/shared
 
 # 非 root 运行；/app/data 存放 SQLite 与下载文件（compose 挂载 ./data 持久化）
 RUN addgroup -g 1001 -S nodejs \

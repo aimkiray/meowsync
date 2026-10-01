@@ -150,7 +150,8 @@ export function pickQqFromUrl(href) {
   // 内嵌 songmid 是载体噪音——先解出单曲等于把歌单丢成一首
   const diss = href.match(/taoge\.html\?[^#]*?\bid=(\d+)/i)?.[1]
     || href.match(/\/playlist\/(\d+)/i)?.[1]
-    || href.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1];  // qqmusic://qq.com/playlist?id=N
+    || href.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1]  // qqmusic://qq.com/playlist?id=N
+    || href.match(/["']?disstid["']?\s*[:=]\s*["']?(\d+)/i)?.[1];  // ?disstid=N 或 p={"disstid":"N"}
   if (diss) return { disstid: diss };
   // ?qq=<mid> 是本站分享链形态——与 ?yt= 同口径也在这里收
   const mid = href.match(/[?&]qq=([0-9A-Za-z]{10,20})/i)?.[1]
