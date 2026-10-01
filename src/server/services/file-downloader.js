@@ -10,6 +10,9 @@ const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('..
 const qq = require('../lib/qq');
 const { resolveBiliAudio, resolveBiliMedia, BILI_PUBLIC_HEADERS } = require('../lib/bilibili');
 const { fetchPlayer: ytFetchPlayer, fetchPlayerWith: ytFetchPlayerWith, pickStreamList: ytPickStreamList } = require('../lib/youtube');
+const { aiEnabled } = require('../lib/ai');
+const lyricAiRepo = require('../repositories/lyricAi');
+const { parseLrcLines, lyricVerdictKey, judgeLyricLines } = require('./lyric-verify');
 
 // qq_<songmid> / bv_<bvid>[_pN] / yt_<videoId> 曲目的服务端下载分发：
 // 各源自有流直取（不经网易云解锁链——别家曲库不是它们的源），
@@ -977,9 +980,34 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
       throw err;
     }
 
+    // 错词不落盘：bv_/yt_ 导入曲的网易云词源可能是错配——下载链与播放链
+    // 同 verdict 签名核验归属（命中缓存零成本；无 title/author 或 AI 关
+    // 则跳过，按原样落盘）。AI 判不符 → NO_LYRICS 跳过而非带错词落盘
+    const extSrc = providerData?.bilibili || providerData?.youtube;
+    if (extM && aiEnabled() && extSrc?.title) {
+      try {
+        const vkey = lyricVerdictKey(lyricId, extSrc.title, extSrc.author || '');
+        const cached = lyricAiRepo.getVerdict(vkey, 'lyric');
+        const ok = cached ? !!cached.ok
+          : await judgeLyricLines({ vkey, lines: parseLrcLines(lrc.lyric), title: extSrc.title, author: extSrc.author || '', signal });
+        if (ok === false) {
+          console.info(`[download] ${songId} 歌词归属核验不符，跳过落盘: ${String(extSrc.title).slice(0, 80)}`);
+          const err = new Error('歌词与来源不匹配');
+          err.code = 'NO_LYRICS';
+          throw err;
+        }
+      } catch (e) {
+        if (e?.code === 'NO_LYRICS' || e?.aborted) throw e;
+        // 核验通道故障放行——AI 是增强不是门禁
+        console.warn(`[download] ${songId} 歌词核验失败放行:`, e?.message || e);
+      }
+    }
+
     // 官方译文按同刻时间戳插到原文行后落盘（标准合并 LRC 格式——播放器
-    // 同刻双行显示原文+译文；网易 tlyric 与 QQ trans 同口径处理）
-    const trans = qqLm ? response.body.trans : response.body.tlyric?.lyric;
+    // 同刻双行显示原文+译文；网易 tlyric 与 QQ trans 同口径处理）；
+    // 无官方译文时吃 AI/历史译文缓存——播过已译的歌下载不该丢译文
+    const trans = (qqLm ? response.body.trans : response.body.tlyric?.lyric)
+      || lyricAiRepo.getCachedTranslation(lyricId)?.tlyric || '';
     const lyricText = mergeLrcTrans(lrc.lyric, trans);
 
     throwIfAborted(signal);

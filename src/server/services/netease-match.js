@@ -7,6 +7,23 @@ const { aiEnabled, askAiJson } = require('../lib/ai');
 // 放弃匹配用源站元数据
 const MATCH_DUR_TOLERANCE_SEC = 45;
 
+// 规范化成「艺人/歌名互比」口径——与 shareName 同款剥法
+const normToken = (s) => String(s || '')
+  .toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
+
+// 名命中是否需要 AI 复核：查询是多 token 组合（「艺人 歌名」形态）且候选
+// 艺人与（源作者 ∪ 查询内 token）零交集 → 同名错配风险真实存在。
+// 单 token 纯歌名查询的名互包含是强证据，不为它多花一次模型调用；
+// 候选艺人字段缺失同样判不出交集——按「需要复核」处理
+const nameHitNeedsConfirm = (song, q, sourceInfo) => {
+  const tokens = String(q).trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return false;
+  const refs = [sourceInfo?.author, ...tokens].map(normToken).filter(x => x.length >= 2);
+  const arts = (Array.isArray(song.ar || song.artists) ? (song.ar || song.artists) : [])
+    .map(a => normToken(a?.name)).filter(x => x.length >= 2);
+  return !arts.some(a => refs.some(r => a.includes(r) || r.includes(a)));
+};
+
 const shareName = (a, b) => {
   const na = String(a || '').toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
   const nb = String(b || '').toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
@@ -127,10 +144,25 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     const songs = (res.body?.result?.songs || []).filter(s => s && typeof s === 'object');
     if (!songs.length) return null;
     for (const s of songs) if (s.id != null) { seenSongs.set(s.id, s); collect?.add(s.id); }
-    const byName = songs.find(s => shareName(s.name, q));
-    // name 命中不查 vetoedIds——确定性的歌名互包含是强证据，
-    // 优先于弱证据（纯时长）场景下模型给出的否决
-    if (byName) return { song: byName, query: q, nameHit: true };
+    const byName = songs.find(s => !vetoedIds.has(s.id) && shareName(s.name, q));
+    // veto 是「(源,候选)对」级判定与证据类型无关——被否的 id 不经任何
+    // 路径复活（含后续串的名命中），否则同一错配换个查询串就钻回来
+    if (byName) {
+      // 「艺人 歌名」组合查询的名命中是同名错配高发口：查询串含艺人成分时
+      // 任何同名曲都满足双向包含（'coverer Lemon' 搜出 米津玄師 的 Lemon）。
+      // 候选艺人与（源作者 ∪ 查询 token）零交集则过一次 AI 复核——翻唱场景
+      // 必然零交集（AI 判同一首歌的翻唱为 true 放行，真同名异曲被否）
+      if (useAi && nameHitNeedsConfirm(byName, q, sourceInfo)) {
+        const verdict = await aiConfirmMatch(byName, sourceInfo, durationSec, signal);
+        if (verdict === false) {
+          vetoedIds.add(byName.id);
+          console.info(`[${tag}] AI 否决组合名命中: ${songDesc(byName)} ← ${q}`);
+          return null;
+        }
+        return { song: byName, query: q, nameHit: true, aiConfirmed: true };
+      }
+      return { song: byName, query: q, nameHit: true };
+    }
     // 时长 sanity 只在有真实时长时启用——源时长 0（live/首映/字段缺失）会把
     // ≤45s 的短曲错配（|x-0|≤45 窗口对 0 恒成立的方向性失真）
     if (Number.isFinite(durationSec) && durationSec > 0) {
@@ -190,7 +222,10 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       try {
         const hit = await searchOnce(q, regenIds);
         if (!hit) continue;
-        if (hit.nameHit) {
+        // 再生轮的名命中必过一次复核（模型产出的查询串离 ground truth 远
+        // 一跳，臆造真实歌名会被 shareName 确定性放行）；searchOnce 内已
+        // 复核过的同对（aiConfirmed）不重复问
+        if (hit.nameHit && !hit.aiConfirmed) {
           const verdict = await aiConfirmMatch(hit.song, sourceInfo, durationSec, signal);
           if (verdict === false) {
             vetoedIds.add(hit.song.id);

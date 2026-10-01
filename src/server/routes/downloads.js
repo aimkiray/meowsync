@@ -398,15 +398,22 @@ app.post('/downloads/local/mirror', async (c) => {
         ...(t.qq && SONGMID_RE.test(String(t.qq.mediaMid || ''))
           ? { qq: { mediaMid: String(t.qq.mediaMid) } } : {}),
         // bv_/yt_ 曲同理只收流定位字段（bvid/cid/page、videoId）+ neteaseId
-        // 词源——下载分发与歌词段靠它们，不整只落 provider 对象
+        // 词源 + title/author——下载链的歌词归属核验要靠来源标题与作者
+        // 构造 verdict 签名，不整只落 provider 对象
         ...(t.bilibili && BVID_RE.test(String(t.bilibili.bvid || ''))
           ? { bilibili: {
               bvid: String(t.bilibili.bvid),
               cid: /^\d+$/.test(String(t.bilibili.cid ?? '')) ? String(t.bilibili.cid) : null,
-              page: Math.max(1, parseInt(t.bilibili.page, 10) || 1)
+              page: Math.max(1, parseInt(t.bilibili.page, 10) || 1),
+              title: String(t.bilibili.title || '').slice(0, 300) || null,
+              author: String(t.bilibili.author || '').slice(0, 120) || null
             } } : {}),
         ...(t.youtube && YT_ID_RE.test(String(t.youtube.videoId || ''))
-          ? { youtube: { videoId: String(t.youtube.videoId) } } : {}),
+          ? { youtube: {
+              videoId: String(t.youtube.videoId),
+              title: String(t.youtube.title || '').slice(0, 300) || null,
+              author: String(t.youtube.author || '').slice(0, 120) || null
+            } } : {}),
         ...(NETEASE_ID_RE.test(String(t.neteaseId ?? ''))
           ? { neteaseId: String(t.neteaseId) } : {})
       }));

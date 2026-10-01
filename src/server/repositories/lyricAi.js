@@ -28,20 +28,26 @@ function markTranslationSkip(songId, reason) {
      WHERE song_lyric_translation.model LIKE 'skip:%'`).run(songId, `skip:${reason}`);
 }
 
-function getLyricVerdict(vkey) {
+// kind 是自由判别列：'lyric'（词归属核验）/ 'unlock'（解锁候选判定）。
+// vkey 由各调用域自定——词归属是 <词源id>@<模型>@<源签名>，解锁是
+// <曲id>@yt_<videoId>@<模型>；同一 PK 下不同 kind 互不干扰
+function getVerdict(vkey, kind) {
   return getDb().prepare(
-    "SELECT ok FROM song_ai_verdict WHERE song_id = ? AND kind = 'lyric'"
-  ).get(vkey);
+    'SELECT ok FROM song_ai_verdict WHERE song_id = ? AND kind = ?'
+  ).get(vkey, kind);
 }
 
-function upsertLyricVerdict(vkey, ok, detail) {
+function upsertVerdict(vkey, kind, ok, detail) {
   getDb().prepare(`INSERT INTO song_ai_verdict (song_id, kind, ok, detail)
-    VALUES (?, 'lyric', ?, ?) ON CONFLICT(song_id, kind) DO UPDATE SET
+    VALUES (?, ?, ?, ?) ON CONFLICT(song_id, kind) DO UPDATE SET
     ok = excluded.ok, detail = excluded.detail, updated_at = CURRENT_TIMESTAMP`
-  ).run(vkey, ok ? 1 : 0, detail);
+  ).run(vkey, kind, ok ? 1 : 0, detail);
 }
+
+const getLyricVerdict = (vkey) => getVerdict(vkey, 'lyric');
+const upsertLyricVerdict = (vkey, ok, detail) => upsertVerdict(vkey, 'lyric', ok, detail);
 
 module.exports = {
   getCachedTranslation, upsertTranslation, markTranslationSkip,
-  getLyricVerdict, upsertLyricVerdict,
+  getVerdict, upsertVerdict, getLyricVerdict, upsertLyricVerdict,
 };

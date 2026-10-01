@@ -97,13 +97,24 @@ function providerDataOf(track) {
       bilibili: {
         bvid: String(track.bilibili.bvid),
         cid: /^\d+$/.test(String(track.bilibili.cid ?? '')) ? String(track.bilibili.cid) : null,
-        page: Math.max(1, parseInt(track.bilibili.page, 10) || 1)
+        page: Math.max(1, parseInt(track.bilibili.page, 10) || 1),
+        // 来源标题/作者随 providerData 走——歌词归属核验的 verdict 签名
+        // 需要它们，缺了只能跳过核验（老镜像行的无损降级）
+        title: String(track.bilibili.title || '').slice(0, 300) || null,
+        author: String(track.bilibili.author || '').slice(0, 120) || null
       },
       neteaseId
     };
   }
   if (track.youtube?.videoId) {
-    return { youtube: { videoId: String(track.youtube.videoId) }, neteaseId };
+    return {
+      youtube: {
+        videoId: String(track.youtube.videoId),
+        title: String(track.youtube.title || '').slice(0, 300) || null,
+        author: String(track.youtube.author || '').slice(0, 120) || null
+      },
+      neteaseId
+    };
   }
   return null;
 }
