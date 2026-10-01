@@ -19,7 +19,14 @@ const WNMCID = (() => {
   return `${s}.${Date.now()}.01.0`;
 })();
 
-const OS_DEFAULTS = { os: 'iPhone OS', appver: '9.0.90', osver: '16.2', channel: 'distribution' };
+// 上游 osMap：cookie.os 是选择器键（'pc'/'linux'/'android'/'iphone'→整套指纹），
+// 不是终值——显式 cookie.os='pc' 要产出整套 pc 指纹而非 pc+iOS 缝合体
+const OS_MAP = {
+  pc: { os: 'pc', appver: '3.0.18.203152', osver: 'Microsoft-Windows-10-Professional-build-22631-64bit', channel: 'netease' },
+  linux: { os: 'linux', appver: '1.2.1.0428', osver: 'Deepin 20.9', channel: 'netease' },
+  android: { os: 'android', appver: '8.20.20.231215173437', osver: '14', channel: 'xiaomi' },
+  iphone: { os: 'iPhone OS', appver: '9.0.90', osver: '16.2', channel: 'distribution' },
+};
 
 const UA = {
   weapi: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
@@ -55,6 +62,7 @@ function buildCookie(cookie) {
   if (typeof cookie === 'string') cookie = cookieToJson(cookie);
   if (typeof cookie !== 'object' || !cookie) return { map: {}, headerStr: '' };
   const nuid = hex(32);
+  const os = OS_MAP[cookie.os] || OS_MAP.iphone;
   const map = {
     ...cookie,
     __remember_me: 'true',
@@ -63,11 +71,11 @@ function buildCookie(cookie) {
     _ntes_nnid: cookie._ntes_nnid || `${nuid},${Date.now()}`,
     WNMCID: cookie.WNMCID || WNMCID,
     WEVNSM: cookie.WEVNSM || '1.0.0',
-    osver: cookie.osver || OS_DEFAULTS.osver,
+    osver: cookie.osver || os.osver,
     deviceId: cookie.deviceId || DEVICE_ID,
-    os: cookie.os || OS_DEFAULTS.os,
-    channel: cookie.channel || OS_DEFAULTS.channel,
-    appver: cookie.appver || OS_DEFAULTS.appver,
+    os: cookie.os || os.os,
+    channel: cookie.channel || os.channel,
+    appver: cookie.appver || os.appver,
   };
   return { map, headerStr: cookieObjToString(map) };
 }
@@ -85,7 +93,8 @@ async function request(uri, data, { crypto: mode = 'eapi', cookie, timeoutMs = D
   const payload = { ...data };
 
   if (mode === 'weapi') {
-    const { map, headerStr } = buildCookie(cookieObj);
+    // headerStr 不解构——NMTID/MUSIC_A 在 merge 后才注入，需重新序列化
+    const { map } = buildCookie(cookieObj);
     if (uri.indexOf('login') === -1) map.NMTID = hex(16);
     if (!map.MUSIC_U) map.MUSIC_A = map.MUSIC_A || '';
     headers.Referer = DOMAIN;
@@ -96,22 +105,26 @@ async function request(uri, data, { crypto: mode = 'eapi', cookie, timeoutMs = D
     url = `${DOMAIN}/weapi/${uri.slice(5)}`;
   } else {
     // eapi：Cookie 头只含重建的 header 对象（上游 request.js:158-180 语义——
-    // 客户端透传键里只有 __csrf/MUSIC_U/MUSIC_A 能到达请求）
+    // header 读 merge 后的 cookie 字段，os='pc' 这类选择器经 osMap 展开后
+    // 要渗透进这里；versioncode/mobilename/buildver/resolution 是 header
+    // 独占字段不经 merge）。MUSIC_U/MUSIC_A 上游是 if-truthy 条件写入——
+    // 空 anonymous_token 下键位本身缺席而非空值
+    const { map } = buildCookie(cookieObj);
     const header = {
-      osver: cookieObj.osver || OS_DEFAULTS.osver,
-      deviceId: cookieObj.deviceId || DEVICE_ID,
-      os: cookieObj.os || OS_DEFAULTS.os,
-      appver: cookieObj.appver || OS_DEFAULTS.appver,
+      osver: map.osver,
+      deviceId: map.deviceId,
+      os: map.os,
+      appver: map.appver,
       versioncode: cookieObj.versioncode || '140',
       mobilename: cookieObj.mobilename || '',
       buildver: cookieObj.buildver || Date.now().toString().slice(0, 10),
       resolution: cookieObj.resolution || '1920x1080',
       __csrf: csrfToken,
-      channel: cookieObj.channel || OS_DEFAULTS.channel,
+      channel: map.channel,
       requestId: `${Date.now()}_${Math.floor(Math.random() * 1000).toString().padStart(4, '0')}`,
     };
-    if (cookieObj.MUSIC_U) header.MUSIC_U = cookieObj.MUSIC_U;
-    else header.MUSIC_A = cookieObj.MUSIC_A || '';
+    if (map.MUSIC_U) header.MUSIC_U = map.MUSIC_U;
+    if (map.MUSIC_A) header.MUSIC_A = map.MUSIC_A;
     headers.Cookie = cookieObjToString(header);
     headers['User-Agent'] = UA.eapi;
     payload.header = header;

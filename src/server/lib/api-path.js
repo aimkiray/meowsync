@@ -8,6 +8,17 @@ const PREFIXES = [
   '/song-meta', '/ai', '/auth'
 ];
 
+// 已摘除的上游路由家族首段——历史上这些是 API（JSON 404/鉴权），摘除后若不
+// 收口会被判成非 API 公开 GET → SPA 兜底 200 回 index.html，探测方会把
+// HTML 当成功响应。正向列入恢复「API 路径」语义：不命中路由表则 JSON 404
+const LEGACY_API_SEGMENTS = new Set([
+  'login', 'register', 'captcha', 'cellphone', 'user', 'users',
+  'dj', 'mv', 'comment', 'like', 'resource', 'daily_signin',
+  'playlist', 'artist', 'cloud', 'msg', 'topic', 'video',
+  'fm_trash', 'event', 'program', 'scrobble', 'send', 'states',
+  'history', 'nickname', 'playmode', 'recent', 'related', 'listen',
+]);
+
 let apiFirstSegments = null;
 function firstSegments() {
   if (!apiFirstSegments) {
@@ -27,7 +38,7 @@ function isApiPath(pathname) {
   const lower = String(pathname || '').toLowerCase();
   if (PREFIXES.some(px => lower === px || lower.startsWith(px + '/'))) return true;
   const firstSegment = (lower.split('/')[1] || '');
-  return firstSegments().has(firstSegment);
+  return firstSegments().has(firstSegment) || LEGACY_API_SEGMENTS.has(firstSegment);
 }
 
 module.exports = { isApiPath, API_PREFIXES: PREFIXES };

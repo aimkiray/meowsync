@@ -21,7 +21,9 @@ async function resolve(info, { signal } = {}) {
   if (!res.ok) throw new Error(`pyncmd HTTP ${res.status}`);
   const body = await res.json();
   if (body && typeof body === 'object' && body.br > 0 && typeof body.url === 'string' && body.url) {
-    return { url: body.url, br: body.br * 1000 };
+    // size 一并透传：有它则下游时长对账免一次 HEAD RTT
+    const size = Number.isFinite(body.size) && body.size > 0 ? body.size : undefined;
+    return { url: body.url, br: body.br * 1000, size };
   }
   return null;
 }

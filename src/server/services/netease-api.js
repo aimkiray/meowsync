@@ -160,13 +160,14 @@ async function aiUnlockInfo(songRow, signal) {
     if (Date.now() - hit.at < ttl) return hit.data;
     unlockInfoCache.delete(key);
   }
-  // 同 id 并发请求合到首个在途调用——批量解锁同曲重复项/并发刷新不重复扣额度
+  // 同 id 并发请求合到首个在途调用——批量解锁同曲重复项/并发刷新不重复扣额度。
+  // 内层不传调用方 signal：规整结果是按 id 共享的通用元数据，首个调用方
+  // 断连不该让同 inflight 的 waiter 陪绑降级（10s 超时已是内层自净上限）
   const gate = unlockInfoInflight.get(key);
   if (gate) return gate;
-  const p = aiUnlockInfoInner(songRow, signal).finally(() => unlockInfoInflight.delete(key));
+  const p = aiUnlockInfoInner(songRow).finally(() => unlockInfoInflight.delete(key));
   unlockInfoInflight.set(key, p);
   const data = await p;
-  // abort 中途返回的 null 不落缓存——那不是「规整不了」而是「被打断」
   if (signal?.aborted) return data;
   if (unlockInfoCache.size > 512) unlockInfoCache.clear();
   unlockInfoCache.set(key, { data, at: Date.now() });
@@ -185,7 +186,7 @@ function buildUnlockInfo(songRow, info) {
     id: songRow.id,
     name: info.name,
     artists,
-    keyword: `${info.name} - ${artists.join(' / ')}`,
+    keyword: artists.length ? `${info.name} - ${artists.join(' / ')}` : info.name,
     durationMs: songRow.dt || null,
   };
 }
@@ -194,6 +195,28 @@ function buildUnlockInfo(songRow, info) {
 function baseUnlockInfo(songRow) {
   const artists = (songRow.ar || []).map(a => a?.name).filter(Boolean);
   return buildUnlockInfo(songRow, { name: songRow.name, artists });
+}
+
+// 试听判定：freeTrialInfo 是明确标记；时长启发式只对付费曲目生效——
+// 免费短歌（intro/间奏 <60s）fee=0 且 url 即完整曲，误判会错误触发解锁。
+// 模块级导出给 routes/music.js 的批量上限判定——400 阈值该数「待解锁项」
+// 而非 data 全量，否则 21 首全可播的 song_url 也被拒
+const needsUnlock = (item) => {
+  if (!item.id) return false;
+  const isTrial = item.freeTrialInfo != null
+    || (item.url && item.time > 0 && item.time <= TRIAL_MAX_DURATION_MS && item.fee > 0);
+  return !item.url || isTrial;
+};
+
+// 回链扩展名：优先 pathname 尾缀（126/purl 链自带 .flac/.mp3），googlevideo
+// 无尾缀时看 mime= 参数。写回 item.type 让前端下载文件名扩展名与内容一致
+function extOf(url) {
+  const m = (url.pathname || '').match(/\.(flac|mp3|m4a|ogg|opus|aac|webm|wav)$/i);
+  if (m) return m[1].toLowerCase();
+  const mime = url.searchParams.get('mime') || '';
+  if (mime.startsWith('audio/mp4')) return 'm4a';
+  if (mime.startsWith('audio/webm')) return 'webm';
+  return null;
 }
 
 // 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）
@@ -209,14 +232,6 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   const throwIfAborted = () => { if (signal?.aborted) throw new Error('aborted'); };
 
   const allSources = purpose === 'download' ? DOWNLOAD_SOURCES : PLAYBACK_SOURCES;
-  // 试听判定：freeTrialInfo 是明确标记；时长启发式只对付费曲目生效——
-  // 免费短歌（intro/间奏 <60s）fee=0 且 url 即完整曲，误判会错误触发解锁
-  const needsUnlock = (item) => {
-    if (!item.id) return false;
-    const isTrial = item.freeTrialInfo != null
-      || (item.url && item.time > 0 && item.time <= TRIAL_MAX_DURATION_MS && item.fee > 0);
-    return !item.url || isTrial;
-  };
   const unlockTargets = items.filter(needsUnlock);
   if (unlockTargets.length > MAX_UNLOCK_ITEMS) {
     // 路由层已限量；这里截断是兜底——丢弃项必须标失败并清链，
@@ -235,7 +250,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   const songRows = {}; // AI 规整用——unlockInfo 需要完整 name/ar/al 字段
   if (ids) {
     try {
-      const detail = await callNeteaseApi('song_detail', { ids });
+      const detail = await callNeteaseApi('song_detail', { ids }, { signal });
       (detail.body?.songs || []).forEach(s => {
         originalDurations[s.id] = s.dt;
         songRows[s.id] = s;
@@ -288,10 +303,18 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，
             // 域名再逐跳过公网 IP 校验——私网解析的 URL 若选中即 break，
             // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
-            // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）
+            // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）。
+            // 逐源失败必须留痕——全静默 continue 下线上「该解的歌不解」无法
+            // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛
             const checked = unblocked?.url ? normalizeOutboundUrl(unblocked.url) : null;
-            if (!checked?.ok) continue;
-            if (!(await resolvesToPublicIp(checked.url.hostname))) continue;
+            if (!checked?.ok) {
+              console.info(`[unlock] ${item.id} ${source}: 无可用回链或归一化被拒`);
+              continue;
+            }
+            if (!(await resolvesToPublicIp(checked.url.hostname))) {
+              console.info(`[unlock] ${item.id} ${source}: ${checked.url.hostname} 非公网可解析`);
+              continue;
+            }
 
             // 会被包进 /audio-proxy 的回链必须过代理白名单预筛——否则产出
             // "已解析却 403"的死链并缓存 60s。qq 源必须算在内：其 https purl
@@ -302,24 +325,28 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
             const willProxy = !!proxyOrigin
               && (source === 'youtube' || source === 'qq' || checked.url.protocol === 'http:');
-            if (willProxy && !isProxyAllowedHost(checked.url.hostname)) continue;
+            if (willProxy && !isProxyAllowedHost(checked.url.hostname)) {
+              console.info(`[unlock] ${item.id} ${source}: ${checked.url.hostname} 不在代理白名单`);
+              continue;
+            }
 
             // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
             // 候选期已知秒数的源（youtube/qq）直接比对原始时长；
             // 其余按 size×br 估算（unm range 探测已随库删除，回落 HEAD）
+            let estMs = null;
+            let sizeBytes = null;
             if (originalDt) {
               const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
-              let estMs = null;
               if (Number.isFinite(unblocked.durationSec) && unblocked.durationSec > 0) {
                 estMs = unblocked.durationSec * 1000;
               } else if (unblocked.br) {
                 // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
                 // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
-                const size = Number.isFinite(unblocked.size) && unblocked.size > 0
+                sizeBytes = Number.isFinite(unblocked.size) && unblocked.size > 0
                   ? unblocked.size
                   : await withTimeout(getContentLength(checked.url.toString()), 8000, 'HEAD 探测')
                     .catch(() => null);
-                estMs = estimateDuration(size, unblocked.br);
+                estMs = estimateDuration(sizeBytes, unblocked.br);
               }
               if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
                 console.warn(
@@ -329,12 +356,20 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
               }
             }
 
-            resolved = { url: checked.url.toString(), br: unblocked.br || null, source };
+            resolved = {
+              url: checked.url.toString(), br: unblocked.br || null, source,
+              // 真实文件形态写回：试听片的 time/size/type 透给下载端会
+              // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件
+              ext: extOf(checked.url),
+              size: sizeBytes || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null),
+              timeMs: estMs || originalDt || null,
+            };
             unlockCacheSet(purpose, item.id, resolved);
             break;
           } catch (e) {
             if (signal?.aborted) throw e;
-            // 该源失败，继续下一个
+            // 该源失败，继续下一个——留一行 info 让「逐源全灭」可排障
+            console.info(`[unlock] ${item.id} ${source}: ${e?.message || e}`);
           }
         }
       }
@@ -357,6 +392,11 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         item.unblockedBr = resolved.br;
         item.usedAudioProxy = useProxy;
         item.freeTrialInfo = null;
+        // 解锁回链的真实形态覆写试听片字段（type 影响前端下载扩展名、
+        // time/size 影响展示与字节对账）——上游原值是残片/空链的元数据
+        if (resolved.ext) item.type = resolved.ext;
+        if (resolved.size) item.size = resolved.size;
+        if (resolved.timeMs) item.time = resolved.timeMs;
         console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${useProxy}${wasCached ? ' (cached)' : ''}`);
       } else {
         item.unlockFailed = true;
@@ -385,4 +425,4 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   return items;
 }
 
-module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration };
+module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock };

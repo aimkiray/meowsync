@@ -56,22 +56,38 @@ async function fetchPlayer(videoId, extraSignal) {
 }
 
 // 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
-// spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强
+// spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强。
+// 客户端表回落与 fetchPlayer 同口径：Innertube 风控按客户端形态整体生效，
+// ANDROID 被封时 search 若写死单形态会在 player 回落链之前就整源死亡
 async function innertubeSearch(keyword, extraSignal, limit = 5) {
-  const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...INNERTUBE_CLIENTS[0].headers },
-    body: JSON.stringify({
-      context: { client: INNERTUBE_CLIENTS[0].client },
-      query: String(keyword || ''),
-      // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
-      params: 'EgIQAQ==',
-    }),
-    signal: timedSignal(extraSignal),
-  });
-  if (!res.ok) throw new Error(`innertube search HTTP ${res.status}`);
-  const body = await res.json();
+  let body = null;
+  let lastErr = null;
+  for (const form of INNERTUBE_CLIENTS) {
+    if (extraSignal?.aborted) throw new Error('aborted');
+    try {
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...form.headers },
+        body: JSON.stringify({
+          context: { client: form.client },
+          query: String(keyword || ''),
+          // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
+          params: 'EgIQAQ==',
+        }),
+        signal: timedSignal(extraSignal),
+      });
+      if (!res.ok) throw new Error(`innertube search HTTP ${res.status}`);
+      body = await res.json();
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (extraSignal?.aborted) throw new Error('aborted');
+      console.warn(`[youtube] ${form.name} 客户端搜索失败:`, e.message);
+    }
+  }
+  if (!body) throw lastErr || new Error('所有客户端形态搜索均失败');
   const out = [];
+  const seen = new Set(); // 同 videoId 会在主结果与相关推荐栏重复出现——去重防重复打 player
   // 递归扫 videoRenderer（web 客户端形态）与 compactVideoRenderer
   // （ANDROID/IOS 移动客户端形态）——twoColumnSearchResultsRenderer 的
   // 嵌套深度随 YouTube 改版漂移，按节点形状收集比按路径深取稳
@@ -83,15 +99,19 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
       return;
     }
     const v = node.videoRenderer || node.compactVideoRenderer;
-    if (v?.videoId) {
+    if (v?.videoId && !seen.has(v.videoId)) {
+      seen.add(v.videoId);
       // lengthText 两种形态都出现：simpleText（web）或 runs（compact）——
       // 统一走 textOf；部分形态直接给 lengthSeconds 数字
       const lt = textOf(v.lengthText);
+      // +null=0 会被 isFinite 当合法时长（0s 反而绕过下游对账）——null/空串先归 NaN
+      const ls = v.lengthSeconds == null || v.lengthSeconds === ''
+        ? NaN : Number(v.lengthSeconds);
       out.push({
         videoId: v.videoId,
         title: textOf(v.title),
         owner: textOf(v.ownerText) || textOf(v.shortBylineText),
-        durationSec: Number.isFinite(+v.lengthSeconds) ? +v.lengthSeconds
+        durationSec: Number.isFinite(ls) && ls > 0 ? ls
           : (lt ? lt.split(':').reduce((s, p) => s * 60 + (+p || 0), 0) : null),
       });
     }
