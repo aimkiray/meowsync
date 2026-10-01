@@ -60,6 +60,10 @@ test('YouTube 歌单链识别：playlist?list= / watch?v=&list= / 裸前缀 id',
   // 纯视频链不判成歌单；11 位裸视频 id 不撞前缀形态
   assert.equal(extractYouTubePlaylistId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), null);
   assert.equal(extractYouTubePlaylistId('dQw4w9WgXcQ'), null);
+  // 裸形态不大小写容忍——'tldr-weekly-01'/'fluffy-kitten' 型搜索词不劫
+  assert.equal(extractYouTubePlaylistId('plrAXtmErZgOeiKm4sgNOknGvNjby9efdf'), null);
+  assert.equal(extractYouTubePlaylistId('tldr-weekly-01'), null);
+  assert.equal(extractYouTubePlaylistId('fluffy-kitten'), null);
 });
 
 test('播放列表 id 三族：网易云数字 / local_pl_ / saved_queue_', () => {

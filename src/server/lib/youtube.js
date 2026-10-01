@@ -269,9 +269,9 @@ function pickStreamList(data, kind, prefer = '') {
 const rendererText = (n) => (n?.runs || []).map(r => r.text).join('') || n?.simpleText || '';
 
 // 歌单页一页：首屏走 browseId=VL<listId>，续页走 continuation token。
-// playlistVideoRenderer 节点递归收集（嵌套深度随 YouTube 改版漂移，按节点
-// 形状取比按路径深取稳——与 innertubeSearch 同款防御）。失效条目
-// （isPlayable:false/无 videoId）计入 skipped 透出给前端
+// 条目节点递归收集（嵌套深度随 YouTube 改版漂移，按节点形状取比按路径
+// 深取稳——与 innertubeSearch 同款防御）。失效条目（isPlayable:false/
+// 无 videoId/sentinel 标题）计入 skipped 透出给前端
 async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   const vd = freshVisitorData();
   const res = await fetch(`https://www.youtube.com/youtubei/v1/browse?key=${INNERTUBE_KEY}`, {
@@ -279,7 +279,8 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
     headers: clientHeaders(WEB_CLIENT, vd),
     body: JSON.stringify({
       context: { client: vd ? { ...WEB_CLIENT.client, visitorData: vd } : WEB_CLIENT.client },
-      ...(continuation ? { continuation } : { browseId: `VL${listId}` }),
+      // VL 前缀输入已是 browseId 形态——幂等而非二次加前缀
+      ...(continuation ? { continuation } : { browseId: /^VL/i.test(listId) ? listId : `VL${listId}` }),
     }),
     signal: timedSignal(extraSignal),
   });
@@ -287,11 +288,20 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   const body = await res.json();
 
   // 私有/不存在/被删的歌单：200 + alerts[].alertRenderer.type='ERROR'
-  // ——对用户是「不可访问」语义，挂 upstreamCode 供路由映射 404
+  // ——对用户是「不可访问」语义，挂 upstreamCode 供路由映射 404；
+  // 登录/风控类 alert（sign in/bot）是本机信誉问题而非歌单问题，分档 502
   const alert = (body?.alerts || []).find(a => a?.alertRenderer?.type === 'ERROR');
   if (alert) {
-    const e = new Error(`播放列表不可用: ${rendererText(alert.alertRenderer.text) || 'ERROR'}`);
-    e.upstreamCode = 'ALERT_ERROR';
+    const text = rendererText(alert.alertRenderer.text);
+    const e = new Error(`播放列表不可用: ${text || 'ERROR'}`);
+    e.upstreamCode = /sign in|log ?in|bot|登录|登入|验证|確認/i.test(text) ? 'ALERT_AUTH' : 'ALERT_ERROR';
+    throw e;
+  }
+  // 200 但三棵内容根与 header 全空——风控空壳/响应畸形，不是「歌单不存在」
+  if (!body?.header && !body?.contents && !body?.onResponseReceivedActions
+    && !body?.onResponseReceivedEndpoints && !body?.continuationContents) {
+    const e = new Error('innertube browse 空壳响应');
+    e.upstreamCode = 'EMPTY_SHELL';
     throw e;
   }
 
@@ -300,8 +310,18 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   let skipped = 0;
   let next = null;
   // 失效条目标题哨兵（各语言形态）——lockup 形态里失效项仍带 videoId，
-  // 只能靠标题判；无标题/无 videoId 的节点同样不可播
-  const DEAD_TITLE = /^[\[【「『(]?\s*(?:(?:deleted|private)\s*video|已删除的?视频|已设为私享的?视频|私享视频|无法播放的?视频)\s*[\]】」』)]?$/i;
+  // 只能靠标题判；整串匹配防 'Private Eyes' 类真标题误杀；无标题/无
+  // videoId 的节点同样不可播
+  const DEAD_TITLE = /^\s*[\[【「『(]?\s*(?:(?:deleted|private|removed|unavailable)\s*video|已[删刪]除的?[视影]片|已移除的?[视影]片|已设为私享的?[视影]片|私享[视影]片|私人[视影]片|无法播放的?[视影]片|削除された(?:動画|ビデオ)|삭제된 동영상)\s*[\]】」』)]?\s*$/i;
+  // 找 part 里的频道跳转（browseEndpoint.browseId='UC…'）——比按语言
+  // 匹配「by/创建者」前缀更稳（lockup 行与 pageHeader 共用）
+  const hasChannelLink = (m) => {
+    if (!m || typeof m !== 'object') return false;
+    if (Array.isArray(m)) return m.some(hasChannelLink);
+    const bid = m.browseEndpoint?.browseId;
+    if (typeof bid === 'string' && bid.startsWith('UC')) return true;
+    return Object.keys(m).some(k => hasChannelLink(m[k]));
+  };
   const parseSecs = (t) => /^\d+(?::\d{1,2})+$/.test(t || '')
     ? t.split(':').reduce((s, p) => s * 60 + (+p || 0), 0) : 0;
   const pushItem = (videoId, title, owner, durationSec) => {
@@ -328,13 +348,21 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
       for (const k of Object.keys(n)) findBadge(n[k]);
     };
     findBadge(lv.contentImage);
-    pushItem(lv.contentId, meta?.title?.content || '',
-      rows[0]?.metadataParts?.[0]?.text?.content, parseSecs(badge));
+    // 频道名：优先带 UC 跳转的 part（合并行里视图计数无频道端点），
+    // 兜底首文本 part 按「•」截段剥尾噪
+    const row0 = rows[0]?.metadataParts || [];
+    const partText = (p) => p?.text?.content
+      || p?.avatarStack?.avatarStackViewModel?.text?.content || p?.avatarStack?.text?.content || '';
+    const ownerPart = row0.find(p => hasChannelLink(p?.text?.commandRuns || p?.avatarStack?.avatarStackViewModel?.text?.commandRuns))
+      || row0.find(p => partText(p));
+    const owner = partText(ownerPart).split(/\s*[•·]\s*/)[0].trim();
+    pushItem(lv.contentId, meta?.title?.content || '', owner, parseSecs(badge));
   };
+  let nextAlt = null; // 非哨兵位 continuationCommand 兜底（哨兵优先）
   const walk = (node) => {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) { for (const it of node) walk(it); return; }
-    if (node.lockupViewModel) { parseLockup(node.lockupViewModel); return; }
+    if (node.lockupViewModel) parseLockup(node.lockupViewModel);
     const v = node.playlistVideoRenderer;
     if (v) {
       // 失效/私有条目：无 videoId 或 isPlayable:false
@@ -345,22 +373,27 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
           parseSecs(rendererText(v.lengthText)));
       }
     }
-    // 续页 token 新旧两形：continuationItemRenderer（旧）/
-    // continuationItemViewModel.continuationCommand.innertubeCommand（新）
-    const token = node.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token
-      || node.continuationItemViewModel?.continuationCommand?.innertubeCommand?.continuationCommand?.token;
-    if (token && !next) next = token;
-    for (const key of Object.keys(node)) {
-      if (key === 'playlistVideoRenderer' || key === 'lockupViewModel'
-        || key === 'continuationItemRenderer' || key === 'continuationItemViewModel') continue;
-      walk(node[key]);
+    // 续页 token：哨兵位优先（continuationItem*/nextContinuationData 是
+    // 明确的加载更多语境），裸 continuationCommand 仅兜底——子树继续
+    // 下钻找 token（lockup/continuationItem 内嵌形态），条目由 seen 去重
+    const sentinel = node.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token
+      || node.continuationItemViewModel?.continuationCommand?.innertubeCommand?.continuationCommand?.token
+      || node.nextContinuationData?.continuation
+      || node.nextContinuationData?.continuationEndpoint?.continuationCommand?.token;
+    if (sentinel && !next) next = sentinel;
+    if (!nextAlt) {
+      nextAlt = node.continuationEndpoint?.continuationCommand?.token
+        || node.continuationCommand?.token || null;
     }
+    for (const key of Object.keys(node)) walk(node[key]);
   };
-  // 续页响应根字段随版本漂移（onResponseReceivedActions /
-  // continuationContents）——三棵候选根都扫，各自子树不重叠
+  // 续页响应根字段随版本漂移（onResponseReceivedActions/Endpoints /
+  // continuationContents）——四棵候选根都扫，各自子树不重叠
   walk(body?.contents);
   walk(body?.onResponseReceivedActions);
+  walk(body?.onResponseReceivedEndpoints);
   walk(body?.continuationContents);
+  if (!next) next = nextAlt;
 
   // 首屏才有 header；新旧两种形态（playlistHeaderRenderer / pageHeaderRenderer）。
   // 新版元信息在 metadataRows 文本行里（「创建者：X」「N 个视频」）
@@ -378,16 +411,7 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
         const tx = p?.text || p?.avatarStack?.text || p?.avatarStack?.avatarStackViewModel?.text;
         const content = tx?.content;
         if (!content) continue;
-        let isChannel = false;
-        const deep = (m) => {
-          if (isChannel || !m || typeof m !== 'object') return;
-          if (Array.isArray(m)) { m.forEach(deep); return; }
-          const bid = m.browseEndpoint?.browseId;
-          if (typeof bid === 'string' && bid.startsWith('UC')) isChannel = true;
-          for (const k of Object.keys(m)) deep(m[k]);
-        };
-        deep(tx?.commandRuns);
-        metaParts.push({ text: content, isChannel });
+        metaParts.push({ text: content, isChannel: hasChannelLink(tx?.commandRuns) });
       }
     }
     for (const k of Object.keys(n)) if (k !== 'metadataParts') collectParts(n[k]);
@@ -395,11 +419,13 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   collectParts(pg?.content?.pageHeaderViewModel?.metadata);
   const title = rendererText(ph?.title)
     || (typeof pg?.pageTitle === 'string' ? pg.pageTitle : rendererText(pg?.pageTitle))
-    || rendererText(pg?.content?.pageHeaderViewModel?.title?.dynamicTextViewModel?.text) || '';
+    || pg?.content?.pageHeaderViewModel?.title?.dynamicTextViewModel?.text?.content || '';
+  // by 前缀剥除要求分隔符/词边界——'Byron'/'By2' 频道名不得啃
+  const BY_PREFIX = /^(?:创建者|by)(?:\s*[:：]\s*|\s+)/i;
   const owner = rendererText(ph?.ownerText)
     || (metaParts.find(p => p.isChannel)?.text
-      || metaParts.find(p => /^(?:创建者|by)\s*[:：]?\s*/i.test(p.text))?.text || '')
-      .replace(/^(?:创建者|by)\s*[:：]?\s*/i, '');
+      || metaParts.find(p => BY_PREFIX.test(p.text))?.text || '')
+      .replace(BY_PREFIX, '');
   const countDigits = rendererText(ph?.numVideosText).replace(/\D/g, '')
     || (metaParts.map(p => p.text.match(/^(\d[\d,.]*)\s*(?:个视频|部视频|videos?)/i)?.[1]).find(Boolean) || '').replace(/\D/g, '');
   const cover = ph?.playlistHeaderBanner?.heroThumbnailRenderer?.thumbnail?.thumbnails?.at(-1)?.url

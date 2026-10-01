@@ -124,6 +124,71 @@ test('playlistVideoRenderer 旧形态：items/header/旧式 continuation 兼容'
   } finally { restore(); }
 });
 
+test('browseId 幂等：VL 前缀原样直拼不二次加前缀', async () => {
+  let sentBrowseId = null;
+  stubFetch(async (_u, opt) => {
+    sentBrowseId = JSON.parse(opt.body).browseId;
+    return jsonRes(wrapContents([lockupItem('dQw4w9WgXcQ', 't', 'o', '1:00')]));
+  });
+  try {
+    await fetchYtPlaylistPage({ listId: 'VLPLrAXtmErZgOeiKm4sgNOknGvNjby9efdf' });
+    assert.equal(sentBrowseId, 'VLPLrAXtmErZgOeiKm4sgNOknGvNjby9efdf');
+    await fetchYtPlaylistPage({ listId: 'PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf' });
+    assert.equal(sentBrowseId, 'VLPLrAXtmErZgOeiKm4sgNOknGvNjby9efdf', 'PL 加 VL 前缀');
+  } finally { restore(); }
+});
+
+test('续页根 onResponseReceivedEndpoints + nextContinuationData 哨兵', async () => {
+  stubFetch(async () => jsonRes({
+    onResponseReceivedEndpoints: [{ appendContinuationItemsAction: {
+      continuationItems: [
+        lockupItem('abc123def45', '续页条目', '频道', '1:00'),
+        { nextContinuationData: { continuation: 'tokNCD' } }] } }],
+  }));
+  try {
+    const r = await fetchYtPlaylistPage({ listId: 'PLx', continuation: 'tok1' });
+    assert.equal(r.items.length, 1);
+    assert.equal(r.continuation, 'tokNCD', 'nextContinuationData 形态 token');
+  } finally { restore(); }
+});
+
+test('header 兜底链与 owner 精确化：dynamicText 直读 + UC part 优先 + • 截段', async () => {
+  // pageTitle 非字符串（漂移形态）→ dynamicTextViewModel.text.content
+  const hdr = JSON.parse(JSON.stringify(NEW_HEADER));
+  delete hdr.pageHeaderRenderer.pageTitle;
+  stubFetch(async () => jsonRes({ header: hdr, ...wrapContents([
+    // lockup 首行合并「频道 • 观看数」单 part——按 • 截段取频道
+    { lockupViewModel: {
+      contentId: 'dQw4w9WgXcQ', contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
+      metadata: { lockupMetadataViewModel: {
+        title: { content: '歌' },
+        metadata: { contentMetadataViewModel: { metadataRows: [
+          { metadataParts: [{ text: { content: '某频道 • 100万次观看' } }] },
+        ] } },
+      } },
+    } },
+  ]) }));
+  try {
+    const r = await fetchYtPlaylistPage({ listId: 'PLabcdefghijklmnop' });
+    assert.equal(r.title, 'Select Lectures', 'dynamicTextViewModel.text.content 兜底');
+    assert.equal(r.items[0].owner, '某频道', '合并行按 • 截段');
+  } finally { restore(); }
+});
+
+test('繁中/日文哨兵失效条目计 skipped', async () => {
+  stubFetch(async () => jsonRes(wrapContents([
+    lockupItem('dQw4w9WgXcQ', '已刪除的影片', '', ''),
+    lockupItem('kJQP7kiw5Fk', '削除された動画', '', ''),
+    lockupItem('jNQXAC9IVRw', 'Private Eyes', 'Hall & Oates', '3:35'), // 真标题不误杀
+  ])));
+  try {
+    const r = await fetchYtPlaylistPage({ listId: 'PLabcdefghijklmnop' });
+    assert.equal(r.items.length, 1);
+    assert.equal(r.items[0].title, 'Private Eyes');
+    assert.equal(r.skipped, 2);
+  } finally { restore(); }
+});
+
 test('续页根 onResponseReceivedActions 兜底 + alert ERROR 抛 upstreamCode', async () => {
   stubFetch(async () => jsonRes({ onResponseReceivedActions: [
     { appendContinuationItemsAction: { continuationItems: [

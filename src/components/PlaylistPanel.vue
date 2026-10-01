@@ -263,6 +263,18 @@ export default {
       if (!isLocalPlaylistId(playlist?.id)) {
         return `${window.location.origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
       }
+      // 导入壳按引用分享——接收端整单重拉，绕开 ?mix= 逐曲 resolve 的
+      // 条数上限（?yt=/?bili=/?qqpl= 在接收侧已有整单导入通道）
+      const ytM = /^local_pl_yt_([A-Za-z0-9_-]+)$/.exec(playlist.id)
+      if (ytM) {
+        return `${window.location.origin}/?yt=${encodeURIComponent(`https://www.youtube.com/playlist?list=${ytM[1]}`)}`
+      }
+      const biM = /^local_pl_bili_(\d+)$/.exec(playlist.id)
+      if (biM) {
+        return `${window.location.origin}/?bili=${encodeURIComponent(`https://www.bilibili.com/list/ml${biM[1]}`)}`
+      }
+      const qqM = /^local_pl_qq_(\d+)$/.exec(playlist.id)
+      if (qqM) return `${window.location.origin}/?qqpl=${qqM[1]}`
       return `${window.location.origin}/?mix=${encodeURIComponent(String(playlist.name || '歌单'))}~${mixIdsFor(playlist).join(',')}`
     }
     const copyShareLink = async (playlist) => {

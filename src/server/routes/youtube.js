@@ -194,6 +194,7 @@ app.get('/youtube/resolve', async (c) => {
 // 失败映射 404）；continuation 翻页，截断到 PL_MAX_ITEMS。词源匹配是
 // 预算制并发池：预算耗尽剩余曲目 matched=null 照常可播可下
 const PL_MAX_ITEMS = 200;
+const PL_MAX_PAGES = 8;
 const PL_MATCH_BUDGET_MS = 45000;
 const PL_MATCH_CONCURRENCY = 3;
 
@@ -204,8 +205,9 @@ app.get('/youtube/playlist', async (c) => {
   const signal = c.req.raw.signal;
   const raw = c.req.query('input') || c.req.query('list') || '';
   const listId = extractYouTubePlaylistId(raw)
-    // 谓词不收的形态按裸 id 兜底（VL 前缀写法/未知前缀——browseId 直拼）
-    || (/^[A-Za-z0-9_-]{10,80}$/.test(raw.trim()) ? raw.trim() : null);
+    // 谓词不收的形态按裸 id 兜底（VL 前缀写法/未知前缀——browseId 直拼；
+    // 真实 listId ≥13 位，短 token 必是垃圾不浪费一跳）
+    || (/^[A-Za-z0-9_-]{13,80}$/.test(raw.trim()) ? raw.trim() : null);
   if (!listId) {
     return c.json({ code: 400, message: '无法从输入解析歌单（支持 playlist?list=/watch?list= 链接）' }, 400);
   }
@@ -216,7 +218,7 @@ app.get('/youtube/playlist', async (c) => {
     const tracks = [];
     const seenIds = new Set();
     let continuation = null;
-    for (let page = 0; page < 8 && tracks.length < PL_MAX_ITEMS; page++) {
+    for (let page = 0; page < PL_MAX_PAGES && tracks.length < PL_MAX_ITEMS; page++) {
       if (signal?.aborted) return c.body(null, 499);
       let data;
       try {
@@ -231,7 +233,8 @@ app.get('/youtube/playlist', async (c) => {
       }
       skipped += data.skipped;
       for (const it of data.items) {
-        if (tracks.length >= PL_MAX_ITEMS || seenIds.has(it.videoId)) continue;
+        if (tracks.length >= PL_MAX_ITEMS) break;
+        if (seenIds.has(it.videoId)) continue;
         seenIds.add(it.videoId);
         const { songName, candidates, artistFromAuthor } = extractYtSong(it.title, it.owner);
         tracks.push({
@@ -296,7 +299,8 @@ app.get('/youtube/playlist', async (c) => {
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
     console.error('[youtube] playlist 失败:', e.message);
-    // 上游 ERROR alert（私有/不存在/被删）对用户是「不可访问」非网关故障
+    // 分档：私有/不存在 alert 与上游 400/404 是「不可访问」→404；
+    // ALERT_AUTH（登录/风控）、EMPTY_SHELL、5xx/网络/超时是上游故障 →502
     if (e.upstreamCode === 'ALERT_ERROR' || /HTTP (400|404)/.test(e.message || '')) {
       return c.json({ code: 404, message: '歌单不存在或不可公开访问' }, 404);
     }
