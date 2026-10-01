@@ -404,7 +404,7 @@ export default {
     const safeSetLs = (k, v) => { try { localStorage.setItem(k, v) } catch { /* 存不上就只用会话值 */ } }
     const lyricFontSize = ref(
       Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MIN,
-        parseInt(safeGetLs('meowsync-lyric-fs')) || 13)))
+        parseInt(safeGetLs('meowsync-lyric-fs')) || 18)))
     watch(lyricFontSize, v => {
       safeSetLs('meowsync-lyric-fs', String(v))
     })
@@ -1005,7 +1005,7 @@ export default {
 .watch-lyric-line {
   text-align: center;
   padding: 3px 4px;
-  font-size: var(--lyric-fs, 13px);
+  font-size: var(--lyric-fs, 18px);
   color: var(--ink-64);
   transition: color .25s;
 }
@@ -1013,26 +1013,25 @@ export default {
 .watch-lyric-line--current {
   color: var(--ink);
   font-weight: 700;
-  font-size: calc(var(--lyric-fs, 13px) + 2px);
+  font-size: calc(var(--lyric-fs, 18px) + 2px);
 }
 
 .watch-lyric-translation {
   /* opacity .75 叠在 ink-86 上画布对比度会跌破 3.5:1——升 .9 保读；
      字号下限 9px——字号调到最小档时译文不比这更小 */
   margin-top: 2px;
-  font-size: max(9px, calc(var(--lyric-fs, 13px) - 2px));
+  font-size: max(9px, calc(var(--lyric-fs, 18px) - 2px));
   opacity: .9;
 }
 
 /* 歌词工具条：字号 / 时间校准两组，顶在歌词面板上方。
-   软分隔线——watch 侧栏约定「静止零装饰，边界交给滚动影」 */
+   不设分隔线——watch 侧栏约定「静止零装饰，边界交给滚动影」 */
 .lyric-tools {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   padding: 4px 16px;
-  border-bottom: var(--hairline-soft);
   flex-shrink: 0;
 }
 .lyric-tools-group { display: flex; align-items: center; gap: 4px; }
