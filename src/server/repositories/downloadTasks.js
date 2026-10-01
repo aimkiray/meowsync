@@ -18,9 +18,11 @@ function mapTaskRow(row) {
     downloadAudio: Boolean(row.download_audio),
     downloadLyrics: Boolean(row.download_lyrics),
     downloadCover: Boolean(row.download_cover),
+    downloadVideo: Boolean(row.download_video),
     audioPath: row.audio_path,
     lyricsPath: row.lyrics_path,
     coverPath: row.cover_path,
+    videoPath: row.video_path,
     bitrate: row.bitrate,
     fileSize: row.file_size,
     durationMs: row.duration_ms,
@@ -44,11 +46,11 @@ function createTask(input) {
   const result = db.prepare(`
     INSERT INTO download_tasks (
       playlist_id, queue_id, song_id, song_name, artist, album, cover_url,
-      status, progress, download_audio, download_lyrics, download_cover,
+      status, progress, download_audio, download_lyrics, download_cover, download_video,
       bitrate, duration_ms, provider_data, created_at, updated_at
     ) VALUES (
       @playlist_id, @queue_id, @song_id, @song_name, @artist, @album, @cover_url,
-      @status, @progress, @download_audio, @download_lyrics, @download_cover,
+      @status, @progress, @download_audio, @download_lyrics, @download_cover, @download_video,
       @bitrate, @duration_ms, @provider_data, @created_at, @updated_at
     )
   `).run({
@@ -64,6 +66,7 @@ function createTask(input) {
     download_audio: input.downloadAudio ? 1 : 0,
     download_lyrics: input.downloadLyrics ? 1 : 0,
     download_cover: input.downloadCover ? 1 : 0,
+    download_video: input.downloadVideo ? 1 : 0,
     bitrate: input.bitrate || 320000,
     duration_ms: input.durationMs || 0,
     provider_data: input.providerData ? JSON.stringify(input.providerData) : null,
@@ -113,6 +116,10 @@ function updateTask(id, updates) {
     fields.push('cover_path = @cover_path');
     params.cover_path = updates.coverPath;
   }
+  if (updates.videoPath !== undefined) {
+    fields.push('video_path = @video_path');
+    params.video_path = updates.videoPath;
+  }
   if (updates.fileSize !== undefined) {
     fields.push('file_size = @file_size');
     params.file_size = updates.fileSize;
@@ -132,6 +139,10 @@ function updateTask(id, updates) {
   if (updates.downloadCover !== undefined) {
     fields.push('download_cover = @download_cover');
     params.download_cover = updates.downloadCover ? 1 : 0;
+  }
+  if (updates.downloadVideo !== undefined) {
+    fields.push('download_video = @download_video');
+    params.download_video = updates.downloadVideo ? 1 : 0;
   }
   if (updates.completedAt !== undefined) {
     fields.push('completed_at = @completed_at');

@@ -16,29 +16,51 @@ const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
 
-// 逐跳回源管线：白名单→公网IP→钉扎建连→302 手动跟随（每跳重验）。两个入口共用：
-// /audio-proxy?url=（显式 URL，开放中转面）与 /audio-proxy/t/:token（vault 查出的
-// 上游签名 URL——QQ purl/B 站 baseUrl/googlevideo 链不出进程，客户端只见 token）
-async function proxyUpstream(c, targetUrl) {
+// 单候选逐跳回源：白名单→公网IP→钉扎建连→302 手动跟随（每跳重验）。
+// 返回结构化结果而非直接回客户端——候选链调度层据 kind 决定换档/透出：
+//   {kind:'ok', send}      上游给了可用响应（含非 2xx 透传？否——见下）
+//   {kind:'halt', send}    客户端自身错误（坏 Range/断连 499）——非候选之罪，立即透出
+//   {kind:'reject', send}  该候选被拒（校验失败/上游 ≥400/请求抛错）——调度层可换档
+// send(c) 是真正写响应的闭包——推迟到「这是最终结论」时才执行，换档候选的
+// 上游 body 在返回前已 cancel，不会挂着悬空 socket
+async function fetchCandidate(c, firstUrl) {
+  const clientRange = c.req.header('range');
+  // 多段 Range（bytes=0-1,3-5）上游会回 multipart/byteranges——与透传的
+  // 单段 Content-Range 语义不兼容，浏览器请求也绝不会产生它，直接拒绝。
+  // 校验在候选循环外做一次：客户端错误与具体候选无关
+  if (clientRange) {
+    // unit 大小写不敏感（RFC 7233）；两端至少给一个数字（bytes=- 是空区间）
+    const m = /^bytes=(\d*)-(\d*)$/i.exec(clientRange.trim());
+    if (!m || (!m[1] && !m[2])) {
+      return { kind: 'halt', send: () => c.json({ code: 400, message: 'unsupported range' }, 400) };
+    }
+    // 反向区间（5-3）上游会回 416 透传，无注入面但没必要放行
+    if (m[1] && m[2] && BigInt(m[1]) > BigInt(m[2])) {
+      return { kind: 'halt', send: () => c.json({ code: 400, message: 'unsupported range' }, 400) };
+    }
+  }
+
+  let targetUrl = firstUrl;
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
     // 协议/端口/credentials/FQDN 尾点与下载路径共用同一归一化（net-guard）：
     // http/https 都放——HTTP 部署下 kuwo/官方链多是 http，浏览器直连又死在
     // CORS，代理是唯一通道；明文回源的篡改面是音频内容本身（本来就不可信）
     const checked = normalizeOutboundUrl(targetUrl);
     if (!checked.ok) {
-      // 语法错误是客户端参数错误(400)，协议/端口违例是策略拒绝(403)
+      // 语法错误是客户端参数错误(400)，协议/端口违例是策略拒绝(403)。
+      // 归候选侧拒绝（换档可能救活——下一候选 URL 形态不同）
       const status = checked.code === 'BAD_URL' ? 400 : 403;
       const message = { BAD_URL: 'invalid url', BAD_SCHEME: 'forbidden protocol', BAD_PORT: 'forbidden port' }[checked.code];
-      return c.json({ code: status, message }, status);
+      return { kind: 'reject', send: () => c.json({ code: status, message }, status) };
     }
     const parsed = checked.url;
     const hostname = parsed.hostname;
     if (!isAllowedHost(hostname)) {
-      return c.json({ code: 403, message: 'forbidden host' }, 403);
+      return { kind: 'reject', send: () => c.json({ code: 403, message: 'forbidden host' }, 403) };
     }
     // 域名解析出的地址必须是公网 IP（SSRF/DNS-rebinding 兜底，见 resolvesToPublicIp 注释）
     if (!(await resolvesToPublicIp(hostname))) {
-      return c.json({ code: 403, message: 'forbidden address' }, 403);
+      return { kind: 'reject', send: () => c.json({ code: 403, message: 'forbidden address' }, 403) };
     }
     targetUrl = parsed.href;
 
@@ -56,20 +78,16 @@ async function proxyUpstream(c, targetUrl) {
     if (BILI_CDN_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h))) {
       proxyHeaders['Referer'] = 'https://www.bilibili.com/';
     }
-    const range = c.req.header('range');
-    if (range) {
-      // 多段 Range（bytes=0-1,3-5）上游会回 multipart/byteranges——与透传的
-      // 单段 Content-Range 语义不兼容，浏览器请求也绝不会产生它，直接拒绝。
-      // unit 大小写不敏感（RFC 7233）；两端至少给一个数字（bytes=- 是空区间）
-      const m = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
-      if (!m || (!m[1] && !m[2])) {
-        return c.json({ code: 400, message: 'unsupported range' }, 400);
-      }
-      // 反向区间（5-3）上游会回 416 透传，无注入面但没必要放行
-      if (m[1] && m[2] && BigInt(m[1]) > BigInt(m[2])) {
-        return c.json({ code: 400, message: 'unsupported range' }, 400);
-      }
-      proxyHeaders['Range'] = range;
+    // 部分 googlevideo 流按「无 Range 的全量 GET」策略拒客（403），而媒体元素
+    // 的探测性首连并不总带 Range——代理代为注入 bytes=0-（语义=全文，走 206
+    // 通道绕开）。下游响应同步把 206 降回 200：客户端没请求 Range，按规范
+    // 不该收到 Partial Content（Howler/audio 元素都能消化，但守规矩更稳）
+    let injectedRange = false;
+    if (clientRange) {
+      proxyHeaders['Range'] = clientRange;
+    } else if (hostname === 'googlevideo.com' || hostname.endsWith('.googlevideo.com')) {
+      proxyHeaders['Range'] = 'bytes=0-';
+      injectedRange = true;
     }
 
     // 超时仅覆盖连接+响应头阶段：AbortSignal 在 fetch resolve 后仍对 body 流生效，
@@ -106,9 +124,11 @@ async function proxyUpstream(c, targetUrl) {
       clearTimeout(timeout);
       // 客户端断开触发的 abort：响应已无法送达，区分出来避免把正常断流
       // 记成上游故障语义（同样返回即可，状态码对死连接无意义）
-      if (c.req.raw.signal?.aborted) return c.body(null, 499);
+      if (c.req.raw.signal?.aborted) {
+        return { kind: 'halt', send: () => c.body(null, 499) };
+      }
       const status = timeoutController.signal.aborted ? 504 : 502;
-      return c.json({ code: status, message: status === 504 ? 'upstream timeout' : 'upstream request failed' }, status);
+      return { kind: 'reject', send: () => c.json({ code: status, message: status === 504 ? 'upstream timeout' : 'upstream request failed' }, status) };
     }
     clearTimeout(timeout);
 
@@ -120,9 +140,17 @@ async function proxyUpstream(c, targetUrl) {
       try {
         targetUrl = new URL(location, targetUrl).toString();
       } catch {
-        return c.json({ code: 502, message: 'invalid redirect location' }, 502);
+        return { kind: 'reject', send: () => c.json({ code: 502, message: 'invalid redirect location' }, 502) };
       }
       continue;
+    }
+
+    // 上游 ≥400：候选拒绝——调度层还有候选就换档（SABR 闸控的 googlevideo
+    // 自适应流即此形态）；body 先 cancel 释放 keep-alive 连接
+    if (upstream.status >= 400) {
+      const status = upstream.status;
+      upstream.body?.cancel().catch(() => {});
+      return { kind: 'reject', send: () => c.json({ code: status, message: `上游返回 ${status}` }, status) };
     }
 
     const resHeaders = {
@@ -150,15 +178,38 @@ async function proxyUpstream(c, targetUrl) {
     const contentLength = upstream.headers.get('content-length');
     if (contentLength && !encoded) resHeaders['Content-Length'] = contentLength;
     const contentRange = upstream.headers.get('content-range');
-    if (contentRange && !encoded) resHeaders['Content-Range'] = contentRange;
+    if (contentRange && !encoded && !injectedRange) resHeaders['Content-Range'] = contentRange;
 
     // encoded 时 Content-Range 已丢弃——206 无 Content-Range 是畸形响应，
-    // 降级为 200 全量语义（body 已解压为完整流，客户端按 200 消费即正确）
-    const status = encoded && upstream.status === 206 ? 200 : upstream.status;
-    return c.body(upstream.body, status, resHeaders);
+    // 降级为 200 全量语义（body 已解压为完整流，客户端按 200 消费即正确）。
+    // injectedRange 同理：客户端未请求 Range 却收 206 属协议噪音，body
+    // 是全量流，按 200 透传语义最诚实
+    const status = (encoded || injectedRange) && upstream.status === 206 ? 200 : upstream.status;
+    return { kind: 'ok', send: () => c.body(upstream.body, status, resHeaders) };
   }
 
-  return c.json({ code: 502, message: 'too many redirects' }, 502);
+  return { kind: 'reject', send: () => c.json({ code: 502, message: 'too many redirects' }, 502) };
+}
+
+// 候选链调度：vault 条目可挂多候选（YouTube 自适应流被 SABR 闸控时 progressive
+// 合流档在链尾兜底）。从上次成功位 idx 起绕行一圈：单候选条目行为与旧版
+// 逐跳管线完全一致；多候选时 4xx/断连换下一档，成功后把 idx 钉住，
+// seek 的后续 Range 直吃可用档不再白探死链
+async function proxyUpstream(c, entry) {
+  const urls = entry.urls;
+  const start = Math.min(entry.idx || 0, urls.length - 1);
+  let lastReject = null;
+  for (let n = 0; n < urls.length; n++) {
+    const i = (start + n) % urls.length;
+    const r = await fetchCandidate(c, urls[i]);
+    if (r.kind === 'halt') return r.send();
+    if (r.kind === 'ok') {
+      entry.idx = i;
+      return r.send();
+    }
+    lastReject = r;
+  }
+  return lastReject.send();
 }
 
 // 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
@@ -170,7 +221,7 @@ app.get('/audio-proxy', async (c) => {
   }
   const targetUrl = c.req.query('url');
   if (!targetUrl) return c.json({ code: 400, message: 'missing url' }, 400);
-  return proxyUpstream(c, targetUrl);
+  return proxyUpstream(c, { urls: [targetUrl], idx: 0 });
 });
 
 // vault 入口：上游签名 URL 经 stream-vault 换成 opaque token——QQ purl 的
@@ -180,9 +231,9 @@ app.get('/audio-proxy/t/:token', async (c) => {
   if (!rateLimit(c, 'audio-proxy', 300)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
   }
-  const targetUrl = streamVault.resolve(c.req.param('token'));
-  if (!targetUrl) return c.json({ code: 404, message: 'stream token expired' }, 404);
-  return proxyUpstream(c, targetUrl);
+  const entry = streamVault.resolve(c.req.param('token'));
+  if (!entry) return c.json({ code: 404, message: 'stream token expired' }, 404);
+  return proxyUpstream(c, entry);
 });
 
 module.exports = app;

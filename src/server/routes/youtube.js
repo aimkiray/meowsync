@@ -143,20 +143,29 @@ app.get('/youtube/stream', async (c) => {
   }
   try {
     const player = await fetchPlayer(videoId, c.req.raw.signal);
-    const streams = pickStreamList(player.streamingData, kind, c.req.query('prefer'));
+    const sd = player.streamingData;
+    const streams = pickStreamList(sd, kind, c.req.query('prefer'));
+    // 部分视频的自适应流被 SABR 闸控：全量 GET 与越过首段窗的 Range 一律
+    // 403，只有 formats 里的 progressive 合流档能拉全——把它挂进候选链尾
+    // 兜底。audio kind 同样放：合流 mp4 含 AAC 轨，<audio> 按容器嗅探照播。
+    // 正常视频首候选即通（idx 钉住），progressive 只在闸控时被触及
+    const progressive = (Array.isArray(sd?.formats) ? sd.formats : [])
+      .filter(f => typeof f?.url === 'string' && f.url
+        && (f.mimeType || '').startsWith('video/mp4'))
+      .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
     // 候选回链逐个过代理白名单——signatureCipher 跳过、非 googlevideo
-    // 域拒；第一个能过代理的地址即 302 目标
-    const usable = streams
+    // 域拒；整条链随 token 下发，代理侧试到第一个能通的档
+    const urls = [...new Set([...streams, ...progressive]
       .map(f => f.url)
-      .find(u => {
+      .filter(u => {
         const checked = normalizeOutboundUrl(u);
         return checked.ok && isAllowedHost(checked.url.hostname);
-      });
-    if (!usable) {
+      }))];
+    if (!urls.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
     // vault token 化——googlevideo 链 ip= 即本机出口地址，不下发给访客
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(usable)}`, 302);
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(urls)}`, 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] stream 失败:', e.message);

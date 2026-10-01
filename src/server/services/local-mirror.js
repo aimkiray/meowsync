@@ -25,7 +25,8 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
     if (!row) throw httpError(500, '镜像歌单写入失败');
     // 墓碑前置检查后，本地 id 级联拿的新行仍可能正被删——事务内按内部行 id 复查
     if (deletingPlaylists.has(row.id)) throw httpError(409, '该歌单正在删除中');
-    // mediaMid 入签名：老镜像（无 qq 字段）重传时触发一次重写补写 provider 元数据。
+    // mediaMid/bvid/videoId/neteaseId 入签名：老镜像（无 provider 字段）重传
+    // 时触发一次重写补写源定位与词源元数据。
     // ar/al 同样入签名——歌手/专辑改了不重写会让旧名滞留 raw_json
     // （下载文件名取 artist，旧名落盘）。JSON 串而非分隔符拼接——艺术家名含
     // , / : 会撞签（"Earth, Wind & Fire" vs ["Earth","Wind & Fire"]）
@@ -35,7 +36,9 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
       typeof t.al === 'string' ? t.al : t.al?.name || '',
       // 封面独立入签——picUrl 变而 al.name 不变时单靠专辑名会漏重写
       (t.al && typeof t.al === 'object') ? (t.al.picUrl || t.al.pic_str || '') : '',
-      t.dt || 0, t.qq?.mediaMid || ''
+      t.dt || 0, t.qq?.mediaMid || '',
+      t.bilibili?.bvid || '', t.bilibili?.cid || '', t.bilibili?.page || 0,
+      t.youtube?.videoId || '', t.neteaseId || ''
     ]);
     const existing = playlistTracksRepo.listTracksByPlaylistId(row.id);
     const unchanged = existing.length === tracks.length

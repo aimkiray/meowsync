@@ -15,6 +15,7 @@ export const downloadsApi = {
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
+      downloadVideo: options.downloadVideo === true,
       concurrentLimit: options.concurrentLimit || 3
     }, { timeout: 60000 });
   },
@@ -73,7 +74,8 @@ export const downloadsApi = {
       bitrate: options.bitrate || 320000,
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,
-      downloadCover: options.downloadCover !== false
+      downloadCover: options.downloadCover !== false,
+      downloadVideo: options.downloadVideo === true
     }, { timeout: 60000 });
   },
 
@@ -82,6 +84,14 @@ export const downloadsApi = {
     return http.get(`/downloads/songs/${songId}/status`, {
       params: { playlistId }
     });
+  },
+
+  // 已下载工件的本地回放地址：在线流被上游闸控/签名失效时的兜底源。
+  // 同源 cookie 鉴权，媒体元素直接消费；kind=video 取 videoPath
+  songFileUrl: (playlistId, songId, kind) => {
+    const params = new URLSearchParams({ playlistId: String(playlistId) });
+    if (kind) params.set('kind', kind);
+    return `/downloads/songs/${encodeURIComponent(songId)}/file?${params}`;
   },
 
   // 删除已下载的歌曲
@@ -100,10 +110,12 @@ export const downloadsApi = {
 
   // 本地歌单（local_pl_*/saved_queue_*）先镜像到服务端 DB，之后所有下载路由
   // 用 playlist.id 直调（服务端 findExistingPlaylistId 按 netease_playlist_id 解析镜像）。
-  // 返回 {playlistId, mirrored, skipped}——skipped = 无服务端下载源的曲目（bv_*/yt_*）数
+  // 返回 {playlistId, mirrored, skipped}——skipped = 无服务端下载源的曲目数
+  // （网易云数字、qq_/bv_/yt_ 前缀之外的不明 id 形态）
   mirrorLocalPlaylist: (playlist) => {
-    // 瘦身投影：服务端只消费 id/name/ar/al/dt。本地 tracks 存的是全量曲对象
-    // （~2-3KB/首），原样上载 ~400 首就撞 1MB body 上限；投影后 2000 曲 ≈600KB
+    // 瘦身投影：服务端只消费 id/name/ar/al/dt + provider 定位字段。本地
+    // tracks 存的是全量曲对象（~2-3KB/首），原样上载 ~400 首就撞 1MB body
+    // 上限；投影后 2000 曲 ≈600KB
     const tracks = (playlist.tracks || []).map(t => t && ({
       id: t.id,
       name: t.name,
@@ -117,7 +129,12 @@ export const downloadsApi = {
       },
       dt: t.dt || t.duration || 0,
       // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返
-      ...(t.qq?.mediaMid ? { qq: { mediaMid: t.qq.mediaMid } } : {})
+      ...(t.qq?.mediaMid ? { qq: { mediaMid: t.qq.mediaMid } } : {}),
+      // bv_/yt_ 曲的自有源流定位 + neteaseId 词源——缺了也能按 id 前缀自愈
+      // 重解（cid 会多一次 view 往返、歌词段拿不到词源），带上更省
+      ...(t.bilibili?.bvid ? { bilibili: { bvid: t.bilibili.bvid, cid: t.bilibili.cid, page: t.bilibili.page } } : {}),
+      ...(t.youtube?.videoId ? { youtube: { videoId: t.youtube.videoId } } : {}),
+      ...(t.neteaseId ? { neteaseId: t.neteaseId } : {})
     }))
     return http.post(`/downloads/local/mirror`, {
       localId: playlist.id,
@@ -149,6 +166,7 @@ export const downloadsApi = {
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
+      downloadVideo: options.downloadVideo === true,
       concurrentLimit: options.concurrentLimit || 3
     }, { timeout: 60000 });
   }

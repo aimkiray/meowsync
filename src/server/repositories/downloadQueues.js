@@ -15,6 +15,7 @@ function mapQueueRow(row) {
     downloadAudio: Boolean(row.download_audio),
     downloadLyrics: Boolean(row.download_lyrics),
     downloadCover: Boolean(row.download_cover),
+    downloadVideo: Boolean(row.download_video),
     // 歌单封面 URL（前端 getQueueCover 直接用作 img src）
     coverImgUrl: row.cover_img_url || '',
     createdAt: row.created_at,
@@ -30,11 +31,11 @@ function createQueue(input) {
   const result = db.prepare(`
     INSERT INTO download_queues (
       playlist_id, name, status, total_tasks,
-      concurrent_limit, bitrate, download_audio, download_lyrics, download_cover,
+      concurrent_limit, bitrate, download_audio, download_lyrics, download_cover, download_video,
       created_at, updated_at
     ) VALUES (
       @playlist_id, @name, @status, @total_tasks,
-      @concurrent_limit, @bitrate, @download_audio, @download_lyrics, @download_cover,
+      @concurrent_limit, @bitrate, @download_audio, @download_lyrics, @download_cover, @download_video,
       @created_at, @updated_at
     )
   `).run({
@@ -47,6 +48,7 @@ function createQueue(input) {
     download_audio: input.downloadAudio ? 1 : 0,
     download_lyrics: input.downloadLyrics ? 1 : 0,
     download_cover: input.downloadCover ? 1 : 0,
+    download_video: input.downloadVideo ? 1 : 0,
     created_at: now,
     updated_at: now
   });
@@ -91,6 +93,10 @@ function updateQueue(id, updates) {
   if (updates.downloadCover !== undefined) {
     fields.push('download_cover = @download_cover');
     params.download_cover = updates.downloadCover ? 1 : 0;
+  }
+  if (updates.downloadVideo !== undefined) {
+    fields.push('download_video = @download_video');
+    params.download_video = updates.downloadVideo ? 1 : 0;
   }
   if (updates.concurrentLimit !== undefined) {
     if (!Number.isInteger(updates.concurrentLimit) || updates.concurrentLimit <= 0) {

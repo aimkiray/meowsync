@@ -253,8 +253,8 @@
           </div>
 
           <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
-               B 站/YouTube 无服务端下载源不渲染；qq_ 只在本地歌单显示（镜像链
-               投影进曲目表后 file-downloader 前缀分发可达），远端单里必 404 -->
+               qq_/bv_/yt_ 只在本地歌单显示（镜像链投影 provider 定位字段进曲目表
+               后 file-downloader 前缀分发可达），远端单里这些 id 必 404 -->
           <div
             v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong)"
             class="pg-menu-item"
@@ -268,6 +268,22 @@
             <template v-if="serverDownloadingStates[showDownloadMenu]"><span class="pixel-loading" aria-hidden="true"></span> 处理中...</template>
             <template v-else-if="serverDownloadedStates[showDownloadMenu]"><PixelIcon name="warn" :size="13" /> 删除已下载文件</template>
             <template v-else><PixelIcon name="download" :size="13" /> 下载到服务器</template>
+          </div>
+
+          <!-- 源站视频下载（仅 bv_/yt_ 且确认有浏览器可放视频流的曲目）——
+               服务端 ffmpeg 合流出真·最高画质 mp4；已下过音频的任务翻 pending
+               只补视频相位 -->
+          <div
+            v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong) && canServerVideo(menuSong)"
+            class="pg-menu-item"
+            role="menuitem"
+            tabindex="0"
+            @click="downloadServerVideo(menuSong)"
+            @keydown.enter="downloadServerVideo(menuSong)"
+            @keydown.space.prevent="downloadServerVideo(menuSong)"
+          >
+            <template v-if="serverDownloadingStates[showDownloadMenu]"><span class="pixel-loading" aria-hidden="true"></span> 处理中...</template>
+            <template v-else><PixelIcon name="play" :size="13" /> 下载视频到服务器</template>
           </div>
         </div>
       </div>
@@ -632,7 +648,7 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
-import { httpsCover, QQ_SONG_ID_RE } from '../lib/url'
+import { httpsCover, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
@@ -733,15 +749,21 @@ export default {
       isLocalPlaylistId(props.selectedPlaylist?.id)
     )
     // 单曲分享壳：本地态但语义是"一张曲的分享容器"——不提供移除/服务器下载入口
-    // 「下载到服务器」可见性：网易云数字 id 全场景可下；qq_ 只在本地歌单可下
-    // （镜像链投影进曲目表），远端歌单里的 qq_ 追曲不在服务端曲目表必 404
+    // 「下载到服务器」可见性：网易云数字 id 全场景可下；qq_/bv_/yt_ 自有源
+    // 曲只在本地歌单可下（镜像链带 provider 定位字段投影进曲目表），
+    // 远端歌单里的追曲不在服务端曲目表必 404
     const canServerDownload = (song) => {
       if (!song) return false
       const id = String(song.id ?? '')
-      if (song.bilibili || song.youtube || id.startsWith('bv_') || id.startsWith('yt_')) return false
       if (/^\d+$/.test(id)) return true
-      return isLocalPlaylist.value && QQ_SONG_ID_RE.test(id)
+      if (!isLocalPlaylist.value) return false
+      return QQ_SONG_ID_RE.test(id) || BV_TRACK_ID_RE.test(id) || YT_TRACK_ID_RE.test(id)
     }
+
+    // 「下载视频到服务器」可见性：只有导入时确认有可放视频流（hasVideo）的
+    // 外部曲才亮——无流曲点了必失败，不亮比亮着报错诚实
+    const canServerVideo = (song) =>
+      Boolean(song?.bilibili?.hasVideo || song?.youtube?.hasVideo)
 
     const isShareShell = computed(() =>
       isSingleSongShellId(props.selectedPlaylist?.id)
@@ -762,13 +784,15 @@ export default {
         const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；有已选歌单（除分享壳）多"从歌单移除"，
-        // 除分享壳的歌单且曲目可达服务端下载链（网易云 id；本地单的 qq_）再多
-        // "下载到服务器"——合计 5/6/7 三档。
+        // 可达服务端下载链多"下载到服务器"，外部有视频流的再多"下载视频到服务器"——
+        // 合计 5/6/7/8 四档。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
+        const serverOk = !isShareShell.value && props.selectedPlaylist && canServerDownload(targetSong)
         const itemCount = 5
           + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
-          + ((!isShareShell.value && props.selectedPlaylist && canServerDownload(targetSong)) ? 1 : 0)
+          + (serverOk ? 1 : 0)
+          + (serverOk && canServerVideo(targetSong) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -926,7 +950,9 @@ export default {
     }
 
     // 下载到服务器或删除
-    const toggleServerDownload = async (song) => {
+    // wantVideo：补源站视频工件（仅外部曲）——跳过"已下载→删除"分支，
+    // 已下载音频的任务由服务端翻 pending 只补视频相位
+    const toggleServerDownload = async (song, wantVideo = false) => {
       if (!song) {
         closeDownloadMenu()
         return
@@ -953,7 +979,7 @@ export default {
         !viewDisposed
         && String(props.selectedPlaylist?.id) === String(ownerPlaylistId)
 
-      if (isDownloaded) {
+      if (isDownloaded && !wantVideo) {
         // 删除已下载文件
         if (!await pixelConfirm(`确定要删除 "${song.name}" 的已下载文件吗？`, { confirmText: '删除', danger: true })) {
           closeDownloadMenu()
@@ -986,7 +1012,8 @@ export default {
             bitrate: 320000,
             downloadAudio: true,
             downloadLyrics: true,
-            downloadCover: true
+            downloadCover: true,
+            downloadVideo: wantVideo
           })
           const submittedTask = response?.data
           // completed 短路（幂等返回）才跳过轮询；pending/downloading 进入轮询
@@ -1031,7 +1058,7 @@ export default {
           }
           if (!stillCurrent()) return // 幂等命中也走同一出口：视图已换即静默
           serverDownloadedStates.value[song.id] = true
-          toast('下载成功', 'success')
+          toast(wantVideo ? '视频下载成功' : '下载成功', 'success')
         } catch (error) {
           console.error('下载失败:', error)
           // 本地单 409 = 撞删除墓碑（镜像/级联途中）——与 PlaylistPanel 同款改写
@@ -1047,6 +1074,9 @@ export default {
         }
       }
     }
+
+    // 「下载视频到服务器」= 同一生命周期，只多传 wantVideo
+    const downloadServerVideo = (song) => toggleServerDownload(song, true)
 
     // 监听歌曲列表/歌单变化，自动查询状态；切歌单先清旧状态防止串标
     watch(() => props.selectedPlaylist?.id, () => {
@@ -1110,6 +1140,8 @@ export default {
       downloadSongDirect,
       canServerDownload,
       toggleServerDownload,
+      downloadServerVideo,
+      canServerVideo,
       getMenuPosition,
       closeDownloadMenu,
       httpsCover

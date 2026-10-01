@@ -15,6 +15,8 @@ const DOWNLOAD_OPTIONS = {
   downloadAudio: z.boolean().optional(),
   downloadLyrics: z.boolean().optional(),
   downloadCover: z.boolean().optional(),
+  // 视频工件 opt-in：只对 bv_/yt_ 外部曲生效（网易云/QQ 无源站视频可下）
+  downloadVideo: z.boolean().optional(),
   concurrentLimit: z.number().int().min(1).max(10).optional()
 };
 

@@ -2148,14 +2148,18 @@ export default {
         currentSong.value = song
 
         // 获取歌曲播放URL：B 站导入曲走 /bilibili/stream 端点——服务端每次
-        // 重解 playurl（CDN 签名会过期）再 302 进 audio-proxy，URL 不落库
-        const songUrlData = song.bilibili
-          ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
-          : song.youtube
-            ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio') }
-            : song.qq
-              ? { url: musicApi.qqStreamUrl(song.qq.mid, '', song.qq.mediaMid) }
-              : await musicApi.getSongUrl(song.id, abortSignal)
+        // 重解 playurl（CDN 签名会过期）再 302 进 audio-proxy，URL 不落库。
+        // _localFile：在线链全灭后的本地工件兜底（onloaderror 兜底链写入），
+        // 优先级最高——文件在盘上，不再打上游玩一遍注定失败的链
+        const songUrlData = options._localFile
+          ? { url: downloadsApi.songFileUrl(options._localFile, song.id) }
+          : song.bilibili
+            ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
+            : song.youtube
+              ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio') }
+              : song.qq
+                ? { url: musicApi.qqStreamUrl(song.qq.mid, '', song.qq.mediaMid) }
+                : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
         if (abortSignal.aborted) {
@@ -2268,6 +2272,16 @@ export default {
               playSong(song, { ...options, preserveContext: true, _streamRetried: true })
               return
             }
+            // 在线链全灭（SABR 闸控/签名耗尽）→ 外部源兜底：播服务器已下载
+            // 工件；没下过则先触发下载、完成后续播本地文件。_localFile 档
+            // 再败说明工件本体坏了——不再兜，走正常报错出口
+            if ((song.youtube || song.bilibili || song.qq) && !options._localFile) {
+              const plId = playingPlaylistId.value || selectedPlaylist.value?.id
+              if (plId) {
+                void playDownloadedCopy(song, plId, options)
+                return
+              }
+            }
             clearHowlWatchdog()
             // 'error' 事件也可能在播放中途触发（CDN 断流），isPlaying 必须复位，
             // 否则 UI/MediaSession/远端都停在假播放态
@@ -2356,6 +2370,51 @@ export default {
         lyricOwnerKey.value = null
         if (currentAbortController === myController) currentAbortController = null
         savePlayerStateToStorage()
+      }
+    }
+
+    // 在线流彻底失效后的兜底（SABR 闸控的 YouTube 自适应流/签名批量耗尽的
+    // 实际救法）：先查服务器有没有已下载工件，没有就触发服务器下载、完成后
+    // 续播本地文件——用户口径「不能在线放就先下载下来」。只对自有源外部曲
+    // 开放；切歌（currentPlayingId 换人）即整链作废
+    const playDownloadedCopy = async (song, playlistId, options) => {
+      if (currentPlayingId !== song.id) return
+      songSwitching.value = true // 下载等待期维持切换态——底栏别装死
+      try {
+        const st = await downloadsApi.getSongDownloadStatus(playlistId, song.id).catch(() => null)
+        let downloaded = st?.data?.downloaded === true
+        if (!downloaded) {
+          toast('在线源不可用，先下载到服务器再播…', 'info')
+          // 未镜像的本地单先补镜像（幂等：内容签名未变时服务端直接短路返回）
+          const pl = (selectedPlaylist.value && String(selectedPlaylist.value.id) === String(playlistId))
+            ? selectedPlaylist.value
+            : userPlaylists.value.find(p => String(p.id) === String(playlistId))
+          if (pl) await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
+          const submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, { bitrate: 320000 })
+          downloaded = submitted?.data?.status === 'completed'
+          // 提交即返回——终态轮询确认（音频档秒级完事，封顶 3min 防无限挂起）
+          const deadline = Date.now() + 3 * 60 * 1000
+          while (!downloaded && Date.now() < deadline && currentPlayingId === song.id) {
+            await new Promise(r => setTimeout(r, 1500))
+            const st2 = await downloadsApi.getSongDownloadStatus(playlistId, song.id).catch(() => null)
+            if (st2?.data?.downloaded) { downloaded = true; break }
+            const ts = st2?.data?.task?.status
+            if (ts === 'failed' || (st2?.data && st2.data.task === null)) break
+          }
+        }
+        if (currentPlayingId !== song.id) return // 等下载期间用户切了歌——静默弃
+        if (!downloaded) {
+          songSwitching.value = false
+          playbackError.value = '在线源不可用，服务器下载仍在进行——完成后可重播'
+          return
+        }
+        toast('已切换本地已下载文件播放', 'info')
+        playSong(song, { ...options, preserveContext: true, _streamRetried: true, _localFile: playlistId })
+      } catch {
+        if (currentPlayingId === song.id) {
+          songSwitching.value = false
+          playbackError.value = '音频加载失败，点击播放键或重新点歌可重试'
+        }
       }
     }
 
