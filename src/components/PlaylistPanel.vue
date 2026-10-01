@@ -492,7 +492,7 @@ export default {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 卡内左右统一 10px 节奏：封面左 10 = 封面→歌名 gap 10 = 操作簇右 10；
+  /* 卡内节奏：封面左右各 +6 margin（左缘→封面 16 = 封面→歌名 16）；
      右 64px 留给常显 .pl-actions（right:10 + 双 24px 键 + 2gap = 60，+4 气隙） */
   padding: 9px 64px 9px 10px;
   cursor: pointer;
@@ -513,6 +513,7 @@ export default {
   width: 44px;
   height: 44px;
   flex-shrink: 0;
+  margin-inline: 6px;
 }
 
 .pl-cover {
