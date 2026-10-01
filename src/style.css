@@ -605,7 +605,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    否则在彩布上静默不达标（新主题改画布色后尤甚）。 */
 .app-shell .app-body .watch-meta, .app-shell .app-body .watch-empty,
 .app-shell .app-body .watch-lyric-line:not(.watch-lyric-line--current),
-.app-shell .app-body .queue-row-artist, .app-shell .app-body .queue-row-duration, .app-shell .app-body .queue-source,
+.app-shell .app-body .queue-row-artist, .app-shell .app-body .queue-row-duration,
+.app-shell .app-body .queue-head-tag, .app-shell .app-body .queue-head-meta, .app-shell .app-body .queue-sec,
 .app-shell .app-body .song-artist, .app-shell .app-body .song-duration, .app-shell .app-body .song-state-text,
 .app-shell .app-body .panel-state-text, .app-shell .app-body .panel-state-sub,
 .app-shell .app-body .pl-meta, .app-shell .app-body .result-section-sub,
@@ -1152,6 +1153,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   padding: 6px 6px 6px 4px;
   transition: background .12s;
 }
+/* 行间发丝分隔——印单的记账线，hover/当前行墨块在其上依旧清晰 */
+.queue-row + .queue-row { border-top: var(--hairline-soft); }
 .queue-row-main {
   flex: 1;
   min-width: 0;
@@ -1162,37 +1165,110 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   cursor: pointer;
 }
 .queue-row:hover { background: var(--ink-06); }
-.queue-row--current { background: var(--ink-10); }
+/* 当前行：浅墨块 + 左侧 accent 书脊（inset shadow 不占布局宽度） */
+.queue-row--current {
+  background: var(--ink-10);
+  box-shadow: inset 2.4px 0 0 var(--accent-magenta-ink);
+}
 /* :hover 特异度(0,2,0)高于--current(0,1,0)——悬停当前行会把标记从ink-10调回ink-06，补钉 */
 .queue-row--current:hover { background: var(--ink-10); }
 /* 当前行 v-if 不渲染移除键——补其占位（24px 键 + 6px 行 gap），时长列才与全列对齐不跳位 */
 .queue-row--current .queue-row-main { margin-right: 30px; }
-/* 当前行 ▶ 用墨色——火烈鸟 accent 在 teal/ink-10 底上仅 ~1.8:1，不达图形 3:1 线 */
+.queue-row--current .queue-row-title { font-weight: 600; }
+/* 当前行序号槽（▶/等幅器）用墨色——火烈鸟 accent 在 teal/ink-10 底上仅 ~1.8:1，
+   不达图形 3:1 线；eq 柱自身的 accent-ink 深档另算 */
 .queue-row--current .queue-row-index { color: var(--ink); font-weight: 700; }
 
-.queue-source {
+/* 队列抬头（印单式）：mono 眉题 + 来源名 + 右端规模元信息，底缘发丝线 */
+.queue-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 10px 7px;
+  border-bottom: var(--hairline-soft);
+}
+.queue-head-tag {
   font-family: var(--font-mono);
   font-weight: 300;
-  font-size: 11px;
-  letter-spacing: .05em;
+  font-size: 10px;
+  letter-spacing: .14em;
   color: var(--ink-64);
-  padding: 10px 10px 6px;
+  flex-shrink: 0;
+}
+.queue-head-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 「Playing from」链接态：button 剥 UA 皮吃排版，hover 暗示可点 */
-button.queue-source--link {
-  display: block;
-  width: 100%;
-  text-align: left;
+/* 「Playing from」链接态：button 剥 UA 皮吃排版，hover 走链接 accent */
+button.queue-head-name {
   background: none;
   border: 0;
+  padding: 0;
+  text-align: left;
   cursor: pointer;
 }
-button.queue-source--link:hover { color: var(--ink); text-decoration: underline; }
+button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration: underline; }
+.queue-head-meta {
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 10px;
+  color: var(--ink-64);
+  flex-shrink: 0;
+}
 
-/* YTM：当前行之上的已播段淡显 */
+/* 「接下来」分节线：mono 眉题 + 尾随发丝线——印单的分栏刻痕 */
+.queue-sec {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 4px;
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 10px;
+  letter-spacing: .14em;
+  color: var(--ink-64);
+  white-space: nowrap;
+}
+.queue-sec::after {
+  content: '';
+  flex: 1;
+  border-top: var(--hairline-soft);
+}
+
+/* 当前行等幅器：三根柱错相起落，暂停定格为静止矮条 */
+.queue-eq {
+  width: 100%;
+  height: 12px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1.6px;
+}
+.queue-eq i {
+  width: 2.4px;
+  height: 100%;
+  background: var(--accent-magenta-ink);
+  transform-origin: bottom;
+  animation: queue-eq-bounce 1s ease-in-out infinite;
+}
+.queue-eq i:nth-child(2) { animation-delay: .22s; }
+.queue-eq i:nth-child(3) { animation-delay: .45s; }
+.queue-eq--paused i { animation: none; transform: scaleY(.3); opacity: .55; }
+@keyframes queue-eq-bounce {
+  0%, 100% { transform: scaleY(.25); }
+  50% { transform: scaleY(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .queue-eq i { animation: none; transform: scaleY(.55); }
+}
+
+/* YTM：当前行之上的已播段淡显（序号槽换成 ✓ 见模板） */
 .queue-row--played { opacity: .55; }
 .queue-row--played:hover { opacity: .85; }
 

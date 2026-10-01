@@ -102,75 +102,84 @@
           class="watch-side-body"
           ref="queueContainer"
         >
-          <!-- YTM「Playing from」：归属歌单在库时来源名可点回歌单页 -->
-          <button
-            v-if="queueOwner"
-            class="queue-source queue-source--link"
-            @click="$emit('open-source')"
-            :title="`回到歌单 ${queueTitle}`"
-          >正在播放：{{ queueTitle }}</button>
-          <p v-else class="queue-source">正在播放：{{ queueTitle }}</p>
+          <!-- 队列抬头（印单式）：mono 眉题 + 来源名 + 规模元信息。
+               归属歌单在库时名字可点回歌单页（原 queue-source--link 语义） -->
+          <div class="queue-head">
+            <span class="queue-head-tag">正在播放</span>
+            <button
+              v-if="queueOwner"
+              class="queue-head-name"
+              @click="$emit('open-source')"
+              :title="`回到歌单 ${queueTitle}`"
+            >{{ queueTitle }}</button>
+            <span v-else class="queue-head-name queue-head-name--plain">{{ queueTitle }}</span>
+            <span v-if="queue.length" class="queue-head-meta">{{ queue.length }} 首<template v-if="queueTotalLabel"> · {{ queueTotalLabel }}</template></span>
+          </div>
           <div v-if="queue.length === 0" class="watch-empty">队列为空喵~</div>
           <template v-else>
-            <div
-              v-for="(song, index) in queueRows"
-              :key="queueKeyOf(song)"
-              class="queue-row"
-              :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--played': index < currentQueueIndex, 'queue-row--dragging': dragIndex === index }"
-            >
-              <button
-                type="button"
-                class="watch-grip"
-                title="拖拽排序 · ↑↓ 键移动"
-                aria-label="调整队列顺序"
-                @pointerdown.stop="startDrag(index, $event)"
-                @keydown.up.prevent.stop="moveRow(index, -1)"
-                @keydown.down.prevent.stop="moveRow(index, 1)"
-                @click.stop
-              ><PixelIcon name="grip" :size="13" /></button>
+            <template v-for="(song, index) in queueRows" :key="queueKeyOf(song)">
               <div
-                class="queue-row-main"
-                role="button"
-                tabindex="0"
-                @click="jumpTo(index)"
-                @keydown.enter="jumpTo(index)"
-                @keydown.space.prevent="jumpTo(index)"
+                class="queue-row"
+                :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--played': index < currentQueueIndex, 'queue-row--dragging': dragIndex === index }"
               >
-                <span class="queue-row-index">
-                  <template v-if="String(song.id) === String(currentSong?.id)"><PixelIcon name="play" :size="16" /></template>
-                  <template v-else>{{ index + 1 }}</template>
-                </span>
-                <img
-                  v-if="song.al?.picUrl || song.album?.picUrl"
-                  :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
-                  :alt="song.name"
-                  class="watch-queue-thumb"
-                />
-                <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
-                <div class="queue-row-info">
-                  <p class="queue-row-title">{{ song.name }}</p>
-                  <p class="queue-row-artist">{{ songArtist(song) }}</p>
+                <button
+                  type="button"
+                  class="watch-grip"
+                  title="拖拽排序 · ↑↓ 键移动"
+                  aria-label="调整队列顺序"
+                  @pointerdown.stop="startDrag(index, $event)"
+                  @keydown.up.prevent.stop="moveRow(index, -1)"
+                  @keydown.down.prevent.stop="moveRow(index, 1)"
+                  @click.stop
+                ><PixelIcon name="grip" :size="13" /></button>
+                <div
+                  class="queue-row-main"
+                  role="button"
+                  tabindex="0"
+                  @click="jumpTo(index)"
+                  @keydown.enter="jumpTo(index)"
+                  @keydown.space.prevent="jumpTo(index)"
+                >
+                  <span class="queue-row-index">
+                    <!-- 当前行：播放中等幅器跳动、暂停定格矮条；已播行打勾 -->
+                    <span v-if="String(song.id) === String(currentSong?.id)" class="queue-eq" :class="{ 'queue-eq--paused': !isPlaying }" aria-hidden="true"><i /><i /><i /></span>
+                    <template v-else-if="index < currentQueueIndex"><PixelIcon name="check" :size="11" /></template>
+                    <template v-else>{{ index + 1 }}</template>
+                  </span>
+                  <img
+                    v-if="song.al?.picUrl || song.album?.picUrl"
+                    :src="httpsCover(song.al?.picUrl || song.album?.picUrl)"
+                    :alt="song.name"
+                    class="watch-queue-thumb"
+                  />
+                  <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
+                  <div class="queue-row-info">
+                    <p class="queue-row-title">{{ song.name }}</p>
+                    <p class="queue-row-artist">{{ songArtist(song) }}</p>
+                  </div>
+                  <span class="queue-row-duration">{{ formatDuration(song) }}</span>
                 </div>
-                <span class="queue-row-duration">{{ formatDuration(song) }}</span>
+                <button
+                  v-if="String(song.id) !== String(currentSong?.id)"
+                  type="button"
+                  class="queue-row-remove pg-icobtn pg-icobtn--bare pg-icobtn--sm"
+                  title="从队列移除"
+                  aria-label="从队列移除"
+                  @click.stop="$emit('queue-remove', index)"
+                ><PixelIcon name="close" :size="14" /></button>
+                <!-- 添加入口恒占最右槽位：当前行缺 remove 时位置依旧一致 -->
+                <button
+                  type="button"
+                  class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
+                  title="添加到歌单"
+                  aria-label="添加到歌单"
+                  aria-haspopup="dialog"
+                  @click.stop="$emit('add-to-playlist', song)"
+                ><PixelIcon name="plus" :size="14" /></button>
               </div>
-              <button
-                v-if="String(song.id) !== String(currentSong?.id)"
-                type="button"
-                class="queue-row-remove pg-icobtn pg-icobtn--bare pg-icobtn--sm"
-                title="从队列移除"
-                aria-label="从队列移除"
-                @click.stop="$emit('queue-remove', index)"
-              ><PixelIcon name="close" :size="14" /></button>
-              <!-- 添加入口恒占最右槽位：当前行缺 remove 时位置依旧一致 -->
-              <button
-                type="button"
-                class="row-add-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
-                title="添加到歌单"
-                aria-label="添加到歌单"
-                aria-haspopup="dialog"
-                @click.stop="$emit('add-to-playlist', song)"
-              ><PixelIcon name="plus" :size="14" /></button>
-            </div>
+              <!-- 「接下来」分节线：印单的分栏刻痕，只在当前行之后出现 -->
+              <div v-if="index === currentQueueIndex && index < queue.length - 1" class="queue-sec">接下来 · {{ queue.length - currentQueueIndex - 1 }} 首</div>
+            </template>
             <!-- 渐进渲染哨兵：千曲队列不一次渲全——前缀窗保全局下标语义
                  （drag/move/jump/remove 全是全局 index），IO 或点按扩窗 -->
             <button
@@ -181,28 +190,30 @@
             >加载更多 · {{ queueRendered }} / {{ queue.length }}</button>
           </template>
 
-          <div class="watch-queue-foot" v-if="queue.length">
-            <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('save-queue')" title="把当前队列存成新歌单">
-              <PixelIcon name="save" :size="12" /> 存为歌单
-            </button>
-            <button
-              class="ink-btn ink-btn--ghost ink-btn--sm"
-              :disabled="queue.length < 2"
-              @click="$emit('clear-queue')"
-              title="清空队列（保留当前播放）"
-            >清空队列</button>
+          <!-- 队列页脚：操作与偏好收成一条发丝顶隔的栏；空队列时只剩居中开关 -->
+          <div class="watch-queue-foot" :class="{ 'watch-queue-foot--empty': !queue.length }">
+            <template v-if="queue.length">
+              <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('save-queue')" title="把当前队列存成新歌单">
+                <PixelIcon name="save" :size="12" /> 存为歌单
+              </button>
+              <button
+                class="ink-btn ink-btn--ghost ink-btn--sm"
+                :disabled="queue.length < 2"
+                @click="$emit('clear-queue')"
+                title="清空队列（保留当前播放）"
+              >清空队列</button>
+            </template>
+            <!-- YTM UP NEXT 底部：自动播放开关（语义全文进 title，label 保持短） -->
+            <label class="watch-autoplay" title="队列播完接续相关歌曲">
+              <input
+                type="checkbox"
+                class="pg-check"
+                :checked="autoplay"
+                @change="$emit('update:autoplay', $event.target.checked)"
+              />
+              <span>自动播放</span>
+            </label>
           </div>
-
-          <!-- YTM UP NEXT 底部：自动播放开关 -->
-          <label class="watch-autoplay">
-            <input
-              type="checkbox"
-              class="pg-check"
-              :checked="autoplay"
-              @change="$emit('update:autoplay', $event.target.checked)"
-            />
-            <span>自动播放（队列播完接续相关歌曲）</span>
-          </label>
         </div>
 
         <!-- 歌词工具条：字号调节（本机偏好）+ 时间校准（按词源入库）。
@@ -414,6 +425,12 @@ export default {
       props.currentSong?.al?.name || props.currentSong?.album?.name || ''
     )
 
+    // 队列抬头元信息：总时长未知字段（dt/duration 皆缺）的歌按 0 计，
+    // 全缺时不显时长段
+    const queueTotalLabel = computed(() => {
+      const ms = props.queue.reduce((sum, s) => sum + (s.dt || s.duration || 0), 0)
+      return ms > 0 ? formatTime(ms / 1000) : null
+    })
     const songArtist = (song) =>
       (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/') || '未知艺人'
 
@@ -659,6 +676,7 @@ export default {
     return {
       queueContainer,
       lyricContainer,
+      queueTotalLabel,
       queueRows,
       queueHasMore,
       queueRendered,
@@ -887,6 +905,8 @@ export default {
   color: var(--ink-64);
 }
 
+/* 拖拽把手悬停/聚焦/拖拽中才显形——常显是每行常驻的视觉噪音
+   （与 queue-row-remove/row-add-btn 同纪律），隐形态仍占位保对齐 */
 .watch-grip {
   flex-shrink: 0;
   width: 20px;
@@ -900,13 +920,20 @@ export default {
   color: var(--ink-86);
   cursor: grab;
   touch-action: none;
+  opacity: 0;
+  pointer-events: none; /* 隐形时不吃点击 */
+  transition: opacity .12s, color .2s;
 }
+.queue-row:hover .watch-grip,
+.queue-row:focus-within .watch-grip,
+.queue-row--dragging .watch-grip,
+.watch-grip:focus-visible { opacity: 1; pointer-events: auto; }
 .watch-grip:hover { color: var(--ink); }
 .watch-grip:active { cursor: grabbing; color: var(--ink); } /* teal 画布上 -ink 档仅 2.17:1，拖拽态用实墨 */
 
-/* 触屏下半透明把手 1.99:1 不可见——直接常显 */
+/* 触屏无 hover——把手常显（且升到实墨，半透明档不可见） */
 @media (hover: none){
-  .watch-grip { color: var(--ink); }
+  .watch-grip { opacity: 1; pointer-events: auto; color: var(--ink); }
 }
 
 /* 相关行点击区已收进 .queue-row-main（行容器化以容纳行尾 + 键），cursor 由它提供 */
@@ -934,11 +961,17 @@ export default {
   background: var(--paper);
 }
 
+/* 队列页脚：发丝顶隔把操作/偏好收成一条栏，与行列表的记账线呼应 */
 .watch-queue-foot {
   display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 12px 4px; /* 底距对齐上距——末行按钮与滚动区下缘同距呼吸 */
+  padding: 10px 4px 12px;
+  border-top: var(--hairline-soft);
+  margin-top: 6px;
 }
+/* 空队列只剩自动播放开关——去掉顶隔线并居中，不吊在角落 */
+.watch-queue-foot--empty { border-top: none; justify-content: center; }
 
 /* 队列渐进渲染哨兵：居中 ghost 键 */
 .watch-queue-more {
@@ -950,16 +983,16 @@ export default {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 4px 4px;
-  font-size: 12px;
+  margin-left: auto;
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   color: var(--ink-86);
   cursor: pointer;
-  margin-top: 8px;
   transition: background .12s;
 }
 .watch-autoplay:hover { background: var(--ink-06); }
-/* 空队列时没有行列表可供它尾随——吊在居中空文案下的左对齐控件会变孤儿，随空态居中 */
-.watch-empty ~ .watch-autoplay { justify-content: center; }
+.watch-queue-foot--empty .watch-autoplay { margin: 0 auto; }
 
 /* 歌词行：当前行墨色加粗放大，其余 ink-64 */
 .watch-lyric-list {
