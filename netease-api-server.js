@@ -4,13 +4,6 @@ const path = require('path');
 // 加载环境变量
 require('dotenv').config();
 
-const { ensureAnonymousToken } = require('./src/server/lib/init-anonymous-token');
-ensureAnonymousToken();
-
-// 补丁：修复 migu 源（必须在 require unblockneteasemusic 之前）
-require('./src/server/lib/patch-migu');
-require('./src/server/lib/patch-unm-request');
-
 const { serve } = require('@hono/node-server');
 const { serveStatic } = require('@hono/node-server/serve-static');
 const { Hono } = require('hono');
@@ -154,7 +147,7 @@ if (hasDist) {
   const { isApiPath } = require('./src/server/lib/api-path');
   app.get('*', (c) => {
     const p = c.req.path;
-    // apiFirstSegments 覆盖全量上游模块名（login/search/album/... 约 300 个），
+    // apiFirstSegments = ALLOWED_APIS ∪ apiModules（自研端点表 17 名），
     // 前端如果将来引入 vue-router，新增路由必须避开这些名字，否则会被判成 API 404。
     // /assets/ 与带扩展名的资源同样不喂 HTML——浏览器拿到 MIME 错乱的 200
     if (isApiPath(p)

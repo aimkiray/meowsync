@@ -352,7 +352,7 @@ function extFromUrl(rawUrl, allowed, fallback) {
 }
 
 // outputPath 是锁键占位路径（.mp3/.jpg 后缀参与并发互斥）——真实扩展名取决于
-// 解锁后 URL（ytdlp 的 itag=140 是 m4a 等），实际文件按 extFromUrl 换后缀落盘，
+// 解锁后 URL（youtube 回链多为 m4a 等），实际文件按 extFromUrl 换后缀落盘，
 // 返回的 path 才是写库/清理要用的真实路径
 function pathWithExt(outputPath, ext) {
   return outputPath.replace(/\.[a-z0-9]+$/i, `.${ext}`);
@@ -424,7 +424,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     }
 
     throwIfAborted(signal);
-    // 扩展名按真实来源修正（ytdlp→m4a 等）：路径互斥锁仍挂在占位 .mp3 键上，
+    // 扩展名按真实来源修正（youtube→m4a 等）：路径互斥锁仍挂在占位 .mp3 键上，
     // 互斥语义不变（同一歌单同曲永远同键），只是落盘文件名更诚实
     const finalPath = pathWithExt(outputPath, extFromUrl(songData.url, AUDIO_EXTS, 'mp3'));
     fs.mkdirSync(path.dirname(finalPath), { recursive: true });
@@ -445,7 +445,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       size: saved.size,
       url: songData.url,
       // 落盘后时长对账需要**文件真实码率**：解锁源的 item.br 仍是网易声明值
-      // （请求 320k 时恒 320000），真实码率在 unblockedBr（ytdlp 常 128k）——
+      // （请求 320k 时恒 320000），真实码率在 unblockedBr（youtube 常 130k）——
       // 用错分母会把完整文件误判成剪辑
       br: songData.unblockedBr ?? songData.br ?? null,
       unblocked: songData.unblocked || false,

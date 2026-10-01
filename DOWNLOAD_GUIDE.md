@@ -6,7 +6,7 @@
 - ✅ 音频文件下载（MP3，支持多码率）
 - ✅ 歌词文件下载（LRC 格式）
 - ✅ 封面图片下载（JPG/PNG）
-- ✅ VIP 歌曲自动解锁（使用 ytdlp 和 kuwo 源）
+- ✅ VIP/灰歌曲自动解锁（自研解锁层：pyncmd/youtube/qq 源）
 - ✅ 下载队列管理（并发控制、暂停/恢复）
 - ✅ 进度跟踪和错误重试
 
@@ -158,11 +158,12 @@ data/downloads/
 
 ## VIP 歌曲解锁
 
-系统会自动检测 VIP 歌曲并使用解锁服务：
-- 下载场景优先 kuwo 源（直连源站，不经 audio-proxy），备用 ytdlp
-- 播放场景优先 ytdlp 源（经服务端 /audio-proxy 中转），备用 kuwo
-- 自动验证时长匹配（kuwo 下载链接除外，其元数据不可靠）
-- 失败自动重试（最多 3 次）
+系统会自动检测 VIP/灰歌曲并尝试解锁（自研解锁层，源按顺序试错）：
+- 下载场景：pyncmd → qq → youtube（qq 走 BEST_LADDER 可出 FLAC）
+- 播放场景：pyncmd → youtube → qq
+- youtube/qq 回链绑服务端出口 IP 或带上游凭据，播放一律经服务端 /audio-proxy 中转
+- 每源先做候选期时长匹配，选中后再做服务端时长对账，错配/剪辑一律拒收
+- 失败自动尝试下一源（全源失败才标 unlockFailed）
 
 ## 测试结果
 
@@ -201,8 +202,8 @@ data/downloads/
 
 - **后端**：Node.js + Hono (@hono/node-server) + SQLite (better-sqlite3)
 - **前端**：Vue 3 + Vite + Tailwind CSS
-- **音乐 API**：NeteaseCloudMusicApi
-- **VIP 解锁**：@unblockneteasemusic/server
+- **音乐 API**：自研 NetEase 客户端（services/netease/，weapi+eapi）
+- **VIP 解锁**：自研解锁层（services/unlock/：pyncmd/youtube/qq）
 - **下载**：axios (流式下载)
 
 ## 开发者信息

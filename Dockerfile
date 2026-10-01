@@ -31,7 +31,6 @@ COPY package*.json ./
 # better-sqlite3 是原生模块：musl 有预编译产物则直接用，没有则回退 node-gyp 编译，
 # 工具链只装在本阶段（不带入最终镜像）
 RUN apk add --no-cache python3 make g++
-# NeteaseCloudMusicApi / unblockneteasemusic 为运行时 CJS 依赖，不打包
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ---------- 阶段 3：单进程运行时 ----------
@@ -42,9 +41,6 @@ WORKDIR /app
 # 而 EXPOSE/compose 映射的都是 3002——裸 `docker run -p` 会暴露错误端口
 ENV NODE_ENV=production \
     API_PORT=3002
-
-# yt-dlp 是播放解锁的第一优先级源（缺装时静默退化到 kuwo）
-RUN apk add --no-cache yt-dlp
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=frontend /app/dist ./dist

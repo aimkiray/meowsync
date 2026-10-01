@@ -853,7 +853,7 @@ async function processTask(task, queueId, signal) {
           try { fs.unlinkSync(result.path); } catch { /* 删失败留给 reap */ }
           throw new Error(`下载内容与歌曲时长不符（${result.size} 字节 vs 预期 ${task.durationMs}ms）`);
         }
-        // 真实落盘路径入库：扩展名由解锁源 URL 决定（ytdlp 常回 m4a），
+        // 真实落盘路径入库：扩展名由解锁源 URL 决定（youtube 常回 m4a），
         // 占位锁键只承担互斥语义
         const audioRow = downloadTasksRepo.updateTask(task.id, {
           audioPath: result.path,
