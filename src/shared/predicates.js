@@ -121,7 +121,9 @@ const YT_URL_RES = [
 export function extractYouTubePlaylistId(input) {
   const s = String(input || '').trim();
   if (!s) return null;
-  if (/^(?:PL|UU|RD|LL|FL|TL|OLAK5uy_)[A-Za-z0-9_-]{11,60}$/i.test(s)) return s;
+  // 裸形态不带 /i——真实 listId 前缀恒大写，放行小写会把
+  // 'tldr-weekly-01' 型 ≥13 位搜索词劫进歌单导入
+  if (/^(?:PL|UU|RD|LL|FL|TL|OLAK5uy_)[A-Za-z0-9_-]{11,60}$/.test(s)) return s;
   if (!/(?:youtube(?:-nocookie)?\.com|youtu\.be|music\.youtube\.com)/i.test(s)) return null;
   return s.match(/[?&]list=([A-Za-z0-9_-]{2,80})/i)?.[1] || null;
 }

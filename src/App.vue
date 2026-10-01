@@ -923,7 +923,8 @@ export default {
         pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
         pl.trackCount = pl.tracks.length
         savePlaylistsToStorage()
-        selectPlaylistAndShow(pl)
+        // 正选中该壳时视图数组已换引用——force 防同 id 短路留陈旧视图
+        selectPlaylistAndShow(pl, { force: true })
         searchQuery.value = ''
         toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首）`, 'success')
       } catch (e) {
@@ -964,7 +965,8 @@ export default {
         pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
         pl.trackCount = pl.tracks.length
         savePlaylistsToStorage()
-        selectPlaylistAndShow(pl)
+        // 正选中该壳时视图数组已换引用——force 防同 id 短路留陈旧视图
+        selectPlaylistAndShow(pl, { force: true })
         const note = [
           data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
           data.skipped ? `跳过失效 ${data.skipped}` : '',
@@ -1010,7 +1012,8 @@ export default {
         pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
         pl.trackCount = pl.tracks.length
         savePlaylistsToStorage()
-        selectPlaylistAndShow(pl)
+        // 正选中该壳时视图数组已换引用——force 防同 id 短路留陈旧视图
+        selectPlaylistAndShow(pl, { force: true })
         const note = [
           data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
           data.skipped ? `跳过失效 ${data.skipped}` : '',
@@ -2086,6 +2089,10 @@ export default {
         }
         if (errData?.playlist) {
           toast('这是 YouTube 歌单链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
+        if (errData?.disstid) {
+          toast('这是 QQ 歌单链接，请在顶部搜索框粘贴导入', 'info')
           return
         }
         console.error('点歌台失败:', error)
@@ -3282,6 +3289,13 @@ export default {
       return `?qq=${qq.trim()}`
     }
 
+    // ?qqpl=<disstid> QQ 歌单按引用分享链——接收端整单重拉
+    const getQQPlFromUrl = () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const qqpl = urlParams.get('qqpl')?.trim()
+      return /^\d+$/.test(qqpl || '') ? qqpl : null
+    }
+
     // ?mix=<name>~id1,id2,bv_X_pN,yt_<vid> 本地歌单内容携带链：数字 id 走网易云
     // 批量详情，bv_/yt_ 段逐个 resolve。~ 用 lastIndexOf 取——name 里本身可以含 ~
     const getMixFromUrl = () => {
@@ -3429,7 +3443,7 @@ export default {
     const consumeUrlShareParams = () => {
       const url = new URL(window.location.href)
       let changed = false
-      for (const key of ['song', 'playlist', 'playlists', 'bili', 'yt', 'qq', 'p', 'mix']) {
+      for (const key of ['song', 'playlist', 'playlists', 'bili', 'yt', 'qq', 'qqpl', 'p', 'mix']) {
         if (url.searchParams.has(key)) {
           url.searchParams.delete(key)
           changed = true
@@ -3582,6 +3596,7 @@ export default {
       const biliInput = getBiliFromUrl()
       const ytInput = getYtFromUrl()
       const qqInput = getQQFromUrl()
+      const qqPlInput = getQQPlFromUrl()
       const mixInput = getMixFromUrl()
       // 所有参数读取已完毕——消费掉，避免下次刷新重新劫持恢复逻辑
       consumeUrlShareParams()
@@ -3594,6 +3609,9 @@ export default {
       } else if (qqInput) {
         // ?qq= 分享链同理
         await importQQ(qqInput)
+      } else if (qqPlInput) {
+        // ?qqpl= 歌单按引用分享链——整单重拉
+        await importQQPlaylist(qqPlInput)
       } else if (mixInput) {
         // ?mix= 本地歌单内容链：重建 local_pl_mix_ 壳
         await importMixPlaylist(mixInput)

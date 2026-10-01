@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 
 let pageScript = {};   // 'first'→首页夹具 | '<token>'→续页夹具（值可 Error）
 let pageCalls = 0;
+let lastListId = null; // stub 透传观测——VL 双前缀缺陷钉（不带 i 的 VL 前缀须原样下传）
 const matchCalls = [];
 let matchImpl = async () => ({ song: null, query: null });
 let rateImpl = () => true;
@@ -19,8 +20,9 @@ const seed = (path, exports) => {
 };
 seed('../src/server/lib/rate-limit.js', { rateLimit: (...a) => rateImpl(...a) });
 seed('../src/server/lib/youtube.js', {
-  fetchYtPlaylistPage: async ({ continuation }) => {
+  fetchYtPlaylistPage: async ({ listId, continuation }) => {
     pageCalls++;
+    lastListId = listId;
     const v = continuation ? pageScript[continuation] : pageScript.first;
     if (v instanceof Error) throw v;
     if (!v) throw new Error(`unstubbed page continuation=${continuation}`);
@@ -75,6 +77,7 @@ test('continuation 翻页 + 失效过滤 + 曲目归一', async () => {
   assert.equal(t0.cover, 'https://i.ytimg.com/vi/vid00000001/hqdefault.jpg');
   assert.equal(t0.matched, null);
   assert.equal(t0.candidates, undefined, '内部匹配字段不下发');
+  assert.equal(t0.songName, '歌1', 'extractYtSong 清洗结果透出');
 });
 
 test('词源匹配并发池：命中的曲目带 matched/matchedBy，未中不阻塞', async () => {
@@ -91,6 +94,7 @@ test('词源匹配并发池：命中的曲目带 matched/matchedBy，未中不�
   assert.equal(matchCalls.length, 3);
   assert.equal(body.matchedCount, 1);
   assert.equal(body.tracks[1].matched.id, 888);
+  assert.equal(body.tracks[1].matchedBy, '歌2', 'matchedBy 透出（与 favlist 断言同口径）');
   assert.equal(body.tracks[0].matched, null);
 });
 
@@ -123,9 +127,17 @@ test('入参兜底与限流：裸 id/list 参数/无法解析 400/429', async ()
   r = await getJson('/youtube/playlist?input=' +
     encodeURIComponent('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLw0xabcdefghi'));
   assert.equal(r.body.listId, 'PLw0xabcdefghi');
-  // 裸未知前缀 id 兜底（VL 写法直传）
+  // 裸未知前缀 id 兜底（VL 写法直传——listId 原样进 lib，双前缀防回归）
   r = await getJson('/youtube/playlist?input=VLPLw0xabcdefghi');
   assert.equal(r.body.listId, 'VLPLw0xabcdefghi');
+  assert.equal(lastListId, 'VLPLw0xabcdefghi');
+  // ?list= 查询通道（resolve 回喂只用 input，这里直接打 list 参数）
+  r = await getJson('/youtube/playlist?list=PLabcdefghijklmnop');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.listId, 'PLabcdefghijklmnop');
+  // 短裸 token（<13 位）按垃圾拒——真实 listId 全 ≥13，不白打上游一跳
+  r = await getJson('/youtube/playlist?input=abcdefghij');
+  assert.equal(r.status, 400);
   r = await getJson('/youtube/playlist?input=hello world');
   assert.equal(r.status, 400);
   rateImpl = () => false;
@@ -159,7 +171,7 @@ test('截断语义：续页不断供则 truncated；续页耗尽见底不标', a
     first: { title: 'T', mediaCount: 500, items: Array.from({ length: 100 }, (_, i) => item(i)), continuation: 'tok1' },
     tok1: { items: Array.from({ length: 100 }, (_, i) => item(100 + i)), continuation: 'tok2' },
   };
-  let r = await getJson('/youtube/playlist?input=PLbigbigbigx');
+  let r = await getJson('/youtube/playlist?input=PLbigbigbigxx');
   assert.equal(r.body.tracks.length, 200);
   assert.equal(r.body.truncated, true);
   // 续页耗尽（continuation=null）见底——200 条全有效也不标截断
@@ -167,7 +179,7 @@ test('截断语义：续页不断供则 truncated；续页耗尽见底不标', a
     first: { title: 'T', items: Array.from({ length: 100 }, (_, i) => item(i)), continuation: 'tok1' },
     tok1: { items: Array.from({ length: 100 }, (_, i) => item(100 + i)) },
   };
-  r = await getJson('/youtube/playlist?input=PLbigbigbigx');
+  r = await getJson('/youtube/playlist?input=PLbigbigbigxx');
   assert.equal(r.body.tracks.length, 200);
   assert.equal(r.body.truncated, false);
   // 跨页重复 videoId 去重（上游漂移防御）
@@ -175,8 +187,21 @@ test('截断语义：续页不断供则 truncated；续页耗尽见底不标', a
     first: { title: 'T', items: [item(1), item(2)], continuation: 'tok1' },
     tok1: { items: [item(2), item(3)] },
   };
-  r = await getJson('/youtube/playlist?input=PLbigbigbigx');
+  r = await getJson('/youtube/playlist?input=PLbigbigbigxx');
   assert.equal(r.body.tracks.length, 3);
+});
+
+test('页数上限：8 页扫满而上游仍有货 → truncated', async () => {
+  reset();
+  pageScript = { first: { title: 'T', items: Array.from({ length: 10 }, (_, i) => item(i)), continuation: 'tok1' } };
+  for (let p = 1; p <= 7; p++) {
+    pageScript[`tok${p}`] = { items: Array.from({ length: 10 }, (_, i) => item(p * 10 + i)), continuation: `tok${p + 1}` };
+  }
+  const r = await getJson('/youtube/playlist?input=PLbigbigbigxx');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.tracks.length, 80);
+  assert.equal(pageCalls, 8, '第 9 页不再请求');
+  assert.equal(r.body.truncated, true, '页上限扫满非见底');
 });
 
 test('resolve 遇歌单链 → 400 带 playlist 字段（前端自动转歌单导入）', async () => {
