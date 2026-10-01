@@ -441,6 +441,7 @@
   width: 44px;
   height: 44px;
   flex-shrink: 0;
+  margin-inline: 6px;
 }
 
 .song-cover {
