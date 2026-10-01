@@ -341,7 +341,7 @@ app.post('/downloads/local/mirror', async (c) => {
       }));
     const skipped = allTracks.length - numeric.length;
     const truncated = numeric.length - tracks.length;
-    if (!tracks.length) return fail(c, 400, `没有可下载的网易云歌曲（跳过 ${skipped} 首非网易云曲目）`);
+    if (!tracks.length) return fail(c, 400, `没有可下载的歌曲（跳过 ${skipped} 首不支持下载的曲目）`);
     const name = String(body.name || '本地歌单').slice(0, 200);
     // upsert + 整表替换必须同事务（upsertPlaylist 自注"独立调用不保证原子"）；
     // 内容签名（id:name 序列）未变时跳过 DELETE+INSERT——行级下载每首都重镜像，
@@ -359,7 +359,8 @@ app.post('/downloads/local/mirror', async (c) => {
       if (!row) throw httpError(500, '镜像歌单写入失败');
       // 墓碑前置检查后，本地 id 级联拿的新行仍可能正被删——事务内复查
       if (deletingPlaylists.has(row.id)) throw httpError(409, '该歌单正在删除中');
-      const sigOf = (t) => `${t.id}:${t.name}:${t.dt || 0}`;
+      // mediaMid 入签名：老镜像（无 qq 字段）重传时触发一次重写补写 provider 元数据
+      const sigOf = (t) => `${t.id}:${t.name}:${t.dt || 0}:${t.qq?.mediaMid || ''}`;
       const existing = playlistTracksRepo.listTracksByPlaylistId(row.id);
       const unchanged = existing.length === tracks.length
         && existing.every((t, i) => sigOf(t) === sigOf(tracks[i]));

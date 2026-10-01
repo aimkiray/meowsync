@@ -2,7 +2,8 @@
 // googlevideo ip= 出口地址）不直接进 302 Location——换成 opaque token，
 // 客户端只见 /audio-proxy/t/<token>。PeerTube videoFileToken/Jellyfin
 // OpenToken/Navidrome share JWT 同款思路：单进程自托管场景用进程内 Map
-// 足够，多实例部署才需要换成共享存储。
+// 足够，多实例部署才需要换成共享存储。代价：进程重启即全表作废——
+// 在途播放的下一次 Range 会 404，客户端需重取流地址恢复。
 // 语义：有效期内多次可用（浏览器 seek=同 URL 多次 Range 请求，一次性
 // token 与可 seek 媒体不兼容）；每次命中滑动续期但有绝对上限（不晚于
 // 上游签名寿命——QQ vkey ~22h，封顶 24h）。
@@ -37,6 +38,10 @@ function resolve(token) {
     return null;
   }
   e.expiresAt = Math.min(now + SLIDING_TTL_MS, e.notAfter); // 滑动续期
+  // LRU touch：Map 迭代序=插入序，delete+set 把活跃 token 挪到末尾——
+  // 否则满容淘汰按"最早插入"先杀掉正在播放的旧 token（net-guard dnsCache 同款）
+  vault.delete(token);
+  vault.set(token, e);
   return e.url;
 }
 

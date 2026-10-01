@@ -337,8 +337,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             // "已解析却 403"的死链并缓存 60s。qq 源必须算在内：其 https purl
             // 明文带 uin/vkey 且 vkey 绑本机 IP，不代理既是凭据泄露又必然 403；
             // sip 偶发裸 IP/非音乐 tc.qq.com 子域同样挡下。
-            // purpose='download' 不受此限（fetchStream 不走白名单通道）
-            const willProxy = purpose === 'playback' && !!proxyOrigin
+            // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
+            // 明文签名链进 JSON 等于把 uin/vkey/出口 IP 发给访客；进程内调用方
+            // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
+            const willProxy = !!proxyOrigin
               && (source === 'ytdlp' || source === 'qq' || checked.url.protocol === 'http:');
             if (willProxy && !isProxyAllowedHost(checked.url.hostname)) continue;
 
@@ -380,7 +382,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         // 必然 403），或上游回 http 链（HTTPS 页面直连会被混合内容拦截）。
         // 用归一化后的协议判定——原始串 startsWith 会被大写 scheme 绕过
         const isHttp = resolved.url.toLowerCase().startsWith('http:');
-        const useProxy = purpose === 'playback' && !!proxyOrigin
+        const useProxy = !!proxyOrigin
           && (resolved.source === 'ytdlp' || resolved.source === 'qq' || isHttp);
         // 代理面统一经 vault token——解锁回链可能带上游凭据（qq purl uin/vkey、
         // googlevideo ip=），明文嵌进 JSON 等于把运营者凭据发给每个访客

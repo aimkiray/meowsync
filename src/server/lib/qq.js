@@ -113,8 +113,9 @@ async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cook
   if (!res.ok) throw new Error(`qq musicu ${module} HTTP ${res.status}`);
   const body = await res.json();
   const node = body?.[reqKey];
-  // 风控信号：code=2001 + feedbackURL 要求登录——同一 body 换签名通道重试
-  if (!signed && (node?.code === 2001 || node?.data?.feedbackURL)) {
+  // 风控信号：code=2001 + feedbackURL 要求登录——同一 body 换签名通道重试。
+  // 2001 可出现在 body 顶层或 node 层（{"req":{"code":2001}} 为 node 形态）
+  if (!signed && (body?.code === 2001 || node?.code === 2001 || node?.data?.feedbackURL || body?.data?.feedbackURL)) {
     return musicu(module, method, param, extraSignal, reqKey, cookie, true);
   }
   if (body?.code !== 0 || !node || node.code !== 0) {
@@ -194,7 +195,7 @@ async function getStreamCandidates(mid, mediaMid, ladder, extraSignal) {
     const tier = Object.keys(QUALITY_TIERS).find(t => filename.startsWith(QUALITY_TIERS[t].prefix)) || ladder[i];
     // purl 的 uin 参数不参与鉴权（vkey 已绑 uin+IP；UNM 多年写死 uin=0 实证）——
     // 脱敏掉登录态 uin，防它经代理 URL/日志外泄
-    const purl = (info?.purl || info?.wifiurl || '').replace(/([?&])uin=\d+/, '$1uin=0');
+    const purl = (info?.purl || info?.wifiurl || '').replace(/([?&])uin=\d+/g, '$1uin=0');
     return {
       tier, purl, filename,
       result: info?.result ?? data?.retcode,
@@ -275,7 +276,7 @@ async function searchSongs(query, limit = 20, extraSignal) {
   }
   // searchid 用上游公式形态（netease-qq-music-api utils.rs）——
   // 时间戳取模混入两段随机数，比 Date.now()%1e17 更像真值
-  const searchid = String(Math.floor(Math.random() * 20) * 18014398509481984
+  const searchid = String((1 + Math.floor(Math.random() * 20)) * 18014398509481984
     + Math.floor(Math.random() * 4194305) * 4294967296 + (Date.now() % 86400000));
   const data = await musicu('music.search.SearchCgiService', 'DoSearchForQQMusicDesktop', {
     query: String(query || ''), search_type: 0, page_num: 1,

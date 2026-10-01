@@ -331,7 +331,7 @@ export default {
           try {
             const mirror = await downloadsApi.mirrorLocalPlaylist(playlist)
             const d = mirror.data?.data || {}
-            if (d.skipped) mirrorNote += `（跳过 ${d.skipped} 首非网易云曲目）`
+            if (d.skipped) mirrorNote += `（跳过 ${d.skipped} 首不支持下载的曲目）`
             if (d.truncated) mirrorNote += `（超出 ${2000} 首上限的部分未包含）`
           } catch (mirrorErr) {
             // 墓碑 409：本地单删除后 130s 内重导同 mix 链再点下载会撞
