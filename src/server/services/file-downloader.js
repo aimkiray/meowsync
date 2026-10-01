@@ -385,7 +385,7 @@ function pickYtProgressive(sd) {
     .filter(f => typeof f?.url === 'string' && f.url
       && (f.mimeType || '').startsWith('video/mp4'))
     .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)))
-    .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null }));
+    .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null, h: f.height || 0 }));
 }
 
 async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, providerData) {
@@ -646,7 +646,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     if (prog.length) progressiveCarry = prog;
     return {
       videos: ytPickStreamList(sd, 'video', 'best')
-        .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null })),
+        .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null, h: f.height || 0 })),
       audios: ytPickStreamList(sd, 'audio')
         .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null })),
       progressive: async () => progressiveCarry
@@ -680,6 +680,34 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     throwIfAborted(signal);
     const videoDir = path.dirname(outputPath);
     fs.mkdirSync(videoDir, { recursive: true });
+    // 匿名 B 站 DASH 在低热度稿封顶 480p，而 durl 合流档能给到 720p——
+    // 自适应最优低于 720p 时才多打这一跳比高（更高清就先用合流直落，
+    // 自带音轨连 ffmpeg 都省）。yt 合流天花板 360p 天然走不进此分支
+    const bestH = media.videos[0]?.h || 0;
+    if (bestH && bestH < 720) {
+      let prog = null;
+      try {
+        prog = await media.progressive();
+      } catch (e) {
+        throwIfAborted(signal);
+        if (e?.fatal && e?.code) throw e;
+        lastErr = lastErr || e;
+      }
+      if (prog && (prog[0]?.h || 0) > bestH) {
+        console.info(`[video-dl] 合流档 ${prog[0].h}p 反超自适应 ${bestH}p——直落合流`);
+        for (const cand of prog) {
+          throwIfAborted(signal);
+          try {
+            const saved = await fetchTo(cand, outputPath, 0, 100);
+            return { path: saved.path, size: saved.size, url: cand.url };
+          } catch (e) {
+            throwIfAborted(signal);
+            if (e?.fatal && e?.code) throw e;
+            lastErr = e;
+          }
+        }
+      }
+    }
     if (FFMPEG_OK && media.videos.length && !media.audios.length) {
       // 音轨表为空时逐候选白下整段视频注定在合流前抛——记语义错误
       // 直接换下一轮/相位（下一轮重解可能拿到带音轨的批）

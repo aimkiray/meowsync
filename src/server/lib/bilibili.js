@@ -9,7 +9,7 @@ const { BVID_RE, BVID_IN_TEXT_RE } = require('../../shared/predicates.js');
 // B 站 API 统一请求头：Referer 是防盗链硬门槛（缺它 403），UA 伪造浏览器。
 // BILI_COOKIE 可选登录态——杜比/Hi-Res 音轨只对有权限的账号下发
 // （Hi-Res 通常需大会员），Cookie 只发给 api.bilibili.com 不外泄
-const BILI_COOKIE = (() => {
+const BILI_COOKIE_BASE = (() => {
   const raw = (process.env.BILI_COOKIE || '').trim();
   if (!raw) return '';
   // header 值要求 latin1——粘贴串带进换行/中文会让 undici 抛头校验错，
@@ -20,17 +20,19 @@ const BILI_COOKIE = (() => {
   }
   // 登录态下 B 站校验 Cookie 内 CURRENT_FNVAL 与请求 fnval 一致——浏览器
   // 导出的 cookie 里该值是用户最后播放的格式（常是 16），原样带上会被
-  // 静默扣发杜比/Hi-Res 轨；剥掉重写成与请求一致的 4048
-  const parts = ascii.split(';').map(s => s.trim())
-    .filter(s => s && s.split('=')[0].trim().toLowerCase() !== 'current_fnval');
-  parts.push('CURRENT_FNVAL=4048');
-  return parts.join('; ');
+  // 静默扣发杜比/Hi-Res 轨；剥掉，发请求时按该请求的 fnval 补写
+  return ascii.split(';').map(s => s.trim())
+    .filter(s => s && s.split('=')[0].trim().toLowerCase() !== 'current_fnval')
+    .join('; ');
 })();
-const BILI_HEADERS = {
+// BILI_COOKIE 对外暴露「是否配了登录态」的布尔面即可——值不出进程
+const BILI_COOKIE = Boolean(BILI_COOKIE_BASE);
+const biliHeadersFor = (fnval = 4048) => ({
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Referer': 'https://www.bilibili.com',
-  ...(BILI_COOKIE ? { Cookie: BILI_COOKIE } : {}),
-};
+  ...(BILI_COOKIE ? { Cookie: `${BILI_COOKIE_BASE}; CURRENT_FNVAL=${fnval}` } : {}),
+});
+const BILI_HEADERS = biliHeadersFor(4048);
 // 短链跳解只需要公共头——UA/Referer 足够拿 location，Cookie 不发 b23.tv
 const BILI_PUBLIC_HEADERS = {
   'User-Agent': BILI_HEADERS['User-Agent'],
@@ -104,10 +106,11 @@ async function parseBvid(input, extraSignal) {
   return null;
 }
 
-// extraSignal 级联客户端断连——上游请求不随客户端断开变僵尸（audio-proxy 同款语义）
-async function biliFetch(path, extraSignal) {
+// extraSignal 级联客户端断连——上游请求不随客户端断开变僵尸（audio-proxy 同款语义）。
+// fnval 形参只为 cookie 的 CURRENT_FNVAL 同步服务——登录态下与请求不一致会被扣发高规格轨
+async function biliFetch(path, extraSignal, fnval = 4048) {
   const res = await fetch(`https://api.bilibili.com${path}`, {
-    headers: BILI_HEADERS,
+    headers: biliHeadersFor(fnval),
     signal: extraSignal
       ? AbortSignal.any([AbortSignal.timeout(BILI_TIMEOUT_MS), extraSignal])
       : AbortSignal.timeout(BILI_TIMEOUT_MS),
@@ -167,12 +170,17 @@ function pickCidFromView(view, pageWanted) {
   return pages[idx]?.cid ?? view.cid;
 }
 
+// B 站质量号 → 近似像素高度：合流 durl 只回 quality 号不带 w/h，与
+// 自适应轨比较高低的共用口径（80/116/120 等档到不了原值，取下档保守估计）
+const QN_HEIGHT = { 127: 4320, 125: 4320, 121: 2160, 120: 2160, 117: 1080, 116: 1080, 112: 1080, 100: 1080, 80: 1080, 74: 720, 64: 720, 32: 480, 16: 360, 15: 360, 6: 240 };
+
 // 下载侧 playurl 解析：providerData.cid 缺失/过期自愈（UP 主换源/调 P 后
 // 库存 cid 失效——按 p 重查对应分P）。fnval 4048=DASH 全轨响应，1=MP4 合流
-// （durl 形态，无 ffmpeg 环境的视频兜底路）。
-async function resolveBiliPlayurl({ bvid, cid, page = 1, signal, fnval = 4048 }) {
+// （durl 形态，无 ffmpeg 环境的视频兜底路）；qn 是 durl 档的目标质量号，
+// 缺省按 16 给 360p——求高画质要显式给 80+
+async function resolveBiliPlayurl({ bvid, cid, page = 1, signal, fnval = 4048, qn = 0 }) {
   const playurlOf = (useCid) =>
-    biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${useCid}&fnval=${fnval}&fourk=1`, signal);
+    biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${useCid}&fnval=${fnval}&fourk=1${qn ? `&qn=${qn}` : ''}`, signal, fnval);
   // cid 缺省时先查 view 定位分P cid——直接发 cid=undefined 是上游 400
   let useCid = /^\d+$/.test(String(cid || '')) ? String(cid) : null;
   if (!useCid) {
@@ -220,18 +228,28 @@ async function resolveBiliMedia({ bvid, cid, page = 1, signal }) {
       })),
     audios: pickStreamList(dash, 'audio')
       .flatMap(s => flatUrls(s, { mimeType: s?.mimeType || '', br: s?.bandwidth || null })),
-    // MP4 合流（durl）：无 ffmpeg 环境下的兜底——分辨率受合流档限制但自带音轨
-    progressive: async () => {
-      const data = await resolveBiliPlayurl({ bvid, cid, page, signal, fnval: 1 });
-      return (Array.isArray(data?.durl) ? data.durl : [])
-        .filter(d => typeof d?.url === 'string' && d.url)
-        .map(d => ({ url: d.url, mimeType: 'video/mp4', br: null }));
-    }
+    // MP4 合流（durl）：无 ffmpeg 兜底 + 匿名 DASH 封顶 480p 时反超到 720p
+    // 的升级路——实测同一稿件 dash 只回 480p/360p 而 fnval=1&qn=80 的 durl
+    // 给到 720p。h 挂质量号折算高度供调用方与自适应轨比高低；结果 memoize
+    // ——「优于自适应先跑」与「自适应全灭兜底」两处消费只打一跳
+    progressive: (() => {
+      let cache = null;
+      return async () => {
+        if (cache) return cache;
+        const data = await resolveBiliPlayurl({ bvid, cid, page, signal, fnval: 1, qn: 80 });
+        const h = QN_HEIGHT[data?.quality] || 0;
+        cache = (Array.isArray(data?.durl) ? data.durl : [])
+          .flatMap(d => [d?.url, ...(Array.isArray(d?.backup_url) ? d.backup_url : [])])
+          .filter(u => typeof u === 'string' && u)
+          .map(url => ({ url, mimeType: 'video/mp4', br: null, h }));
+        return cache;
+      };
+    })(),
   };
 }
 
 module.exports = {
-  BILI_COOKIE, BILI_HEADERS, BILI_PUBLIC_HEADERS, BILI_TIMEOUT_MS,
+  BILI_COOKIE, BILI_HEADERS, BILI_PUBLIC_HEADERS, BILI_TIMEOUT_MS, QN_HEIGHT,
   biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView,
   viewQuery, parseBvid, isBiliLinkHost, resolveBiliAudio, resolveBiliMedia,
   BVID_RE,
