@@ -3,6 +3,8 @@ const { trustProxyEnabled } = require('../lib/env');
 const { WebSocketServer } = require('ws');
 // 控制面契约与共享表对齐（src/shared/protocol.js）——controller/host 三端同源
 const { CONTROL_TYPES, CONTROL_PAYLOAD_GUARDS, REMOTE_LIMITS, MSG_TYPES } = require('../../shared/protocol.js');
+// 登录会话优先于 REMOTE_TOKEN——浏览器 WS 握手带 cookie，遥控器页面登录后零改造
+const { sessionFromCookieHeader, authEnabled } = require('../lib/auth-gate');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_PAYLOAD_BYTES = REMOTE_LIMITS.MAX_PAYLOAD_BYTES;
@@ -235,14 +237,19 @@ function attachRemoteControl(server, options = {}) {
       return;
     }
 
-    // 可选 token 鉴权：子协议优先（不落 URL 日志），?token= 兼容旧客户端。
-    // 先于容量检查——未认证客户端不应能经 401/503 差异探测连接数状态
-    // （REMOTE_TOKEN 未设置时保持开放，兼容局域网自用——公网部署务必配置，
-    // 入口有启动 warning）
-    const provided = tokenFromProtocols(req) ?? url.searchParams.get('token');
-    if (token && !tokenMatches(provided, token)) {
-      rejectUpgrade(socket, 401, 'Unauthorized');
-      return;
+    // 鉴权级联：session cookie（浏览器登录态，同源握手天然携带）→
+    // REMOTE_TOKEN 子协议/?token=（非浏览器客户端旁路，不落 URL 日志优先）。
+    // 先于容量检查——未认证客户端不应能经 401/503 差异探测连接数状态。
+    // 两者皆未配置时保持开放（局域网自用兼容；公网部署必须启用登录或配 token）
+    const sess = sessionFromCookieHeader(req.headers.cookie || '');
+    if (!sess) {
+      const provided = tokenFromProtocols(req) ?? url.searchParams.get('token');
+      // 启用登录后 REMOTE_TOKEN 未配也必须拒——否则「登录开着、WS 裸奔」
+      // 形成旁路洞（旧逻辑只在 token 非空时才校验）
+      if (token ? !tokenMatches(provided, token) : authEnabled()) {
+        rejectUpgrade(socket, 401, 'Unauthorized');
+        return;
+      }
     }
 
     // controller 容量上限在升级阶段拒——handleUpgrade 后再踢仍会完成握手，

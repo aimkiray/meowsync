@@ -49,6 +49,15 @@ export const songMetaBody = z.looseObject({
   )
 });
 
+// POST /auth/setup 与 /auth/login：登录凭据契约。
+// username 白名单字符集（防注入展示/HTML），password 8-128（OWASP 建议下限 8，
+// 上限防 bcrypt 式截断语义与超长 DoS——argon2/scrypt 无截断问题但超长输入
+// 会拉满 KDF 内存参数耗时，收 128 够任何口令管理器生成的串）
+export const authCredentialsBody = z.looseObject({
+  username: z.string().min(1).max(64).regex(/^[\w.@-]+$/u, '用户名只能含字母数字与 . @ _ -'),
+  password: z.string().min(8, '密码至少 8 位').max(128)
+});
+
 // POST /ai/lyric-translate 与 /ai/lyric-verify：id 形态（数字/qq_/bv_/yt_ 前缀）
 // 由路由层正则把关——这里只收「存在且是标量」
 export const aiLyricBody = z.looseObject({

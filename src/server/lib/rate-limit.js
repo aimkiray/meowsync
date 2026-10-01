@@ -26,4 +26,21 @@ function rateLimit(c, key, limit) {
   return true;
 }
 
-module.exports = { rateLimit };
+// 不带 IP 的按键限流：登录接口的 per-account 桶——防「换 IP 轮喷同一账号」
+// 绕过 per-IP 限流。windowMs 可配（登录桶要分钟级窗，不只 60s）
+function rateLimitByKey(key, limit, windowMs = 60000) {
+  const now = Date.now();
+  const hits = (rateBuckets.get(key) || []).filter(t => now - t < windowMs);
+  if (hits.length >= limit) return false;
+  hits.push(now);
+  rateBuckets.set(key, hits);
+  if (rateBuckets.size > 5000) {
+    for (const [k, v] of rateBuckets) {
+      if (!v.some(t => now - t < windowMs)) rateBuckets.delete(k);
+    }
+    if (rateBuckets.size > 5000) rateBuckets.clear();
+  }
+  return true;
+}
+
+module.exports = { rateLimit, rateLimitByKey };

@@ -99,6 +99,14 @@
           :title="isDownloadsView ? '返回歌曲列表' : '打开下载管理'"
         >{{ isDownloadsView ? '歌曲' : '管理' }}</button>
 
+        <!-- 登录态：登出（会话作废服务端 session） -->
+        <button
+          v-if="authState.enabled && authState.authenticated"
+          class="ink-btn ink-btn--ghost topnav-action"
+          title="退出登录"
+          @click="logout"
+        >退出</button>
+
         <!-- 主题切换：lang-pill 滑动胶囊（三段态 = radio index），注册表见 lib/theme.js -->
         <div class="theme-pill topnav-theme" role="radiogroup" aria-label="切换主题" :title="`主题：${themeLabel}`">
           <span class="theme-pill-glider" :style="{ transform: `translateX(${themeIndex * 100}%)` }" aria-hidden="true"></span>
@@ -122,6 +130,8 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
+import { authState } from '../lib/auth-state.js'
+import { authApi } from '../api/auth.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 
@@ -366,8 +376,17 @@ export default {
 
     const themeIndex = computed(() => Math.max(0, THEMES.findIndex(t => t.id === currentTheme.value)))
 
+    // 登出：作废服务端 session 后整页重载（与登录成功同一收束路径）
+    const logout = async () => {
+      try { await authApi.logout() } catch { /* 网络失败也本地登出 */ }
+      authState.authenticated = false
+      window.location.reload()
+    }
+
     return {
       controllerUrl,
+      authState,
+      logout,
       themeLabel,
       themeIndex,
       THEMES,

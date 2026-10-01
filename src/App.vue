@@ -1,6 +1,17 @@
 <template>
+  <!-- 登录门：探活完成前不渲染任何业务壳（否则 RemoteController 会抢在
+       状态判定前发起未认证 WS）；需要登录而未认证时 AuthGate 接管全屏；
+       登录成功整页重载重走初始化 -->
+  <div v-if="!authState.booted" style="position:fixed;inset:0;background:#f4f1ea;z-index:999"></div>
+  <AuthGate
+    v-else-if="authRequired()"
+    :is-setup="authState.setupRequired"
+    :expired="authState.expired"
+    @authed="onAuthed"
+  />
+
   <!-- 手机控制器模式 -->
-  <RemoteController v-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" :ws-protocols="remoteWsProtocols" />
+  <RemoteController v-else-if="remoteMode === 'controller'" :ws-url="remoteControllerWsUrl" :ws-protocols="remoteWsProtocols" />
 
   <!-- 应用壳：纸面顶栏 / 左库侧栏+全宽主区（每视图一张饱和纸色） / 墨色底条 -->
   <div v-else class="app-shell" :data-view="centerView">
@@ -301,6 +312,9 @@ import { Howl } from 'howler'
 import { musicApi, parseLyrics, mergeTranslations } from './api/music'
 import { downloadsApi } from './api/downloads'
 import { aiApi } from './api/ai'
+import { authApi } from './api/auth'
+import { authState, authRequired } from './lib/auth-state'
+import AuthGate from './components/AuthGate.vue'
 import { useRemoteControl } from './composables/useRemoteControl'
 import { useHomeFeed } from './composables/useHomeFeed'
 import { readJSON, writeJSON } from './lib/storage'
@@ -337,6 +351,7 @@ export default {
     FullscreenPlayer,
     RemoteController,
     AdminPanel,
+    AuthGate,
     PixelIcon
   },
   setup() {
@@ -3223,9 +3238,24 @@ export default {
     }
     window.addEventListener('popstate', onPopState)
 
-    // 组件挂载
+    // 登录/建号成功：cookie 已落盘，整页重载以干净状态重走 onMounted 管线
+    const onAuthed = () => window.location.reload()
+
     onMounted(async () => {
       console.log('🚀 App组件挂载完成')
+
+      // 登录探活先行：需要登录而未认证时 AuthGate 接管，跳过全部初始化
+      // （遥控端同样被门——WS 握手也要带登录 cookie）
+      try {
+        const st = await authApi.status()
+        const d = st?.data || {}
+        authState.enabled = !!d.authEnabled
+        authState.setupRequired = !!d.setupRequired
+        authState.authenticated = !!d.authenticated
+        authState.username = d.username || null
+      } catch { /* 探活失败按未启用处理——离线单机的旧行为 */ }
+      authState.booted = true
+      if (authRequired()) return
 
       // 遥控器模式：不初始化播放器/歌单/播放状态恢复，纯控制端
       if (remoteMode.value === 'controller') {
@@ -3333,6 +3363,9 @@ export default {
 
     return {
       // 响应式数据
+      authState,
+      authRequired,
+      onAuthed,
       remoteMode,
       remoteControllerWsUrl,
       remoteWsProtocols,

@@ -37,37 +37,24 @@ const PORT = parsedApiPort || parsedFallbackPort || 3101;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // 解析CORS来源配置（WebSocket Origin 校验共用此白名单）。
-// 默认只留 localhost——credentials:true 下白名单里的任何公网域名都能跨站
-// 读写本实例（含 DELETE /playlists、文件清理）；局域网/公网部署必须显式
-// 配 CORS_ORIGINS，不要把第三方域名内建进默认值
-const corsOrigins = (process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',')
-  : ['http://localhost:3100', 'http://127.0.0.1:3100', 'http://localhost:3101', 'http://127.0.0.1:3101']
-).map(o => o.trim()).filter(Boolean)
-  // 归一化到 origin：'https://x.com/' 尾斜杠永不匹配 Origin 头，
-  // 不规整等于该项静默失效（WS 同源兜底救不了跨源配置项）
-  .map(o => {
-    try {
-      const u = new URL(o);
-      // 只收 http(s)：file:/data:/chrome-extension: 等非标 scheme 的
-      // URL.origin 是字符串 'null'——进了白名单等于放行 Origin:null
-      // 的请求（sandboxed iframe/file:// 页面都发它），credentials:true 下成洞
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-        console.warn(`[config] CORS_ORIGINS 项 '${o}' 不是 http(s) origin（也不支持通配符），已忽略`);
-        return null;
-      }
-      return u.origin;
-    } catch {
-      console.warn(`[config] CORS_ORIGINS 项 '${o}' 不是合法 URL，已忽略`);
-      return null;
-    }
-  }).filter(Boolean);
+// CORS 白名单收敛进 lib/env.js（HTTP cors / WS Origin / auth CSRF 三处共用）
+const { corsOrigins: corsOriginsFn } = require('./src/server/lib/env');
+const corsOrigins = corsOriginsFn();
 
 // 中间件
 app.use('*', cors({
   origin: (origin) => (origin && corsOrigins.includes(origin)) ? origin : null,
   credentials: true,
 }));
+
+// 安全响应头（/audio-proxy 响应跳过——它的 ACAO:*/CSP:sandbox 已就位）
+const { secureHeaders } = require('./src/server/lib/secure-headers');
+app.use('*', secureHeaders());
+
+// 进站大门：users 表为空时全放行（向后兼容局域网无登录部署）。
+// session cookie 优先，x-download-token 作为脚本旁路
+const { authGate } = require('./src/server/lib/auth-gate');
+app.use('*', authGate);
 
 // 健康检查：/ping 只探活；/healthz 探 DB 写路径（Docker HEALTHCHECK 用它）——
 // SELECT 1 是纯内存查询，磁盘满时照样通过；必须在事务里产生真实 WAL 写入，
@@ -112,10 +99,12 @@ if (hasDist) {
 }
 
 // 可选写操作鉴权：DOWNLOAD_TOKEN 设置后，/downloads 与 /playlists 的非 GET 请求
-// 必须携带匹配的 x-download-token 头——局域网部署时防止任意主机触发下载把磁盘写满
+// 必须携带匹配的 x-download-token 头——局域网部署时防止任意主机触发下载把磁盘写满。
+// 登录态（session cookie）视为等效凭据：启用登录后浏览器不再构建期注入 token
 const downloadToken = process.env.DOWNLOAD_TOKEN || '';
 if (downloadToken) {
   const crypto = require('crypto');
+  const { sessionFromCookieHeader } = require('./src/server/lib/auth-gate');
   // 双方先 sha256 再比较：等长摘要消除长度侧信道（长度不同的猜测耗时更短），
   // 与 ws/remote.js 的 REMOTE_TOKEN 校验同一写法
   const expectedHash = crypto.createHash('sha256').update(downloadToken).digest();
@@ -127,6 +116,8 @@ if (downloadToken) {
       || p === '/song-meta' || p.startsWith('/song-meta/'))
       && c.req.method !== 'GET' && c.req.method !== 'HEAD';
     if (!protectedWrite) return next();
+    // 已登录会话放行（authGate 已验过，这里再查一次保中间件独立成立）
+    if (sessionFromCookieHeader(c.req.header('cookie'))) return next();
     const providedHash = crypto.createHash('sha256')
       .update(c.req.header('x-download-token') || '')
       .digest();
@@ -139,6 +130,7 @@ if (downloadToken) {
 
 // 路由：音频代理 → 歌单/下载管理 → 受限的网易云API
 // Hono 路由中静态路径（/audio-proxy、/healthz、/playlists、/downloads/*）优先级高于参数路由（/:apiName）
+app.route('/', require('./src/server/routes/auth'));
 app.route('/', require('./src/server/routes/proxy'));
 app.route('/', require('./src/server/routes/playlists'));
 app.route('/', require('./src/server/routes/downloads'));
@@ -156,25 +148,15 @@ app.route('/', musicRoutes);
 // 多段路径（/song_url/123）也要兜：首段命中白名单 API 名同样是 API 请求
 if (hasDist) {
   const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
-  const API_PREFIXES = ['/downloads', '/playlists', '/audio-proxy', '/remote', '/ping', '/healthz', '/bilibili', '/youtube', '/qq', '/song-meta', '/ai'];
-  const apiNames = musicRoutes.ALLOWED_APIS || new Set();
-  // 未白名单的上游模块名（/login/xxx 之类）与 /assets/ 静态资源同样不喂 HTML：
-  // 前者会让 axios 把 index.html 当 JSON 解析，后者让浏览器拿到 MIME 错乱的 200
-  const { apiModules } = require('./src/server/services/netease-api');
-  const apiFirstSegments = new Set(
-    [...apiNames, ...Object.keys(apiModules)].map(s => s.toLowerCase())
-  );
+  // API 判定与 authGate 同一份分类（lib/api-path.js）——两处口径漂移会互相拆台
+  const { isApiPath } = require('./src/server/lib/api-path');
   app.get('*', (c) => {
     const p = c.req.path;
-    // 首段判定时统一小写——/Song_url/x 之类的变体同样是 API 请求，不该喂 HTML。
-    // 注意：apiFirstSegments 覆盖全量上游模块名（login/search/album/... 约 300 个），
-    // 前端如果将来引入 vue-router，新增路由必须避开这些名字，否则会被判成 API 404
-    const firstSegment = (p.split('/')[1] || '').toLowerCase();
-    // 前缀匹配同样按小写：/Downloads/x、/Api/xxx 之类部署层误配不该喂 HTML
-    const lowerPath = p.toLowerCase();
-    if (API_PREFIXES.some(px => lowerPath === px || lowerPath.startsWith(px + '/'))
-      || apiFirstSegments.has(firstSegment)
-      || lowerPath.startsWith('/assets/')
+    // apiFirstSegments 覆盖全量上游模块名（login/search/album/... 约 300 个），
+    // 前端如果将来引入 vue-router，新增路由必须避开这些名字，否则会被判成 API 404。
+    // /assets/ 与带扩展名的资源同样不喂 HTML——浏览器拿到 MIME 错乱的 200
+    if (isApiPath(p)
+      || p.toLowerCase().startsWith('/assets/')
       || /\.[a-z0-9]+$/i.test(p)) {
       return c.json({ code: 404, message: 'Not Found' }, 404);
     }
@@ -207,6 +189,15 @@ try {
 } catch (error) {
   console.error('[db] 初始化/状态恢复失败:', error);
   process.exit(1);
+}
+
+// 过期会话清扫：启动跑一遍 + 每小时续扫（unref 不拦进程退出）
+{
+  const sessionsRepo = require('./src/server/repositories/sessions');
+  try { sessionsRepo.sweepExpired(); } catch { /* 表刚建/无权限均不致命 */ }
+  setInterval(() => {
+    try { sessionsRepo.sweepExpired(); } catch { /* 同上 */ }
+  }, 3600 * 1000).unref();
 }
 // 孤儿文件清扫放在 serve() 之前同步跑——崩溃残片/未落库写盘此刻无协程引用，
 // DB 是唯一事实源；失败只告警不阻塞启动（不把它押进上面的致命分支）
@@ -249,6 +240,14 @@ const remote = attachRemoteControl(server, {
 if (!process.env.REMOTE_TOKEN && ['0.0.0.0', '::', '::0', '[::]', '0'].includes(HOST.trim())) {
   console.warn('[remote] REMOTE_TOKEN 未设置且监听所有网卡：任何可达客户端都能控制播放。公网部署请配置 REMOTE_TOKEN');
 }
+// 空 users 表 = 登录未启用 = 公网裸奔窗口：任何先到者都能 POST /auth/setup
+// 接管管理员。启动时大声提示，文档中要求先完成 setup 再对外开放端口
+try {
+  const { authEnabled } = require('./src/server/lib/auth-gate');
+  if (!authEnabled() && ['0.0.0.0', '::', '::0', '[::]', '0'].includes(HOST.trim())) {
+    console.warn('[auth] 登录体系未初始化：对外监听时任何人都能执行 /auth/setup 建号。请先完成初始化再开放端口');
+  }
+} catch { /* 表未就绪不影响启动 */ }
 
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
 // WS 连接由 remote.close() 立即 terminate（升级 socket 不归 close()/

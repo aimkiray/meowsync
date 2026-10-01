@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---------- 阶段 1：前端构建 ----------
-FROM node:22-alpine AS frontend
+FROM node:24-alpine AS frontend
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -23,7 +23,7 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
 RUN npm run build
 
 # ---------- 阶段 2：生产依赖 ----------
-FROM node:22-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 # better-sqlite3 是原生模块：musl 有预编译产物则直接用，没有则回退 node-gyp 编译，
@@ -33,7 +33,8 @@ RUN apk add --no-cache python3 make g++
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ---------- 阶段 3：单进程运行时 ----------
-FROM node:22-alpine
+# node>=24.7 自带 crypto.argon2（登录密码 KDF 主路径；旧版 Node 自动回落 scrypt）
+FROM node:24-alpine
 WORKDIR /app
 # API_PORT 必须显式设：镜像未设时服务回落到开发默认 3101，
 # 而 EXPOSE/compose 映射的都是 3002——裸 `docker run -p` 会暴露错误端口
@@ -59,7 +60,7 @@ USER meowsync
 # 单端口：API + WS + 静态站点同端口托管
 EXPOSE 3002
 
-# 注意：node:22-alpine 的 wget 是 busybox 精简版，不支持 --no-verbose/--tries
+# 注意：node:24-alpine 的 wget 是 busybox 精简版，不支持 --no-verbose/--tries
 # （会报 unrecognized option 恒失败），改用 Node 内置 fetch 探活
 # 端口解析与服务端一致（API_PORT || PORT || 3002），docker run -e API_PORT=... 覆盖端口时探活仍正确
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
