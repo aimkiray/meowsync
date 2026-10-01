@@ -269,7 +269,7 @@ app.post('/ai/lyric-verify', async (c) => {
 
   try {
     if (signal?.aborted) return c.body(null, 499);
-    const { lrc } = await fetchLyricRaw(id);
+    const { lrc } = await fetchLyricRaw(id, signal);
     const lines = parseLrcLines(lrc);
     if (!lines.length) {
       // 没词可验——无词显示不算错配

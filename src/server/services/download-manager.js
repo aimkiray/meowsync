@@ -362,7 +362,10 @@ async function createDownloadQueue(playlistId, options = {}) {
               downloadAudio: queue.downloadAudio,
               downloadLyrics: queue.downloadLyrics,
               downloadCover: queue.downloadCover,
-              downloadVideo: queue.downloadVideo && isExternalSongId(songId)
+              downloadVideo: queue.downloadVideo && isExternalSongId(songId),
+              // providerData 同步最新镜像行：title/author/neteaseId 会变
+              // （改题、词源重匹配），收养重跑不该拿建行时的旧快照
+              providerData: providerDataOf(track)
             }));
           // 重跑前清路径同时也要清旧文件：行先清、文件后删（崩溃留孤儿文件
           // 由 reap 兜底，比幻影登记路径安全）。扩展名现已随源浮动，不删会
@@ -1572,7 +1575,8 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
-      downloadVideo: options.downloadVideo === true && isExternalSongId(songId)
+      downloadVideo: options.downloadVideo === true && isExternalSongId(songId),
+      providerData: providerDataOf(track)
     }) || task;
   } else {
     task = downloadTasksRepo.createTask({
@@ -1910,8 +1914,17 @@ async function retryTask(taskId) {
   // queueId 指向已不存在的队列（孤儿行）时一并归位 standalone——
   // 否则任务永远绑着死队列。复位+计数重算+队列状态回 pending 同事务：
   // 半途失败不留"任务复位了队列还在 failed"（failed 队列拒绝 start）
+  // 复位时顺手刷新 providerData——镜像行的 title/author/neteaseId 可能比
+  // 建行时新（改题/重匹配），旧快照会让歌词归属核验按陈旧签名放行
+  const trackRow = playlistTracksRepo.listTracksByPlaylistId(task.playlistId)
+    .find(t => String(t.id) === String(task.songId));
+  const freshProviderData = trackRow ? providerDataOf(trackRow) : undefined;
+
   getDb().transaction(() => {
-    downloadTasksRepo.updateTask(taskId, resetTaskFields(queue ? {} : { queueId: null }));
+    downloadTasksRepo.updateTask(taskId, {
+      ...resetTaskFields(queue ? {} : { queueId: null }),
+      ...(freshProviderData !== undefined ? { providerData: freshProviderData } : {})
+    });
     if (queue) {
       recountQueueCounters(queue.id);
       if (queue.status === 'failed' || queue.status === 'completed' || queue.status === 'cancelled') {
@@ -1979,10 +1992,17 @@ async function retryQueue(queueId) {
 
   // 行更新+队列状态同事务：半途失败不留"部分任务复位、队列还停在 failed"。
   // retryCount 必须重置——否则 retryCount=3 的任务重试一次又判死
+  // providerData 一并刷新到最新镜像行：title/author/neteaseId 会变
+  const mirrorRows = playlistTracksRepo.listTracksByPlaylistId(queue.playlistId);
+  const providerMap = new Map(mirrorRows.map(t => [String(t.id), providerDataOf(t)]));
   const resetPaths = [];
   getDb().transaction(() => {
     for (const task of failedTasks) {
-      downloadTasksRepo.updateTask(task.id, resetTaskFields());
+      const freshProviderData = providerMap.get(String(task.songId));
+      downloadTasksRepo.updateTask(task.id, {
+        ...resetTaskFields(),
+        ...(freshProviderData !== undefined ? { providerData: freshProviderData } : {})
+      });
       resetPaths.push(task.audioPath, task.lyricsPath, task.coverPath, task.videoPath);
     }
     // completedTasks 不动：失败任务从未计入完成数；复位后的计数由任务行重算
@@ -2206,6 +2226,7 @@ module.exports = {
   getSongDownloadStatus,
   getTaskArtifactPath,
   toPublicTask,
+  providerDataOf,
   deleteSongFiles,
   deletePlaylistDownloadedFiles,
   recoverStaleStates,

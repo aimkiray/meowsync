@@ -983,13 +983,16 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
     // 错词不落盘：bv_/yt_ 导入曲的网易云词源可能是错配——下载链与播放链
     // 同 verdict 签名核验归属（命中缓存零成本；无 title/author 或 AI 关
     // 则跳过，按原样落盘）。AI 判不符 → NO_LYRICS 跳过而非带错词落盘
-    const extSrc = providerData?.bilibili || providerData?.youtube;
-    if (extM && aiEnabled() && extSrc?.title) {
+    const extSrc = String(songId).startsWith('bv_')
+      ? providerData?.bilibili : providerData?.youtube;
+    if (extM && aiEnabled() && extSrc?.title?.trim()) {
       try {
         const vkey = lyricVerdictKey(lyricId, extSrc.title, extSrc.author || '');
         const cached = lyricAiRepo.getVerdict(vkey, 'lyric');
-        const ok = cached ? !!cached.ok
-          : await judgeLyricLines({ vkey, lines: parseLrcLines(lrc.lyric), title: extSrc.title, author: extSrc.author || '', signal });
+        // 无时间戳的纯文本词 parse 出 0 行——没东西可验，按「无词」放过
+        const lines = cached ? null : parseLrcLines(lrc.lyric);
+        const ok = cached ? !!cached.ok : (!lines.length ? true
+          : await judgeLyricLines({ vkey, lines, title: extSrc.title, author: extSrc.author || '', signal }));
         if (ok === false) {
           console.info(`[download] ${songId} 歌词归属核验不符，跳过落盘: ${String(extSrc.title).slice(0, 80)}`);
           const err = new Error('歌词与来源不匹配');

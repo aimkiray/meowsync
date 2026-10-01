@@ -128,6 +128,12 @@ function updateTask(id, updates) {
     fields.push('bitrate = @bitrate');
     params.bitrate = updates.bitrate;
   }
+  // providerData 可刷新：镜像行的 title/author/neteaseId 会变（标题改名、
+  // 词源重匹配），收养/复位路径要能把新快照写回老任务行
+  if (updates.providerData !== undefined) {
+    fields.push('provider_data = @provider_data');
+    params.provider_data = updates.providerData ? JSON.stringify(updates.providerData) : null;
+  }
   if (updates.downloadAudio !== undefined) {
     fields.push('download_audio = @download_audio');
     params.download_audio = updates.downloadAudio ? 1 : 0;
