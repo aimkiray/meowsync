@@ -88,13 +88,15 @@
             aria-label="下一首"
             title="下一首"
           ><PixelIcon name="next" :size="24" /></button>
+          <!-- 模式字形（m-loop/m-list）在 22 格 viewBox 里横向近满格，
+               比箭头类字形视觉宽一倍——图标降 4px 光学配平，键体尺寸不变 -->
           <button
             @click="$emit('toggle-play-mode')"
             class="transport transport--edge"
             :disabled="!currentSong"
             :aria-label="`切换播放模式，当前：${playModeText || '顺序'}`"
             :title="`播放模式：${playModeText || '列表循环'}`"
-          ><PixelIcon :name="playModeIcon" :size="24" /></button>
+          ><PixelIcon :name="playModeIcon" :size="20" /></button>
           <!-- YTM：time-info 在中列走带簇尾部（repeat 之后），不在右簇 -->
           <span class="player-time hidden lg:inline">
             {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
