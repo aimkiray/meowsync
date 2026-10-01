@@ -1,24 +1,15 @@
-import axios from 'axios';
-import { resolveApiBaseUrl } from '../lib/api-base';
+import http from './http';
 
-const API_BASE_URL = resolveApiBaseUrl();
-
-// DOWNLOAD_TOKEN（构建期注入）：服务端开了写鉴权时前端请求自动带令牌
-const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || '';
-
-// 默认超时：轮询/查询类请求挂起时必须能 settle——裸 axios 无超时会让
+// 共享实例已统一剥 r.data（返回 {code,...} body）+ 10s 默认超时：
+// 轮询/查询类请求挂起时必须能 settle——裸 axios 无超时会让
 // AdminPanel 的 pollInFlight 标志永久卡住、轮询停摆。单曲下载/任务重试
 // 都是"提交即返回"的异步语义，终态由状态轮询确认——不再需要长超时通道
-const http = axios.create({
-  timeout: Number(import.meta.env.VITE_API_TIMEOUT) || 10000,
-  headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
-});
 
 export const downloadsApi = {
   createQueue: (playlistId, options = {}) => {
     // 歌单未导入时服务端会先走两次上游往返（detail+tracks），慢网可超默认 15s——
     // 超时后服务端仍建成队列，重试只会撞 409，给足 60s
-    return http.post(`${API_BASE_URL}/downloads/queues`, {
+    return http.post(`/downloads/queues`, {
       playlistId,
       bitrate: options.bitrate || 320000,
       downloadAudio: options.downloadAudio !== false,
@@ -29,55 +20,55 @@ export const downloadsApi = {
   },
 
   listQueues: () => {
-    return http.get(`${API_BASE_URL}/downloads/queues`);
+    return http.get(`/downloads/queues`);
   },
 
   getQueue: (id) => {
-    return http.get(`${API_BASE_URL}/downloads/queues/${id}`);
+    return http.get(`/downloads/queues/${id}`);
   },
 
   startQueue: (id) => {
-    return http.post(`${API_BASE_URL}/downloads/queues/${id}/start`);
+    return http.post(`/downloads/queues/${id}/start`);
   },
 
   pauseQueue: (id) => {
-    return http.post(`${API_BASE_URL}/downloads/queues/${id}/pause`);
+    return http.post(`/downloads/queues/${id}/pause`);
   },
 
   resumeQueue: (id) => {
-    return http.post(`${API_BASE_URL}/downloads/queues/${id}/resume`);
+    return http.post(`/downloads/queues/${id}/resume`);
   },
 
   cancelQueue: (id) => {
-    return http.post(`${API_BASE_URL}/downloads/queues/${id}/cancel`);
+    return http.post(`/downloads/queues/${id}/cancel`);
   },
 
   retryQueue: (id) => {
-    return http.post(`${API_BASE_URL}/downloads/queues/${id}/retry`);
+    return http.post(`/downloads/queues/${id}/retry`);
   },
 
   deleteQueue: (id) => {
     // 服务端要等中止+排空在途下载（排空上限 30s），15s 默认超时会让客户端
     // 先报"失败"而服务端实际删完——重试拿到 404 体验错乱，给 60s
-    return http.delete(`${API_BASE_URL}/downloads/queues/${id}`, {
+    return http.delete(`/downloads/queues/${id}`, {
       timeout: 60000
     });
   },
 
   listTasks: (params = {}) => {
-    return http.get(`${API_BASE_URL}/downloads/tasks`, { params });
+    return http.get(`/downloads/tasks`, { params });
   },
 
   retryTask: (id) => {
     // 重试即提交即返回（后台协程跑），终态由任务轮询确认
-    return http.post(`${API_BASE_URL}/downloads/tasks/${id}/retry`);
+    return http.post(`/downloads/tasks/${id}/retry`);
   },
 
   // 提交单曲下载到服务器（返回 pending/completed 任务行，不阻塞等下载完成——
   // 终态用 getSongDownloadStatus 轮询；completed 行是幂等短路返回）。
   // 超时仍要给足：歌单未导入时服务端先走两次上游往返才提交任务
   downloadSongToServer: (playlistId, songId, options = {}) => {
-    return http.post(`${API_BASE_URL}/downloads/songs/${songId}`, {
+    return http.post(`/downloads/songs/${songId}`, {
       playlistId,
       bitrate: options.bitrate || 320000,
       downloadAudio: options.downloadAudio !== false,
@@ -88,21 +79,21 @@ export const downloadsApi = {
 
   // 查询歌曲下载状态
   getSongDownloadStatus: (playlistId, songId) => {
-    return http.get(`${API_BASE_URL}/downloads/songs/${songId}/status`, {
+    return http.get(`/downloads/songs/${songId}/status`, {
       params: { playlistId }
     });
   },
 
   // 删除已下载的歌曲
   deleteSongDownload: (playlistId, songId) => {
-    return http.delete(`${API_BASE_URL}/downloads/songs/${songId}`, {
+    return http.delete(`/downloads/songs/${songId}`, {
       params: { playlistId }
     });
   },
 
   // 删除歌单全部已下载歌曲（排空在途下载可能耗数秒，给足超时）
   deletePlaylistDownloads: (playlistId) => {
-    return http.delete(`${API_BASE_URL}/downloads/playlists/${playlistId}/files`, {
+    return http.delete(`/downloads/playlists/${playlistId}/files`, {
       timeout: 60000
     });
   },
@@ -128,7 +119,7 @@ export const downloadsApi = {
       // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返
       ...(t.qq?.mediaMid ? { qq: { mediaMid: t.qq.mediaMid } } : {})
     }))
-    return http.post(`${API_BASE_URL}/downloads/local/mirror`, {
+    return http.post(`/downloads/local/mirror`, {
       localId: playlist.id,
       name: playlist.name,
       coverImgUrl: playlist.coverImgUrl || '',
@@ -139,21 +130,21 @@ export const downloadsApi = {
   // 本地单从库中移除时清服务端镜像（行+任务+文件级联）。fire-and-forget 即可——
   // 失败仅留孤儿行，不阻塞前端删除
   removeLocalMirror: (localId) => {
-    return http.delete(`${API_BASE_URL}/downloads/local/mirror/${encodeURIComponent(localId)}`);
+    return http.delete(`/downloads/local/mirror/${encodeURIComponent(localId)}`);
   },
 
   // 歌曲级歌词时间校准：GET 无行时返回 offsetMs:0；PUT 写绝对值（0=删行复位）
   getSongMeta: (songId) => {
-    return http.get(`${API_BASE_URL}/song-meta/${encodeURIComponent(songId)}`);
+    return http.get(`/song-meta/${encodeURIComponent(songId)}`);
   },
   saveLyricOffset: (songId, offsetMs) => {
-    return http.put(`${API_BASE_URL}/song-meta/${encodeURIComponent(songId)}`, { offsetMs });
+    return http.put(`/song-meta/${encodeURIComponent(songId)}`, { offsetMs });
   },
 
   // 快速下载歌单（建队列 + 启动即返回，后台跑）；歌单未导入时同样要先走上游
   // 导入（detail+tracks 两次往返），超时后重试会撞"已有进行中队列"的 409——给 60s
   quickDownloadPlaylist: (playlistId, options = {}) => {
-    return http.post(`${API_BASE_URL}/downloads/playlists/${playlistId}/quick`, {
+    return http.post(`/downloads/playlists/${playlistId}/quick`, {
       bitrate: options.bitrate || 320000,
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,

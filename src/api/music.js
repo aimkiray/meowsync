@@ -1,35 +1,8 @@
-import axios from 'axios'
-import { resolveApiBaseUrl } from '../lib/api-base'
+import api, { API_BASE_URL } from './http'
 import { httpsCover } from '../lib/url'
 
-const API_BASE_URL = resolveApiBaseUrl()
-const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT) || 10000
 const RETRY_COUNT = 3
 const RETRY_DELAY = 500
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: API_TIMEOUT,
-  withCredentials: true,
-  headers: {
-    'Accept': '*/*',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-  }
-})
-
-api.interceptors.request.use(
-  config => {
-    // 不污染调用方传入的 params 对象
-    config.params = { ...config.params, _t: Date.now() }
-    return config
-  },
-  error => Promise.reject(error)
-)
-
-api.interceptors.response.use(
-  response => response.data,
-  error => Promise.reject(error)
-)
 
 function isAbortError(error) {
   return error?.name === 'AbortError' || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED'

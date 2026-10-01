@@ -300,7 +300,9 @@ import { Howl } from 'howler'
 import { musicApi, parseLyrics, mergeTranslations } from './api/music'
 import { downloadsApi } from './api/downloads'
 import { aiApi } from './api/ai'
-import { resolveApiBaseUrl } from './lib/api-base'
+import { useRemoteControl } from './composables/useRemoteControl'
+import { useHomeFeed } from './composables/useHomeFeed'
+import { readJSON, writeJSON } from './lib/storage'
 import { formatTime } from './lib/format'
 import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
@@ -379,8 +381,6 @@ export default {
     const fullscreenInteractionMode = ref('auto')
     const PLAYER_STATE_STORAGE_KEY = 'meowsync-player-state'
     const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
-    const PLAY_HISTORY_STORAGE_KEY = 'meowsync-play-history'
-    const PLAYLIST_HISTORY_STORAGE_KEY = 'meowsync-playlist-history'
     const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
     let restorePlayerState = null
     let lastSavedWholeSecond = -1
@@ -393,12 +393,9 @@ export default {
     const playlistDownloadsRefreshKey = ref(0)
     const topNavRef = ref(null) // 「/」快捷键聚焦搜索框
 
-    // 首页发现流数据（toplist）+ 最近播放历史（歌曲/歌单两条线）
-    const homeToplists = ref([])
-    const playHistory = ref([])
-    const playlistHistory = ref([])
-    const homeLoading = ref(false)
-    
+    // 首页发现流 + 最近播放历史收敛在 composables/useHomeFeed.js
+    // （loadHomeFeed/recordPlayHistory/recordPlaylistHistory/restoreHistory 同迁）
+
     let howl = null
     let lyricTimer = null
     let progressRafId = null
@@ -409,164 +406,11 @@ export default {
     let previewSeq = 0 // 顶栏 id 预览序闸：selectPlaylist/playSong/新搜索都会顶掉它
     let searchReqId = 0 // searchPlaylists 请求序号，同上
 
-    // 远程控制模式
-    const urlParams = new URLSearchParams(window.location.search)
-    const rawMode = urlParams.get('mode')
-    // 'remote' 是 'controller' 的别名——用户/旧链接手滑写 remote 时应进控制器而非普通应用
-    const normalizedMode = rawMode === 'remote' ? 'controller' : rawMode
-    const remoteMode = ref(['host', 'controller'].includes(normalizedMode) ? normalizedMode : 'off') // 'off' | 'host' | 'controller'
 
-    const apiBase = resolveApiBaseUrl()
-    const remoteToken = import.meta.env.VITE_REMOTE_TOKEN || ''
-    // token 优先走 Sec-WebSocket-Protocol 子协议——?token= 会落进反代 access log
-    // 与浏览器历史。协议值须为 RFC7230 token 字符集，含其他字符时回退 URL 参数
-    const tokenSafeForProto = /^[A-Za-z0-9._~-]+$/.test(remoteToken)
-    const remoteWsProtocols = remoteToken && tokenSafeForProto ? [`remote.${remoteToken}`] : undefined
-    const remoteTokenParam = remoteToken && !tokenSafeForProto
-      ? `&token=${encodeURIComponent(remoteToken)}` : ''
-    const remoteWsUrl = apiBase.replace(/^http/, 'ws') + '/remote'
-    const remoteHostWsUrl = `${remoteWsUrl}?role=host${remoteTokenParam}`
-    const remoteControllerWsUrl = `${remoteWsUrl}?role=controller${remoteTokenParam}`
-    let remoteWs = null
-    let remoteStateTimer = null
-    let remoteReconnectTimer = null
     let volumeSaveTimer = null
 
-    // state_update 只保留 controller 端用到的字段，避免整个 song 对象
-    // （含 alias/privilege 等大字段）每 2s 全量序列化并广播
-    function serializeRemoteSong(song) {
-      if (!song) return null
-      const artistList = song.ar || song.artists || []
-      return {
-        id: song.id,
-        name: song.name,
-        al: { picUrl: song.al?.picUrl ?? song.album?.picUrl ?? '' },
-        ar: artistList.map(a => ({ name: a?.name ?? '' }))
-      }
-    }
-
-    function sendRemoteState() {
-      if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) return
-      remoteWs.send(JSON.stringify({
-        type: 'state_update',
-        payload: {
-          isPlaying: isPlaying.value,
-          currentSong: serializeRemoteSong(currentSong.value),
-          currentTime: currentTime.value,
-          duration: duration.value,
-          volume: volume.value,
-          // 待播队列广播：封顶 50 条防止大歌单撑爆 64KB 帧限制；
-          // 当前曲在截断窗外时发 -1——否则服务端 clamp 到 49 会点亮错误的行
-          queue: playingSongs.value.slice(0, 50).map(serializeRemoteSong),
-          queueIndex: (i => (i >= 0 && i < 50 ? i : -1))(currentPlayingIndex())
-        }
-      }))
-    }
-
-    // 远端控制命令：play/pause 幂等执行（controller 端状态有延迟，不能用 toggle）
-    function handleRemoteMessage(msg) {
-      switch (msg.type) {
-        case 'play':
-          // 与 togglePlay 同款的恢复路径：实例已被错误处理销毁时重走 playSong，
-          // 否则远端 play 在加载失败后静默失效
-          if (!howl) {
-            if (currentSong.value && !songSwitching.value) {
-              playSong(currentSong.value, { preserveContext: true, seekTime: currentTime.value })
-            }
-          } else if (!isPlaying.value) {
-            howl.play()
-          }
-          break
-        case 'pause':
-          if (howl && isPlaying.value) howl.pause()
-          break
-        case 'next':
-          nextSong()
-          break
-        case 'prev':
-          previousSong()
-          break
-        case 'seek': {
-          // 严格校验：null/true/'' 会被 Number() 强转成 0/1 蒙混过 isFinite
-          const t = msg.payload
-          if (howl && typeof t === 'number' && Number.isFinite(t)) {
-            const clamped = Math.max(0, Math.min(t, duration.value || 0))
-            howl.seek(clamped)
-            currentTime.value = clamped
-          }
-          break
-        }
-        case 'volume':
-          updateVolume(msg.payload)
-          break
-        case 'play_song': {
-          // 先在播放快照中定位（队列内导航）；命中浏览列表则视为用户跨歌单点歌，
-          // 拍新快照；两边都没有则记录日志便于排查，不静默吞掉
-          let list = playbackList()
-          let targetIndex = list.findIndex(s => String(s.id) === String(msg.payload))
-          if (targetIndex !== -1) {
-            playSong(list[targetIndex], { preserveContext: true })
-          } else {
-            list = filteredSongs.value
-            targetIndex = list.findIndex(s => String(s.id) === String(msg.payload))
-            if (targetIndex !== -1) {
-              playSong(list[targetIndex])
-            } else {
-              console.warn('[remote] play_song 目标不在播放队列或当前列表:', msg.payload)
-            }
-          }
-          break
-        }
-        case 'request_state':
-          sendRemoteState()
-          break
-      }
-    }
-
-    let remoteRetries = 0
-    function connectRemoteHost() {
-      if (remoteMode.value !== 'host') return
-      // 回调一律操作局部 ws：迟到的 onerror/onclose 若引用共享 remoteWs，
-      // 会把已被取代的新 socket 误关/清空
-      const ws = remoteWs = new WebSocket(remoteHostWsUrl, remoteWsProtocols)
-      ws.onopen = () => {
-        remoteRetries = 0
-        console.log('[remote] host WS connected')
-        remoteStateTimer = setInterval(sendRemoteState, 2000)
-      }
-      ws.onmessage = (e) => {
-        try {
-          handleRemoteMessage(JSON.parse(e.data))
-        } catch { /* 忽略畸形消息 */ }
-      }
-      ws.onclose = (e) => {
-        if (remoteWs === ws) remoteWs = null
-        clearInterval(remoteStateTimer)
-        remoteStateTimer = null
-        // 被新 host 顶替（服务端 close code 4000）：不再重连，
-        // 否则两端会反复互踢形成踢皮球循环。这是夺权事件——静默停在 console
-        // 会让用户以为遥控还在生效，必须可见提示
-        if (e && e.code === 4000) {
-          console.warn('[remote] 已有新的 host 接管，本端停止远程控制')
-          toast('远程控制已被另一设备接管，本端已退出主机模式（刷新页面可重新接管）', 'error', 5000)
-          return
-        }
-        // 该 socket 已被更新的连接取代，不重连（新连接自己负责）
-        if (remoteWs && remoteWs !== ws) return
-        // 断线重连有上限：握手即被拒（token/Origin 不通过）时避免无限重试
-        remoteRetries++
-        if (remoteRetries > 5) {
-          // 与 4000 顶替路径对称：遥控静默失效会让用户误以为还在生效
-          console.warn('[remote] host 重连次数超限，停止重连（请检查 REMOTE_TOKEN/服务状态）')
-          toast('远程控制连接多次失败，已停止重连（刷新页面可重试）', 'error', 5000)
-          return
-        }
-        remoteReconnectTimer = setTimeout(connectRemoteHost, 3000)
-      }
-      ws.onerror = () => ws.close()
-    }
-
-    // 过滤后的歌曲列表（根据VIP显示设置）
+    // 远程控制（host 广播 + 指令执行 + 重连）收敛在 composables/useRemoteControl.js——
+    // 依赖 refs/函数定义在下方，实例化点见 updateVolume 之后
     const filteredSongs = computed(() => {
       if (showVipSongs.value) {
         return songs.value // 显示所有歌曲
@@ -1081,25 +925,7 @@ export default {
       }
     }
 
-    // 本地存储操作（全部带异常防护，脏数据不再阻断初始化）
-    const readJSON = (key, fallback = null) => {
-      try {
-        const raw = localStorage.getItem(key)
-        return raw === null ? fallback : JSON.parse(raw)
-      } catch (e) {
-        console.warn(`localStorage 读取 ${key} 失败，已重置:`, e.message)
-        return fallback
-      }
-    }
-
-    const writeJSON = (key, value) => {
-      try {
-        localStorage.setItem(key, JSON.stringify(value))
-      } catch (e) {
-        console.warn(`localStorage 写入 ${key} 失败:`, e.message)
-      }
-    }
-
+    // readJSON/writeJSON 收敛进 lib/storage.js（首页 composable 复用同一实现）
     const getRemovedDefaultPlaylists = () => {
       const removed = readJSON(REMOVED_DEFAULT_PLAYLISTS_KEY, [])
       return Array.isArray(removed) ? removed.map(String) : []
@@ -2083,75 +1909,18 @@ export default {
       }
     }
 
-    // 首页发现流：三路独立加载互不阻塞，单路失败只空自己那格；
-    // 货架渐进渲染（HomeFeed 按数组到达上架），loading 只负责「全空态」的转圈。
-    // 8s 软上限：上游挂起时不让用户盯满 15s axios 超时——先到点落失败态，
-    // 晚到的数据经响应式照常补位替换失败文案
-    let homeLoaded = false
-    const loadHomeFeed = () => {
-      if (homeLoaded) return
-      homeLoaded = true
-      homeLoading.value = true
-      const settled = Promise.allSettled([
-        musicApi.getToplists().then(list => { homeToplists.value = list.slice(0, 12) })
-      ])
-      settled.then(results => {
-        // allSettled 吞掉每路报错——留个脚印，否则全挂时控制台静默
-        results.forEach(r => {
-          if (r.status === 'rejected') console.warn('[home]', r.reason?.message || r.reason)
-        })
-        // 全空（失败/空数组）解开一次性闩锁——回到首页或网络恢复时可重试
-        if (!homeToplists.value.length) {
-          homeLoaded = false
-        }
-      })
-      Promise.race([settled, new Promise(resolve => setTimeout(resolve, 8000))])
-        .finally(() => { homeLoading.value = false })
-    }
-    // 回到首页即重试（上一趟有货则闩锁短路零成本）；断网恢复同理
-    watch(centerView, v => { if (v === 'home') loadHomeFeed() })
-    window.addEventListener('online', loadHomeFeed)
+    // 首页发现流 + 最近播放历史（懒加载闩锁、断网重试、storage 持久化）
+    // ——收敛 composables/useHomeFeed.js；centerView 等依赖均已就位
+    const {
+      homeToplists, playHistory, playlistHistory, homeLoading,
+      loadHomeFeed, recordPlayHistory, recordPlaylistHistory, restoreHistory
+    } = useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playingPlaylistId })
 
     // 歌曲播放逻辑
     // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
     // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
     // preserveContext=true 表示本次切歌属于播放队列内导航（上一首/下一首/远端点歌），
     // 沿用已有快照；默认则从当前浏览列表拍新快照。
-    // 最近播放：按 id 去重置顶、截 20 首；只存渲染/重播需要的字段，
-    // 接口原始对象（含 alia 等大字段）整只塞 storage 会撑爆配额
-    const recordPlayHistory = (song) => {
-      if (!song || song.id == null) return
-      const entry = {
-        id: song.id, name: song.name,
-        ar: song.ar || song.artists, al: song.al || song.album,
-        dt: song.dt ?? song.duration, fee: song.fee, privilege: song.privilege,
-        // B 站导入曲的播放源/歌词源字段——丢了从历史点回会退成不可播
-        bilibili: song.bilibili, neteaseId: song.neteaseId,
-        youtube: song.youtube, // YouTube 导入曲同理——丢了从历史点回会退成不可播
-        qq: song.qq // qq_<mid> 同理——播放源与词源键都在里面
-      }
-      playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
-      writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
-    }
-
-    // 最近播放的歌单：记播放上下文的归属歌单（playingPlaylistId，已在快照时锁死）。
-    // single_song_ 单曲分享是临时壳不算歌单；saved_queue_ 是用户歌单照记。
-    // 对象优先查 userPlaylists 活副本（本地歌单的 tracks 只有那里有），查不到才落 stub
-    const recordPlaylistHistory = () => {
-      const pid = playingPlaylistId.value
-      if (pid == null || isSingleSongShellId(pid)) return
-      const pl = userPlaylists.value.find(p => String(p.id) === String(pid))
-        || (String(selectedPlaylist.value?.id) === String(pid) ? selectedPlaylist.value : null)
-      if (!pl) return
-      const entry = {
-        id: pl.id, name: pl.name,
-        coverImgUrl: pl.coverImgUrl || pl.picUrl || '',
-        trackCount: pl.trackCount ?? pl.tracks?.length
-      }
-      playlistHistory.value = [entry, ...playlistHistory.value.filter(p => String(p.id) !== String(pid))].slice(0, 20)
-      writeJSON(PLAYLIST_HISTORY_STORAGE_KEY, playlistHistory.value)
-    }
-
     const playSong = async (song, options = {}) => {
       if (!song || song.id == null) return
       mediaImportSeq++ // 用户点了别的歌——同上，作废在途外部媒体解析
@@ -2470,7 +2239,7 @@ export default {
           : await metaPromise
         if (signal?.aborted || currentPlayingId !== song.id) return
 
-        lyricOffsetMs.value = meta?.data?.offsetMs ?? 0
+        lyricOffsetMs.value = meta?.offsetMs ?? 0
         lyricOwnerKey.value = lyricId // 词属主与值同源——见 lyricOwnerKey 注释
         lyrics.value = lyricsData?.lyrics || []
         currentLyricIndex.value = 0
@@ -2871,6 +2640,16 @@ export default {
       volumeSaveTimer = setTimeout(savePlayerStateToStorage, 300)
     }
 
+    // 远程控制：host 模式 state_update 广播 + 指令执行 + 断线重连。
+    // 必须放在全部依赖（refs/playbackList/updateVolume 等）定义之后实例化；
+    // 模式判定要在播放器初始化前生效——controller 分支在下方 init 里提前 return
+    const { remoteMode, remoteControllerWsUrl, remoteWsProtocols, connectRemoteHost } = useRemoteControl({
+      getHowl: () => howl,
+      isPlaying, currentSong, currentTime, duration, volume,
+      playingSongs, songSwitching, filteredSongs,
+      playSong, nextSong, previousSong, updateVolume, currentPlayingIndex, playbackList
+    })
+
     const openFullscreenPlayer = () => {
       if (!currentSong.value) return
       isFullscreenPlayerOpen.value = true // 由 watch 统一持久化
@@ -3043,16 +2822,6 @@ export default {
       fullscreenInteractionMode
     ], () => {
       savePlayerStateToStorage()
-    })
-
-    // host 模式：状态变化时立即推送
-    watch([isPlaying, currentSong, volume], () => {
-      if (remoteMode.value === 'host') sendRemoteState()
-    })
-
-    // 队列快照变更（shuffle/增删/换单）也要即时推送——2s 轮询兜底但点歌不该等
-    watch(playingSongs, () => {
-      if (remoteMode.value === 'host') sendRemoteState()
     })
 
     // 从URL参数获取歌单ID列表
@@ -3396,14 +3165,7 @@ export default {
 
       // 加载保存的歌单与最近播放历史（首页 recent/history 区块数据源）
       loadPlaylistsFromStorage()
-      const savedHistory = readJSON(PLAY_HISTORY_STORAGE_KEY)
-      if (Array.isArray(savedHistory)) {
-        playHistory.value = savedHistory.filter(s => s && s.id != null)
-      }
-      const savedPlHistory = readJSON(PLAYLIST_HISTORY_STORAGE_KEY)
-      if (Array.isArray(savedPlHistory)) {
-        playlistHistory.value = savedPlHistory.filter(p => p && p.id != null)
-      }
+      restoreHistory()
       restorePlayerState = loadPlayerStateFromStorage()
       restoreUiState(restorePlayerState)
 
@@ -3528,17 +3290,6 @@ export default {
 
     // 组件卸载：清理 WS/定时器/rAF/音频，避免泄漏与卸载后重连
     onBeforeUnmount(() => {
-      window.removeEventListener('online', loadHomeFeed)
-      remoteReconnectTimer && clearTimeout(remoteReconnectTimer)
-      remoteReconnectTimer = null
-      // onclose 被置 null 后不会再清 remoteStateTimer，这里必须手动清，否则 interval 泄漏
-      remoteStateTimer && clearInterval(remoteStateTimer)
-      remoteStateTimer = null
-      if (remoteWs) {
-        remoteWs.onclose = null
-        remoteWs.close()
-        remoteWs = null
-      }
       if (currentAbortController) {
         currentAbortController.abort()
         currentAbortController = null
