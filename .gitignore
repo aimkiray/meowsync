@@ -3,3 +3,7 @@ node_modules
 .claude/
 dist/
 data/
+*.sqlite
+*.sqlite-journal
+.agents/
+skills-lock.json
