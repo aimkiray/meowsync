@@ -525,6 +525,7 @@ export default {
       const myReq = ++searchReqId
       searching.value = true
       searchSongResults.value = []
+      searchSongQuery.value = '' // 同步清：在途旧深挖的 query 守卫即刻失效
       searchSongTotal.value = null
       try {
         const [plRes, songRes] = await Promise.allSettled([
@@ -533,7 +534,7 @@ export default {
         ])
         if (myReq !== searchReqId) return
         searchResults.value = plRes.status === 'fulfilled' ? (plRes.value.playlists || []) : []
-        searchSongResults.value = songRes.status === 'fulfilled' ? (songRes.value.songs || []) : []
+        searchSongResults.value = songRes.status === 'fulfilled' ? (songRes.value?.songs || []) : []
         searchSongQuery.value = query
         searchSongTotal.value = songRes.status === 'fulfilled' ? songRes.value.total : null
       } finally {
@@ -545,6 +546,7 @@ export default {
     // 上游翻页间结果可能漂移重叠，按 id 去重追加
     const loadMoreSearchSongs = async () => {
       const q = searchSongQuery.value
+      const myReq = searchReqId
       if (!q || searchSongTotal.value == null || searchSongLoadingMore.value) return
       if (searchSongResults.value.length >= searchSongTotal.value) return
       searchSongLoadingMore.value = true
@@ -552,15 +554,18 @@ export default {
         const { songs: more, total } = await musicApi.searchSongsPage(q, {
           limit: 20, offset: searchSongResults.value.length,
         })
-        if (searchSongQuery.value !== q) return // 新搜索已接管
+        // 双代次守卫：query 快照挡异词切换；reqId 快照挡同词重搜
+        // （同词重搜后 results 已回写首页，旧深挖再落地会造队列缺口）
+        if (searchSongQuery.value !== q || searchReqId !== myReq) return
         if (total != null) searchSongTotal.value = total
         const seen = new Set(searchSongResults.value.map(s => String(s.id)))
-        searchSongResults.value = [
-          ...searchSongResults.value,
-          ...more.filter(s => !seen.has(String(s.id))),
-        ]
+        const fresh = more.filter(s => !seen.has(String(s.id)))
+        searchSongResults.value = [...searchSongResults.value, ...fresh]
+        // 零进展灭键：上游返空页/整页撞重时 offset 原地踏步，再点必空转
+        if (!fresh.length) searchSongTotal.value = searchSongResults.value.length
       } catch (e) {
         console.warn('[search] 深挖失败:', e?.message || e)
+        toast('加载更多失败，点按重试', 'error')
       } finally {
         searchSongLoadingMore.value = false
       }

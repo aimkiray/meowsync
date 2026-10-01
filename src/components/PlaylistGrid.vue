@@ -70,7 +70,9 @@
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
         <!-- 单曲深挖：服务端翻页（cloudsearch offset+songCount）——
-             20 首封顶的时代结束；QQ 源结果（songTotal=null）不亮此键 -->
+             20 首封顶的时代结束；QQ 源结果（songTotal=null）不亮此键。
+             刻意只点按不接 IO 哨兵：每次点击=一次上游请求，
+             滚动到底自动连发会打爆上游配额/风控 -->
         <button
           v-if="songTotal != null && songs.length < songTotal"
           class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
