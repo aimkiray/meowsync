@@ -12,14 +12,19 @@ const state = reactive({
 
 let toastSeq = 0
 
+// 返回 toast id 供 toastDismiss 手动回收——长驻进度 toast（外部导入
+// 最坏分钟级）在完成后需要立即退场，不能挂着等超时
 export function toast(text, type = 'info', duration = 2600) {
   if (type === 'error') glitchBurst()
   const id = ++toastSeq
   state.toasts.push({ id, text: String(text), type })
-  setTimeout(() => {
-    const i = state.toasts.findIndex(t => t.id === id)
-    if (i !== -1) state.toasts.splice(i, 1)
-  }, duration)
+  setTimeout(() => toastDismiss(id), duration)
+  return id
+}
+
+export function toastDismiss(id) {
+  const i = state.toasts.findIndex(t => t.id === id)
+  if (i !== -1) state.toasts.splice(i, 1)
 }
 
 export function pixelConfirm(message, { confirmText = '确定', danger = false } = {}) {

@@ -7,7 +7,7 @@ const { tokenMatches } = require('../lib/token-eq');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
-const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, viewQuery, parseBvid, resolveBiliLink, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
+const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, viewQuery, resolveBiliLink, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
 
 const app = new Hono();
 
@@ -42,8 +42,10 @@ app.get('/bilibili/resolve', async (c) => {
   }
   const input = c.req.query('input') || c.req.query('bvid');
   // 收藏夹链（含 b23 跳解出来的 medialist/favlist 落地页）走歌单导入——
-  // favlist 字段带下去前端自动转 /bilibili/favlist，与 disstid 同口径
-  const link = await resolveBiliLink(input, c.req.raw.signal);
+  // favlist 字段带下去前端自动转 /bilibili/favlist，与 disstid 同口径。
+  // catch 防跳解途中同步抛（URL 构造/agent 异常）漏成裸 500——解析失败
+  // 按「无法解析」400 处理更贴用户语义
+  const link = await resolveBiliLink(input, c.req.raw.signal).catch(() => null);
   if (link?.kind === 'favlist') {
     return c.json({ code: 400, message: '这是 B 站收藏夹链接，正在为你导入歌单', favlist: link.fid }, 400);
   }
@@ -147,27 +149,38 @@ app.get('/bilibili/favlist', async (c) => {
   }
   const signal = c.req.raw.signal;
   const raw = c.req.query('input') || c.req.query('fid') || '';
-  const link = await resolveBiliLink(raw, signal);
-  // resolveBiliLink 不识别的裸数字按 fid 兜底（直达 API 用）——顶栏裸数字
-  // 走网易云歌单，到不了这里
+  const link = await resolveBiliLink(raw, signal).catch(() => null);
+  // resolveBiliLink 不识别的裸数字按 fid 兜底（resolve 重定向回喂走这条）——
+  // 顶栏裸数字走网易云歌单，到不了这里
   const fid = link?.kind === 'favlist' ? link.fid
-    : (/^\d{1,15}$/.test(raw.trim()) ? raw.trim() : null);
+    : (/^\d{1,20}$/.test(raw.trim()) ? raw.trim() : null);
   if (!fid) return c.json({ code: 400, message: '无法从输入解析收藏夹（支持 space favlist?fid=/medialist/mlN 链接）' }, 400);
   try {
     let info = null;
     let skipped = 0;
+    let exhausted = false; // 上游已见底——truncated 的权威判据（纯计数会漏报/误报）
     const tracks = [];
     for (let pn = 1; pn <= Math.ceil(FAV_MAX_ITEMS / FAV_PAGE_SIZE); pn++) {
       if (signal?.aborted) return c.body(null, 499);
-      const data = await biliFetch(
-        `/x/v3/fav/resource/list?media_id=${fid}&ps=${FAV_PAGE_SIZE}&pn=${pn}&platform=web`, signal);
+      let data;
+      try {
+        data = await biliFetch(
+          `/x/v3/fav/resource/list?media_id=${fid}&ps=${FAV_PAGE_SIZE}&pn=${pn}&platform=web`, signal);
+      } catch (e) {
+        if (!info && !tracks.length) throw e; // 首页即挂——整体失败走 catch
+        break;                                // 中途翻车：保住已扫部分按截断返回
+      }
       info = info || data?.info || null;
       const medias = Array.isArray(data?.medias) ? data.medias : [];
-      if (!medias.length) break;
+      if (!medias.length) { exhausted = true; break; }
       for (const m of medias) {
         if (tracks.length >= FAV_MAX_ITEMS) break;
-        // 非视频条目/已失效（无 bvid 或标题哨兵）跳过——计数透出给前端
-        if (m?.type !== 2 || !m.bvid || m.title === '已失效视频') { skipped++; continue; }
+        // 非视频/失效条目跳过计数透出：attr≠0 是 UP 自删/下架位
+        // （失效项标题不恒为哨兵），标题哨兵作兜底
+        if (m?.type !== 2 || !m.bvid || m.title === '已失效视频' || (m.attr ?? 0) !== 0) {
+          skipped++;
+          continue;
+        }
         tracks.push({
           bvid: m.bvid,
           cid: null,                    // cid 由播放/下载链自愈（view 兜底）
@@ -183,8 +196,13 @@ app.get('/bilibili/favlist', async (c) => {
           matchedBy: null,
         });
       }
-      const total = info?.media_count ?? tracks.length;
-      if (medias.length < FAV_PAGE_SIZE || tracks.length + skipped >= total) break;
+      // has_more 是上游权威翻页信号；缺省回落「短页即底 + 计数已扫满」
+      // 推断——media_count 缺省时按未见底继续翻（宁多打一跳不漏页）。
+      // 见底判定必须先于上限 break：恰好第 200 条就是末条时 exhausted 要置位
+      const hasMore = data?.has_more ?? (medias.length >= FAV_PAGE_SIZE
+        && (info?.media_count == null || tracks.length + skipped < info.media_count));
+      if (!hasMore) { exhausted = true; break; }
+      if (tracks.length >= FAV_MAX_ITEMS) break;
     }
     if (!info) {
       return c.json({ code: 404, message: '收藏夹不存在或不可公开访问' }, 404);
@@ -225,13 +243,18 @@ app.get('/bilibili/favlist', async (c) => {
       mediaCount: info.media_count ?? tracks.length,
       skipped,
       matchedCount,
-      truncated: tracks.length >= FAV_MAX_ITEMS,
+      truncated: !exhausted,
       tracks,
     });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
     console.error('[bilibili] favlist 失败:', e.message);
-    // 上游业务码透出（私有夹/风控有可识别的 -400/-403/112xx 形态）
+    // 上游业务码分档：-400/-403/-404 系（私有夹/不存在/无权限）对用户是
+    // 「不可访问」而非网关故障——映射 404；风控（-352/-412）等仍 502
+    const code = Number(e.message?.match(/code=(-?\d+)/)?.[1]);
+    if ([-400, -403, -404].includes(code)) {
+      return c.json({ code: 404, message: '收藏夹不存在或不可公开访问' }, 404);
+    }
     return c.json({ code: 502, message: `收藏夹获取失败: ${e.message}` }, 502);
   }
 });

@@ -326,7 +326,7 @@ import { readJSON, writeJSON } from './lib/storage'
 import { formatTime } from './lib/format'
 import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
-import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
+import { toast, toastDismiss, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
 import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
@@ -859,6 +859,7 @@ export default {
         await playSong(song)
         enterWatch()
       } catch (error) {
+        if (myReq !== mediaImportSeq) return // 过期请求的转跳/失败都不打扰用户
         // 服务端把输入解成了 QQ 歌单/B 站收藏夹（短链跳解形态前端谓词看不穿）——
         // 按结构化字段自动转歌单导入，别让"请粘到顶栏"的提示死循环。
         // resolve 重抛的 Error 经 .data 保字段，裸 axios 错走 .response.data
@@ -871,7 +872,6 @@ export default {
           importBiliFavlist(errData.favlist)
           return
         }
-        if (myReq !== mediaImportSeq) return // 过期请求的失败不打扰用户
         console.error(`❌ ${spec.tag} 导入失败:`, error)
         searchQuery.value = input // 失败还原输入——用户可直接回车重试
         toast(`${spec.tag} 导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
@@ -932,8 +932,10 @@ export default {
       selectReqId++
       const myReq = ++mediaImportSeq
       loadingSongs.value = false
+      // 先清框：导入在途期间（最坏 ~60s+）输入还在的话回车会双发吃限流桶
+      searchQuery.value = ''
+      const progressToast = toast('正在导入 B 站收藏夹…', 'info', 120000)
       try {
-        toast('正在导入 B 站收藏夹…', 'info', 120000)  // 翻页+匹配预算最坏 ~60s+
         const data = await musicApi.getBiliFavlist(input)
         if (myReq !== mediaImportSeq) return
         const tracks = (data.tracks || []).map(buildBilibiliSong)
@@ -956,7 +958,6 @@ export default {
         pl.trackCount = pl.tracks.length
         savePlaylistsToStorage()
         selectPlaylistAndShow(pl)
-        searchQuery.value = ''
         const note = [
           data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
           data.skipped ? `跳过失效 ${data.skipped}` : '',
@@ -965,7 +966,10 @@ export default {
         toast(`已导入 B 站收藏夹「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
       } catch (e) {
         if (myReq !== mediaImportSeq) return
+        searchQuery.value = input // 失败还原输入——用户可直接回车重试
         toast(`收藏夹导入失败：${e.message || '请检查链接后重试'}`, 'error', 5000)
+      } finally {
+        toastDismiss(progressToast) // 进度 toast 完成即退——stale/失败路径也收
       }
     }
 
@@ -2014,6 +2018,13 @@ export default {
         if (!list?.length) toast('没有找到相关歌曲', 'info')
       } catch (error) {
         if (mySeq !== pickerSeq || !songPickerOpen.value) return
+        // b23 短链跳解出收藏夹时服务端回 favlist 字段——点歌台无导入
+        // 落点，服务端文案「正在为你导入歌单」在此语境是误导，换指向性提示
+        const errData = error?.data || error?.response?.data
+        if (errData?.favlist) {
+          toast('这是 B 站收藏夹链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
         console.error('点歌台失败:', error)
         toast(`${action}失败: ` + (error.response?.data?.message || error.message), 'error')
       } finally {
@@ -3165,11 +3176,15 @@ export default {
       return songParam.trim()
     }
 
-    // 从URL参数获取 B 站导入标识（?bili=BVxxx 分享链）
+    // 从URL参数获取 B 站导入标识（?bili=BVxxx 分享链；收藏夹 URL/mlN 也放行，
+    // 下游 importBilibiliOrFav 自己分单曲/收藏夹——?bili=favlistURL 是
+    // 收藏夹的按引用分享通道）
     const getBiliFromUrl = () => {
       const urlParams = new URLSearchParams(window.location.search)
-      const bili = urlParams.get('bili')
-      if (!bili || !/^(BV[0-9A-Za-z]{10}|av\d+)$/i.test(bili.trim())) return null
+      const bili = urlParams.get('bili')?.trim()
+      if (!bili) return null
+      if (extractBiliFavlistId(bili)) return bili
+      if (!/^(BV[0-9A-Za-z]{10}|av\d+)$/i.test(bili)) return null
       // 分P分享链 ?bili=BV&p=N——拼回 input 串让服务端 pickPageParam 接住
       const p = /^\d+$/.test(urlParams.get('p') || '') ? Number(urlParams.get('p')) : 0
       const input = p > 1 ? `${bili.trim()}?p=${p}` : bili.trim()
