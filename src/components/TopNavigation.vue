@@ -120,7 +120,7 @@
 <script>
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
-import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId } from '../lib/url.js'
+import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, isSongmidLike } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -199,7 +199,7 @@ export default {
           emit('search-qq-pl', qqPlInPref)
           return
         }
-        if (isQQInput(kw) || (/^[0-9A-Za-z]{10,20}$/.test(kw) && /\d/.test(kw) && /[a-z]/i.test(kw))) {
+        if (isQQInput(kw) || isSongmidLike(kw)) {
           emit('search-qq', isQQInput(kw) ? kw : `qq:${kw}`)
           return
         }

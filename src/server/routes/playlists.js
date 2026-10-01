@@ -9,15 +9,13 @@ const { deletePlaylistCascade } = require('../services/download-manager');
 const { readJsonBody } = require('../lib/http-body');
 const { fail, handleError } = require('../lib/http-error');
 const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
+const { parseNumericId } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
-// 路由 :id 参数统一校验：只收纯十进制——Number() 会放过 '1e5'/'0x10'/' 3 '
+// 路由 :id 参数统一校验：只收纯十进制（实现收敛进 shared/predicates）
 function parsePlaylistId(c) {
-  const raw = c.req.param('id');
-  if (!/^\d+$/.test(raw)) return null;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
+  return parseNumericId(c.req.param('id'));
 }
 
 app.get('/playlists', (c) => {

@@ -9,16 +9,14 @@ const { getDb } = require('../db/client');
 const { readJsonBody } = require('../lib/http-body');
 const { fail, handleError, httpError } = require('../lib/http-error');
 const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
+const { MIRROR_PLAYLIST_ID_RE, parseNumericId } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
 // 路由 :id 参数统一校验：只收纯十进制数字——Number() 会放过 '1e5'/'0x10'/' 3 '
-// 这类脏输入，parseInt 又会截断 '12abc'，两者都得拦
+// 这类脏输入，parseInt 又会截断 '12abc'，两者都得拦（实现收敛进 shared/predicates）
 function parseIdParam(c, name = 'id') {
-  const raw = c.req.param(name);
-  if (!/^\d+$/.test(raw)) return null;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
+  return parseNumericId(c.req.param(name));
 }
 
 
@@ -310,7 +308,7 @@ app.post('/downloads/local/mirror', async (c) => {
     // ~400 曲处截死整个歌单
     const body = await readJsonBody(c, 8 * 1024 * 1024);
     const localId = String(body.localId || '').trim();
-    if (!/^(local_pl_|saved_queue_)[\w-]{1,64}$/.test(localId)
+    if (!MIRROR_PLAYLIST_ID_RE.test(localId)
         || localId.length > LOCAL_MIRROR_ID_MAX) {
       return fail(c, 400, '无效的本地歌单 ID');
     }
@@ -378,7 +376,7 @@ app.post('/downloads/local/mirror', async (c) => {
 app.delete('/downloads/local/mirror/:localId', async (c) => {
   try {
     const localId = String(c.req.param('localId') || '').trim();
-    if (!/^(local_pl_|saved_queue_)[\w-]{1,64}$/.test(localId)
+    if (!MIRROR_PLAYLIST_ID_RE.test(localId)
         || localId.length > LOCAL_MIRROR_ID_MAX) {
       return fail(c, 400, '无效的本地歌单 ID');
     }

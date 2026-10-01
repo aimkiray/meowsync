@@ -1,26 +1,15 @@
 const { tokenMatches } = require('../lib/token-eq');
 const { WebSocketServer } = require('ws');
+// 控制面契约与共享表对齐（src/shared/protocol.js）——controller/host 三端同源
+const { CONTROL_TYPES, CONTROL_PAYLOAD_GUARDS, REMOTE_LIMITS } = require('../../shared/protocol.js');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
-const MAX_PAYLOAD_BYTES = 64 * 1024;
-const MAX_CONTROLLERS = 32;
+const MAX_PAYLOAD_BYTES = REMOTE_LIMITS.MAX_PAYLOAD_BYTES;
+const MAX_CONTROLLERS = REMOTE_LIMITS.MAX_CONTROLLERS;
 // 每连接消息限流：controller 只在点按时发消息；host 峰值在音量拖动——
 // watch 逐帧推 state_update，高刷屏下可达 ~144/s，host 桶取 200 留足余量
 const HOST_MSG_PER_SEC = 200;
 const CONTROLLER_MSG_PER_SEC = 30;
-const CONTROL_TYPES = new Set(['play', 'pause', 'next', 'prev', 'seek', 'volume', 'play_song']);
-// controller→host 的 payload 形状校验：type 白名单之外再核形状，畸形直接丢
-// （host 端的 seek/volume 数值校验是最终防线，但先把垃圾挡在转发路径上）
-const CONTROL_PAYLOAD_GUARDS = {
-  play: (p) => p === undefined || p === null,
-  pause: (p) => p === undefined || p === null,
-  next: (p) => p === undefined || p === null,
-  prev: (p) => p === undefined || p === null,
-  seek: (p) => typeof p === 'number' && Number.isFinite(p),
-  volume: (p) => typeof p === 'number' && Number.isFinite(p),
-  play_song: (p) => (typeof p === 'string' && p.length <= 128)
-    || (typeof p === 'number' && Number.isSafeInteger(p))
-};
 
 let hostSocket = null;
 const controllers = new Set();
