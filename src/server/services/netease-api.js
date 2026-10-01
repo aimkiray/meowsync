@@ -40,7 +40,7 @@ try {
 }
 // 先加载补丁再引入库：库内 request() 的每次出站连接经 guarded lookup
 // 强校验公网 IP（match() 内部探测请求是盲 SSRF 面，补丁幂等可重复加载）
-require('../../lib/patch-unm-request');
+require('../lib/patch-unm-request');
 const unblockmatch = require('@unblockneteasemusic/server');
 
 // 试听版判定阈值：上游返回的 url 时长不超过 60s 视为试听片段

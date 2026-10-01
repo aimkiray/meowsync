@@ -3,6 +3,7 @@ const { apiModules, callNeteaseApi, resolveSongUrls } = require('../services/net
 // 流式限长读取：Content-Length 只是声明值，chunked 请求必须读流按字节截断
 const { readParamsBody } = require('../lib/http-body');
 const { stripAbsolutePaths } = require('../lib/sanitize');
+const { trustProxyEnabled } = require('../lib/env');
 
 const app = new Hono();
 
@@ -56,7 +57,7 @@ const NETEASE_COOKIE_KEYS = new Set([
 // c.req.url 由 @hono/node-server 基于 Host 头与 socket 加密状态构建（Host 是客户端实际拨号的地址）
 function requestOrigin(c) {
   const url = new URL(c.req.url);
-  const trustProxy = ['1', 'true'].includes((process.env.TRUST_PROXY || '').toLowerCase());
+  const trustProxy = trustProxyEnabled();
   const fwdProto = trustProxy ? c.req.header('x-forwarded-proto') : null;
   const fwdHost = trustProxy ? c.req.header('x-forwarded-host') : null;
   const proto = (fwdProto || url.protocol.replace(':', '')).split(',')[0].trim();

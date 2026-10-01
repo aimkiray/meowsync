@@ -1,8 +1,8 @@
 const { Hono } = require('hono');
-const { normalizeOutboundUrl } = require('../lib/net-guard');
-const { isAllowedHost, streamVault } = require('./proxy');
+const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
+const streamVault = require('../lib/stream-vault');
 const { rateLimit } = require('../lib/rate-limit');
-const { matchNeteaseSong } = require('../lib/netease-match');
+const { matchNeteaseSong } = require('../services/netease-match');
 const { extractYouTubeId } = require('../../shared/predicates.js');
 
 const app = new Hono();

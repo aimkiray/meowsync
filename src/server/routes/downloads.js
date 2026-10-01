@@ -1,14 +1,13 @@
 const { Hono } = require('hono');
 const downloadManager = require('../services/download-manager');
+const { mirrorLocalPlaylist } = require('../services/local-mirror');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 const playlistsRepo = require('../repositories/playlists');
-const playlistTracksRepo = require('../repositories/playlistTracks');
-const { getDb } = require('../db/client');
 // 读流按字节硬截断：chunked/无 Content-Length 请求不会被声明值检查拦住
 const { readJsonBody } = require('../lib/http-body');
-const { fail, handleError, httpError } = require('../lib/http-error');
-const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
+const { fail, handleError } = require('../lib/http-error');
+const { isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
 const { MIRROR_PLAYLIST_ID_RE, parseNumericId } = require('../../shared/predicates.js');
 
 const app = new Hono();
@@ -341,30 +340,10 @@ app.post('/downloads/local/mirror', async (c) => {
     const truncated = numeric.length - tracks.length;
     if (!tracks.length) return fail(c, 400, `没有可下载的歌曲（跳过 ${skipped} 首不支持下载的曲目）`);
     const name = String(body.name || '本地歌单').slice(0, 200);
-    // upsert + 整表替换必须同事务（upsertPlaylist 自注"独立调用不保证原子"）；
-    // 内容签名（id:name 序列）未变时跳过 DELETE+INSERT——行级下载每首都重镜像，
-    // 无短路会是 O(N) 写放大
-    const db = getDb();
-    const pl = db.transaction(() => {
-      const row = playlistsRepo.upsertPlaylist({
-        neteasePlaylistId: localId,
-        name,
-        coverImgUrl: String(body.coverImgUrl || '').slice(0, 500),
-        creatorNickname: '本地歌单',
-        trackCount: tracks.length,
-        source: 'local'
-      });
-      if (!row) throw httpError(500, '镜像歌单写入失败');
-      // 墓碑前置检查后，本地 id 级联拿的新行仍可能正被删——事务内复查
-      if (deletingPlaylists.has(row.id)) throw httpError(409, '该歌单正在删除中');
-      // mediaMid 入签名：老镜像（无 qq 字段）重传时触发一次重写补写 provider 元数据
-      const sigOf = (t) => `${t.id}:${t.name}:${t.dt || 0}:${t.qq?.mediaMid || ''}`;
-      const existing = playlistTracksRepo.listTracksByPlaylistId(row.id);
-      const unchanged = existing.length === tracks.length
-        && existing.every((t, i) => sigOf(t) === sigOf(tracks[i]));
-      if (!unchanged) playlistTracksRepo.replaceTracksForPlaylist(row.id, tracks);
-      return row;
-    })();
+    // 落库事务收敛在 services/local-mirror.js（upsert+整表替换原子性、
+    // 内容签名短路、墓碑复查都在那层）
+    const pl = mirrorLocalPlaylist(localId, name,
+      String(body.coverImgUrl || '').slice(0, 500), tracks);
     return c.json({ code: 200, data: { playlistId: pl.id, mirrored: tracks.length, skipped, truncated } });
   } catch (error) {
     return handleError(c, error, '本地歌单镜像失败');

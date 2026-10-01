@@ -1,8 +1,8 @@
 const { Hono } = require('hono');
 const { tokenMatches } = require('../lib/token-eq');
 const { rateLimit } = require('../lib/rate-limit');
-const { streamVault } = require('./proxy');
-const { matchNeteaseSong } = require('../lib/netease-match');
+const streamVault = require('../lib/stream-vault');
+const { matchNeteaseSong } = require('../services/netease-match');
 const {
   hasQqCookie, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
   getSongDetail, pickStreamUrl, getLyric, getPlaylist, searchSongs,

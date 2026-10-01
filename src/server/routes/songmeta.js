@@ -1,5 +1,5 @@
 const { Hono } = require('hono');
-const { getDb } = require('../db/client');
+const songMetaRepo = require('../repositories/songLyricMeta');
 const { readJsonBody } = require('../lib/http-body');
 
 const app = new Hono();
@@ -17,10 +17,7 @@ app.get('/song-meta/:id', (c) => {
   if (!SONG_ID_RE.test(id)) {
     return c.json({ code: 400, message: '非法 songId' }, 400);
   }
-  const row = getDb()
-    .prepare('SELECT offset_ms FROM song_lyric_meta WHERE song_id = ?')
-    .get(id);
-  return c.json({ code: 200, songId: id, offsetMs: row?.offset_ms ?? 0 });
+  return c.json({ code: 200, songId: id, offsetMs: songMetaRepo.getOffsetMs(id) });
 });
 
 // PUT /song-meta/:id  {offsetMs} —— 绝对值 upsert（客户端防抖后只发终值，
@@ -46,16 +43,10 @@ app.put('/song-meta/:id', async (c) => {
   if (!Number.isSafeInteger(offsetMs) || Math.abs(offsetMs) > MAX_OFFSET_MS) {
     return c.json({ code: 400, message: 'offsetMs 须为 ±300000 内的整数' }, 400);
   }
-  const db = getDb();
   if (offsetMs === 0) {
-    db.prepare('DELETE FROM song_lyric_meta WHERE song_id = ?').run(id);
+    songMetaRepo.deleteOffsetMs(id);
   } else {
-    db.prepare(`
-      INSERT INTO song_lyric_meta (song_id, offset_ms, updated_at)
-      VALUES (?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(song_id) DO UPDATE SET
-        offset_ms = excluded.offset_ms, updated_at = excluded.updated_at
-    `).run(id, offsetMs);
+    songMetaRepo.upsertOffsetMs(id, offsetMs);
   }
   return c.json({ code: 200, songId: id, offsetMs });
 });

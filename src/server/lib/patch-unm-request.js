@@ -17,7 +17,7 @@
 const Module = require('module');
 const path = require('path');
 const net = require('net');
-const { makeGuardedLookup, isPrivateIp, stripIpv6Brackets } = require('../server/lib/net-guard');
+const { makeGuardedLookup, isPrivateIp, stripIpv6Brackets } = require('./net-guard');
 
 if (!global.__meowsyncUnmRequestPatched) {
   global.__meowsyncUnmRequestPatched = true;
@@ -27,7 +27,7 @@ if (!global.__meowsyncUnmRequestPatched) {
     reqPath = require.resolve('@unblockneteasemusic/server/src/request.js');
   } catch {
     reqPath = path.resolve(
-      __dirname, '../../node_modules/@unblockneteasemusic/server/src/request.js'
+      __dirname, '../../../node_modules/@unblockneteasemusic/server/src/request.js'
     );
   }
   const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);

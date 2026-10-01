@@ -4,12 +4,12 @@ const path = require('path');
 // 加载环境变量
 require('dotenv').config();
 
-const { ensureAnonymousToken } = require('./src/lib/init-anonymous-token');
+const { ensureAnonymousToken } = require('./src/server/lib/init-anonymous-token');
 ensureAnonymousToken();
 
 // 补丁：修复 migu 源（必须在 require unblockneteasemusic 之前）
-require('./src/lib/patch-migu');
-require('./src/lib/patch-unm-request');
+require('./src/server/lib/patch-migu');
+require('./src/server/lib/patch-unm-request');
 
 const { serve } = require('@hono/node-server');
 const { serveStatic } = require('@hono/node-server/serve-static');
