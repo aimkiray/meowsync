@@ -23,8 +23,11 @@ export const BVID_RE = /^BV1[0-9A-Za-z]{9}$/i;
 // 文本中抽取 bvid 的宽松形（含前后文容忍，服务端解析 href 用）
 export const BVID_IN_TEXT_RE = /BV1[0-9A-Za-z]{9}/i;
 export const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
-// 网易云 id：纯十进制
+// 网易云 id：纯十进制；BOUNDED 是给入参校验的 20 位上限形态
 export const NETEASE_ID_RE = /^\d+$/;
+export const NETEASE_ID_BOUNDED_RE = /^\d{1,20}$/;
+// qq_<songmid> 本站轨道 id（捕获组取裸 mid——ai.js/file-downloader 用）
+export const QQ_SONG_ID_RE = /^qq_([0-9A-Za-z]{10,20})$/;
 
 // 本地歌单 id 前缀族
 // - single_song_*：单曲分享临时壳
