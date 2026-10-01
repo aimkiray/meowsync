@@ -35,7 +35,11 @@ async function probeGated(url, signal) {
     return false;
   } catch (e) {
     if (signal?.aborted) throw e;
-    if (e?.fatal && e.message === '上游返回 403') return true;
+    // 按机读状态码判（fetchStream 在 err.upstreamStatus 上挂的）——
+    // 403=闸控；416=探针越过 EOF 但 Range 通道畅通，恰证明未闸（短文件
+    // 场景），归 null 会让短流每次请求都白打探测
+    if (e?.upstreamStatus === 403) return true;
+    if (e?.upstreamStatus === 416) return false;
     return null;
   }
 }
@@ -188,20 +192,32 @@ app.get('/youtube/stream', async (c) => {
 
     // SABR 闸控探测（结果缓存）：被闸的视频换 VISIONOS 客户端重解——
     // 同一批自适应流它签的 URL 完全不受限，能放回真最高档（实测 itag251
-    // 全量 200）。只有确定性判定（2xx/403）才写缓存——超时/断连等
-    // 无定论结果落缓存会把一次抖动放大成 30min 的误判
-    let gate = gateCache.get(videoId);
+    // 全量 200）。只有确定性判定（2xx/403/416）才写缓存——超时/断连等
+    // 无定论结果落缓存会把一次抖动放大成 30min 的误判。
+    // 探测目标限定自适应流：pickStreamList('video') 在缺 avc1 时会回落
+    // progressive——那恰是闸控下畅通的物料，探它只能得假阴。
+    // 且必须挑够长的流（最大 contentLength）：小档全长可能 < 探针起点
+    // 2MiB，越界得 416 会被误判成「未闸」（实测 itag139 全长 ~1.5MB）
+    const probeTarget = (Array.isArray(sd?.adaptiveFormats) ? sd.adaptiveFormats : [])
+      .filter(f => typeof f?.url === 'string' && f.url
+        && (f.mimeType || '').startsWith(kind === 'video' ? 'video/' : 'audio/'))
+      .sort((a, b) => (parseInt(b.contentLength) || 0) - (parseInt(a.contentLength) || 0))
+      .map(f => f.url)
+      .find(u => {
+        const chk = normalizeOutboundUrl(u);
+        return chk.ok && isAllowedHost(chk.url.hostname);
+      });
     let gated = null;
+    const gate = gateCache.get(videoId);
     if (gate && Date.now() - gate.ts <= GATE_TTL_MS) {
       gated = gate.gated;
-    } else if (streams.length) {
-      gated = await probeGated(streams[0].url, c.req.raw.signal);
+    } else if (probeTarget) {
+      gated = await probeGated(probeTarget, c.req.raw.signal);
       if (gated !== null) {
-        gate = { gated, ts: Date.now() };
         if (gateCache.size >= GATE_CACHE_MAX) {
           gateCache.delete(gateCache.keys().next().value);
         }
-        gateCache.set(videoId, gate);
+        gateCache.set(videoId, { gated, ts: Date.now() });
       }
     }
     if (gated) {
@@ -231,6 +247,9 @@ app.get('/youtube/stream', async (c) => {
     if (!urls.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
+    // 探测/升级段的最后一个 await 与写响应之间仍可能断连——302 打死 socket
+    // 前再查一次（与 /resolve 的 134 行同口径）
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     // vault token 化——googlevideo 链 ip= 即本机出口地址，不下发给访客
     return c.redirect(`/audio-proxy/t/${streamVault.mint(urls)}`, 302);
   } catch (e) {

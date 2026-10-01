@@ -228,7 +228,11 @@ async function fetchStream(rawUrl, { timeout, signal, headers }) {
       // 4xx（除 429）对该 URL 是确定性失败：重试三次白打上游。5xx/429/超时保留可重试
       const status = error.response?.status;
       if (status >= 400 && status < 500 && status !== 429) {
-        throw fatalError(`上游返回 ${status}`);
+        // upstreamStatus 挂状态码——跨模块消费者（如 routes/youtube 的
+        // 闸控探测）按码判定，不耦合 message 文案
+        const err = fatalError(`上游返回 ${status}`);
+        err.upstreamStatus = status;
+        throw err;
       }
       throw errnoToFatal(error);
     }
@@ -444,7 +448,9 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
       throw fatalError(`${bvM ? 'B 站' : 'YouTube'} 无可下载音轨`);
     }
     // mkdir 提到候选循环外：ENOSPC/EACCES 这类确定性 errno 若在 try 内会
-    // 因无 fatal 标记而遍历所有候选空转——放外面直接穿透到顶层 errnoToFatal
+    // 因无 fatal 标记而遍历所有候选空转——放外面直接穿透到顶层 errnoToFatal。
+    // 先查 abort：resolve 返回与 mkdir 之间的取消窗口不该复活已清扫的目录骨架
+    throwIfAborted(signal);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     for (const cand of lists.adaptive) {
       throwIfAborted(signal);
@@ -557,16 +563,17 @@ function ffmpegMux(videoPath, audioPath, outPath, signal) {
     child.on('error', (e) => { signal?.removeEventListener('abort', onAbort); reject(e); });
     child.on('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
-      if (signal?.aborted) {
-        const e = new Error('已取消');
-        e.aborted = true;
-        return reject(e);
-      }
       const fail = (err) => {
         // reject 路径清 .mux 半截——别让残片活到下次启动 reap
         try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
         reject(err);
       };
+      if (signal?.aborted) {
+        // abort 也走 fail——SIGKILL 中途正是最可能留半截 .mux 的路径
+        const e = new Error('已取消');
+        e.aborted = true;
+        return fail(e);
+      }
       if (code !== 0) return fail(new Error(`ffmpeg 合流失败(${code}): ${errTail || '无输出'}`));
       try {
         fs.renameSync(muxPath, outPath);
@@ -594,15 +601,15 @@ function ffmpegExtractAudio(inPath, outPath, signal) {
     child.on('error', (e) => { signal?.removeEventListener('abort', onAbort); reject(e); });
     child.on('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
-      if (signal?.aborted) {
-        const e = new Error('已取消');
-        e.aborted = true;
-        return reject(e);
-      }
       const fail = (err) => {
         try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
         reject(err);
       };
+      if (signal?.aborted) {
+        const e = new Error('已取消');
+        e.aborted = true;
+        return fail(e);
+      }
       if (code !== 0) return fail(new Error(`ffmpeg 抽轨失败(${code}): ${errTail || '无输出'}`));
       try {
         fs.renameSync(muxPath, outPath);
@@ -670,9 +677,14 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
       continue;
     }
     lastMedia = media;
+    throwIfAborted(signal);
     const videoDir = path.dirname(outputPath);
     fs.mkdirSync(videoDir, { recursive: true });
-    if (FFMPEG_OK && media.videos.length) {
+    if (FFMPEG_OK && media.videos.length && !media.audios.length) {
+      // 音轨表为空时逐候选白下整段视频注定在合流前抛——记语义错误
+      // 直接换下一轮/相位（下一轮重解可能拿到带音轨的批）
+      lastErr = lastErr || new Error('该视频无可用音轨，无法合流');
+    } else if (FFMPEG_OK && media.videos.length) {
       // 音轨跨视频候选复用——换视频档重下音轨是纯浪费
       let audioTmp = null;
       try {
