@@ -3,6 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllowedHost } = require('../lib/net-guard');
+const streamVault = require('../lib/stream-vault');
 const { aiEnabled, askAiJson } = require('../lib/ai');
 
 // NeteaseCloudMusicApi 安装路径经 require.resolve 解析，避免依赖 process.cwd()/__dirname 布局
@@ -332,12 +333,13 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             if (!checked?.ok) continue;
             if (!(await resolvesToPublicIp(checked.url.hostname))) continue;
 
-            // 会被包进 /audio-proxy 的回链（playback + http/ytdlp）必须过代理
-            // 白名单预筛——qq sip 偶发裸 IP/非音乐 tc.qq.com 子域，过了公网校验
-            // 却会在代理层 403，产出缓存 60s 的死链并阻断后续可用源。
+            // 会被包进 /audio-proxy 的回链必须过代理白名单预筛——否则产出
+            // "已解析却 403"的死链并缓存 60s。qq 源必须算在内：其 https purl
+            // 明文带 uin/vkey 且 vkey 绑本机 IP，不代理既是凭据泄露又必然 403；
+            // sip 偶发裸 IP/非音乐 tc.qq.com 子域同样挡下。
             // purpose='download' 不受此限（fetchStream 不走白名单通道）
             const willProxy = purpose === 'playback' && !!proxyOrigin
-              && (source === 'ytdlp' || checked.url.protocol === 'http:');
+              && (source === 'ytdlp' || source === 'qq' || checked.url.protocol === 'http:');
             if (willProxy && !isProxyAllowedHost(checked.url.hostname)) continue;
 
             // kuwo 已退化为 ~11s 预览剪辑，时长校验是拒收它的唯一机制——
@@ -379,9 +381,11 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         // 用归一化后的协议判定——原始串 startsWith 会被大写 scheme 绕过
         const isHttp = resolved.url.toLowerCase().startsWith('http:');
         const useProxy = purpose === 'playback' && !!proxyOrigin
-          && (resolved.source === 'ytdlp' || isHttp);
+          && (resolved.source === 'ytdlp' || resolved.source === 'qq' || isHttp);
+        // 代理面统一经 vault token——解锁回链可能带上游凭据（qq purl uin/vkey、
+        // googlevideo ip=），明文嵌进 JSON 等于把运营者凭据发给每个访客
         item.url = useProxy
-          ? `${proxyOrigin}/audio-proxy?url=${encodeURIComponent(resolved.url)}`
+          ? `${proxyOrigin}/audio-proxy/t/${streamVault.mint(resolved.url)}`
           : resolved.url;
         item.unblocked = true;
         item.unblockedSource = resolved.source;

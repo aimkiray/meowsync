@@ -22,10 +22,6 @@ const QQ_TIER_BR = { RS01: null, F000: null, M800: 320000, M500: 128000, C400: 9
 // 省流量档，不给拉无损；>=320k（含默认）走完整档梯，归档取最优
 const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADDER);
 
-// 选链与 routes/qq.js 共用 lib/qq.js pickStreamUrl（宿主校验/mediaMid 回填一份实现）
-const qqPickStreamUrl = (mid, signal, bitrate) =>
-  qq.pickStreamUrl(mid, { ladder: qqLadderFor(bitrate), signal });
-
 // LRC 译文合并：同刻时间戳的译文行插到原文行后（标准合并格式）；
 // 译文无对应时间戳的孤儿行丢弃——贴错行比没译文更糟。
 // 键归一到毫秒：lrc [00:01.23] 与 trans [00:01.230] 精度/补零不同
@@ -362,12 +358,19 @@ function pathWithExt(outputPath, ext) {
   return outputPath.replace(/\.[a-z0-9]+$/i, `.${ext}`);
 }
 
-async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal) {
+// providerData：任务行快照的源私有字段（{qq:{mediaMid}}）——mediaMid 是 vkey
+// filename 键，带了可省一次注定失败的 vkey 空调用 + detail 回填往返；
+// 缺省/过期都安全，pickStreamUrl 内部仍兜底
+async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal, providerData) {
   try {
     // qq_<songmid> 分发：QQ 源直链（BEST 档梯）→ 同一条 fetchStream 守卫管线
     const qqM = String(songId).match(QQ_ID_RE);
     if (qqM) {
-      const hit = await qqPickStreamUrl(qqM[1], signal, bitrate);
+      const hit = await qq.pickStreamUrl(qqM[1], {
+        mediaMid: providerData?.qq?.mediaMid || '',
+        ladder: qqLadderFor(bitrate),
+        signal
+      });
       if (!hit) throw fatalError('QQ 音乐无可用音源（可能需要 VIP 权限或地域限制）');
       throwIfAborted(signal);
       const finalPath = pathWithExt(outputPath, qq.QUALITY_TIERS[hit.tier]?.ext || 'm4a');

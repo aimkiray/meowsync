@@ -68,6 +68,9 @@ const DOWNLOAD_TASK_COLUMNS = {
   cover_path: 'TEXT',
   bitrate: 'INTEGER DEFAULT 320000',
   file_size: 'INTEGER',
+  // 源私有履约数据快照（Music Assistant provider_mappings.details 同思路）：
+  // qq 的 mediaMid（vkey filename 键）等——opaque blob，下载协程原样取用
+  provider_data: 'TEXT',
   duration_ms: 'INTEGER',
   completed_at: 'TEXT',
   created_at: 'TEXT',

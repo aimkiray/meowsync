@@ -20,6 +20,7 @@
       @search-yt="importYouTube"
       @search-qq="importQQ"
       @search-qq-pl="importQQPlaylist"
+      @search-qq-songs="handleQQSongSearch"
     />
 
     <div class="app-body">
@@ -301,7 +302,8 @@ import { downloadsApi } from './api/downloads'
 import { aiApi } from './api/ai'
 import { resolveApiBaseUrl } from './lib/api-base'
 import { formatTime } from './lib/format'
-import { isVipSong, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
+import { isVipSong, isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from './lib/song'
+import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
 import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractNeteaseSongId, extractYouTubeId } from './lib/url'
@@ -569,7 +571,8 @@ export default {
       if (showVipSongs.value) {
         return songs.value // 显示所有歌曲
       } else {
-        return songs.value.filter(song => !isVipSong(song)) // 隐藏VIP歌曲
+        // 隐藏"VIP 且不可播"：qq payPlay 在服务端有 VIP cookie 时实际可播
+        return songs.value.filter(song => !isVipUnplayable(song, serverCaps.value))
       }
     })
     
@@ -662,6 +665,25 @@ export default {
         if (myReq !== searchReqId) return
         searchResults.value = plRes.status === 'fulfilled' ? (plRes.value.playlists || []) : []
         searchSongResults.value = songRes.status === 'fulfilled' ? (songRes.value || []) : []
+      } finally {
+        if (myReq === searchReqId) searching.value = false
+      }
+    }
+
+    // qq: 关键词 → QQ 曲库搜索：结果与网易云单曲共用 songs 结果区
+    // （qq_ 曲对象的播放/下载/分享链与列表渲染已兼容）
+    const handleQQSongSearch = async (kw) => {
+      previewSeq++
+      centerView.value = 'search'
+      pushNavState()
+      const myReq = ++searchReqId
+      searching.value = true
+      searchResults.value = []
+      searchSongResults.value = []
+      try {
+        const list = await musicApi.searchQQSongs(kw)
+        if (myReq !== searchReqId) return
+        searchSongResults.value = (list || []).map(buildQQSong)
       } finally {
         if (myReq === searchReqId) searching.value = false
       }
@@ -1901,7 +1923,8 @@ export default {
               return
             } catch { /* mid 形态的关键词——resolve 失败按搜索处理 */ }
           }
-          const list = await musicApi.searchQQSongs(kw)
+          if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
+          const list = await musicApi.searchQQSongs(kw, pickerAbort.signal)
           if (mySeq !== pickerSeq || !songPickerOpen.value) return
           songPickerResults.value = (list || []).map(buildQQSong)
           if (!songPickerResults.value.length) toast('QQ 音乐没有找到相关歌曲', 'info')
@@ -3362,6 +3385,7 @@ export default {
       }
 
       setupMediaSessionHandlers()
+      loadServerCaps() // 源凭据状态（qq loggedIn 等）——VIP 可见性等判定消费，无需 await
 
       // 启动远程控制 host 连接
       if (remoteMode.value === 'host') {

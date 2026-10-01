@@ -354,6 +354,7 @@ async function createDownloadQueue(playlistId, options = {}) {
         album: albumName,
         coverUrl,
         bitrate: queue.bitrate,
+        providerData: track.qq ? { qq: { mediaMid: track.qq.mediaMid } } : null,
         durationMs: track.dt || track.duration || 0,
         downloadAudio: queue.downloadAudio,
         downloadLyrics: queue.downloadLyrics,
@@ -841,7 +842,8 @@ async function processTask(task, queueId, signal) {
           audioPath,
           task.bitrate,
           (progress) => reportProgress(totalProgress + Math.floor(progress * weights.audio / 100)),
-          signal
+          signal,
+          task.providerData
         );
         // 落盘后时长对账：HEAD 探测失败时解锁端校验会漏放预览剪辑——
         // 真实字节数+真实码率是最后一道闸门（只查"短"，见 durationLooksTruncated）
@@ -1468,6 +1470,7 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       album: albumName,
       coverUrl,
       bitrate: options.bitrate || 320000,
+      providerData: track.qq ? { qq: { mediaMid: track.qq.mediaMid } } : null,
       durationMs: track.dt || track.duration || 0,
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,

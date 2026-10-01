@@ -1,6 +1,7 @@
 const { Hono } = require('hono');
 const { createHash, timingSafeEqual } = require('crypto');
 const { rateLimit } = require('../lib/rate-limit');
+const { streamVault } = require('./proxy');
 const { matchNeteaseSong } = require('../lib/netease-match');
 const {
   hasQqCookie, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
@@ -38,6 +39,11 @@ const pickStream = (mid, mediaMid, prefer, extraSignal) =>
     mediaMid, signal: extraSignal,
     ladder: prefer === 'best' ? BEST_LADDER : PLAY_LADDER,
   });
+
+// 凭据状态透出（MA provider status 同款只读事实）：前端据此调整 VIP 曲的
+// 可播性判定——配了 VIP cookie 的部署里 payPlay 曲实际可播。只回布尔
+// 枚举不回任何凭据本体
+app.get('/qq/status', (c) => c.json({ code: 200, loggedIn: hasQqCookie() }));
 
 app.get('/qq/resolve', async (c) => {
   if (!rateLimit(c, 'qq-resolve', 12)) {
@@ -117,7 +123,8 @@ app.get('/qq/stream', async (c) => {
     if (!hit) {
       return c.json({ code: 404, message: '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）' }, 404);
     }
-    return c.redirect(`/audio-proxy?url=${encodeURIComponent(hit.url)}`, 302);
+    // 经 vault 换 opaque token——purl 明文带 uin/vkey/guid，不进 Location/前端可见面
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(hit.url)}`, 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] stream 失败:', e.message);

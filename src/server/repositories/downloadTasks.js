@@ -26,8 +26,15 @@ function mapTaskRow(row) {
     durationMs: row.duration_ms,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    completedAt: row.completed_at
+    completedAt: row.completed_at,
+    providerData: parseProviderData(row.provider_data)
   };
+}
+
+// provider_data 是源私有 JSON blob——坏数据只让该字段缺省，不炸任务行
+function parseProviderData(raw) {
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 function createTask(input) {
@@ -38,11 +45,11 @@ function createTask(input) {
     INSERT INTO download_tasks (
       playlist_id, queue_id, song_id, song_name, artist, album, cover_url,
       status, progress, download_audio, download_lyrics, download_cover,
-      bitrate, duration_ms, created_at, updated_at
+      bitrate, duration_ms, provider_data, created_at, updated_at
     ) VALUES (
       @playlist_id, @queue_id, @song_id, @song_name, @artist, @album, @cover_url,
       @status, @progress, @download_audio, @download_lyrics, @download_cover,
-      @bitrate, @duration_ms, @created_at, @updated_at
+      @bitrate, @duration_ms, @provider_data, @created_at, @updated_at
     )
   `).run({
     playlist_id: input.playlistId,
@@ -59,6 +66,7 @@ function createTask(input) {
     download_cover: input.downloadCover ? 1 : 0,
     bitrate: input.bitrate || 320000,
     duration_ms: input.durationMs || 0,
+    provider_data: input.providerData ? JSON.stringify(input.providerData) : null,
     created_at: now,
     updated_at: now
   });

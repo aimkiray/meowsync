@@ -1,6 +1,7 @@
 const { Hono } = require('hono');
 const { Agent } = require('undici');
 const { rateLimit } = require('../lib/rate-limit');
+const streamVault = require('../lib/stream-vault');
 // 私网/保留段判定、DNS 解析校验与代理白名单都抽在 src/server/lib/net-guard.js，
 // 与 file-downloader/netease-api（选源预筛）共用同一份实现
 const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllowedHost } = require('../lib/net-guard');
@@ -15,16 +16,10 @@ const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
 
-// 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
-app.get('/audio-proxy', async (c) => {
-  // 全站唯一"任意人可让服务器代发大流量"的端点——白名单域也是开放中转面，
-  // 补 per-IP 限流（一次播放=1 次请求，seek 重试量级小，300/min 宽裕）
-  if (!rateLimit(c, 'audio-proxy', 300)) {
-    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
-  }
-  let targetUrl = c.req.query('url');
-  if (!targetUrl) return c.json({ code: 400, message: 'missing url' }, 400);
-
+// 逐跳回源管线：白名单→公网IP→钉扎建连→302 手动跟随（每跳重验）。两个入口共用：
+// /audio-proxy?url=（显式 URL，开放中转面）与 /audio-proxy/t/:token（vault 查出的
+// 上游签名 URL——QQ purl/B 站 baseUrl/googlevideo 链不出进程，客户端只见 token）
+async function proxyUpstream(c, targetUrl) {
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
     // 协议/端口/credentials/FQDN 尾点与下载路径共用同一归一化（net-guard）：
     // http/https 都放——HTTP 部署下 kuwo/官方链多是 http，浏览器直连又死在
@@ -135,6 +130,8 @@ app.get('/audio-proxy', async (c) => {
       // Accept-Ranges 只在上游真实声明时透传——上游不支持却还回 'bytes'
       // 会让浏览器误判可断点续传，发出 Range 请求后被上游无视又回 200
       'Access-Control-Allow-Origin': '*',
+      // 音频子资源不需要 Referer 链——顺手掐断页面 URL 外溢的通道
+      'Referrer-Policy': 'no-referrer',
       // 白名单域回 text/html 时会以本服务 origin 渲染（借可信域钓鱼）——
       // nosniff 阻 MIME 猜测，sandbox 阻脚本执行
       'X-Content-Type-Options': 'nosniff',
@@ -162,9 +159,34 @@ app.get('/audio-proxy', async (c) => {
   }
 
   return c.json({ code: 502, message: 'too many redirects' }, 502);
+}
+
+// 音频代理：用于转发 googlevideo 等需要服务端 IP 的音频流
+app.get('/audio-proxy', async (c) => {
+  // 全站唯一"任意人可让服务器代发大流量"的端点——白名单域也是开放中转面，
+  // 补 per-IP 限流（一次播放=1 次请求，seek 重试量级小，300/min 宽裕）
+  if (!rateLimit(c, 'audio-proxy', 300)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const targetUrl = c.req.query('url');
+  if (!targetUrl) return c.json({ code: 400, message: 'missing url' }, 400);
+  return proxyUpstream(c, targetUrl);
+});
+
+// vault 入口：上游签名 URL 经 stream-vault 换成 opaque token——QQ purl 的
+// uin/vkey、B 站登录态的 mid/uipk、googlevideo 的 ip= 不出进程；
+// token 有效期内多次可用（seek=并发 Range），滑动 TTL 上限对齐上游签名寿命
+app.get('/audio-proxy/t/:token', async (c) => {
+  if (!rateLimit(c, 'audio-proxy', 300)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const targetUrl = streamVault.resolve(c.req.param('token'));
+  if (!targetUrl) return c.json({ code: 404, message: 'stream token expired' }, 404);
+  return proxyUpstream(c, targetUrl);
 });
 
 module.exports = app;
 // 白名单判定导出给 bilibili/youtube 路由：/bilibili|youtube/stream 挑候选 CDN
 // 回链时用同一谓词预筛，避免选中代理必拒的域导致 302 落地后 403
 module.exports.isAllowedHost = isAllowedHost;
+module.exports.streamVault = streamVault;

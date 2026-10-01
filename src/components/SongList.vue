@@ -614,7 +614,8 @@ import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
-import { isVipSong, isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
+import { isVipSong, isVipUnplayable, isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
+import { serverCaps } from '../lib/caps'
 import { shareOrCopy } from '../lib/share'
 import { toast, pixelConfirm } from '../lib/feedback'
 
@@ -677,7 +678,8 @@ export default {
       if (props.showVipSongs) {
         return props.songs // 显示所有歌曲
       } else {
-        return props.songs.filter(song => !isVipSong(song)) // 隐藏VIP歌曲
+        // 隐藏"VIP 且不可播"——qq payPlay 在服务端有 VIP cookie 时实际可播
+        return props.songs.filter(song => !isVipUnplayable(song, serverCaps.value))
       }
     })
 

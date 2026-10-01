@@ -421,9 +421,16 @@ export const musicApi = {
     return { lyrics: mergeTranslations(lyrics, translations) }
   },
 
+  // QQ 凭据状态：{loggedIn}——配了 VIP QQ_COOKIE 的部署里 qq payPlay 曲可播，
+  // 前端"隐藏VIP"过滤据此放行（失败保守回落未登录）
+  getQqStatus: async () => {
+    const response = await api.get('/qq/status', { timeout: 5000 }).catch(() => null)
+    return { loggedIn: Boolean(response?.data?.loggedIn) }
+  },
+
   // QQ 曲库搜索（点歌台 qq: 前缀；服务端固定回 20 条）
-  searchQQSongs: async (q) => {
-    const response = await api.get('/qq/search', { params: { q } }).catch(err => {
+  searchQQSongs: async (q, abortSignal = null) => {
+    const response = await api.get('/qq/search', { params: { q }, signal: abortSignal }).catch(err => {
       if (err?.response?.data?.message) throw new Error(err.response.data.message)
       throw err
     })

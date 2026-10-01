@@ -333,7 +333,11 @@ app.post('/downloads/local/mirror', async (c) => {
         ar: Array.isArray(t.ar || t.artists) ? (t.ar || t.artists).slice(0, 20) : [],
         al: (t.al && typeof t.al === 'object') ? t.al
           : (t.album && typeof t.album === 'object') ? t.album : {},
-        dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0)
+        dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0),
+        // qq 源私有字段只收 mediaMid（vkey filename 键）——其余下载链用不上；
+        // 形态校验防任意对象进 raw_json
+        ...(t.qq && /^[0-9A-Za-z]{10,20}$/.test(String(t.qq.mediaMid || ''))
+          ? { qq: { mediaMid: String(t.qq.mediaMid) } } : {})
       }));
     const skipped = allTracks.length - numeric.length;
     const truncated = numeric.length - tracks.length;
