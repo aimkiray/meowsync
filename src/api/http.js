@@ -34,12 +34,15 @@ http.interceptors.request.use(
 http.interceptors.response.use(
   response => response.data,
   error => {
-    // 会话过期/被服务端清扫：踢回登录门。/auth/* 自身（login 401 错误密码）
-    // 不触发——那是业务结果不是会话失效
+    // 会话过期/被服务端清扫：踢回登录门。只认服务端 authGate 下发的
+    // x-ms-auth 标记——上游透传的裸 401（如 check_music）不带此头，
+    // 不误触登出；同时不依赖本地 enabled 标志（探活失败时服务端仍标记）
     const url = error?.config?.url || ''
+    const marker = error?.response?.headers?.['x-ms-auth']
     if (error?.response?.status === 401
-      && !url.startsWith('/auth/')
-      && authState.enabled) {
+      && marker === 'required'
+      && !url.startsWith('/auth/')) {
+      authState.enabled = true
       authState.authenticated = false
       authState.expired = true
     }

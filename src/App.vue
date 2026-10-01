@@ -8,6 +8,7 @@
     :is-setup="authState.setupRequired"
     :expired="authState.expired"
     @authed="onAuthed"
+    @skip="dismissSetup"
   />
 
   <!-- 手机控制器模式 -->
@@ -313,7 +314,7 @@ import { musicApi, parseLyrics, mergeTranslations } from './api/music'
 import { downloadsApi } from './api/downloads'
 import { aiApi } from './api/ai'
 import { authApi } from './api/auth'
-import { authState, authRequired } from './lib/auth-state'
+import { authState, authRequired, dismissSetup } from './lib/auth-state'
 import AuthGate from './components/AuthGate.vue'
 import { useRemoteControl } from './composables/useRemoteControl'
 import { useHomeFeed } from './composables/useHomeFeed'
@@ -3365,6 +3366,7 @@ export default {
       // 响应式数据
       authState,
       authRequired,
+      dismissSetup,
       onAuthed,
       remoteMode,
       remoteControllerWsUrl,

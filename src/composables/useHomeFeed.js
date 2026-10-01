@@ -2,6 +2,7 @@ import { ref, watch, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music'
 import { readJSON, writeJSON } from '../lib/storage'
 import { isSingleSongShellId } from '../lib/song'
+import { authRequired } from '../lib/auth-state'
 
 const PLAY_HISTORY_STORAGE_KEY = 'meowsync-play-history'
 const PLAYLIST_HISTORY_STORAGE_KEY = 'meowsync-playlist-history'
@@ -19,8 +20,9 @@ export function useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playi
   // 晚到的数据经响应式照常补位替换失败文案
   let homeLoaded = false
   const loadHomeFeed = () => {
-    // 遥控端没有 home 视图——online 事件不该白打 toplist 请求
-    if (remoteMode?.value === 'controller') return
+    // 遥控端没有 home 视图——online 事件不该白打 toplist 请求；
+    // 登录门展示期同样不打（401 会被拦截器误标「会话已过期」）
+    if (remoteMode?.value === 'controller' || authRequired()) return
     if (homeLoaded) return
     homeLoaded = true
     homeLoading.value = true

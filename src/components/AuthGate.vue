@@ -2,29 +2,30 @@
   <div class="auth-gate">
     <form class="auth-card" @submit.prevent="submit">
       <div class="auth-title">
-        <PixelIcon :name="isSetup ? 'warn' : 'note'" :size="20" />
-        <span>{{ isSetup ? '初始化管理员' : 'MeowSync' }}</span>
+        <PixelIcon :name="effectiveSetup ? 'warn' : 'note'" :size="20" />
+        <span>{{ effectiveSetup ? '初始化管理员' : 'MeowSync' }}</span>
       </div>
       <p class="auth-sub">
-        {{ isSetup
+        {{ effectiveSetup
           ? '首次启动：创建管理员账号。完成前请勿将本实例暴露到公网。'
           : (expired ? '会话已过期，请重新登录' : '登录以继续使用') }}
       </p>
       <input
+        ref="usernameInput"
         v-model.trim="username"
         class="auth-input"
         type="text"
         autocomplete="username"
-        placeholder="用户名"
+        placeholder="用户名（字母/数字/._-/@）"
+        pattern="[\w.@-]{1,64}"
         maxlength="64"
         required
-        autofocus
       />
       <input
         v-model="password"
         class="auth-input"
         type="password"
-        :autocomplete="isSetup ? 'new-password' : 'current-password'"
+        :autocomplete="effectiveSetup ? 'new-password' : 'current-password'"
         placeholder="密码（至少 8 位）"
         minlength="8"
         maxlength="128"
@@ -32,8 +33,14 @@
       />
       <p v-if="error" class="auth-error">{{ error }}</p>
       <button class="auth-btn" type="submit" :disabled="busy">
-        {{ busy ? '处理中…' : (isSetup ? '创建并进入' : '登录') }}
+        {{ busy ? '处理中…' : (effectiveSetup ? '创建并进入' : '登录') }}
       </button>
+      <button
+        v-if="effectiveSetup"
+        class="auth-skip"
+        type="button"
+        @click="$emit('skip')"
+      >暂不设置（局域网自用）</button>
     </form>
   </div>
 </template>
@@ -49,9 +56,17 @@ export default {
     isSetup: { type: Boolean, default: false },
     expired: { type: Boolean, default: false }
   },
-  emits: ['authed'],
+  emits: ['authed', 'skip'],
   data() {
-    return { username: '', password: '', busy: false, error: '' }
+    return { username: '', password: '', busy: false, error: '', forceLogin: false }
+  },
+  computed: {
+    // setup 期间收到 409（另一客户端抢先建号）→ 本地翻成登录模式
+    effectiveSetup() { return this.isSetup && !this.forceLogin }
+  },
+  mounted() {
+    // autofocus 对动态插入的组件不保证生效——显式聚焦
+    this.$refs.usernameInput?.focus()
   },
   methods: {
     async submit() {
@@ -59,7 +74,7 @@ export default {
       this.busy = true
       this.error = ''
       try {
-        const body = this.isSetup
+        const body = this.effectiveSetup
           ? await authApi.setup(this.username, this.password)
           : await authApi.login(this.username, this.password)
         if (body?.code === 200) {
@@ -70,6 +85,11 @@ export default {
         }
         this.error = body?.message || '操作失败'
       } catch (e) {
+        const status = e?.response?.status
+        if (status === 409 && this.effectiveSetup) {
+          // 已被抢先建号——翻登录模式让表单立即可用
+          this.forceLogin = true
+        }
         this.error = e?.response?.data?.message || '网络错误，请稍后再试'
       } finally {
         this.busy = false
@@ -145,4 +165,15 @@ export default {
 }
 .auth-btn:disabled { opacity: 0.5; cursor: default; }
 .auth-btn:not(:disabled):hover { background: #0e8f8f; border-color: #0e8f8f; }
+.auth-skip {
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: #777;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 2px;
+}
+.auth-skip:hover { color: #1a1a1a; }
 </style>

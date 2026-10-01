@@ -211,7 +211,8 @@ export const musicApi = {
       : `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
     let blobResponse = await fetch(proxyUrl, { credentials: 'include' }).catch(() => null)
     if (!blobResponse || !blobResponse.ok) {
-      blobResponse = await fetch(downloadData.url, { credentials: 'include' }).catch(error => {
+      // CDN 直连必须 omit——上游普遍只回 ACAO:*，credentialed 请求会被浏览器拦
+      blobResponse = await fetch(downloadData.url, { credentials: 'omit' }).catch(error => {
         throw new Error(`下载失败: ${error.message || '网络错误'}`)
       })
     }

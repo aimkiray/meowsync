@@ -47,6 +47,21 @@ function resolveSession(rawToken) {
   return { userId: row.user_id, username: row.username, role: row.role };
 }
 
+// 只读探活版 resolve：不写 last_seen/不删过期行（/auth/status 是 GET——
+// 读路径带写副作用会让爬虫/预取/双击都触发 WAL 写；过期行留给 sweeper）
+function peekSession(rawToken) {
+  if (!rawToken) return null;
+  const db = getDb();
+  const now = Date.now();
+  const row = db.prepare(`
+    SELECT s.expires_at, s.not_after, s.user_id, u.username, u.role
+    FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.id = ?
+  `).get(tokenId(rawToken));
+  if (!row || row.expires_at <= now || row.not_after <= now) return null;
+  return { userId: row.user_id, username: row.username, role: row.role };
+}
+
 function deleteSession(rawToken) {
   if (!rawToken) return;
   getDb().prepare('DELETE FROM sessions WHERE id = ?').run(tokenId(rawToken));
@@ -64,6 +79,6 @@ function sweepExpired() {
 }
 
 module.exports = {
-  createSession, resolveSession, deleteSession, deleteAllForUser,
+  createSession, resolveSession, peekSession, deleteSession, deleteAllForUser,
   sweepExpired, IDLE_TTL_MS, ABSOLUTE_TTL_MS
 };

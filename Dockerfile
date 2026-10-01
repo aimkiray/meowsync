@@ -4,7 +4,9 @@
 FROM node:24-alpine AS frontend
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# --ignore-scripts：前端构建不需要原生绑定，跳过 postinstall 可免疫
+# better-sqlite3 上游 gypfile 抖动（npm10 隐式 node-gyp rebuild）
+RUN npm ci --ignore-scripts
 COPY index.html vite.config.js postcss.config.js tailwind.config.js ./
 COPY public ./public
 COPY src ./src

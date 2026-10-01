@@ -100,6 +100,25 @@ test('isApiPath：公开前缀/静态资源/SPA 路径分类', () => {
   assert.equal(apiPath.isApiPath('/assets/index.css'), false);
 });
 
+test('peekSession：只读探活不写库（与 resolve 对比）', () => {
+  const u = usersRepo.findByUsername('admin');
+  const raw = sessionsRepo.createSession(u.id);
+  const { getDb } = require('../src/server/db/client.js');
+  const id = require('crypto').createHash('sha256').update(raw).digest('hex');
+  // 把 last_seen_at 推到 20min 前使 touch 生效条件成立——peek 仍不得写
+  const pushed = Date.now() - 20 * 60 * 1000;
+  getDb().prepare('UPDATE sessions SET last_seen_at=? WHERE id=?').run(pushed, id);
+  const s = sessionsRepo.peekSession(raw);
+  assert.equal(s.username, 'Admin');
+  const after = getDb().prepare('SELECT last_seen_at FROM sessions WHERE id=?').get(id);
+  assert.equal(after.last_seen_at, pushed, 'peek 不得滑动续期');
+  // resolve 对照组——超过节流间隔应写
+  sessionsRepo.resolveSession(raw);
+  const touched = getDb().prepare('SELECT last_seen_at FROM sessions WHERE id=?').get(id);
+  assert.ok(touched.last_seen_at > after.last_seen_at, 'resolve 应滑动续期');
+  sessionsRepo.deleteSession(raw);
+});
+
 // ── cookie 解析（不进 Hono 的单测形态）──
 
 test('sessionFromCookieHeader：name 匹配/URI 解码/空值', () => {
@@ -115,11 +134,12 @@ test('sessionFromCookieHeader：name 匹配/URI 解码/空值', () => {
 
 // ── CSRF Origin 判定 ──
 
-function fakeCtx({ origin, url = 'https://app.example.com/x', host = 'app.example.com' } = {}) {
+function fakeCtx({ origin, url = 'https://app.example.com/x', host = 'app.example.com', xfh } = {}) {
+  const headers = { origin, host, 'x-forwarded-host': xfh };
   return {
     req: {
       method: 'POST',
-      header: (n) => ({ origin, host }[n.toLowerCase()] || undefined),
+      header: (n) => headers[n.toLowerCase()],
       url
     }
   };
@@ -139,4 +159,24 @@ test('csrfOriginOk：同源放行/异源拒/无 Origin 放行/白名单', () => 
   const allowed = fakeCtx({ origin: 'https://allowed.example.com' });
   assert.equal(authGate.csrfOriginOk(allowed), true);
   delete process.env.CORS_ORIGINS;
+});
+
+test('csrfOriginOk：TRUST_PROXY 下采信 X-Forwarded-Host（反代重写 Host 形态）', () => {
+  // 反代把 Host 改成内部地址时，Origin 应与 XFH（外部域）对齐而非内部 Host
+  process.env.TRUST_PROXY = '1';
+  const behindProxy = fakeCtx({
+    origin: 'https://music.example.com',
+    url: 'http://meowsync:3002/downloads',   // Host 头被反代重写后的入站形态
+    host: 'meowsync:3002',
+    xfh: 'music.example.com'
+  });
+  assert.equal(authGate.csrfOriginOk(behindProxy), true);
+  // 异源即便伪造 XFH 也无济于事（Origin 是浏览器强制的）
+  const evil = fakeCtx({
+    origin: 'https://evil.example.com',
+    host: 'meowsync:3002',
+    xfh: 'music.example.com'
+  });
+  assert.equal(authGate.csrfOriginOk(evil), false);
+  delete process.env.TRUST_PROXY;
 });

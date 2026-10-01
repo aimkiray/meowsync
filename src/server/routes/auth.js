@@ -9,21 +9,21 @@ const { parseJsonBody } = require('../lib/validate');
 const { authCredentialsBody } = require('../../shared/contracts.js');
 const { rateLimit, rateLimitByKey } = require('../lib/rate-limit');
 const { trustProxyEnabled } = require('../lib/env');
-// CSRF 判定与 authGate 同一份实现——login/setup 是公开路由，authGate 的
-// 写请求 Origin 校验不会覆盖它们，必须各自在路由内显式调用同一函数
-const { csrfOriginOk } = require('../lib/auth-gate');
+// CSRF 判定与 authGate 同一份实现——login/setup/logout 是公开路由，
+// authGate 的写请求 Origin 校验不会覆盖 /auth/*，必须各自显式调用；
+// COOKIE_NAME 同源复用防两处字面量漂移
+const { csrfOriginOk, COOKIE_NAME } = require('../lib/auth-gate');
 const usersRepo = require('../repositories/users');
 const sessionsRepo = require('../repositories/sessions');
 const { hashPassword, verifyPassword, needsRehash, getDummyHash } = require('../lib/password');
 
 const app = new Hono();
-const COOKIE_NAME = 'ms_session';
 const SESSION_COOKIE_AGE_S = Math.floor(sessionsRepo.ABSOLUTE_TTL_MS / 1000);
 
 function requestIsHttps(c) {
   if (trustProxyEnabled()) {
     const fwd = c.req.header('x-forwarded-proto');
-    if (fwd) return fwd.split(',')[0].trim() === 'https';
+    if (fwd) return fwd.split(',')[0].trim().toLowerCase() === 'https';
   }
   return new URL(c.req.url).protocol === 'https:';
 }
@@ -51,7 +51,8 @@ app.get('/auth/status', (c) => {
   c.header('Cache-Control', 'no-store');
   const authEnabled = usersRepo.countUsers() > 0;
   const raw = getCookie(c, COOKIE_NAME);
-  const sess = authEnabled && raw ? sessionsRepo.resolveSession(raw) : null;
+  // 只读探活：GET 语义不该带 UPDATE/DELETE 副作用（爬虫/预取也会触发）
+  const sess = authEnabled && raw ? sessionsRepo.peekSession(raw) : null;
   return c.json({
     code: 200,
     data: {
@@ -108,7 +109,7 @@ app.post('/auth/login', async (c) => {
   if (error) return error;
   // 双键限流：per-IP 防扫多号，per-account 防换 IP 喷单号
   if (!rateLimitByKey(`auth-login:ip:${clientIp(c)}`, 20, 10 * 60 * 1000)
-    || !rateLimitByKey(`auth-login:acct:${body.username.toLowerCase()}`, 8, 10 * 60 * 1000)) {
+    || !rateLimitByKey(`auth-login:acct:${body.username.trim().toLowerCase()}`, 8, 10 * 60 * 1000)) {
     return fail(c, 429, '尝试太频繁，请 10 分钟后再试');
   }
   const user = usersRepo.findByUsername(body.username.trim());
@@ -135,6 +136,11 @@ app.post('/auth/login', async (c) => {
 });
 
 app.post('/auth/logout', (c) => {
+  // 公开路由不经 authGate 的写请求 Origin 检查——logout 自身补（防跨站
+  // 强制登出骚扰：响应里的 Set-Cookie 清 cookie 对跨站表单也生效）
+  if (!csrfOriginOk(c)) {
+    return fail(c, 403, '非法请求来源');
+  }
   const raw = getCookie(c, COOKIE_NAME);
   if (raw) sessionsRepo.deleteSession(raw);
   deleteCookie(c, COOKIE_NAME, { path: '/' });
