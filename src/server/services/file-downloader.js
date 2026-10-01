@@ -680,11 +680,13 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     throwIfAborted(signal);
     const videoDir = path.dirname(outputPath);
     fs.mkdirSync(videoDir, { recursive: true });
-    // 匿名 B 站 DASH 在低热度稿封顶 480p，而 durl 合流档能给到 720p——
-    // 自适应最优低于 720p 时才多打这一跳比高（更高清就先用合流直落，
-    // 自带音轨连 ffmpeg 都省）。yt 合流天花板 360p 天然走不进此分支
+    // 匿名 B 站 DASH 在低热度稿封顶 480p，而 durl 合流档能给到 720p（qn=80
+    // 名义 1080p 目标——账户/稿件压不到 1080 但可能压到 720-1080 区间）——
+    // 自适应最优低于 1080p 时多打这一跳比高（更高清就先用合流直落，自带
+    // 音轨连 ffmpeg 都省）。videos 空时 bestH=0 必然触发——合流直接接管。
+    // yt 合流天花板 360p 只在自适应全灭/低档时才会赢，语义自洽
     const bestH = media.videos[0]?.h || 0;
-    if (bestH && bestH < 720) {
+    if (bestH < 1080) {
       let prog = null;
       try {
         prog = await media.progressive();
@@ -693,9 +695,12 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
         if (e?.fatal && e?.code) throw e;
         lastErr = lastErr || e;
       }
-      if (prog && (prog[0]?.h || 0) > bestH) {
-        console.info(`[video-dl] 合流档 ${prog[0].h}p 反超自适应 ${bestH}p——直落合流`);
-        for (const cand of prog) {
+      // 只消费「真反超」的档——probe 判门看的是最高档，若它失败不能让
+      // 低于 bestH 的合流档截胡（那比自适应还差），低档留给尾部兜底
+      const winners = (prog || []).filter(c => (c.h || 0) > bestH);
+      if (winners.length) {
+        console.info(`[video-dl] 合流档 ${winners[0].h}p 反超自适应 ${bestH}p——直落合流`);
+        for (const cand of winners) {
           throwIfAborted(signal);
           try {
             const saved = await fetchTo(cand, outputPath, 0, 100);
