@@ -1,62 +1,16 @@
-const path = require('path');
-const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllowedHost } = require('../lib/net-guard');
 const streamVault = require('../lib/stream-vault');
 const { aiEnabled, askAiJson } = require('../lib/ai');
-
-// NeteaseCloudMusicApi 安装路径经 require.resolve 解析，避免依赖 process.cwd()/__dirname 布局
-function resolvePackageDir(pkg) {
-  try {
-    return path.dirname(require.resolve(`${pkg}/package.json`));
-  } catch {
-    return path.join(__dirname, '../../../node_modules', pkg);
-  }
-}
-
-// 动态导入所有API模块
-const apiModules = Object.create(null);
-const modulePath = path.join(resolvePackageDir('NeteaseCloudMusicApi'), 'module');
-if (fs.existsSync(modulePath)) {
-  const files = fs.readdirSync(modulePath);
-  files.forEach(file => {
-    if (file.endsWith('.js')) {
-      const moduleName = file.replace('.js', '');
-      try {
-        apiModules[moduleName] = require(path.join(modulePath, file));
-      } catch (error) {
-        console.warn(`Failed to load module ${moduleName}:`, error.message);
-      }
-    }
-  });
-}
-
-let request;
-try {
-  request = require('NeteaseCloudMusicApi/util/request');
-} catch {
-  request = require(path.join(resolvePackageDir('NeteaseCloudMusicApi'), 'util', 'request'));
-}
-// 先加载补丁再引入库：库内 request() 的每次出站连接经 guarded lookup
-// 强校验公网 IP（match() 内部探测请求是盲 SSRF 面，补丁幂等可重复加载）
-require('../lib/patch-unm-request');
-const unblockmatch = require('@unblockneteasemusic/server');
+const { callNeteaseApi, apiModules } = require('./netease');
+const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('./unlock');
 
 // 试听版判定阈值：上游返回的 url 时长不超过 60s 视为试听片段
 const TRIAL_MAX_DURATION_MS = 60000;
 // 解锁结果的时长校验容差（估算时长与原始时长偏差占比）
-const DURATION_TOLERANCE = { ytdlp: 0.4, default: 0.2 };
-// 源优先级（2026-09 实测）：
-// - pyncmd：网易自家 m801.music.126.net，一次 API 调用出完整文件，最快最稳
-// - bodian：bd-er.kuwo.cn 完整文件（与 kuwo 不同的 CDN 路径）
-// - ytdlp：googlevideo 完整文件，但需本机 yt-dlp 且解析有秒级延迟
-// - kuwo：antiserver/trackmedia 现已退化为 ~11s 预览剪辑，只作兜底——
-//   时长校验会识别剪辑并跳过，不会把残片当完整曲下发
-// qq：unm 自带的 QQ 音乐源（musicu.fcg vkey 链）——给网易云灰曲兜底，
-// 读 QQ_COOKIE 环境变量解锁 VIP 档；排末位（需要 QQ 侧不地域限制+额度健康）
-const PLAYBACK_SOURCES = ['pyncmd', 'ytdlp', 'bodian', 'kuwo', 'qq'];
-const DOWNLOAD_SOURCES = ['pyncmd', 'bodian', 'ytdlp', 'kuwo', 'qq'];
+// youtube 现场版/剪辑版时长差异大给宽；其余源 20%
+const DURATION_TOLERANCE = { youtube: 0.4, default: 0.2 };
 
 // 通过 Content-Length + 码率估算音频时长（毫秒）
 function estimateDuration(contentLength, br) {
@@ -121,10 +75,9 @@ async function getContentLength(url, hops = 0, lookup = makeGuardedLookup()) {
   });
 }
 
-// 上游模块/解锁调用没有 AbortSignal 概念，且无内建超时——一个挂死的 upstream
-// 请求会让队列排空（drain）无限等待、任务卡在不可中止阶段。race 一个总时限兜底
-const UPSTREAM_TIMEOUT_MS = 30000;
-const UNBLOCK_TIMEOUT_MS = 60000; // unblockmatch 内部串行试多个源站，给得宽一些
+// getContentLength 的 HEAD 探测基于裸 http.request（非 AbortSignal 体系）——
+// race 一个总时限兜底防挂死
+const UNBLOCK_TIMEOUT_MS = 60000; // 单源 resolve 上限（provider 内每次 fetch 真取消）
 function withTimeout(promise, ms, label) {
   let timer;
   return Promise.race([
@@ -136,14 +89,8 @@ function withTimeout(promise, ms, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function callNeteaseApi(apiName, params, options = {}) {
-  if (!apiModules[apiName]) {
-    throw new Error(`API '${apiName}' not found`);
-  }
-  // timeoutMs 可覆盖：千曲歌单的 playlist_detail/track_all 慢链路可超 30s
-  const timeoutMs = options.timeoutMs || UPSTREAM_TIMEOUT_MS;
-  return withTimeout(apiModules[apiName](params, request), timeoutMs, `上游接口 ${apiName}`);
-}
+// callNeteaseApi/apiModules 由 ./netease 门面提供（自研客户端——
+// services/netease/{crypto,request,endpoints}.js，替代 NeteaseCloudMusicApi）
 
 // 单请求内解锁扇出的硬上限：song_url 接受逗号分隔多 id，逐项又会并发跑
 // 4 源 × match() 出站请求——无界扇出会把服务端 FD/上游配额打爆
@@ -226,30 +173,35 @@ async function aiUnlockInfo(songRow, signal) {
   return data;
 }
 
-// unm find(id, data) 的 data 形态：{id,name,alias,duration,album,artists}
-// ——注意是原始 detail 字段名（artists/album/duration），不是规整后的 ar/al/dt
-// 「注入即承诺」硬契约：data truthy 时 unm 不再自抓 detail，且 getFormatData
-// 产出空 name/非对象 album/非数组 artists 会让该源直接 reject 不回落——
-// 所以这里必须保证 name 非空 + album/artists 恒为正确形态，malformed data
-// 比 undefined 更差（undefined 走 unm 自抓，malformed 让全部源同因失败）
-function buildUnmData(songRow, info) {
-  const artists = info.artists.map(name => ({ name }));
-  if (!info.name || !artists.length) return null;
+// 解锁检索 info：{id, name, artists[], keyword, durationMs}
+// ——provider 拿 keyword 去外站搜候选。keyword 形态对齐 unm 的
+// 「name - artists.join(' / ')」（外站检索的多年实证形态）
+// 「注入即承诺」：info.name 必须非空 + artists 恒为字符串数组，
+// malformed 形态会让全部搜索型源同因失败——name 缺失直接返回 null
+function buildUnlockInfo(songRow, info) {
+  if (!info.name) return null;
+  const artists = Array.isArray(info.artists) ? info.artists : [];
   return {
     id: songRow.id,
     name: info.name,
-    alias: Array.isArray(songRow.alia) ? songRow.alia : [],
-    duration: songRow.dt || 0,
-    album: { id: songRow.al?.id, name: songRow.al?.name },
     artists,
+    keyword: `${info.name} - ${artists.join(' / ')}`,
+    durationMs: songRow.dt || null,
   };
 }
 
+// 无 AI 规整时的基线 info：直接用 song_detail 原始字段拼 keyword
+function baseUnlockInfo(songRow) {
+  const artists = (songRow.ar || []).map(a => a?.name).filter(Boolean);
+  return buildUnlockInfo(songRow, { name: songRow.name, artists });
+}
+
 // 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）
-// - url 为空或为试听片段的条目尝试 unblockmatch 回退源
-// - 时长校验对所有源生效（kuwo 已退化为预览剪辑，校验即识别机制）；
+// - url 为空或为试听片段的条目尝试 ./unlock 注册表里的 provider 回退源
+// - 时长校验对所有源生效（provider 候选期已知 durationSec 直接比对，
+//   否则 size×br 估算——剪辑/错配文件一律拒收）；
 //   purpose='download' 走 DOWNLOAD_SOURCES 顺序且不经 /audio-proxy（直连源站）
-// - purpose='playback' 时：ytdlp 命中经 proxyOrigin 拼 /audio-proxy 回链
+// - purpose='playback' 时：youtube/qq 命中经 proxyOrigin 拼 /audio-proxy 回链
 // - signal：客户端断开/超时由路由层透传进来，逐源检查即止血——否则一次
 //   客户端超时仍留整条解锁链在跑，重试只会叠加僵尸请求
 async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null, signal = null } = {}) {
@@ -281,18 +233,15 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   const ids = unlockTargets.map(i => i.id).join(',');
   const originalDurations = {};
   const songRows = {}; // AI 规整用——unlockInfo 需要完整 name/ar/al 字段
-  if (ids && apiModules['song_detail']) {
+  if (ids) {
     try {
-      const detail = await withTimeout(
-        apiModules['song_detail']({ ids }, request),
-        UPSTREAM_TIMEOUT_MS, '上游接口 song_detail'
-      );
+      const detail = await callNeteaseApi('song_detail', { ids });
       (detail.body?.songs || []).forEach(s => {
         originalDurations[s.id] = s.dt;
         songRows[s.id] = s;
       });
     } catch (e) {
-      // 静默降级会让 kuwo 剪辑漏检——留痕才能发现"上游抖动→成片剪辑入库"的因果
+      // 静默降级会让剪辑错配漏检——留痕才能发现"上游抖动→成片剪辑入库"的因果
       console.warn(`[unlock] song_detail 获取失败，时长校验降级（逐源统计仍生效）: ${e?.message || e}`);
     }
   }
@@ -305,30 +254,41 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
       let resolved = unlockCacheGet(purpose, item.id);
       const wasCached = Boolean(resolved);
       if (!resolved) {
-        // AI 规整检索元数据：一次提取全源复用（unm 内部按 keyword 搜候选，
-        // 干净的 name/artists 让每个源的 select 都更准）。失败/未配置 →
-        // matchData=null → unm 走自己的 detail 抓取，行为与旧版一致
-        let matchData = null;
+        // AI 规整检索元数据：一次提取全源复用（provider 拿 keyword 去外站
+        // 搜候选，干净的 name/artists 让候选选择更准）。失败 → 退回
+        // song_detail 原始字段拼 keyword；连 songRow 都没有时 info=null——
+        // 搜索型源会拿不到 keyword，仅 id 直解源（pyncmd）仍可用
+        let info = null;
         const songRow = songRows[item.id];
-        if (songRow && aiEnabled()) {
-          try {
-            const info = await aiUnlockInfo(songRow, signal);
-            matchData = info ? buildUnmData(songRow, info) : null;
-          } catch { /* AI 规整失败不阻塞解锁主路径 */ }
+        if (songRow) {
+          if (aiEnabled()) {
+            try {
+              const normalized = await aiUnlockInfo(songRow, signal);
+              if (normalized) info = buildUnlockInfo(songRow, normalized);
+            } catch { /* AI 规整失败不阻塞解锁主路径 */ }
+          }
+          if (!info) info = baseUnlockInfo(songRow);
         }
         for (const source of allSources) {
           throwIfAborted();
+          const provider = PROVIDERS[source];
+          if (!provider) continue;
           try {
-            const unblocked = await withTimeout(
-              unblockmatch(item.id, [source], matchData || undefined),
-              UNBLOCK_TIMEOUT_MS, `解锁源 ${source}`
+            const unblocked = await provider.resolve(
+              info ? { ...info } : { id: item.id, keyword: '' },
+              {
+                purpose,
+                // 真实取消透传：provider 内每次 fetch 都吃这个 signal——
+                // 客户端断开/超时立即杀上游 socket（取代旧 race 的僵尸链）
+                signal: AbortSignal.any(
+                  [AbortSignal.timeout(UNBLOCK_TIMEOUT_MS), ...(signal ? [signal] : [])]
+                ),
+              },
             );
             // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，
             // 域名再逐跳过公网 IP 校验——私网解析的 URL 若选中即 break，
             // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
-            // 其回链属攻击者可影响数据，校验严格度必须与下载端一致。
-            // 注意盲区：match() 内部 check() 的 range 探测发生在本校验之前，
-            // 由 patch-unm-request 的 socket 层 guarded lookup 兜底）
+            // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）
             const checked = unblocked?.url ? normalizeOutboundUrl(unblocked.url) : null;
             if (!checked?.ok) continue;
             if (!(await resolvesToPublicIp(checked.url.hostname))) continue;
@@ -336,33 +296,34 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             // 会被包进 /audio-proxy 的回链必须过代理白名单预筛——否则产出
             // "已解析却 403"的死链并缓存 60s。qq 源必须算在内：其 https purl
             // 明文带 uin/vkey 且 vkey 绑本机 IP，不代理既是凭据泄露又必然 403；
-            // sip 偶发裸 IP/非音乐 tc.qq.com 子域同样挡下。
+            // youtube 的 googlevideo ip= 同理必须代理。
             // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
             // 明文签名链进 JSON 等于把 uin/vkey/出口 IP 发给访客；进程内调用方
             // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
             const willProxy = !!proxyOrigin
-              && (source === 'ytdlp' || source === 'qq' || checked.url.protocol === 'http:');
+              && (source === 'youtube' || source === 'qq' || checked.url.protocol === 'http:');
             if (willProxy && !isProxyAllowedHost(checked.url.hostname)) continue;
 
-            // kuwo 已退化为 ~11s 预览剪辑，时长校验是拒收它的唯一机制——
-            // 校验需 dt 基准+br 双输入，任一缺失时 kuwo 必须 fail-closed
-            // 剔除（其余源无剪辑退化史，放行）
-            if (source === 'kuwo' && (!originalDt || !unblocked.br)) continue;
-
-            // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘
-            if (originalDt && unblocked.br) {
-              // match() 内部 check() 已发过 range 请求并解析出 size——优先复用，少发一次 HEAD
-              // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
-              // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
-              const size = Number.isFinite(unblocked.size) && unblocked.size > 0
-                ? unblocked.size
-                : await withTimeout(getContentLength(checked.url.toString()), 8000, 'HEAD 探测')
-                  .catch(() => null);
-              const estimated = estimateDuration(size, unblocked.br);
+            // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
+            // 候选期已知秒数的源（youtube/qq）直接比对原始时长；
+            // 其余按 size×br 估算（unm range 探测已随库删除，回落 HEAD）
+            if (originalDt) {
               const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
-              if (estimated && Math.abs(estimated - originalDt) / originalDt > tolerance) {
+              let estMs = null;
+              if (Number.isFinite(unblocked.durationSec) && unblocked.durationSec > 0) {
+                estMs = unblocked.durationSec * 1000;
+              } else if (unblocked.br) {
+                // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
+                // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
+                const size = Number.isFinite(unblocked.size) && unblocked.size > 0
+                  ? unblocked.size
+                  : await withTimeout(getContentLength(checked.url.toString()), 8000, 'HEAD 探测')
+                    .catch(() => null);
+                estMs = estimateDuration(size, unblocked.br);
+              }
+              if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
                 console.warn(
-                  `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${estimated}ms original=${originalDt}ms, skipping`
+                  `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
                 );
                 continue;
               }
@@ -378,12 +339,12 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         }
       }
       if (resolved) {
-        // 走代理的情形：ytdlp 的 googlevideo URL 带 ip= 绑定（浏览器直连
+        // 走代理的情形：youtube 的 googlevideo URL 带 ip= 绑定（浏览器直连
         // 必然 403），或上游回 http 链（HTTPS 页面直连会被混合内容拦截）。
         // 用归一化后的协议判定——原始串 startsWith 会被大写 scheme 绕过
         const isHttp = resolved.url.toLowerCase().startsWith('http:');
         const useProxy = !!proxyOrigin
-          && (resolved.source === 'ytdlp' || resolved.source === 'qq' || isHttp);
+          && (resolved.source === 'youtube' || resolved.source === 'qq' || isHttp);
         // 代理面统一经 vault token——解锁回链可能带上游凭据（qq purl uin/vkey、
         // googlevideo ip=），明文嵌进 JSON 等于把运营者凭据发给每个访客
         item.url = useProxy
@@ -424,4 +385,4 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   return items;
 }
 
-module.exports = { callNeteaseApi, apiModules, request, resolveSongUrls, estimateDuration };
+module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration };

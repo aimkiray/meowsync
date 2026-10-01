@@ -1,7 +1,7 @@
 // 「这是 API 请求吗」唯一判定源：authGate（公开白名单）与 SPA 兜底
 // （不喂 index.html）共用同一份分类，防两处漂移。
-// 路由表是开放式的（/:apiName 透传网关有 ~300 个上游模块首段），
-// 反向枚举黑名单必漏——只有正向判定可靠。
+// /:apiName 网关背后是 ALLOWED_APIS 白名单 + 自研端点表（apiModules，
+// 17 名）——反向枚举黑名单必漏，只有正向判定可靠。
 const PREFIXES = [
   '/downloads', '/playlists', '/audio-proxy', '/remote',
   '/ping', '/healthz', '/bilibili', '/youtube', '/qq',

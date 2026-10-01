@@ -1,0 +1,140 @@
+// YouTube Innertube 原语——routes/youtube.js 与解锁层（services/unlock/youtube.js）
+// 共用。公开 web 客户端 key（嵌在 youtube.com 前端里，供匿名访客调 youtubei）。
+// ANDROID/IOS 客户端的 streamingData 直返可播 url（无 signatureCipher 混淆
+// 签名）——正是不需要 yt-dlp 的原因；ANDROID 优先，被风控/改版时退 IOS。
+// key/客户端版本号摘自 youtube.com 前端与 yt-dlp 上游（会随 YouTube 改版过期——
+// resolve 报「无流数据」率升高时对照 yt-dlp 仓库同步 clientVersion）
+const YT_TIMEOUT_MS = 15000;
+const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const INNERTUBE_CLIENTS = [
+  {
+    name: 'ANDROID',
+    client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30, hl: 'zh' },
+    headers: { 'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip' },
+  },
+  {
+    name: 'IOS',
+    client: { clientName: 'IOS', clientVersion: '20.10.4', deviceModel: 'iPhone16,2', hl: 'zh' },
+    headers: { 'User-Agent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_4 like Mac OS X)' },
+  },
+];
+
+const timedSignal = (extraSignal, ms = YT_TIMEOUT_MS) => extraSignal
+  ? AbortSignal.any([AbortSignal.timeout(ms), extraSignal])
+  : AbortSignal.timeout(ms);
+
+// 播放器响应：依次尝试客户端形态，第一个给出可用流的为准。
+// extraSignal 级联客户端断连——上游请求不随客户端断开变僵尸
+async function fetchPlayer(videoId, extraSignal) {
+  let lastErr = null;
+  for (const form of INNERTUBE_CLIENTS) {
+    if (extraSignal?.aborted) throw new Error('aborted');
+    try {
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...form.headers },
+        body: JSON.stringify({ context: { client: form.client }, videoId }),
+        signal: timedSignal(extraSignal),
+      });
+      if (!res.ok) throw new Error(`innertube HTTP ${res.status}`);
+      const body = await res.json();
+      const ps = body?.playabilityStatus;
+      // OK / LIVE_EDGE 才有流；LOGIN_REQUIRED/ERROR 等直接带 reason 抛
+      if (ps?.status && !['OK', 'LIVE_EDGE'].includes(ps.status)) {
+        throw new Error(`不可播放: ${ps.reason || ps.status}`);
+      }
+      if (!body?.streamingData) throw new Error('无流数据');
+      return body;
+    } catch (e) {
+      lastErr = e;
+      // 客户端断连引发的 abort 不算上游失败——不打误导性 warn
+      if (extraSignal?.aborted) throw new Error('aborted');
+      console.warn(`[youtube] ${form.name} 客户端取流失败:`, e.message);
+    }
+  }
+  throw lastErr || new Error('所有客户端形态均失败');
+}
+
+// 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
+// spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强
+async function innertubeSearch(keyword, extraSignal, limit = 5) {
+  const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...INNERTUBE_CLIENTS[0].headers },
+    body: JSON.stringify({
+      context: { client: INNERTUBE_CLIENTS[0].client },
+      query: String(keyword || ''),
+      // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
+      params: 'EgIQAQ==',
+    }),
+    signal: timedSignal(extraSignal),
+  });
+  if (!res.ok) throw new Error(`innertube search HTTP ${res.status}`);
+  const body = await res.json();
+  const out = [];
+  // 递归扫 videoRenderer（web 客户端形态）与 compactVideoRenderer
+  // （ANDROID/IOS 移动客户端形态）——twoColumnSearchResultsRenderer 的
+  // 嵌套深度随 YouTube 改版漂移，按节点形状收集比按路径深取稳
+  const textOf = (n) => (n?.runs || []).map(r => r.text).join('') || n?.simpleText || '';
+  const walk = (node) => {
+    if (!node || typeof node !== 'object' || out.length >= limit) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    const v = node.videoRenderer || node.compactVideoRenderer;
+    if (v?.videoId) {
+      // lengthText 两种形态都出现：simpleText（web）或 runs（compact）——
+      // 统一走 textOf；部分形态直接给 lengthSeconds 数字
+      const lt = textOf(v.lengthText);
+      out.push({
+        videoId: v.videoId,
+        title: textOf(v.title),
+        owner: textOf(v.ownerText) || textOf(v.shortBylineText),
+        durationSec: Number.isFinite(+v.lengthSeconds) ? +v.lengthSeconds
+          : (lt ? lt.split(':').reduce((s, p) => s * 60 + (+p || 0), 0) : null),
+      });
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'videoRenderer' || key === 'compactVideoRenderer') continue;
+      walk(node[key]);
+    }
+  };
+  walk(body?.contents);
+  return out;
+}
+
+// 选流：音频默认优先 mp4a/m4a 容器（audio/mp4——webm opus 在 Safari 的
+// <audio> 不通）；prefer='best'（下载档）直接按 bitrate 排全部音频——
+// opus itag251（~136k 全频带到 20kHz）优于 aac itag140（~130k 且 16kHz
+// 低通截断），播放器兼容性由用户本地承担，归档就该拿第一代完整频带。
+// video 取 adaptive avc1（H.264 全浏览器可放），按分辨率/bitrate 降序。
+// signatureCipher 混淆流（无 url 只有签名参数）跳过——本服务不做签名反解
+function pickStreamList(data, kind, prefer = '') {
+  const adaptive = Array.isArray(data?.adaptiveFormats) ? data.adaptiveFormats : [];
+  const progressive = Array.isArray(data?.formats) ? data.formats : [];
+  const usable = (f) => typeof f?.url === 'string' && f.url;
+  if (kind === 'audio') {
+    // 多配音/口述影像轨（MrBeast 类稿件）带 audioTrack 元数据——非默认轨
+    // 不该按码率赢过原声轨（否则下载/播放拿到外语配音）
+    const audios = adaptive.filter(f => usable(f)
+      && (f.mimeType || '').startsWith('audio/')
+      && f.audioTrack?.audioIsDefault !== false);
+    if (prefer === 'best') {
+      return audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+    }
+    const mp4 = audios.filter(f => (f.mimeType || '').startsWith('audio/mp4'));
+    return (mp4.length ? mp4 : audios).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  }
+  const avc = adaptive.filter(f =>
+    usable(f) && (f.mimeType || '').startsWith('video/mp4')
+    && (f.mimeType || '').includes('avc1'));
+  // progressive 兜底同样限 video/mp4——webm 合并流 Safari 放不了，宁缺毋滥
+  // （hasVideo 语义 = 浏览器解得动的流存在）
+  const mp4Progressive = progressive.filter(f =>
+    usable(f) && (f.mimeType || '').startsWith('video/mp4'));
+  return (avc.length ? avc : mp4Progressive)
+    .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
+}
+
+module.exports = { fetchPlayer, innertubeSearch, pickStreamList, YT_TIMEOUT_MS };

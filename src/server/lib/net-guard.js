@@ -266,8 +266,8 @@ function makeGuardedLookup() {
 // 可代理的上行域白名单（proxy.js 与 netease-api.js 选源预筛共用——解锁源回链
 // 若在名单外，包进 /audio-proxy 会成"已解析却 403"的死链）：收窄到实际 CDN
 // 子域，整棵后缀域放行会把网易 NOS 对象存储等用户可控内容面也纳入可代理范围：
-// googlevideo（ytdlp 解锁回链）、music.126.net（官方曲库 CDN m*/p* 子域）、
-// kuwo.cn（kuwo 解锁源）、bilivideo.com/.cn+hdslb.com（B 站 CDN/封面图床）、
+// googlevideo（youtube 解锁回链）、music.126.net（官方曲库 CDN m*/p* 子域）、
+// kuwo.cn（bodian/酷我系回链 CDN——保留给可选源）、bilivideo.com/.cn+hdslb.com（B 站 CDN/封面图床）、
 // QQ 音流只收 qqmusic.qq.com 全族 + tc.qq.com 音乐子族（tc.qq.com 是腾讯通用
 // CDN，视频/小程序/广告都在其下）；sip 偶发裸 IP——后缀匹配天然拒绝 IP 字面量
 const PROXY_ALLOWED_HOSTS = ['googlevideo.com', 'music.126.net', 'kuwo.cn',

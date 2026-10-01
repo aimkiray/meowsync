@@ -66,7 +66,7 @@ function requestOrigin(c) {
 }
 
 // 上游统一返回结构 {status, body, cookie}
-// 注意：NeteaseCloudMusicApi 的 request() 对非 200 响应是 reject(answer) 而非 resolve，
+// 注意：services/netease/request.js 对非 200 响应是 reject(answer) 而非 resolve，
 // 因此该函数同时供 try（resolve 路径）与 catch（reject 路径）复用
 function sendUpstreamResult(c, answer) {
   // Cookie 回传：上游的 Set-Cookie（登录态/匿名token）透传给客户端。

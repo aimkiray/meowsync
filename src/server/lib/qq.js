@@ -13,8 +13,8 @@ const { Agent } = require('undici');
 const QQ_TIMEOUT_MS = 15000;
 
 // ── Cookie：可选登录态（VIP/无损档只对登录账号下发）。只发 *.qq.com 域。
-// 懒读而非启动快照：unm qq provider 的自动续期会把新凭据写 process.env
-// .NEW_QQ_COOKIE（qm_keyst ~1.5 天过期）——每次请求读最新值两条链共享续期结果。
+// 懒读而非启动快照：续期会把新凭据写 process.env.NEW_QQ_COOKIE
+// （qm_keyst ~3 天过期，到期前 10min 窗口内自动续）——每次请求读最新值。
 // 与 BILI_COOKIE 同款 ASCII 清洗——粘贴串带进换行/中文会让 undici 头校验
 // 抛错，全部 QQ 请求静默 502
 let cookieWarned = false;
@@ -26,9 +26,60 @@ function qqCookie() {
     cookieWarned = true;
     console.warn('[qq] QQ_COOKIE 含控制字符/非 ASCII，已剔除——cookie 值应为纯 ASCII');
   }
+  maybeRenewQqCookie();
   return ascii;
 }
 const hasQqCookie = () => Boolean(qqCookie());
+
+// musickey_createtime + 3d（秒）是 qm_keyst 生命周期（unm 同款口径）；
+// 到期前 600s 窗口内触发续期——老 key 在此窗口仍有效，后台续期无缝交接
+const QQ_KEY_LIFETIME_SEC = 259200;
+const QQ_RENEW_WINDOW_SEC = 600;
+let renewalInflight = null;
+
+// LoginServer/Login 用 refresh_token 换新 musickey，回写 NEW_QQ_COOKIE。
+// 只在 qqCookie() 里惰性触发——读 cookie 的请求自然带上续期检查
+async function renewQqCookie(cookie) {
+  const refreshToken = cookieVal(cookie, 'qqrefresh_token');
+  const musickey = cookieVal(cookie, 'qqmusic_key') || cookieVal(cookie, 'qm_keyst');
+  const musicid = parseInt(cookieVal(cookie, 'uin') || '0', 10);
+  if (!refreshToken || !musickey || !musicid) return;
+  try {
+    const res = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        req: {
+          module: 'music.login.LoginServer', method: 'Login',
+          param: { refresh_token: refreshToken, musickey, musicid },
+        },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const body = await res.json();
+    const data = body?.req?.data || {};
+    if (!data.musickey || !data.musickeyCreateTime) return;
+    const renewed = cookie
+      .replace(/(qqmusic_key=)[^;]*/, `$1${data.musickey}`)
+      .replace(/(qm_keyst=)[^;]*/, `$1${data.musickey}`)
+      .replace(/(psrf_musickey_createtime=)[^;]*/, `$1${data.musickeyCreateTime}`)
+      .replace(/(musickey_createtime=)[^;]*/, `$1${data.musickeyCreateTime}`);
+    process.env.NEW_QQ_COOKIE = renewed;
+    console.info('[qq] cookie 已自动续期（qm_keyst 刷新）');
+  } catch (e) {
+    console.warn('[qq] cookie 续期失败:', e.message);
+  }
+}
+
+function maybeRenewQqCookie() {
+  if (renewalInflight) return;
+  const cookie = qqCookie();
+  if (!cookie) return;
+  const created = parseInt(cookieVal(cookie, 'musickey_createtime'), 10);
+  if (!created) return;
+  if (created + QQ_KEY_LIFETIME_SEC - Date.now() / 1000 >= QQ_RENEW_WINDOW_SEC) return;
+  renewalInflight = renewQqCookie(cookie).finally(() => { renewalInflight = null; });
+}
 
 // cookie 里的登录参数：uin（QQ 登录，"o0956…" 形态需剥 o 前缀与前导零）或
 // wxuin/p_luin（微信登录）+ qqmusic_key/qm_keyst。参数化 cookie 快照——单次
