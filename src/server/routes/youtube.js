@@ -66,19 +66,25 @@ function extractYtSong(title, author) {
   // 词干不该剥；内容禁含括号保证配对（嵌套/不配对的留原样总比切残片强）；
   // 回调校验开合括号同型——`(…]`/`【…)` 跨界不配对的留原样；全角括号同规则
   const BRACKET_PAIR = { '(': ')', '（': '）', '[': ']', '【': '】' };
-  const cleanTitle = String(title || '')
-    .replace(/[[(（【][^\[\]()（）【】]{0,80}?\b(?:official|lyrics?|audio|visuali[sz]er|video|mv|hd|4k|8k|remaster(?:ed)?|mono|explicit|live|color coded)\b[^\[\]()（）【】]{0,80}?[\])）】]/gi,
+  const cleanTitle = (String(title || '')
+    .replace(/[[(（【][^\[\]()（）【】]{0,80}?\b(?:official|lyrics?|audio|visuali[sz]er|video|mv|hd|4k|8k|remaster(?:ed)?|mono|explicit|live|color coded|covers?)\b[^\[\]()（）【】]{0,80}?[\])）】]/gi,
       m => BRACKET_PAIR[m[0]] === m[m.length - 1] ? ' ' : m)
+    // \b 对 CJK 不生效——cover 系中/韩词走独立括号剥（与 bilibili 侧同口径）
+    .replace(/[（(【][^（）()【】]{0,40}?(?:커버|翻唱|翻弹|演奏)[^（）()【】]{0,40}?[)）】]/gu, ' ')
     // 韩翻/搬运号常见竖线分隔「歌名┃频道 COVER」「歌名｜频道」——首个即截，
     // 尾段是频道与标记噪声（Mela!┃미녕이 COVER → Mela!）
-    .replace(/\s*[┃│｜▏].*$/u, ' ')
+    .replace(/\s*[┃│｜▏|].*$/u, ' ')
+    // 《》先化成空格再剥尾——「Title《COVER》」要先让 COVER 露出成尾巴
+    .replace(/《|》/g, ' ')
     // 尾巴上的翻唱标记：'COVER by xx'、裸 'COVER'/'커버'/'翻唱'/'cover'
     .replace(/\s+(?:cover(?:\s+by\s+.+)?|커버|翻唱|翻弹|演奏)\s*$/i, ' ')
-    .replace(/《|》/g, ' ')
     .replace(/\s+/g, ' ')
     // 剥括号可能留下悬空分隔符（'Artist - (Explicit)' → 'Artist -'）
     .replace(/^[-—–~～·|\s]+|[-—–~～·|\s]+$/g, '')
-    .trim();
+    .trim()) || String(title || '');
+  // ^ 行首竖线/括号剥光后 cleanTitle 可能为空——退回原始标题（与 bilibili
+  // 侧 `t || title` 兜底同口径）；空标题会让 candidates 只剩频道名，
+  // 退化成纯时长窗匹配，错歌词静默固化
   // 频道名后缀剥皮：'Artist - Topic'（自动投稿）/'ArtistVEVO'（官方频道）
   const artistFromAuthor = String(author || '')
     .replace(/\s*-\s*Topic$/i, '')

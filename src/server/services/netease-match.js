@@ -30,6 +30,9 @@ const songDesc = (s) => {
 // 有能力时让模型复核；模型拒答/超时返回 null 按原启发式放行（AI 是增强不是门禁）
 async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
   const ans = await askAiJson({
+    // match 路径嵌在 25s resolve 预算内——AI 单次调用收窄到 10s，
+    // 慢端点（挂起/排队）不能独占整个预算让启发式链没机会跑
+    timeoutMs: 10000,
     system: '你是音乐识别助手。判断候选歌曲与来源音/视频是不是同一首歌'
       + '（同一录音、官方版本，或同一首歌的不同平台发布）。歌名不同语言/译名差异属正常。'
       + '只输出 JSON {"match":true|false}。',
@@ -51,22 +54,29 @@ async function aiExtractQueries(sourceInfo, signal) {
       + '提取不出返回 {"queries":[]}。只输出 JSON。',
     user: `标题：${cleanPrompt(sourceInfo.title)}\n作者/频道：${cleanPrompt(sourceInfo.author) || '未知'}`,
     maxTokens: 96,
+    timeoutMs: 10000,
     signal,
   });
   const raw = Array.isArray(ans?.queries) ? ans.queries : [];
   return [...new Set(raw
-    .map(q => String(q ?? '').replace(/\s+/g, ' ').trim())
-    .filter(q => q && q.length <= 80))]
+    // 只收字符串元素——对象/数字经 String() 会产垃圾查询白烧上游；
+    // 控制符（C0/DEL/bidi）会进 keywords 与日志/持久化 matchedBy，一并剥
+    .filter(q => typeof q === 'string')
+    .map(q => q.replace(/[\p{C}]+/gu, ' ').replace(/\s+/g, ' ').trim())
+    .filter(q => q.length >= 2 && q.length <= 80))]
     .slice(0, 3);
 }
 
 // AI 兜底：启发式全失败时，把所有查询见过的候选整批给模型挑——
 // 一次调用覆盖 ≤10 候选，比逐候选问省额度且上下文更全
-async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds = null) {
-  // 已被 aiConfirmMatch 否决的候选不进池——否决后再被兜底挑回是语义矛盾
-  const list = [...seenSongs.values()]
-    .filter(s => !vetoedIds?.has(s.id))
-    .slice(0, 10);
+async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds = null, preferIds = null) {
+  // 已被 aiConfirmMatch 否决的候选不进池——否决后再被兜底挑回是语义矛盾。
+  // preferIds（再生轮新装入的候选）排在截断窗口前部——seenSongs 是插入序
+  // Map，启发式批先填 ≥10 时再生批会被 slice 挤掉，而那恰是正主在的批
+  const all = [...seenSongs.values()].filter(s => !vetoedIds?.has(s.id));
+  const list = (preferIds?.size
+    ? [...all.filter(s => preferIds.has(s.id)), ...all.filter(s => !preferIds.has(s.id))]
+    : all).slice(0, 10);
   if (!list.length) return null;
   const desc = list.map((s, i) => `${i + 1}. ${songDesc(s)}`).join('\n');
   const ans = await askAiJson({
@@ -75,6 +85,7 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
       + '都不符返回 {"match":0}，能确定返回 {"match":编号}。只输出 JSON。',
     user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s）\n候选：\n${desc}`,
     maxTokens: 32,
+    timeoutMs: 10000,
     signal,
   });
   // match:true（模型混用 confirm 形态）Number(true)=1 会假命中第 1 候选——
@@ -105,16 +116,21 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   const useAi = aiEnabled() && !!sourceInfo?.title;
 
   // 单条查询的云搜 + 启发式命中：命中即返回，未命中也把结果记入 seenSongs
-  // 供 AI 再生/兜底复用。AI 否决的时长候选进 vetoedIds 不再复活
-  const searchOnce = async (q) => {
-    const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '5' });
-    const songs = res.body?.result?.songs;
-    if (!Array.isArray(songs) || !songs.length) return null;
-    for (const s of songs) if (s?.id != null) seenSongs.set(s.id, s);
+  // 供 AI 再生/兜底复用。AI 否决的时长候选进 vetoedIds 不再复活。
+  // collect：本轮新装入的候选 id（再生轮优先池用）。nameHit 标记供
+  // 再生轮区分「确定性互包含」与「时长命中」（前者要补一次 AI 复核——
+  // 模型产出的查询串比启发式候选离 ground truth 远一跳，不能免检）
+  const searchOnce = async (q, collect = null) => {
+    const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '5' }, { signal });
+    if (signal?.aborted) return null;
+    // 上游数组混入 null 元素会让下游 .find/.map 裸取字段 TypeError——先净化
+    const songs = (res.body?.result?.songs || []).filter(s => s && typeof s === 'object');
+    if (!songs.length) return null;
+    for (const s of songs) if (s.id != null) { seenSongs.set(s.id, s); collect?.add(s.id); }
     const byName = songs.find(s => shareName(s.name, q));
     // name 命中不查 vetoedIds——确定性的歌名互包含是强证据，
     // 优先于弱证据（纯时长）场景下模型给出的否决
-    if (byName) return { song: byName, query: q };
+    if (byName) return { song: byName, query: q, nameHit: true };
     // 时长 sanity 只在有真实时长时启用——源时长 0（live/首映/字段缺失）会把
     // ≤45s 的短曲错配（|x-0|≤45 窗口对 0 恒成立的方向性失真）
     if (Number.isFinite(durationSec) && durationSec > 0) {
@@ -158,19 +174,32 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     }
   }
   // 启发式链全灭 → ①AI 再生干净查询词补一轮（脏标题串搜不到正主时
-  // 唯一把正主装进候选池的路），产出仍过 shareName/时长/否决闸；
+  // 唯一把正主装进候选池的路），产出仍过 shareName/时长/否决闸——且
+  // 再生轮 name 命中额外过一次 AI 复核（模型产出的查询串离 ground truth
+  // 远一跳，臆造真实歌名会被 shareName 确定性放行，不能免检）；
   // ②AI 兜底从全量已见候选里挑（如『短视频标题串了梗词导致
   // 所有搜索串都搜不到正主』的场景——直接看整批候选比再搜一轮更有效）
+  // query/matchedBy 值域：'<搜索串>'（启发式）/ 'ai:regen:<串>' / 'ai:pick'
+  const regenIds = new Set();
   if (useAi && !signal?.aborted) {
-    const regen = await aiExtractQueries(sourceInfo, signal).catch(() => []);
+    const candSet = new Set(candidates.map(q => String(q || '').trim().toLowerCase()));
+    const regen = (await aiExtractQueries(sourceInfo, signal).catch(() => []))
+      .filter(q => !candSet.has(q.toLowerCase())); // 与已试过的串去重，不白烧上游
     for (const q of regen) {
       if (signal?.aborted) break;
       try {
-        const hit = await searchOnce(q);
-        if (hit) {
-          console.info(`[${tag}] AI 再生查询命中「${q}」: ${songDesc(hit.song)} ← ${sourceInfo.title}`);
-          return { song: hit.song, query: `ai:${q}` };
+        const hit = await searchOnce(q, regenIds);
+        if (!hit) continue;
+        if (hit.nameHit) {
+          const verdict = await aiConfirmMatch(hit.song, sourceInfo, durationSec, signal);
+          if (verdict === false) {
+            vetoedIds.add(hit.song.id);
+            console.info(`[${tag}] AI 否决再生名命中: ${songDesc(hit.song)} ← ${q}`);
+            continue;
+          }
         }
+        console.info(`[${tag}] AI 再生查询命中「${q}」: ${songDesc(hit.song)} ← ${sourceInfo.title}`);
+        return { song: hit.song, query: `ai:regen:${q}` };
       } catch (e) {
         warnFail(q, e);
       }
@@ -178,12 +207,12 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   }
   if (useAi && seenSongs.size && !signal?.aborted) {
     // 畸形上游数据（ar 非数组等）在 desc 构建处可能 TypeError——
-    // 兜底是增强路径，异常按「无兜底」降级而非 502
-    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds)
+    // 兜底是增强路径，异常按「无兜底」降级而非 502；再生批优先入池
+    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds, regenIds)
       .catch(() => null);
     if (pick) {
       console.info(`[${tag}] AI 兜底命中: ${songDesc(pick)} ← ${sourceInfo.title}`);
-      return { song: pick, query: 'ai' };
+      return { song: pick, query: 'ai:pick' };
     }
   }
   return { song: null, query: null };
