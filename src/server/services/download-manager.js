@@ -90,7 +90,17 @@ function drainWithTimeout(promise, ms = DRAIN_TIMEOUT_MS) {
 // （匹配到的网易词源）——落 provider_data 让任务跨重启可重放、
 // 词源不依赖内存态歌单对象
 function providerDataOf(track) {
-  if (track.qq) return { qq: { mediaMid: track.qq.mediaMid } };
+  const qqMid = track.qq?.mediaMid;
+  if (qqMid) {
+    return {
+      qq: { mediaMid: qqMid },
+      // qq 曲缺词时回落 neteaseId 词源——核验签名需要曲自身名/艺人快照
+      neteaseId: /^\d+$/.test(String(track.neteaseId ?? '')) ? String(track.neteaseId) : null,
+      title: String(track.name || '').slice(0, 300) || null,
+      author: String((Array.isArray(track.ar) ? track.ar : track.artists || [])
+        .map(a => a?.name).filter(Boolean).join(' ')).slice(0, 120) || null
+    };
+  }
   const neteaseId = /^\d+$/.test(String(track.neteaseId ?? '')) ? String(track.neteaseId) : null;
   if (track.bilibili?.bvid) {
     return {
@@ -115,6 +125,11 @@ function providerDataOf(track) {
       },
       neteaseId
     };
+  }
+  // 外部曲缺 provider 定位字段（老镜像/畸形行）但已匹配词源——neteaseId
+  // 单独落 providerData，别让歌词段连词源一起丢
+  if (neteaseId && (BV_TRACK_ID_RE.test(String(track.id)) || YT_TRACK_ID_RE.test(String(track.id)))) {
+    return { neteaseId };
   }
   return null;
 }
@@ -1530,7 +1545,8 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
         downloadAudio: options.downloadAudio !== false,
         downloadLyrics: options.downloadLyrics !== false,
         downloadCover: options.downloadCover !== false,
-        downloadVideo: options.downloadVideo === true && isExternalSongId(queueTask.songId)
+        downloadVideo: options.downloadVideo === true && isExternalSongId(queueTask.songId),
+        providerData: providerDataOf(track)
       }));
       // 死队列不再走收尾重算：接管会让其计数器永久虚高，顺手回调对齐
       recountQueueCounters(queueTask.queueId);
@@ -1916,8 +1932,7 @@ async function retryTask(taskId) {
   // 半途失败不留"任务复位了队列还在 failed"（failed 队列拒绝 start）
   // 复位时顺手刷新 providerData——镜像行的 title/author/neteaseId 可能比
   // 建行时新（改题/重匹配），旧快照会让歌词归属核验按陈旧签名放行
-  const trackRow = playlistTracksRepo.listTracksByPlaylistId(task.playlistId)
-    .find(t => String(t.id) === String(task.songId));
+  const trackRow = playlistTracksRepo.findTrackBySongId(task.playlistId, task.songId);
   const freshProviderData = trackRow ? providerDataOf(trackRow) : undefined;
 
   getDb().transaction(() => {
@@ -1992,9 +2007,15 @@ async function retryQueue(queueId) {
 
   // 行更新+队列状态同事务：半途失败不留"部分任务复位、队列还停在 failed"。
   // retryCount 必须重置——否则 retryCount=3 的任务重试一次又判死
-  // providerData 一并刷新到最新镜像行：title/author/neteaseId 会变
+  // providerData 一并刷新到最新镜像行：title/author/neteaseId 会变。
+  // 同 song_id 重复行取首个——与 createQueue 的 seen 去重/retryTask 的
+  // find 同口径，三处对同一首歌必须取同一行
   const mirrorRows = playlistTracksRepo.listTracksByPlaylistId(queue.playlistId);
-  const providerMap = new Map(mirrorRows.map(t => [String(t.id), providerDataOf(t)]));
+  const providerMap = new Map();
+  for (const t of mirrorRows) {
+    const k = String(t.id);
+    if (!providerMap.has(k)) providerMap.set(k, providerDataOf(t));
+  }
   const resetPaths = [];
   getDb().transaction(() => {
     for (const task of failedTasks) {

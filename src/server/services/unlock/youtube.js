@@ -8,42 +8,63 @@ const { pickByDuration } = require('./match');
 const { aiEnabled, askAiJson, AI_MODEL } = require('../../lib/ai');
 const { getVerdict, upsertVerdict } = require('../../repositories/lyricAi');
 
-// 进 prompt 的字段剥换行/方括号——候选标题/频道名是第三方数据
+// 进 prompt 的字段剥换行/方括号/控制符——候选标题/频道名是第三方数据，
+// C0/C1 控制符（ANSI 转义等）原样进日志与 verdict detail 列，一并剥除
 const cleanField = (s) => String(s ?? '')
-  .replace(/[\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+  .replace(/[\x00-\x1f\x7f-\x9f\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
 
 // 解锁判定键：(歌曲, 候选视频, 模型) 三元组——同一首歌下被批的候选重试即
-// 命中不再问模型；换模型自动失效重判。只持久化 ok=1（正面批准）；ok=0 的
-// 全否不持久化——一次「全都不像」的误判不该把候选永久判死
+// 命中不再问模型；换模型自动失效重判
 const unlockVkey = (songId, videoId) => `${songId}@yt_${videoId}@${AI_MODEL}`;
 
 // 进程内冷却（非持久 verdict——瞬时态不该进库）：
-// - deadCands：批准过的候选取流失败进死簿 30min——死视频每次 resolve 都被
-//   前置再死一遍（fetchPlayer 最坏 ~45s）会顶穿 60s 解锁预算；不写 verdict
-//   因为「死」是瞬态（风控/可恢复），永久 ok=0 会把对的歌判死
+// - deadCands：取流失败的候选进死簿 30min 押尾——死视频每次 resolve 都被
+//   前置再死一遍（fetchPlayer 最坏 ~45s）会顶穿 60s 解锁预算。同一对反复
+//   死（n>=2）升级写 ok=0 verdict 收敛——一次死可能是风控/瞬断，反复死
+//   不是；verdict 一旦落库就永久剔除出 AI 候选池与排序
 // - rejectedAt：AI 全否（pick:0）冷却 10min——verdict 不持久化否决的代价是
-//   重试即重问，冷却把「一直被否的歌反复播放」的 AI 开销收敛到有界
-const deadCands = new Map();
-const rejectedAt = new Map();
-// 在途 AI 判定单飞：同曲同候选集的并发 resolve 共享一次模型调用——
-// 键里带候选集指纹，候选变化（新视频进榜）即新键不复用
+//   重试即重问；冷却按「被拒候选集」生效：搜索漂移出新视频即重新评估，
+//   不让一次 pick:0 把换代后的候选集也吞掉
+// - inflightRank：在途 AI 判定单飞，键带候选集指纹——同曲同候选集的并发
+//   resolve 共享一次模型调用；指纹含顺序是故意的：ans.pick 是首调用方
+//   数组下标，同序才保证搭车者映射回同一个候选
+const deadCands = new Map();   // deadKey -> {at, n}
+const rejectedAt = new Map();  // String(songId) -> {at, ids: Set<videoId>}
 const inflightRank = new Map();
 const DEAD_TTL_MS = 30 * 60 * 1000;
 const REJECT_TTL_MS = 10 * 60 * 1000;
 const deadKey = (info, cand) => `${info.id}:${cand.videoId}`;
+const isDead = (info, cand) => {
+  const d = deadCands.get(deadKey(info, cand));
+  return !!d && Date.now() - d.at < DEAD_TTL_MS;
+};
+const markDead = (info, cand) => {
+  const key = deadKey(info, cand);
+  const n = (deadCands.get(key)?.n || 0) + 1;
+  deadCands.set(key, { at: Date.now(), n });
+  if (n >= 2) {
+    try {
+      upsertVerdict(unlockVkey(info.id, cand.videoId), 'unlock', 0, `stream-dead x${n}`);
+    } catch { /* verdict 落库失败不阻塞解锁 */ }
+  }
+};
 const pruneExpired = (m, ttl) => {
   const now = Date.now();
-  for (const [k, ts] of m) if (now - ts > ttl) m.delete(k);
+  for (const [k, v] of m) if (now - (v.at ?? v) > ttl) m.delete(k);
 };
 
 // AI 核验时长闸筛过的候选：时长分辨不了 live/remix/翻唱/伴奏等同长错配。
-// 判定记忆先行（ok=1 前置、ok=0 剔除——剔除路径给手工 veto 与未来的
-// 确定性否决 writer 预留），未判批次一次调用择最优；
+// 判定记忆先行（ok=1 前置、ok=0 剔除），未判批次一次调用择最优；
 // AI 关闭/哑火 → 判定记忆仍生效、未判候选原序放行（记忆是累积知识，
-// 不随开关旁路；AI 是增强不是门禁）
+// 不随开关旁路；AI 是增强不是门禁）。
+// 返回 {ordered, pickedId}：批准 verdict（ok=1）延迟到 resolve() 里
+// 该候选 fetchPlayer 验证成功才落库——先写库遇到死流会让死候选
+// 永久压在队首反复重死，顶穿解锁预算
 async function aiRankCandidates(info, usable, signal) {
+  const pass = (ordered) => ({ ordered, pickedId: null });
   // info.id 是 verdict 键的曲维——缺了会把不同歌的判定串到同一键域，宁退
-  if (info?.id == null) return usable;
+  if (info?.id == null) return pass(usable);
+  const sid = String(info.id);
   const approved = [];
   const unjudged = [];
   const dead = [];
@@ -52,21 +73,24 @@ async function aiRankCandidates(info, usable, signal) {
     let v = null;
     try { v = getVerdict(unlockVkey(info.id, cand.videoId), 'unlock'); } catch { /* 库不可用不阻塞解锁 */ }
     if (v?.ok === 0) continue;
-    if (v?.ok === 1) {
-      (deadCands.has(deadKey(info, cand)) ? dead : approved).push(cand);
-    } else unjudged.push(cand);
+    // 死簿对全量候选生效：未判候选死过同样押尾、不再喂回 AI prompt
+    if (v?.ok === 1) (isDead(info, cand) ? dead : approved).push(cand);
+    else (isDead(info, cand) ? dead : unjudged).push(cand);
   }
-  if (!unjudged.length) return [...approved, ...dead];
-  if (!aiEnabled() || signal?.aborted) return [...approved, ...unjudged, ...dead];
-  // 全否冷却：近期被判「全都不像」且无新候选结论时本轮直接跳过 AI——
-  // 负结果无持久化，冷却是「一直被否的歌反复解锁」的开销闸
-  const rejTs = rejectedAt.get(info.id);
-  if (rejTs && Date.now() - rejTs < REJECT_TTL_MS) {
-    return [...approved, ...dead];   // 未判候选本轮全部跳过
+  if (!unjudged.length) return pass([...approved, ...dead]);
+  if (!aiEnabled() || signal?.aborted) return pass([...approved, ...unjudged, ...dead]);
+  // 全否冷却按被拒候选集生效：候选集原封未变才跳过 AI；有任何新视频
+  // 进榜即重新评估（负结果不持久化的设计意图延伸到冷却层）
+  const rej = rejectedAt.get(sid);
+  if (rej && Date.now() - rej.at < REJECT_TTL_MS
+      && unjudged.every(c => rej.ids.has(c.videoId))) {
+    console.info(`[unlock] ${sid} 候选集命中全否冷却，跳过 AI（${unjudged.length} 条）`);
+    return pass([...approved, ...dead]);
   }
-  // 单飞：同一 (曲,候选集) 的在途判定直接搭车。promise 承载的是首调用方的
-  // signal——它 abort 时共享调用方拿到 null 走原序放行，属可接受的降级
-  const fkey = `${info.id}:${unjudged.map(c => c.videoId).join(',')}`;
+  // 单飞：同一 (曲,候选集) 的在途判定直接搭车。共享 promise 不带调用方
+  // signal——首调用方 abort 不该让搭车者陪绑降级（同 unlockInfoInflight
+  // 先例）；10s timeoutMs 是内层自净上限。搭车者用自己的 signal 决定吃不吃结果
+  const fkey = `${sid}:${unjudged.map(c => c.videoId).join(',')}`;
   if (!inflightRank.has(fkey)) {
     inflightRank.set(fkey, (async () => {
       const desc = unjudged.map((c, i) =>
@@ -74,7 +98,6 @@ async function aiRankCandidates(info, usable, signal) {
       const ans = await askAiJson({
         timeoutMs: 10000,
         maxTokens: 32,
-        signal,
         system: '你是音乐解锁助手。从视频站候选里选出与目标同一首歌的正式音源'
           + '（官方音源/Official Audio/MV/自动投稿/同曲完整版可算；live/remix/翻唱'
           + '/nightcore/8D/伴奏/卡拉OK/短剪辑不算，除非目标本身就是该版本）。'
@@ -89,19 +112,19 @@ async function aiRankCandidates(info, usable, signal) {
     })().catch(() => null).finally(() => inflightRank.delete(fkey)));
   }
   const ans = await inflightRank.get(fkey);
-  if (signal?.aborted || ans == null) return [...approved, ...unjudged, ...dead];
+  if (signal?.aborted || ans == null) return pass([...approved, ...unjudged, ...dead]);
   if (ans.pick === 0) {
-    rejectedAt.set(info.id, Date.now());
+    rejectedAt.set(sid, { at: Date.now(), ids: new Set(unjudged.map(c => c.videoId)) });
     pruneExpired(rejectedAt, REJECT_TTL_MS);
-    console.info(`[unlock] ${info.id} AI 判定 ${unjudged.length} 条 YouTube 候选均非目标曲`);
-    return [...approved, ...dead];
+    console.info(`[unlock] ${sid} AI 判定 ${unjudged.length} 条 YouTube 候选均非目标曲`);
+    return pass([...approved, ...dead]);
   }
   const picked = unjudged[ans.pick - 1];
-  try {
-    upsertVerdict(unlockVkey(info.id, picked.videoId), 'unlock', 1, cleanField(picked.title));
-  } catch { /* verdict 落库失败不阻塞解锁 */ }
-  console.info(`[unlock] ${info.id} AI 选定候选 ${ans.pick}/${unjudged.length}: ${cleanField(picked.title)}`);
-  return [...approved, picked, ...unjudged.filter((_, i) => i !== ans.pick - 1), ...dead];
+  console.info(`[unlock] ${sid} AI 选定候选 ${ans.pick}/${unjudged.length}: ${cleanField(picked.title)}`);
+  return {
+    ordered: [...approved, picked, ...unjudged.filter((_, i) => i !== ans.pick - 1), ...dead],
+    pickedId: picked.videoId
+  };
 }
 
 /**
@@ -116,7 +139,7 @@ async function resolve(info, { signal, purpose } = {}) {
   const usable = pickByDuration(candidates, info.durationMs, c => c.durationSec);
   if (!usable.length) return null;
   // AI 核验/排序后的候选序：批准记忆与模型选定在前，死候选押尾
-  const ordered = await aiRankCandidates(info, usable, signal);
+  const { ordered, pickedId } = await aiRankCandidates(info, usable, signal);
   if (!ordered.length) {
     console.info(`[unlock] ${info.id} youtube: ${usable.length} 候选全部被判定记忆否决`);
     return null;
@@ -129,14 +152,21 @@ async function resolve(info, { signal, purpose } = {}) {
       const audio = pickStreamList(player.streamingData, 'audio',
         purpose === 'download' ? 'best' : '')[0];
       if (audio?.url) {
+        // AI 选定候选取流验证成功才落批准 verdict——「批准」承诺的是
+        // 「是这首歌且能播」，未经流验证的批准会把死候选永久压队首
+        if (pickedId && cand.videoId === pickedId) {
+          try {
+            upsertVerdict(unlockVkey(info.id, pickedId), 'unlock', 1, cleanField(cand.title));
+          } catch { /* verdict 落库失败不阻塞解锁 */ }
+        }
         return { url: audio.url, br: audio.bitrate || null, durationSec: cand.durationSec };
       }
       failed += 1;
-      deadCands.set(deadKey(info, cand), Date.now());
+      markDead(info, cand);
     } catch (e) {
       if (signal?.aborted) throw e;
       failed += 1;
-      deadCands.set(deadKey(info, cand), Date.now());
+      markDead(info, cand);
       // 单候选不可播放（地区锁/年龄门）换下一个候选
     }
   }

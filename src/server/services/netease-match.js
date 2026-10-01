@@ -16,20 +16,37 @@ const normToken = (s) => String(s || '')
 // 单 token 纯歌名查询的名互包含是强证据，不为它多花一次模型调用；
 // 候选艺人字段缺失同样判不出交集——按「需要复核」处理
 // 查询串里的修饰 token 不算艺人引用——'recovery' 含 'cover'、'olive' 含
-// 'live' 这类子串碰撞会制造假 overlap 跳过本应触发的复核
+// 'live' 这类子串碰撞会制造假 overlap 跳过本应触发的复核。成员判定用
+// 剥离全部非标点/字母/数字的严归一（normToken 不剥 ASCII 标点，'cover.'
+// /'[mv]' 会绕过精确匹配集合）
 const QUERY_NOISE = new Set([
   'cover', 'covers', 'covered', 'coverver', '커버', '翻唱', '翻弹', '演奏',
   'live', 'official', 'mv', 'audio', 'video', 'lyric', 'lyrics',
-  'hd', '4k', '8k', 'remix', 'full', '完整版',
+  'hd', '4k', '8k', 'remix', 'full', '完整版', '完整',
+  // 高频碰撞面：短词 token 极易被艺人名吸收成假交集（'ep'⊂'deeppurple'、
+  // 'ost'⊂'ghost'、'op'⊂'hope'、'ed'⊂'edsheeran'、'by'⊂'baby'）
+  'feat', 'ft', 'by', 'ver', 'version', 'ep', 'op', 'ed', 'ost',
+  'mix', 'edit', 'demo', 'pv', 'inst', 'instrumental', 'acoustic',
+  'karaoke', '8d', 'slowed', 'sped', 'remaster', 'remastered',
+  'single', 'album', 'topic',
+  '现场', '伴奏', '演唱会', '单曲', '专辑', '中字', '字幕', '合集',
+  '试听', '自制', '搬运', '转载',
 ]);
+const noiseKey = (t) => String(t ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 const nameHitNeedsConfirm = (song, q, sourceInfo) => {
   const tokens = String(q).trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) return false;
-  const refs = [sourceInfo?.author, ...tokens.filter(t => !QUERY_NOISE.has(normToken(t)))]
+  // author 同样过噪声闸——频道名就叫 'Cover'/'LIVE官方' 时它是假引用
+  const refs = [sourceInfo?.author, ...tokens]
+    .filter(t => !QUERY_NOISE.has(noiseKey(t)))
     .map(normToken).filter(x => x.length >= 2);
   const arts = (Array.isArray(song.ar || song.artists) ? (song.ar || song.artists) : [])
     .map(a => normToken(a?.name)).filter(x => x.length >= 2);
-  return !arts.some(a => refs.some(r => a.includes(r) || r.includes(a)));
+  return !arts.some(a => refs.some(r =>
+    a.includes(r)
+    // 反向（ref 吞艺人名）加两道闸：艺人本身叫 'Live'/'MV' 之类的噪声词，
+    // 或短到 <3 字符——'olive' 吞 'live'、'lemon' 吞 'lemo' 都是假交集
+    || (a.length >= 3 && !QUERY_NOISE.has(noiseKey(a)) && r.includes(a))));
 };
 
 const shareName = (a, b) => {
@@ -264,4 +281,4 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   return { song: null, query: null };
 }
 
-module.exports = { matchNeteaseSong, shareName, MATCH_DUR_TOLERANCE_SEC };
+module.exports = { matchNeteaseSong, shareName, nameHitNeedsConfirm, MATCH_DUR_TOLERANCE_SEC };

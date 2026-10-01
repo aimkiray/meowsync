@@ -12,6 +12,8 @@ let aiOn = true;
 let aiScript = [];       // askAiJson 依次返回（null=模型哑/超时）
 let apiScript = [];      // callNeteaseApi 依次返回 {songs:[...]}（数组即 result.songs）
 const apiCalls = [];     // 记录每次云搜的 keywords + 是否带 signal
+const aiCalls = [];      // 记录每次 AI 调用——「零调用」断言不能只靠脚本剩量
+                          // （空脚本上调用返回 null 不留痕迹）
 
 const apiPath = require.resolve('../src/server/services/netease-api.js');
 const aiPath = require.resolve('../src/server/lib/ai.js');
@@ -24,14 +26,14 @@ require.cache[apiPath] = { id: apiPath, filename: apiPath, loaded: true, exports
 } };
 require.cache[aiPath] = { id: aiPath, filename: aiPath, loaded: true, exports: {
   aiEnabled: () => aiOn,
-  askAiJson: async () => (aiScript.length ? aiScript.shift() : null),
+  askAiJson: async () => { aiCalls.push(1); return aiScript.length ? aiScript.shift() : null; },
   AI_MODEL: 'stub',
 } };
-const { matchNeteaseSong } = require('../src/server/services/netease-match.js');
+const { matchNeteaseSong, nameHitNeedsConfirm } = require('../src/server/services/netease-match.js');
 
 const song = (id, name, dtMs = 200000, ar = '某人') => ({ id, name, dt: dtMs, ar: [{ name: ar }], al: { name: 'al' } });
 const src = { title: 'T', author: 'A' };
-const reset = () => { aiOn = true; aiScript = []; apiScript = []; apiCalls.length = 0; };
+const reset = () => { aiOn = true; aiScript = []; apiScript = []; apiCalls.length = 0; aiCalls.length = 0; };
 
 test('歌名互包含 → 启发式命中返回原查询串，不触发 AI', async () => {
   reset();
@@ -140,7 +142,31 @@ test('组合查询名命中·艺人有交集 → 不过 AI（确定性放行）'
   apiScript = [[song(1, 'Lemon', 200000, '米津玄師')]];
   const r = await matchNeteaseSong(['米津玄師 Lemon', 'Lemon'], 200, 't', null, src);
   assert.equal(r.song.id, 1);
-  assert.equal(aiScript.length, 0);  // 艺人重叠——零 AI 调用
+  assert.equal(aiCalls.length, 0);   // 艺人重叠——一次 AI 都不该打
+});
+
+test('组合查询噪声词不造假交集：cover 修饰撞上含 cover 的艺人名仍复核', async () => {
+  reset();
+  // 'Lemon cover' 里的 'cover' 是修饰词——'Discovery' 艺人名虽然字面含
+  // 'cover'，那是修饰 token 被吸收成假交集，不是真艺人重叠 → 必须过复核
+  apiScript = [[song(1, 'Lemon', 200000, 'Discovery')]];
+  aiScript = [{ match: true }];
+  const r = await matchNeteaseSong(['Lemon cover'], 200, 't', null, { title: 'Lemon', author: 'up' });
+  assert.equal(aiCalls.length, 1);   // 复核确实发起——修复前假交集会免检放行
+  assert.equal(r.song.id, 1);
+});
+
+test('nameHitNeedsConfirm 边界：噪声艺名/噪声 token/单 token', () => {
+  // 艺人本身叫 Live（噪声词）：'olive' 吞 'live' 是假交集 → 需要复核
+  assert.equal(nameHitNeedsConfirm(song(1, 'X', 0, 'Live'), 'olive lemon', { author: 'up' }), true);
+  // 带标点的噪声 token（'cover.'）被严归一滤掉，否则它吞艺人名 'Cover' 造假交集
+  assert.equal(nameHitNeedsConfirm(song(1, 'X', 0, 'Cover'), 'lemon cover.', { author: 'up' }), true);
+  // 真艺人交集仍免检
+  assert.equal(nameHitNeedsConfirm(song(1, 'X', 0, '米津玄師'), '米津玄師 lemon', { author: 'up' }), false);
+  // 单 token 纯歌名查询恒免检
+  assert.equal(nameHitNeedsConfirm(song(1, 'X', 0, 'nobody'), 'lemon', { author: 'up' }), false);
+  // 频道名就叫噪声词时 author 也不作引用
+  assert.equal(nameHitNeedsConfirm(song(1, 'X', 0, 'Cover'), 'lemon mix', { author: 'Cover' }), true);
 });
 
 test('再生批在兜底池截断窗口优先——启发式噪声挤不掉正主', async () => {

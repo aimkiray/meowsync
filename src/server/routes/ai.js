@@ -49,8 +49,8 @@ function cjkRatio(text) {
 // "open your eyes"/"speed of light"/「曲がり角」这类正常行首不能误杀
 const NON_LYRIC_RE = /^(?:(?:纯音乐|instrumental|作曲|作词|编曲|监制|制作人|出品|录入|歌词制作)|(?:op|sp|music|词|曲)\s*[:：])/i;
 
-// callNeteaseApi 不透传 signal——上游 lyric 请求会跑到自身超时（有界），
-// 调用点在拿到结果后靠 ownsLyric/abort 检查丢弃迟到的数据
+// callNeteaseApi 第三参 options.signal 端到端透传到 request 层——
+// 客户端断连即杀上游 socket，不必等自身超时
 async function fetchLyricRaw(id, signal) {
   const qqM = id.match(QQ_SONG_ID_RE);
   if (qqM) {
@@ -58,7 +58,7 @@ async function fetchLyricRaw(id, signal) {
     const r = await getLyric(qqM[1], signal);
     return { lrc: r.lyric || '', tlyric: r.trans || '' };
   }
-  const res = await callNeteaseApi('lyric', { id });
+  const res = await callNeteaseApi('lyric', { id }, { signal });
   return {
     lrc: res.body?.lrc?.lyric || '',
     tlyric: res.body?.tlyric?.lyric || '',
@@ -239,7 +239,6 @@ app.post('/ai/lyric-translate', async (c) => {
 // 「错歌词比没歌词更糟」：判不符时前端把歌词整组隐藏。
 // 判定按词源 id 落库（song_ai_verdict kind='lyric'）——同一错配不重复问模型
 app.post('/ai/lyric-verify', async (c) => {
-  if (!aiEnabled()) return fail(c, 503, 'AI 未配置', { enabled: false });
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 64 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
@@ -248,11 +247,16 @@ app.post('/ai/lyric-verify', async (c) => {
   const sourceAuthor = String(body.sourceAuthor || '').trim();
   if (!sourceTitle) return fail(c, 400, '缺少 sourceTitle');
   const signal = c.req.raw.signal;
-  const vkey = lyricVerdictKey(id, sourceTitle, sourceAuthor);
+  // 键入参用未 trim 的原串——键函数内置 slice→lower→trim，与下载链
+  // providerData 截断值产同键；先 trim 再传会让截断窗口错位
+  const vkey = lyricVerdictKey(id, body.sourceTitle, body.sourceAuthor);
 
+  // 已落库判定先查再闸：AI 关掉后缓存 verdict 照常生效（记忆不随开关
+  // 旁路），只是不能再产新判定——未命中才 503
   const verdictOf = () => lyricAiRepo.getVerdict(vkey, 'lyric');
   const cached = verdictOf();
   if (cached) return c.json({ code: 200, ok: !!cached.ok, cached: true });
+  if (!aiEnabled()) return fail(c, 503, 'AI 未配置', { enabled: false });
   // 缓存未命中才吃配额
   if (!rateLimit(c, 'ai-verify', 20)) return fail(c, 429, '请求过于频繁');
 
