@@ -5,6 +5,7 @@ const { isAllowedHost, streamVault } = require('./proxy');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../lib/netease-match');
 const { tokenMatches } = require('../lib/token-eq');
+const { BVID_RE, BVID_IN_TEXT_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
@@ -49,7 +50,7 @@ const isBiliLinkHost = (h) => BILI_LINK_HOSTS.some(x => h === x || h.endsWith('.
 function pickBvidFromUrl(href) {
   // 大小写宽容：三层口径统一（前端 isBilibiliInput/?bili= 都收小写）——
   // bvid 本身大小写敏感，错大小写交给上游 view API 判（-404 照常报错）
-  const m = href.match(/BV[0-9A-Za-z]{10}/i);
+  const m = href.match(BVID_IN_TEXT_RE);
   if (m) return m[0];
   const av = href.match(/(?:^|[/?&=])av(\d+)/i);
   if (av) return { aid: Number(av[1]) };
@@ -284,7 +285,7 @@ app.get('/bilibili/stream', async (c) => {
   }
   const bvid = c.req.query('bvid');
   const kind = c.req.query('kind') === 'video' ? 'video' : 'audio';
-  if (!/^BV[0-9A-Za-z]{10}$/.test(String(bvid || ''))) {
+  if (!BVID_RE.test(String(bvid || ''))) {
     return c.json({ code: 400, message: 'invalid bvid' }, 400);
   }
   try {

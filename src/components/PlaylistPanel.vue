@@ -141,6 +141,7 @@ import { downloadsApi } from '../api/downloads'
 import { copyText, shareOrCopy } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
+import { isNeteasePlaylist } from '../shared/predicates.js'
 import { toast, pixelConfirm } from '../lib/feedback'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -312,7 +313,7 @@ export default {
     // local_pl_/saved_queue_ 经 ?mix= 内容链与服务端镜像拿到远端单同款能力；
     // 打开网易云仅远端数字 id 单有意义
     const isShareShell = (playlist) => isSingleSongShellId(playlist?.id)
-    const isNeteasePlaylist = (playlist) => /^\d+$/.test(String(playlist?.id ?? ''))
+    // isNeteasePlaylist 实现收敛进 shared/predicates（纯数字 id）
 
     // 下载歌单——同一歌单在途请求合并：双击/连点不发第二个 POST，
     // 服务端对活跃队列本就 409，这里省掉那条注定失败的往返与错误 toast

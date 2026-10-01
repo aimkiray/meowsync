@@ -6,6 +6,7 @@
 // 每次都重取，且最终拉流要么本进程要么经 /audio-proxy 回源（不能拿 vkey 的
 // 机器与拉流的机器不同 IP）。
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('./net-guard');
+const { SONGMID_RE, pickQqFromUrl } = require('../../shared/predicates.js');
 const { createHash } = require('crypto');
 const { Agent } = require('undici');
 
@@ -137,8 +138,8 @@ async function fcg(path, extraSignal, { host = 'c.y.qq.com', headers } = {}) {
   return res.json();
 }
 
-// songmid（字母数字 ~14 位）与 songid（纯数字）是两把键——文件名用 media_mid
-const SONGMID_RE = /^[0-9A-Za-z]{10,20}$/;
+// songmid（字母数字 ~14 位）与 songid（纯数字）是两把键——文件名用 media_mid。
+// SONGMID_RE 与 pickQqFromUrl 的唯一真相源在 src/shared/predicates.js（顶部 require）
 
 // QQ 音流 sip 宿主白名单（routes/qq.js 与 file-downloader 共用）：qqmusic.qq.com
 // 全族（ws./isure./dl./cc.stream.qqmusic.qq.com 等）+ tc.qq.com 的音乐子族。
@@ -375,33 +376,7 @@ function normalizeTrack(s) {
   };
 }
 
-// ── 分享链接解析：提取 songmid/songid/disstid/albummid；c.y.qq.com 短链逐跳跟随
-function pickQqFromUrl(href) {
-  // p=%7B...%7D 编码 JSON 载荷先解码回明文——songmid/disstid 正则吃的是字面量
-  const pEnc = href.match(/[?&]p=([^&]+)/i)?.[1];
-  if (pEnc && /%[0-9a-f]{2}/i.test(pEnc)) {
-    try { href += '&' + decodeURIComponent(pEnc); } catch { /* 残缺编码不致命 */ }
-  }
-  // 歌单形态先于 mid：playlist?id=N&p={"songmid":"x"} 这类链接语义是歌单，
-  // 内嵌 songmid 是载体噪音——先解出单曲等于把歌单丢成一首
-  const diss = href.match(/taoge\.html\?[^#]*?\bid=(\d+)/i)?.[1]
-    || href.match(/\/playlist\/(\d+)/i)?.[1]
-    || href.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1];  // qqmusic://qq.com/playlist?id=N
-  if (diss) return { disstid: diss };
-  // ?qq=<mid> 是本站分享链形态——与 ?yt= 同口径也在这里收
-  const mid = href.match(/[?&]qq=([0-9A-Za-z]{10,20})/i)?.[1]
-    || href.match(/songmid=([0-9A-Za-z]{10,20})/i)?.[1]
-    || href.match(/songDetail\/([0-9A-Za-z]{10,20})/i)?.[1]
-    || href.match(/\/song\/([0-9A-Za-z]{10,20})\.html/i)?.[1]
-    || href.match(/["']?songmid["']?\s*:\s*["']([0-9A-Za-z]{10,20})/i)?.[1];  // qqmusic://...?p={"songmid":"x"}
-  if (mid) return { mid };
-  const songid = href.match(/songid=(\d+)/i)?.[1];
-  if (songid) return { songid };
-  const albummid = href.match(/albumDetail\/([0-9A-Za-z]{10,20})/i)?.[1];
-  if (albummid) return { albummid };
-  return null;
-}
-
+// ── 分享链接解析用共享表 pickQqFromUrl（src/shared/predicates.js）；
 // c.y.qq.com/base/fcgi-bin/u?__= 短链——手动逐跳跟随（与 parseBvid 同款防线：
 // 每跳过 normalizeOutboundUrl + *.qq.com 域白 + 公网 IP + 钉扎建连）
 async function resolveQqInput(input, extraSignal) {

@@ -3,11 +3,11 @@ const { normalizeOutboundUrl } = require('../lib/net-guard');
 const { isAllowedHost, streamVault } = require('./proxy');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchNeteaseSong } = require('../lib/netease-match');
+const { extractYouTubeId } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
 const YT_TIMEOUT_MS = 15000;
-const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
 // ── Innertube ──
 // 公开 web 客户端 key（嵌在 youtube.com 前端里，供匿名访客调 youtubei）。
@@ -63,18 +63,10 @@ async function fetchPlayer(videoId, extraSignal) {
   throw lastErr || new Error('所有客户端形态均失败');
 }
 
-// videoId 提取：watch?v= / youtu.be/ / shorts/ / embed/ / live/ / 本站 ?yt= 分享链 /
-// 裸 11 位 id。URL 形态优先，裸 id 最后——顺序敏感（裸 id 也吃 youtu.be 路径）
-function pickYouTubeId(input) {
-  const s = String(input || '').trim();
-  if (!s) return null;
-  const m = s.match(/(?:youtube(?:-nocookie)?\.com|music\.youtube\.com)\/(?:watch\?[^ ]*?\bv=|shorts\/|embed\/|live\/|v\/)([A-Za-z0-9_-]{11})/i)
-    || s.match(/youtu\.be\/([A-Za-z0-9_-]{11})/i)
-    || s.match(/[?&]yt=([A-Za-z0-9_-]{11})/i);
-  if (m) return m[1];
-  // 裸 id 须含非数字字符——纯数字 11 位与网易云 id 撞型
-  return (YT_ID_RE.test(s) && /\D/.test(s)) ? s : null;
-}
+// videoId 提取委托共享形态表 extractYouTubeId（src/shared/predicates.js）：
+// watch?v= / youtu.be/ / shorts/ / embed/ / live/ / 本站 ?yt= 分享链 / 裸 11 位 id。
+// URL 形态优先，裸 id 最后（须含非数字——纯数字 11 位与网易云 id 撞型）
+const pickYouTubeId = extractYouTubeId;
 
 // 歌名提取：YouTube 标题约定形如「Artist - Title (Official Video)」。
 // 先剥括号修饰串，再按 ' - ' 切——左侧是歌手；无分隔符时用频道名兜底

@@ -306,7 +306,7 @@ import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSong
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractNeteaseSongId, extractYouTubeId } from './lib/url'
+import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike } from './lib/url'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -1910,7 +1910,7 @@ export default {
           action = 'QQ 搜索'
           const kw = q.replace(/^qq[:：]/i, '').trim()
           if (!kw) return
-          if (isQQInput(kw) || (/^[0-9A-Za-z]{10,20}$/.test(kw) && /\d/.test(kw) && /[a-z]/i.test(kw))) {
+          if (isQQInput(kw) || isSongmidLike(kw)) {
             try {
               pickerAbort = new AbortController()
               const data = await musicApi.resolveQQ(isQQInput(kw) ? kw : `qq:${kw}`, pickerAbort.signal)

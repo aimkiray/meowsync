@@ -13,90 +13,26 @@ export function httpsCover(url) {
   return s.replace(/^http:\/\//i, 'https://');
 }
 
-// B 站输入识别：BV 号（真实 bvid 恒 BV1 头+9 位）、av 号、
-// bilibili.com/b23.tv 链接。\b 词边界防长 token 误吞
-export function isBilibiliInput(input) {
-  const s = String(input || '');
-  // QQ 链接/载荷里的 songmid 理论可呈 BV1xxxxxxxxx 形态——域/scheme 前置
-  // 排除防撞车（qq.com 任意子域、qqmusic:* scheme 都按 QQ 处理）
-  if (/(?:^|[/:.\s'"])(?:[a-z0-9-]+\.)*qq\.com/i.test(s) || /qqmusic[:./]/i.test(s)) return false;
-  if (/^qq[:：]/i.test(s.trim())) return false;  // qq: 前缀语法专属于 QQ 输入，不给 BV 形 mid 抢走
-  return /\bBV1[0-9A-Za-z]{9}\b/i.test(s) // 小写 bv 也收下——服务端会校验真实 bvid
-    || /bilibili\.com|b23\.tv/i.test(s)
-    || /(?:^|\/)av\d+/i.test(s);
-}
-
-// YouTube URL 形态表（顺序敏感）——与服务端 pickYouTubeId 前半段逐字符一致
-const YT_URL_RES = [
-  /(?:youtube(?:-nocookie)?\.com|music\.youtube\.com)\/(?:watch\?[^ ]*?\bv=|shorts\/|embed\/|live\/|v\/)([A-Za-z0-9_-]{11})/i,
-  /youtu\.be\/([A-Za-z0-9_-]{11})/i,
-  /[?&]yt=([A-Za-z0-9_-]{11})/i,
-];
-
-// YouTube 视频 id 提取：URL 形态 + 裸 11 位 id（须含非数字，纯数字与网易云 id 撞型）。
-// 与服务端 pickYouTubeId 同一套形态表
-export function extractYouTubeId(input) {
-  const s = String(input || '').trim();
-  if (!s) return null;
-  for (const re of YT_URL_RES) {
-    const m = s.match(re);
-    if (m) return m[1];
-  }
-  // 裸 id 兜底：与服务端 pickYouTubeId 形态表对齐；前端调用点被
-  // isYouTubeInput（仅 URL 形态）门控后实际吃不到这条，保留只为表完整
-  return (/^[A-Za-z0-9_-]{11}$/.test(s) && /\D/.test(s)) ? s : null;
-}
-
-// YouTube 输入识别：只认无歧义的 URL 形态——裸 11 位串与搜索关键词天然歧义
-// （`lofi1234567` 这类 11 位词会被误当 videoId 劫持进导入流程），裸 id 输入
-// 走正常搜索；想用裸 id 可以拼 youtu.be/<id>
-export function isYouTubeInput(input) {
-  const s = String(input || '').trim();
-  return !!s && YT_URL_RES.some(re => re.test(s));
-}
-
-// QQ 音乐输入识别：只认无歧义形态——y.qq.com 系链接（含 c.y.qq.com 短链，
-// 链接内无 id 时服务端跳解）、?qq= 本站还原链、qqmusic:// 协议、songid 参数。
-// 裸 songmid（14 位字母数字）与歌单 disstid（纯数字）跟关键词/网易云 id 同型
-// 歧义，裸串一律走正常搜索。注意 qq: 是点歌台「QQ 曲库搜索」前缀不是歌曲
-// 链接——收进 URL_RES 会让 qq:<10-20位字母数字关键词>被劫持去 resolve
-const QQ_SONG_URL_RES = [
-  /songmid=([0-9A-Za-z]{10,20})/i,
-  /songDetail\/([0-9A-Za-z]{10,20})/i,
-  /qq\.com\/[^ ]*?\/song\/([0-9A-Za-z]{10,20})\.html/i,
-  /[?&]qq=([0-9A-Za-z]{10,20})/i,
-  /[?&]songid=(\d+)/i,
-];
-
-export function isQQInput(input) {
-  const s = String(input || '').trim();
-  if (!s) return false;
-  if (extractQQPlaylistId(s)) return false; // 歌单链接走歌单导入分支，不进单曲导入
-  return QQ_SONG_URL_RES.some(re => re.test(s)) || /qqmusic:\/\//i.test(s)
-    || /^(?:https?:\/\/)?(?:[a-z0-9]+\.)*y\.qq\.com\//i.test(s);
-}
-
-// QQ 歌单识别：y.qq.com/n/ryqq[_v2]/playlist/<disstid>、分享页 taoge.html?id=
-export function extractQQPlaylistId(input) {
-  const s = String(input || '').trim();
-  if (!/(?:y\.qq\.com|qq\.com|qqmusic)/i.test(s)) return null;
-  return s.match(/\/playlist\/(\d+)/i)?.[1]
-    || s.match(/taoge\.html[^ ]*?[?&]id=(\d+)/i)?.[1]
-    || s.match(/playlist\?[^ ]*?\bid=(\d+)/i)?.[1]  // qqmusic://qq.com/playlist?id=N
-    || s.match(/[?&]disstid=(\d+)/i)?.[1]
-    || null;
-}
-
-// 网易云歌曲 id 提取：music.163.com/song?id= / song/N / ?song=N / 裸数字。
-// 点歌框语境下裸数字即歌曲 id（歌单 id 歧义由外层语义决定）
-export function extractNeteaseSongId(input) {
-  const s = String(input || '').trim();
-  if (!s) return null;
-  // song\? 吃掉字面 ? 后接 \bid=——id 是首参（song?id=N）或非首参（song?x=1&id=N）
-  // 都命中；不要再要求第二个 [?&]，否则主流形式全灭退回关键词搜索
-  const m = s.match(/song\?[^ ]*?\bid=(\d+)/i)        // music.163.com/[#/]song?id=N
-    || s.match(/\/song\/(\d+)/i)                      // .../song/N
-    || s.match(/[?&]song=(\d+)/i);                    // 本站 ?song=N 分享链
-  if (m) return m[1];
-  return /^\d+$/.test(s) ? s : null;
-}
+// 输入谓词唯一真相源在 src/shared/predicates.js（服务端 require(ESM) 同消费）。
+// 此处 re-export 保持既有调用面不变
+export {
+  SONGMID_RE,
+  isSongmidLike,
+  isNeteasePlaylist,
+  BVID_RE,
+  NETEASE_ID_RE,
+  SINGLE_SONG_PREFIX,
+  SAVED_QUEUE_PREFIX,
+  LOCAL_PLAYLIST_PREFIX,
+  isLocalPlaylistId,
+  isEphemeralPlaylistId,
+  isSingleSongShellId,
+  parseNumericId,
+  isBilibiliInput,
+  extractYouTubeId,
+  isYouTubeInput,
+  isQQInput,
+  extractQQPlaylistId,
+  pickQqFromUrl,
+  extractNeteaseSongId,
+} from '../shared/predicates.js';
