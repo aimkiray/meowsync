@@ -865,7 +865,7 @@ export default {
         if (seq !== statusCheckSeq) return // 已有更新的请求在飞，丢弃本次结果
         // 畸形响应（如反代把 API 误指到静态服返回 HTML 200）必须当失败处理，
         // 否则 || [] 会把全部"已下载"标记静默清成未下载
-        const tasks = response.data?.data
+        const tasks = response?.data
         if (!Array.isArray(tasks)) {
           throw new Error('任务列表响应格式异常')
         }
@@ -949,7 +949,7 @@ export default {
             downloadLyrics: true,
             downloadCover: true
           })
-          const submittedTask = response.data?.data
+          const submittedTask = response?.data
           // completed 短路（幂等返回）才跳过轮询；pending/downloading 进入轮询
           if (submittedTask?.status !== 'completed') {
             // 轮询窗口封顶 10min：超时只报"仍在后台"，任务在服务端继续跑
@@ -963,7 +963,7 @@ export default {
               let stData
               try {
                 const st = await downloadsApi.getSongDownloadStatus(ownerPlaylistId, song.id)
-                stData = st.data?.data
+                stData = st?.data
                 pollErrors = 0
               } catch (pollErr) {
                 if (++pollErrors >= 3) throw pollErr

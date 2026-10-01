@@ -219,10 +219,10 @@ async function loadQueues(options = {}) {
     const response = await downloadsApi.listQueues();
     // 响应体非 envelope（如同源静态服的 index.html 200）：不能当空列表吞掉，
     // 抛错走 catch → 首载显示错误态而不是"还没有下载队列"假象
-    if (!response.data || !Array.isArray(response.data.data)) {
+    if (!response || !Array.isArray(response.data)) {
       throw new Error('接口返回了非预期内容（可能打到了静态服务器）');
     }
-    const nextQueues = response.data.data;
+    const nextQueues = response.data;
     const previousSelectedQueueId = selectedQueue.value?.id ?? null;
     const queuesChanged = hasCollectionChanged(queues.value, nextQueues, hasQueueChanged);
 
@@ -275,15 +275,15 @@ async function loadTasks(queueId, options = {}) {
     if (String(selectedQueue.value?.id) !== String(queueId)) return;
     // 与 loadQueues 对齐：打错部署（静态服务器返回 HTML）不能让任务面板
     // 永远显示"还没有任务"
-    if (!response.data || !Array.isArray(response.data.data?.tasks)) {
+    if (!response || !Array.isArray(response.data?.tasks)) {
       throw new Error('任务列表响应格式异常');
     }
-    const nextTasks = response.data.data.tasks;
+    const nextTasks = response.data.tasks;
     if (hasCollectionChanged(tasks.value, nextTasks, hasTaskChanged)) {
       tasks.value = nextTasks;
     }
     // 顺手用同一快照刷新选中队列行（避免等下一轮 listQueues 才更新状态）
-    const freshQueue = response.data.data.queue;
+    const freshQueue = response.data.queue;
     if (freshQueue && selectedQueue.value) {
       selectedQueue.value = freshQueue;
     }

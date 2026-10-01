@@ -331,7 +331,7 @@ export default {
         if (isLocalPlaylistId(playlist.id)) {
           try {
             const mirror = await downloadsApi.mirrorLocalPlaylist(playlist)
-            const d = mirror.data?.data || {}
+            const d = mirror?.data || {}
             if (d.skipped) mirrorNote += `（跳过 ${d.skipped} 首不支持下载的曲目）`
             if (d.truncated) mirrorNote += `（超出 ${2000} 首上限的部分未包含）`
           } catch (mirrorErr) {
@@ -355,7 +355,7 @@ export default {
 
         // 服务端对终态队列原地复活而非另立行——按复用标记与完成度分文案：
         // 复活且任务全数完好 = 没有东西要下，"继续下载"的文案会误导
-        const queue = res.data?.data
+        const queue = res?.data
         toast(!queue?.reused
           ? `下载队列已创建，正在后台下载${mirrorNote}`
           : queue.totalTasks > 0 && queue.completedTasks === queue.totalTasks
@@ -396,7 +396,7 @@ export default {
           throw delErr
         }
         // 畸形响应（反代返回 HTML 200 等）不该吞成"0 首"假提示
-        const deletedSongs = response.data?.data?.deletedSongs
+        const deletedSongs = response?.data?.deletedSongs
         if (typeof deletedSongs !== 'number') {
           throw new Error('接口返回异常')
         }
