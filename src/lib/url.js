@@ -35,6 +35,7 @@ export {
   parseNumericId,
   isBilibiliInput,
   extractBiliFavlistId,
+  extractYouTubePlaylistId,
   extractYouTubeId,
   isYouTubeInput,
   isQQInput,

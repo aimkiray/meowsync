@@ -128,7 +128,7 @@
 <script>
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
-import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
+import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import { authState } from '../lib/auth-state.js'
 import { authApi } from '../api/auth.js'
@@ -188,6 +188,12 @@ export default {
       }
       if (isBilibiliInput(query)) {
         emit('search-bili', query)
+        return
+      }
+      // YouTube 歌单链先于单曲判定——watch?v=&list= 复合链的歌单语境
+      // 更具体（载荷原样透传，App 层 importYouTubeOrPlaylist 再分单曲/歌单）
+      if (extractYouTubePlaylistId(query)) {
+        emit('search-yt', query)
         return
       }
       if (isYouTubeInput(query)) {
@@ -303,9 +309,10 @@ export default {
       emit('update:searchQuery', e.target.value)
       const q = e.target.value.trim()
       cancelSuggest()
-      // 纯数字/歌单链接/B站（视频与收藏夹）/QQ 输入（含 qq: 前缀）走直达路径，不弹建议
+      // 纯数字/歌单链接/B站（视频与收藏夹）/YouTube（视频与歌单）/QQ 输入走直达路径，不弹建议
       if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)
-        || isQQInput(q) || extractQQPlaylistId(q) || extractBiliFavlistId(q) || /^qq[:：]/i.test(q)) {
+        || isQQInput(q) || extractQQPlaylistId(q) || extractBiliFavlistId(q)
+        || extractYouTubePlaylistId(q) || /^qq[:：]/i.test(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

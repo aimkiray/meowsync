@@ -8,7 +8,7 @@ import {
   isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
   parseNumericId, extractYouTubeId, isYouTubeInput,
   isQQInput, pickQqFromUrl, extractQQPlaylistId, extractNeteaseSongId,
-  extractBiliFavlistId
+  extractBiliFavlistId, extractYouTubePlaylistId
 } from '../src/shared/predicates.js';
 
 test('songmid：QQ songmid 形态', () => {
@@ -44,6 +44,22 @@ test('B 站收藏夹链识别：favlist?fid= / medialist mlN / 裸 mlN', () => {
   // 视频链不判成收藏夹；句中混进的 ml 字样不算
   assert.equal(extractBiliFavlistId('https://www.bilibili.com/video/BV1GJ411x7h7'), null);
   assert.equal(extractBiliFavlistId('看看这个 ml123 的视频'), null);
+});
+
+test('YouTube 歌单链识别：playlist?list= / watch?v=&list= / 裸前缀 id', () => {
+  assert.equal(extractYouTubePlaylistId('https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf'), 'PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf');
+  assert.equal(extractYouTubePlaylistId('https://music.youtube.com/playlist?list=OLAK5uy_kmHwGkLQNnKBKjAYRHYd-LFNpKPnMxpo'), 'OLAK5uy_kmHwGkLQNnKBKjAYRHYd-LFNpKPnMxpo');
+  // 复合链的歌单语境优先（与 favlist 同口径）
+  assert.equal(extractYouTubePlaylistId('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ'), 'RDdQw4w9WgXcQ');
+  assert.equal(extractYouTubePlaylistId('https://youtu.be/dQw4w9WgXcQ?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf'), 'PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf');
+  // 裸前缀 id（≥11 位后缀）
+  assert.equal(extractYouTubePlaylistId('PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf'), 'PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf');
+  // 非 YouTube 域的 list= 不抢；短裸 id 更像搜索词不抢
+  assert.equal(extractYouTubePlaylistId('https://example.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf'), null);
+  assert.equal(extractYouTubePlaylistId('PL123'), null);
+  // 纯视频链不判成歌单；11 位裸视频 id 不撞前缀形态
+  assert.equal(extractYouTubePlaylistId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), null);
+  assert.equal(extractYouTubePlaylistId('dQw4w9WgXcQ'), null);
 });
 
 test('播放列表 id 三族：网易云数字 / local_pl_ / saved_queue_', () => {

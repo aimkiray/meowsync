@@ -114,6 +114,18 @@ const YT_URL_RES = [
   /[?&]yt=([A-Za-z0-9_-]{11})/i,
 ];
 
+// 歌单链接识别（先于 isYouTubeInput 判——watch?v=&list= 复合链的播放单
+// 语境更具体，与 favlist 先于视频同口径）：/playlist?list=、watch 带的
+// &list=、youtu.be/X?list=。URL 形态限 YouTube 域；裸写只收已知前缀
+// （PL/UU/RD/OLAK5uy_ 等，≥11 位后缀——短形态更像搜索词不抢）
+export function extractYouTubePlaylistId(input) {
+  const s = String(input || '').trim();
+  if (!s) return null;
+  if (/^(?:PL|UU|RD|LL|FL|TL|OLAK5uy_)[A-Za-z0-9_-]{11,60}$/i.test(s)) return s;
+  if (!/(?:youtube(?:-nocookie)?\.com|youtu\.be|music\.youtube\.com)/i.test(s)) return null;
+  return s.match(/[?&]list=([A-Za-z0-9_-]{2,80})/i)?.[1] || null;
+}
+
 // YouTube 视频 id 提取：URL 形态 + 裸 11 位 id（须含非数字，纯数字与网易云 id 撞型）
 export function extractYouTubeId(input) {
   const s = String(input || '').trim();
