@@ -694,19 +694,20 @@ export default {
       }
     }
 
-    // B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；歌曲名/封面
-    // 优先吃网易云匹配（封面与双语歌词的正主），演唱者归真实 UP 主名；
+    // B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；歌曲名优先吃
+    // 网易云匹配（双语词源的正主），封面/演唱者归视频自己的（导入的是
+    // 「这个视频」——封面就该是视频封面，matched 只作缺省兜底）；
     // bilibili 字段挂播放所需的源信息（bvid/cid/hasVideo），neteaseId 仅作歌词源
     const buildBilibiliSong = (data) => ({
       id: `bv_${data.bvid}${(data.page || 1) > 1 ? `_p${data.page}` : ''}`,
       name: data.matched?.name || data.songName || data.title,
-      // 演唱者归真实 UP 主——导入的是「这个视频的演唱」，matched 艺人只作
-      // UP 主名缺失时的兜底（封面/词源仍走 matched）
       ar: data.owner ? [{ name: data.owner }] : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'Bilibili' }]),
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
-        picUrl: data.matched?.al?.picUrl || httpsCover(data.cover || '')
+        // hdslb 对无 Referer 放行（全局 Referrer-Policy: no-referrer 已保证）；
+        // 服务端下载封面经 fetchStream 不带 Referer 同口径
+        picUrl: httpsCover(data.cover || '') || data.matched?.al?.picUrl || ''
       },
       dt: (data.duration || 0) * 1000,
       bilibili: {
@@ -719,7 +720,7 @@ export default {
 
     // YouTube 导入曲对象：id 用 yt_ 前缀与 bv_/网易云数值隔离；youtube 字段
     // 挂播放源（videoId/hasVideo），neteaseId 仍仅作歌词源。封面走 ytimg
-    // 服务端回链（matched 的网易云封面优先——高清且无防盗链风险）
+    // 视频缩略图优先（导入的是「这个视频」），matched 网易云封面作缺省兜底
     const buildYouTubeSong = (data) => ({
       id: `yt_${data.videoId}`,
       name: data.matched?.name || data.songName || data.title,
@@ -729,7 +730,7 @@ export default {
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
-        picUrl: data.matched?.al?.picUrl || httpsCover(data.cover || '')
+        picUrl: httpsCover(data.cover || '') || data.matched?.al?.picUrl || ''
       },
       dt: (data.duration || 0) * 1000,
       youtube: {
