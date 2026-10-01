@@ -310,7 +310,10 @@
 
 <script>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { Howl } from 'howler'
+import { Howl, Howler } from 'howler'
+// HTML5 音频池默认 10 太小：失败重试/快速切歌期间，在途 fetch 的节点
+// 来不及释放就被判 locked，报「Audio pool exhausted」伪错误——扩到 24
+Howler.html5PoolSize = 24
 import { musicApi, parseLyrics, mergeTranslations } from './api/music'
 import { downloadsApi } from './api/downloads'
 import { aiApi } from './api/ai'
@@ -2236,6 +2239,17 @@ export default {
             // 无论是否过期都回收实例；过期时不得触碰新歌的共享状态（含看门狗）
             newHowl.unload()
             if (isStale()) return
+            // 流地址失效自愈：vault token 随服务重启蒸发（404）/上游签名
+            // 过期或风控（403）都让浏览器拿到 4xx → MEDIA_ERR_SRC_NOT_SUPPORTED。
+            // 重解一次拿新链（各源端点本就每次重解签名）——单发闸防死循环，
+            // 二次再败才落报错路径
+            if (!options._streamRetried) {
+              console.log('🔁 流地址可能已失效，重解重试:', song.name)
+              if (howl === newHowl) howl = null
+              clearHowlWatchdog()
+              playSong(song, { ...options, preserveContext: true, _streamRetried: true })
+              return
+            }
             clearHowlWatchdog()
             // 'error' 事件也可能在播放中途触发（CDN 断流），isPlaying 必须复位，
             // 否则 UI/MediaSession/远端都停在假播放态
