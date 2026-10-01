@@ -297,7 +297,8 @@ export const musicApi = {
   },
 
   // 流地址：服务端每次重解 playurl（CDN 签名会过期）再 302 进 /audio-proxy，
-  // 前端拿到的总是新鲜地址——直接塞给 <audio>/<video>/Howler 即可
+  // 前端拿到的总是新鲜地址——直接塞给 <audio>/<video>/Howler 即可。
+  // kind=video 下匿名低热度稿可能被 durl 合流档反超（服务端内部比高）
   bilibiliStreamUrl: (bvid, kind = 'audio', cid = null, page = 1, prefer = '') => {
     const params = new URLSearchParams({ bvid, kind })
     if (cid) params.set('cid', cid)
@@ -335,7 +336,7 @@ export const musicApi = {
   },
 
   // 流地址：服务端每次重解 Innertube（googlevideo 签名 ~6h 过期）再 302 进
-  // /audio-proxy——kind=video 拿 avc1 adaptive（静音补画面），audio 默认优先
+  // /audio-proxy——kind=video 拿 avc1 adaptive，audio 默认优先
   // mp4a（Safari 兼容）；prefer=best 给下载归档用——按码率取最优（Opus 251
   // 全频带，AAC 140 在 16kHz 被低通截断）
   youtubeStreamUrl: (videoId, kind = 'audio', prefer = '') => {

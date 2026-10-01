@@ -127,8 +127,8 @@ app.get('/bilibili/resolve', async (c) => {
 // 播放流地址：每次重解 playurl（CDN 签名 ~2h 过期），302 到 audio-proxy
 // 走统一代理（Referer 注入 + Range 透传 + SSRF 校验），不在此直接透流
 app.get('/bilibili/stream', async (c) => {
-  // 同样未鉴权且每次最多 3 次 B 站扇出——限流放宽些（每次播放触发一次，
-  // 音频+视频分开计），只挡异常刷量
+  // 同样未鉴权；kind=video 最坏扇出 5 跳（view+playurl+cid 自愈两跳+durl 探测），
+  // 限流放宽些（每次播放触发一次，音频+视频分开计），只挡异常刷量
   if (!rateLimit(c, 'stream', 60)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
   }
@@ -150,13 +150,15 @@ app.get('/bilibili/stream', async (c) => {
     } catch (e) {
       // cid 过期自愈：稿件被 UP 主换源/调 P 后库存 cid 失效——按 p 重查对应分P
       // 的 cid（不能回落 view.cid——那是 P1，会把分P导入的曲静默拉回第一P）。
-      // 仅对「调用方传了合法数字 cid」自愈——刚查来的 cid 失败重试无意义
+      // 仅对「调用方传了合法数字 cid」自愈——刚查来的 cid 失败重试无意义。
+      // 新 cid 必须赋回——下方 durl 探测要复用同一 cid
       if (!/^\d+$/.test(c.req.query('cid') || '')) throw e;
       const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${pickCidFromView(view, pageWanted)}&fnval=4048&fourk=1`, c.req.raw.signal);
+      cid = pickCidFromView(view, pageWanted);
+      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1`, c.req.raw.signal);
     }
     // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
-    // audio-proxy 端口策略会拒——用同一校验器预筛，拿第一个能过代理的地址
+    // audio-proxy 端口策略会拒——用同一校验器预筛
     // prefer=best 消耗的是运营者大会员轨——配了 DOWNLOAD_TOKEN 的部署里
     // 要求带令牌才放行，匿名访客按常规档处理（不报错，静默回落）。
     // 已登录会话与令牌等效（c.get('user') 由 authGate 验过）
@@ -165,22 +167,19 @@ app.get('/bilibili/stream', async (c) => {
     const prefer = wantBest && (!BILI_COOKIE || !token || c.get('user')
       || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
     const streams = pickStreamList(playurl, kind, prefer);
-    // hasVideo 语义 = 「存在浏览器解得动的 avc1」——kind=video 下若整档只有
-    // hevc/av01，302 过去也是黑屏，按无流 404（与 resolve 的 hasVideo 口径一致）
-    if (kind === 'video' && !streams.some(s => (s.codecs || '').startsWith('avc1'))) {
-      return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
-    }
     // 匿名 DASH 在低热度稿封顶 480p——durl 合流档（fnval=1&qn=80）能反超到
-    // 720p。只在自适应最优低于 720p 时多打这一跳；反超则把合流档前插候选
-    // 链首（它是完整 mp4 自带音轨，代理链天然能放）
+    // 720p，且它是恒 avc1 的完整 mp4（dash 无 avc1 的稿件也由它救活——
+    // 所以探测排在「无 avc1 判死」之前，判死交给最终 usable 为空）。
+    // 只在自适应最优低于 1080p 时多打这一跳；反超则只用合流组。
+    // durl 是分段数组——length>1 时各段是顺序拼接而非镜像，不能用
     const dashBestH = streams[0]?.height || 0;
     let durlUrls = [];
-    if (kind === 'video' && dashBestH < 720) {
+    if (kind === 'video' && dashBestH < 1080) {
       try {
-        const pd = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=1&qn=80&fourk=1`, c.req.raw.signal, 1);
-        if ((QN_HEIGHT[pd.quality] || 0) > dashBestH) {
-          durlUrls = (Array.isArray(pd.durl) ? pd.durl : [])
-            .flatMap(d => [d?.url, ...(Array.isArray(d?.backup_url) ? d.backup_url : [])])
+        const pd = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=1&qn=80&fourk=1`, c.req.raw.signal);
+        const durl = Array.isArray(pd.durl) ? pd.durl : [];
+        if (durl.length === 1 && (QN_HEIGHT[pd.quality] || 0) > dashBestH) {
+          durlUrls = [durl[0]?.url, ...(Array.isArray(durl[0]?.backup_url) ? durl[0].backup_url : [])]
             .filter(u => typeof u === 'string' && u);
         }
       } catch (e) {
@@ -188,21 +187,36 @@ app.get('/bilibili/stream', async (c) => {
         // 合流档拉取失败不挡自适应主链
       }
     }
-    const candidates = [...durlUrls, ...streams.flatMap(s => {
-      const backups = Array.isArray(s?.backupUrl) ? s.backupUrl
-        : (Array.isArray(s?.backup_url) ? s.backup_url : []);
-      return [s?.baseUrl, s?.base_url, ...backups];
-    })].filter(u => typeof u === 'string' && u);
     // 与 audio-proxy 放行业务对齐：归一化 + host 白名单（DNS/端口已由
-    // normalizeOutboundUrl 覆盖端口面，建连 IP 钉扎在代理层再查一次）——
-    // 整条链随 token 下发，代理侧试到第一个能通的档
-    const usable = candidates.filter(u => {
+    // normalizeOutboundUrl 覆盖端口面，建连 IP 钉扎在代理层再查一次）。
+    // 换档只在同一字节实体内成立——跨档（durl vs dash m4s、不同分辨率
+    // dash 档）字节布局不同，播放中段换档会静默错乱：所以合流赢了就只用
+    // 合流镜像组，否则只用首选自适应档自己的镜像组（baseUrl/backup_url
+    // 是同字节镜像，组内换档安全）
+    const passesWhitelist = (u) => {
       const checked = normalizeOutboundUrl(u);
       return checked.ok && isAllowedHost(checked.url.hostname);
-    });
+    };
+    let usable = [...new Set(durlUrls)].filter(passesWhitelist);
+    if (!usable.length) {
+      // dash 无 avc1 且 durl 没接住——hevc/av01 原样塞给 <video> 是黑屏，
+      // 按无流 404（与 resolve 的 hasVideo 口径一致）
+      if (kind === 'video' && !streams.some(s => (s.codecs || '').startsWith('avc1'))) {
+        return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
+      }
+      const preferred = kind === 'video'
+        ? (streams.find(s => (s.codecs || '').startsWith('avc1')) || streams[0])
+        : streams[0];
+      const backups = Array.isArray(preferred?.backupUrl) ? preferred.backupUrl
+        : (Array.isArray(preferred?.backup_url) ? preferred.backup_url : []);
+      usable = [...new Set([preferred?.baseUrl, preferred?.base_url, ...backups]
+        .filter(u => typeof u === 'string' && u))].filter(passesWhitelist);
+    }
     if (!usable.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
+    // 写响应前的终态断连检查——durl/view/playurl 多跳 await 期间客户端可能已走
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     // vault token 化——登录态 baseUrl 带 mid/uipk/deadline，不出进程
     return c.redirect(`/audio-proxy/t/${streamVault.mint(usable)}`, 302);
   } catch (e) {
