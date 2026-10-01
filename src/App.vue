@@ -324,7 +324,7 @@ import { useRemoteControl } from './composables/useRemoteControl'
 import { useHomeFeed } from './composables/useHomeFeed'
 import { readJSON, writeJSON } from './lib/storage'
 import { formatTime } from './lib/format'
-import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, externalArtistName } from './lib/song'
+import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
@@ -705,14 +705,20 @@ export default {
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
-        // hdslb 对无 Referer 放行（全局 Referrer-Policy: no-referrer 已保证）；
-        // 服务端下载封面经 fetchStream 不带 Referer 同口径
-        picUrl: httpsCover(data.cover || '') || data.matched?.al?.picUrl || ''
+        // hdslb 对无 Referer 放行（Referrer-Policy: no-referrer 经
+        // index.html meta 随文档下发，不经 Hono 的部署也生效）；服务端下载
+        // 封面经 fetchStream 不带 Referer 同口径。非 http(s) 的 cover 不入库
+        picUrl: /^https?:\/\//i.test(String(data.cover || ''))
+          ? (httpsCover(data.cover) || data.matched?.al?.picUrl || '')
+          : (data.matched?.al?.picUrl || '')
       },
       dt: (data.duration || 0) * 1000,
       bilibili: {
         bvid: data.bvid, cid: data.cid, page: data.page || 1,
         hasVideo: !!data.hasVideo, title: data.title,
+        // 封面持久化进 providerData——bv_ 封面不能由 bvid 推导（yt_ 可以），
+        // 存量加载自愈/口径偏离修正都要靠它
+        cover: data.cover || '',
         author: data.owner || '', matchedBy: data.matchedBy || null
       },
       neteaseId: data.matched?.id || null
@@ -730,7 +736,9 @@ export default {
       al: {
         id: data.matched?.al?.id ?? null,
         name: data.matched?.al?.name || data.title,
-        picUrl: httpsCover(data.cover || '') || data.matched?.al?.picUrl || ''
+        picUrl: /^https?:\/\//i.test(String(data.cover || ''))
+          ? (httpsCover(data.cover) || data.matched?.al?.picUrl || '')
+          : (data.matched?.al?.picUrl || '')
       },
       dt: (data.duration || 0) * 1000,
       youtube: {
@@ -1106,13 +1114,21 @@ export default {
         // 过滤 null/无 id 的脏条目，避免后续 String(p.id) 访问抛异常；
         // 同步字段若非数组（旧数据/手工改坏）会在合并/添加路径抛异常——load 时净化。
         // healExternalAr：旧版导入曲的 ar 曾被网易云匹配艺人覆盖——按持久化的
-        // 频道/UP主名重建演唱者口径，存量导入曲加载即自愈
+        // 频道/UP主名重建演唱者口径；al.picUrl 同口径自愈——视频封面是新口径
+        // （yt_ 由 videoId 推导、bv_ 吃持久化的 bilibili.cover，无此字段的旧
+        // bv_ 数据保持不动），存量导入曲加载即自愈
         let healedAny = false
         const healExternalAr = (t) => {
           const ext = t && externalArtistName(t)
           // 只在确实偏离口径时改写——无病曲不动引用，也不触发无意义回写
           if (ext && !(t.ar?.length === 1 && t.ar[0]?.name === ext)) {
             t.ar = [{ name: ext }]
+            healedAny = true
+          }
+          const extCover = t && externalCoverUrl(t)
+          // al 也可能是字符串形态（旧数据/上游简化对象）——只对对象形态自愈
+          if (extCover && t.al && typeof t.al === 'object' && t.al.picUrl !== extCover) {
+            t.al = { ...t.al, picUrl: extCover }
             healedAny = true
           }
           return t

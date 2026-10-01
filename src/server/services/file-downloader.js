@@ -1022,7 +1022,16 @@ async function downloadCover(coverUrl, outputPath, signal) {
     const finalPath = pathWithExt(outputPath, extFromUrl(coverUrl, COVER_EXTS, 'jpg'));
     fs.mkdirSync(path.dirname(finalPath), { recursive: true });
 
-    const response = await fetchStream(coverUrl, { timeout: 60000, signal });
+    // hdslb（B 站图床）防盗链：空 Referer 目前放行，但 axios 默认 UA 是
+    // 非浏览器形态、一旦收紧即 403——与 proxy.js 对 BILI_CDN_HOSTS 注头
+    // 同口径，对 hdslb 封面附 UA+Referer；其他图床（ytimg/126/gtimg）
+    // 不查防盗链，不附带
+    let coverHost = '';
+    try { coverHost = new URL(coverUrl).hostname; } catch { /* 下行 fetchStream 会给 BAD_URL */ }
+    const coverHeaders = (coverHost === 'hdslb.com' || coverHost.endsWith('.hdslb.com'))
+      ? BILI_PUBLIC_HEADERS : undefined;
+
+    const response = await fetchStream(coverUrl, { timeout: 60000, signal, headers: coverHeaders });
     if (response.status !== 200) {
       response.data.destroy();
       throw fatalError(`上游返回 ${response.status}`);

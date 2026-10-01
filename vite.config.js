@@ -20,6 +20,9 @@ export default defineConfig(({ command, mode }) => {
       // VITE_HOST 独立于后端 HOST，避免共享变量互相影响
       host: env.VITE_HOST || 'localhost',
       open: env.VITE_OPEN_BROWSER !== 'false' && process.platform !== 'linux',
+      // 与 index.html 的 meta referrer 双保险——dev 下 index.html 由 Vite
+      // 直接服务、不吃 Hono secureHeaders，没这层 hdslb 封面全 403
+      headers: { 'Referrer-Policy': 'no-referrer' },
       allowedHosts: [
         'localhost',
         '127.0.0.1',
@@ -30,7 +33,8 @@ export default defineConfig(({ command, mode }) => {
     // 预览服务器配置
     preview: {
       port: parseInt(env.VITE_PORT) || 3100,
-      host: env.VITE_HOST || 'localhost'
+      host: env.VITE_HOST || 'localhost',
+      headers: { 'Referrer-Policy': 'no-referrer' }
     },
 
     // 构建配置

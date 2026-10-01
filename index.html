@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/cinnamoroll1.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- 视频封面（hdslb 等图床）对第三方 Referer 一律 403、无 Referer 放行；
+         meta 随文档走——Vite dev/preview 与任何不经 Hono 的服务形态都生效
+         （Hono secureHeaders 对生产响应也下同款头，双保险） -->
+    <meta name="referrer" content="no-referrer" />
     <meta name="description" content="MeowSync - 网易云音乐播放器" />
     <title>MeowSync</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
