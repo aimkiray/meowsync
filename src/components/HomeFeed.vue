@@ -1,6 +1,6 @@
 <template>
-  <!-- 首页发现流（白纸画布）：最近播放 chips + 榜单/最近歌单横向货架。
-       页脚版本戳收版（print-grid 签名） -->
+  <!-- 首页发现流（白纸画布）：最近播放 chips + 最近歌单/专辑横向货架。
+       货架全部由本地播放历史派生，零网络请求。页脚版本戳收版（print-grid 签名） -->
   <div class="home-feed">
     <header class="home-head">
       <p class="pg-label">home · discover</p>
@@ -24,50 +24,9 @@
       </div>
     </section>
 
-    <!-- 货架脱离加载闸门渐进渲染：单路到达即上架，不被最慢请求拖住。
-         空态文案保持中立——8s 软上限到点时请求可能仍在飞，不说「失败」 -->
-    <div v-if="loading && !hasShelves" class="home-state" role="status">
-      <div class="pixel-loading" aria-hidden="true"></div>
-      <p class="home-state-text">加载推荐中喵...</p>
+    <div v-if="!hasShelves && !recents.length" class="home-state" role="status">
+      <p class="home-state-text">还没有播放记录，去顶部搜索试试喵~</p>
     </div>
-    <div v-else-if="!hasShelves" class="home-state" role="status">
-      <p class="home-state-text">推荐暂时没刷出来，去顶部搜索试试喵~</p>
-    </div>
-
-    <!-- 榜单货架 -->
-    <section v-if="toplists.length" class="home-section">
-      <div class="home-section-head">
-        <p class="pg-label">charts</p>
-        <span class="home-section-sub">榜单</span>
-      </div>
-      <div class="home-shelf">
-        <div
-          v-for="pl in toplists"
-          :key="pl.id"
-          class="grid-card"
-          @click="$emit('open', pl)"
-          @keydown.enter="$emit('open', pl)"
-          @keydown.space.prevent="$emit('open', pl)"
-          tabindex="0"
-          role="button"
-          :title="`打开《${pl.name}》`"
-        >
-          <div class="grid-card-cover">
-            <img
-              v-if="pl.coverImgUrl"
-              :src="httpsCover(pl.coverImgUrl)"
-              :alt="pl.name"
-              loading="lazy"
-            />
-            <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
-          </div>
-          <div class="grid-card-body">
-            <h3 class="grid-card-name">{{ pl.name }}</h3>
-            <p class="grid-card-meta">{{ pl.updateFrequency || '榜单' }}</p>
-          </div>
-        </div>
-      </div>
-    </section>
 
     <!-- 最近播放的歌单货架 -->
     <section v-if="recentPlaylists.length" class="home-section">
@@ -157,10 +116,6 @@ export default {
   name: 'HomeFeed',
   components: { PrintMarks, PixelIcon, GlitchText },
   props: {
-    toplists: {
-      type: Array,
-      default: () => []
-    },
     recentPlaylists: {
       type: Array,
       default: () => []
@@ -168,16 +123,12 @@ export default {
     recents: {
       type: Array,
       default: () => []
-    },
-    loading: {
-      type: Boolean,
-      default: false
     }
   },
   emits: ['open', 'play-song'],
   computed: {
     hasShelves() {
-      return this.toplists.length > 0 || this.recentPlaylists.length > 0 || this.recentAlbums.length > 0
+      return this.recentPlaylists.length > 0 || this.recentAlbums.length > 0
     },
     /* 最近播放的专辑：按专辑去重（无 id 退 name），保留最近次序，截 12 上货架 */
     recentAlbums() {

@@ -80,13 +80,6 @@ export const musicApi = {
     return data.result?.songs || []
   },
 
-  // 首页发现流：排行榜（toplist）+ 推荐歌单（personalized）+ 热搜词
-  getToplists: async (abortSignal = null) => {
-    const response = await api.get('/toplist', { signal: abortSignal, timeout: 15000 })
-    const data = unwrapBody(response)
-    return data.list || []
-  },
-
   getPersonalized: async (limit = 12, abortSignal = null) => {
     const response = await api.get('/personalized', {
       params: { limit },

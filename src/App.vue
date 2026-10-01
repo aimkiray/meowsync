@@ -57,10 +57,8 @@
       <main class="app-main">
         <HomeFeed
           v-if="centerView === 'home'"
-          :toplists="homeToplists"
           :recent-playlists="playlistHistory"
           :recents="playHistory"
-          :loading="homeLoading"
           @open="openShelfPlaylist"
           @play-song="openWatchRecent"
         />
@@ -410,8 +408,8 @@ export default {
     const playlistDownloadsRefreshKey = ref(0)
     const topNavRef = ref(null) // 「/」快捷键聚焦搜索框
 
-    // 首页发现流 + 最近播放历史收敛在 composables/useHomeFeed.js
-    // （loadHomeFeed/recordPlayHistory/recordPlaylistHistory/restoreHistory 同迁）
+    // 最近播放历史收敛在 composables/useHomeFeed.js
+    // （recordPlayHistory/recordPlaylistHistory/restoreHistory 同迁）
 
     let howl = null
     let lyricTimer = null
@@ -2739,12 +2737,12 @@ export default {
       playSong, nextSong, previousSong, updateVolume, currentPlayingIndex, playbackList
     })
 
-    // 首页发现流 + 最近播放历史（懒加载闩锁、断网重试、storage 持久化）
-    // ——收敛 composables/useHomeFeed.js；remoteMode 须先于本调用定义（遥控端短路）
+    // 最近播放历史（storage 持久化；首页货架全由本地历史派生，零网络）
+    // ——收敛 composables/useHomeFeed.js
     const {
-      homeToplists, playHistory, playlistHistory, homeLoading,
-      loadHomeFeed, recordPlayHistory, recordPlaylistHistory, restoreHistory
-    } = useHomeFeed({ centerView, userPlaylists, selectedPlaylist, playingPlaylistId, remoteMode })
+      playHistory, playlistHistory,
+      recordPlayHistory, recordPlaylistHistory, restoreHistory
+    } = useHomeFeed({ userPlaylists, selectedPlaylist, playingPlaylistId })
 
     const openFullscreenPlayer = () => {
       if (!currentSong.value) return
@@ -3280,11 +3278,6 @@ export default {
       restorePlayerState = loadPlayerStateFromStorage()
       restoreUiState(restorePlayerState)
 
-      // 首页发现流（后台加载，不阻塞首屏）——必须早于下面的恢复 await：
-      // 否则 restorePlaybackState/分享链路动辄数十秒期间 HomeFeed 已挂载而
-      // loading=false，空态会先把「加载失败」闪上屏
-      loadHomeFeed()
-
       // 加载默认歌单
       await loadDefaultPlaylists()
       
@@ -3409,10 +3402,8 @@ export default {
       queueTitle,
       queueOwner,
       topNavRef,
-      homeToplists,
       playlistHistory,
       playHistory,
-      homeLoading,
 
       // 方法
       previewPlaylistById,
