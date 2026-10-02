@@ -103,7 +103,8 @@
           </span>
         </div>
 
-        <!-- 右簇（音量 + watch/词/沉浸入口） -->
+        <!-- 右簇（音量 + 沉浸入口）——watch 页的队列/歌词入口键已删：
+             缩略信息点击区仍是回 watch 的主入口（YTM 肌肉记忆位） -->
         <div class="player-right">
           <div class="vol-wrap">
             <button
@@ -125,28 +126,6 @@
               aria-label="音量"
             />
           </div>
-          <button
-            class="pg-icobtn pg-icobtn--on-ink"
-            :class="{ 'pg-icobtn--pressed': sidePanelOpen && panelTab === 'queue' }"
-            :disabled="!currentSong"
-            :aria-pressed="sidePanelOpen && panelTab === 'queue'"
-            @click="$emit('open-watch', 'queue')"
-            aria-label="待播队列"
-            title="待播队列"
-          >
-            <PixelIcon name="menu" :size="15" />
-          </button>
-          <button
-            class="pg-icobtn pg-icobtn--on-ink bp-xtra"
-            :class="{ 'pg-icobtn--pressed': sidePanelOpen && panelTab === 'lyrics' }"
-            :disabled="!currentSong"
-            :aria-pressed="sidePanelOpen && panelTab === 'lyrics'"
-            @click="$emit('open-watch', 'lyrics')"
-            aria-label="歌词"
-            title="歌词"
-          >
-            <PixelIcon name="note" :size="14" />
-          </button>
           <button
             class="pg-icobtn pg-icobtn--on-ink bp-xtra"
             :disabled="!currentSong"
@@ -224,14 +203,6 @@ export default {
     songSwitching: {
       type: Boolean,
       default: false
-    },
-    sidePanelOpen: {
-      type: Boolean,
-      default: false
-    },
-    panelTab: {
-      type: String,
-      default: 'queue'
     },
     autoplayOn: {
       type: Boolean,
@@ -442,13 +413,13 @@ export default {
    howl 守卫），用 progress 光标区分于死键；opacity .15s 柔化瞬闪 */
 .transport--switching { opacity: .45; cursor: progress; }
 
-/* watch 页已打开对应 tab 时的按下态（纸面反白） */
+/* 切换态图标的按下态（纸面反白）——静音/随机/循环等 toggle 键共用 */
 .pg-icobtn--pressed {
   background: var(--paper);
   color: var(--ink);
 }
 
-/* 右列：时间 + 音量 + watch/沉浸入口 */
+/* 右列：时间 + 音量 + 沉浸入口 */
 .player-right {
   display: flex;
   align-items: center;
@@ -511,15 +482,14 @@ export default {
   .transport--play { width: 56px; height: 56px; }
 }
 
-/* ≤551px 连静音键也收：mute+三键簇 160px 需半幅 ≥160（vw≥552）才容下，
-   501–551 会顶偏播放键（最多 ~25px @501）——该档只留三键簇 112px，
-   456 处恰好满配（半幅 112 = 簇 112） */
+/* ≤551px 连静音键也收：mute+沉浸键 72px 需半幅 ≥72（vw≥552）从容，
+   501–551 会顶偏播放键——该档只留沉浸键 32px，456 处恰好满配 */
 @media (max-width: 551px) {
   .vol-wrap { display: none; }
 }
 
-/* ≤455px：词/沉浸键收进 watch 页路径可达——421–455 档三键簇 112px
-   同样触底推偏播放键（~18px），与 ≤420 的 YTM 稀疏化合并收口 */
+/* ≤455px：沉浸键也收——421–455 档半幅见底，与 ≤420 的 YTM 稀疏化
+   合并收口（此时右簇仅剩时间戳） */
 @media (max-width: 455px) {
   .bp-xtra { display: none; }
 }
