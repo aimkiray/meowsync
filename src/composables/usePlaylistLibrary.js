@@ -4,7 +4,7 @@ import { downloadsApi } from '../api/downloads'
 import { readJSON, writeJSON } from '../lib/storage'
 import { toast } from '../lib/feedback'
 import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides } from '../lib/song'
-import { applyTrackOrder, groupTracksByArtist } from '../lib/track-order'
+import { applyTrackOrder, groupTracksByArtist, moveTrackByIds } from '../lib/track-order'
 
 const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
 const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
@@ -287,7 +287,10 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
         // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
         // 本地增删（addedTracks/墓碑）要计入 trackCount——远端计数不含它们
         // 剥掉 playlist 参数上的同步键——传入的陈旧快照不能回退 libPl 刚写的值
-        const { addedTracks: _a, removedTrackIds: _r, lastRemoteIds: _l, lastSyncedAt: _s, ...plBase } = playlist
+        // trackOrder/trackOverrides 同剥：陈旧快照经 merged 摊回库对象会回退
+        // libPl 刚写入的新值（force 重选快照路径是未来的地雷引信）
+        const { addedTracks: _a, removedTrackIds: _r, lastRemoteIds: _l, lastSyncedAt: _s,
+          trackOrder: _t, trackOverrides: _o, ...plBase } = playlist
         const merged = { ...plBase, ...(fullPlaylist || {}) }
         const localDelta = addedTracks.length - keptRemoved.length
         if (localDelta) {
@@ -377,7 +380,12 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       if (String(selectedPlaylist.value?.id) === String(pl.id)) {
         // 墓碑恢复的远端成员可能有历史 override（删除不清 override）——
         // 渲染行即应用，不等下次 selectPlaylist 合并
-        songs.value = [...songs.value, applyTrackOverrides({ ...song }, pl.trackOverrides)]
+        // applyTrackOrder：id 还在覆盖层登记位的恢复曲回到原槽而非坠尾
+        // （本地单无 trackOrder——恒等返回，两系同一条写路径）
+        songs.value = applyTrackOrder(
+          [...songs.value, applyTrackOverrides({ ...song }, pl.trackOverrides)],
+          pl.trackOrder
+        )
         if (selectedPlaylist.value !== pl) {
           selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: pl.trackCount }
         }
@@ -407,7 +415,9 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
     pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1
     if (isOpenTarget) {
-      songs.value = [...songs.value, entry]
+      // applyTrackOrder 同 restored 分支口径：还在登记位的 id（远端删过又
+      // 回来的曲）回原槽而非坠尾；未登记恒等落尾（本地单无覆盖层=恒等）
+      songs.value = applyTrackOrder([...songs.value, entry], pl.trackOrder)
       // 远端单的 selectedPlaylist 是 merge 快照（非库对象代理），hero 计数手动同步
       if (selectedPlaylist.value !== pl) {
         selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: pl.trackCount }
@@ -461,19 +471,21 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     if (isLocalPlaylistId(libPl.id)) {
       libPl.tracks = [...ordered]
     } else {
-      libPl.trackOrder = ordered.map(t => String(t.id))
+      // 空安全：脏行（null/无 id）不写覆盖层——落未登记类下次合并沉尾
+      libPl.trackOrder = ordered
+        .map(t => t?.id)
+        .filter(id => id != null && String(id) !== '')
+        .map(String)
     }
     savePlaylistsToStorage()
     return true
   }
 
-  // 行级位移（SongList 排序模式的拖拽/↑↓ emit）：from→to 全量下标直译
-  const moveSongInPlaylist = (from, to) => {
-    const list = [...songs.value]
-    if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return
-    const [moved] = list.splice(from, 1)
-    list.splice(to, 0, moved)
-    applySongsOrder(list)
+  // 行级位移（SongList 排序模式的拖拽/↑↓ emit）：双端 id 锚定——排序态期间
+  // 静默同步/行追加可能整体替换 songs，下标载荷会移错行
+  const moveSongInPlaylist = ({ dragId, targetId } = {}) => {
+    const ordered = moveTrackByIds(songs.value, dragId, targetId)
+    if (ordered !== songs.value) applySongsOrder(ordered)
   }
 
   // 「相同作者归拢」：主唱名聚类排序（组间拼音序、组内保原序）后落同一写通道

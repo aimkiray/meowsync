@@ -10,6 +10,7 @@ import {
   buildBilibiliSong, buildYouTubeSong, buildQQSong,
   MEDIA_IMPORT_SPECS, redirectDataOf,
 } from '../lib/external-songs'
+import { applyTrackOrder } from '../lib/track-order'
 
 const MIX_IMPORT_CAP = 300   // 与生成侧 playlistShareUrl 的截断对齐
 const MIX_RESOLVE_CAP = 10   // bv_/yt_ 逐项 resolve——客户端预算共桶（服务端两端点各 12/min 分桶）
@@ -136,7 +137,12 @@ export function useExternalImport({
     pl.coverImgUrl = coverImgUrl
     pl.creator = { nickname: creator }
     const newIds = new Set(tracks.map(t => String(t.id)))
-    pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
+    // 旧成员（含 provider 仍在集的曲）各回其 tracks 序位——排序模式重排过
+    // 的排布不被远端集前插抹掉；真·远端新曲落尾——与 trackOrder 归并同语义
+    pl.tracks = applyTrackOrder(
+      [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))],
+      (pl.tracks || []).map(t => t.id)
+    )
     pl.trackCount = pl.tracks.length
     savePlaylistsToStorage()
     selectPlaylistAndShow(pl, { force: true })

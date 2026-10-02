@@ -264,7 +264,13 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
     checkAllSongsDownloadStatus()
   })
 
-  watch(() => props.songs, () => {
+  // 成员指纹闸：状态映射按 songId 键控与顺序无关——纯重排（同 id 集新引用，
+  // 如歌单排序模式每次位移都重赋值）不该触发整表重拉。sort 拷贝不改原数组
+  let lastSongsFingerprint = ''
+  watch(() => props.songs, (list) => {
+    const fp = (list || []).map(t => String(t?.id)).sort().join(',')
+    if (fp === lastSongsFingerprint) return
+    lastSongsFingerprint = fp
     checkAllSongsDownloadStatus()
   }, { immediate: true })
 
