@@ -255,6 +255,26 @@ test('候选去重保序：同 url 跨批只出现一次', async () => {
   assert.deepEqual(r.streams.map(s => s.url), [GV('a-x'), GV('p-x')]);
 });
 
+test('pickStreamList video：adaptiveOnly 不交合流档（下载链防 mux 双音轨）', () => {
+  reset();
+  const data = sd({ fm: [progF('x', 720)] }); // 无 adaptive，只有 720p 合流
+  // 播放链（默认）：avc1 缺席回落合流兜底
+  assert.equal(realYt.pickStreamList(data, 'video').length, 1);
+  // 下载链：adaptiveOnly 必须返回空——合流由 file-downloader 尾部相位接管
+  assert.equal(realYt.pickStreamList(data, 'video', 'best', { adaptiveOnly: true }).length, 0);
+});
+
+test('pickStreamList video 次键：同像素先 fps 再 bitrate（1080p60 赢 1080p30）', () => {
+  const v30 = { url: GV('v30'), mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080, width: 1920, fps: 30, bitrate: 4500000 };
+  const v60 = { url: GV('v60'), mimeType: 'video/mp4; codecs="avc1.640032"', height: 1080, width: 1920, fps: 60, bitrate: 5500000 };
+  const vHiBr = { url: GV('vhi'), mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080, width: 1920, fps: 30, bitrate: 8000000 };
+  const data = sd({ ad: [v30, v60, vHiBr] });
+  const out = realYt.pickStreamList(data, 'video', 'best', { adaptiveOnly: true });
+  assert.equal(out[0].url, GV('v60'));   // 60fps 档赢（fps 先于码率）
+  assert.equal(out[1].url, GV('vhi'));   // 同 30fps 段内 bitrate 决胜
+  assert.equal(out[2].url, GV('v30'));
+});
+
 test('VISIONOS 阶段 abort 穿透——不得吞成 deadAdaptive 回落', async () => {
   reset();
   const resolve = freshResolve();

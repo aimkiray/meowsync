@@ -755,6 +755,8 @@ async function processTask(task, queueId, signal) {
         );
         const videoRow = downloadTasksRepo.updateTask(task.id, {
           videoPath: result.path,
+          // 实际到手档位快照落库——候选降档/合流兜底从此可对账
+          videoMeta: result.videoMeta || null,
           progress: totalProgress + weights.video
         });
         // 行在写盘窗口被删：新文件永不登记——就地回收（同音频段处理）
@@ -1325,8 +1327,27 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       throw httpError(409, '所在队列正在删除中');
     }
     // 幂等返回只认"completed 且文件还在"——登记路径被外部删掉的行回退到
-    // 接管/重跑分支补回文件（否则客户端拿到的是指向已删文件的"已下载"）
+    // 接管/重跑分支补回文件（否则客户端拿到的是指向已删文件的"已下载"）。
+    // 例外：「补视频」请求且行缺视频工件时必须翻 pending 真跑——裸 return
+    // 会让前端 toast「视频下载成功」而实际什么都没下。摘出队列（standalone
+    // 代跑队列行会往旧队列写计数），保留完好路径字段——分段幂等自动跳过
+    // 已落盘段，只补视频相位；旧队列计数回调对齐
     if (queueTask.status === 'completed' && taskFilesIntact(queueTask)) {
+      if (options.downloadVideo === true && isExternalSongId(songId) && !queueTask.videoPath) {
+        getDb().transaction(() => {
+          downloadTasksRepo.updateTask(queueTask.id, {
+            queueId: null,
+            status: 'pending',
+            progress: 0,
+            errorMessage: null,
+            completedAt: null,
+            downloadVideo: true
+          });
+          recountQueueCounters(queueTask.queueId);
+        })();
+        retryAfter.delete(queueTask.id);
+        return dispatchStandalone(downloadTasksRepo.findTaskById(queueTask.id) || queueTask);
+      }
       return queueTask;
     }
     const owner = downloadQueuesRepo.findQueueById(queueTask.queueId);

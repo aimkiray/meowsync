@@ -160,6 +160,82 @@ test('锁释放断言：local_uploads 400 之后再发同请求仍 400（锁泄�
   assert.equal((await del(queue.id)).status, 400); // deletingPlaylists 若泄漏，第二次拿 409
 });
 
+test('队列已完成曲「补视频」翻 pending 接管——不再幂等谎报成功', async () => {
+  // 修复前：queueTask completed+intact 的幂等短路不查 downloadVideo/videoPath，
+  // 「下载视频到服务器」直接返回完成态、前端 toast 成功但什么都没下
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777014', name: 'pl-video' });
+  playlistTracksRepo.replaceTracksForPlaylist(pl.id, [
+    { id: 'bv_BV7770140000', name: '曲', ar: [{ name: '艺人' }], al: { name: '专' }, dt: 200000 }
+  ]);
+  const queue = queuesRepo.createQueue({
+    playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 1, completedTasks: 1
+  });
+  const task = tasksRepo.createTask({
+    playlistId: pl.id, queueId: queue.id, songId: 'bv_BV7770140000', songName: '曲',
+    artist: '艺人', status: 'completed', downloadAudio: true, downloadVideo: false
+  });
+  const audioPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', 'bv_BV7770140000.mp3');
+  mkdirSync(dirname(audioPath), { recursive: true });
+  writeFileSync(audioPath, 'audio-bytes');
+  tasksRepo.updateTask(task.id, { audioPath });
+
+  const res = await app.request('http://t/downloads/songs/bv_BV7770140000', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playlistId: pl.id, downloadVideo: true })
+  });
+  assert.equal(res.status, 200);
+
+  const row = tasksRepo.findTaskById(task.id);
+  // 摘出队列（standalone 代跑会往旧队列写计数）+ 翻 pending 真跑视频相位
+  assert.equal(row.queueId, null);
+  assert.equal(row.downloadVideo, true);
+  assert.ok(['pending', 'downloading'].includes(row.status));
+  // 完好音频工件保留——分段幂等只补视频相位，不整首重下
+  assert.equal(row.audioPath, audioPath);
+  assert.ok(existsSync(audioPath));
+  // 旧队列计数回调对齐（摘行后不再计入）
+  assert.equal(queuesRepo.findQueueById(queue.id).completedTasks, 0);
+
+  // 收尾：级联 abort 挂起的 standalone 视频协程
+  await del(queue.id);
+});
+
+test('队列已完成曲补视频——videoPath 已在册时仍幂等返回不重复下', async () => {
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777015', name: 'pl-video2' });
+  playlistTracksRepo.replaceTracksForPlaylist(pl.id, [
+    { id: 'bv_BV7770150000', name: '曲2', ar: [], al: {}, dt: 100 }
+  ]);
+  const queue = queuesRepo.createQueue({
+    playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 1, completedTasks: 1
+  });
+  const task = tasksRepo.createTask({
+    playlistId: pl.id, queueId: queue.id, songId: 'bv_BV7770150000', songName: '曲2',
+    artist: '', status: 'completed', downloadAudio: true, downloadVideo: true
+  });
+  const audioPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', 'bv_BV7770150000.mp3');
+  const videoPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'bv_BV7770150000.mp4');
+  mkdirSync(dirname(audioPath), { recursive: true });
+  mkdirSync(dirname(videoPath), { recursive: true });
+  writeFileSync(audioPath, 'audio-bytes');
+  writeFileSync(videoPath, 'video-bytes');
+  tasksRepo.updateTask(task.id, { audioPath, videoPath });
+
+  const res = await app.request('http://t/downloads/songs/bv_BV7770150000', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playlistId: pl.id, downloadVideo: true })
+  });
+  assert.equal(res.status, 200);
+  const row = tasksRepo.findTaskById(task.id);
+  // 幂等语义保留：行仍是队列所有、completed 不动、不派新协程
+  assert.equal(row.queueId, queue.id);
+  assert.equal(row.status, 'completed');
+  assert.equal(row.videoPath, videoPath);
+
+  await del(queue.id);
+});
+
 test('在途协程级联：abort+排空后任务/队列/歌单行全清', async () => {
   const dm = require('../src/server/services/download-manager.js');
   const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777013', name: 'live-pl' });

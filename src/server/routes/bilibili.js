@@ -61,7 +61,7 @@ app.get('/bilibili/resolve', async (c) => {
     const duration = page?.duration ?? view.duration;
     const [tagRes, playurl] = await Promise.all([
       biliFetch(`/x/tag/archive/tags?bvid=${view.bvid}`, c.req.raw.signal).catch(() => []),
-      biliFetch(`/x/player/playurl?bvid=${view.bvid}&cid=${cid}&fnval=4048&fourk=1`, c.req.raw.signal),
+      biliFetch(`/x/player/playurl?bvid=${view.bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`, c.req.raw.signal),
     ]);
     const tagNames = Array.isArray(tagRes) ? tagRes.map(t => t.tag_name).filter(Boolean) : [];
     const songName = extractSongName(tagNames, view.title);
@@ -251,7 +251,7 @@ app.get('/bilibili/stream', async (c) => {
     }
     let playurl;
     try {
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1`, c.req.raw.signal);
+      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`, c.req.raw.signal);
     } catch (e) {
       // cid 过期自愈：稿件被 UP 主换源/调 P 后库存 cid 失效——按 p 重查对应分P
       // 的 cid（不能回落 view.cid——那是 P1，会把分P导入的曲静默拉回第一P）。
@@ -260,7 +260,7 @@ app.get('/bilibili/stream', async (c) => {
       if (!/^\d+$/.test(c.req.query('cid') || '')) throw e;
       const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
       cid = pickCidFromView(view, pageWanted);
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1`, c.req.raw.signal);
+      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`, c.req.raw.signal);
     }
     // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
     // audio-proxy 端口策略会拒——用同一校验器预筛

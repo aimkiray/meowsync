@@ -165,8 +165,14 @@ function pickStreamList(data, kind, prefer = '') {
     return regular;
   }
   const avc = (dash.video || []).filter(v => (v.codecs || '').startsWith('avc1'));
+  // 同像素决胜帧率再比码率——1080P / 1080P高码率 / 1080P60 的 h*w 相同，
+  // 裸像素序靠上游数组顺序碰巧正确（首项即最高 id），上游改序即静默降级。
+  // frameRate/frame_rate 上游两种拼法都出现过；bandwidth 天然随档位递增
+  const bvFps = (v) => Number(v?.frameRate ?? v?.frame_rate) || 0;
   return (avc.length ? avc : dash.video || [])
-    .slice().sort((a, b) => (b.height * b.width) - (a.height * a.width));
+    .slice().sort((a, b) => (b.height * b.width) - (a.height * a.width)
+      || bvFps(b) - bvFps(a)
+      || (b.bandwidth || 0) - (a.bandwidth || 0));
 }
 const pickStreams = (data) => ({
   audio: pickStreamList(data, 'audio')[0] || null,
@@ -193,11 +199,14 @@ const QN_HEIGHT = { 127: 4320, 125: 4320, 121: 2160, 120: 2160, 117: 1080, 116: 
 
 // 下载侧 playurl 解析：providerData.cid 缺失/过期自愈（UP 主换源/调 P 后
 // 库存 cid 失效——按 p 重查对应分P）。fnval 4048=DASH 全轨响应，1=MP4 合流
-// （durl 形态，无 ffmpeg 环境的视频兜底路）；qn 是 durl 档的目标质量号，
-// 缺省按 16 给 360p——求高画质要显式给 80+
+// （durl 形态，无 ffmpeg 环境的视频兜底路）；qn 是目标质量号——对 durl 档
+// 缺省按 16 给 360p；对 DASH 缺省会让 accept_quality 列出的高档（116/120/
+// 125/127 等）不进 dash.video[]——求高画质必须显式给。DASH 统一补 127，
+// 权限不足上游自动钳回账户/稿件天花板，无副作用
 async function resolveBiliPlayurl({ bvid, cid, page = 1, signal, fnval = 4048, qn = 0 }) {
+  const effQn = qn || (fnval === 1 ? 0 : 127);
   const playurlOf = (useCid) =>
-    biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${useCid}&fnval=${fnval}&fourk=1${qn ? `&qn=${qn}` : ''}`, signal);
+    biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${useCid}&fnval=${fnval}&fourk=1${effQn ? `&qn=${effQn}` : ''}`, signal);
   // cid 缺省时先查 view 定位分P cid——直接发 cid=undefined 是上游 400
   let useCid = /^\d+$/.test(String(cid || '')) ? String(cid) : null;
   if (!useCid) {

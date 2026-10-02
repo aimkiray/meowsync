@@ -208,12 +208,23 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
 //   不重编码即真·源画质；音轨刻意用常规档——opus/flac/杜比塞不进 mp4 容器。
 // ffmpeg 缺席：回落源站 MP4 合流档（YouTube formats / B 站 fnval=1 durl），
 //   分辨率受合流档限制但产物自包含可播；两者皆无才报失败。
-const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
+// 8GiB：4K VP9 ~45Mbps 码率下约 25 分钟，1080p 约 2.2h——压真实归档需求
+// 之上只挡失控流；2GB 对 4K 是 ~6 分钟的静默降档陷阱（超限fatal无 .code
+// 不穿透，候选循环自动吃下一档更低分辨率）
+const MAX_VIDEO_BYTES = 8 * 1024 * 1024 * 1024;
+// 视频整段总时长闸 30min：2GB 需 ~9Mbps、8GB 需 ~36Mbps 持续带宽——慢链
+// 上 5min 闸会把能拉完的高档硬生生降级
+const MAX_VIDEO_MS = 30 * 60 * 1000;
 
 const FFMPEG_OK = (() => {
   try {
-    return spawnSync('ffmpeg', ['-hide_banner', '-version'], { stdio: 'ignore' }).status === 0;
-  } catch { return false; }
+    const ok = spawnSync('ffmpeg', ['-hide_banner', '-version'], { stdio: 'ignore' }).status === 0;
+    if (!ok) console.warn('[video-dl] 未检测到 ffmpeg——外部源视频下载将回落低清合流档（yt≈360p / bv≤720p），安装 ffmpeg 才能拿到高画质');
+    return ok;
+  } catch {
+    console.warn('[video-dl] 未检测到 ffmpeg——外部源视频下载将回落低清合流档（yt≈360p / bv≤720p），安装 ffmpeg 才能拿到高画质');
+    return false;
+  }
 })();
 
 // -c copy 纯封装不重编码：音乐视频尺度下秒级完成。out 先落 .mux 再 rename——
@@ -224,16 +235,28 @@ function ffmpegMux(videoPath, audioPath, outPath, signal) {
     const child = spawn('ffmpeg', [
       '-hide_banner', '-loglevel', 'error', '-y',
       '-i', videoPath, '-i', audioPath,
+      // 显式选流：默认流选择对非常规输入（视频文件自带音轨等）可能多选——
+      // 钉死 0 号输入首个视频轨 + 1 号输入首个音频轨
+      '-map', '0:v:0', '-map', '1:a:0',
       // .mux 中间态后缀 ffmpeg 猜不出封装格式——必须显式 -f mp4
       '-c', 'copy', '-f', 'mp4', '-movflags', '+faststart', muxPath
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
     let errTail = '';
     child.stderr.on('data', d => { errTail = (errTail + d).slice(-500); });
+    // ffmpeg 无内建超时——封装 8GB 文件正常秒级，挂死会把任务钉死在
+    // downloading 直到队列 abort；120s 兜底兜底杀
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* 进程已退 */ }
+    }, 120000);
     const onAbort = () => { try { child.kill('SIGKILL'); } catch { /* 进程已退 */ } };
     signal?.addEventListener('abort', onAbort, { once: true });
-    child.on('error', (e) => { signal?.removeEventListener('abort', onAbort); reject(e); });
-    child.on('close', (code) => {
+    const cleanup = () => {
+      clearTimeout(killTimer);
       signal?.removeEventListener('abort', onAbort);
+    };
+    child.on('error', (e) => { cleanup(); reject(e); });
+    child.on('close', (code) => {
+      cleanup();
       const fail = (err) => {
         // reject 路径清 .mux 半截——别让残片活到下次启动 reap
         try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
@@ -267,11 +290,18 @@ function ffmpegExtractAudio(inPath, outPath, signal) {
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
     let errTail = '';
     child.stderr.on('data', d => { errTail = (errTail + d).slice(-500); });
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* 进程已退 */ }
+    }, 120000);
     const onAbort = () => { try { child.kill('SIGKILL'); } catch { /* 进程已退 */ } };
     signal?.addEventListener('abort', onAbort, { once: true });
-    child.on('error', (e) => { signal?.removeEventListener('abort', onAbort); reject(e); });
-    child.on('close', (code) => {
+    const cleanup = () => {
+      clearTimeout(killTimer);
       signal?.removeEventListener('abort', onAbort);
+    };
+    child.on('error', (e) => { cleanup(); reject(e); });
+    child.on('close', (code) => {
+      cleanup();
       const fail = (err) => {
         try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
         reject(err);
@@ -316,9 +346,13 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     const prog = pickYtProgressive(sd);
     if (prog.length) progressiveCarry = prog;
     return {
-      videos: ytPickStreamList(sd, 'video', 'best')
-        .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null, h: f.height || 0 })),
+      // adaptiveOnly：合流 formats 混入 videos 会让 ffmpegMux 产出双音轨 mp4
+      // ——合流兜底走尾部 progressive 相位，不进自适应候选表
+      videos: ytPickStreamList(sd, 'video', 'best', { adaptiveOnly: true })
+        .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null, h: f.height || 0, w: f.width || 0 })),
+      // 合流音轨硬过滤 audio/mp4：opus webm 塞进 mp4 容器 Safari 无声
       audios: ytPickStreamList(sd, 'audio')
+        .filter(f => (f.mimeType || '').startsWith('audio/mp4'))
         .map(f => ({ url: f.url, mimeType: f.mimeType || '', br: f.bitrate || null })),
       progressive: async () => progressiveCarry
     };
@@ -332,9 +366,19 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     return await streamToFile(resp, dest, {
       maxBytes: MAX_VIDEO_BYTES,
       onProgress: onProgress && ((p) => onProgress(base + Math.floor(p * span / 100))),
-      maxTotalMs: 300000
+      maxTotalMs: MAX_VIDEO_MS
     });
   };
+  // 候选失败即降档是静默路径——日志留痕让"实际到手档位"可回溯
+  const downgradeWarn = (cand, e) =>
+    console.warn(`[video-dl] ${cand.h || '?'}p 档下载失败（${e.message}），尝试下一档`);
+  // 实际到手档位快照：mimeType 抽编码串，落 video_meta 列供对账/展示
+  const codecOf = (mimeType) =>
+    (String(mimeType || '').match(/codecs="?([a-zA-Z0-9._-]+)/) || [])[1] || null;
+  const metaOf = (cand, source) => ({
+    h: cand.h || 0, w: cand.w || 0, codec: codecOf(cand.mimeType),
+    br: cand.br || null, source
+  });
   let lastErr = null;
   let lastMedia = null;
   for (let round = 0; round < 2; round++) {
@@ -375,10 +419,11 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
           throwIfAborted(signal);
           try {
             const saved = await fetchTo(cand, outputPath, 0, 100);
-            return { path: saved.path, size: saved.size, url: cand.url };
+            return { path: saved.path, size: saved.size, url: cand.url, videoMeta: metaOf(cand, 'progressive') };
           } catch (e) {
             throwIfAborted(signal);
             if (e?.fatal && e?.code) throw e;
+            downgradeWarn(cand, e);
             lastErr = e;
           }
         }
@@ -418,12 +463,13 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
             await ffmpegMux(videoTmp, audioTmp, outputPath, signal);
             onProgress && onProgress(100);
             const size = fs.statSync(outputPath).size;
-            return { path: outputPath, size, url: v.url };
+            return { path: outputPath, size, url: v.url, videoMeta: metaOf(v, 'adaptive') };
           } catch (e) {
             throwIfAborted(signal);
             // 上游 4xx 的 fatal 只判死这一条 URL——换候选；带 errno 的本地
             // 确定性失败（ENOSPC/EROFS）才是真穿透，候选级循环不该为它空转
             if (e?.fatal && e?.code) throw e;
+            downgradeWarn(v, e);
             lastErr = e;
           } finally {
             try { fs.unlinkSync(videoTmp); } catch { /* 未产即空 */ }
@@ -451,10 +497,11 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     throwIfAborted(signal);
     try {
       const saved = await fetchTo(cand, outputPath, 0, 100);
-      return { path: saved.path, size: saved.size, url: cand.url };
+      return { path: saved.path, size: saved.size, url: cand.url, videoMeta: metaOf(cand, 'progressive') };
     } catch (e) {
       throwIfAborted(signal);
       if (e?.fatal && e?.code) throw e;
+      downgradeWarn(cand, e);
       lastErr = e;
     }
   }

@@ -23,6 +23,7 @@ function mapTaskRow(row) {
     lyricsPath: row.lyrics_path,
     coverPath: row.cover_path,
     videoPath: row.video_path,
+    videoMeta: parseProviderData(row.video_meta),
     bitrate: row.bitrate,
     fileSize: row.file_size,
     durationMs: row.duration_ms,
@@ -123,6 +124,10 @@ function updateTask(id, updates) {
   if (updates.videoPath !== undefined) {
     fields.push('video_path = @video_path');
     params.video_path = updates.videoPath;
+  }
+  if (updates.videoMeta !== undefined) {
+    fields.push('video_meta = @video_meta');
+    params.video_meta = updates.videoMeta ? JSON.stringify(updates.videoMeta) : null;
   }
   if (updates.fileSize !== undefined) {
     fields.push('file_size = @file_size');
