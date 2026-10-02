@@ -2,7 +2,7 @@
   <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
   <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden">
-    <!-- 浮层顶行：不占流——右栏待播区的顶部空间随之释放 -->
+    <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
     </div>
@@ -219,7 +219,8 @@
         </div>
 
         <!-- 歌词工具条：字号调节（本机偏好）+ 时间校准（按词源入库）。
-             不挂进滚动体——面板滚动时工具条恒可见 -->
+             宽屏不挂进侧栏滚动体——面板内滚时恒可见；单列整页滚态随页流
+             （钉顶空间留给 tabs——工具条是低频校准件） -->
         <div v-if="tab === 'lyrics' && currentSong" class="lyric-tools">
           <div class="lyric-tools-group" role="group" aria-label="歌词字号">
             <button type="button" class="lyric-tool" :disabled="lyricFontSize <= LYRIC_FS_MIN"
@@ -545,38 +546,38 @@ export default {
       if (props.tab === 'related') loadRelated()
     })
 
-    // ── 歌词/队列定位滚动 ──
-    const centerCurrentRow = () => {
-      if (props.tab === 'lyrics') {
-        const el = lyricContainer.value?.querySelector(`[data-lyric-index="${props.currentLyricIndex}"]`)
-        el?.scrollIntoView({ block: 'center' })
-      } else {
-        // 当前行可能在渲染窗外——先扩窗物化再定位（nextTick 等 DOM 落地）
-        queueEnsureRendered(currentQueueIndex.value)
-        nextTick(() => {
-          const el = queueContainer.value?.querySelector('.queue-row--current')
-          el?.scrollIntoView({ block: 'center' })
-        })
-      }
-    }
-
     // 单列态（<901px，与模板 wide: 断点同源）滚动器是 .watch-view 整页——
     // 容器不限高不内滚、scrollTop 恒 0，rect 法空转；此时 scrollIntoView
-    // 只移动真滚动祖先，恰是整页居中所需。宽屏态用 rect 法只滚 lyricContainer
+    // 只移动真滚动祖先，恰是整页居中所需。宽屏态用 rect 法只滚指定容器
     // ——scrollIntoView 会连滚所有祖先，双栏态拽动整页。
-    // 字号重排后同样用这套分派
-    const scrollLyricIntoCenter = (i, smooth) => {
-      const container = lyricContainer.value
-      const el = container?.querySelector(`[data-lyric-index="${i}"]`)
+    const scrollRowIntoCenter = (container, el, smooth) => {
       if (!container || !el) return
       if (!window.matchMedia('(min-width: 901px)').matches) {
         el.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' })
         return
       }
       const containerRect = container.getBoundingClientRect()
-      const lyricRect = el.getBoundingClientRect()
-      const scrollOffset = (lyricRect.top - containerRect.top + lyricRect.height / 2) - containerRect.height / 2
+      const rowRect = el.getBoundingClientRect()
+      const scrollOffset = (rowRect.top - containerRect.top + rowRect.height / 2) - containerRect.height / 2
       container.scrollTo({ top: container.scrollTop + scrollOffset, behavior: smooth ? 'smooth' : 'auto' })
+    }
+    const scrollLyricIntoCenter = (i, smooth) => {
+      scrollRowIntoCenter(lyricContainer.value,
+        lyricContainer.value?.querySelector(`[data-lyric-index="${i}"]`), smooth)
+    }
+
+    // ── 歌词/队列定位滚动 ──
+    const centerCurrentRow = () => {
+      if (props.tab === 'lyrics') {
+        scrollLyricIntoCenter(props.currentLyricIndex, false)
+      } else {
+        // 当前行可能在渲染窗外——先扩窗物化再定位（nextTick 等 DOM 落地）
+        queueEnsureRendered(currentQueueIndex.value)
+        nextTick(() => {
+          scrollRowIntoCenter(queueContainer.value,
+            queueContainer.value?.querySelector('.queue-row--current'), false)
+        })
+      }
     }
 
     watch(() => props.currentLyricIndex, async (i) => {
@@ -728,7 +729,7 @@ export default {
    ——本层是唯一滚动器；≥901px 转双栏内滚，车道移交各栏 */
 .watch-view { scrollbar-gutter: stable; }
 
-/* 浮层顶行：返回钉左页角 / 沉浸钉右页角。
+/* 浮层顶行：返回键钉左页角。
    移动基态入流 sticky——.watch-view 是真滚动器，absolute 会随内容滚走、
    深滚后失去唯一返回路径；宽屏态改回 absolute 不占流（栏内自滚）。
    pointer-events:none 带子让下方内容可点，仅按键自身接收点击 */
@@ -847,8 +848,10 @@ export default {
   border: var(--hairline);
   color: var(--ink);
   flex-shrink: 0;
-  /* 宽与封面同轴——移动基态跟随封面 min(64vw,320px) */
+  /* 宽与封面同轴——移动基态跟随封面 min(64vw,320px[,55svh])：
+     横屏矮机上封面按 55svh 收缩，横幅不跟上就会比封面还宽 */
   width: min(64vw, 320px);
+  width: min(64vw, 320px, 55svh);
   max-width: 100%;
   text-align: left;
 }
@@ -860,7 +863,16 @@ export default {
   color: var(--accent-danger-ink);
 }
 
-.watch-tabs { flex-shrink: 0; }
+.watch-tabs {
+  flex-shrink: 0;
+  /* 单列整页滚下 tabs 随页流走会迫使深滚用户滚回顶——钉在 52px 顶条
+     （10px padding×2 + ink-btn--sm 32px）之下；宽屏侧栏内滚时惰性 */
+  position: sticky;
+  top: 52px;
+  z-index: 4;
+  /* 滚过内容不透字（同 .watch-top 的画布衬底） */
+  background: var(--view-canvas, var(--paper));
+}
 
 /* 移动基态：不限高不内滚（YTM 整页滚动语义——队列/歌词随页流）；
    ≥901px 回栏内滚（flex:1+min-height:0+overflow，见 min-width 块） */
