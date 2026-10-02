@@ -220,8 +220,8 @@ export function useSearchNav({
   }
 
   const playPlaylistAndWatch = (shuffle) => {
+    if (!playPlaylist(shuffle)) return // 空单不跳 watch（toast 在 playPlaylist 内）
     enterWatch()
-    playPlaylist(shuffle)
   }
 
   // ── 搜索 ──

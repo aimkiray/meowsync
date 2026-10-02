@@ -49,6 +49,7 @@
           @select-playlist="selectPlaylistAndShow"
           @play-playlist="playPlaylistFromSidebar"
           @remove-playlist="removePlaylistFromLibrary"
+          @open-create-playlist="handleOpenCreatePlaylist"
           @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
         />
       </aside>
@@ -203,13 +204,47 @@
               placeholder="新建歌单…"
               maxlength="40"
               aria-label="新歌单名称"
-              @keydown.enter="createPlaylistAndAdd"
+              @keydown.enter="!$event.isComposing && createPlaylistAndAdd()"
             />
             <button
               class="ink-btn ink-btn--sm"
               :disabled="!newPlaylistName.trim()"
               @click="createPlaylistAndAdd"
             ><PixelIcon name="plus" :size="12" /> 新建</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 新建空白歌单（侧栏头 + 键触发）：复用 atp 模态皮，仅头 + 命名行 -->
+    <Teleport to="body">
+      <div
+        v-if="createPlaylistOpen"
+        class="atp-overlay"
+        @click="closeCreatePlaylist"
+      >
+        <div
+          class="atp-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-label="新建歌单"
+          @click.stop
+        >
+          <div class="pg-menu-head">新建歌单</div>
+          <div class="atp-new atp-new--flush">
+            <input
+              ref="createPlaylistInput"
+              v-model="createPlaylistName"
+              placeholder="歌单名…"
+              maxlength="40"
+              aria-label="歌单名称"
+              @keydown.enter="!$event.isComposing && submitCreatePlaylist()"
+            />
+            <button
+              class="ink-btn ink-btn--sm"
+              :disabled="!createPlaylistName.trim()"
+              @click="submitCreatePlaylist"
+            ><PixelIcon name="plus" :size="12" /> 创建</button>
           </div>
         </div>
       </div>
@@ -315,7 +350,7 @@ import { useRemoteControl } from './composables/useRemoteControl'
 import { useHomeFeed } from './composables/useHomeFeed'
 import { visibleSongs } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
-import { isConfirmOpen, resolveConfirm } from './lib/feedback'
+import { isConfirmOpen, resolveConfirm, toast } from './lib/feedback'
 import { httpsCover } from './lib/url'
 import { readShareParams, consumeUrlShareParams } from './lib/share-params'
 import { createReqGate } from './lib/req-gate'
@@ -392,7 +427,22 @@ export default {
       collectSelectedPlaylist, selectedPlaylistInLibrary,
       selectPlaylist, appendSongToLibraryPlaylist, removeSongFromPlaylist, syncPlaylist,
       loadDefaultPlaylists,
+      createPlaylistOpen, createPlaylistName, createPlaylistInput,
+      openCreatePlaylist, closeCreatePlaylist, createLocalPlaylist,
     } = usePlaylistLibrary({ gates, playingPlaylistId, loading })
+
+    // 新建空白歌单提交：建库对象 → 直接打开（空态与「添加歌曲」入口即见，
+    // YTM 建单即落的同款行为）。selectPlaylistAndShow 处理 view 切换/导航栈
+    const submitCreatePlaylist = async () => {
+      const pl = createLocalPlaylist(createPlaylistName.value)
+      if (!pl) {
+        toast('歌单名不能为空', 'error')
+        return
+      }
+      closeCreatePlaylist()
+      toast(`已创建歌单《${pl.name}》`, 'success')
+      await selectPlaylistAndShow(pl)
+    }
 
     const filteredSongs = computed(() =>
       visibleSongs(songs.value, showVipSongs.value, serverCaps.value)
@@ -493,8 +543,17 @@ export default {
     } = useAddToPlaylist({
       gates,
       userPlaylists, selectedPlaylist, songs,
-      addPlaylistToLibrary, appendSongToLibraryPlaylist,
+      addPlaylistToLibrary, appendSongToLibraryPlaylist, createLocalPlaylist,
+      closeCreatePlaylist,
     })
+
+    // 侧栏「+」开新建弹窗：跨域互斥收口——atp/点歌台若因 Tab 逃逸还开着，
+    // 先收掉再开（双层模态时 Esc 会关掉看不见的底层窗——顺序与视觉堆叠相反）
+    const handleOpenCreatePlaylist = () => {
+      addTargetSong.value = null
+      closeSongPicker()
+      openCreatePlaylist()
+    }
 
     // 远程控制：host 模式 state_update 广播 + 指令执行 + 断线重连（composables/
     // useRemoteControl.js）。必须放在 usePlayer 之后实例化——依赖全部来自播放器域；
@@ -523,6 +582,11 @@ export default {
       // 非 Esc 键直接 return——空格/斜杠不会穿透到全局快捷键
       if (songPickerOpen.value) {
         if (e.key === 'Escape') closeSongPicker()
+        return
+      }
+      // 新建歌单模态同款冻结
+      if (createPlaylistOpen.value) {
+        if (e.key === 'Escape') closeCreatePlaylist()
         return
       }
       if (e.key === 'Escape') {
@@ -801,6 +865,13 @@ export default {
       openAddToPlaylist,
       addSongToPlaylist,
       createPlaylistAndAdd,
+      createPlaylistOpen,
+      createPlaylistName,
+      createPlaylistInput,
+      openCreatePlaylist,
+      closeCreatePlaylist,
+      submitCreatePlaylist,
+      handleOpenCreatePlaylist,
       removeSongFromPlaylist,
       syncPlaylist,
       httpsCover

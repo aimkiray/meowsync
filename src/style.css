@@ -619,6 +619,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .app-shell .app-body .queue-row-artist, .app-shell .app-body .queue-row-duration,
 .app-shell .app-body .queue-head-tag, .app-shell .app-body .queue-head-meta, .app-shell .app-body .queue-sec,
 .app-shell .app-body .song-artist, .app-shell .app-body .song-duration, .app-shell .app-body .song-state-text,
+.app-shell .app-body .song-state-sub,
 .app-shell .app-body .panel-state-text, .app-shell .app-body .panel-state-sub,
 .app-shell .app-body .pl-meta, .app-shell .app-body .result-section-sub,
 .app-shell .app-body .grid-state-text, .app-shell .app-body .home-section-sub, .app-shell .app-body .home-state-text,
@@ -1162,6 +1163,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* ── 点歌台（asp-*）：atp 模态皮的加宽变体，行式结果列表 ── */
 .asp-dialog { width: min(380px, 92vw); }
 .asp-search { border-top: none; border-bottom: var(--hairline-soft); }
+/* atp-new 直接贴 pg-menu-head 时（无列表的裸弹窗）：头部底边已分头，
+   再留顶线会叠成 2.4px 缝——与 asp-search 同型的去顶线变体 */
+.atp-new--flush { border-top: none; }
 .asp-row {
   display: flex;
   align-items: center;

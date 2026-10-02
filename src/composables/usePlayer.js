@@ -293,13 +293,18 @@ export function usePlayer({
       playingSongs.value = playingSongs.value.slice()
     }
 
-    // 「播放全部/随机」hero 按钮：队首（或随机锚点）起播，快照当前过滤列表
+    // 「播放全部/随机」hero 按钮：队首（或随机锚点）起播，快照当前过滤列表。
+    // 空单返回 false——调用方据此不跳 watch（否则落在空 watch 页死胡同）
     const playPlaylist = (shuffle = false) => {
       const list = filteredSongs.value
-      if (!list.length) return
+      if (!list.length) {
+        toast('歌单还没有歌曲，先添加几首吧', 'info')
+        return false
+      }
       if (shuffle) shuffleOn.value = true
       const anchor = shuffle ? list[Math.floor(Math.random() * list.length)] : list[0]
       playSong(anchor) // 非 preserveContext → playSong 内 setQueue 重拍快照
+      return true
     }
 
     // 搜索结果页点歌：队列 = 本次搜索的单曲结果，而非当前浏览歌单
@@ -314,8 +319,8 @@ export function usePlayer({
       const ok = await selectPlaylist(playlist)
       if (!ok) return
       setSidebarOpen(false)
+      if (!playPlaylist(false)) return // 空单：不进 watch（toast 在 playPlaylist 内）
       enterWatch() // 点歌单播放即进入 watch 页（YTM 同款导航）
-      playPlaylist(false)
     }
 
     // 队列抽屉「正在播放：X」来源名——队列无归属（搜索结果/删库歌单）时
