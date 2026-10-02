@@ -145,11 +145,12 @@ export function applyTrackOverrides(song, overrides) {
   const o = overrides?.[String(song?.id ?? '')]
   if (!o) return song
   const out = { ...song }
-  if (o.name) out.name = o.name
-  // != null 而非真值闸：''=用户显式清空，与就地分支同口径（空艺人→未知艺术家）
+  // 全字段 != null 口径：''=显式清空、0=显式清零（与就地分支同律）——真值闸
+  // 会把「清空名/封面」静默丢掉
+  if (o.name != null) out.name = o.name
   if (o.artist != null) out.ar = [{ name: o.artist || '未知艺术家' }]
-  if (o.album != null) out.al = { ...(song.al || {}), name: o.album }
+  if (o.album != null) out.al = { ...(typeof song.al === 'object' && song.al ? song.al : {}), name: o.album }
   if (o.durationMs != null) out.dt = o.durationMs // 0=用户清空回「自动」，也要覆盖
-  if (o.coverUrl) out.picUrl = o.coverUrl
+  if (o.coverUrl != null) out.picUrl = o.coverUrl
   return out
 }

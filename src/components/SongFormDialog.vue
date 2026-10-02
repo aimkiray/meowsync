@@ -2,7 +2,7 @@
   <Teleport to="body">
     <!-- 遮罩 click 要带 mousedown 同源自证：input 里按下拖到遮罩松手，
          click 会派发到公共祖先 overlay——重表单（四字段+四文件位）误关代价太高 -->
-    <div v-if="open" class="atp-overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
+    <div v-if="open" class="atp-overlay" @mousedown="onOverlayDown" @mouseup="onOverlayUp" @click="onOverlayClick">
       <div
         class="atp-dialog sfd-dialog"
         role="dialog"
@@ -56,7 +56,7 @@
                 <button
                   type="button"
                   class="ink-btn ink-btn--sm"
-                  :aria-label="`${picked[slot.kind] ? '重选' : hasExisting(slot.kind) ? '更换' : '选择'}${slot.label}`"
+                  :aria-label="`${picked[slot.kind] ? '重选' : hasExisting(slot.kind) ? '更换' : '选择文件'} · ${slot.label}`"
                   :disabled="busy"
                   @click="fileRefs[slot.kind]?.click()"
                 >{{ picked[slot.kind] ? '重选' : (hasExisting(slot.kind) ? '更换' : '选择文件') }}</button>
@@ -188,6 +188,7 @@ export default {
     const onPick = (kind, e) => {
       const f = e.target.files?.[0] || null
       e.target.value = '' // 同文件重选也要触发 change
+      delete progress[kind] // 任何重选都先清旧进度条——abort 残留/上次失败的都是误导
       const slot = FILE_SLOTS.find(s => s.kind === kind)
       // 预检：扩展名+体积——必败的选择别等提交后服务端 400/413 才告诉用户
       if (f) {
@@ -204,9 +205,15 @@ export default {
         }
       }
       picked[kind] = f
-      delete progress[kind] // 重选清掉旧进度条——abort 残留/上次失败的都是误导
       error.value = ''
     }
+
+    // 中止/失败收尾：busy 落定后清掉半截进度条（完成的留 100%，重选同 kind 才清）
+    watch(() => props.busy, (b, prev) => {
+      if (prev && !b) {
+        for (const k of Object.keys(progress)) if (progress[k] < 1) delete progress[k]
+      }
+    })
 
     const submit = () => {
       if (props.busy) return
@@ -239,12 +246,16 @@ export default {
       })
     }
 
-    // 遮罩 drag-out 误关闸：只有「按下+抬起都在遮罩本体」才算主动点击关闭
+    // 遮罩 drag-out 误关闸：按下+抬起+click 三点都落在遮罩本体才算主动关闭。
+    // click 在按下/抬起不同元素时派发到最近公共祖先（遮罩）——target=self 区分
+    // 不了松手点，所以 down/up 各自自证（「按下反悔拖回 dialog」不该关窗）
     let overlayDownSelf = false
+    let overlayUpSelf = false
     const onOverlayDown = (e) => { overlayDownSelf = e.target === e.currentTarget }
+    const onOverlayUp = (e) => { overlayUpSelf = e.target === e.currentTarget }
     const onOverlayClick = (e) => {
-      const isRealOverlayClick = overlayDownSelf && e.target === e.currentTarget
-      overlayDownSelf = false
+      const isRealOverlayClick = overlayDownSelf && overlayUpSelf && e.target === e.currentTarget
+      overlayDownSelf = overlayUpSelf = false
       if (isRealOverlayClick) onCancel()
     }
 

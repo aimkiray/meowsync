@@ -41,7 +41,7 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
   // 进内存对 2GB 视频曲是实打实的内存压力。download 属性空值：同源时文件名
   // 由 Content-Disposition 的 filename* 给（含正确扩展名）
   const downloadFileArtifact = async (song) => {
-    const artists = song.ar?.map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
+    const artists = (Array.isArray(song.ar) ? song.ar.map(a => a?.name).filter(Boolean).join(', ') : '') || '未知艺术家'
     const base = `${artists} - ${song.name}`.replace(/[\\/:*?"<>|]/g, '_')
     const link = document.createElement('a')
     link.href = `${fileArtifactUrl(song.id)}&download=${encodeURIComponent(base)}`

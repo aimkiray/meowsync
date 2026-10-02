@@ -9,6 +9,11 @@ import { UPLOADS_PLAYLIST_ID, fileArtifactUrl } from '../lib/song'
 
 export { UPLOADS_PLAYLIST_ID, fileArtifactUrl }
 
+// 与 http.js 拦截器同口径：DOWNLOAD_TOKEN（无登录写鉴权）部署下裸 XHR/fetch
+// 也要带令牌——uploads 是 protectedWrite，session cookie 缺位时没它全 401
+const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
+const tokenHeaders = () => DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
+
 export function uploadFile({ kind, file, filename, songId, onProgress }) {
   const params = new URLSearchParams({ kind })
   params.set('filename', filename || file?.name || 'file')
@@ -19,6 +24,7 @@ export function uploadFile({ kind, file, filename, songId, onProgress }) {
     xhr.open('POST', `${API_BASE_URL}/uploads?${params}`)
     xhr.withCredentials = true
     xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    if (DOWNLOAD_TOKEN) xhr.setRequestHeader('x-download-token', DOWNLOAD_TOKEN)
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
     }
@@ -43,6 +49,7 @@ export async function deleteUploadedSong(songId) {
   const doDelete = () => fetch(`${API_BASE_URL}/uploads/${encodeURIComponent(songId)}`, {
     method: 'DELETE',
     credentials: 'include',
+    headers: tokenHeaders(),
   })
   let r = await doDelete()
   // abort→DELETE 竞态：xhr.abort 后服务端 inflight 锁要走「socket 断→流读失败

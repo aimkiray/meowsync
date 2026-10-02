@@ -1910,7 +1910,10 @@ async function shutdownAll() {
 function reapUploadPartFiles() {
   let removed = 0;
   const root = path.join(DOWNLOAD_BASE_DIR, 'uploads');
-  if (!fs.existsSync(root)) return removed;
+  // 根也要 lstat——existsSync 跟随 symlink，子目录有闸根没有就不对称
+  try {
+    if (!fs.lstatSync(root).isDirectory()) return removed;
+  } catch { return removed; }
   for (const sub of fs.readdirSync(root, { withFileTypes: true })) {
     if (!sub.isDirectory()) continue;
     const dir = path.join(root, sub.name);
