@@ -137,7 +137,7 @@
           @open-source="openQueueSource"
           @add-to-playlist="handleOpenAddToPlaylist"
         />
-        <AdminPanel v-else />
+        <DownloadsPanel v-else />
       </main>
     </div>
 
@@ -409,7 +409,7 @@ import BottomPlayer from './components/BottomPlayer.vue'
 import PixelIcon from './components/PixelIcon.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import RemoteController from './components/RemoteController.vue'
-import AdminPanel from './components/AdminPanel.vue'
+import DownloadsPanel from './components/DownloadsPanel.vue'
 
 export default {
   name: 'App',
@@ -425,7 +425,7 @@ export default {
     BottomPlayer,
     FullscreenPlayer,
     RemoteController,
-    AdminPanel,
+    DownloadsPanel,
     AuthGate,
     PixelIcon
   },

@@ -2,7 +2,7 @@ import http, { API_BASE_URL } from './http';
 
 // 共享实例已统一剥 r.data（返回 {code,...} body）+ 10s 默认超时：
 // 轮询/查询类请求挂起时必须能 settle——裸 axios 无超时会让
-// AdminPanel 的 pollInFlight 标志永久卡住、轮询停摆。单曲下载/任务重试
+// DownloadsPanel 的 pollInFlight 标志永久卡住、轮询停摆。单曲下载/任务重试
 // 都是"提交即返回"的异步语义，终态由状态轮询确认——不再需要长超时通道
 
 export const downloadsApi = {
