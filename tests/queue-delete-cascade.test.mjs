@@ -255,3 +255,42 @@ test('在途协程级联：abort+排空后任务/队列/歌单行全清', async 
   assert.equal(queuesRepo.findQueueById(queue.id), null);
   assert.equal(playlistsRepo.findPlaylistById(pl.id), null);
 });
+
+test('幻影 videoPath 清册：登记但文件已删 + 不补视频的重跑清掉登记', async () => {
+  // 修复前：videoPath 在册而文件被外删 → taskFilesIntact 永假 → 行永远钉在
+  // 「未下载」，且 flag 同步把 downloadVideo 翻 false 后视频相位不再跑——
+  // 任何普通重下都修不好登记幻影。现在重跑时清册让完好工件重新算 intact
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777016', name: 'pl-phantom' });
+  playlistTracksRepo.replaceTracksForPlaylist(pl.id, [
+    { id: 'bv_BV7770160000', name: '曲', ar: [{ name: '艺人' }], al: { name: '专' }, dt: 200000 }
+  ]);
+  const task = tasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 'bv_BV7770160000', songName: '曲',
+    artist: '艺人', status: 'completed', downloadAudio: true, downloadVideo: true
+  });
+  const audioPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', 'bv_BV7770160000.mp3');
+  const phantomVideo = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'bv_BV7770160000.mp4');
+  mkdirSync(dirname(audioPath), { recursive: true });
+  writeFileSync(audioPath, 'audio-bytes');
+  // 登记 videoPath 但不落盘——模拟文件被外部删除的幻影态
+  tasksRepo.updateTask(task.id, {
+    audioPath, videoPath: phantomVideo, videoMeta: { h: 1080, w: 1920, codec: 'avc1', br: 1, source: 'adaptive' }
+  });
+  assert.equal(downloadFs.taskFilesIntact(tasksRepo.findTaskById(task.id)), false);
+
+  // 普通重下（不补视频）→ flag 同步时应清幻影登记
+  const res = await app.request('http://t/downloads/songs/bv_BV7770160000', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playlistId: pl.id })
+  });
+  assert.equal(res.status, 200);
+  const row = tasksRepo.findTaskById(task.id);
+  assert.equal(row.videoPath, null);
+  assert.equal(row.videoMeta, null);
+  assert.equal(row.downloadVideo, false);
+
+  // 收尾：种队列走级联 abort 挂起的 standalone 协程
+  const q = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 0 });
+  await del(q.id);
+});

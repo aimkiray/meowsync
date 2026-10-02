@@ -22,7 +22,7 @@
             muted
             playsinline
             preload="auto"
-            @error="mediaVideoFailed = true"
+            @error="onMediaVideoError"
           ></video>
           <img
             v-else-if="coverUrl"
@@ -650,6 +650,16 @@ export default {
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
       return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video', song.file.videoV) : ''
     })
+    // 本地档解码失败（hev1/av01-in-mp4 等 Safari 放不动的封装）——先回落
+    // 在线流再闩封面：清 downloadedVideoUrl 让 mediaVideoUrl 换源重载，
+    // watcher 顺带复位 mediaVideoFailed；在线源也失败才真闩
+    const onMediaVideoError = () => {
+      if (downloadedVideoUrl.value && mediaVideoUrl.value === downloadedVideoUrl.value) {
+        downloadedVideoUrl.value = null
+        return
+      }
+      mediaVideoFailed.value = true
+    }
     // 复位键用 mediaVideoUrl——同曲换源（B 站换P/YouTube 重导）时新源该重新尝试
     watch(mediaVideoUrl, () => { mediaVideoFailed.value = false })
 

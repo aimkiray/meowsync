@@ -176,6 +176,11 @@ function hasTaskChanged(currentTask, nextTask) {
     || currentTask.downloadCover !== nextTask.downloadCover
     || currentTask.audioPath !== nextTask.audioPath
     || currentTask.lyricsPath !== nextTask.lyricsPath
+    // 视频位三字段（下载请求翻转 downloadVideo、工件落盘写 videoPath/
+    // videoMeta）不 diff 会让视频徽章在任务行上永久缺席
+    || currentTask.downloadVideo !== nextTask.downloadVideo
+    || currentTask.videoPath !== nextTask.videoPath
+    || JSON.stringify(currentTask.videoMeta || null) !== JSON.stringify(nextTask.videoMeta || null)
     // filesIntact/fileSize 是完成态唯二的"文件变了"信号——不比会让幻影行永久滞留
     || currentTask.filesIntact !== nextTask.filesIntact
     || currentTask.fileSize !== nextTask.fileSize

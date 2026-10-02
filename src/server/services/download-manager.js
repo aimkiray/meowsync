@@ -14,7 +14,7 @@ const {
   DOWNLOAD_BASE_DIR, isExternalSongId, durationLooksTruncated,
   drainWithTimeout, DRAIN_TIMEOUT_MS, providerDataOf, retryDelayMs,
   isUnderDownloadDir, sanitizeErrorMessage, toPublicTask, deleteFiles,
-  taskFilesIntact, taskLockKeys,
+  taskFilesIntact, taskLockKeys, pathPresent,
 } = require('./download-fs');
 
 // 运行中队列的控制器集合：queueId -> { paused, cancelled, abort, done }
@@ -1417,6 +1417,12 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
       downloadVideo: options.downloadVideo === true && isExternalSongId(songId),
+      // 幻影清册：videoPath 登记但文件已被外删、本次又不补视频——留着它
+      // taskFilesIntact 永假，行在 UI 永远钉在「未下载」且任何普通重跑都
+      // 修不好（视频相位按 flag 跳过）。清册让完好文件重新算 intact；
+      // 文件还在的 videoPath 保留（del 语义不归 flag 同步管）
+      ...(options.downloadVideo !== true && task.videoPath && !pathPresent(task.videoPath)
+        ? { videoPath: null, videoMeta: null } : {}),
       providerData: providerDataOf(track)
     }) || task;
   } else {

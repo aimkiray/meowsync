@@ -115,3 +115,30 @@ test('progressive：durl 拉取失败不缓存——重试会真打新一跳', a
   await assert.rejects(() => media.progressive(), /HTTP 500/);
   assert.ok(n > afterFirst);
 });
+
+test('pickStreamList video anyCodec：4K hev1 反超 1080p avc1，同像素仍 avc1 优先', async () => {
+  const { pickStreamList } = require('../src/server/lib/bilibili.js');
+  const avc1080 = { id: 80, codecs: 'avc1.640032', mimeType: 'video/mp4', width: 1920, height: 1080, frameRate: '30', bandwidth: 2000000, baseUrl: 'https://a/avc1080' };
+  const hev4k = { id: 120, codecs: 'hev1.1.6.L153', mimeType: 'video/mp4', width: 3840, height: 2160, frameRate: '30', bandwidth: 12000000, baseUrl: 'https://a/hev4k' };
+  const hev1080 = { id: 116, codecs: 'hev1.1.6.L120', mimeType: 'video/mp4', width: 1920, height: 1080, frameRate: '30', bandwidth: 3000000, baseUrl: 'https://a/hev1080' };
+  // 下载链放开编码面：>1080p 档（只发 hev1/av01 的 4K/8K/HDR）必须可达
+  const out = pickStreamList({ dash: { video: [avc1080, hev4k, hev1080] } }, 'video', 'best', { anyCodec: true });
+  assert.equal(out[0].id, 120);
+  // 同像素仍 avc1 优先——hev1 轨留在候选表里做下一档降级而非首选
+  assert.equal(out[1].id, 80);
+  assert.equal(out[2].id, 116);
+});
+
+test('pickStreamList video 默认档不受 anyCodec 影响——播放链 avc1 兜底语义保留', async () => {
+  const { pickStreamList } = require('../src/server/lib/bilibili.js');
+  const avc1080 = { id: 80, codecs: 'avc1.640032', mimeType: 'video/mp4', width: 1920, height: 1080, frameRate: '30', bandwidth: 2000000 };
+  const hev4k = { id: 120, codecs: 'hev1.1.6.L153', mimeType: 'video/mp4', width: 3840, height: 2160, frameRate: '30', bandwidth: 12000000 };
+  // 播放链（prefer='best' 但不传 anyCodec）：avc 存在即只交 avc——
+  // 4K hev1 不外泄给浏览器直放（DASH 裸轨 Safari 解不动）
+  const out = pickStreamList({ dash: { video: [hev4k, avc1080] } }, 'video', 'best');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].id, 80);
+  // 无 avc 时仍兜底全档（原语义：宁拿 hev1 也不空手）
+  const out2 = pickStreamList({ dash: { video: [hev4k] } }, 'video', 'best');
+  assert.equal(out2[0].id, 120);
+});
