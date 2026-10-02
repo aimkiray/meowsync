@@ -5,7 +5,7 @@
 //   数字值）、组内稳定保序、无名艺人沉尾
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyTrackOrder, groupTracksByArtist, trackArtistGroupKey } from '../src/lib/track-order.js';
+import { applyTrackOrder, groupTracksByArtist, moveTrackByIds, trackArtistGroupKey } from '../src/lib/track-order.js';
 
 const t = (id, artist) => ({ id, name: `s${id}`, ar: [{ name: artist }] });
 const ids = (list) => list.map(x => String(x.id));
@@ -90,4 +90,38 @@ test('groupTracksByArtist 不改原数组（返回新数组）', () => {
   const out = groupTracksByArtist(list);
   assert.deepEqual(ids(list), ['1', '2']);
   assert.deepEqual(ids(out), ['2', '1']);
+});
+
+test('moveTrackByIds 双端 id 锚定：下插/上插', () => {
+  const list = [t('a'), t('b'), t('c'), t('d')];
+  assert.deepEqual(ids(moveTrackByIds(list, 'a', 'c')), ['b', 'c', 'a', 'd']);
+  assert.deepEqual(ids(moveTrackByIds(list, 'd', 'b')), ['a', 'd', 'b', 'c']);
+  // 原位（拖到自己）返回同引用——调用方据此判 no-op 不落盘
+  assert.equal(moveTrackByIds(list, 'b', 'b'), list);
+});
+
+test('moveTrackByIds 任一端不在列/非法输入原样返回同引用', () => {
+  const list = [t('a'), t('b')];
+  assert.equal(moveTrackByIds(list, 'a', 'gone'), list);
+  assert.equal(moveTrackByIds(list, 'gone', 'a'), list);
+  assert.equal(moveTrackByIds(list, null, 'a'), list);
+  assert.equal(moveTrackByIds(null, 'a', 'b'), null);
+  // 数字/字符串 id 归一
+  assert.deepEqual(ids(moveTrackByIds([t(1), t(2)], '2', 1)), ['2', '1']);
+});
+
+test('trackArtistGroupKey ar 空数组不遮蔽 artists 兜底 + 字符串形态', () => {
+  // 回归：ar:[] 是 truthy，直接 || 会吞掉 artists 兜底
+  assert.equal(trackArtistGroupKey({ ar: [], artists: [{ name: 'Bob' }] }), 'Bob');
+  assert.equal(trackArtistGroupKey({ ar: ['弦名'] }), '弦名');
+  assert.equal(trackArtistGroupKey({ artists: ['Plain Str'] }), 'Plain Str');
+  assert.equal(trackArtistGroupKey({ ar: [null], artists: [] }), '');
+});
+
+test('groupTracksByArtist null 条目/非法输入沉尾不炸', () => {
+  const out = groupTracksByArtist([null, t('1', 'A'), { id: 'x' }, undefined]);
+  // null/undefined 键为空与无名同组，保原相对序沉尾
+  assert.deepEqual(out.map(x => x?.id), ['1', undefined, 'x', undefined]);
+  assert.deepEqual(groupTracksByArtist(null), []);
+  assert.deepEqual(groupTracksByArtist(undefined), []);
 });

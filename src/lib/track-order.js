@@ -44,6 +44,22 @@ const LATIN_COLLATOR = new Intl.Collator('en', {
 const isLatinKey = (k) => /^[\x00-\x7F]/.test(k)
 
 /**
+ * 行位移的 id 锚定实现：排序态期间静默同步/行追加可能整体替换列表——按下标
+ * 盲 splice 会移错行，双端 id 解析当前位再插；任一端已不在列（行被移除）
+ * 原样返回同引用，调用方据此判 no-op。
+ */
+export function moveTrackByIds(list, dragId, targetId) {
+  if (!Array.isArray(list)) return list
+  const from = list.findIndex(t => String(t?.id) === String(dragId))
+  const to = list.findIndex(t => String(t?.id) === String(targetId))
+  if (from === -1 || to === -1 || from === to) return list
+  const out = [...list]
+  const [moved] = out.splice(from, 1)
+  out.splice(to, 0, moved)
+  return out
+}
+
+/**
  * 聚类键＝主唱口径：ar/artists 第一艺人名。
  * 「相同作者放一起」按第一署名归拢——featuring 曲（'A / B' 并列）落主唱组
  * 而非自成孤岛；用户编辑过艺人的曲（applyTrackOverrides 写 ar[0]）按其
@@ -51,9 +67,13 @@ const isLatinKey = (k) => /^[\x00-\x7F]/.test(k)
  * 同 UP 主的稿自然聚拢。
  */
 export function trackArtistGroupKey(song) {
-  const list = song?.ar || song?.artists
-  const name = Array.isArray(list) ? list[0]?.name : null
-  return String(name ?? '').trim()
+  // ar 空数组是 truthy——`ar || artists` 会吞掉 artists 兜底；条目也可能是
+  // 字符串形态（上游简化数据）——两路各取首个非空名
+  const firstName = (list) => {
+    const head = Array.isArray(list) ? list[0] : null
+    return typeof head === 'string' ? head : String(head?.name ?? '')
+  }
+  return String(firstName(song?.ar) || firstName(song?.artists) || '').trim()
 }
 
 /**
