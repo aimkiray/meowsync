@@ -132,7 +132,7 @@ function updateQueue(id, updates) {
 function findQueueById(id) {
   const db = getDb();
   // 与 listQueues 同形 JOIN：selectedQueue 快照若缺 cover_img_url，
-  // AdminPanel 轮询刷新会把队列卡的封面冲成空串
+  // DownloadsPanel 轮询刷新会把队列卡的封面冲成空串
   const row = db.prepare(`
     SELECT q.*, p.cover_img_url
     FROM download_queues q

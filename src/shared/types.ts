@@ -102,10 +102,14 @@ export interface DownloadTask {
   downloadAudio?: boolean;
   downloadLyrics?: boolean;
   downloadCover?: boolean;
+  downloadVideo?: boolean;
   // toPublicTask：DOWNLOAD_BASE_DIR 内相对路径或 null（站外路径不泄）
   audioPath?: string | null;
   lyricsPath?: string | null;
   coverPath?: string | null;
+  videoPath?: string | null;
+  /** 视频实际到手档位（file-downloader metaOf）：h/w 像素、codec、br 码率、source=progressive|adaptive */
+  videoMeta?: { h?: number; w?: number; codec?: string | null; br?: number | null; source?: string } | null;
   bitrate?: number;
   fileSize?: number;
   durationMs?: number;

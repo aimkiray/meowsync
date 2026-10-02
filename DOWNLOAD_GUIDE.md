@@ -212,4 +212,4 @@ data/downloads/
 - 数据访问层：`src/server/repositories/`
 - 业务逻辑层：`src/server/services/`
 - API 路由：`src/server/routes/downloads.js`
-- 前端组件：`src/components/AdminPanel.vue`
+- 前端组件：`src/components/DownloadsPanel.vue`

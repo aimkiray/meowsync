@@ -177,12 +177,14 @@ export default {
   setup(props, { emit }) {
     const openMenuId = ref(null)
     const menuPositions = ref({})
+    // 最近开菜单的 ⋯键本体——Esc 解散菜单时焦点归还它，不落 body
+    let menuTriggerEl = null
 
     // HTTPS 部署下 http: 封面会被浏览器混拦——网易图床均支持 TLS，显式升级
     // （共享 helper 见 lib/url.js，歌曲封面/歌单封面/任务封面同一来源）
     const httpsCover = sharedHttpsCover
 
-    const closeOnEscape = (e) => { if (e.key === 'Escape') closeMenu() }
+    const closeOnEscape = (e) => { if (e.key === 'Escape') closeMenu(null, true) }
     // 滚动监听必须包箭头：直传 closeMenu 会把 Event 对象塞进 playlistId 形参，
     // 定点判定 String(event) 与任何歌单 id 不等 → 滚动关菜单静默失效
     const closeOnScroll = () => closeMenu()
@@ -211,6 +213,7 @@ export default {
         // 下方空间不足翻到上方、左侧越界收回视口内——面板可滚动而菜单 fixed，
         // 开出视口后 scroll-close 又挡住滚动，菜单就永远不可达
         const button = event.target.closest('button') || event.target
+        menuTriggerEl = button
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 本菜单全是短项，实际宽恒等于 pg-menu 的 min-width
         // 菜单高度按可见项数算：临时歌单隐藏 4 项只剩"删除歌单"，
@@ -236,12 +239,18 @@ export default {
       return menuPositions.value[playlistId] || { top: '0px', left: '0px' }
     }
 
-    const closeMenu = (playlistId = null) => {
+    const closeMenu = (playlistId = null, restoreFocus = false) => {
       // 带 id 定点关：长 await（下载/删除）后的 finally 落地时用户可能已点开
       // 另一歌单的菜单——无条件全清会把新菜单误杀
       if (playlistId != null && String(openMenuId.value) !== String(playlistId)) return
-      if (openMenuId.value != null) delete menuPositions.value[openMenuId.value]
+      const wasOpen = openMenuId.value != null
+      if (wasOpen) delete menuPositions.value[openMenuId.value]
       openMenuId.value = null
+      // Esc 解散时焦点归还 ⋯触发键——菜单散了焦点不落 body（菜单项激活路径
+      // 不传 restoreFocus，下一跳自己管焦点）
+      if (restoreFocus && wasOpen && menuTriggerEl?.isConnected) {
+        menuTriggerEl.focus({ preventScroll: true })
+      }
     }
 
     const openInNetease = (playlist) => {

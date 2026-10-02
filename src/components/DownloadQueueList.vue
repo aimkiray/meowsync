@@ -37,7 +37,7 @@
       <p class="dql-state-text">加载队列中喵...</p>
     </div>
 
-    <div v-else-if="queues.length === 0" class="dql-state dql-state--grow">
+    <div v-else-if="queues.length === 0" class="dql-state">
       <p class="dql-state-text">{{ emptyText }}</p>
     </div>
 
@@ -76,7 +76,7 @@
             >{{ getStatusText(queue.status) }}</span>
             <span
               v-if="queue.failedTasks > 0"
-              class="pg-chip pg-chip--static dql-chip dql-chip--fail"
+              class="pg-chip pg-chip--static dql-chip pg-chip--fail"
             >失败 {{ queue.failedTasks }}</span>
           </div>
           <p class="dql-meta">
@@ -159,10 +159,11 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, ref } from 'vue';
-import { httpsCover } from '../lib/url';
-import PixelIcon from './PixelIcon.vue';
-import GlitchText from './GlitchText.vue';
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { httpsCover } from '../lib/url'
+import { queueStatusMeta, statusChipClass } from '../lib/downloadStatus.js'
+import PixelIcon from './PixelIcon.vue'
+import GlitchText from './GlitchText.vue'
 
 const props = defineProps({
   queues: {
@@ -199,9 +200,15 @@ const emit = defineEmits(['start', 'pause', 'resume', 'cancel', 'retry', 'delete
 
 const openMenuId = ref(null);
 const menuPosition = ref({ top: '0px', left: '0px' });
+// 最近开菜单的 ⋯键本体——Esc 解散菜单时焦点归还它，不落 body
+let menuTriggerEl = null;
 
-function closeMenu() {
+function closeMenu(restoreFocus = false) {
+  const wasOpen = openMenuId.value !== null;
   openMenuId.value = null;
+  if (restoreFocus && wasOpen && menuTriggerEl?.isConnected) {
+    menuTriggerEl.focus({ preventScroll: true });
+  }
 }
 
 function toggleMenu(queueId, event) {
@@ -210,6 +217,7 @@ function toggleMenu(queueId, event) {
     return;
   }
 
+  menuTriggerEl = event.currentTarget;
   const rect = event.currentTarget.getBoundingClientRect();
   const menuWidth = 132;
   // 按该队列实际渲染的菜单项数估高（每项约 33px）——写死 180px 会让短菜单无谓上翻
@@ -273,9 +281,13 @@ function handleWindowPointerDown(event) {
 
 function handleWindowKeydown(event) {
   if (event.key === 'Escape') {
-    closeMenu();
+    closeMenu(true);
   }
 }
+
+// 轮询驱动重排（状态翻转改排序）会让 fixed 菜单悬空指错行——
+// 成员/次序真的变了才关（只 watch 数组引用则每次 selectedQueue 刷新都误关）
+watch(() => props.queues.map(queue => queue.id).join(','), () => closeMenu());
 
 // 任何滚动（含嵌套滚动容器）都会让 fixed 菜单与触发按钮脱节——捕获阶段监听直接关
 function handleScroll() {
@@ -297,29 +309,13 @@ onBeforeUnmount(() => {
 });
 
 function getStatusText(status) {
-  const statusMap = {
-    pending: '等待中',
-    running: '运行中',
-    paused: '已暂停',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消'
-  };
-  return statusMap[status] || status;
+  return queueStatusMeta(status).label;
 }
 
 // 状态 → 芯片修饰类：running=墨底反白（激活），completed=绿戳，failed=危险红，
-// 其余淡墨。只换类名不改映射结构
+// 其余淡墨。词表与色档收口在 lib/downloadStatus.js
 function getStatusClass(status) {
-  const classMap = {
-    pending: 'dql-chip--dim',
-    running: 'pg-chip--on',
-    paused: 'dql-chip--dim',
-    completed: 'dql-chip--ok',
-    failed: 'dql-chip--fail',
-    cancelled: 'dql-chip--dim'
-  };
-  return classMap[status] || 'dql-chip--dim';
+  return statusChipClass(queueStatusMeta(status).tier);
 }
 
 function getProgress(queue) {
@@ -328,8 +324,7 @@ function getProgress(queue) {
 }
 
 function getQueueCover(queue) {
-  const url = queue.coverImgUrl || queue.coverUrl || queue.cover_img_url || '';
-  return httpsCover(url);
+  return httpsCover(queue.coverImgUrl || '');
 }
 </script>
 
@@ -380,8 +375,6 @@ function getQueueCover(queue) {
   padding: 32px 16px;
 }
 
-.dql-state--grow { /* 兼容类名保留——锚点已并入基类 */ }
-
 .dql-state-text {
   font-size: 12px;
   color: var(--ink-64);
@@ -392,7 +385,7 @@ function getQueueCover(queue) {
   overflow-y: auto;
   border-top: var(--hairline-soft);
 }
-/* <xl 时滚动器是外层 AdminPanel 网格（本列随内容撑高不内滚）——车道只在 ≥xl 常驻 */
+/* <xl 时滚动器是外层 DownloadsPanel 网格（本列随内容撑高不内滚）——车道只在 ≥xl 常驻 */
 @media (min-width: 1280px) {
   .dql-scroll { scrollbar-gutter: stable; }
 }
@@ -470,17 +463,13 @@ function getQueueCover(queue) {
   min-width: 0;
 }
 
-/* 芯片紧凑化（队列行密度高于标签云） */
+/* 芯片紧凑化（队列行密度高于标签云）；色档走全局 pg-chip--ok/fail/dim */
 .dql-chip {
   height: 20px;
   padding: 0 8px;
   font-size: 10px;
   flex-shrink: 0;
 }
-
-.dql-chip--dim { color: var(--ink-64); }
-.dql-chip--ok { color: var(--accent-green-ink); border-color: var(--accent-green); }
-.dql-chip--fail { color: var(--accent-danger-ink); border-color: var(--accent-danger); }
 
 .dql-meta {
   margin-top: 3px;

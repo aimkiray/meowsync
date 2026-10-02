@@ -1,0 +1,420 @@
+<template>
+  <!-- 主区全宽：下载管理视图占用整个内容列（YTM 式页面切换而非面板挤压）。
+       sage 画布上两张纸面发丝盒（队列列 / 任务列） -->
+  <div class="downloads-panel flex flex-col relative m-3 sm:m-5 flex-1 min-h-0 overflow-hidden">
+    <!-- <xl 单列时两行各按内容撑高会超出面板——给网格自身加纵向滚动兜底 -->
+    <div class="grid grid-cols-1 xl:grid-cols-[400px_minmax(0,1fr)] gap-4 flex-1 min-h-0 overflow-y-auto overscroll-contain xl:overflow-visible"
+      style="scrollbar-gutter: stable"><!-- <xl 时本格是唯一滚动器；≥xl overflow:visible 时 gutter 自动失效 -->
+      <div class="min-h-0 flex flex-col">
+        <DownloadQueueList
+          :queues="displayQueues"
+          :loading="loadingQueues"
+          :selected-queue-id="selectedQueue?.id ?? null"
+          :empty-text="queueEmptyText"
+          :search-query="queueSearch"
+          :status-filter="queueStatusFilter"
+          @update:search-query="queueSearch = $event"
+          @update:status-filter="queueStatusFilter = $event"
+          @start="startQueue"
+          @pause="pauseQueue"
+          @resume="resumeQueue"
+          @cancel="cancelQueue"
+          @retry="retryQueue"
+          @delete="deleteQueue"
+          @select="selectQueue"
+        />
+      </div>
+
+      <div class="min-h-0 flex flex-col">
+        <DownloadTaskList
+          :tasks="tasks"
+          :loading="loadingTasks"
+          :selected-queue="selectedQueue"
+          :retrying-task-ids="retryingTaskIds"
+          :empty-error="tasksError"
+          @retry-task="retryTask"
+        />
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { toast, pixelConfirm } from '../lib/feedback'
+import { downloadsApi } from '../api/downloads'
+import { apiErrorMessage } from '../api/http'
+import { createReqGate } from '../lib/req-gate'
+import DownloadQueueList from './DownloadQueueList.vue'
+import DownloadTaskList from './DownloadTaskList.vue'
+
+const queues = ref([])
+const selectedQueue = ref(null)
+const tasks = ref([])
+const loadingQueues = ref(false)
+const loadingTasks = ref(false)
+const retryingTaskIds = ref([])
+const queueSearch = ref('')
+const queueStatusFilter = ref('all')
+const hasLoadedQueues = ref(false)
+const hasLoadedTasks = ref(false)
+
+let pollInterval = null
+
+const displayQueues = computed(() => {
+  const priority = {
+    running: 0,
+    paused: 1,
+    pending: 2,
+    failed: 3,
+    completed: 4,
+    cancelled: 5
+  }
+
+  const normalizedQuery = queueSearch.value.trim().toLowerCase()
+
+  const filteredQueues = queues.value.filter(queue => {
+    if (queueStatusFilter.value !== 'all' && queue.status !== queueStatusFilter.value) {
+      return false
+    }
+
+    if (normalizedQuery) {
+      const haystacks = [queue.name, String(queue.id), String(queue.playlistId)].filter(Boolean).map(value => value.toLowerCase())
+      if (!haystacks.some(value => value.includes(normalizedQuery))) {
+        return false
+      }
+    }
+
+    return true
+  })
+
+  const sortedQueues = [...filteredQueues].sort((left, right) => {
+    const leftSelected = selectedQueue.value && left.id === selectedQueue.value.id ? 0 : 1
+    const rightSelected = selectedQueue.value && right.id === selectedQueue.value.id ? 0 : 1
+
+    if (leftSelected !== rightSelected) {
+      return leftSelected - rightSelected
+    }
+
+    const leftPriority = priority[left.status] ?? 99
+    const rightPriority = priority[right.status] ?? 99
+
+    if (leftPriority !== rightPriority) {
+      return leftPriority - rightPriority
+    }
+
+    const leftProgress = getQueueProgress(left)
+    const rightProgress = getQueueProgress(right)
+
+    if (leftProgress !== rightProgress) {
+      return rightProgress - leftProgress
+    }
+
+    return right.id - left.id
+  })
+
+  return sortedQueues
+})
+
+// 首次加载失败与"真的为空"要区分开——否则服务挂掉时 UI 显示空态误导
+const loadError = ref('')
+const tasksError = ref('')
+const queueEmptyText = computed(() => {
+  return loadError.value || '还没有下载队列喵~'
+})
+
+function getQueueProgress(queue) {
+  if (!queue || queue.totalTasks === 0) {
+    return 0
+  }
+  return Math.round((queue.completedTasks / queue.totalTasks) * 100)
+}
+
+// diff 收窄前提（不变量）：download_queues/download_tasks 的一切运行期写都收口在
+// updateQueue/updateTask/recountQueueCounters——三者无条件 bump updated_at；
+// 旁路只有 DELETE（行消失由长度/id 维兜住）。新增裸写 UPDATE 路径必须先 bump
+// updated_at，否则这里漏判变更。coverImgUrl（JOIN playlists 外来列，封面随歌单
+// 行变而本行戳不动）与 filesIntact（盘上文件实时判定，外部删文件无任何 DB 写）
+// 是两个不随 updated_at 的派生字段——单列比较。
+function hasQueueChanged(currentQueue, nextQueue) {
+  if (!currentQueue || !nextQueue) return currentQueue !== nextQueue
+  return currentQueue.id !== nextQueue.id
+    || currentQueue.updatedAt !== nextQueue.updatedAt
+    || currentQueue.coverImgUrl !== nextQueue.coverImgUrl
+}
+
+function hasTaskChanged(currentTask, nextTask) {
+  if (!currentTask || !nextTask) return currentTask !== nextTask
+  return currentTask.id !== nextTask.id
+    || currentTask.updatedAt !== nextTask.updatedAt
+    || currentTask.filesIntact !== nextTask.filesIntact
+}
+
+function hasCollectionChanged(currentItems, nextItems, compareItem) {
+  if (currentItems.length !== nextItems.length) {
+    return true
+  }
+
+  for (let index = 0; index < currentItems.length; index += 1) {
+    if (compareItem(currentItems[index], nextItems[index])) {
+      return true
+    }
+  }
+
+  return false
+}
+
+// 选中项"在快照里缺席"的连续计数：请求发出到响应落地之间用户新选的队列
+// 不在旧快照里是正常竞态——一轮缺席可能恰是窗口，两轮都不在才是真删除
+let selectionMissCount = 0
+
+function selectQueue(queue) {
+  selectedQueue.value = queue
+  selectionMissCount = 0
+  // 立即清空旧队列任务——加载/轮询间隙不应在 B 名下展示 A 的任务列表
+  tasks.value = []
+  hasLoadedTasks.value = false
+  tasksError.value = ''
+  loadTasks(queue.id)
+}
+
+// 手动刷新（action 后 await loadQueues）与轮询 tick 可并发：认领闸保后发者赢，
+// 晚出发的旧响应不覆盖新快照；loadTasks 另有选中队列归属校验兜跨队列竞态
+const queuesGate = createReqGate()
+const tasksGate = createReqGate()
+
+async function loadQueues(options = {}) {
+  const { silent = false } = options
+  const my = queuesGate.claim()
+
+  try {
+    if (!silent && !hasLoadedQueues.value) {
+      loadingQueues.value = true
+    }
+    const response = await downloadsApi.listQueues()
+    // 响应体非 envelope（如同源静态服的 index.html 200）：不能当空列表吞掉，
+    // 抛错走 catch → 首载显示错误态而不是"还没有下载队列"假象
+    if (!response || !Array.isArray(response.data)) {
+      throw new Error('接口返回了非预期内容（可能打到了静态服务器）')
+    }
+    if (!queuesGate.isCurrent(my)) return
+    const nextQueues = response.data
+    const previousSelectedQueueId = selectedQueue.value?.id ?? null
+    const queuesChanged = hasCollectionChanged(queues.value, nextQueues, hasQueueChanged)
+
+    if (queuesChanged) {
+      queues.value = nextQueues
+    }
+
+    const activeQueues = queuesChanged ? nextQueues : queues.value
+
+    if (previousSelectedQueueId != null) {
+      const matchedQueue = activeQueues.find(queue => queue.id === previousSelectedQueueId)
+      if (matchedQueue) {
+        selectionMissCount = 0
+        selectedQueue.value = matchedQueue
+      } else if (++selectionMissCount >= 2) {
+        // 连续两轮快照都缺席才判定删除——单轮缺席可能只是"响应快照早于用户点击"
+        selectionMissCount = 0
+        selectedQueue.value = null
+        tasks.value = []
+        hasLoadedTasks.value = false
+      }
+    }
+
+    hasLoadedQueues.value = true
+    loadError.value = ''
+  } catch (error) {
+    console.error('加载队列失败:', error)
+    // 首次加载失败给用户可见的错误态；轮询静默失败不打断界面
+    if (!hasLoadedQueues.value) {
+      loadError.value = '加载失败: ' + (apiErrorMessage(error))
+    }
+  } finally {
+    if (!silent && queuesGate.isCurrent(my)) {
+      loadingQueues.value = false
+    }
+  }
+}
+
+async function loadTasks(queueId, options = {}) {
+  const { silent = false } = options
+  const my = tasksGate.claim()
+
+  try {
+    if (!silent && !hasLoadedTasks.value) {
+      loadingTasks.value = true
+    }
+    // 单端点拿 队列+任务 原子快照——队列行与任务列表同一时刻，不会出现
+    // "队列显示完成而任务还在下载中"的中间帧（分离请求各自的延迟会交错）
+    const response = await downloadsApi.getQueue(queueId)
+    if (!tasksGate.isCurrent(my)) return
+    // 响应可能属于上一个选中队列（并发 selectQueue 交错）——归属校验防错写
+    if (String(selectedQueue.value?.id) !== String(queueId)) return
+    // 与 loadQueues 对齐：打错部署（静态服务器返回 HTML）不能让任务面板
+    // 永远显示"还没有任务"
+    if (!response || !Array.isArray(response.data?.tasks)) {
+      throw new Error('任务列表响应格式异常')
+    }
+    const nextTasks = response.data.tasks
+    if (hasCollectionChanged(tasks.value, nextTasks, hasTaskChanged)) {
+      tasks.value = nextTasks
+    }
+    // 顺手用同一快照刷新选中队列行（避免等下一轮 listQueues 才更新状态）
+    const freshQueue = response.data.queue
+    if (freshQueue && selectedQueue.value) {
+      selectedQueue.value = freshQueue
+    }
+    hasLoadedTasks.value = true
+    tasksError.value = ''
+  } catch (error) {
+    console.error('加载任务失败:', error)
+    // 与队列侧同口径：首载失败给可见错误态，轮询静默失败不打断
+    if (!hasLoadedTasks.value) {
+      tasksError.value = '加载失败: ' + (apiErrorMessage(error))
+    }
+  } finally {
+    if (!silent && tasksGate.isCurrent(my)) {
+      loadingTasks.value = false
+    }
+  }
+}
+
+// 队列动作统一入口：双击/快连点的并发闸（服务端对重复动作回 409，先拦掉
+// 无意义往返）；refreshTasks 只对"会动任务列表"的动作多刷一份任务
+const busyQueueIds = new Set()
+
+async function runQueueAction(queueId, label, call, { refreshTasks = false } = {}) {
+  if (busyQueueIds.has(queueId)) return
+  busyQueueIds.add(queueId)
+  try {
+    await call(queueId)
+    await loadQueues()
+    if (refreshTasks && selectedQueue.value?.id === queueId) {
+      await loadTasks(queueId)
+    }
+  } catch (error) {
+    console.error(`${label}失败:`, error)
+    toast(`${label}失败: ` + (apiErrorMessage(error)), 'error')
+  } finally {
+    busyQueueIds.delete(queueId)
+  }
+}
+
+const startQueue = (queueId) => runQueueAction(queueId, '启动队列', downloadsApi.startQueue)
+const pauseQueue = (queueId) => runQueueAction(queueId, '暂停队列', downloadsApi.pauseQueue)
+const resumeQueue = (queueId) => runQueueAction(queueId, '恢复队列', downloadsApi.resumeQueue)
+const retryQueue = (queueId) => runQueueAction(queueId, '重试队列', downloadsApi.retryQueue, { refreshTasks: true })
+
+async function cancelQueue(queueId) {
+  if (!await pixelConfirm('确定要取消这个队列吗？未完成的任务将停止下载', { confirmText: '取消队列', danger: true })) return
+  await runQueueAction(queueId, '取消队列', downloadsApi.cancelQueue, { refreshTasks: true })
+}
+
+async function retryTask(taskId) {
+  if (retryingTaskIds.value.includes(taskId)) return
+  retryingTaskIds.value.push(taskId)
+
+  try {
+    await downloadsApi.retryTask(taskId)
+    if (selectedQueue.value) {
+      await Promise.all([
+        loadQueues(),
+        loadTasks(selectedQueue.value.id)
+      ])
+    } else {
+      await loadQueues()
+    }
+  } catch (error) {
+    console.error('重试任务失败:', error)
+    toast('重试任务失败: ' + (apiErrorMessage(error)), 'error')
+  } finally {
+    retryingTaskIds.value = retryingTaskIds.value.filter(id => id !== taskId)
+  }
+}
+
+async function deleteQueue(queueId) {
+  // 服务端把队列删除升级为歌单级联：清掉该歌单全部下载足迹（单曲任务、其他
+  // 队列、登记行与盘上文件），进行中的下载也会中止——确认文案必须说清爆炸半径
+  const doomed = queues.value.find(q => q.id === queueId)
+  if (!await pixelConfirm(
+    `确定要删除${doomed?.name ? `「${doomed.name}」` : '这个歌单'}吗？其全部下载任务与已下载资源将一并清理，进行中的下载也会中止`,
+    { confirmText: '删除', danger: true }
+  )) return
+  if (busyQueueIds.has(queueId)) return
+  busyQueueIds.add(queueId)
+
+  try {
+    await downloadsApi.deleteQueue(queueId)
+    await loadQueues()
+    // 级联连坐删同歌单兄弟队列——选中项落在同一歌单上即清，别等两轮缺席判定
+    if (selectedQueue.value?.id === queueId
+        || (doomed?.playlistId != null && selectedQueue.value?.playlistId === doomed.playlistId)) {
+      selectionMissCount = 0 // 手动清选中同样要归零——loadQueues 内缺席计数会留下惰性 =1
+      selectedQueue.value = null
+      tasks.value = []
+      hasLoadedTasks.value = false
+    }
+    toast(doomed?.name ? `已删除「${doomed.name}」及其下载资源` : '已删除歌单及其下载资源', 'success')
+  } catch (error) {
+    console.error('删除歌单下载足迹失败:', error)
+    toast('删除失败: ' + (apiErrorMessage(error)), 'error')
+  } finally {
+    busyQueueIds.delete(queueId)
+  }
+}
+
+let pollInFlight = false
+
+async function pollTick() {
+  // 标签页不可见时跳过轮询：隐藏页面的进度刷新用户看不到，白耗请求；
+  // in-flight 防 RTT>间隔时的请求重叠交错写
+  if (document.hidden || pollInFlight) return
+  pollInFlight = true
+  try {
+    await loadQueues({ silent: true })
+    // 选中队列缺席窗口内（连续两轮未命中才清选中）不轮询任务——
+    // 那两行快照里队列已删，任务接口会返回 [] 闪一帧"已删队列+空任务"
+    if (selectedQueue.value && selectionMissCount === 0) {
+      await loadTasks(selectedQueue.value.id, { silent: true })
+    }
+  } finally {
+    pollInFlight = false
+  }
+}
+
+function startPolling() {
+  pollInterval = setInterval(pollTick, 2000)
+}
+
+function stopPolling() {
+  if (pollInterval) {
+    clearInterval(pollInterval)
+    pollInterval = null
+  }
+}
+
+// 回前台立即补一轮——否则要等下一个 2s 节拍才看到最新状态
+function handleVisibilityChange() {
+  if (!document.hidden) pollTick()
+}
+
+watch(() => selectedQueue.value?.id, (queueId) => {
+  if (!queueId) {
+    tasks.value = []
+    hasLoadedTasks.value = false
+    tasksError.value = ''
+  }
+})
+
+onMounted(async () => {
+  await loadQueues()
+  startPolling()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  stopPolling()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
+</script>
