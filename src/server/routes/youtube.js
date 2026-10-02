@@ -1,57 +1,19 @@
 const { Hono } = require('hono');
-const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
 const streamVault = require('../lib/stream-vault');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
+const { resolveYoutubeStreams } = require('../services/youtube-resolve');
 const { extractYouTubeId, extractYouTubePlaylistId, YT_ID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
 // Innertube 原语（fetchPlayer/pickStreamList/innertubeSearch）在 lib/youtube.js
 // ——解锁层 services/unlock/youtube.js 复用同一实现，不维护两份客户端表
-const { fetchPlayer, fetchPlayerWith, pickStreamList, fetchYtPlaylistPage } = require('../lib/youtube');
-const { fetchStream } = require('../services/download-io');
+const { fetchPlayer, pickStreamList, fetchYtPlaylistPage } = require('../lib/youtube');
 
-// 「SABR 闸控」探测缓存：videoId → {gated, ts}。自适应流被闸时签名批
-// 寿命 ~6h，探测结果缓存 30min 同量级——连播/重试不重复白打上游
-const GATE_TTL_MS = 30 * 60e3;
-const GATE_CACHE_MAX = 512;
-const gateCache = new Map();
-
-// 闸控指纹：自适应流首段窗内的 Range 放行、窗外有界 Range 一律 403、全量
-// GET 同拒。窗口不是精确 1MiB——实测紧贴 1MiB 边界的 1KiB 探测会假阴，
-// 2MiB 深处才稳定 403。返回三态：false=未闸（2xx/416），true=闸控（403），
-// null=无定论（超时/5xx/白名单外——不写缓存，逐请求退化照常走兜底链）。
-// abort 穿透不写缓存：断连被吞成"未闸"会污染 30min 判定
-async function probeGated(url, signal) {
-  const checked = normalizeOutboundUrl(url);
-  if (!checked.ok || !isAllowedHost(checked.url.hostname)) return null;
-  try {
-    const resp = await fetchStream(url, {
-      timeout: 10000, signal,
-      headers: { Range: 'bytes=2097152-2098175' }
-    });
-    resp.data.destroy();
-    return false;
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    // 按机读状态码判（fetchStream 在 err.upstreamStatus 上挂的）——
-    // 403=闸控；416=探针越过 EOF 但 Range 通道畅通，恰证明未闸（短文件
-    // 场景），归 null 会让短流每次请求都白打探测
-    if (e?.upstreamStatus === 403) return true;
-    if (e?.upstreamStatus === 416) return false;
-    return null;
-  }
-}
-
-// formats 里的 progressive mp4 合流档——闸控视频唯一确定能拉全的形态，
-// 也是 VISIONOS 批不保证回的部分；两处候选链拼尾共用同一挑选口径
-function pickProgressiveMp4(sd) {
-  return (Array.isArray(sd?.formats) ? sd.formats : [])
-    .filter(f => typeof f?.url === 'string' && f.url
-      && (f.mimeType || '').startsWith('video/mp4'))
-    .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
-}
+// SABR 闸控探测/gateCache/VISIONOS 升级/progressive 结转已下沉到
+// services/youtube-resolve.js——/stream 与解锁链共用同一份判定，
+// 修一处全链生效，别在这里复制第二份
 
 // videoId 提取委托共享形态表 extractYouTubeId（src/shared/predicates.js）：
 // watch?v= / youtu.be/ / shorts/ / embed/ / live/ / 本站 ?yt= 分享链 / 裸 11 位 id。
@@ -289,70 +251,13 @@ app.get('/youtube/stream', async (c) => {
     return c.json({ code: 400, message: 'invalid video id' }, 400);
   }
   try {
-    let sd = (await fetchPlayer(videoId, c.req.raw.signal)).streamingData;
-    let streams = pickStreamList(sd, kind, c.req.query('prefer'));
-    // progressive 合流档是闸控视频的保底命——无条件拼链尾；audio kind
-    // 同样放：合流 mp4 含 AAC 轨，<audio> 按容器嗅探照播
-    let progressive = pickProgressiveMp4(sd);
+    // 闸控感知解析下沉 services/youtube-resolve.js：探测/VISIONOS 升级/
+    // progressive 结转/白名单去重一份实现，解锁链共用同一判定
+    const { streams } = await resolveYoutubeStreams(videoId, {
+      kind, prefer: c.req.query('prefer'), signal: c.req.raw.signal
+    });
 
-    // SABR 闸控探测（结果缓存）：被闸的视频换 VISIONOS 客户端重解——
-    // 同一批自适应流它签的 URL 完全不受限，能放回真最高档（实测 itag251
-    // 全量 200）。只有确定性判定（2xx/403/416）才写缓存——超时/断连等
-    // 无定论结果落缓存会把一次抖动放大成 30min 的误判。
-    // 探测目标限定自适应流：pickStreamList('video') 在缺 avc1 时会回落
-    // progressive——那恰是闸控下畅通的物料，探它只能得假阴。
-    // 且必须挑够长的流（最大 contentLength）：小档全长可能 < 探针起点
-    // 2MiB，越界得 416 会被误判成「未闸」（实测 itag139 全长 ~1.5MB）
-    const probeTarget = (Array.isArray(sd?.adaptiveFormats) ? sd.adaptiveFormats : [])
-      .filter(f => typeof f?.url === 'string' && f.url
-        && (f.mimeType || '').startsWith(kind === 'video' ? 'video/' : 'audio/'))
-      .sort((a, b) => (parseInt(b.contentLength) || 0) - (parseInt(a.contentLength) || 0))
-      .map(f => f.url)
-      .find(u => {
-        const chk = normalizeOutboundUrl(u);
-        return chk.ok && isAllowedHost(chk.url.hostname);
-      });
-    let gated = null;
-    const gate = gateCache.get(videoId);
-    if (gate && Date.now() - gate.ts <= GATE_TTL_MS) {
-      gated = gate.gated;
-      // LRU touch：命中挪尾——满容淘汰按插入序删头，不刷新会让
-      // 高频热播视频的旧判定先被挤掉（stream-vault resolve 同款）
-      gateCache.delete(videoId);
-      gateCache.set(videoId, gate);
-    } else if (probeTarget) {
-      gated = await probeGated(probeTarget, c.req.raw.signal);
-      if (gated !== null) {
-        if (gateCache.size >= GATE_CACHE_MAX) {
-          gateCache.delete(gateCache.keys().next().value);
-        }
-        gateCache.set(videoId, { gated, ts: Date.now() });
-      }
-    }
-    if (gated) {
-      console.info(`[youtube] ${videoId} SABR 闸控命中——VISIONOS 客户端重解`);
-      try {
-        const vp = await fetchPlayerWith(videoId, c.req.raw.signal, 'VISIONOS');
-        if (vp?.streamingData) {
-          sd = vp.streamingData;
-          streams = pickStreamList(sd, kind, c.req.query('prefer'));
-          const prog = pickProgressiveMp4(sd);
-          if (prog.length) progressive = prog;
-        }
-      } catch (e) {
-        // VISIONOS 也拿不到就用原批——链尾合流档照样能播；abort 穿透
-        if (c.req.raw.signal?.aborted) throw e;
-        console.warn(`[youtube] ${videoId} VISIONOS 重解失败，回落原批:`, e.message);
-      }
-    }
-    // 候选回链逐个过代理白名单——signatureCipher 跳过、非 googlevideo
-    // 域拒；整条链随 token 下发，代理侧试到第一个能通的档
-    const urls = [...new Set([...streams, ...progressive]
-      .map(f => f.url)
-      .filter(u => {
-        const checked = normalizeOutboundUrl(u);
-        return checked.ok && isAllowedHost(checked.url.hostname);
-      }))];
+    const urls = streams.map(s => s.url);
     if (!urls.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }

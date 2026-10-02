@@ -13,16 +13,17 @@ let aiScript = [];                 // askAiJson 依次返回
 let verdictRows = {};              // vkey → {ok}
 const verdictWrites = [];          // upsertVerdict 记录
 let askCalls = 0;
-// lib/youtube 三件套做成可变桩——resolve 级用例要改取流行为
-let fetchPlayerImpl = async () => ({ streamingData: {} });
+// lib/youtube 搜索 + services/youtube-resolve 取流做成可变桩——
+// resolve 级用例要改取流行为（闸控感知解析已下沉，此处桩在编排接缝上）
+let resolveStreamsImpl = async () => ({ streams: [] });
 let searchImpl = async () => [];
-let pickImpl = () => [];
 
 import { seed } from './helpers.mjs';
 seed('../src/server/lib/youtube.js', {
-  fetchPlayer: (...a) => fetchPlayerImpl(...a),
   innertubeSearch: (...a) => searchImpl(...a),
-  pickStreamList: (...a) => pickImpl(...a),
+});
+seed('../src/server/services/youtube-resolve.js', {
+  resolveYoutubeStreams: (...a) => resolveStreamsImpl(...a),
 });
 seed('../src/server/lib/ai.js', {
   aiEnabled: () => aiOn,
@@ -41,9 +42,8 @@ const mkInfo = (id) => ({ id, name: '目标曲', artists: ['目标歌手'], keyw
 const cand = (id) => ({ videoId: id, title: `t-${id}`, owner: `o-${id}`, durationSec: 200 });
 const reset = () => {
   aiOn = true; aiScript = []; verdictRows = {}; verdictWrites.length = 0; askCalls = 0;
-  fetchPlayerImpl = async () => ({ streamingData: {} });
+  resolveStreamsImpl = async () => ({ streams: [] });
   searchImpl = async () => [];
-  pickImpl = () => [];
 };
 const ids = (r) => r.ordered.map(c => c.videoId);
 
@@ -103,8 +103,7 @@ test('resolve：AI 选定候选取流成功才落批准 verdict', async () => {
   const info = mkInfo('r1');
   searchImpl = async () => [cand('x'), cand('y'), cand('z')];
   aiScript = [{ pick: 2 }];
-  fetchPlayerImpl = async (vid) => ({ streamingData: { vid } });
-  pickImpl = (sd) => [{ url: `u-${sd.vid}`, bitrate: 128 }];
+  resolveStreamsImpl = async (vid) => ({ streams: [{ url: `u-${vid}`, br: 128 }] });
   const r = await resolve(info, {});
   assert.equal(r.url, 'u-y');
   assert.deepEqual(verdictWrites, [{ vkey: 'r1@yt_y@stub-model', kind: 'unlock', ok: 1, detail: 't-y' }]);
@@ -115,8 +114,9 @@ test('resolve：选定候选取流失败不落 verdict，死候选不再喂回 A
   const info = mkInfo('r2');
   searchImpl = async () => [cand('x'), cand('y'), cand('z')];
   aiScript = [{ pick: 2 }];
-  fetchPlayerImpl = async (vid) => ({ streamingData: { vid } });
-  pickImpl = (sd) => sd.vid === 'y' ? [] : [{ url: `u-${sd.vid}`, bitrate: 128 }];
+  resolveStreamsImpl = async (vid) => ({
+    streams: vid === 'y' ? [] : [{ url: `u-${vid}`, br: 128 }]
+  });
   const r = await resolve(info, {});
   assert.equal(r.url, 'u-x');                  // y(选定)死 → x 兜底成功
   assert.equal(verdictWrites.length, 0);       // 批准不落库——x 不是 AI 选定
@@ -132,8 +132,7 @@ test('同一候选反复取流失败 ≥2 次 → 升级 ok=0 verdict 永久剔�
   aiOn = false;                                // 无 AI 路径同样走死簿升级
   const info = mkInfo('r3');
   searchImpl = async () => [cand('d'), cand('w')];
-  fetchPlayerImpl = async (vid) => ({ streamingData: { vid } });
-  pickImpl = () => [];
+  resolveStreamsImpl = async () => ({ streams: [] });
   await resolve(info, {});                     // d/w 各死一次——还只是内存死簿
   assert.equal(verdictWrites.length, 0);
   await resolve(info, {});                     // 再死 → n=2 升级持久否决
