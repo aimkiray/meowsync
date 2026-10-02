@@ -793,7 +793,13 @@ export function usePlayer({
     // 歌词加载和同步（支持取消 + 过期响应不落盘，防止旧歌歌词覆盖新歌）。
     // 外部导入曲（B 站/YouTube）的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_*/yt_* id
     // ——过期判定锚 song.id，不锚歌词请求的 id
+    // lyricLoadSeq：同曲两次并发 load 的单调闸（播放路径 fetch 在飞 + 歌词热
+    // 重载再发——同 id 同 signal 域里 currentPlayingId/abort 都分不开，后到者
+    // 赢；无它时旧响应晚落地会覆盖新词）
+    let lyricLoadSeq = 0
     const loadLyrics = async (song, signal = null) => {
+      const mySeq = ++lyricLoadSeq
+      const stale = () => signal?.aborted || currentPlayingId !== song.id || mySeq !== lyricLoadSeq
       // file_ 曲：词源=用户上传的 .lrc 工件（file 端点 kind=lyrics）。无资产时 404 → 空词。
       // 词属主键用 song.id——file 词与曲同生死，offset 校准也挂它（song_lyric_meta 按 id 存）
       if (isFileTrackId(song?.id)) {
@@ -805,17 +811,17 @@ export function usePlayer({
           const res = await fetch(fileArtifactUrl(song.id, 'lyrics'), { signal, credentials: 'include' })
           const text = res.ok ? await res.text() : null
           const meta = await metaPromise
-          if (signal?.aborted || currentPlayingId !== song.id) return
+          if (stale()) return
           lyricOffsetMs.value = meta?.offsetMs ?? 0
           lyricOwnerKey.value = song.id
           lyrics.value = text ? parseLyrics(text) : []
           currentLyricIndex.value = 0
           if (lyrics.value.length > 0) startLyricSync()
         } catch (error) {
-          if (signal?.aborted || error.name === 'AbortError') return
-          if (currentPlayingId === song.id) { lyrics.value = []; currentLyricIndex.value = 0; lyricOwnerKey.value = null }
+          if (stale() || error.name === 'AbortError') return
+          lyrics.value = []; currentLyricIndex.value = 0; lyricOwnerKey.value = null
         } finally {
-          if (!signal?.aborted && currentPlayingId === song.id) loadingLyrics.value = false
+          if (!stale()) loadingLyrics.value = false
         }
         return
       }
@@ -845,17 +851,17 @@ export function usePlayer({
         let lyricsData = song?.qq
           ? await musicApi.getQQLyric(song.qq.mid, signal).catch(() => null)
           : await musicApi.getLyrics(lyricId, signal)
-        // 切歌/取消后直接丢弃，不写回共享状态
-        if (signal?.aborted || currentPlayingId !== song.id) return
+        // 切歌/取消/同曲再载后直接丢弃，不写回共享状态
+        if (stale()) return
         if (song?.qq && !lyricsData?.lyrics?.length && song.neteaseId) {
           lyricId = song.neteaseId
           lyricsData = await musicApi.getLyrics(lyricId, signal)
-          if (signal?.aborted || currentPlayingId !== song.id) return
+          if (stale()) return
         }
         const meta = song?.qq
           ? await downloadsApi.getSongMeta(lyricId).catch(() => null)
           : await metaPromise
-        if (signal?.aborted || currentPlayingId !== song.id) return
+        if (stale()) return
 
         lyricOffsetMs.value = meta?.offsetMs ?? 0
         lyricOwnerKey.value = lyricId // 词属主与值同源——见 lyricOwnerKey 注释
@@ -878,15 +884,13 @@ export function usePlayer({
         void postProcessLyrics(song, lyricId, seq, signal)
           .catch(e => console.warn('AI 歌词后处理异常:', e))
       } catch (error) {
-        if (signal?.aborted || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
+        if (stale() || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
         console.error('❌ 加载歌词失败:', error)
-        if (currentPlayingId === song.id) {
-          lyrics.value = []
-          currentLyricIndex.value = 0
-          lyricOwnerKey.value = null
-        }
+        lyrics.value = []
+        currentLyricIndex.value = 0
+        lyricOwnerKey.value = null
       } finally {
-        if (!signal?.aborted && currentPlayingId === song.id) {
+        if (!stale()) {
           loadingLyrics.value = false
         }
       }

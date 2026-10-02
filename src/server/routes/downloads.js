@@ -273,73 +273,92 @@ app.get('/downloads/songs/:songId/file', async (c) => {
       return fail(c, 404, '文件不存在或尚未下载完成');
     }
     const closeFd = () => { try { fs.closeSync(fd); } catch { /* 已关 */ } };
-    const stat = fs.fstatSync(fd);
-    const ext = path.extname(filePath).slice(1).toLowerCase();
-    // webm 二义：上传白名单里它同时是 audio/video 扩展——kind=video 优先判视频，
-    // 否则 <video> 拿到 audio/webm 会按音轨播（有画面的上传视频丢画面）
-    const type = (kind === 'video' && ext === 'webm') ? 'video/webm'
-      : ARTIFACT_MIME[ext] || (kind === 'video' ? 'video/mp4' : 'application/octet-stream');
-
-    // 上传曲换源不换 URL（/file?kind=…）——启发式缓存会拿旧文件。
-    // no-cache + ETag(size-mtime) 使 revalidate 落 304 而非全量重拉。
-    // mtimeMs 保留浮点：同 size + 同毫秒内的两次换源不撞 tag
-    const etag = `W/"${stat.size}-${stat.mtimeMs}"`;
-    // If-None-Match 多值/* 弱比较（RFC 9110 列表语义）——只认单值会把该 304
-    // 的再验证多发成 200 全量（安全方向，但白烧带宽）
-    const inm = c.req.header('if-none-match');
-    const etagBare = etag.slice(3, -1);
-    if (inm && (inm.trim() === '*'
-        || inm.split(',').some(t => t.trim().replace(/^W\//, '').replace(/^"|"$/g, '') === etagBare))) {
-      closeFd();
-      return c.body(null, 304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
-    }
-
-    let start = 0;
-    let end = stat.size - 1;
-    let status = 200;
-    // If-Range：缓存再验证带 Range 时浏览器发 etag——不匹配（换源后）必须
-    // 忽略 Range 回 200 全量，否则 206 拼的是新旧文件混血的坏段
-    const ifRange = c.req.header('if-range');
-    let range = c.req.header('range');
-    if (range && ifRange && ifRange !== etag) range = undefined;
-    if (range) {
-      const m = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
-      if (!m || (!m[1] && !m[2])) {
-        closeFd();
-        return c.json({ code: 400, message: 'unsupported range' }, 400);
-      }
-      if (!m[1]) {
-        // 后缀区间 bytes=-N：末尾 N 字节
-        start = Math.max(0, stat.size - parseInt(m[2], 10));
-      } else {
-        start = parseInt(m[1], 10);
-        if (m[2]) end = Math.min(parseInt(m[2], 10), stat.size - 1);
-      }
-      if (start > end || start >= stat.size) {
-        closeFd();
-        return c.body(null, 416, { 'Content-Range': `bytes */${stat.size}` });
-      }
-      status = 206;
-    }
-    const headers = {
-      'Content-Type': type,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': String(end - start + 1),
-      'Access-Control-Allow-Origin': '*',
-      'Cache-Control': 'no-cache',
-      'ETag': etag
-    };
-    // download=<文件名基底>：触发附件语义并给真实扩展名——客户端 <a href> 直链
-    // 下载不再把整文件 blob 进内存（file_ 视频上限 2GB）。RFC5987 filename* 编码
-    const downloadName = c.req.query('download');
-    if (downloadName) {
-      const safe = String(downloadName).slice(0, 200).replace(/[\r\n"\\]/g, '_');
-      headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(safe)}.${ext}`;
-    }
-    if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
-    // fd 交给 stream 持有（autoClose）——createReadStream 自身抛错时回收兜底
+    // openSync 之后到 createReadStream 接手之间的任何抛错都必须 closeFd——
+    // fd 是裸数字（GC 不回收），漏关 = 每请求泄漏一个 fd，打到 EMFILE 全
+    // 服务崩。单 try 拢住整段：fstatSync、encodeURIComponent（孤立代理项
+    // URIError——?download= 文件名 slice 截断代理对/畸形输入都能造出来）等
     let stream;
+    let status;
+    let headers;
     try {
+      const stat = fs.fstatSync(fd);
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      // webm 二义：上传白名单里它同时是 audio/video 扩展——kind=video 优先判
+      // 视频，否则 <video> 拿到 audio/webm 会按音轨播（有画面的上传视频丢画面）
+      const type = (kind === 'video' && ext === 'webm') ? 'video/webm'
+        : ARTIFACT_MIME[ext] || (kind === 'video' ? 'video/mp4' : 'application/octet-stream');
+
+      // 上传曲换源不换 URL（/file?kind=…）——启发式缓存会拿旧文件。
+      // no-cache + ETag(size-mtime) 使 revalidate 落 304 而非全量重拉。
+      // mtimeMs 保留浮点：同 size + 同毫秒内的两次换源不撞 tag
+      const etag = `W/"${stat.size}-${stat.mtimeMs}"`;
+      // If-None-Match 多值/列表内 * 弱比较（RFC 9110 列表语义）——只认单值会
+      // 把该 304 的再验证多发成 200 全量（安全方向，但白烧带宽）
+      const inm = c.req.header('if-none-match');
+      const etagBare = etag.slice(3, -1);
+      if (inm && inm.split(',').some(t => {
+        const tok = t.trim();
+        return tok === '*' || tok.replace(/^W\//, '').replace(/^"|"$/g, '') === etagBare;
+      })) {
+        closeFd();
+        return c.body(null, 304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
+      }
+
+      let start = 0;
+      let end = stat.size - 1;
+      status = 200;
+      // If-Range：缓存再验证带 Range 时浏览器发 etag——不匹配（换源后）必须
+      // 忽略 Range 回 200 全量，否则 206 拼的是新旧文件混血的坏段
+      const ifRange = c.req.header('if-range');
+      let range = c.req.header('range');
+      if (range && ifRange && ifRange !== etag) range = undefined;
+      if (range) {
+        const m = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
+        if (!m || (!m[1] && !m[2])) {
+          closeFd();
+          return c.json({ code: 400, message: 'unsupported range' }, 400);
+        }
+        if (!m[1]) {
+          // 后缀区间 bytes=-N：末尾 N 字节
+          start = Math.max(0, stat.size - parseInt(m[2], 10));
+        } else {
+          start = parseInt(m[1], 10);
+          if (m[2]) end = Math.min(parseInt(m[2], 10), stat.size - 1);
+        }
+        if (start > end || start >= stat.size) {
+          closeFd();
+          return c.body(null, 416, { 'Content-Range': `bytes */${stat.size}` });
+        }
+        status = 206;
+      }
+      headers = {
+        'Content-Type': type,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(end - start + 1),
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache',
+        'ETag': etag
+      };
+      // download=<文件名基底>：触发附件语义并给真实扩展名——客户端 <a href>
+      // 直链下载不再把整文件 blob 进内存（file_ 视频上限 2GB）。
+      // toWellFormed 把 slice 切断代理对/畸形输入留下的孤立代理项换成 U+FFFD
+      // ——裸进 encodeURIComponent 会抛 URIError（fd 泄漏就是这条路径）。
+      // encodeURIComponent 不转 !'()*，RFC5987 attr-char 不收它们——补转义
+      const downloadName = c.req.query('download');
+      if (downloadName) {
+        const safe = String(downloadName).slice(0, 200).replace(/[\r\n"\\]/g, '_').toWellFormed();
+        const enc = encodeURIComponent(safe)
+          .replace(/[!'()*]/g, ch => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+        headers['Content-Disposition'] = `attachment; filename*=UTF-8''${enc}.${ext}`;
+      }
+      if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
+      if (stat.size === 0) {
+        // 空工件：end=-1 传给 createReadStream 会 ERR_OUT_OF_RANGE——在册文件
+        // 被外部截成 0 字节时回 200 空体而不是 500
+        closeFd();
+        return c.body(null, 200, headers);
+      }
+      // fd 交给 stream 持有（autoClose）——createReadStream 自身抛错时回收兜底
       stream = fs.createReadStream(filePath, { fd, start, end, autoClose: true });
     } catch (e) {
       closeFd();

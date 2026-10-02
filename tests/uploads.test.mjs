@@ -179,7 +179,8 @@ test('写盘窗口内登记行被并发删除：409 + 新文件回收不留孤�
   const row = rowOf(songId);
   const doomedPath = row.audioPath.replace(/\.mp3$/, '.flac'); // 第二次传 flac 的新路径
 
-  // 换源流：pull 时把登记行删掉（模拟窗口内 DELETE /uploads/:id）
+  // 换源流：pull 时把登记行删掉——DELETE /uploads/:id 有 inflight 锁打不进
+  // 窗口，真实的删行源是 DELETE /downloads/tasks/:id 与 /songs/:id（不查锁）
   let pulled = false;
   const killer = new ReadableStream({
     async pull(ctrl) {
@@ -231,6 +232,23 @@ test('?download= 触发附件语义 + 真实扩展名', async () => {
   assert.match(cd, /^attachment;/);
   assert.match(cd, /\.flac"*$|\.flac$/m); // filename* 尾部带真实扩展名
   assert.match(cd, /filename\*=UTF-8''/);
+});
+
+test('?download= 孤立代理项/截断代理对不 500（fd 泄漏回归）', async () => {
+  const res = await post('kind=audio&filename=sur.mp3', Buffer.from('mp3bytes'));
+  const { songId } = (await res.json()).data;
+  const fileUrl = `http://t/downloads/songs/${songId}/file?playlistId=local_uploads&kind=audio`;
+  // 名字第 200 位切断 emoji 的 UTF-16 代理对——裸 encodeURIComponent 会
+  // 抛 URIError，此前 fd 没有 closeFd 兜底每请求泄漏一个描述符
+  const cut = `${'a'.repeat(199)}${encodeURIComponent('😀x')}`;
+  const r1 = await app.request(`${fileUrl}&download=${cut}`, { headers: xff() });
+  assert.equal(r1.status, 200, '截断代理对应回 200（toWellFormed → U+FFFD）');
+  assert.match(r1.headers.get('content-disposition') || '', /filename\*=UTF-8''/);
+  await r1.arrayBuffer(); // 消费完让流收尾
+  // 极端输入直接丢代理序列——不 500 就算过（hono 解码失败会留原始串）
+  const r2 = await app.request(`${fileUrl}&download=%ED%A0%80`, { headers: xff() });
+  assert.equal(r2.status, 200);
+  await r2.arrayBuffer();
 });
 
 test('非法输入家族：kind/songId/扩展名/空体逐项 400', async () => {

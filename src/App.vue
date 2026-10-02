@@ -174,7 +174,9 @@
       <div
         v-if="addTargetSong"
         class="atp-overlay"
-        @click="addTargetSong = null"
+        @mousedown="onOverlayDown"
+        @mouseup="onOverlayUp"
+        @click="onAtpOverlayClick"
       >
         <div
           class="atp-dialog"
@@ -222,7 +224,9 @@
       <div
         v-if="createPlaylistOpen"
         class="atp-overlay"
-        @click="closeCreatePlaylist"
+        @mousedown="onOverlayDown"
+        @mouseup="onOverlayUp"
+        @click="onCreateOverlayClick"
       >
         <div
           class="atp-dialog"
@@ -257,7 +261,9 @@
       <div
         v-if="songPickerOpen"
         class="atp-overlay"
-        @click="closeSongPicker"
+        @mousedown="onOverlayDown"
+        @mouseup="onOverlayUp"
+        @click="onPickerOverlayClick"
       >
         <div
           class="atp-dialog asp-dialog"
@@ -480,9 +486,11 @@ export default {
     let songFormPrevFocus = null
 
     const openSongForm = (song = null, returnFocus = null) => {
+      if (songFormOpen.value) return
       // busy 也挡：关窗不中止在途 submit（async 还在跑），此时重开会让旧
-      // submit 的成功路径 closeSongForm() 误杀新窗、finally 吞新 abort 句柄
-      if (songFormOpen.value || songFormBusy.value) return
+      // submit 的成功路径 closeSongForm() 误杀新窗、finally 吞新 abort 句柄。
+      // 静默 return 不行——用户点了没反应比报错更糟
+      if (songFormBusy.value) { toast('有上传处理中，请稍候', 'info'); return }
       // 焦点锚三条路：菜单路径 emit 带的 ⋯键 ＞ 点歌台路径的 hero「添加歌曲」
       // 键（pickerPrevFocus）＞ 兜底 activeElement。两条直达路径的触发元素
       // （menuitem/创建键）随后都随弹层卸载——抓它们等于没抓
@@ -498,6 +506,9 @@ export default {
     }
 
     const closeSongForm = () => {
+      // busy 期关窗连坐在途上传——否则 async submit 成僵尸（写对单但 toast
+      // 落在切走的视图上+中止通道消失）。abort 幂等：已在 abort 路径再来无碍
+      if (songFormBusy.value) abortSongFormUpload()
       songFormOpen.value = false
       songFormSong.value = null
     }
@@ -508,10 +519,26 @@ export default {
     // （merged 新引用），按引用比对会把开着表单的窗误杀
     watch(selectedPlaylist, (v, prev) => {
       if (songFormOpen.value && String(v?.id) !== String(prev?.id)) {
-        abortSongFormUpload() // 关窗不中止的话 submit 继续跑成僵尸——写错单+杀新窗
+        // closeSongForm 内建 busy→abort（与互斥 handler 的裸关窗同一条收路径）
         closeSongForm()
       }
     })
+
+    // atp/create/picker 三姊妹弹层的遮罩闸——同 SongFormDialog 三点自证
+    // （down/up/click 全落遮罩才算主动关；「按在遮罩拖回弹窗」不许误关）。
+    // 互斥不变量保证同时只有一扇窗，共享 state 够用
+    let overlayDownSelf = false
+    let overlayUpSelf = false
+    const onOverlayDown = (e) => { overlayDownSelf = e.target === e.currentTarget }
+    const onOverlayUp = (e) => { overlayUpSelf = e.target === e.currentTarget }
+    const overlayDismiss = (onClose) => (e) => {
+      const ok = overlayDownSelf && overlayUpSelf && e.target === e.currentTarget
+      overlayDownSelf = overlayUpSelf = false
+      if (ok) onClose()
+    }
+    const onAtpOverlayClick = overlayDismiss(() => { addTargetSong.value = null })
+    const onCreateOverlayClick = overlayDismiss(() => closeCreatePlaylist())
+    const onPickerOverlayClick = overlayDismiss(() => closeSongPicker())
 
     // 焦点归还：rAF（本帧渲染 patch 全落地后）+ 可见性门槛——同三窗不变量
     watch(songFormOpen, (open) => {
@@ -1111,6 +1138,8 @@ export default {
       songFormOpen, songFormSong, songFormBusy,
       openSongForm, closeSongForm, submitSongForm, abortSongFormUpload,
       canCreateLocalSong, handleRemovePlaylist,
+      onOverlayDown, onOverlayUp,
+      onAtpOverlayClick, onCreateOverlayClick, onPickerOverlayClick,
       handleOpenSongPicker, handleOpenAddToPlaylist, handleRemoveSongFromPlaylist,
       queueJump,
       queueRemove,

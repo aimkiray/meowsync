@@ -83,7 +83,11 @@ async function streamRequestBody(c, outputPath, maxBytes) {
   if (!body || typeof body.getReader !== 'function') {
     throw httpError(400, '缺少请求体');
   }
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  try {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  } catch (e) {
+    throw e?.code === 'ENOSPC' ? httpError(507, '磁盘空间不足') : e;
+  }
   // 磁盘余量预检：声明长度 > 可用空间直接 507——不写到一半才 ENOSPC 白烧带宽
   //（ENOSPC 仍由写路径兜底；statfs 不可用的平台跳过这道闸）
   try {
@@ -119,13 +123,18 @@ async function streamRequestBody(c, outputPath, maxBytes) {
   };
   // 停滞看门狗（watchStall 同族）：限流管次数不管字节——慢速攻击每 <stall 发
   // 1 字节即可长期占满 MAX_INFLIGHT 工位，合法上传全 429。destroy 触发 error
-  // → errP 冒泡成 408，与断流同路径清理
+  // → errP 冒泡成 408，与断流同路径清理。
+  // 总量硬顶：只判「距上片」不够——滴流每 <60s 发 1 字节就能无限刷新停滞计
+  // 时（watchStall 的 maxTotalMs 同款防御）。30min 对应 2GB 视频 1.1MB/s 下限
   const STALL_MS = 60000;
-  let lastChunkAt = Date.now();
+  const MAX_TOTAL_MS = 30 * 60 * 1000;
+  const startedAt = Date.now();
+  let lastChunkAt = startedAt;
   const stallTimer = setInterval(() => {
-    if (Date.now() - lastChunkAt <= STALL_MS) return;
-    try { reader.cancel(); } catch { /* 忽略 */ }
-    ws.destroy(httpError(408, '上传停滞超时'));
+    const now = Date.now();
+    if (now - lastChunkAt <= STALL_MS && now - startedAt <= MAX_TOTAL_MS) return;
+    Promise.resolve(reader.cancel()).catch(() => { /* cancel 拒绝无害 */ });
+    ws.destroy(httpError(408, '上传停滞/超时'));
   }, 5000);
   stallTimer.unref();
   try {
@@ -151,7 +160,7 @@ async function streamRequestBody(c, outputPath, maxBytes) {
   } catch (err) {
     await cleanup();
     try { await reader.cancel(); } catch { /* 忽略 */ }
-    throw err;
+    throw err?.code === 'ENOSPC' ? httpError(507, '磁盘空间不足') : err;
   } finally {
     clearInterval(stallTimer);
     reader.releaseLock?.();
@@ -164,7 +173,7 @@ async function streamRequestBody(c, outputPath, maxBytes) {
     fs.renameSync(partPath, outputPath);
   } catch (err) {
     await cleanup();
-    throw err;
+    throw err?.code === 'ENOSPC' ? httpError(507, '磁盘空间不足') : err;
   }
   return total;
 }
@@ -182,7 +191,9 @@ app.post('/uploads', async (c) => {
     const def = KIND_DEFS[kind];
     if (!def) return fail(c, 400, 'kind 必须是 audio|video|cover|lyrics');
 
-    const filename = String(c.req.query('filename') || '').slice(0, 240);
+    // 扩展名先抽再截：先 slice(0,240) 会把 >240 字符名尾部的 .mp3 砍掉，
+    // 报「（无扩展名）」把有扩展名的合法文件拒了
+    const filename = String(c.req.query('filename') || '');
     const ext = (filename.match(/\.([0-9A-Za-z]{1,8})$/)?.[1] || '').toLowerCase();
     if (!def.exts.has(ext)) {
       return fail(c, 400, `不支持的文件类型 ${ext ? `.${ext}` : '（无扩展名）'}（${kind} 允许：${[...def.exts].join('/')}）`);
@@ -242,19 +253,28 @@ async function handleUpload(c, { kind, def, ext, filename, songId }) {
     fs.rmSync(oldPath, { force: true });
   }
 
-  const displayName = filename.replace(/\.[0-9A-Za-z]{1,8}$/, '') || songId;
-  // 曲名/原始文件名只随媒体工件更新——后传的封面/歌词文件名不该覆盖显示名
+  const displayName = filename.slice(0, 240).replace(/\.[0-9A-Za-z]{1,8}$/, '') || songId;
+  // 曲名/原始文件名/fileSize 只随媒体工件更新——后传的封面/歌词不该把
+  // 显示名覆盖成封面文件名、把行 fileSize 从 500MB mp3 降成 4KB lrc
   const isMediaKind = kind === 'audio' || kind === 'video';
   // 登记段统一兜底：任何失败（撞 UNIQUE/行被并发 DELETE 抹掉/DB IO 错）新文件
-  // 都回收——uploads/ 不在 reapOrphanFiles 视野，漏回收 = 永久孤儿
+  // 都回收——uploads/ 不在 reapOrphanFiles 视野，漏回收 = 永久孤儿。
+  // 有损边角：同扩展名换源时旧文件已被 rename 覆盖，登记失败删新文件后行
+  // 还在但 filesIntact=false——前端重新露出上传入口，属可自愈方向
   try {
     if (existing) {
       const updated = downloadTasksRepo.updateTask(existing.id, {
         [KIND_PATH_COL[kind]]: outputPath,
         [KIND_DL_FIELD[kind]]: true,
-        fileSize: size,
-        ...(isMediaKind ? { songName: displayName } : {}),
-        providerData: { ...(existing.providerData || {}), upload: true, ...(isMediaKind ? { originalName: filename } : {}) },
+        // 接管的不一定是 completed 行（failed/pending 残留也走这路）——不复位
+        // status 会留「文件在盘+flag 置位但 status=failed」的幻影，file 端点
+        // 按 status==='completed' 查直接 404
+        status: 'completed',
+        progress: 100,
+        errorMessage: null,
+        completedAt: new Date().toISOString(),
+        ...(isMediaKind ? { fileSize: size, songName: displayName } : {}),
+        providerData: { ...(existing.providerData || {}), upload: true, ...(isMediaKind ? { originalName: filename.slice(0, 240) } : {}) },
       });
       // 行在写盘窗口内被并发 DELETE 抹掉：updateTask 对不存在行静默 0 行——
       // 不校验就 200 假成功+隐形孤儿（外层 catch 统一回收新文件）
@@ -277,7 +297,7 @@ async function handleUpload(c, { kind, def, ext, filename, songId }) {
           downloadVideo: kind === 'video',
           downloadCover: kind === 'cover',
           downloadLyrics: kind === 'lyrics',
-          providerData: { upload: true, originalName: filename },
+          providerData: { upload: true, originalName: filename.slice(0, 240) },
         });
       } catch (e) {
         // UNIQUE 撞行（窗口内并发插入/墓碑行残留）：回收新文件回落接管
@@ -308,7 +328,7 @@ app.delete('/uploads/:songId', async (c) => {
     if (!FILE_TRACK_ID_RE.test(songId)) return fail(c, 400, '非法 songId');
     if (inflightUploads.has(songId)) return fail(c, 409, '该曲目有上传正在进行');
     await downloadManager.deleteSongFiles(UPLOADS_PLAYLIST_ID, songId);
-    return c.json({ code: 200, songId, deleted: true });
+    return c.json({ code: 200, data: { songId, deleted: true } });
   } catch (error) {
     return handleError(c, error, '删除上传文件失败');
   }

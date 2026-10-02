@@ -368,7 +368,9 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       pl.removedTrackIds = pl.removedTrackIds.filter(id => String(id) !== sid)
       pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1 // 与 added 支路同兜底
       if (String(selectedPlaylist.value?.id) === String(pl.id)) {
-        songs.value = [...songs.value, { ...song }]
+        // 墓碑恢复的远端成员可能有历史 override（删除不清 override）——
+        // 渲染行即应用，不等下次 selectPlaylist 合并
+        songs.value = [...songs.value, applyTrackOverrides({ ...song }, pl.trackOverrides)]
         if (selectedPlaylist.value !== pl) {
           selectedPlaylist.value = { ...selectedPlaylist.value, trackCount: pl.trackCount }
         }
@@ -682,7 +684,11 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
             && effArtist === (meta.artist || '未知艺术家')
             && (eff.al?.name || '') === meta.album
             && (eff.dt || 0) === meta.durationMs
-          if (!overrideUnchanged) {
+          // meta={} 的纯 filePatch 调用（catch 部分回放）不该在远端成员上
+          // 写 {name:undefined,...} 死 override 键——当前不可达，留闸防未来
+          const hasMeta = meta.name != null || meta.artist != null || meta.album != null
+            || meta.durationMs != null || filePatch?.coverUrl != null
+          if (!overrideUnchanged && hasMeta) {
             pl.trackOverrides = {
               ...(pl.trackOverrides || {}),
               [sid]: {
@@ -699,19 +705,20 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
         }
         savePlaylistsToStorage()
       }
-      // 渲染层同步：打开的正是这张单就同改 songs.value。就地落点时库对象与
-      // 渲染对象是同一引用——apply 幂等，再跑一遍无害；overrides 落点还要补
-      // coverUrl 通道（apply 不写 picUrl——它只认 filePatch.file 位）
+      // 渲染层同步：hit 才动视图（未入库单编辑失败时既弹「无法持久」又改
+      // 渲染行是自相矛盾）。就地落点时库对象与渲染对象同引用——apply 幂等
       const viewIdx = songs.value.findIndex(t => String(t.id) === sid)
-      if (viewIdx !== -1 && String(selectedPlaylist.value?.id) === String(playlistId)) {
+      if (hit && viewIdx !== -1 && String(selectedPlaylist.value?.id) === String(playlistId)) {
         const cur = songs.value[viewIdx]
-        const isRemoteOverride = pl && !isLocalPlaylistId(pl.id)
-          && pl.trackOverrides?.[sid]
+        // 远端成员（pl.tracks 是 detail 缓存、成员来自远端）绝不就地 apply——
+        // cur 与缓存对象同引用，写了=写脏共享快照（ar 摊平/custom 位都会被
+        // 下次 detail 冲掉，纯隐藏双写）。有 override 换渲染行，没有就不碰
+        const isRemoteMember = pl && !isLocalPlaylistId(pl.id)
           && !(pl.addedTracks || []).some(t => String(t.id) === sid)
-        if (isRemoteOverride) {
-          // 远端成员：只换 override 渲染行——cur 与 pl.tracks 缓存成员同引用，
-          // apply(cur) 会把 custom/字段打进一个会被 detail 覆盖的对象（隐藏双写）
-          songs.value[viewIdx] = applyTrackOverrides(cur, pl.trackOverrides)
+        if (isRemoteMember) {
+          if (pl.trackOverrides?.[sid]) {
+            songs.value[viewIdx] = applyTrackOverrides(cur, pl.trackOverrides)
+          }
         } else {
           apply(cur)
           if (pl?.trackOverrides?.[sid]) {

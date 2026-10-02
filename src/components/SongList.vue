@@ -849,13 +849,15 @@ export default {
 
     // 关闭菜单：所有关闭路径收口到这里，顺带清位置缓存（只增不减会泄漏）。
     // restoreFocus=true（Esc/遮罩点击解散）：焦点归还 ⋯触发键——菜单散了焦点
-    // 不落 body。菜单项激活路径不传——下一跳（弹窗/动作）自己管焦点
+    // 不落 body。菜单项激活路径不传——下一跳（弹窗/动作）自己管焦点。
+    // wasOpen 前置闸：menuTriggerBtn 缓存常驻——菜单没开时按 Esc 不许偷焦点
     const closeDownloadMenu = (restoreFocus = false) => {
-      if (showDownloadMenu.value !== null) {
+      const wasOpen = showDownloadMenu.value !== null
+      if (wasOpen) {
         delete menuPositions.value[showDownloadMenu.value]
       }
       showDownloadMenu.value = null
-      if (restoreFocus && menuTriggerBtn?.isConnected) {
+      if (restoreFocus && wasOpen && menuTriggerBtn?.isConnected) {
         menuTriggerBtn.focus({ preventScroll: true })
       }
     }
