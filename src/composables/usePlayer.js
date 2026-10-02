@@ -11,7 +11,7 @@ import { formatTime } from '../lib/format'
 import { toast } from '../lib/feedback'
 import { glitchBurst } from '../lib/theme'
 import { httpsCover } from '../lib/url'
-import { isEphemeralPlaylistId } from '../lib/song'
+import { isEphemeralPlaylistId, isLocalPlaylistId } from '../lib/song'
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
@@ -23,7 +23,9 @@ import { isEphemeralPlaylistId } from '../lib/song'
 //   userPlaylists / selectedPlaylist / selectPlaylist / savePlaylistsToStorage — 库域
 //   filteredSongs — App computed（当前歌单可见曲集，播放上下文快照源）
 //   showVipSongs / fullscreenLyricMode / fullscreenInteractionMode — UI 偏好（存档写回）
-//   recordPlayHistory / recordPlaylistHistory / restoreHistory — useHomeFeed
+//   recordPlayHistory / recordPlaylistHistory — useHomeFeed
+//   nav — useSearchNav 惰性转发（nav 实例化在本 composable 之后，必须 thunk）：
+//     enterWatch / openWatchSong / selectPlaylistAndShow / setSidebarOpen / getSearchSongResults
 export function usePlayer({
   gates,
   playingPlaylistId,
@@ -31,7 +33,9 @@ export function usePlayer({
   selectPlaylist, savePlaylistsToStorage,
   filteredSongs,
   showVipSongs, fullscreenLyricMode, fullscreenInteractionMode,
-  recordPlayHistory, recordPlaylistHistory, restoreHistory,
+  recordPlayHistory, recordPlaylistHistory,
+  enterWatch, openWatchSong, selectPlaylistAndShow,
+  setSidebarOpen, getSearchSongResults,
 }) {
     const currentSong = ref(null)
 
@@ -300,7 +304,7 @@ export function usePlayer({
 
     // 搜索结果页点歌：队列 = 本次搜索的单曲结果，而非当前浏览歌单
     const playSongFromSearch = (song) => {
-      setQueue(searchSongResults.value, shuffleOn.value ? song : null)
+      setQueue(getSearchSongResults(), shuffleOn.value ? song : null)
       playingPlaylistId.value = null // 队列不归属任何歌单
       playSong(song, { preserveContext: true })
     }
@@ -309,7 +313,7 @@ export function usePlayer({
     const playPlaylistFromSidebar = async (playlist) => {
       const ok = await selectPlaylist(playlist)
       if (!ok) return
-      sidebarOpen.value = false
+      setSidebarOpen(false)
       enterWatch() // 点歌单播放即进入 watch 页（YTM 同款导航）
       playPlaylist(false)
     }
@@ -628,6 +632,10 @@ export function usePlayer({
             if ((song.youtube || song.bilibili || song.qq) && !options._localFile) {
               const plId = playingPlaylistId.value || selectedPlaylist.value?.id
               if (plId) {
+                // 转入下载兜底前必须解除看门狗+置空 howl——下载轮询最长 ~3min，
+                // 20s 看门狗到时会把兜底误判成加载超时（abort 歌词请求/报超时文案）
+                clearHowlWatchdog()
+                if (howl === newHowl) howl = null
                 void playDownloadedCopy(song, plId, options)
                 return
               }
@@ -739,7 +747,8 @@ export function usePlayer({
           const pl = (selectedPlaylist.value && String(selectedPlaylist.value.id) === String(playlistId))
             ? selectedPlaylist.value
             : userPlaylists.value.find(p => String(p.id) === String(playlistId))
-          if (pl) await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
+          // 仅 local_pl_* 可镜像——数字/壳 id 会被服务端形态闸直接 400，省一跳
+          if (pl && isLocalPlaylistId(pl.id)) await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
           const submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, { bitrate: 320000 })
           downloaded = submitted?.data?.status === 'completed'
           // 提交即返回——终态轮询确认（音频档秒级完事，封顶 3min 防无限挂起）
@@ -1290,11 +1299,14 @@ export function usePlayer({
     watch([currentSong, isPlaying], updateMediaSession)
 
     // 后台标签页 rAF 冻结，watch(currentTime) 停转 → 进度持久化滞后；
-    // 切回前台/离开前补一次强制落盘
+    // 切回前台/离开前补一次强制落盘。pagehide 兜底 iOS Safari 杀页/bfcache
+    // 路径——那里 visibilitychange 不保证触发
     const onVisibilityFlush = () => {
       if (document.visibilityState === 'hidden') savePlaybackTimeIfNeeded(true)
     }
+    const onPageHide = () => savePlaybackTimeIfNeeded(true)
     document.addEventListener('visibilitychange', onVisibilityFlush)
+    window.addEventListener('pagehide', onPageHide)
 
     // ←→ 键盘进退：直接作用 howl（等价于拖进度条），5s 步长对齐 YTM
     const seekBy = (delta) => {
@@ -1322,6 +1334,7 @@ export function usePlayer({
       clearTimeout(volumeSaveTimer)
       flushLyricOffsetSave() // 卸载前把待发的校准写出去
       document.removeEventListener('visibilitychange', onVisibilityFlush)
+      window.removeEventListener('pagehide', onPageHide)
       teardownMediaSession()
       if (howl) {
         howl.stop()

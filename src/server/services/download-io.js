@@ -43,16 +43,8 @@ function mergeLrcTrans(lrc, trans) {
 // 可被链路篡改成 302 到内网/云元数据地址，与 proxy.js 同一威胁模型：每跳都做公网校验
 const MAX_REDIRECTS = 5;
 const MAX_FILENAME_BYTES = 120;
-// 体积上限：明文源站被 302 到无限流/超大文件的威胁模型下，写完再对账已经磁盘写满
-const MAX_AUDIO_BYTES = 512 * 1024 * 1024;
-const MAX_COVER_BYTES = 32 * 1024 * 1024;
 // Windows 保留名：即便在 mac/linux 生成，用户最终可能在 Windows 上操作这些文件
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-
-// 解锁源实际回的非 mp3 格式白名单——URL path 后缀不在名单内一律回退 mp3/jpg，
-// 防止上游注入怪异扩展名（.php/.html）落盘
-const AUDIO_EXTS = new Set(['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wav', 'webm']);
-const COVER_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 
 function sanitizeFilename(filename, maxBytes = MAX_FILENAME_BYTES) {
   let cleaned = String(filename || '')
@@ -358,15 +350,13 @@ function pathWithExt(outputPath, ext) {
 
 
 module.exports = {
-  lrcTsKey,
+  MIME_EXT,
   mergeLrcTrans,
   sanitizeFilename,
   fatalError,
   errnoToFatal,
   throwIfAborted,
   describeError,
-  watchStall,
-  hasNonIdentityEncoding,
   fetchStream,
   removePartial,
   streamToFile,

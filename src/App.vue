@@ -389,12 +389,12 @@ export default {
     const {
       userPlaylists, selectedPlaylist, songs, loadingSongs,
       playlistDownloadsRefreshKey,
-      savePlaylistsToStorage, loadPlaylistsFromStorage, getRemovedDefaultPlaylists,
+      savePlaylistsToStorage, loadPlaylistsFromStorage,
       addPlaylistToLibrary, removePlaylistFromLibrary, handlePlaylistDownloadsDeleted,
-      loadPlaylistById, collectSelectedPlaylist, selectedPlaylistInLibrary,
+      collectSelectedPlaylist, selectedPlaylistInLibrary,
       selectPlaylist, appendSongToLibraryPlaylist, removeSongFromPlaylist, syncPlaylist,
       loadDefaultPlaylists,
-    } = usePlaylistLibrary({ gates, playingPlaylistId })
+    } = usePlaylistLibrary({ gates, playingPlaylistId, loading })
 
     const filteredSongs = computed(() =>
       visibleSongs(songs.value, showVipSongs.value, serverCaps.value)
@@ -416,8 +416,8 @@ export default {
       currentTime, duration, volume, durationWarning, playbackError,
       playingSongs, queueTitle, queueOwner, playerIsTemp,
       lyrics, currentLyricIndex, lyricOffsetMs, loadingLyrics,
-      adjustLyricOffset, resetLyricOffset, scheduleLyricOffsetSave,
-      playbackList, currentPlayingIndex, setQueue, toggleShuffle,
+      adjustLyricOffset, resetLyricOffset,
+      playbackList, currentPlayingIndex, toggleShuffle,
       queueJump, queueRemove, queueMove, clearQueue,
       playNextInQueue, addToQueueEnd, saveQueueAsPlaylist, openQueueSource,
       playSong, playPlaylist, playPlaylistFromSidebar, playSongFromSearch,
@@ -426,8 +426,8 @@ export default {
       previousSong, nextSong, seekTo, seekBy, updateVolume, toggleMute,
       openFullscreenPlayer, closeFullscreenPlayer,
       savePlayerStateToStorage, loadPlayerStateFromStorage,
-      restoreUiState, restorePlaybackState, savePlaybackTimeIfNeeded,
-      setupMediaSessionHandlers, teardownMediaSession, getHowl,
+      restoreUiState, restorePlaybackState,
+      setupMediaSessionHandlers, getHowl,
     } = usePlayer({
       gates,
       playingPlaylistId,
@@ -435,16 +435,23 @@ export default {
       selectPlaylist, savePlaylistsToStorage,
       filteredSongs,
       showVipSongs, fullscreenLyricMode, fullscreenInteractionMode,
-      recordPlayHistory, recordPlaylistHistory, restoreHistory,
+      recordPlayHistory, recordPlaylistHistory,
+      // nav 域（useSearchNav）实例化在本 composable 之后——全部惰性转发
+      enterWatch: () => enterWatch(),
+      openWatchSong: (s) => openWatchSong(s),
+      selectPlaylistAndShow: (p, o) => selectPlaylistAndShow(p, o),
+      setSidebarOpen: (v) => { sidebarOpen.value = v },
+      getSearchSongResults: () => searchSongResults.value,
     })
 
     // 导航+搜索域（composables/useSearchNav.js）：URL 可寻址视图/history 栈、
-    // 顶栏双区搜索与单曲深挖、id 预览、watch 页进出。playSong 族惰性转发防 TDZ
+    // 顶栏双区搜索与单曲深挖、id 预览、watch 页进出。playSong 族惰性转发——
+    // 与 player→nav 反向注入（上）同型，实例化顺序无关的防御写法
     const {
       centerView, sidebarOpen, searching,
       searchResults, searchSongResults,
-      searchSongQuery, searchSongTotal, searchSongLoadingMore,
-      buildNavUrl, pushNavState, applyUrlNav, normalizeNavEntry,
+      searchSongTotal, searchSongLoadingMore,
+      applyUrlNav, normalizeNavEntry,
       navHome, closeSearchView, toggleCenterView, watchBack,
       enterWatch, openWatchPanel,
       selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,
@@ -462,12 +469,11 @@ export default {
     })
 
     // 外部导入域（composables/useExternalImport.js）：单曲 resolve 导入 / 三源整单导入 /
-    // mix 内容分享导入 / 网易云单曲壳。playSong 声明在后部——惰性转发让闭包在
-    // 调用时才取值（实例化于 TDZ 之前的等价语义）
+    // mix 内容分享导入 / 网易云单曲壳。跨域回调沿用惰性转发惯例（顺序无关）
     const {
-      importExternalMedia, importBilibili, importYouTube, importQQ,
+      importQQ,
       importBilibiliOrFav, importYouTubeOrPlaylist,
-      importQQPlaylist, importBiliFavlist, importYouTubePlaylist,
+      importQQPlaylist,
       importNeteaseSongById, importMixPlaylist,
     } = useExternalImport({
       gates,
@@ -729,15 +735,10 @@ export default {
 
       // 方法
       previewPlaylistById,
-      loadPlaylistById,
       selectedPlaylistInLibrary,
       collectSelectedPlaylist,
-      importBilibili,
       importBilibiliOrFav,
-      importBiliFavlist,
-      importYouTube,
       importYouTubeOrPlaylist,
-      importYouTubePlaylist,
       importQQ,
       importQQPlaylist,
       importNeteaseSongById,
@@ -752,10 +753,7 @@ export default {
       navHome,
       handlePlaylistSearch,
       handleQQSongSearch,
-      playSong,
-      playPlaylist,
       playPlaylistFromSidebar,
-      playSongFromSearch,
       playNextInQueue,
       addToQueueEnd,
       queueJump,
@@ -764,7 +762,6 @@ export default {
       clearQueue,
       saveQueueAsPlaylist,
       openWatchPanel,
-      enterWatch,
       openWatchSong,
       openWatchSearchSong,
       openWatchRecent,
