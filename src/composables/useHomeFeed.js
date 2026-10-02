@@ -1,9 +1,9 @@
 import { ref } from 'vue'
-import { readJSON, writeJSON } from '../lib/storage'
+import { readJSON, writeJSON, LS_KEYS } from '../lib/storage'
 import { isSingleSongShellId } from '../lib/song'
 
-const PLAY_HISTORY_STORAGE_KEY = 'meowsync-play-history'
-const PLAYLIST_HISTORY_STORAGE_KEY = 'meowsync-playlist-history'
+const PLAY_HISTORY_STORAGE_KEY = LS_KEYS.PLAY_HISTORY
+const PLAYLIST_HISTORY_STORAGE_KEY = LS_KEYS.PLAYLIST_HISTORY
 
 // 最近播放历史：localStorage 持久化（20 条去重置顶）。
 // 首页货架全部由本地历史派生，无网络请求。

@@ -6,7 +6,7 @@ Howler.html5PoolSize = 24
 import { musicApi, parseLyrics, mergeTranslations } from '../api/music'
 import { downloadsApi } from '../api/downloads'
 import { aiApi } from '../api/ai'
-import { readJSON, writeJSON } from '../lib/storage'
+import { readJSON, writeJSON, LS_KEYS } from '../lib/storage'
 import { formatTime } from '../lib/format'
 import { toast } from '../lib/feedback'
 import { glitchBurst } from '../lib/theme'
@@ -65,7 +65,7 @@ export function usePlayer({
     // 没有它 songSwitching 会永久卡住播放键
     const PLAYBACK_LOAD_TIMEOUT_MS = 20000
 
-    const PLAYER_STATE_STORAGE_KEY = 'meowsync-player-state'
+    const PLAYER_STATE_STORAGE_KEY = LS_KEYS.PLAYER_STATE
 
     let lastSavedWholeSecond = -1
 
