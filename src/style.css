@@ -1033,10 +1033,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   max-width: calc(100vw - 16px);
   overflow-y: auto;
   /* 矮视口防截底：6 项菜单 ~278px，vh < ~290 时翻上后仍会出底缘——可滚兜底。
-     dvh 跟可视高（iOS 工具栏展开态 vh 会高估） */
+     dvh 跟可视高（iOS 工具栏展开态 vh 会高估）。
+     overscroll contain 由下方登记清单统一管（不与单件双写） */
   max-height: calc(100vh - 16px);
   max-height: calc(100dvh - 16px);
-  overscroll-behavior: contain;
 }
 .pg-menu-head {
   padding: 9px 12px;
@@ -1110,7 +1110,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border: var(--hairline);
 }
 @media (max-height: 540px) {
-  .atp-dialog { max-height: calc(100dvh - 24px); }
+  .atp-dialog {
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
 }
 .atp-list { overflow-y: auto; min-height: 0; } /* 显式化收缩意图（overflow 已隐式清零，注释防回归） */
 .atp-name {

@@ -433,8 +433,8 @@ onUnmounted(() => {
 
 /* 轨道/柄色由 .pg-range + .pg-range--on-ink 全局供给；这里只补布局、焦点环、14px 加大柄（触屏遥控）。
    本页是手机专用遥控面——input 自身扩成 40px 命中带（视觉轨道仍细）。
-   pan-y：原生 range 横拖由浏览器内部处理不受 pointercancel 影响，
-   竖滑放行滚页——pan-x 反而会把这两条 40px 带变成滚动死区 */
+   pan-y：横移永不被浏览器认作滚动手势（横拖全程不产生 pointercancel），
+   竖滑透传滚页；pan-x 相反——竖滑在 40px 带上是死区且横拖可被滚动抢走 */
 .rc-slider {
   flex: 1;
   height: 40px;
