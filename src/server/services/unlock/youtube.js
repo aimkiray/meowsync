@@ -1,4 +1,5 @@
-// youtube 解锁源：Innertube 搜索 → 时长选候选 → AI 核验 → fetchPlayer 取流。
+// youtube 解锁源：Innertube 搜索 → 时长选候选 → AI 核验 → 闸控感知取流
+//（services/youtube-resolve.js：探测 SABR 闸控 → VISIONOS 升级 → 合流兜底）。
 // 替代 unm 的 yt-dlp provider（spawn yt-dlp ytsearch1 + 盲 range 探测）——
 // 候选期就有 lengthSeconds，选错的概率更低；且不再需要 Docker 里的 yt-dlp。
 // 回链是 googlevideo 带 ip= 签名的本机绑定链——播放必须经 /audio-proxy
@@ -20,7 +21,7 @@ const unlockVkey = (songId, videoId) => `${songId}@yt_${videoId}@${AI_MODEL}`;
 
 // 进程内冷却（非持久 verdict——瞬时态不该进库）：
 // - deadCands：取流失败的候选进死簿 30min 押尾——死视频每次 resolve 都被
-//   前置再死一遍（fetchPlayer 最坏 ~45s）会顶穿 60s 解锁预算。同一对反复
+//   前置再死一遍（resolveYoutubeStreams 含探测最坏 ~55s）会顶穿 60s 解锁预算。同一对反复
 //   死（n>=2）升级写 ok=0 verdict 收敛——一次死可能是风控/瞬断，反复死
 //   不是；verdict 一旦落库就永久剔除出 AI 候选池与排序
 // - rejectedAt：AI 全否（pick:0）冷却 10min——verdict 不持久化否决的代价是
@@ -59,7 +60,7 @@ const pruneExpired = (m, ttl) => {
 // AI 关闭/哑火 → 判定记忆仍生效、未判候选原序放行（记忆是累积知识，
 // 不随开关旁路；AI 是增强不是门禁）。
 // 返回 {ordered, pickedId}：批准 verdict（ok=1）延迟到 resolve() 里
-// 该候选 fetchPlayer 验证成功才落库——先写库遇到死流会让死候选
+// 该候选取流验证成功才落库——先写库遇到死流会让死候选
 // 永久压在队首反复重死，顶穿解锁预算
 async function aiRankCandidates(info, usable, signal) {
   const pass = (ordered) => ({ ordered, pickedId: null });
@@ -166,7 +167,15 @@ async function resolve(info, { signal, purpose } = {}) {
             upsertVerdict(unlockVkey(info.id, pickedId), 'unlock', 1, cleanField(cand.title));
           } catch { /* verdict 落库失败不阻塞解锁 */ }
         }
-        return { url: head.url, br: head.br, durationSec: cand.durationSec };
+        // 整条候选链透出：探测无定论（gated=null）但实际被闸时首链仍
+        // 可能死——下游 vault 逐链 mint，代理侧试到活档钉位，合流尾档
+        // 兜底（与 /stream 同权，不再押注单链）
+        return {
+          url: head.url,
+          urls: streams.map(s => s.url),
+          br: head.br,
+          durationSec: cand.durationSec
+        };
       }
       failed += 1;
       markDead(info, cand);

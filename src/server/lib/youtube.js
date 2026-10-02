@@ -1,5 +1,7 @@
-// YouTube Innertube 原语——routes/youtube.js 与解锁层（services/unlock/youtube.js）
-// 共用。公开 web 客户端 key（嵌在 youtube.com 前端里，供匿名访客调 youtubei）。
+// YouTube Innertube 原语——消费方：routes/youtube.js（/resolve、歌单页）、
+// services/youtube-resolve.js（闸控感知取流，/stream 与解锁链共用）、
+// services/file-downloader.js（服务端下载）。
+// 公开 web 客户端 key（嵌在 youtube.com 前端里，供匿名访客调 youtubei）。
 // ANDROID/IOS 客户端的 streamingData 直返可播 url（无 signatureCipher 混淆
 // 签名）——正是不需要 yt-dlp 的原因；ANDROID 优先，被风控/改版时退 IOS。
 // key/客户端版本号摘自 youtube.com 前端与 yt-dlp 上游（会随 YouTube 改版过期——

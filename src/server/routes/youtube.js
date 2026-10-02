@@ -7,8 +7,9 @@ const { extractYouTubeId, extractYouTubePlaylistId, YT_ID_RE } = require('../../
 
 const app = new Hono();
 
-// Innertube 原语（fetchPlayer/pickStreamList/innertubeSearch）在 lib/youtube.js
-// ——解锁层 services/unlock/youtube.js 复用同一实现，不维护两份客户端表
+// Innertube 原语在 lib/youtube.js；本路由消费 fetchPlayer/pickStreamList
+//（/resolve 元数据）与 fetchYtPlaylistPage（歌单页）——/stream 的闸控感知
+// 取流走 services/youtube-resolve.js，搜索原语 innertubeSearch 归解锁层
 const { fetchPlayer, pickStreamList, fetchYtPlaylistPage } = require('../lib/youtube');
 
 // SABR 闸控探测/gateCache/VISIONOS 升级/progressive 结转已下沉到

@@ -92,6 +92,9 @@ async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', sig
   } else if (probeTarget) {
     gated = await probeGated(probeTarget, signal);
     if (gated !== null) {
+      // 陈旧键覆盖前先删——Map.set 对已存在 key 保留原插入位，不删会让
+      // 刷新后的热判定仍排在旧位置被满容淘汰先挤掉（与命中 touch 同口径）
+      gateCache.delete(videoId);
       if (gateCache.size >= GATE_CACHE_MAX) {
         gateCache.delete(gateCache.keys().next().value);
       }

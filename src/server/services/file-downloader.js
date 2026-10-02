@@ -579,8 +579,12 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       url: songData.url,
       // 落盘后时长对账需要**文件真实码率**：解锁源的 item.br 仍是网易声明值
       // （请求 320k 时恒 320000），真实码率在 unblockedBr（youtube 常 130k）——
-      // 用错分母会把完整文件误判成剪辑
-      br: songData.unblockedBr ?? songData.br ?? null,
+      // 用错分母会把完整文件误判成剪辑。unblockedBr 为 null（progressive 合流
+      // 兜底链——容器总码率不可当音轨码率）时保持 null 跳过对账，别拿声明值
+      // 复活成假分母（闸控链码率与声明值差 2-3 倍，截断闸会名存实亡）
+      br: songData.unblocked
+        ? (songData.unblockedBr ?? null)
+        : (songData.br ?? null),
       unblocked: songData.unblocked || false,
       unblockedSource: songData.unblockedSource || null
     };
