@@ -900,6 +900,11 @@ async function pauseQueue(queueId) {
   if (deletingQueues.has(queueId)) {
     throw httpError(409, '队列正在删除中');
   }
+  // 级联窗口对称检查：级联只持 deletingPlaylists——查到即可快失败，
+  // 查不到也无害（控制器已随排空移出 Map，下面 get 空 409）
+  if (deletingPlaylists.has(downloadQueuesRepo.findQueueById(queueId)?.playlistId)) {
+    throw httpError(409, '该歌单正在删除中');
+  }
   const controller = activeQueues.get(queueId);
   if (!controller) {
     throw httpError(409, '队列未运行');
@@ -914,6 +919,10 @@ async function pauseQueue(queueId) {
 async function resumeQueue(queueId) {
   if (deletingQueues.has(queueId)) {
     throw httpError(409, '队列正在删除中');
+  }
+  // 对称检查同 pauseQueue：级联锁是 deletingPlaylists，本函数原只查队列锁
+  if (deletingPlaylists.has(downloadQueuesRepo.findQueueById(queueId)?.playlistId)) {
+    throw httpError(409, '该歌单正在删除中');
   }
   const controller = activeQueues.get(queueId);
   if (!controller) {
@@ -1056,14 +1065,11 @@ async function deleteQueue(queueId) {
     return;
   }
   // 可重入 + 排空窗口锁：并发 DELETE 不重复排空，且排空 await 期间拒绝
-  // startQueue/retryTask 起新协程——否则行删后新协程仍在写盘，永久失联
+  // startQueue/retryTask 起新协程——否则行删后新协程仍在写盘，永久失联。
+  // 到此 playlistId 必为 null（在册队列上方已升级级联）：孤儿队列不属任何
+  // 歌单，deletingPlaylists 交叉锁对它无意义
   if (deletingQueues.has(queueId)) {
     throw httpError(409, '队列正在删除中');
-  }
-  // 交叉锁：歌单级联删除正在进行时，cascade 的 drain 会把控制器移出 Map，
-  // 这里再跑一遍排空=空转后直接删行——cascade 里在途协程写完即孤儿
-  if (deletingPlaylists.has(queue.playlistId)) {
-    throw httpError(409, '该歌单正在删除中');
   }
   deletingQueues.add(queueId);
 
@@ -1559,8 +1565,12 @@ async function deletePlaylistDownloadedFiles(playlistId) {
 // 删除歌单前清理：中止该歌单的活跃队列与 standalone 任务、排空后收集待删文件路径
 // 返回给调用方（真正的 unlink 在行删除事务提交后，见 deletePlaylistCascade）。
 // 排空保证 "写完未记档" 的文件路径也被最终快照收集到。
-// 本函数不管 deletingPlaylists 锁——由 deletePlaylistCascade 在外层持有到行删除后
+// 本函数不管 deletingPlaylists 锁——由 deletePlaylistCascade 在外层持有到行删除后。
+// 锁外调用会让"排空集合建立"与"行删除"之间开窗（新协程写入成孤儿）——契约断言
 async function deletePlaylistFiles(playlistId) {
+  if (!deletingPlaylists.has(playlistId)) {
+    throw new Error('deletePlaylistFiles 必须在 deletingPlaylists 锁内调用');
+  }
   {
     const drains = [];
     const drainedControllers = new Set(); // 追踪 drain 超时后仍在跑的协程
@@ -1686,8 +1696,15 @@ async function deletePlaylistCascade(playlistId) {
       deletingNeteasePlaylists.set(tombstoneNeteaseId, Infinity);
     }
     const pendingFiles = await deletePlaylistFiles(playlistId);
-    // 排空后快照任务 id——提交后清对应退避条目（事务内清会留回滚不一致）
-    const taskIds = downloadTasksRepo.listTasksByPlaylist(playlistId).map(t => t.id);
+    // 排空快照与删行事务之间隔着一次 microtask 跳变——漏网协程在此窗内写完
+    // 记档的路径会逃出 pendingFiles。事务前重取任务快照求并集把窗口归零；
+    // 同时这份快照就是待删 taskIds 的来源
+    const finalTasks = downloadTasksRepo.listTasksByPlaylist(playlistId);
+    const taskIds = finalTasks.map(t => t.id);
+    const allPendingFiles = [...new Set([
+      ...pendingFiles,
+      ...finalTasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath])
+    ])];
     // 显式删子表行：FK 级联依赖建表期声明，老库 ALTER 补的列可能没带
     // REFERENCES/ON DELETE CASCADE——不能把行删除押在 schema 史上。
     // 三条 DELETE 同事务：半途失败整体回滚，不留子表已删父表还在的不一致
@@ -1700,7 +1717,7 @@ async function deletePlaylistCascade(playlistId) {
     })();
     for (const id of taskIds) retryAfter.delete(id);
     // 行删提交后再清文件与目录骨架（见 deletePlaylistFiles 尾注）
-    cleanupPlaylistFilesAndDirs(playlistId, pendingFiles);
+    cleanupPlaylistFilesAndDirs(playlistId, allPendingFiles);
     return deleted;
   } finally {
     deletingPlaylists.delete(playlistId);

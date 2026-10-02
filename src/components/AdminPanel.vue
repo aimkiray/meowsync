@@ -377,25 +377,29 @@ async function retryQueue(queueId) {
 }
 
 async function deleteQueue(queueId) {
-  // 服务端把队列删除升级为歌单级联：清掉该歌单全部已下载资源（含单曲任务、
-  // 其他队列与登记行）——确认文案必须说清，否则"删队列"的预期与实际不符
-  const name = queues.value.find(q => q.id === queueId)?.name;
+  // 服务端把队列删除升级为歌单级联：清掉该歌单全部下载足迹（单曲任务、其他
+  // 队列、登记行与盘上文件），进行中的下载也会中止——确认文案必须说清爆炸半径
+  const doomed = queues.value.find(q => q.id === queueId);
   if (!await pixelConfirm(
-    `确定要删除${name ? `「${name}」` : '这个歌单'}吗？其全部已下载资源将一并清理`,
+    `确定要删除${doomed?.name ? `「${doomed.name}」` : '这个歌单'}吗？其全部下载任务与已下载资源将一并清理，进行中的下载也会中止`,
     { confirmText: '删除', danger: true }
   )) return;
 
   try {
     await downloadsApi.deleteQueue(queueId);
     await loadQueues();
-    if (selectedQueue.value?.id === queueId) {
+    // 级联连坐删同歌单兄弟队列——选中项落在同一歌单上即清，别等两轮缺席判定
+    if (selectedQueue.value?.id === queueId
+        || (doomed?.playlistId != null && selectedQueue.value?.playlistId === doomed.playlistId)) {
       selectionMissCount = 0; // 手动清选中同样要归零——loadQueues 内缺席计数会留下惰性 =1
       selectedQueue.value = null;
       tasks.value = [];
+      hasLoadedTasks.value = false;
     }
+    toast(doomed?.name ? `已删除「${doomed.name}」及其下载资源` : '已删除歌单及其下载资源', 'success');
   } catch (error) {
-    console.error('删除队列失败:', error);
-    toast('删除队列失败: ' + (apiErrorMessage(error)), 'error');
+    console.error('删除歌单下载足迹失败:', error);
+    toast('删除失败: ' + (apiErrorMessage(error)), 'error');
   }
 }
 

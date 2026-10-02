@@ -286,8 +286,15 @@ export default {
     }
 
     const removePlaylist = async (playlistId) => {
-      // 与其他删除项保持一致的确认（本地库移除，误删可重加但易误触）
-      if (!await pixelConfirm('确定要从库中移除该歌单吗？', { confirmText: '移除', danger: true })) {
+      // 语义分岔要说清：本地单移除连带清服务端镜像与已下载文件；远端单只从
+      // 列表移除，服务器上的已下载资源保留（要清走下载管理页删歌单）
+      const pl = props.userPlaylists.find(p => String(p.id) === String(playlistId))
+      const confirmText = isLocalPlaylistId(pl?.id)
+        ? '确定要删除该歌单吗？其已下载资源将一并清理'
+        : isSingleSongShellId(pl?.id)
+          ? '确定要从库中移除该歌单吗？'
+          : '确定要从库中移除该歌单吗？已下载文件保留在服务器（可在下载管理中清理）'
+      if (!await pixelConfirm(confirmText, { confirmText: '移除', danger: true })) {
         closeMenu(playlistId)
         return
       }
@@ -357,7 +364,12 @@ export default {
       } catch (error) {
         console.error('创建下载队列失败:', error)
         const message = apiErrorMessage(error)
-        toast('下载失败: ' + message, 'error')
+        // 409 过载：删除墓碑窗（管理页级联删/镜像删后 ~130s 重下会撞）改写为
+        // 可重试语义；"已有进行中的队列"等冲突原文透传
+        toast(
+          error.response?.status === 409 && /正在删除中/.test(message)
+            ? '歌单清理中，请稍候重试'
+            : '下载失败: ' + message, 'error')
       } finally {
         downloadingIds.delete(pid)
         closeMenu(pid) // 失败也要关菜单——否则菜单挂着看似还能点（定点关：别误杀新菜单）

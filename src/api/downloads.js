@@ -49,10 +49,10 @@ export const downloadsApi = {
   },
 
   deleteQueue: (id) => {
-    // 服务端要等中止+排空在途下载（排空上限 30s），15s 默认超时会让客户端
-    // 先报"失败"而服务端实际删完——重试拿到 404 体验错乱，给 60s
+    // 队列删除已升级为歌单级联：最坏要等两轮排空（首轮+重扫各 ~30s）再加
+    // 文件清理——60s 贴边会让客户端先报"失败"而服务端实际删完，重试 404
     return http.delete(`/downloads/queues/${id}`, {
-      timeout: 60000
+      timeout: 90000
     });
   },
 
