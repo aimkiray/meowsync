@@ -1,7 +1,7 @@
 <template>
   <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
-  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-hidden">
+  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden">
     <!-- 浮层顶行：不占流——右栏待播区的顶部空间随之释放 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
