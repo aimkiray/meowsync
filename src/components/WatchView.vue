@@ -1,15 +1,15 @@
 <template>
   <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
-  <div class="watch-view">
+  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-hidden">
     <!-- 浮层顶行：不占流——右栏待播区的顶部空间随之释放 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
     </div>
 
-    <div class="watch-layout">
+    <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-14 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
       <!-- ══ 左栏 ══ -->
-      <div class="watch-main">
+      <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto">
         <div class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }">
           <!-- 外部导入曲视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
                音频模式回落网易云匹配封面——不加载视频即省流量 -->
@@ -74,7 +74,7 @@
       </div>
 
       <!-- ══ 右栏：待播 / 歌词 / 相关 ══ -->
-      <aside class="watch-side" aria-label="待播与歌词">
+      <aside class="watch-side relative flex min-w-0 flex-col pt-2.5 wide:min-h-0 wide:pl-6 wide:pt-0" aria-label="待播与歌词">
 
         <div class="pg-tabs watch-tabs" role="tablist" aria-label="播放页侧栏面板">
           <button
@@ -556,12 +556,19 @@ export default {
       }
     }
 
-    // rect 法只滚 lyricContainer——scrollIntoView 会连滚所有祖先，
-    // 单列态拽动整页。字号重排后同样用这只滚容器
+    // 单列态（<901px，与模板 wide: 断点同源）滚动器是 .watch-view 整页——
+    // 容器不限高不内滚、scrollTop 恒 0，rect 法空转；此时 scrollIntoView
+    // 只移动真滚动祖先，恰是整页居中所需。宽屏态用 rect 法只滚 lyricContainer
+    // ——scrollIntoView 会连滚所有祖先，双栏态拽动整页。
+    // 字号重排后同样用这套分派
     const scrollLyricIntoCenter = (i, smooth) => {
       const container = lyricContainer.value
       const el = container?.querySelector(`[data-lyric-index="${i}"]`)
       if (!container || !el) return
+      if (!window.matchMedia('(min-width: 901px)').matches) {
+        el.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' })
+        return
+      }
       const containerRect = container.getBoundingClientRect()
       const lyricRect = el.getBoundingClientRect()
       const scrollOffset = (lyricRect.top - containerRect.top + lyricRect.height / 2) - containerRect.height / 2
@@ -713,23 +720,9 @@ export default {
 
 <style scoped>
 /* 主区页内视图（青纸画布）——走带已移除（底栏承担），信息面板垂直居中 */
-.watch-view {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
-}
-
-.watch-layout {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) min(400px, 38vw);
-  gap: 24px;
-  padding: 20px 20px 20px; /* 顶 20 与全站首行轴齐平（头行已并入左栏） */
-}
+/* 布局壳的盒模型已上模板工具类（mobile-first）：移动基态单列整页滚
+   ——本层是唯一滚动器；≥901px 转双栏内滚，车道移交各栏 */
+.watch-view { scrollbar-gutter: stable; }
 
 /* 浮层顶行：返回钉左页角 / 沉浸钉右页角；不占流——待播栏顶部空间整体释放。
    pointer-events:none 带子让下方内容可点，仅按键自身接收点击 */
@@ -747,26 +740,13 @@ export default {
 }
 .watch-top > * { pointer-events: auto; }
 
-/* ── 左栏：封面 + 信息 + 操作 ── */
-.watch-main {
-  min-width: 0;
-  overflow-y: auto;
-  /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
-     （旧浏览器不认两关键字写法时回退到上行 stable） */
-  scrollbar-gutter: stable;
-  scrollbar-gutter: stable both-edges;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 8px 8px 0; /* 底距交给 .watch-layout 的 20，不再叠 24 */
-  text-align: center;
-}
+/* ── 左栏：封面 + 信息 + 操作 ──
+   盒模型走模板工具类；本规则只剩宽屏双车道（见 min-width 块） */
 
 .watch-cover {
   /* width 里的 100% 对 shrink-to-fit 父级是循环%——fallback 分支塌成 42px。
-     min() 只留物理上限，收窄交给 max-width */
-  width: min(46vh, 420px);
+     min() 只留物理上限，收窄交给 max-width。移动基态按视口宽取小（单列） */
+  width: min(64vw, 320px);
   max-width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
@@ -785,10 +765,10 @@ export default {
 
 /* 外部导入曲视频模式：16:9 信箱（外部视频多为横屏，方形裁切会砍画面）；
    image-rendering 像素化是封面的印刷效果，视频不该继承。
-   视频是主内容、须明显大于方形封面：宽顶满栏位，上限 62vh 反推宽
+   移动基态占满栏宽（整页滚动，高度不占视口预算）；宽屏上限 62vh 反推宽
    （封面 min(46vh,420px) 面积约 17.6万px²；960×540 ≈ 51.8万，~3×） */
 .watch-cover--video {
-  width: min(100%, 1080px, calc(62vh * 16 / 9));
+  width: min(100%, 1080px);
   aspect-ratio: 16 / 9;
   object-fit: contain;
   image-rendering: auto;
@@ -832,26 +812,19 @@ export default {
 
 .watch-action { font-size: 12px; }
 
-/* ── 右栏：发丝线分栏的 tab 面板 ── */
-.watch-side {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  position: relative;
-  /* gap 24 → padding 24：栏界标尺两侧留白对称 */
-  padding-left: 24px;
-}
+/* ── 右栏：发丝线分栏的 tab 面板 ──
+   盒模型走模板工具类；本规则只剩栏界标尺 */
 
-/* 栏界羽化标尺：ink-30 细线、两端渐隐、上下内缩——暗示分栏而非一堵墨墙 */
+/* 栏界羽化标尺：ink-30 细线、两端渐隐。移动基态转横（单列态栏界在上方）；
+   ≥901px 回竖版（见 min-width 块） */
 .watch-side::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 24px;
-  bottom: 24px;
-  width: 1.2px;
-  background: linear-gradient(to bottom, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
+  left: 24px;
+  right: 24px;
+  top: 0;
+  height: 1.2px;
+  background: linear-gradient(to right, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
   pointer-events: none;
 }
 
@@ -864,7 +837,8 @@ export default {
   border: var(--hairline);
   color: var(--ink);
   flex-shrink: 0;
-  width: min(46vh, 420px);
+  /* 宽与封面同轴——移动基态跟随封面 min(64vw,320px) */
+  width: min(64vw, 320px);
   max-width: 100%;
   text-align: left;
 }
@@ -878,11 +852,9 @@ export default {
 
 .watch-tabs { flex-shrink: 0; }
 
+/* 移动基态：不限高不内滚（YTM 整页滚动语义——队列/歌词随页流）；
+   ≥901px 回栏内滚（flex:1+min-height:0+overflow，见 min-width 块） */
 .watch-side-body {
-  flex: 1;
-  min-height: 0;
-  scrollbar-gutter: stable;
-  overflow-y: auto;
   padding-top: 8px;
   /* 滚动影替尺：画布色盖片 local 随内容滚走 → 钉在顶缘的 scroll 影显露；
      回到顶时盖片重新遮住影——边界只在内容压在 tab 下时出现。
@@ -1060,41 +1032,41 @@ export default {
 /* 校准值键兼复位：按最大刻度 ±300.0s 预留宽，避免值跳变时整组位移 */
 .lyric-tool-reset { min-width: 56px; }
 
-/* 窄屏：单列——封面→信息 在上、tab 区在下 */
-@media (max-width: 900px) {
-  /* 单列态滚动移交 .watch-view——车道跟着滚动器走 */
-  .watch-view { overflow-y: auto; scrollbar-gutter: stable; }
+/* ── 宽屏增强（mobile-first 反转点 ≥901px，与模板 wide: 断点同源）──
+   双栏内滚态：本层不滚、左右栏各自管车道；此前移动基态曾在此犯
+   「flex:1+min-height:0 未解除 → 侧栏压成内滚细条」的错——
+   反转后限高只存在于宽屏态，单列从结构上不存在挤压路径 */
+@media (min-width: 901px) {
+  .watch-view { scrollbar-gutter: auto; }
 
-  .watch-layout {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    overflow: visible;
-    padding-top: 56px; /* 浮层顶行净空——单列时内容从键位下方起 */
+  /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
+     （旧浏览器不认两关键字写法时回退到上行 stable） */
+  .watch-main {
+    scrollbar-gutter: stable;
+    scrollbar-gutter: stable both-edges;
   }
 
-  .watch-main { overflow: visible; }
-  .watch-cover { width: min(64vw, 320px); }
-  /* 视频例外：单列态占满栏宽（整页滚动，高度不占视口预算） */
-  .watch-cover--video { width: 100%; }
+  .watch-cover { width: min(46vh, 420px); }
+  /* 视频是主内容、须明显大于方形封面 */
+  .watch-cover--video { width: min(100%, 1080px, calc(62vh * 16 / 9)); }
+  .watch-banner { width: min(46vh, 420px); }
 
-  .watch-side {
-    padding-left: 0;
-    padding-top: 10px;
-  }
-
-  /* 单列态栏界转横——同源羽化标尺 */
+  /* 栏界标尺回竖版（gap 24 → 栏内 padding-left 24：标尺两侧留白对称） */
   .watch-side::before {
-    left: 24px;
-    right: 24px;
-    top: 0;
-    bottom: auto;
-    width: auto;
-    height: 1.2px;
-    background: linear-gradient(to right, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
+    left: 0;
+    right: auto;
+    top: 24px;
+    bottom: 24px;
+    width: 1.2px;
+    height: auto;
+    background: linear-gradient(to bottom, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
   }
 
-  /* 不再限高内滚——YTM 是整页滚动，队列随页流；此时本栏不滚，死车道回收 */
-  .watch-side-body { max-height: none; scrollbar-gutter: auto; }
+  .watch-side-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
 }
 </style>
