@@ -480,7 +480,9 @@ export default {
     let songFormPrevFocus = null
 
     const openSongForm = (song = null, returnFocus = null) => {
-      if (songFormOpen.value) return
+      // busy 也挡：关窗不中止在途 submit（async 还在跑），此时重开会让旧
+      // submit 的成功路径 closeSongForm() 误杀新窗、finally 吞新 abort 句柄
+      if (songFormOpen.value || songFormBusy.value) return
       // 焦点锚三条路：菜单路径 emit 带的 ⋯键 ＞ 点歌台路径的 hero「添加歌曲」
       // 键（pickerPrevFocus）＞ 兜底 activeElement。两条直达路径的触发元素
       // （menuitem/创建键）随后都随弹层卸载——抓它们等于没抓
@@ -501,8 +503,15 @@ export default {
     }
 
     // 歌单被切走/置空时收口（picker 在 useAddToPlaylist 有同款 watcher）——
-    // 不关的话提交按「切换后的 selectedPlaylist」写错单的 trackOverrides
-    watch(selectedPlaylist, () => { if (songFormOpen.value) closeSongForm() })
+    // 不关的话提交按「切换后的 selectedPlaylist」写错单的 trackOverrides。
+    // 按 id 判切单：selectPlaylist 完成后 selectedPlaylist 同 id 重赋值
+    // （merged 新引用），按引用比对会把开着表单的窗误杀
+    watch(selectedPlaylist, (v, prev) => {
+      if (songFormOpen.value && String(v?.id) !== String(prev?.id)) {
+        abortSongFormUpload() // 关窗不中止的话 submit 继续跑成僵尸——写错单+杀新窗
+        closeSongForm()
+      }
+    })
 
     // 焦点归还：rAF（本帧渲染 patch 全落地后）+ 可见性门槛——同三窗不变量
     watch(songFormOpen, (open) => {
@@ -537,9 +546,17 @@ export default {
       return up.promise.finally(() => { if (songFormAbort === up.abort) songFormAbort = null })
     }
 
-    const submitSongForm = async ({ song, meta, files, setProgress }) => {
+    const submitSongForm = async ({ song, meta, files, setProgress, setError }) => {
+      // 自重入闸：组件 props.busy 经调度器异步刷新，同 tick 双击可穿组件内闸
+      if (songFormBusy.value) return
       songFormBusy.value = true
       let createdSongId = null
+      // 目标单按提交时刻锁定——上传可能跑数秒，期间切单（watcher 关窗但
+      // async 继续跑）后读 selectedPlaylist 会把编辑写进新歌单的 overrides
+      const submitPlId = selectedPlaylist.value?.id
+      // filePatch 提出 try 块：edit 中途失败/中止时已传完的 kind 服务端已换源，
+      // catch 里要把已成功的位照样应用（file 位与盘上漂移 = 换的封面永不显示）
+      const filePatch = {}
       try {
         const KIND_ORDER = ['audio', 'video', 'cover', 'lyrics']
         if (!song) {
@@ -550,17 +567,18 @@ export default {
             toast('请先打开一个本地歌单或已收藏歌单再新建歌曲', 'error')
             return
           }
-          let songId = null
+          // songId 客户端预生成（服务端认 FILE_TRACK_ID_RE 形态）：首个上传
+          // 「服务端已登记行但响应被 abort/断网截断」的窗口里 createdSongId 必须
+          // 已持真值——等响应才赋值那窗会漏掉孤儿行的回滚
+          const songId = `file_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`
+          createdSongId = songId
           const uploaded = {}
           for (const kind of KIND_ORDER) {
             const f = files[kind]
             if (!f) continue
-            const r = await runUpload({ kind, file: f, songId, onProgress: v => setProgress(kind, v) })
-            songId = r.songId
-            createdSongId = r.songId // catch 回滚用——首个上传即建立登记行
+            await runUpload({ kind, file: f, songId, onProgress: v => setProgress(kind, v) })
             uploaded[kind] = true
           }
-          if (!songId) return // 组件侧已拦——双保险
           const track = {
             id: songId,
             name: meta.name,
@@ -594,22 +612,26 @@ export default {
           toast(`已添加《${track.name}》`, 'success')
         } else {
           const sid = song.id
-          const filePatch = {}
           if (isFileTrackId(sid)) {
             for (const kind of KIND_ORDER) {
               const f = files[kind]
               if (!f) continue
               await runUpload({ kind, file: f, songId: sid, onProgress: v => setProgress(kind, v) })
               if (kind === 'audio') filePatch.hasAudio = true
-              if (kind === 'video') filePatch.hasVideo = true
+              // videoV/coverV 版本戳：<video>/<img> 按 URL 键缓存，同 URL 换源不重载
+              if (kind === 'video') { filePatch.hasVideo = true; filePatch.videoV = Date.now() }
               if (kind === 'cover') { filePatch.hasCover = true; filePatch.coverV = Date.now() }
               if (kind === 'lyrics') filePatch.hasLyrics = true
             }
+            // 正在播的曲换了词文件：主动热重载（切歌路径的 loadLyrics 不触发，
+            // 词源变了但 song.id 没变）
+            if (files.lyrics && String(currentSong.value?.id) === String(sid)) {
+              reloadLyrics()
+            }
           }
-          const plId = selectedPlaylist.value?.id
           // 未入库的歌单（未收藏远端单）没有可持久化的落点——applyTrackEdit
           // 静默 miss 不能配「已保存」的 toast，明说让用户先收藏
-          if (!plId || !applyTrackEdit(plId, sid, meta, Object.keys(filePatch).length ? filePatch : null)) {
+          if (!submitPlId || !applyTrackEdit(submitPlId, sid, meta, Object.keys(filePatch).length ? filePatch : null)) {
             toast('歌单未入库，编辑无法持久保存——请先收藏该歌单', 'error')
             return
           }
@@ -622,7 +644,15 @@ export default {
         if (!song && createdSongId) {
           deleteUploadedSong(createdSongId).catch(() => {})
         }
-        toast(e?.message === '已取消' ? '已取消上传' : (e?.message || '保存失败'), e?.message === '已取消' ? 'info' : 'error')
+        // edit 中途失败/中止：已传完的 kind 服务端已换源（事实先行），
+        // filePatch 不落库的话 file 位与盘上漂移——把已成功的位照样应用
+        if (song && isFileTrackId(song.id) && submitPlId && Object.keys(filePatch).length) {
+          try { applyTrackEdit(submitPlId, song.id, {}, filePatch) } catch { /* 落库失败不再级联 */ }
+        }
+        const msg = e?.message || '保存失败'
+        // 错误钉回表单（窗还活着时——abort 场景窗可能已被切单 watcher 关了）
+        if (e?.message !== '已取消') setError?.(msg)
+        toast(e?.message === '已取消' ? '已取消上传' : msg, e?.message === '已取消' ? 'info' : 'error')
       } finally {
         songFormBusy.value = false
         songFormAbort = null
@@ -638,9 +668,10 @@ export default {
         const inAdded = pl.addedTracks?.some(t => String(t.id) === String(songId))
         return n + (inTracks || inAdded ? 1 : 0)
       }, 0)
-      // 播放队列/历史里的 file_ 也算活引用——曲还在播就把资产删了，回放必 404
+      // 播放队列/历史里的 file_ 也算活引用——曲还在播/可点回就把资产删了必 404
       const inQueue = playingSongs.value?.some(t => String(t.id) === String(songId)) ? 1 : 0
-      return inLists + inQueue
+      const inHistory = playHistory.value?.some(t => String(t.id) === String(songId)) ? 1 : 0
+      return inLists + inQueue + inHistory
     }
 
     const handleRemoveSongFromPlaylist = async (song) => {
@@ -666,8 +697,13 @@ export default {
       const orphans = [...fileIds].filter(id => fileTrackRefCount(id) === 0)
       if (!orphans.length) return
       if (!await pixelConfirm(`歌单已删除。其中 ${orphans.length} 个本地上传曲目的服务器文件（音频/视频/歌词/封面）要一起删掉吗？`, { confirmText: '删除文件', danger: true })) return
-      for (const id of orphans) await deleteUploadedSong(id).catch(() => {})
-      toast('已删除服务器上的文件', 'success')
+      let ok = 0, failed = 0
+      for (const id of orphans) await deleteUploadedSong(id).then(() => { ok++ }).catch(() => { failed++ })
+      // 成败分报——全吞再报「已删除」是破坏性操作谎报（在途 409/限流 429 都可能）
+      toast(
+        failed ? `已删除 ${ok} 个文件，${failed} 个失败（可能在传输中或被限流）` : '已删除服务器上的文件',
+        failed ? 'error' : 'success'
+      )
     }
 
 
@@ -691,7 +727,7 @@ export default {
       currentTime, duration, volume, durationWarning, playbackError,
       playingSongs, queueTitle, queueOwner, playerIsTemp,
       lyrics, currentLyricIndex, lyricOffsetMs, loadingLyrics,
-      adjustLyricOffset, resetLyricOffset,
+      adjustLyricOffset, resetLyricOffset, reloadLyrics,
       playbackList, currentPlayingIndex, toggleShuffle,
       queueJump, queueRemove, queueMove, clearQueue,
       playNextInQueue, addToQueueEnd, saveQueueAsPlaylist, openQueueSource,

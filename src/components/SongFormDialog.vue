@@ -1,6 +1,8 @@
 <template>
   <Teleport to="body">
-    <div v-if="open" class="atp-overlay" @click="onCancel">
+    <!-- 遮罩 click 要带 mousedown 同源自证：input 里按下拖到遮罩松手，
+         click 会派发到公共祖先 overlay——重表单（四字段+四文件位）误关代价太高 -->
+    <div v-if="open" class="atp-overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
       <div
         class="atp-dialog sfd-dialog"
         role="dialog"
@@ -54,10 +56,11 @@
                 <button
                   type="button"
                   class="ink-btn ink-btn--sm"
+                  :aria-label="`${picked[slot.kind] ? '重选' : hasExisting(slot.kind) ? '更换' : '选择'}${slot.label}`"
                   :disabled="busy"
                   @click="fileRefs[slot.kind]?.click()"
                 >{{ picked[slot.kind] ? '重选' : (hasExisting(slot.kind) ? '更换' : '选择文件') }}</button>
-                <span class="sfd-file-name" :title="picked[slot.kind]?.name || ''">{{ picked[slot.kind]?.name || existingHint(slot.kind) }}</span>
+                <span class="sfd-file-name" :class="{ 'sfd-file-name--picked': picked[slot.kind] }" :title="picked[slot.kind]?.name || ''">{{ picked[slot.kind]?.name || existingHint(slot.kind) }}</span>
                 <button
                   v-if="picked[slot.kind]"
                   type="button"
@@ -110,6 +113,7 @@
 import { ref, reactive, computed, watch, nextTick } from 'vue'
 import PixelIcon from './PixelIcon.vue'
 import { isFileTrackId } from '../lib/song'
+import { parseDurationMs } from '../lib/format'
 
 // 上传文件位表：exts/maxBytes 与服务端 KIND_DEFS 白名单同口径（客户端预选 +
 // 预检——能选到必败类型/超体积只在提交后经服务端 400/413 才见太迟）
@@ -190,7 +194,7 @@ export default {
         const ext = (f.name.match(/\.([0-9A-Za-z]{1,8})$/)?.[1] || '').toLowerCase()
         if (!slot.accept.split(',').includes(`.${ext}`)) {
           picked[kind] = null
-          error.value = `${slot.label}不支持 .${ext}（允许：${slot.accept}）`
+          error.value = `${slot.label}不支持 ${ext ? `.${ext}` : '无扩展名'}（允许：${slot.accept}）`
           return
         }
         if (f.size > slot.maxBytes) {
@@ -200,26 +204,24 @@ export default {
         }
       }
       picked[kind] = f
+      delete progress[kind] // 重选清掉旧进度条——abort 残留/上次失败的都是误导
       error.value = ''
-    }
-
-    // 时长输入宽松解析：mm:ss / 纯秒 / m:ss.ms 都收，空=0（自动）
-    const parseDuration = (s) => {
-      const t = String(s || '').trim()
-      if (!t) return 0
-      const m = /^(\d{1,5})(?::([0-5]?\d)(?:\.(\d{1,2}))?)?$/.exec(t)
-      if (!m) return NaN
-      return (+m[1]) * (m[2] != null ? 60000 : 1000) + (m[2] ? +m[2] * 1000 : 0) + (m[3] ? +m[3].padEnd(2, '0') * 10 : 0)
     }
 
     const submit = () => {
       if (props.busy) return
       const name = form.name.trim()
       if (!name) { error.value = '歌名不能为空'; return }
-      const durationMs = parseDuration(form.duration)
+      const durationMs = parseDurationMs(form.duration)
       if (Number.isNaN(durationMs)) { error.value = '时长格式不对（用 mm:ss 或秒）'; return }
-      if (!isEdit.value && !picked.audio && !picked.video) {
-        error.value = '新建歌曲至少需要一个音频或视频文件'
+      // create 门槛=「至少一件浏览器可播工件」：audio 白名单全可播；video 里
+      // mkv 不解（Matroska 浏览器无解码器），mov 仅 Safari/部分 Chromium——
+      // mkv/mov 仍可传（存档/下载价值），但不满足「能播」的建曲底线
+      const playableVideo = picked.video && /\.(mp4|webm|mov)$/i.test(picked.video.name)
+      if (!isEdit.value && !picked.audio && !playableVideo) {
+        error.value = picked.video
+          ? 'MKV 容器浏览器无法播放——可作存档，但新建还需一个音频或 mp4/webm/mov 视频'
+          : '新建歌曲至少需要一个音频或视频文件'
         return
       }
       emit('submit', {
@@ -232,7 +234,18 @@ export default {
         },
         files: { ...picked },
         setProgress: (kind, v) => { progress[kind] = v },
+        // 提交失败把错误钉回窗内——toast 2.6s 就蒸发，表单却留着等重试
+        setError: (m) => { error.value = m },
       })
+    }
+
+    // 遮罩 drag-out 误关闸：只有「按下+抬起都在遮罩本体」才算主动点击关闭
+    let overlayDownSelf = false
+    const onOverlayDown = (e) => { overlayDownSelf = e.target === e.currentTarget }
+    const onOverlayClick = (e) => {
+      const isRealOverlayClick = overlayDownSelf && e.target === e.currentTarget
+      overlayDownSelf = false
+      if (isRealOverlayClick) onCancel()
     }
 
     const onCancel = () => { if (!props.busy) emit('close') }
@@ -242,7 +255,7 @@ export default {
     return {
       isEdit, canEditFiles, form, picked, progress, error,
       nameInput, fileRefs, fileSlots, hasExisting, existingHint,
-      onPick, submit, onCancel, onLeftBtn,
+      onPick, submit, onCancel, onLeftBtn, onOverlayDown, onOverlayClick,
     }
   },
 }
@@ -279,6 +292,8 @@ export default {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 已选文件名是该行最重信息——hint 态 ink-64 弱化，picked 态回满档 */
+.sfd-file-name--picked { color: var(--ink); }
 /* display:none 才能出 Tab 序（0 尺寸/opacity 都不出序）；label[for] 与
    程序化 .click() 对 display:none 的 input 照常有效 */
 .sfd-hidden { display: none; }

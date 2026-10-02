@@ -1497,6 +1497,13 @@ async function deletePlaylistDownloadedFiles(playlistId) {
   if (resolvedPlaylistId === null) {
     throw httpError(404, '歌单不存在');
   }
+  // local_uploads 伪歌单是全部 file_ 上传曲的资产登记锚——批量清文件等于
+  // 一键删光所有上传音源（DELETE /playlists/:id 的路由层拦截挡不住这条
+  // playlistId→files 路径）。服务层收敛成不变量：要删走 /uploads/:songId 逐曲删
+  const plRow = playlistsRepo.findPlaylistById(resolvedPlaylistId);
+  if (plRow?.neteasePlaylistId === 'local_uploads') {
+    throw httpError(400, '本地上传资产库不可批量清空');
+  }
   // 删除窗口锁（理由同 deleteTask）：cascade/队列排空期间控制器已移出 Map，
   // 窗口内下载中的任务会被错判为"未在跑"而删行——协程继续写盘成孤儿
   if (deletingPlaylists.has(resolvedPlaylistId)) {
@@ -1897,11 +1904,38 @@ async function shutdownAll() {
 // 空库（DB 丢失/新建）不判任何目录为孤儿——丢一个 DB 文件不该抹掉下载库；
 // symlink 一律跳过（lstat 不跟随）——downloads/<id>/audio 链到大盘时不得
 // 顺着链接删光目标目录；目录搬迁特征（登记路径全在 base 外）跳过并告警
+// uploads/ 半成品收割：POST /uploads 的 .part 残片在进程崩溃/SIGKILL 时无
+// catch 兜底（正常错误路径自收）。只删 *.part 且 mtime>60s——在写文件不吃。
+// 独立于下面的空库/空任务表护栏：.part 永不进登记行，任何 DB 态下删都安全
+function reapUploadPartFiles() {
+  let removed = 0;
+  const root = path.join(DOWNLOAD_BASE_DIR, 'uploads');
+  if (!fs.existsSync(root)) return removed;
+  for (const sub of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!sub.isDirectory()) continue;
+    const dir = path.join(root, sub.name);
+    // lstat 不跟随：symlink 子目录整段跳过——顺链接会删到目标目录的真文件
+    if (!fs.lstatSync(dir).isDirectory()) continue;
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.part')) continue;
+      const fp = path.join(dir, f);
+      try {
+        const st = fs.statSync(fp);
+        if (Date.now() - st.mtimeMs < 60000) continue;
+        fs.rmSync(fp, { force: true });
+        removed += 1;
+      } catch { /* 单文件失败不阻塞整体清扫 */ }
+    }
+  }
+  return removed;
+}
+
 function reapOrphanFiles() {
   let removedDirs = 0;
   let removedFiles = 0;
   try {
     if (!fs.existsSync(DOWNLOAD_BASE_DIR)) return { removedDirs, removedFiles };
+    removedFiles += reapUploadPartFiles();
     // 空库护栏：getDb 会对缺失/损坏的 sqlite 自动建空库——此时 playlists 表
     // 为空，若无护栏整棵 downloads 树都会被当作"无歌单"删掉。新装不会有
     // downloads 内容，跳过清扫零代价
@@ -2046,5 +2080,6 @@ module.exports = {
   deletePlaylistDownloadedFiles,
   recoverStaleStates,
   reapOrphanFiles,
-  shutdownAll
+  shutdownAll,
+  isShuttingDown: () => shuttingDown
 };

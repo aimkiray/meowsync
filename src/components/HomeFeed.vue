@@ -107,7 +107,7 @@
 
 <script>
 import { httpsCover } from '../lib/url'
-import { songArtists } from '../lib/song'
+import { songArtists, songCoverUrl } from '../lib/song'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -139,7 +139,8 @@ export default {
         const key = al?.id ?? al?.name
         if (!key || seen.has(key)) continue
         seen.add(key)
-        list.push({ key, name: al.name, picUrl: al.picUrl || '', artist: songArtists(song), song })
+        // songCoverUrl 收口：file_ 上传曲封面走 file 端点，provider 曲走 al.picUrl
+        list.push({ key, name: al.name, picUrl: songCoverUrl(song) || '', artist: songArtists(song), song })
       }
       return list.slice(0, 12)
     }

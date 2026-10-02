@@ -26,7 +26,7 @@ export function uploadFile({ kind, file, filename, songId, onProgress }) {
       let body = null
       try { body = JSON.parse(xhr.responseText) } catch { /* 非 JSON 错误页 */ }
       if (xhr.status >= 200 && xhr.status < 300 && body?.code === 200) {
-        resolve(body)
+        resolve(body.data) // {songId, kind, size}——包封同仓 {code,data} 惯例
       } else {
         reject(new Error(body?.message || `上传失败（HTTP ${xhr.status}）`))
       }
@@ -40,10 +40,17 @@ export function uploadFile({ kind, file, filename, songId, onProgress }) {
 }
 
 export async function deleteUploadedSong(songId) {
-  const r = await fetch(`${API_BASE_URL}/uploads/${encodeURIComponent(songId)}`, {
+  const doDelete = () => fetch(`${API_BASE_URL}/uploads/${encodeURIComponent(songId)}`, {
     method: 'DELETE',
     credentials: 'include',
   })
+  let r = await doDelete()
+  // abort→DELETE 竞态：xhr.abort 后服务端 inflight 锁要走「socket 断→流读失败
+  // →finally」才释放——DELETE 抢在释放前到吃 409 锁遗留孤儿行。锁极短，缓一拍重试
+  if (r.status === 409) {
+    await new Promise(res => setTimeout(res, 400))
+    r = await doDelete()
+  }
   // 与 uploadFile 同口径校验——401/404/409/429 不能报「已删除」（破坏性操作
   // 谎报结果 = 用户以为资产清了实际还在盘上）
   let body = null

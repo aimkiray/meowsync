@@ -11,7 +11,7 @@ import { formatTime } from '../lib/format'
 import { toast } from '../lib/feedback'
 import { glitchBurst } from '../lib/theme'
 import { httpsCover } from '../lib/url'
-import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl } from '../lib/song'
+import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song'
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
@@ -379,7 +379,7 @@ export function usePlayer({
       const pl = {
         id: `saved_queue_${Date.now()}`,
         name: `${queueTitle.value} · 队列`,
-        coverImgUrl: first?.al?.picUrl || first?.album?.picUrl || '',
+        coverImgUrl: songCoverUrl(first) || '',
         creator: { nickname: '我的队列' },
         trackCount: playingSongs.value.length,
         tracks: playingSongs.value.slice(),
@@ -1288,7 +1288,7 @@ export function usePlayer({
       if (song) {
         const artists = (song.ar || song.artists || [])
           .map(a => a?.name).filter(Boolean).join(', ')
-        const pic = song.al?.picUrl || song.album?.picUrl || ''
+        const pic = songCoverUrl(song) // file_ 上传曲封面走 file 端点，不只认 al.picUrl
         try {
           navigator.mediaSession.metadata = new MediaMetadata({
             title: song.name || '',
@@ -1392,6 +1392,9 @@ export function usePlayer({
       // 歌词态
       lyrics, currentLyricIndex, lyricOffsetMs, loadingLyrics,
       adjustLyricOffset, resetLyricOffset, scheduleLyricOffsetSave,
+      // file_ 曲换歌词文件后热重载：song.id 没变不会触发切歌路径的 loadLyrics，
+      // 编辑弹窗传完 .lrc 调它重拉。无 signal——靠 currentPlayingId 守卫丢弃过期回包
+      reloadLyrics: () => { if (currentSong.value) loadLyrics(currentSong.value) },
       // 队列操作
       playbackList, currentPlayingIndex, setQueue, toggleShuffle,
       queueJump, queueRemove, queueMove, clearQueue,

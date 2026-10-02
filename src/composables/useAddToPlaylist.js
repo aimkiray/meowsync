@@ -2,7 +2,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music'
 import { apiErrorMessage } from '../api/http'
 import { toast } from '../lib/feedback'
-import { isSingleSongShellId } from '../lib/song'
+import { isSingleSongShellId, songCoverUrl } from '../lib/song'
 import {
   extractBiliFavlistId, isBilibiliInput, extractYouTubePlaylistId,
   isYouTubeInput, extractYouTubeId, extractQQPlaylistId, isQQInput,
@@ -80,7 +80,7 @@ export function useAddToPlaylist({
     const song = addTargetSong.value
     if (!name || !song) return
     const pl = createLocalPlaylist(name, {
-      coverImgUrl: song.al?.picUrl || song.album?.picUrl || ''
+      coverImgUrl: songCoverUrl(song) // file_ 封面走 file 端点，不只认 al.picUrl
     })
     // pl 已是库内响应式代理——addSongToPlaylist 的字段赋值走依赖追踪
     if (pl) addSongToPlaylist(pl)
@@ -99,6 +99,10 @@ export function useAddToPlaylist({
 
   let pickerAbort = null // 挂在窗生命周期的 AbortController——关窗中止在途 resolve
   let pickerPrevFocus = null // 触发键（open 同步段捕获，同 atpPrevFocus 之理）
+  // picker 自己的归还锚另一份：prevFocus 在 open watcher 里被消费置 null
+  // （防重复归还），而 picker→songForm 跳转要在「picker 还开着」时读它——
+  // 单独存一份给 getPickerPrevFocus 透出
+  let pickerReturnFocus = null
 
   // 目标单的库对象（远端 merge 快照上的 addedTracks 不落库，必须落在库行上）
   const pickerLibPlaylist = computed(() =>
@@ -130,6 +134,7 @@ export function useAddToPlaylist({
     if (!pl || isSingleSongShellId(pl.id)) return
     // 触发键在互斥收口前的同步段捕获（watcher 内读会被兄弟窗的 cleanup 归还污染）
     pickerPrevFocus = document.activeElement
+    pickerReturnFocus = pickerPrevFocus
     gates.picker.invalidate() // 上一窗在途的搜索/解析作废
     pickerAbort?.abort()   // 连带中止在途 resolve 的 HTTP（服务端级联断上游）
     pickerAbort = null
@@ -160,7 +165,10 @@ export function useAddToPlaylist({
     if (!v) return
     const prevFocus = pickerPrevFocus
     pickerPrevFocus = null
-    onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus({ preventScroll: true }) })
+    onCleanup(() => {
+      pickerReturnFocus = null
+      if (prevFocus instanceof HTMLElement) prevFocus.focus({ preventScroll: true })
+    })
     await nextTick()
     songPickerInput.value?.focus()
   })
@@ -360,7 +368,8 @@ export function useAddToPlaylist({
     songPickerAdded, songPickerPending, songPickerInput, pickerTakenIds,
     openSongPicker, closeSongPicker, addPickedSong, songPickerSearch,
     // 触发键快照——picker→songForm 跳转时把归还目标传过去（picker 自己的
-    // prevFocus 即「添加歌曲」hero 键，关 songForm 还到它才算闭环）
-    getPickerPrevFocus: () => pickerPrevFocus,
+    // prevFocus 即「添加歌曲」hero 键，关 songForm 还到它才算闭环）。
+    // 读的是 pickerReturnFocus——prevFocus 在 open watcher 就被消费置 null 了
+    getPickerPrevFocus: () => pickerReturnFocus,
   }
 }

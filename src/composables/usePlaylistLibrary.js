@@ -389,6 +389,12 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       pl.tracks = [...(pl.tracks || []), entry]
     } else {
       pl.addedTracks = [...(pl.addedTracks || []), entry]
+      // 同 id 的历史 override 不随新追加复活（远端删过的曲重加进 addedTracks，
+      // merge 期旧 override 会遮蔽新对象——僵尸编辑复活）
+      if (pl.trackOverrides?.[sid] != null) {
+        const { [sid]: _drop, ...rest } = pl.trackOverrides
+        pl.trackOverrides = rest
+      }
     }
     pl.trackCount = (pl.trackCount ?? pl.tracks?.length ?? 0) + 1
     if (isOpenTarget) {
@@ -658,18 +664,36 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
           hit = true
         }
         if (!hit) {
-          // 远端成员：覆盖层 merge（不重建对象——其他曲的 override 不动）
+          // 远端成员：覆盖层 merge（不重建对象——其他曲的 override 不动）。
+          // 归属闸：sid 必须真在这张单（远端缓存成员或 lastRemoteIds 基线），
+          // 否则 override 键就是死数据——本地单到这儿更不该写（本地分支不消费
+          // overrides），直接 miss
+          if (isLocalPlaylistId(pl.id)) return false
+          const raw = pl.tracks?.find(t => String(t.id) === sid)
+          const memberOf = !!raw || (pl.lastRemoteIds || []).map(String).includes(sid)
+          if (!memberOf) return false
           const prev = pl.trackOverrides?.[sid] || {}
-          pl.trackOverrides = {
-            ...(pl.trackOverrides || {}),
-            [sid]: {
-              ...prev,
-              name: meta.name, artist: meta.artist, album: meta.album,
-              durationMs: meta.durationMs,
-              // coverUrl 是预留通道（filePatch 暂无产出）——undefined 死键会
-              // 清掉假想旧值，只在有值时写
-              ...(filePatch?.coverUrl ? { coverUrl: filePatch.coverUrl } : {}),
-            },
+          // 无改动不落 override——远端成员开编辑窗原样保存不该把字段钉死、
+          // 挡住远端口径的后续更新（与就地分支「无改动不打 custom」同口径）
+          const eff = raw ? applyTrackOverrides(raw, { [sid]: prev }) : null
+          const effArtist = (eff?.ar || []).map(a => a?.name).filter(Boolean).join(', ')
+          const overrideUnchanged = eff
+            && eff.name === meta.name
+            && effArtist === (meta.artist || '未知艺术家')
+            && (eff.al?.name || '') === meta.album
+            && (eff.dt || 0) === meta.durationMs
+          if (!overrideUnchanged) {
+            pl.trackOverrides = {
+              ...(pl.trackOverrides || {}),
+              [sid]: {
+                ...prev,
+                name: meta.name, artist: meta.artist, album: meta.album,
+                durationMs: meta.durationMs,
+                // coverUrl 是预留通道（filePatch 暂无产出）——undefined 死键会
+                // 清掉假想旧值，只在有值时写
+                ...(filePatch?.coverUrl ? { coverUrl: filePatch.coverUrl } : {}),
+              },
+            }
           }
           hit = true
         }
@@ -681,9 +705,18 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       const viewIdx = songs.value.findIndex(t => String(t.id) === sid)
       if (viewIdx !== -1 && String(selectedPlaylist.value?.id) === String(playlistId)) {
         const cur = songs.value[viewIdx]
-        apply(cur)
-        if (pl?.trackOverrides?.[sid]) {
+        const isRemoteOverride = pl && !isLocalPlaylistId(pl.id)
+          && pl.trackOverrides?.[sid]
+          && !(pl.addedTracks || []).some(t => String(t.id) === sid)
+        if (isRemoteOverride) {
+          // 远端成员：只换 override 渲染行——cur 与 pl.tracks 缓存成员同引用，
+          // apply(cur) 会把 custom/字段打进一个会被 detail 覆盖的对象（隐藏双写）
           songs.value[viewIdx] = applyTrackOverrides(cur, pl.trackOverrides)
+        } else {
+          apply(cur)
+          if (pl?.trackOverrides?.[sid]) {
+            songs.value[viewIdx] = applyTrackOverrides(cur, pl.trackOverrides)
+          }
         }
       }
       return hit

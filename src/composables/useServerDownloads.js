@@ -37,27 +37,18 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
   const canServerVideo = (song) =>
     Boolean(song?.bilibili?.hasVideo || song?.youtube?.hasVideo)
 
-  // file_ 曲浏览器下载：file 端点拿 blob → a[download]。扩展名从
-  // Content-Type 推（客户端不背上传扩展名）；识别不了回落 .bin
-  const FILE_EXT_BY_MIME = {
-    'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/flac': 'flac',
-    'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/webm': 'weba',
-    'video/mp4': 'mp4', 'video/webm': 'webm', 'video/x-matroska': 'mkv', 'video/quicktime': 'mov',
-  }
+  // file_ 工件下载走 <a href> 直链 + 服务端 Content-Disposition——blob 全量
+  // 进内存对 2GB 视频曲是实打实的内存压力。download 属性空值：同源时文件名
+  // 由 Content-Disposition 的 filename* 给（含正确扩展名）
   const downloadFileArtifact = async (song) => {
-    const res = await fetch(fileArtifactUrl(song.id), { credentials: 'include' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const blob = await res.blob()
-    const mime = (res.headers.get('content-type') || '').split(';')[0].trim()
-    const ext = FILE_EXT_BY_MIME[mime] || 'bin'
     const artists = song.ar?.map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
+    const base = `${artists} - ${song.name}`.replace(/[\\/:*?"<>|]/g, '_')
     const link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
-    link.download = `${artists} - ${song.name}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
+    link.href = `${fileArtifactUrl(song.id)}&download=${encodeURIComponent(base)}`
+    link.download = ''
     document.body.appendChild(link)
     link.click()
     link.remove()
-    setTimeout(() => URL.revokeObjectURL(link.href), 1000) // click 同步取流是异步——延迟吊销
   }
 
   // 直接下载（浏览器下载，最高码率）
