@@ -194,11 +194,12 @@ test('队列已完成曲「补视频」翻 pending 接管——不再幂等谎�
   // 完好音频工件保留——分段幂等只补视频相位，不整首重下
   assert.equal(row.audioPath, audioPath);
   assert.ok(existsSync(audioPath));
-  // 旧队列计数回调对齐（摘行后不再计入）
-  assert.equal(queuesRepo.findQueueById(queue.id).completedTasks, 0);
+  // 旧队列被摘空即收壳——completed 0/0 幽灵行不留（单行队列摘完即删）
+  assert.equal(queuesRepo.findQueueById(queue.id), null);
 
-  // 收尾：级联 abort 挂起的 standalone 视频协程
-  await del(queue.id);
+  // 收尾：壳已被收掉——另种一条队列走级联 abort 挂起的 standalone 视频协程
+  const sweeper = queuesRepo.createQueue({ playlistId: pl.id, name: 'sweep', status: 'completed', totalTasks: 0 });
+  await del(sweeper.id);
 });
 
 test('队列已完成曲补视频——videoPath 已在册时仍幂等返回不重复下', async () => {
@@ -291,6 +292,60 @@ test('幻影 videoPath 清册：登记但文件已删 + 不补视频的重跑清
   assert.equal(row.downloadVideo, false);
 
   // 收尾：种队列走级联 abort 挂起的 standalone 协程
+  const q = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 0 });
+  await del(q.id);
+});
+
+test('status/file 契约：body.data.task 嵌套形态 + kind=video 的 Range 与幻影 404', async () => {
+  // WatchView 本地档探测吃 {code,data:{downloaded,task}} 嵌套——读错层级
+  // （st.task）整段功能即死代码；此用例钉住服务端契约面
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777017', name: 'pl-contract' });
+  const task = tasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 'bv_BV7770170000', songName: '曲',
+    artist: '艺人', status: 'completed', downloadAudio: true, downloadVideo: true
+  });
+  const audioPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', 'bv_BV7770170000.mp3');
+  const videoPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'bv_BV7770170000.mp4');
+  mkdirSync(dirname(audioPath), { recursive: true });
+  mkdirSync(dirname(videoPath), { recursive: true });
+  writeFileSync(audioPath, 'audio-bytes');
+  writeFileSync(videoPath, 'video-bytes-0123456789');
+  tasksRepo.updateTask(task.id, {
+    audioPath, videoPath, videoMeta: { h: 1080, w: 1920, codec: 'avc1.640032', br: 5400000, source: 'adaptive' }
+  });
+
+  const st = await (await app.request(
+    `http://t/downloads/songs/bv_BV7770170000/status?playlistId=${pl.id}`)).json();
+  assert.equal(st.code, 200);
+  assert.equal(st.data.downloaded, true);
+  // toPublicTask 透相对路径（歌单目录相对）——前端探测消费的就是这个形态
+  assert.equal(st.data.task.videoPath, `${pl.id}/videos/bv_BV7770170000.mp4`);
+  assert.equal(st.data.task.videoMeta.h, 1080);
+
+  const file = await app.request(
+    `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.id}&kind=video`);
+  assert.equal(file.status, 200);
+  assert.match(file.headers.get('content-type') || '', /video\/mp4/);
+
+  const ranged = await app.request(
+    `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.id}&kind=video`,
+    { headers: { Range: 'bytes=0-4' } });
+  assert.equal(ranged.status, 206);
+  assert.equal(await ranged.text(), 'video');
+
+  // 幻影 videoPath（登记在库、文件外删）：status 照报登记值，file 404——
+  // 前端靠这个 404 走 error→在线流回落
+  const phantom = tasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 'bv_BV7770180000', songName: '幻',
+    artist: '', status: 'completed', downloadAudio: true, downloadVideo: true
+  });
+  tasksRepo.updateTask(phantom.id, {
+    videoPath: join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'gone.mp4')
+  });
+  const file404 = await app.request(
+    `http://t/downloads/songs/bv_BV7770180000/file?playlistId=${pl.id}&kind=video`);
+  assert.equal(file404.status, 404);
+
   const q = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 0 });
   await del(q.id);
 });

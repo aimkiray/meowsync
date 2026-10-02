@@ -80,8 +80,11 @@ app.get('/bilibili/resolve', async (c) => {
     });
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     const { audio, video } = pickStreams(playurl);
-    // hasVideo 只给「浏览器解得动的 avc1」——hevc/av01 流存在也不能宣称可视频
-    const avcStreams = (playurl?.dash?.video || []).filter(v => (v.codecs || '').startsWith('avc1'));
+    // hasVideo 只给「浏览器解得动的 avc1」——hevc/av01 流存在也不能宣称可视频；
+    // hasDownloadableVideo 口径放宽到「有任何视频轨」——下载链能合流非 avc1
+    // 档进 mp4，纯 hev1/av01 稿件（4K 独占编码）不该拿不到下载入口
+    const allVideo = Array.isArray(playurl?.dash?.video) ? playurl.dash.video : [];
+    const avcStreams = allVideo.filter(v => (v.codecs || '').startsWith('avc1'));
     // 无损/杜比轨可用性回给前端展示（下载 prefer=best 会实际命中）
     const dashAudio = playurl?.dash || {};
     const hasHiRes = [].concat(dashAudio.flac?.audio || [])
@@ -104,6 +107,7 @@ app.get('/bilibili/resolve', async (c) => {
       matched: toMatchedJson(matched),
       matchedBy,
       hasVideo: avcStreams.length > 0,
+      hasDownloadableVideo: allVideo.length > 0,
       hasHiRes,
       hasDolby,
       audioQuality: audio ? { id: audio.id, bandwidth: audio.bandwidth } : null,
@@ -309,13 +313,18 @@ app.get('/bilibili/stream', async (c) => {
       if (kind === 'video' && !streams.some(s => (s.codecs || '').startsWith('avc1'))) {
         return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
       }
-      const preferred = kind === 'video'
-        ? (streams.find(s => (s.codecs || '').startsWith('avc1')) || streams[0])
-        : streams[0];
-      const backups = Array.isArray(preferred?.backupUrl) ? preferred.backupUrl
-        : (Array.isArray(preferred?.backup_url) ? preferred.backup_url : []);
-      usable = [...new Set([preferred?.baseUrl, preferred?.base_url, ...backups]
-        .filter(u => typeof u === 'string' && u))].filter(passesWhitelist);
+      // 顶档镜像全被白名单拒（mcdn 非标端口等）时按档降级——preferred 取
+      // 「首个有可过白名单 URL 的档」而非无条件首档，否则冷稿件整档 404
+      const urlsOf = (s) => [s?.baseUrl, s?.base_url,
+        ...(Array.isArray(s?.backupUrl) ? s.backupUrl
+          : (Array.isArray(s?.backup_url) ? s.backup_url : []))]
+        .filter(u => typeof u === 'string' && u);
+      const usableTier = (s) => urlsOf(s).filter(passesWhitelist);
+      const tier = kind === 'video'
+        ? (streams.filter(s => (s.codecs || '').startsWith('avc1')).find(s => usableTier(s).length)
+          || streams.find(s => usableTier(s).length))
+        : streams.find(s => usableTier(s).length);
+      usable = tier ? [...new Set(usableTier(tier))] : [];
     }
     if (!usable.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
