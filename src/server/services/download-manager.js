@@ -1035,13 +1035,25 @@ async function cancelQueue(queueId) {
   return downloadQueuesRepo.findQueueById(queueId);
 }
 
-// DELETE /queues/:id：中止运行中的控制器、排空在途任务、清掉已落盘文件，再删行——
-// 不做这些会留下永远失联的孤儿文件；排空尤其关键：abort 后 processTask 的收尾
-// （路径写库/removePartial）是异步的，直接扫文件会漏掉"写完未记档"的落盘
+// DELETE /queues/:id：管理页的"删除歌单"语义是整个歌单下载足迹——队列行只是
+// 足迹的视图句柄。只删本队列会留下同歌单的 standalone 单曲任务（queue_id=NULL）、
+// 其他队列任务与歌单登记行：文件仍在盘上且收割器视其为在册，永不清理。
+// 因此 playlistId 在册的队列升级为歌单级联——排空该歌单全部控制器、删全部
+// 任务/队列/歌单行、事务后清文件（语义收敛进 deletePlaylistCascade）。
+// playlistId 悬空的孤儿队列走下方窄删：中止运行中的控制器、排空在途任务、
+// 清掉已落盘文件，再删行——不做这些会留下永远失联的孤儿文件；排空尤其关键：
+// abort 后 processTask 的收尾（路径写库/removePartial）是异步的，直接扫文件
+// 会漏掉"写完未记档"的落盘
 async function deleteQueue(queueId) {
   const queue = downloadQueuesRepo.findQueueById(queueId);
   if (!queue) {
     throw httpError(404, '队列不存在');
+  }
+  // 级联自带的 deletingPlaylists 锁与排空逻辑是窄删检查的超集——重复登记
+  // deletingQueues 反而会让"队列正在删除中"与"歌单正在删除中"两种 409 语义并存
+  if (queue.playlistId != null) {
+    await deletePlaylistCascade(queue.playlistId);
+    return;
   }
   // 可重入 + 排空窗口锁：并发 DELETE 不重复排空，且排空 await 期间拒绝
   // startQueue/retryTask 起新协程——否则行删后新协程仍在写盘，永久失联
@@ -1662,6 +1674,12 @@ async function deletePlaylistCascade(playlistId) {
     // 按网易云 id 记墓碑：级联删除期间到达的导入 upsert 会以同一
     // netease_playlist_id 重建新行（本地 id 全新，deletingPlaylists 拦不住）
     const tombstoneRow = playlistsRepo.findPlaylistById(playlistId);
+    // local_uploads 伪歌单是全部 file_ 上传资产的登记锚——级联会删行并清掉
+    // 所有上传音源（曲目还在但资产没了）。队列删除升级为级联后这条径也通到
+    // 这里，路由层拦截只管 DELETE /playlists/:id 一路——不变量收敛在服务层
+    if (tombstoneRow?.neteasePlaylistId === 'local_uploads') {
+      throw httpError(400, '本地上传资产库不可删除');
+    }
     if (tombstoneRow?.neteasePlaylistId) {
       tombstoneNeteaseId = String(tombstoneRow.neteasePlaylistId);
       // 级联进行中 = Infinity（在途墓碑），见 deletion-locks.js 生命周期说明

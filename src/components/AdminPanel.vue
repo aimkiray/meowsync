@@ -377,7 +377,13 @@ async function retryQueue(queueId) {
 }
 
 async function deleteQueue(queueId) {
-  if (!await pixelConfirm('确定要删除这个队列吗？', { confirmText: '删除', danger: true })) return;
+  // 服务端把队列删除升级为歌单级联：清掉该歌单全部已下载资源（含单曲任务、
+  // 其他队列与登记行）——确认文案必须说清，否则"删队列"的预期与实际不符
+  const name = queues.value.find(q => q.id === queueId)?.name;
+  if (!await pixelConfirm(
+    `确定要删除${name ? `「${name}」` : '这个歌单'}吗？其全部已下载资源将一并清理`,
+    { confirmText: '删除', danger: true }
+  )) return;
 
   try {
     await downloadsApi.deleteQueue(queueId);
