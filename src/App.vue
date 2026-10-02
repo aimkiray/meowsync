@@ -187,7 +187,7 @@
             <button
               v-for="pl in addablePlaylists"
               :key="pl.id"
-              class="pg-menu-item atp-item"
+              class="pg-menu-item"
               :title="`加入《${pl.name}》`"
               @click="addSongToPlaylist(pl)"
             >
@@ -204,7 +204,7 @@
               placeholder="新建歌单…"
               maxlength="40"
               aria-label="新歌单名称"
-              @keydown.enter="!$event.isComposing && createPlaylistAndAdd()"
+              @keydown.enter="!($event.isComposing || $event.keyCode === 229) && createPlaylistAndAdd()"
             />
             <button
               class="ink-btn ink-btn--sm"
@@ -238,7 +238,7 @@
               placeholder="歌单名…"
               maxlength="40"
               aria-label="歌单名称"
-              @keydown.enter="!$event.isComposing && submitCreatePlaylist()"
+              @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submitCreatePlaylist()"
             />
             <button
               class="ink-btn ink-btn--sm"
@@ -272,7 +272,7 @@
               v-model="songPickerQuery"
               placeholder="搜歌名 / 粘歌曲链接、ID 或 B 站/YouTube 链接"
               aria-label="搜索或粘贴歌曲"
-              @keydown.enter="!$event.isComposing && songPickerSearch()"
+              @keydown.enter="!($event.isComposing || $event.keyCode === 229) && songPickerSearch()"
             />
             <button
               class="ink-btn ink-btn--sm"
@@ -435,10 +435,7 @@ export default {
     // YTM 建单即落的同款行为）。selectPlaylistAndShow 处理 view 切换/导航栈
     const submitCreatePlaylist = async () => {
       const pl = createLocalPlaylist(createPlaylistName.value)
-      if (!pl) {
-        toast('歌单名不能为空', 'error')
-        return
-      }
+      if (!pl) return // 空名静默——与 atp 新建行同律（disabled 态已表达）
       closeCreatePlaylist()
       toast(`已创建歌单《${pl.name}》`, 'success')
       await selectPlaylistAndShow(pl)
@@ -573,12 +570,9 @@ export default {
         if (e.key === 'Escape') resolveConfirm(false) // 兜底：焦点逃出 overlay 时仍能关
         return
       }
-      // 添加到歌单模态同款冻结——否则 Tab 到框外后 /、f、空格全部穿透生效
-      if (addTargetSong.value) {
-        if (e.key === 'Escape') addTargetSong.value = null
-        return
-      }
-      // 点歌台模态同款冻结。Esc 连框内焦点也收（输入态下 Esc 的直觉就是关窗）；
+      // 三弹窗冻结：三窗互斥本无叠加态，但防线按堆叠序顶层优先
+      //（模板序 atp:172 < create:221 < picker:256——万一叠加，Esc 先关看得见的）
+      // 点歌台模态冻结。Esc 连框内焦点也收（输入态下 Esc 的直觉就是关窗）；
       // 非 Esc 键直接 return——空格/斜杠不会穿透到全局快捷键
       if (songPickerOpen.value) {
         if (e.key === 'Escape') closeSongPicker()
@@ -587,6 +581,11 @@ export default {
       // 新建歌单模态同款冻结
       if (createPlaylistOpen.value) {
         if (e.key === 'Escape') closeCreatePlaylist()
+        return
+      }
+      // 添加到歌单模态同款冻结——否则 Tab 到框外后 /、f、空格全部穿透生效
+      if (addTargetSong.value) {
+        if (e.key === 'Escape') addTargetSong.value = null
         return
       }
       if (e.key === 'Escape') {
@@ -868,9 +867,9 @@ export default {
       createPlaylistOpen,
       createPlaylistName,
       createPlaylistInput,
-      openCreatePlaylist,
       closeCreatePlaylist,
       submitCreatePlaylist,
+      // 裸 openCreatePlaylist 不导出——唯一入口必须过 handleOpenCreatePlaylist 的互斥收口
       handleOpenCreatePlaylist,
       removeSongFromPlaylist,
       syncPlaylist,

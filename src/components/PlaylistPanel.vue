@@ -436,17 +436,20 @@ export default {
   padding: 20px 0 0; /* 与主区首行同轴：全站 masthead→内容 = 20 */
 }
 
-/* 头行：label 左 + 新建键右——右缘与行块可视缘同轴（行块左右内收 12px） */
+/* 头行：label 左 + 新建键右。右缘 22px 的取舍：overlay 滚动条平台（macOS 默认）
+   对齐行内 ⋯ 列缘（行块内收 12 + .pl-actions right:10）；经典滚动条平台
+   （scrollbar-gutter 车道 10px 把整行左推）恰好对齐行块可视缘——两平台都落在
+   真实可视缘上，而非追逐随 gutter 漂移的同一坐标 */
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-right: 12px;
+  padding-right: 22px;
   flex-shrink: 0;
 }
 
 .panel-label {
-  padding: 8px 12px 10px; /* 与栏内 12px 内容轴同缘（封面左缘） */
+  padding: 8px 12px 10px; /* 与行块内收缘同轴（12px；封面左缘再内进 16px） */
   flex-shrink: 0;
 }
 
@@ -483,7 +486,8 @@ export default {
   /* 窄轨行块 ~55px：操作簇在该态已 display:none（style.css ~:738），
      64px 保留位无物可让——回收为对称 6px 让封面居中 */
   .app-sidebar:not(.app-sidebar--open) .pl-row-main { padding: 9px 6px; }
-  /* 窄轨 label/行内件全藏后头行只剩 + 键——与居中封面列对位 */
+  /* 窄轨 label/行内件全藏后头行只剩 + 键——与居中封面列对位
+     （经典滚动条平台 scrollbar-gutter:auto 吐车道，封面心漂 ~5px，可接受） */
   .app-sidebar:not(.app-sidebar--open) .panel-head { justify-content: center; padding-right: 0; }
 }
 

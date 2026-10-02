@@ -31,18 +31,24 @@ export function useAddToPlaylist({
   const addTargetSong = ref(null)
   const newPlaylistName = ref('')
   const atpInput = ref(null)
+  // 触发键在 open 同步段捕获——不能挪进 watcher 里读 document.activeElement：
+  // 互斥收口（如 picker-over-atp）时兄弟窗的 cleanup 归还先跑（watcher id 序），
+  // watcher 内读到的会是被污染的旧窗触发键而非本次真实触发键
+  let atpPrevFocus = null
   // 可选目标排除 single_song_ 分享壳：它会被「超 10 个剪枝」自动销毁，
   // 用户加进去的曲会随壳静默消失（数据丢失通道）
   const addablePlaylists = computed(() =>
     userPlaylists.value.filter(p => !isSingleSongShellId(p.id))
   )
   const openAddToPlaylist = (song) => {
-    closeSongPicker() // 与点歌台显式互斥（行菜单在模态外层但防御性收口）
-    closeCreatePlaylist() // 与新建歌单弹窗同款互斥
+    // 校验先于互斥收口（与 openSongPicker 同律）：无效曲不该碰弹窗态
     if (!song || song.id == null) {
       toast('这首歌无法加入歌单', 'error')
       return
     }
+    atpPrevFocus = document.activeElement
+    closeSongPicker() // 与点歌台显式互斥（行菜单在模态外层但防御性收口）
+    closeCreatePlaylist() // 与新建歌单弹窗同款互斥
     newPlaylistName.value = ''
     addTargetSong.value = song
   }
@@ -50,8 +56,10 @@ export function useAddToPlaylist({
   // Esc 由 onGlobalKeydown 统一冻结处理，此处只管焦点归还（还给触发键）
   watch(addTargetSong, async (v, _prev, onCleanup) => {
     if (!v) return
-    const prevFocus = document.activeElement
-    onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus() })
+    const prevFocus = atpPrevFocus
+    atpPrevFocus = null
+    // preventScroll：归还不该滚页面（互斥关闭路径上归还的只是中间态，滚了是闪动）
+    onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus({ preventScroll: true }) })
     await nextTick()
     atpInput.value?.focus()
   })
@@ -90,6 +98,7 @@ export function useAddToPlaylist({
   const songPickerInput = ref(null)
 
   let pickerAbort = null // 挂在窗生命周期的 AbortController——关窗中止在途 resolve
+  let pickerPrevFocus = null // 触发键（open 同步段捕获，同 atpPrevFocus 之理）
 
   // 目标单的库对象（远端 merge 快照上的 addedTracks 不落库，必须落在库行上）
   const pickerLibPlaylist = computed(() =>
@@ -119,6 +128,8 @@ export function useAddToPlaylist({
   const openSongPicker = () => {
     const pl = selectedPlaylist.value
     if (!pl || isSingleSongShellId(pl.id)) return
+    // 触发键在互斥收口前的同步段捕获（watcher 内读会被兄弟窗的 cleanup 归还污染）
+    pickerPrevFocus = document.activeElement
     gates.picker.invalidate() // 上一窗在途的搜索/解析作废
     pickerAbort?.abort()   // 连带中止在途 resolve 的 HTTP（服务端级联断上游）
     pickerAbort = null
@@ -147,8 +158,9 @@ export function useAddToPlaylist({
   // Esc 由 onGlobalKeydown 统一冻结；焦点归还与 atp 同款
   watch(songPickerOpen, async (v, _prev, onCleanup) => {
     if (!v) return
-    const prevFocus = document.activeElement
-    onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus() })
+    const prevFocus = pickerPrevFocus
+    pickerPrevFocus = null
+    onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus({ preventScroll: true }) })
     await nextTick()
     songPickerInput.value?.focus()
   })

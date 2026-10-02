@@ -318,8 +318,9 @@ export function usePlayer({
     const playPlaylistFromSidebar = async (playlist) => {
       const ok = await selectPlaylist(playlist)
       if (!ok) return
+      // 判空早于关抽屉/进 watch——no-op 点击不该带着合上抽屉的副作用
+      if (!playPlaylist(false)) return // 空单：toast 在 playPlaylist 内
       setSidebarOpen(false)
-      if (!playPlaylist(false)) return // 空单：不进 watch（toast 在 playPlaylist 内）
       enterWatch() // 点歌单播放即进入 watch 页（YTM 同款导航）
     }
 
