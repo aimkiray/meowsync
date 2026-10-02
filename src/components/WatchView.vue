@@ -962,7 +962,9 @@ export default {
   background: var(--paper);
 }
 
-/* 队列页脚：发丝顶隔把操作/偏好收成一条栏，与行列表的记账线呼应 */
+/* 队列页脚：发丝顶隔把操作/偏好收成一条栏，与行列表的记账线呼应。
+   顶隔贴死末行底缘（margin 悬空会让线读成「最后一卡的下边框带间隙」）；
+   行间分隔靠 .queue-row + .queue-row 的 border-top 同口径 */
 .watch-queue-foot {
   display: flex;
   align-items: center;
@@ -971,7 +973,6 @@ export default {
   flex-wrap: wrap;
   padding: 10px 4px 12px;
   border-top: var(--hairline-soft);
-  margin-top: 6px;
 }
 /* 空队列只剩自动播放开关——去掉顶隔线并居中，不吊在角落 */
 .watch-queue-foot--empty { border-top: none; justify-content: center; }
