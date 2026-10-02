@@ -273,7 +273,7 @@
             @keydown.enter="openSourceFromMenu"
             @keydown.space.prevent="openSourceFromMenu"
           >
-            <PixelIcon name="external" :size="13" /> 回源 · {{ menuSourceName }}
+            <PixelIcon name="external" :size="13" /> {{ menuSourceName }}
           </div>
 
           <!-- 获取源文件（浏览器下载）。菜单目标从全量 props.songs 查，不依赖渲染切片 -->
