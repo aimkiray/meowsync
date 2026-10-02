@@ -958,7 +958,12 @@ export default {
           toggleMute()
           break
         case 'f': case 'F':
-          if (currentSong.value) isFullscreenPlayerOpen.value = !isFullscreenPlayerOpen.value
+          // 元素级全屏（watch 视频）激活中：沉浸层是 top layer 之下的 Vue
+          // overlay——开着完全不可见，退出视频全屏后落在沉浸式层是事故
+          if (currentSong.value
+            && !(document.fullscreenElement || document.webkitFullscreenElement)) {
+            isFullscreenPlayerOpen.value = !isFullscreenPlayerOpen.value
+          }
           break
         case 'q': case 'Q':
           if (currentSong.value) openWatchPanel('queue')

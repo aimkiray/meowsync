@@ -10,41 +10,54 @@
     <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
       <!-- ══ 左栏 ══ -->
       <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
-        <div ref="coverWrapRef" class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }">
+        <div ref="coverWrapRef" class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }"
+          @mousemove="pokeFsControls" @pointerdown="pokeFsControls">
           <!-- 外部导入曲视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
-               音频模式回落网易云匹配封面——不加载视频即省流量 -->
-          <video
-            v-if="mediaVideoActive"
-            ref="mediaVideoRef"
-            :key="mediaVideoKey"
-            class="watch-cover watch-cover--video"
-            :src="mediaVideoUrl"
-            :aria-label="`视频画面：${currentSong?.name || ''}`"
-            muted
-            playsinline
-            preload="auto"
-            @error="onMediaVideoError"
-          ></video>
-          <!-- 悬停控制层：中央半透明播放/暂停走全局 toggle-play（视频元素静音、
-               时钟锚 Howler——syncMediaVideo 自动跟着收放）；右下全屏锁在 wrap
-               上做元素级 fullscreen——控制层随 wrap 一起进全屏仍可用 -->
-          <div v-if="mediaVideoActive" class="watch-video-controls">
-            <button
-              type="button"
-              class="watch-video-toggle"
+               音频模式回落网易云匹配封面——不加载视频即省流量。
+               video+控制层同包一个 template v-if：img/fallback 的 v-else 链
+               只挂这一处条件——控制层条件将来分叉不会误把 img 带出场 -->
+          <template v-if="mediaVideoActive">
+            <video
+              ref="mediaVideoRef"
+              :key="mediaVideoKey"
+              class="watch-cover watch-cover--video"
+              :src="mediaVideoUrl"
+              :aria-label="`视频画面：${currentSong?.name || ''}`"
+              muted
+              playsinline
+              preload="auto"
+              disablepictureinpicture
+              disableremoteplayback
+              @error="onMediaVideoError"
               @click="$emit('toggle-play')"
-              :title="isPlaying ? '暂停' : '播放'"
-              :aria-label="isPlaying ? '暂停' : '播放'"
-            ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="26" /></button>
-            <button
-              type="button"
-              class="watch-video-fs"
-              @click="toggleVideoFullscreen"
-              :title="videoFullscreen ? '退出全屏' : '全屏'"
-              :aria-label="videoFullscreen ? '退出全屏' : '视频全屏'"
-              :aria-pressed="videoFullscreen"
-            ><PixelIcon name="expand" :size="14" /></button>
-          </div>
+            ></video>
+            <!-- 悬停控制层：中央半透明播放/暂停走全局 toggle-play（视频元素静音、
+                 时钟锚 Howler——syncMediaVideo 自动跟着收放）；右下全屏锁在 wrap
+                 上做元素级 fullscreen——控制层随 wrap 一起进全屏仍可用。
+                 全屏态改 --on class 驱动露出（mousemove/pointerdown 戳醒+自隐）——
+                 光标停在屏内 :hover 恒真，CSS 恒显会把中央键全程压在画面上 -->
+            <div class="watch-video-controls" :class="{ 'watch-video-controls--on': fsControlsOn }">
+              <button
+                type="button"
+                class="watch-video-toggle"
+                @click="$emit('toggle-play')"
+                :title="isPlaying ? '暂停' : '播放'"
+                :aria-label="isPlaying ? '暂停' : '播放'"
+              ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="26" /></button>
+              <!-- iPhone Safari 无元素级 Fullscreen API（只有 video 专属的
+                   webkitEnterFullscreen——静音视频进原生全屏会与 Howler 音频脱钩），
+                   能力缺失时藏键好过留颗死键 -->
+              <button
+                v-if="canElementFs"
+                type="button"
+                class="watch-video-fs"
+                @click="toggleVideoFullscreen"
+                :title="videoFullscreen ? '退出全屏' : '全屏'"
+                :aria-label="videoFullscreen ? '退出全屏' : '视频全屏'"
+                :aria-pressed="videoFullscreen"
+              ><PixelIcon name="expand" :size="14" /></button>
+            </div>
+          </template>
           <img
             v-else-if="coverUrl"
             :src="httpsCover(coverUrl)"
@@ -646,25 +659,67 @@ export default {
         }
       } catch { /* 全屏被权限/iframe 策略拒——静默，icon 态随 fullscreenchange 不翻 */ }
     }
-    // Esc/手势/系统级退出不经过本键——以 fullscreenchange 同步 icon 态
+    // Esc/手势/系统级退出不经过本键——以 fullscreenchange 同步 icon 态；
+    // 元素身份闸：别家元素（如 video 右键菜单的原生全屏）进全屏时 icon
+    // 不该翻成「退出」态
     const onFullscreenChange = () => {
-      videoFullscreen.value = !!(document.fullscreenElement || document.webkitFullscreenElement)
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement
+      videoFullscreen.value = fsEl === coverWrapRef.value
+    }
+    // iPhone Safari 无元素级 Fullscreen API（webkitEnterFullscreen 只挂
+    // video 元素）——能力探测一次定案，不支持就不渲染全屏键
+    const canElementFs = typeof document !== 'undefined'
+      && !!(document.documentElement.requestFullscreen
+        || document.documentElement.webkitRequestFullscreen)
+    // 请求被拒走 fullscreenerror 而非 change——promise reject 已静默，
+    // 这里补用户可见反馈（事件 target 是请求元素，只认自己 wrap 的）
+    const onFullscreenError = (e) => {
+      if (e?.target === coverWrapRef.value) toast('全屏请求被浏览器拒绝', 'error')
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('fullscreenchange', onFullscreenChange)
       window.addEventListener('webkitfullscreenchange', onFullscreenChange)
+      window.addEventListener('fullscreenerror', onFullscreenError)
+      window.addEventListener('webkitfullscreenerror', onFullscreenError)
       onBeforeUnmount(() => {
         window.removeEventListener('fullscreenchange', onFullscreenChange)
         window.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+        window.removeEventListener('fullscreenerror', onFullscreenError)
+        window.removeEventListener('webkitfullscreenerror', onFullscreenError)
+        clearTimeout(fsHideTimer)
+        // 卸载先于 DOM 移除——主动退掉自持的全屏，不等浏览器对脱离
+        // 元素的事后清理（行为更确定，少一帧悬空全屏帧）
+        const fsEl = document.fullscreenElement || document.webkitFullscreenElement
+        if (fsEl === coverWrapRef.value) {
+          try {
+            // 同步错误 try 兜，异步 reject（竞态下已先退）走 catch——不留 unhandled
+            (document.exitFullscreen || document.webkitExitFullscreen)
+              ?.call(document)?.catch?.(() => {})
+          } catch { /* 退出被拒无碍——元素马上移除，UA 会兜底清场 */ }
+        }
       })
     }
-    // 全屏中视频模式消失（切到无视频曲/关视频开关/换源失败闩封面）——控制层
-    // 随之卸载，留在全屏只剩 Esc 一条路；主动退全屏交还页面
-    watch(mediaVideoActive, (on) => {
-      if (!on && (document.fullscreenElement || document.webkitFullscreenElement)) {
-        try { (document.exitFullscreen || document.webkitExitFullscreen)?.call(document) }
-        catch { /* 已在退出流程中 */ }
-      }
+    // 全屏态控制层自隐：桌面光标停在屏内 :hover 恒真、触屏 hover:none 恒真——
+    // CSS 恒显会把中央圆键全程压在画面正中；改 JS 驱动：mousemove/pointerdown
+    // 戳醒 + 播放中 2.6s 自隐；暂停态常显——画面静止时控件是唯一状态读数
+    const fsControlsOn = ref(false)
+    let fsHideTimer = 0
+    const pokeFsControls = () => {
+      if (!videoFullscreen.value) return
+      fsControlsOn.value = true
+      clearTimeout(fsHideTimer)
+      if (props.isPlaying) fsHideTimer = setTimeout(() => { fsControlsOn.value = false }, 2600)
+    }
+    watch(videoFullscreen, (on) => {
+      clearTimeout(fsHideTimer)
+      // 进全屏走 poke（亮一轮＋播放中顺便挂上自隐计时）；退出即清态
+      if (on) pokeFsControls()
+      else fsControlsOn.value = false
+    })
+    watch(() => props.isPlaying, (p) => {
+      if (!videoFullscreen.value) return
+      if (p) pokeFsControls()                        // 恢复播放→重新计自隐
+      else { clearTimeout(fsHideTimer); fsControlsOn.value = true } // 暂停→常显
     })
     // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
     const mediaVideoFailed = ref(false)
@@ -762,6 +817,24 @@ export default {
     // 复位键用 mediaVideoUrl——同曲换源（B 站换P/YouTube 重导）时新源该重新尝试
     watch(mediaVideoUrl, () => { mediaVideoFailed.value = false })
 
+    // 全屏中视频模式确定消失（切到无视频曲/关视频开关/换源失败闩封面）——控制层
+    // 随之卸载，留在全屏只剩 Esc 一条路；主动退全屏交还页面。
+    // 双信号并查 dlProbeSettled：切到需探测的 bili/yt 曲时探测窗内 active 也会
+    // 翻 false（URL 空串），探测在途不算「视频没了」——否则会连播到视频曲必退
+    // 全屏；元素身份同查：只退自己 wrap 的全屏，不碰别家（原生全屏等）的
+    // 【序】必须列在 mediaVideoActive/dlProbeSettled/mediaVideoUrl 三 const 之后——
+    // 非 immediate watch 注册即 eager 求值 oldValue，靠前会 TDZ
+    watch([mediaVideoActive, dlProbeSettled], () => {
+      if (mediaVideoActive.value || !dlProbeSettled.value) return
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement
+      if (fsEl === coverWrapRef.value) {
+        try {
+          (document.exitFullscreen || document.webkitExitFullscreen)
+            ?.call(document)?.catch?.(() => {})
+        } catch { /* 已在退出流程中 */ }
+      }
+    })
+
     // 音画同步：视频元素静音播放，时钟完全听 Howler——每帧对比 currentTime，
     // 漂移超阈值才 seek（RAF 每帧触发，此处只做减法+偶尔 seek，开销可忽略）。
     // 顺带 reconcile paused 态——watch(isPlaying) 只在翻转时触发，组件重挂载
@@ -856,6 +929,9 @@ export default {
       coverWrapRef,
       videoFullscreen,
       toggleVideoFullscreen,
+      canElementFs,
+      fsControlsOn,
+      pokeFsControls,
       videoOn,
       mediaVideoFailed,
       mediaVideoActive,
@@ -932,6 +1008,8 @@ export default {
   object-fit: contain;
   image-rendering: auto;
   background: #000;
+  /* 点画面=播放/暂停——禁掉双击缩放手势带来的 ~300ms 点击延迟 */
+  touch-action: manipulation;
 }
 
 /* 视频态 wrap 必须占满栏宽：wrap 在 align-items:center 的 flex 栏里是
@@ -978,9 +1056,13 @@ export default {
   transition: background .15s ease, transform .15s ease;
 }
 .watch-video-toggle:hover { background: rgba(0, 0, 0, .75); transform: scale(1.06); }
-.watch-video-toggle:focus-visible {
+/* 焦点环白描边在亮画面（MV 高光帧）下不可见——外圈补暗晕保证双底色可读；
+   box-shadow 随 border-radius 走，圆键得圆环 */
+.watch-video-toggle:focus-visible,
+.watch-video-fs:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, .75);
 }
 
 /* 右下全屏键：同款半透明墨底，方角小键贴视频下缘 */
@@ -1001,13 +1083,11 @@ export default {
   transition: background .15s ease;
 }
 .watch-video-fs:hover { background: rgba(0, 0, 0, .75); }
-.watch-video-fs:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: 2px;
-}
 
 /* 元素全屏态：wrap 黑场居中，视频吃满屏（16:9 信箱由 object-fit:contain
-   兜住，宽高 100% 只为占满容器）；悬停控制层此时仍在屏内可用 */
+   兜住，宽高 100% 只为占满容器）；悬停控制层此时仍在屏内可用。
+   :-webkit-full-screen 是 Safari≤16.3 的旧伪类——不能并进 :fullscreen
+   选择器组（不识别的伪类会让整条规则作废），单列一份 */
 .watch-cover-wrap:fullscreen {
   background: #000;
   display: flex;
@@ -1017,6 +1097,32 @@ export default {
 .watch-cover-wrap:fullscreen .watch-cover--video {
   width: 100%;
   height: 100%;
+  border: 0; /* .watch-cover 的墨发丝框在纯黑场里只剩噪点 */
+}
+.watch-cover-wrap:-webkit-full-screen {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.watch-cover-wrap:-webkit-full-screen .watch-cover--video {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* 全屏态露出移交 JS（--on class）：光标停屏内 :hover 恒真 + 触屏
+   hover:none 恒真——CSS 恒显会全程遮挡；焦点留在键上（focus-within）
+   时仍强制露出，键盘用户不丢焦点载体 */
+.watch-cover-wrap:fullscreen .watch-video-controls,
+.watch-cover-wrap:-webkit-full-screen .watch-video-controls {
+  opacity: 0;
+}
+.watch-cover-wrap:fullscreen .watch-video-controls--on,
+.watch-cover-wrap:-webkit-full-screen .watch-video-controls--on,
+.watch-cover-wrap:fullscreen:focus-within .watch-video-controls,
+.watch-cover-wrap:-webkit-full-screen:focus-within .watch-video-controls {
+  opacity: 1;
 }
 
 /* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
