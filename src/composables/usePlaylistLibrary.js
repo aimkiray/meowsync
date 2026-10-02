@@ -4,6 +4,7 @@ import { downloadsApi } from '../api/downloads'
 import { readJSON, writeJSON } from '../lib/storage'
 import { toast } from '../lib/feedback'
 import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides } from '../lib/song'
+import { applyTrackOrder, groupTracksByArtist } from '../lib/track-order'
 
 const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
 const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
@@ -90,7 +91,9 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
           tracks: Array.isArray(p.tracks) ? p.tracks.map(healExternalAr) : p.tracks,
           addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks.map(healExternalAr) : undefined,
           removedTrackIds: Array.isArray(p.removedTrackIds) ? p.removedTrackIds : undefined,
-          lastRemoteIds: Array.isArray(p.lastRemoteIds) ? p.lastRemoteIds : undefined
+          lastRemoteIds: Array.isArray(p.lastRemoteIds) ? p.lastRemoteIds : undefined,
+          // 曲序覆盖层同净化：非数组/脏条目（旧数据/手工改坏）清掉而不是带病进合并
+          trackOrder: Array.isArray(p.trackOrder) ? p.trackOrder.map(String) : undefined
         }))
       userPlaylists.value.push(...validPlaylists)
       if (healedAny) savePlaylistsToStorage() // 自愈结果落盘——下次启动不再依赖重算
@@ -273,8 +276,12 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
         // trackOverrides：远端曲目的本地编辑覆盖层（远端单不可就地改写——下次
         // detail 拉取即覆盖）。addedTracks 成员是本地对象就地编辑不走这层
         const overrides = libPl?.trackOverrides ?? playlist.trackOverrides
-        songs.value = [...visibleTracks, ...addedTracks]
-          .map(t => applyTrackOverrides(t, overrides))
+        // trackOrder 覆盖层在墓碑过滤/追加/override 之后应用——成员集是远端裁决
+        // 的，顺序才归本地；未登记成员（远端新曲/追加）按合并序落尾
+        songs.value = applyTrackOrder(
+          [...visibleTracks, ...addedTracks].map(t => applyTrackOverrides(t, overrides)),
+          libPl?.trackOrder
+        )
         console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
 
         // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
@@ -438,6 +445,43 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
     savePlaylistsToStorage()
     toast(`已从《${libPl.name}》移除「${song.name}」`, 'success')
+  }
+
+  // ── 曲序 ──
+  // 持久化落点两系：本地单重排 pl.tracks（数组本身就是序；镜像上传按此序落
+  // 服务端 position，下载队列跟随）；远端单写 trackOrder 覆盖层（成员归远端、
+  // 顺序归本地）。非库预览单没有持久化落点——与 applyTrackEdit 同口径拒绝。
+  // ordered 须是当前渲染的全量曲目对象列（排序模式绕 VIP 过滤/渐进窗渲染）
+  const applySongsOrder = (ordered) => {
+    const pl = selectedPlaylist.value
+    if (!pl || pl.id == null || !Array.isArray(ordered)) return false
+    const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id))
+    if (!libPl) return false
+    songs.value = ordered
+    if (isLocalPlaylistId(libPl.id)) {
+      libPl.tracks = [...ordered]
+    } else {
+      libPl.trackOrder = ordered.map(t => String(t.id))
+    }
+    savePlaylistsToStorage()
+    return true
+  }
+
+  // 行级位移（SongList 排序模式的拖拽/↑↓ emit）：from→to 全量下标直译
+  const moveSongInPlaylist = (from, to) => {
+    const list = [...songs.value]
+    if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return
+    const [moved] = list.splice(from, 1)
+    list.splice(to, 0, moved)
+    applySongsOrder(list)
+  }
+
+  // 「相同作者归拢」：主唱名聚类排序（组间拼音序、组内保原序）后落同一写通道
+  const groupSongsByArtist = () => {
+    if (songs.value.length < 2) return
+    if (applySongsOrder(groupTracksByArtist(songs.value))) {
+      toast('已按歌手归拢排序', 'success')
+    }
   }
 
   // 手动同步：静默重拉远端歌单并报告增量。每次拉取都刷新 lastRemoteIds 基线，
@@ -758,6 +802,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     appendSongToLibraryPlaylist,
     removeSongFromPlaylist,
     applyTrackEdit,
+    moveSongInPlaylist,
+    groupSongsByArtist,
     syncPlaylist,
   }
 }

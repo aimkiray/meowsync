@@ -85,6 +85,8 @@
           @sync-playlist="syncPlaylist"
           @collect-playlist="collectSelectedPlaylist"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
+          @move-song="moveSongInPlaylist"
+          @group-by-artist="groupSongsByArtist"
         />
         <PlaylistGrid
           v-else-if="centerView === 'search'"
@@ -467,6 +469,7 @@ export default {
       addPlaylistToLibrary, removePlaylistFromLibrary, handlePlaylistDownloadsDeleted,
       collectSelectedPlaylist, selectedPlaylistInLibrary,
       selectPlaylist, appendSongToLibraryPlaylist, removeSongFromPlaylist, applyTrackEdit, syncPlaylist,
+      moveSongInPlaylist, groupSongsByArtist,
       loadDefaultPlaylists,
       createPlaylistOpen, createPlaylistName, createPlaylistInput,
       openCreatePlaylist, closeCreatePlaylist, createLocalPlaylist,
@@ -1202,6 +1205,8 @@ export default {
       // 裸 openCreatePlaylist 不导出——唯一入口必须过 handleOpenCreatePlaylist 的互斥收口
       handleOpenCreatePlaylist,
       removeSongFromPlaylist,
+      moveSongInPlaylist,
+      groupSongsByArtist,
       syncPlaylist,
       httpsCover
     }
