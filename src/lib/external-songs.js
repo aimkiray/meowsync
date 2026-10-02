@@ -31,7 +31,11 @@ export const buildBilibiliSong = (data) => ({
   dt: (data.duration || 0) * 1000,
   bilibili: {
     bvid: data.bvid, cid: data.cid, page: data.page || 1,
-    hasVideo: !!data.hasVideo, title: data.title,
+    hasVideo: !!data.hasVideo,
+    // 下载口径独立于浏览器直放口径——纯非 avc1 稿件（4K 独占 hev1/av01）
+    // 无在线流可放但下载链可合流进 mp4，入口不能跟着 hasVideo 一起灭
+    hasDownloadableVideo: !!data.hasDownloadableVideo,
+    title: data.title,
     // 封面持久化进 providerData——bv_ 封面不能由 bvid 推导（yt_ 可以），
     // 存量加载自愈/口径偏离修正都要靠它
     cover: data.cover || '',
@@ -59,6 +63,7 @@ export const buildYouTubeSong = (data) => ({
   dt: (data.duration || 0) * 1000,
   youtube: {
     videoId: data.videoId, hasVideo: !!data.hasVideo,
+    hasDownloadableVideo: !!data.hasDownloadableVideo,
     // authorClean 持久化：存量自愈/行内展示不必再剥 ' - Topic'/'VEVO'
     title: data.title, author: data.author, authorClean: data.authorClean || null,
     matchedBy: data.matchedBy || null

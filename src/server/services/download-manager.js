@@ -1267,6 +1267,7 @@ const dispatchStandalone = (task) => {
       status: 'pending',
       progress: 0,
       errorMessage: null,
+      completedAt: null,
       retryCount: 0
     });
     retryAfter.delete(task.id);
@@ -1280,10 +1281,16 @@ const dispatchStandalone = (task) => {
     // 409 是幂等语义，行归在跑的协程管——标 failed 会污染别人的任务
     if (error?.status === 409 && Array.isArray(error?.lockKeys)) {
       try {
-        downloadTasksRepo.updateTask(task.id, {
-          status: 'failed',
-          errorMessage: '输出路径被其他下载任务占用，请稍后重试'
-        });
+        // 复查防 clobber：entry 摘除与本 catch 之间是微任务窗——新请求
+        // 可能已完成整轮 dispatch 起了新协程，盲标 failed 会作废它
+        const cur = standaloneRunning.has(task.id) ? null
+          : downloadTasksRepo.findTaskById(task.id);
+        if (cur && cur.status === 'pending') {
+          downloadTasksRepo.updateTask(task.id, {
+            status: 'failed',
+            errorMessage: '输出路径被其他下载任务占用，请稍后重试'
+          });
+        }
       } catch { /* 行可能已被删 */ }
       return;
     }
@@ -1339,11 +1346,19 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       if (options.downloadVideo === true && isExternalSongId(songId) && !queueTask.videoPath) {
         // 摘出=改写队列成员关系——活体队列（含控制器排空/僵尸态）按非完好
         // 分支同款 ownerActive 纪律 409，等队列终结再补；否则任务会从
-        // 运行中队列的详情页飞行中消失，且 standalone 绕过队列并发限额
+        // 运行中队列的详情页飞行中消失，且 standalone 绕过队列并发限额。
+        // DB 判据只认 running/paused——pending 无控制器的队列（建了没启动/
+        // 重启复位残留）没在跑任何东西，拿它挡单曲下载会让用户永远 409
         const owner = downloadQueuesRepo.findQueueById(queueTask.queueId);
         const ownerBusy = queueHasLiveController(queueTask.queueId);
-        if (ownerBusy || (owner && ['pending', 'running', 'paused'].includes(owner.status))) {
+        if (ownerBusy || (owner && ['running', 'paused'].includes(owner.status))) {
           throw httpError(409, '该歌曲所属下载队列仍在运行，请等队列结束后再补视频');
+        }
+        // 纵深防御闸：standaloneRunning 里的行 queueId 恒为 null（dispatch
+        // 前置先摘队列），正常不可达——但不变量若被未来写入点破坏，翻
+        // pending 在跑行会 clobber 协程且 dispatch 409 静默吞成行卡死
+        if (standaloneRunning.has(queueTask.id)) {
+          throw httpError(409, '该歌曲正在下载中');
         }
         getDb().transaction(() => {
           downloadTasksRepo.updateTask(queueTask.id, {
@@ -1358,11 +1373,13 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
             retryCount: 0,
             providerData: providerDataOf(track)
           });
-          recountQueueCounters(queueTask.queueId);
           // 摘空壳回收：单曲队列摘完留 completed 0/0 幽灵壳——start/retry
-          // 均不可用的纯残留顺手删（无活控制器已由上方 ownerBusy 闸保证）
+          // 均不可用的纯残留顺手删（无活控制器已由上方 ownerBusy 闸保证）；
+          // 非空才 recount——对将删行写计数是浪费
           if (owner && downloadTasksRepo.listTasksByQueue(queueTask.queueId).length === 0) {
             try { downloadQueuesRepo.deleteQueue(queueTask.queueId); } catch { /* 壳已消失 */ }
+          } else {
+            recountQueueCounters(queueTask.queueId);
           }
         })();
         retryAfter.delete(queueTask.id);
@@ -1372,12 +1389,19 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     }
     const owner = downloadQueuesRepo.findQueueById(queueTask.queueId);
     // 内存控制器是真判据：队列 status 已 cancelled 但协程仍在排空/僵尸集里跑
-    // 时（不可中止上游调用超 DRAIN_TIMEOUT），接管会双调度同批文件
+    // 时（不可中止上游调用超 DRAIN_TIMEOUT），接管会双调度同批文件。
+    // DB 判据只认 running/paused——pending 无控制器=建了没启动/重启复位
+    // 残留，不是活跃调度源，拿它挡单曲下载会永久锁死成员行
     const ownerBusy = queueHasLiveController(queueTask.queueId);
     const ownerActive = ownerBusy
-      || (owner && ['pending', 'running', 'paused'].includes(owner.status));
+      || (owner && ['running', 'paused'].includes(owner.status));
     if (ownerActive) {
       throw httpError(409, '该歌曲所属下载队列仍在运行，请等队列结束后再重试');
+    }
+    // 纵深防御闸（与补视频摘出同口径）：standaloneRunning 行 queueId 恒
+    // null 让这恒假，但不变量破了时接管会清掉协程正在写的路径字段
+    if (standaloneRunning.has(queueTask.id)) {
+      throw httpError(409, '该歌曲正在下载中');
     }
     // 属主队列已终结（cancelled/failed）或行已消失：接管该行原地重跑——
     // 否则被弃队列的歌从此永远无法单曲下载。置回 standalone 语义，不给死队列写计数。
@@ -1393,8 +1417,14 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
         downloadVideo: options.downloadVideo === true && isExternalSongId(queueTask.songId),
         providerData: providerDataOf(track)
       }));
-      // 死队列不再走收尾重算：接管会让其计数器永久虚高，顺手回调对齐
-      recountQueueCounters(queueTask.queueId);
+      // 摘空壳回收与补视频摘出同口径——单任务终态队列被接管摘空后不留
+      // 0/0 幽灵行；非空才 recount（死队列不再走收尾重算，接管会让计数
+      // 永久虚高，回调对齐）
+      if (owner && downloadTasksRepo.listTasksByQueue(queueTask.queueId).length === 0) {
+        try { downloadQueuesRepo.deleteQueue(queueTask.queueId); } catch { /* 壳已消失 */ }
+      } else {
+        recountQueueCounters(queueTask.queueId);
+      }
     })();
     retryAfter.delete(queueTask.id);
     // 行清后删文件：清路径却不删文件会让旧文件（可能不同扩展名）成运行期孤儿
@@ -1461,6 +1491,12 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       ...(options.downloadCover === false
         && task.coverPath && !pathPresent(task.coverPath)
         ? { coverPath: null } : {}),
+      // audioPath 幻影同口径——只在音频相位显式关闭时清（开着会由
+      // processTask 的 existsSync 幂等真补回）；fileSize 是音频档的
+      // 体积登记，连同清掉
+      ...(options.downloadAudio === false
+        && task.audioPath && !pathPresent(task.audioPath)
+        ? { audioPath: null, fileSize: null } : {}),
       providerData: providerDataOf(track)
     }) || task;
   } else {

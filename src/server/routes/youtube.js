@@ -200,6 +200,7 @@ app.get('/youtube/playlist', async (c) => {
           songName,
           candidates,
           hasVideo: true,          // browse 不给 streamingData——avc1 可用性乐观值，流链兜底降级
+          hasDownloadableVideo: true, // 同口径乐观值——纯 webm/非 avc1 稿件也亮下载入口
           matched: null,
           matchedBy: null,
         });

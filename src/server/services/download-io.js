@@ -83,8 +83,10 @@ function fatalError(message) {
 // 本地确定性失败 errno：磁盘满/配额满/只读文件系统/路径形态冲突/路径超长——
 // 重试 N 次结果必然相同，全部映射成 fatal 终止重试。
 // 不在列的：EPERM/EACCES（Windows 上杀软扫描、句柄释放延迟是瞬时的）、
-// EMFILE/ENFILE（fd 压力随并发释放自愈）——这些重试可能成功
-const FATAL_ERRNOS = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'ENAMETOOLONG', 'EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'ELOOP', 'EFBIG']);
+// EMFILE/ENFILE（fd 压力随并发释放自愈）——这些重试可能成功；
+// EFBIG 也不在——它是「这条候选体积超限」的候选级确定性（FAT32 落盘目录
+// 4GiB 天花板），后面的低档候选可能装得下，穿透会把它们一并判死
+const FATAL_ERRNOS = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'ENAMETOOLONG', 'EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'ELOOP']);
 // POSIX 上 EACCES 是真权限拒绝（确定性），Windows 上它常与 EPERM 同义瞬时
 if (process.platform !== 'win32') FATAL_ERRNOS.add('EACCES');
 function errnoToFatal(error) {
@@ -94,6 +96,16 @@ function errnoToFatal(error) {
     error.fatal = true;
   }
   return error;
+}
+
+// 任务级穿透谓词：fatal+errno = 本地确定性病（换 URL/换档结果必然相同），
+// 候选循环不该为它空转，直接穿透到任务判死。
+// 只 fatal 无 errno 的（上游 4xx、ERR_DNS_GUARD_BLOCKED 的 socket 层拦截）
+// 是「这条 URL 死了」的候选级语义——backup_url/下一档还有机会，不能穿透。
+// DNS guard 的 .code 是合成标记不是本地 errno——round-robin/split-horizon
+// DNS 下一条 URL 被拦不该剥夺兄弟候选的机会，与 URL 阶段拦截同级
+function penetratesCandidates(e) {
+  return Boolean(e?.fatal && e?.code && e.code !== 'ERR_DNS_GUARD_BLOCKED');
 }
 
 // 不可中止的上游阶段（解锁/取链）拖住协程可达数分钟，远超删除/停机排空预算——
@@ -355,6 +367,7 @@ module.exports = {
   sanitizeFilename,
   fatalError,
   errnoToFatal,
+  penetratesCandidates,
   throwIfAborted,
   describeError,
   fetchStream,

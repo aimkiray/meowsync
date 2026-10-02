@@ -142,3 +142,37 @@ test('pickStreamList video 默认档不受 anyCodec 影响——播放链 avc1 �
   const out2 = pickStreamList({ dash: { video: [hev4k] } }, 'video', 'best');
   assert.equal(out2[0].id, 120);
 });
+
+test('pickStreamList 健壮性：null 条目与 codecs 缺失档不炸穿排序', async () => {
+  const { pickStreamList } = require('../src/server/lib/bilibili.js');
+  const avc = { id: 80, codecs: 'avc1.640028', mimeType: 'video/mp4', width: 1920, height: 1080, bandwidth: 2e6, baseUrl: 'https://a/80' };
+  // dash.video 含 null/字符串脏条目——裸 .bandwidth/.codecs 会 TypeError
+  const out = pickStreamList({ dash: { video: [null, avc, 'garbage'] } }, 'video', 'best');
+  assert.equal(out[0].id, 80);
+  const out2 = pickStreamList({ dash: { video: [null, avc] } }, 'video', 'best', { anyCodec: true });
+  assert.equal(out2[0].id, 80);
+  // audio 路同口径：null 条目不能把 prefer=best 排序炸掉
+  const audio = pickStreamList({ dash: { audio: [null, { id: 1, bandwidth: 1e5, baseUrl: 'https://a/a' }] } }, 'audio', 'best');
+  assert.equal(audio[0].id, 1);
+});
+
+test('pickStreamList audio prefer=best：dolby 单对象形态参与排序', async () => {
+  const { pickStreamList } = require('../src/server/lib/bilibili.js');
+  const aac = { id: 30280, bandwidth: 2e5, baseUrl: 'https://a/aac' };
+  const dash = {
+    audio: [aac],
+    dolby: { type: 2, audio: { id: 30251, bandwidth: 4e5, baseUrl: 'https://a/ec3' } }, // 单对象非数组
+  };
+  const out = pickStreamList({ dash }, 'audio', 'best');
+  assert.equal(out[0].id, 30251);
+  assert.equal(out[1].id, 30280);
+});
+
+test('flatUrls：同值 baseUrl/base_url 去重 + 非字符串 backup 过滤', async () => {
+  const { flatUrls } = require('../src/server/lib/bilibili.js');
+  const out = flatUrls({
+    baseUrl: 'https://a/main', base_url: 'https://a/main', // 上游常同值双发
+    backup_url: ['https://a/bk1', null, 42, 'https://a/bk1'],
+  });
+  assert.deepEqual(out.map(x => x.url), ['https://a/main', 'https://a/bk1']);
+});

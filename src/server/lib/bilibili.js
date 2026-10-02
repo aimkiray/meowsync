@@ -152,7 +152,9 @@ function pickStreamList(data, kind, prefer = '', opts = {}) {
   const dash = data?.dash || {};
   if (kind === 'audio') {
     const audioArr = Array.isArray(dash.audio) ? dash.audio : [];
-    const regular = audioArr.slice().sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+    // 数组条目可能是 null/非对象（上游脏数据）——sort 比较器与视频路同
+    // 口径用 ?.，否则一个脏条目就 TypeError 炸穿整个 502
+    const regular = audioArr.slice().sort((a, b) => (b?.bandwidth || 0) - (a?.bandwidth || 0));
     if (prefer === 'best') {
       // hasUrl 认全部四个地址字段——只带 backupUrl 的条目不该被预过滤丢档
       const hasUrl = (f) => f && (f.baseUrl || f.base_url
@@ -163,7 +165,7 @@ function pickStreamList(data, kind, prefer = '', opts = {}) {
       // dolby.audio 同 flac 兼容单对象/数组形态——routes 的 hasDolby 谓词
       // 两种形态都认，这里漏单对象会让「有杜比标」的稿件下载不到杜比轨
       const dolby = [].concat(dash.dolby?.audio || [])
-        .filter(hasUrl).sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+        .filter(hasUrl).sort((a, b) => (b?.bandwidth || 0) - (a?.bandwidth || 0));
       return [...flac, ...dolby, ...regular];
     }
     return regular;
@@ -240,13 +242,16 @@ async function resolveBiliPlayurl({ bvid, cid, page = 1, signal, fnval = 4048, q
   }
 }
 
-// 单档流的主链+备份链摊平成顺序候选——端口策略/边缘拒绝按档降级
+// 单档流的主链+备份链摊平成顺序候选——端口策略/边缘拒绝按档降级。
+// 上游常同时下发值相同的 baseUrl 与 base_url——URL 级去重防同链烧两次
+// 候选位；主 url 在前、backup 殿后
 const flatUrls = (s, extra = {}) =>
-  [s?.baseUrl, s?.base_url,
-    ...(Array.isArray(s?.backupUrl) ? s.backupUrl
-      : (Array.isArray(s?.backup_url) ? s.backup_url : []))]
-    .filter(u => typeof u === 'string' && u)
-    .map(url => ({ url, ...extra }));
+  [...new Set(
+    [s?.baseUrl, s?.base_url,
+      ...(Array.isArray(s?.backupUrl) ? s.backupUrl
+        : (Array.isArray(s?.backup_url) ? s.backup_url : []))]
+      .filter(u => typeof u === 'string' && u)
+  )].map(url => ({ url, ...extra }));
 
 // 音频下载候选：prefer='best' 让 Hi-Res/杜比轨排在常规 AAC 前（BILI_COOKIE
 // 有权限才下发，否则自然回落最高码率 AAC）。
@@ -306,6 +311,7 @@ module.exports = {
   // 其他 fnval/非 api 域请求会错配或泄 cookie；公共面只有 BILI_PUBLIC_HEADERS
   BILI_COOKIE, BILI_PUBLIC_HEADERS, BILI_TIMEOUT_MS, QN_HEIGHT,
   biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView,
+  flatUrls,
   viewQuery, parseBvid, resolveBiliLink, isBiliLinkHost, resolveBiliAudio, resolveBiliMedia,
   BVID_RE,
 };

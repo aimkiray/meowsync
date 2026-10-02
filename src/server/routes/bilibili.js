@@ -7,7 +7,7 @@ const { tokenMatches } = require('../lib/token-eq');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
-const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, viewQuery, resolveBiliLink, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
+const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, flatUrls, viewQuery, resolveBiliLink, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
 
 const app = new Hono();
 
@@ -84,11 +84,16 @@ app.get('/bilibili/resolve', async (c) => {
     // hasDownloadableVideo 口径放宽到「有任何视频轨」——下载链能合流非 avc1
     // 档进 mp4，纯 hev1/av01 稿件（4K 独占编码）不该拿不到下载入口
     const allVideo = Array.isArray(playurl?.dash?.video) ? playurl.dash.video : [];
-    const avcStreams = allVideo.filter(v => (v.codecs || '').startsWith('avc1'));
-    // 无损/杜比轨可用性回给前端展示（下载 prefer=best 会实际命中）
+    // 原始上游数组可能含 null 条目——与 lib 侧同口径 ?.（裸 .codecs
+    // 会 TypeError 炸穿 502）
+    const avcStreams = allVideo.filter(v => (v?.codecs || '').startsWith('avc1'));
+    // 无损/杜比轨可用性回给前端展示（下载 prefer=best 会实际命中）——
+    // URL 判定与 lib hasUrl 同口径：只带 backup_url 的轨也算可用
     const dashAudio = playurl?.dash || {};
-    const hasHiRes = [].concat(dashAudio.flac?.audio || [])
-      .some(f => f && (f.baseUrl || f.base_url));
+    const hasAnyUrl = (f) => f && (f.baseUrl || f.base_url
+      || (Array.isArray(f.backupUrl) && f.backupUrl.length)
+      || (Array.isArray(f.backup_url) && f.backup_url.length));
+    const hasHiRes = [].concat(dashAudio.flac?.audio || []).some(hasAnyUrl);
     const hasDolby = (dashAudio.dolby?.type || 0) > 0
       && (Array.isArray(dashAudio.dolby?.audio) ? dashAudio.dolby.audio.length > 0 : !!dashAudio.dolby?.audio);
     return c.json({
@@ -107,7 +112,8 @@ app.get('/bilibili/resolve', async (c) => {
       matched: toMatchedJson(matched),
       matchedBy,
       hasVideo: avcStreams.length > 0,
-      hasDownloadableVideo: allVideo.length > 0,
+      // 含 URL 的条目才算可下载——null/无地址脏条目不亮假入口
+      hasDownloadableVideo: allVideo.some(v => v && (v.baseUrl || v.base_url)),
       hasHiRes,
       hasDolby,
       audioQuality: audio ? { id: audio.id, bandwidth: audio.bandwidth } : null,
@@ -180,6 +186,7 @@ app.get('/bilibili/favlist', async (c) => {
           owner: m.upper?.name || '',
           songName: extractSongName([], m.title),
           hasVideo: true,               // favlist 不给 playurl——avc1 可用性按乐观值，流链兜底降级
+          hasDownloadableVideo: true,   // 同口径乐观值——纯非 avc1 稿件也能亮下载入口
           matched: null,
           matchedBy: null,
         });
@@ -288,6 +295,7 @@ app.get('/bilibili/stream', async (c) => {
         const pd = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=1&qn=80&fourk=1`, c.req.raw.signal);
         const durl = Array.isArray(pd.durl) ? pd.durl : [];
         if (durl.length === 1 && (QN_HEIGHT[pd.quality] || 0) > dashBestH) {
+          // durl 的主链字段是 .url 而非 baseUrl——与 flatUrls 形态不同，不复用
           durlUrls = [durl[0]?.url, ...(Array.isArray(durl[0]?.backup_url) ? durl[0].backup_url : [])]
             .filter(u => typeof u === 'string' && u);
         }
@@ -310,20 +318,14 @@ app.get('/bilibili/stream', async (c) => {
     if (!usable.length) {
       // dash 无 avc1 且 durl 没接住——hevc/av01 原样塞给 <video> 是黑屏，
       // 按无流 404（与 resolve 的 hasVideo 口径一致）
-      if (kind === 'video' && !streams.some(s => (s.codecs || '').startsWith('avc1'))) {
+      if (kind === 'video' && !streams.some(s => (s?.codecs || '').startsWith('avc1'))) {
         return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
       }
       // 顶档镜像全被白名单拒（mcdn 非标端口等）时按档降级——preferred 取
-      // 「首个有可过白名单 URL 的档」而非无条件首档，否则冷稿件整档 404
-      const urlsOf = (s) => [s?.baseUrl, s?.base_url,
-        ...(Array.isArray(s?.backupUrl) ? s.backupUrl
-          : (Array.isArray(s?.backup_url) ? s.backup_url : []))]
-        .filter(u => typeof u === 'string' && u);
-      const usableTier = (s) => urlsOf(s).filter(passesWhitelist);
-      const tier = kind === 'video'
-        ? (streams.filter(s => (s.codecs || '').startsWith('avc1')).find(s => usableTier(s).length)
-          || streams.find(s => usableTier(s).length))
-        : streams.find(s => usableTier(s).length);
+      // 「首个有可过白名单 URL 的档」而非无条件首档，否则冷稿件整档 404。
+      // 到这里的 video 档必然全 avc1（无 avc1 上面已 404），无需再滤编码
+      const usableTier = (s) => flatUrls(s).map(x => x.url).filter(passesWhitelist);
+      const tier = streams.find(s => usableTier(s).length);
       usable = tier ? [...new Set(usableTier(tier))] : [];
     }
     if (!usable.length) {
