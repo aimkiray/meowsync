@@ -452,6 +452,83 @@ export function usePlaylistLibrary({ gates, playingPlaylistId }) {
     }
   }
 
+    // URL歌单加载（playlistIds 由 readShareParams 在挂载处一趟解析后传入）
+    const loadDefaultPlaylists = async (urlPlaylistIds) => {
+      try {
+        console.log('🎵 检查是否需要加载URL歌单...')
+
+        // 如果没有URL参数，跳过加载
+        if (urlPlaylistIds.length === 0) {
+          console.log('✅ 无URL歌单参数，跳过加载')
+          return
+        }
+
+        console.log('🔗 检测到URL歌单参数，加载指定歌单:', urlPlaylistIds)
+        const defaultPlaylistIds = urlPlaylistIds
+        
+        const removedIds = getRemovedDefaultPlaylists()
+        
+        // 过滤掉已移除的歌单ID和已存在的歌单ID；URL 内重复ID先去重，避免并行加载后重复push
+        const validIds = [...new Set(defaultPlaylistIds)].filter(id => {
+          if (removedIds.includes(id)) {
+            console.log('⏭️ 跳过已移除的默认歌单:', id)
+            return false
+          }
+          
+          // 检查是否已存在相同ID的歌单（确保ID类型一致）
+          const exists = userPlaylists.value.find(p => String(p.id) === String(id))
+          if (exists) {
+            console.log('⏭️ 跳过已存在的歌单:', id, exists.name)
+            return false
+          }
+          
+          return true
+        })
+        
+        if (validIds.length === 0) {
+          console.log('✅ 所有默认歌单都已被用户删除，跳过加载')
+          return
+        }
+        
+        console.log('🌐 加载歌单:', validIds)
+        
+        // 并行加载所有歌单
+        const playlistPromises = validIds.map(async (id) => {
+          try {
+            const playlist = await loadPlaylistById(id)
+            if (playlist) {
+              playlist.isDefault = true
+              console.log('✅ 默认歌单加载成功:', playlist.name)
+              return playlist
+            }
+          } catch (error) {
+            console.error('❌ 加载默认歌单失败:', id, error)
+            return null
+          }
+        })
+        
+        // 等待所有歌单加载完成
+        const playlists = await Promise.all(playlistPromises)
+        
+        // 将成功加载的歌单添加到用户歌单列表
+        // push 前再查一次重：加载 await 期间用户可能已通过其他途径添加同一歌单
+        playlists.forEach(playlist => {
+          if (playlist && !userPlaylists.value.some(p => String(p.id) === String(playlist.id))) {
+            userPlaylists.value.push(playlist)
+          }
+        })
+        
+        // 保存到本地存储
+        if (playlists.some(p => p)) {
+          savePlaylistsToStorage()
+        }
+
+        console.log('✅ URL歌单加载完成')
+      } catch (error) {
+        console.error('❌ 加载URL歌单失败:', error)
+      }
+    }
+
   return {
     // state
     userPlaylists,
@@ -471,6 +548,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId }) {
     loadPlaylistById,
     collectSelectedPlaylist,
     selectedPlaylistInLibrary,
+    // URL 默认歌单加载
+    loadDefaultPlaylists,
     // 选择与同步
     selectPlaylist,
     appendSongToLibraryPlaylist,
