@@ -258,10 +258,6 @@
   background: rgba(45, 211, 190, .18);
   color: var(--accent-magenta-ink);
 }
-/* glitch 的选中语言是 teal tint pill——watch 下标线方案豁免，防 pill+短线混血 */
-:root[data-theme="glitch-restoration"] .watch-tabs .pg-tab::after { display: none; }
-:root[data-theme="glitch-restoration"] .watch-tabs .pg-tab { position: static; }
-
 /* 悬浮层：menu/suggest/toast 收圆角 + 柔影；dialog 是独立档
    （8px 半径 + 更深 .18 影——规范 window≠dialog） */
 :root[data-theme="glitch-restoration"] .pg-menu,
@@ -944,31 +940,17 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   color: var(--paper);
 }
 
-/* watch 页 tab：下标线式——共享发丝基座 + accent 激活短线滑入（YTM tab 语义，取代盒式墨块） */
+/* watch 页 tab：纯文字式——无下标短线无墨块，激活态只靠墨色升档
+   （ink-86→ink）；tab 间竖向发丝分隔也摘掉，留白即边界 */
 .watch-tabs .pg-tab {
-  position: relative;
   border-right: none;
-}
-.watch-tabs .pg-tab::after {
-  content: '';
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: -1.2px;
-  height: 2px;
-  background: var(--accent-magenta-ink);
-  opacity: 0;
-  transform: scaleX(.4);
-  transition: opacity .18s var(--ease-ink), transform .18s var(--ease-ink);
 }
 .watch-tabs .pg-tab--active {
   background: transparent;
   color: var(--ink);
 }
-.watch-tabs .pg-tab--active::after { opacity: 1; transform: scaleX(1); }
-.watch-tabs .pg-tab:not(.pg-tab--active):hover::after { opacity: .3; transform: scaleX(1); }
-/* tab 基座去尺：激活短线浮在留白上成为唯一笔触；与滚动区的边界感
-   交给 .watch-side-body 的滚动影——内容潜到 tab 下时才显现，静止零装饰 */
+/* tab 基座去尺：与滚动区的边界感交给 .watch-side-body 的滚动影——
+   内容潜到 tab 下时才显现，静止零装饰 */
 .watch-tabs { border-bottom: none; }
 
 /* 芯片（25px 发丝小牌：标签/热搜/筛选） */
