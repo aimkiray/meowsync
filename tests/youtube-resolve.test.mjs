@@ -286,3 +286,25 @@ test('VISIONOS 阶段 abort 穿透——不得吞成 deadAdaptive 回落', async
   await assert.rejects(() => resolve('vid00000014', { kind: 'audio', signal: ctl.signal }));
   // abort 穿透而非回落——若吞成 deadAdaptive 会返回 streams 而非抛错
 });
+
+test('pickStreamList video adaptiveOnly：2160p vp9-webm 反超 1080p avc1，同像素仍 avc1 优先', () => {
+  const avc1080 = { url: GV('avc1080'), mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080, width: 1920, fps: 30, bitrate: 5000000 };
+  const vp9_2160 = { url: GV('vp9-4k'), mimeType: 'video/webm; codecs="vp09.00.51.08"', height: 2160, width: 3840, fps: 30, bitrate: 18000000 };
+  const vp9_1080 = { url: GV('vp9-1080'), mimeType: 'video/webm; codecs="vp09.00.40.08"', height: 1080, width: 1920, fps: 30, bitrate: 2400000 };
+  const data = sd({ ad: [avc1080, vp9_2160, vp9_1080] });
+  const out = realYt.pickStreamList(data, 'video', 'best', { adaptiveOnly: true });
+  // >1080p 的 webm/vp9 档必须可达（avc1-only 时代 2160p 静默落成 1080p）
+  assert.equal(out[0].url, GV('vp9-4k'));
+  // 同像素 avc1 优先——vp9 1080p 排在 avc1 1080p 后（mp4 兼容档首选）
+  assert.equal(out[1].url, GV('avc1080'));
+  assert.equal(out[2].url, GV('vp9-1080'));
+});
+
+test('pickStreamList video 播放链不收 webm——非 avc1 档不外泄给浏览器直放', () => {
+  const vp9_2160 = { url: GV('vp9-4k'), mimeType: 'video/webm; codecs="vp09.00.51.08"', height: 2160, width: 3840, fps: 30, bitrate: 18000000 };
+  const avc1080 = { url: GV('avc1080'), mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080, width: 1920, fps: 30, bitrate: 5000000 };
+  const data = sd({ ad: [vp9_2160, avc1080] });
+  const out = realYt.pickStreamList(data, 'video');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].url, GV('avc1080'));
+});

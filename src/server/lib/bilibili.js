@@ -144,9 +144,11 @@ const viewQuery = (id) => typeof id === 'string' ? `bvid=${id}` : `aid=${id.aid}
 // prefer='best'（下载档）把 dash.flac.audio（Hi-Res 无损）与 dash.dolby.audio
 // （杜比）排在常规 AAC 前——flac > dolby > aac：无损严格优于有损空间音频，
 // 这两条轨需要 fnval 相应位标志且大多要登录态，缺席时自然回落常规档。
-// 视频优先 avc1（H.264 全浏览器可放）再按分辨率降序——hevc/av01 老设备放不了。
-// 返回排序后的完整数组——单档流的备份 URL 全被端口策略拒时还能降级到下一档
-function pickStreamList(data, kind, prefer = '') {
+// 视频优先 avc1（H.264 全浏览器可放）再按分辨率降序——hevc/av01 老设备放不了；
+// opts.anyCodec（仅下载链）放开全编码排序——同像素仍 avc1 优先，但 4K/8K/HDR
+// 的非 avc1 档可达。返回排序后的完整数组——单档流的备份 URL 全被端口策略拒时
+// 还能降级到下一档
+function pickStreamList(data, kind, prefer = '', opts = {}) {
   const dash = data?.dash || {};
   if (kind === 'audio') {
     const audioArr = Array.isArray(dash.audio) ? dash.audio : [];
@@ -164,12 +166,23 @@ function pickStreamList(data, kind, prefer = '') {
     }
     return regular;
   }
-  const avc = (dash.video || []).filter(v => (v.codecs || '').startsWith('avc1'));
   // 同像素决胜帧率再比码率——1080P / 1080P高码率 / 1080P60 的 h*w 相同，
   // 裸像素序靠上游数组顺序碰巧正确（首项即最高 id），上游改序即静默降级。
   // frameRate/frame_rate 上游两种拼法都出现过；bandwidth 天然随档位递增
   const bvFps = (v) => Number(v?.frameRate ?? v?.frame_rate) || 0;
-  return (avc.length ? avc : dash.video || [])
+  const all = dash.video || [];
+  if (opts.anyCodec) {
+    // 下载档放开编码面：4K/8K/HDR/杜比视界常只发 hev1/av01——像素更高的
+    // 非 avc1 档必须可达（hev1/dvh1/av01/vp9 进 mp4 均合法封装）；同像素
+    // 仍优先 avc1 保浏览器直放——播放链不传 anyCodec，兼容性口径不受牵连
+    const avcRank = (v) => (v?.codecs || '').startsWith('avc1') ? 1 : 0;
+    return all.slice().sort((a, b) => (b.height * b.width) - (a.height * a.width)
+      || avcRank(b) - avcRank(a)
+      || bvFps(b) - bvFps(a)
+      || (b.bandwidth || 0) - (a.bandwidth || 0));
+  }
+  const avc = all.filter(v => (v.codecs || '').startsWith('avc1'));
+  return (avc.length ? avc : all)
     .slice().sort((a, b) => (b.height * b.width) - (a.height * a.width)
       || bvFps(b) - bvFps(a)
       || (b.bandwidth || 0) - (a.bandwidth || 0));
@@ -239,18 +252,20 @@ async function resolveBiliAudio({ bvid, cid, page = 1, signal }) {
     .flatMap(s => flatUrls(s, { mimeType: s?.mimeType || '', br: s?.bandwidth || null }));
 }
 
-// 视频下载物料：DASH 自适应视频轨（avc1 分辨率降序）+ 常规 AAC 音轨（合流用——
+// 视频下载物料：DASH 自适应视频轨（全编码，像素降序、同像素 avc1 优先）
+// + 常规 AAC 音轨（合流用——
 // flac/杜比轨塞不进 mp4 容器）+ 懒取 MP4 合流兜底（无 ffmpeg 时 fnval=1 再打一跳）
 async function resolveBiliMedia({ bvid, cid, page = 1, signal }) {
   const dash = await resolveBiliPlayurl({ bvid, cid, page, signal, fnval: 4048 });
   return {
-    // 合流只留 avc1（H.264）——pickStreamList 的 hevc/av01 兜底是给播放器
-    // 探测用的，塞进 mp4 容器产的是解不动的文件
-    videos: pickStreamList(dash, 'video', 'best')
-      .filter(s => (s?.codecs || '').startsWith('avc1'))
+    // 全编码档摊平：4K/8K 常只有 hev1/av01——hev1/dvh1 合流时 ffmpegMux
+    // 给 -tag:v hvc1 保 Apple 兼容；同像素仍优先 avc1（pickStreamList best
+    // 档已排序），mp4 容器对这些编码均合法
+    videos: pickStreamList(dash, 'video', 'best', { anyCodec: true })
       .flatMap(s => flatUrls(s, {
         mimeType: s?.mimeType || '', br: s?.bandwidth || null,
-        w: s?.width || 0, h: s?.height || 0
+        w: s?.width || 0, h: s?.height || 0,
+        codec: s?.codecs || ''
       })),
     audios: pickStreamList(dash, 'audio')
       .flatMap(s => flatUrls(s, { mimeType: s?.mimeType || '', br: s?.bandwidth || null })),

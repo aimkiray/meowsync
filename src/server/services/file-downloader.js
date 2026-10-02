@@ -229,9 +229,13 @@ const FFMPEG_OK = (() => {
 
 // -c copy 纯封装不重编码：音乐视频尺度下秒级完成。out 先落 .mux 再 rename——
 // ffmpeg 直接写最终路径时崩溃会留半截 .mp4，与 .part 语义同构
-function ffmpegMux(videoPath, audioPath, outPath, signal) {
+function ffmpegMux(videoPath, audioPath, outPath, signal, codec) {
   return new Promise((resolve, reject) => {
     const muxPath = `${outPath}.mux`;
+    // hev1（B 站 4K/HDR 档）裸进 mp4 默认 hev1 tag——Apple/QuickTime 系不认，
+    // hvc1 tag 才是通用档。dvh1（杜比视界）的合法 tag 就是 dvh1——强转 hvc1
+    // 会抹掉 DV 配置盒，只能放行；avc1/vp09/av01 同样裸写即可
+    const tagArgs = /^hev/i.test(codec || '') ? ['-tag:v', 'hvc1'] : [];
     const child = spawn('ffmpeg', [
       '-hide_banner', '-loglevel', 'error', '-y',
       '-i', videoPath, '-i', audioPath,
@@ -239,7 +243,7 @@ function ffmpegMux(videoPath, audioPath, outPath, signal) {
       // 钉死 0 号输入首个视频轨 + 1 号输入首个音频轨
       '-map', '0:v:0', '-map', '1:a:0',
       // .mux 中间态后缀 ffmpeg 猜不出封装格式——必须显式 -f mp4
-      '-c', 'copy', '-f', 'mp4', '-movflags', '+faststart', muxPath
+      '-c', 'copy', ...tagArgs, '-f', 'mp4', '-movflags', '+faststart', muxPath
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
     let errTail = '';
     child.stderr.on('data', d => { errTail = (errTail + d).slice(-500); });
@@ -376,7 +380,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
   const codecOf = (mimeType) =>
     (String(mimeType || '').match(/codecs="?([a-zA-Z0-9._-]+)/) || [])[1] || null;
   const metaOf = (cand, source) => ({
-    h: cand.h || 0, w: cand.w || 0, codec: codecOf(cand.mimeType),
+    h: cand.h || 0, w: cand.w || 0, codec: cand.codec || codecOf(cand.mimeType),
     br: cand.br || null, source
   });
   let lastErr = null;
@@ -460,7 +464,9 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
               }
               audioTmp = tmp;
             }
-            await ffmpegMux(videoTmp, audioTmp, outputPath, signal);
+            // codec 透传：bv 候选自带 codecs 字段，yt 从 mimeType 抽——
+            // hev1/dvh1 源要 hvc1 tag 才是通用 mp4
+            await ffmpegMux(videoTmp, audioTmp, outputPath, signal, v.codec || codecOf(v.mimeType));
             onProgress && onProgress(100);
             const size = fs.statSync(outputPath).size;
             return { path: outputPath, size, url: v.url, videoMeta: metaOf(v, 'adaptive') };
@@ -480,7 +486,9 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
       }
     }
     // 本轮自适应全灭不动 progressive——下一轮 VISIONOS 升级批可能拿回
-    // 不受闸的高画质轨；合流兜底只在客户端阶梯用尽后出场
+    // 不受闸的高画质轨；合流兜底只在客户端阶梯用尽后出场。
+    // 无 ffmpeg 时自适应相位整体跳过，第二轮重解纯属白打一跳——直连
+    if (!FFMPEG_OK) break;
   }
   // 自适应阶梯用尽/无 ffmpeg → MP4 合流兜底（B 站 thunk 懒取 durl；
   // yt 走跨轮结转的 formats 批——VISIONOS 不回 formats 时仍有 ANDROID 的）。

@@ -274,13 +274,17 @@ function pickStreamList(data, kind, prefer = '', opts = {}) {
     && (f.mimeType || '').includes('avc1'));
   // adaptiveOnly（下载链）：合流档自带音轨，混进 videos 会让 ffmpegMux 产出
   // 双音轨 mp4——下载侧合流由 file-downloader 的 progressive 兜底相位接管，
-  // 这里只交纯净 video-only 轨；播放链（未传参）保持合流兜底旧语义
+  // 这里只交纯净 video-only 轨；播放链（未传参）保持合流兜底旧语义。
+  // 编码面放开：>1080p（1440p/2160p/HDR）只发 vp9/av01 的 video/webm——
+  // vp09/av01 进 mp4 是合法封装（ffmpeg -c copy），像素更高的非 avc1 档
+  // 反超；同像素仍优先 avc1 保浏览器直放，决胜序：像素→编码→fps→码率
   if (opts.adaptiveOnly) {
-    // 同像素决胜帧率再比码率——1080p60 与 1080p30 同面积，裸像素序撞上谁
-    // 在前取谁（Innertube 序不定）；fps/bitrate 都是上游直给字段，缺省 0
-    return avc.slice().sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0))
-      || (b.fps || 0) - (a.fps || 0)
-      || (b.bitrate || 0) - (a.bitrate || 0));
+    const avcRank = (f) => (f.mimeType || '').includes('avc1') ? 1 : 0;
+    return adaptive.filter(f => usable(f) && (f.mimeType || '').startsWith('video/'))
+      .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0))
+        || avcRank(b) - avcRank(a)
+        || (b.fps || 0) - (a.fps || 0)
+        || (b.bitrate || 0) - (a.bitrate || 0));
   }
   // progressive 兜底同样限 video/mp4——webm 合并流 Safari 放不了，宁缺毋滥
   // （hasVideo 语义 = 浏览器解得动的流存在）
