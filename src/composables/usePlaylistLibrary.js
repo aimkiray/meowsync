@@ -163,12 +163,13 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       savePlaylistsToStorage()
       console.log('✅ 歌单已移除:', playlist.name)
 
-      // 作废在途 select：被删歌单若正有一个 detail 请求在飞，
-      // 迟到回包会把 songs/selectedPlaylist 盖写回来「复活」视图
-      gates.select.invalidate()
-
-      // 如果移除的是当前选中的歌单，清空选择
+      // 如果移除的是当前选中（或在途加载中——claim 时已写 selectedPlaylist）
+      // 的歌单：作废其 select 闸，迟到回包才不会盖写回来「复活」视图。
+      // 只对当前目标作废——误杀无关的在途选择会把 loadingSongs 悬住
+      // （它由最新认领者复位），作废后要手动收掉
       if (String(selectedPlaylist.value?.id) === String(playlistId)) {
+        gates.select.invalidate()
+        loadingSongs.value = false
         selectedPlaylist.value = null
         songs.value = []
       }
