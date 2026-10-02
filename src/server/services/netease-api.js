@@ -311,14 +311,23 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
             // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）。
             // 逐源失败必须留痕——全静默 continue 下线上「该解的歌不解」无法
-            // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛
-            const checked = unblocked?.url ? normalizeOutboundUrl(unblocked.url) : null;
-            if (!checked?.ok) {
-              console.info(`[unlock] ${item.id} ${source}: 无可用回链或归一化被拒`);
-              continue;
+            // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛。
+            // unblocked.urls（youtube 闸控链）：整条候选链逐条过同一套校验，
+            // 活链集随 resolved 下发——代理逐试钉位，首档死掉自动换档到
+            // 合流兜底；无 urls 的源退化为单链（契约向后兼容）
+            const rawUrls = Array.isArray(unblocked?.urls) && unblocked.urls.length
+              ? unblocked.urls : [unblocked?.url];
+            const urls = [];
+            let checked = null;
+            for (const u of rawUrls) {
+              const chk = typeof u === 'string' && u ? normalizeOutboundUrl(u) : null;
+              if (!chk?.ok) continue;
+              if (!(await resolvesToPublicIp(chk.url.hostname))) continue;
+              if (!checked) checked = chk;
+              urls.push(chk.url.toString());
             }
-            if (!(await resolvesToPublicIp(checked.url.hostname))) {
-              console.info(`[unlock] ${item.id} ${source}: ${checked.url.hostname} 非公网可解析`);
+            if (!checked) {
+              console.info(`[unlock] ${item.id} ${source}: 无可用回链或归一化/公网校验全拒`);
               continue;
             }
 
@@ -331,9 +340,16 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
             const willProxy = !!proxyOrigin
               && (source === 'youtube' || source === 'qq' || checked.url.protocol === 'http:');
-            if (willProxy && !isProxyAllowedHost(checked.url.hostname)) {
-              console.info(`[unlock] ${item.id} ${source}: ${checked.url.hostname} 不在代理白名单`);
-              continue;
+            if (willProxy) {
+              // 多链场景整条都须过白名单——漏一条等于往 vault 里混一条
+              // 注定 403 的死链（代理逐试会空打一跳）或裸凭据外发
+              for (let i = urls.length - 1; i >= 0; i--) {
+                if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
+              }
+              if (!urls.length) {
+                console.info(`[unlock] ${item.id} ${source}: 不在代理白名单`);
+                continue;
+              }
             }
 
             // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
@@ -363,7 +379,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             }
 
             resolved = {
-              url: checked.url.toString(), br: unblocked.br || null, source,
+              url: urls[0], urls, br: unblocked.br || null, source,
               // 真实文件形态写回：试听片的 time/size/type 透给下载端会
               // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件。
               // size 优先 provider/HEAD 实测值；youtube/qq 无 size 但知道
@@ -394,7 +410,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         // 代理面统一经 vault token——解锁回链可能带上游凭据（qq purl uin/vkey、
         // googlevideo ip=），明文嵌进 JSON 等于把运营者凭据发给每个访客
         item.url = useProxy
-          ? `${proxyOrigin}/audio-proxy/t/${streamVault.mint(resolved.url)}`
+          ? `${proxyOrigin}/audio-proxy/t/${streamVault.mint(resolved.urls || resolved.url)}`
           : resolved.url;
         item.unblocked = true;
         item.unblockedSource = resolved.source;

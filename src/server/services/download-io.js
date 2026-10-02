@@ -209,8 +209,8 @@ async function fetchStream(rawUrl, { timeout, signal, headers }) {
       // 4xx（除 429）对该 URL 是确定性失败：重试三次白打上游。5xx/429/超时保留可重试
       const status = error.response?.status;
       if (status >= 400 && status < 500 && status !== 429) {
-        // upstreamStatus 挂状态码——跨模块消费者（如 routes/youtube 的
-        // 闸控探测）按码判定，不耦合 message 文案
+        // upstreamStatus 挂状态码——跨模块消费者（services/youtube-resolve
+        // 的闸控探测）按码判定，不耦合 message 文案
         const err = fatalError(`上游返回 ${status}`);
         err.upstreamStatus = status;
         throw err;
