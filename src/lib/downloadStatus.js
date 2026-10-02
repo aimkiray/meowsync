@@ -37,3 +37,17 @@ export function taskStatusMeta(status) {
 export function statusChipClass(tier) {
   return CHIP_CLASS[tier] || CHIP_CLASS.dim
 }
+
+// 队列完成度百分比——DownloadsPanel 排序键与 DownloadQueueList 行展示共用
+export function queueProgress(queue) {
+  if (!queue || queue.totalTasks === 0) return 0
+  return Math.round((queue.completedTasks / queue.totalTasks) * 100)
+}
+
+// 状态过滤 select 的选项单：标签与 QUEUE_STATUS_META 同源（第四处抄写收编），
+// 顺序按交互习惯排——活跃态在前。加/改状态只需动 META 表与这里的顺序数组
+export const queueStatusFilterOptions = [
+  { value: 'all', label: '全部状态' },
+  ...['running', 'paused', 'pending', 'failed', 'completed', 'cancelled']
+    .map(value => ({ value, label: QUEUE_STATUS_META[value].label }))
+]

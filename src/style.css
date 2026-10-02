@@ -184,7 +184,8 @@
 :root[data-theme="glitch-restoration"] .song-result-cover,
 :root[data-theme="glitch-restoration"] .track-cover,
 :root[data-theme="glitch-restoration"] .pl-cover,
-:root[data-theme="glitch-restoration"] .dql-cover { border-radius: 4px; }
+:root[data-theme="glitch-restoration"] .dql-cover,
+:root[data-theme="glitch-restoration"] .dtr-cover { border-radius: 4px; }
 
 /* 印刷家具退场——memoria 窗体不带裁切标线/页缘标尺；
    版本戳保留（OS-fiction 兼容的戳记） */

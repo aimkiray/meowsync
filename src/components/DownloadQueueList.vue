@@ -3,7 +3,7 @@
   <div class="pg-panel dql-panel h-full flex flex-col">
     <div class="dql-head">
       <div class="dql-head-info">
-        <h2 class="dql-title"><GlitchText :text="title" /></h2>
+        <h2 class="dql-title"><GlitchText text="下载队列" /></h2>
         <p class="pg-label pg-label--dim dql-sub">左侧选队列，右侧看详情喵~</p>
       </div>
       <span class="pg-chip pg-chip--static dql-count">{{ queues.length }} 条</span>
@@ -21,13 +21,7 @@
           :value="statusFilter"
           @change="$emit('update:status-filter', $event.target.value)"
         >
-          <option value="all">全部状态</option>
-          <option value="running">运行中</option>
-          <option value="paused">已暂停</option>
-          <option value="pending">等待中</option>
-          <option value="failed">失败</option>
-          <option value="completed">已完成</option>
-          <option value="cancelled">已取消</option>
+          <option v-for="opt in queueStatusFilterOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
       </div>
     </div>
@@ -161,7 +155,7 @@
 <script setup>
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { httpsCover } from '../lib/url'
-import { queueStatusMeta, statusChipClass } from '../lib/downloadStatus.js'
+import { queueStatusMeta, statusChipClass, queueProgress, queueStatusFilterOptions } from '../lib/downloadStatus.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 
@@ -178,10 +172,6 @@ const props = defineProps({
     type: Number,
     default: null
   },
-  title: {
-    type: String,
-    default: '下载队列'
-  },
   emptyText: {
     type: String,
     default: '还没有下载队列喵~'
@@ -194,34 +184,34 @@ const props = defineProps({
     type: String,
     default: 'all'
   }
-});
+})
 
-const emit = defineEmits(['start', 'pause', 'resume', 'cancel', 'retry', 'delete', 'select', 'update:search-query', 'update:status-filter']);
+const emit = defineEmits(['start', 'pause', 'resume', 'cancel', 'retry', 'delete', 'select', 'update:search-query', 'update:status-filter'])
 
-const openMenuId = ref(null);
-const menuPosition = ref({ top: '0px', left: '0px' });
+const openMenuId = ref(null)
+const menuPosition = ref({ top: '0px', left: '0px' })
 // 最近开菜单的 ⋯键本体——Esc 解散菜单时焦点归还它，不落 body
-let menuTriggerEl = null;
+let menuTriggerEl = null
 
 function closeMenu(restoreFocus = false) {
-  const wasOpen = openMenuId.value !== null;
-  openMenuId.value = null;
+  const wasOpen = openMenuId.value !== null
+  openMenuId.value = null
   if (restoreFocus && wasOpen && menuTriggerEl?.isConnected) {
-    menuTriggerEl.focus({ preventScroll: true });
+    menuTriggerEl.focus({ preventScroll: true })
   }
 }
 
 function toggleMenu(queueId, event) {
   if (openMenuId.value === queueId) {
-    closeMenu();
-    return;
+    closeMenu()
+    return
   }
 
-  menuTriggerEl = event.currentTarget;
-  const rect = event.currentTarget.getBoundingClientRect();
-  const menuWidth = 132;
+  menuTriggerEl = event.currentTarget
+  const rect = event.currentTarget.getBoundingClientRect()
+  const menuWidth = 132
   // 按该队列实际渲染的菜单项数估高（每项约 33px）——写死 180px 会让短菜单无谓上翻
-  const queue = props.queues?.find(q => q.id === queueId);
+  const queue = props.queues?.find(q => q.id === queueId)
   const itemCount = queue
     ? 1
       + (['pending', 'cancelled'].includes(queue.status) ? 1 : 0)
@@ -230,101 +220,100 @@ function toggleMenu(queueId, event) {
       + (['pending', 'running', 'paused'].includes(queue.status) ? 1 : 0)
       + (canRetry(queue) ? 1 : 0)
       + (canDelete(queue) ? 1 : 0)
-    : 6;
-  const menuHeight = itemCount * 39 + 4; // 实测项高 ≈39，不足时上翻避免出视口底
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));
+    : 6
+  const menuHeight = itemCount * 39 + 4 // 实测项高 ≈39，不足时上翻避免出视口底
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8))
   const top = rect.bottom + 4 + menuHeight > viewportHeight
     ? Math.max(8, rect.top - menuHeight - 4)
-    : rect.bottom + 4;
+    : rect.bottom + 4
 
   menuPosition.value = {
     top: `${top}px`,
     left: `${left}px`
-  };
-  openMenuId.value = queueId;
+  }
+  openMenuId.value = queueId
 }
 
 function getMenuPosition(queueId) {
   if (openMenuId.value !== queueId) {
-    return { top: '0px', left: '0px' };
+    return { top: '0px', left: '0px' }
   }
-  return menuPosition.value;
+  return menuPosition.value
 }
 
 function runQueueAction(action, payload) {
-  emit(action, payload);
-  closeMenu();
+  emit(action, payload)
+  closeMenu()
 }
 
 function canRetry(queue) {
   // paused 仍在服务端 activeQueues 里，retryQueue 会 409"请先取消"——不显示入口
-  return queue.failedTasks > 0 && queue.status !== 'running' && queue.status !== 'paused';
+  return queue.failedTasks > 0 && queue.status !== 'running' && queue.status !== 'paused'
 }
 
 function canDelete(queue) {
-  return queue.status !== 'running';
+  return queue.status !== 'running'
 }
 
 function handleWindowPointerDown(event) {
-  const target = event.target;
+  const target = event.target
   // 菜单是 Teleport 到 body 的——不在 .dql-row 内，必须单独豁免；
   // 否则 pointerdown（先于 click）就把菜单关了，菜单项点击永远不触发
   // 豁免收窄到菜单本体与触发钮：.dql-row 整行豁免会让"点另一行不关菜单"，
   // 选中置顶排序后旧菜单悬空指向错误卡片
   if (target instanceof Element && target.closest('.queue-menu, .queue-menu-trigger')) {
-    return;
+    return
   }
-  closeMenu();
+  closeMenu()
 }
 
 function handleWindowKeydown(event) {
   if (event.key === 'Escape') {
-    closeMenu(true);
+    closeMenu(true)
   }
 }
 
 // 轮询驱动重排（状态翻转改排序）会让 fixed 菜单悬空指错行——
 // 成员/次序真的变了才关（只 watch 数组引用则每次 selectedQueue 刷新都误关）
-watch(() => props.queues.map(queue => queue.id).join(','), () => closeMenu());
+watch(() => props.queues.map(queue => queue.id).join(','), () => closeMenu())
 
 // 任何滚动（含嵌套滚动容器）都会让 fixed 菜单与触发按钮脱节——捕获阶段监听直接关
 function handleScroll() {
-  closeMenu();
+  closeMenu()
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('pointerdown', handleWindowPointerDown);
-  window.addEventListener('keydown', handleWindowKeydown);
-  window.addEventListener('scroll', handleScroll, true);
+  window.addEventListener('pointerdown', handleWindowPointerDown)
+  window.addEventListener('keydown', handleWindowKeydown)
+  window.addEventListener('scroll', handleScroll, true)
 }
 
 onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
-    window.removeEventListener('pointerdown', handleWindowPointerDown);
-    window.removeEventListener('keydown', handleWindowKeydown);
-    window.removeEventListener('scroll', handleScroll, true);
+    window.removeEventListener('pointerdown', handleWindowPointerDown)
+    window.removeEventListener('keydown', handleWindowKeydown)
+    window.removeEventListener('scroll', handleScroll, true)
   }
-});
+})
 
 function getStatusText(status) {
-  return queueStatusMeta(status).label;
+  return queueStatusMeta(status).label
 }
 
 // 状态 → 芯片修饰类：running=墨底反白（激活），completed=绿戳，failed=危险红，
 // 其余淡墨。词表与色档收口在 lib/downloadStatus.js
 function getStatusClass(status) {
-  return statusChipClass(queueStatusMeta(status).tier);
+  return statusChipClass(queueStatusMeta(status).tier)
 }
 
 function getProgress(queue) {
-  if (queue.totalTasks === 0) return 0;
-  return Math.round((queue.completedTasks / queue.totalTasks) * 100);
+  return queueProgress(queue)
 }
 
 function getQueueCover(queue) {
-  return httpsCover(queue.coverImgUrl || '');
+  return httpsCover(queue.coverImgUrl || '')
 }
 </script>
 

@@ -45,6 +45,7 @@ import { toast, pixelConfirm } from '../lib/feedback'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
 import { createReqGate } from '../lib/req-gate'
+import { queueProgress } from '../lib/downloadStatus.js'
 import DownloadQueueList from './DownloadQueueList.vue'
 import DownloadTaskList from './DownloadTaskList.vue'
 
@@ -103,8 +104,8 @@ const displayQueues = computed(() => {
       return leftPriority - rightPriority
     }
 
-    const leftProgress = getQueueProgress(left)
-    const rightProgress = getQueueProgress(right)
+    const leftProgress = queueProgress(left)
+    const rightProgress = queueProgress(right)
 
     if (leftProgress !== rightProgress) {
       return rightProgress - leftProgress
@@ -123,24 +124,23 @@ const queueEmptyText = computed(() => {
   return loadError.value || '还没有下载队列喵~'
 })
 
-function getQueueProgress(queue) {
-  if (!queue || queue.totalTasks === 0) {
-    return 0
-  }
-  return Math.round((queue.completedTasks / queue.totalTasks) * 100)
-}
-
 // diff 收窄前提（不变量）：download_queues/download_tasks 的一切运行期写都收口在
 // updateQueue/updateTask/recountQueueCounters——三者无条件 bump updated_at；
 // 旁路只有 DELETE（行消失由长度/id 维兜住）。新增裸写 UPDATE 路径必须先 bump
-// updated_at，否则这里漏判变更。coverImgUrl（JOIN playlists 外来列，封面随歌单
-// 行变而本行戳不动）与 filesIntact（盘上文件实时判定，外部删文件无任何 DB 写）
-// 是两个不随 updated_at 的派生字段——单列比较。
+// updated_at，否则这里漏判变更。
+// updated_at 是毫秒精度：同毫秒两次写会产同戳——计数/状态/progress 这些便宜列
+// 直接比，把别名窗封到"同毫秒且同值"（真·无变化，无漏判代价）。
+// coverImgUrl（JOIN playlists 外来列，封面随歌单行变而本行戳不动）与
+// filesIntact（盘上文件实时判定，外部删文件无任何 DB 写）不随 updated_at——单列。
 function hasQueueChanged(currentQueue, nextQueue) {
   if (!currentQueue || !nextQueue) return currentQueue !== nextQueue
   return currentQueue.id !== nextQueue.id
     || currentQueue.updatedAt !== nextQueue.updatedAt
     || currentQueue.coverImgUrl !== nextQueue.coverImgUrl
+    || currentQueue.status !== nextQueue.status
+    || currentQueue.totalTasks !== nextQueue.totalTasks
+    || currentQueue.completedTasks !== nextQueue.completedTasks
+    || currentQueue.failedTasks !== nextQueue.failedTasks
 }
 
 function hasTaskChanged(currentTask, nextTask) {
@@ -148,6 +148,9 @@ function hasTaskChanged(currentTask, nextTask) {
   return currentTask.id !== nextTask.id
     || currentTask.updatedAt !== nextTask.updatedAt
     || currentTask.filesIntact !== nextTask.filesIntact
+    || currentTask.status !== nextTask.status
+    || currentTask.progress !== nextTask.progress
+    || currentTask.errorMessage !== nextTask.errorMessage
 }
 
 function hasCollectionChanged(currentItems, nextItems, compareItem) {
@@ -195,12 +198,14 @@ async function loadQueues(options = {}) {
       loadingQueues.value = true
     }
     const response = await downloadsApi.listQueues()
+    // 超期响应先丢——被新认领顶掉的旧快照连校验都不该做（与 loadTasks 同口径），
+    // 否则"超期+畸形"的组合会进 catch 打噪音甚至误写首载错误态
+    if (!queuesGate.isCurrent(my)) return
     // 响应体非 envelope（如同源静态服的 index.html 200）：不能当空列表吞掉，
     // 抛错走 catch → 首载显示错误态而不是"还没有下载队列"假象
     if (!response || !Array.isArray(response.data)) {
       throw new Error('接口返回了非预期内容（可能打到了静态服务器）')
     }
-    if (!queuesGate.isCurrent(my)) return
     const nextQueues = response.data
     const previousSelectedQueueId = selectedQueue.value?.id ?? null
     const queuesChanged = hasCollectionChanged(queues.value, nextQueues, hasQueueChanged)
@@ -294,7 +299,7 @@ async function runQueueAction(queueId, label, call, { refreshTasks = false } = {
   try {
     await call(queueId)
     await loadQueues()
-    if (refreshTasks && selectedQueue.value?.id === queueId) {
+    if (refreshTasks && String(selectedQueue.value?.id) === String(queueId)) {
       await loadTasks(queueId)
     }
   } catch (error) {
@@ -345,14 +350,18 @@ async function deleteQueue(queueId) {
     `确定要删除${doomed?.name ? `「${doomed.name}」` : '这个歌单'}吗？其全部下载任务与已下载资源将一并清理，进行中的下载也会中止`,
     { confirmText: '删除', danger: true }
   )) return
-  if (busyQueueIds.has(queueId)) return
+  // 已确认的意图不能静默吞——busy 命中（同队列动作在途）给用户交代再退
+  if (busyQueueIds.has(queueId)) {
+    toast('该队列有操作进行中，请稍后再删', 'info')
+    return
+  }
   busyQueueIds.add(queueId)
 
   try {
     await downloadsApi.deleteQueue(queueId)
     await loadQueues()
     // 级联连坐删同歌单兄弟队列——选中项落在同一歌单上即清，别等两轮缺席判定
-    if (selectedQueue.value?.id === queueId
+    if (String(selectedQueue.value?.id) === String(queueId)
         || (doomed?.playlistId != null && selectedQueue.value?.playlistId === doomed.playlistId)) {
       selectionMissCount = 0 // 手动清选中同样要归零——loadQueues 内缺席计数会留下惰性 =1
       selectedQueue.value = null
