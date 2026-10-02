@@ -637,15 +637,17 @@ export default {
     // 都白烧一次 CDN 请求，且秒挂型流（闸控 403）的 error 会先于探测闩封面
     const dlProbeSettled = ref(false)
     let dlVideoSeq = 0
-    watch([mediaVideoKey, () => props.queueOwner?.id], async () => {
+    watch([mediaVideoKey, () => props.queueOwner?.id, videoOn], async () => {
       const seq = ++dlVideoSeq
       downloadedVideoUrl.value = null
       const song = props.currentSong
       const plId = props.queueOwner?.id
       // 探测门用下载口径：hasDownloadableVideo 曲可能有本地视频档（下载链
-      // 收全编码）——只认 hasVideo 会把已下载的纯非 avc1 稿件挡在门外
-      const probeable = song?.bilibili?.hasVideo || song?.bilibili?.hasDownloadableVideo
-        || song?.youtube?.hasVideo || song?.youtube?.hasDownloadableVideo
+      // 收全编码）——只认 hasVideo 会把已下载的纯非 avc1 稿件挡在门外。
+      // 视频关着时不探——纯音频用户不该为每首视频曲白打一跳 status 请求
+      const probeable = videoOn.value
+        && (song?.bilibili?.hasVideo || song?.bilibili?.hasDownloadableVideo
+          || song?.youtube?.hasVideo || song?.youtube?.hasDownloadableVideo)
       if (!plId || !probeable) {
         dlProbeSettled.value = true
         return
@@ -689,6 +691,11 @@ export default {
       // 迟到的旧元素 error（换曲后 DOM 复用期）：key 换绑后旧元素的迟投
       // 事件不能打到新歌状态——按 target 身份闸
       if (e?.target && e.target !== mediaVideoRef.value) return
+      // 同元素 src 换绑的迟投 error（本地档失败后已切在线流、旧资源又补发
+      // 一次 error）：currentSrc 仍是旧资源时与当前 URL 不符——丢弃
+      const curSrc = e?.target?.currentSrc
+      if (curSrc && mediaVideoUrl.value
+        && new URL(mediaVideoUrl.value, window.location.href).href !== curSrc) return
       if (downloadedVideoUrl.value && mediaVideoUrl.value === downloadedVideoUrl.value) {
         downloadedVideoUrl.value = null
         return
@@ -792,6 +799,7 @@ export default {
       videoOn,
       mediaVideoFailed,
       mediaVideoActive,
+      mediaVideoKey,
       mediaVideoUrl
     }
   }

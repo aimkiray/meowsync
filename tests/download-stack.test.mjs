@@ -65,3 +65,21 @@ test('download-manager 对上层的 re-export 面完整', () => {
     assert.equal(typeof dm[name], 'function', `download-manager 应透出 ${name}`);
   }
 });
+
+test('penetratesCandidates：本地 errno fatal 穿透，DNS guard/上游 4xx 只死本条 URL', () => {
+  // 本地确定性 errno（ENOSPC 等）→ 穿透候选循环
+  const enospc = new Error('no space'); enospc.code = 'ENOSPC';
+  assert.equal(io.penetratesCandidates(io.errnoToFatal(enospc)), true);
+  // socket 层 DNS guard 拦截有合成 code 但不是本地 errno——候选级
+  // （与 URL 阶段 checkHostPublic 的 fatalError 无 code 同口径）：一条
+  // URL 命中私网解析不该剥夺 backup_url/下一档的机会
+  const guard = new Error('blocked'); guard.code = 'ERR_DNS_GUARD_BLOCKED';
+  const marked = io.errnoToFatal(guard);
+  assert.equal(marked.fatal, true);
+  assert.equal(io.penetratesCandidates(marked), false);
+  // 上游 4xx fatalError 无 code——候选级
+  assert.equal(io.penetratesCandidates(io.fatalError('HTTP 403')), false);
+  // EFBIG 不再穿透：FAT32 落盘目录 4GiB 天花板是候选体积问题，低档能装
+  const efbig = new Error('too big'); efbig.code = 'EFBIG';
+  assert.equal(io.penetratesCandidates(io.errnoToFatal(efbig)), false);
+});

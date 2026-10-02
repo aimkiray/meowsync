@@ -133,7 +133,7 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
     }
     // 在途守卫：处理中再点会发出重复请求撞服务端 409，
     // 用户看到的却是"下载失败"——直接关菜单静默返回
-    if (song && serverDownloadingStates.value[song.id]) {
+    if (serverDownloadingStates.value[song.id]) {
       closeDownloadMenu()
       return
     }

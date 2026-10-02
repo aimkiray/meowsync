@@ -5,8 +5,8 @@ const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
 // 字节流原语（fetchStream/streamToFile/fatalError 等）在 download-io.js——
 // 本文件只做 provider 媒体编排与四类工件下载入口
 const {
-  MIME_EXT, mergeLrcTrans, fatalError, errnoToFatal, throwIfAborted,
-  describeError, fetchStream, removePartial, streamToFile,
+  MIME_EXT, mergeLrcTrans, fatalError, errnoToFatal, penetratesCandidates,
+  throwIfAborted, describeError, fetchStream, removePartial, streamToFile,
   extFromUrl, pathWithExt,
 } = require('./download-io');
 const qq = require('../lib/qq');
@@ -151,7 +151,7 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
         throwIfAborted(signal);   // fetch 的 AbortError DOMException 同样无标记
         if (e?.aborted) throw e;  // 取消语义穿透候选循环
         // 上游 4xx fatal 只判死本条 URL；带 errno 的本地确定性失败才穿透
-        if (e?.fatal && e?.code) throw e;
+        if (penetratesCandidates(e)) throw e;
         lastErr = e;
       }
     }
@@ -162,6 +162,12 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
   // 自适应全阶梯全灭（极端闸控/仅 progressive 的老视频）→ 合流兜底：
   // ffmpeg 在则 -vn -c:a copy 抽 AAC 轨落 m4a；缺席则合流 mp4 原样作
   // 音频工件——浏览器按容器嗅探照播，代价是文件里多带一路视频轨
+  // mkdir 在候选循环外（与自适应段同口径）：全轮死在 resolve 阶段时这里
+  // 才首次建目录；确定性 errno 不空转候选，abort 后不复活目录骨架
+  if (progressiveCarry.length) {
+    throwIfAborted(signal);
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  }
   for (const cand of progressiveCarry) {
     throwIfAborted(signal);
     const tmpPath = `${outputPath}.prog.mp4`;
@@ -171,7 +177,6 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
         resp.data.destroy();
         continue;
       }
-      fs.mkdirSync(path.dirname(tmpPath), { recursive: true });
       const saved = await streamToFile(resp, tmpPath, {
         // progressive 兜底下的是整段合流 mp4（含视频轨）——5min 闸在慢链
         // 上会硬截断，与视频相位同口径给 MAX_VIDEO_MS
@@ -195,7 +200,7 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
       };
     } catch (e) {
       throwIfAborted(signal);
-      if (e?.aborted || (e?.fatal && e?.code)) throw e;
+      if (e?.aborted || penetratesCandidates(e)) throw e;
       lastErr = e;
     } finally {
       // ffmpeg 抽完/全灭后清掉合流中间件——它不该成为最终工件
@@ -258,12 +263,15 @@ function ffmpegMux(videoPath, audioPath, outPath, signal, codec) {
     child.stderr.on('data', d => { errTail = (errTail + d).slice(-500); });
     child.stderr.on('error', () => { /* 管道级错误不入错尾，但必须挂监听防 uncaught */ });
     // ffmpeg 无内建超时——封装正常秒级，挂死会把任务钉死在 downloading
-    // 直到队列 abort。faststart 要整文件二次搬迁，超时按下限 50MB/s 随
-    // 输入体量伸缩——8GiB 在慢盘上 ~3min，定值 120s 会误杀
+    // 直到队列 abort。等效速率按 25MiB/s 估：faststart 需读入+写 .mux+
+    // 二次搬迁共 ~3× 体量的 I/O，50MiB/s 假设在 HDD/SMR/NAS 上会误杀
+    // （被杀后换候选重下又被同一超时杀，回到 N 段白下形态）
     const inputBytes = [videoPath, audioPath]
       .reduce((sum, p) => { try { return sum + fs.statSync(p).size; } catch { return sum; } }, 0);
-    const muxTimeoutMs = 120000 + Math.ceil(inputBytes / (50 * 1024 * 1024)) * 1000;
+    const muxTimeoutMs = 120000 + Math.ceil(inputBytes / (25 * 1024 * 1024)) * 1000;
+    let timedOut = false;
     const killTimer = setTimeout(() => {
+      timedOut = true;
       try { child.kill('SIGKILL'); } catch { /* 进程已退 */ }
     }, muxTimeoutMs);
     const onAbort = () => { try { child.kill('SIGKILL'); } catch { /* 进程已退 */ } };
@@ -274,9 +282,14 @@ function ffmpegMux(videoPath, audioPath, outPath, signal, codec) {
     };
     child.on('error', (e) => {
       cleanup();
-      // spawn 级失败（ENOENT/EACCES 库损坏）是环境病不是候选病——标 fatal
-      // 穿透候选循环，否则每段视频下完才死在 mux，N 档全烧一遍
-      e.fatal = true;
+      try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
+      // spawn 级失败白名单：ENOENT/EACCES/ENOEXEC 是确定性环境病（二进制
+      // 缺失/不可执行/格式错）标 fatal 穿透候选循环，否则每段视频下完才
+      // 死在 mux、N 档全烧一遍；EAGAIN/ENOMEM/EMFILE/ETXTBSY 是瞬时资源
+      // 压力，保持候选级让下一个候选重试
+      if (e?.code === 'ENOENT' || e?.code === 'EACCES' || e?.code === 'ENOEXEC') {
+        e.fatal = true;
+      }
       reject(e);
     });
     child.on('close', (code, killedBy) => {
@@ -293,8 +306,9 @@ function ffmpegMux(videoPath, audioPath, outPath, signal, codec) {
         return fail(e);
       }
       if (code !== 0) {
-        // killedBy=SIGKILL 超时杀与真崩 exit N 要在日志里分得开
-        const why = killedBy ? `被${killedBy}杀（超时或中止）` : `exit ${code}`;
+        // 三种死法分开报：我方超时杀 / 外部杀（OOM、人工 kill）/ 真崩 exit N
+        const why = timedOut ? `超 ${Math.round(muxTimeoutMs / 1000)}s 被 SIGKILL`
+          : killedBy ? `被${killedBy}杀（外部信号）` : `exit ${code}`;
         return fail(new Error(`ffmpeg 合流失败（${why}）: ${errTail || '无输出'}`));
       }
       try {
@@ -324,12 +338,15 @@ function ffmpegExtractAudio(inPath, outPath, signal) {
     let errTail = '';
     child.stderr.on('data', d => { errTail = (errTail + d).slice(-500); });
     child.stderr.on('error', () => { /* 管道级错误不入错尾，但必须挂监听防 uncaught */ });
-    // 超时随输入体量伸缩（与 ffmpegMux 同口径，抽轨比封装少一半写但同阶）
+    // 超时随输入体量伸缩（与 ffmpegMux 同口径 25MiB/s 等效速率——抽轨少
+    // 一半写但慢盘余量仍要留）
     let inputBytes = 0;
     try { inputBytes = fs.statSync(inPath).size; } catch { /* 0 按最小超时 */ }
+    let timedOut = false;
     const killTimer = setTimeout(() => {
+      timedOut = true;
       try { child.kill('SIGKILL'); } catch { /* 进程已退 */ }
-    }, 120000 + Math.ceil(inputBytes / (50 * 1024 * 1024)) * 1000);
+    }, 120000 + Math.ceil(inputBytes / (25 * 1024 * 1024)) * 1000);
     const onAbort = () => { try { child.kill('SIGKILL'); } catch { /* 进程已退 */ } };
     signal?.addEventListener('abort', onAbort, { once: true });
     const cleanup = () => {
@@ -338,8 +355,11 @@ function ffmpegExtractAudio(inPath, outPath, signal) {
     };
     child.on('error', (e) => {
       cleanup();
-      // spawn 级失败是环境病——标 fatal 穿透候选循环（与 ffmpegMux 同口径）
-      e.fatal = true;
+      try { fs.unlinkSync(muxPath); } catch { /* 未产即空 */ }
+      // spawn 级失败白名单与 ffmpegMux 同口径——确定性环境病才穿透
+      if (e?.code === 'ENOENT' || e?.code === 'EACCES' || e?.code === 'ENOEXEC') {
+        e.fatal = true;
+      }
       reject(e);
     });
     child.on('close', (code, killedBy) => {
@@ -354,7 +374,7 @@ function ffmpegExtractAudio(inPath, outPath, signal) {
         return fail(e);
       }
       if (code !== 0) {
-        const why = killedBy ? `被${killedBy}杀（超时或中止）` : `exit ${code}`;
+        const why = timedOut ? `超时被 SIGKILL` : killedBy ? `被${killedBy}杀（外部信号）` : `exit ${code}`;
         return fail(new Error(`ffmpeg 抽轨失败（${why}）: ${errTail || '无输出'}`));
       }
       try {
@@ -454,7 +474,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
         prog = await media.progressive();
       } catch (e) {
         throwIfAborted(signal);
-        if (e?.fatal && e?.code) throw e;
+        if (penetratesCandidates(e)) throw e;
         lastErr = lastErr || e;
       }
       // 只消费「真反超」的档——probe 判门看的是最高档，若它失败不能让
@@ -464,14 +484,16 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
         console.info(`[video-dl] 合流档 ${winners[0].h}p 反超自适应 ${bestH}p——直落合流`);
         for (const cand of winners) {
           throwIfAborted(signal);
-          // 记已试——尾部兜底循环消费同一批 URL，确定性失败不重复打
+          // 记已试——尾部兜底与下一轮 VISIONOS 的 winners 都消费同一批
+          // URL，确定性失败不重复整段下载（单文件可达 GB 级）
+          if (triedProgressive.has(cand.url)) continue;
           triedProgressive.add(cand.url);
           try {
             const saved = await fetchTo(cand, outputPath, 0, 100);
             return { path: saved.path, size: saved.size, url: cand.url, videoMeta: metaOf(cand, 'progressive') };
           } catch (e) {
             throwIfAborted(signal);
-            if (e?.fatal && e?.code) throw e;
+            if (penetratesCandidates(e)) throw e;
             downgradeWarn(cand, e);
             lastErr = e;
           }
@@ -499,7 +521,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
               for (const a of media.audios) {
                 try { await fetchTo(a, tmp, 75, 15); audioOk = true; break; } catch (e) {
                   throwIfAborted(signal);
-                  if (e?.fatal && e?.code) throw e;
+                  if (penetratesCandidates(e)) throw e;
                   lastErr = e;
                 }
               }
@@ -530,7 +552,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
             throwIfAborted(signal);
             // 上游 4xx 的 fatal 只判死这一条 URL——换候选；带 errno 的本地
             // 确定性失败（ENOSPC/EROFS）才是真穿透，候选级循环不该为它空转
-            if (e?.fatal && e?.code) throw e;
+            if (penetratesCandidates(e)) throw e;
             downgradeWarn(v, e);
             lastErr = e;
           } finally {
@@ -565,7 +587,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
       return { path: saved.path, size: saved.size, url: cand.url, videoMeta: metaOf(cand, 'progressive') };
     } catch (e) {
       throwIfAborted(signal);
-      if (e?.fatal && e?.code) throw e;
+      if (penetratesCandidates(e)) throw e;
       downgradeWarn(cand, e);
       lastErr = e;
     }
