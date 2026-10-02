@@ -1,7 +1,7 @@
 <template>
   <!-- 主区全宽：管理视图占用整个内容列（YTM 式页面切换而非面板挤压）。
        sage 画布上两张纸面发丝盒（队列列 / 任务列） -->
-  <div class="admin-panel flex flex-col relative m-5 flex-1 min-h-0 overflow-hidden">
+  <div class="admin-panel flex flex-col relative m-3 sm:m-5 flex-1 min-h-0 overflow-hidden">
     <!-- <xl 单列时两行各按内容撑高会超出面板——给网格自身加纵向滚动兜底 -->
     <div class="grid grid-cols-1 xl:grid-cols-[400px_minmax(0,1fr)] gap-4 flex-1 min-h-0 overflow-y-auto xl:overflow-visible"
       style="scrollbar-gutter: stable"><!-- <xl 时本格是唯一滚动器；≥xl overflow:visible 时 gutter 自动失效 -->

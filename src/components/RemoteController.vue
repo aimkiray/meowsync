@@ -431,9 +431,13 @@ onUnmounted(() => {
   color: var(--label-grey);
 }
 
-/* 轨道/柄色由 .pg-range + .pg-range--on-ink 全局供给；这里只补布局、焦点环、14px 加大柄（触屏遥控） */
+/* 轨道/柄色由 .pg-range + .pg-range--on-ink 全局供给；这里只补布局、焦点环、14px 加大柄（触屏遥控）。
+   本页是手机专用遥控面——input 自身扩成 40px 命中带（视觉轨道仍细），
+   pan-x 防竖滚抢走横拖手势 */
 .rc-slider {
   flex: 1;
+  height: 40px;
+  touch-action: pan-x;
   outline: none;
 }
 .rc-slider:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
@@ -529,7 +533,8 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 9px 8px;
+  /* 遥控端点行即跳播——~36px 行高误触邻行，垫到 ~44px 触控档 */
+  padding: 12px 8px;
   background: none;
   border: none;
   border-left: 1.2px solid transparent;

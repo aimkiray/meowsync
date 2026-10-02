@@ -309,6 +309,10 @@
 .song-list-main {
   padding: 20px;
 }
+/* 窄屏让利：360px 视口 40px 边距吃掉 11% 屏宽——行信息列优先 */
+@media (max-width: 640px) {
+  .song-list-main { padding: 12px; }
+}
 
 .song-rows { scrollbar-gutter: stable; }
 
@@ -614,8 +618,12 @@
   color: var(--label-grey);
 }
 
-/* 触屏无 hover——隐形但可点的 ⋯ 键会误触，常显 */
+/* 触屏无 hover——隐形但可点的 ⋯ 键会误触，常显。
+   常显后须给时长让位：右 padding 把时长推到 ⋯ 键左侧，
+   否则透明底图标永远压在 "3:45" 上 */
 @media (hover: none) {
+  .song-row-main { padding-right: 44px; }
+  .song-duration { margin-right: 0; }
   .song-menu-btn {
     opacity: 1;
     pointer-events: auto;
@@ -777,7 +785,10 @@ export default {
         // 计算菜单位置：下方空间不足时翻到按钮上方，左右越界时收回视口内
         const button = event.target.closest('button')
         const rect = button.getBoundingClientRect()
-        const menuWidth = 160 // 与 .pg-menu min-width 一致，防止右缘溢出视口
+        // 估宽按最长项实测 ~200px（「获取源文件（最优音质）」「回源·源名」），
+        // 不是 min-width 160——估低会把右缘钳点放错，长菜单右端出视口。
+        // .pg-menu 另有 max-width:calc(100vw-16px) 双保险
+        const menuWidth = 200
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；可回源多"回源"，有已选歌单
         // （除分享壳）多"从歌单移除"，可达服务端下载链多"下载到服务器"，外部

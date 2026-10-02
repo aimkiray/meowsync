@@ -429,7 +429,8 @@ export default {
 /* 纸面 masthead：一行高度 + 墨色发丝下缘 */
 .topnav {
   flex-shrink: 0;
-  padding: 0 16px;
+  /* 横屏刘海侧让位：viewport-fit=cover 下左缘 ~47px 死区 */
+  padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
   border-bottom: var(--hairline);
   background: var(--paper);
 }
@@ -557,7 +558,10 @@ export default {
   z-index: var(--z-menu);
   background: var(--paper);
   border: var(--hairline);
-  overflow: hidden;
+  /* 8 条建议 ~300px + 窄屏双行顶栏 ~97px——手机横屏会顶出视口底缘，
+     限高内滚兜底 */
+  max-height: calc(100dvh - var(--topnav-h, 56px) - 8px);
+  overflow-y: auto;
 }
 
 .topnav-suggest-item {

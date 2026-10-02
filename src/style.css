@@ -468,12 +468,19 @@ html {
   scroll-behavior: smooth;
 }
 
+/* 百分比高度链：老内核（无 dvh）下 100vh 是大视口高，壳层 overflow:hidden
+   又无滚动补偿——底条会被推到可视区外永远不可达。% 高在 iOS 走小视口，
+   是最稳的兼容路径；现代浏览器仍走 .app-shell 的 dvh */
+html, body, #app { height: 100%; }
+
+/* overflow-x:clip 而非 hidden——hidden 使 body 成为滚动容器（整页可拖拽
+   露出底条下方条带、且污染后代 sticky 的滚动脉络），clip 只裁不建容器 */
+html, body { overflow-x: clip; }
+
 body {
   font-family: var(--font-body);
   background: var(--page);
   color: var(--ink-86);
-  min-height: 100vh;
-  overflow-x: hidden;
 }
 
 ::selection {
@@ -570,6 +577,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 
 /* ═══ 应用壳：纸面 masthead / 彩纸主区 / 墨色底条 ═══ */
 .app-shell {
+  /* 三档高度：% 走 html/body 链兜老内核小视口 → vh 兜底 → dvh 现代值 */
+  height: 100%;
   height: 100vh;
   height: 100dvh;
   display: flex;
@@ -710,6 +719,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
     top: var(--topnav-h);
     left: 0;
     bottom: 0;
+    /* 抽屉盖住底栏——末行须让出 Home 指示条；横屏左缘让刘海区 */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
     width: min(300px, 85vw);
     z-index: var(--z-menu);
     background: var(--paper);
@@ -1001,10 +1013,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-field select { flex: 0 0 auto; border-left: var(--hairline); cursor: pointer; }
 .pg-field input::placeholder { color: var(--ink-64); }
 .pg-field:focus-within { outline: 2px solid currentColor; outline-offset: -1px; }
-/* iOS 防缩放：<16px 的 input 聚焦会触发整页 zoom */
-@media (max-width: 700px) {
-  /* iOS：<16px 文字输入聚焦触发整页 zoom（atp 对话框打开即 autofocus） */
-  .pg-field input, .atp-new input { font-size: 16px; }
+/* iOS/iPadOS 防缩放：<16px 的 input/select 聚焦触发整页 zoom；
+   pointer:coarse 覆盖平板触屏（旧 700px 断点漏 iPad 竖屏 768–834） */
+@media (pointer: coarse) {
+  .pg-field input, .pg-field select, .atp-new input, .asp-search input { font-size: 16px; }
 }
 
 /* 浮动菜单（teleport 到 body 脱离组件作用域——必须全局类） */
@@ -1014,9 +1026,15 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border: var(--hairline);
   z-index: var(--z-menu);
   min-width: 160px;
+  /* JS 估宽(menuWidth≈160)按短项算——「回源·源名」「获取源文件」实测 ~190px，
+     窄屏右缘会出视口；硬顶到视口内，超出走 item 截断 */
+  max-width: calc(100vw - 16px);
   overflow-y: auto;
-  /* 矮视口防截底：6 项菜单 ~278px，vh < ~290 时翻上后仍会出底缘——可滚兜底 */
+  /* 矮视口防截底：6 项菜单 ~278px，vh < ~290 时翻上后仍会出底缘——可滚兜底。
+     dvh 跟可视高（iOS 工具栏展开态 vh 会高估） */
   max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overscroll-behavior: contain;
 }
 .pg-menu-head {
   padding: 9px 12px;
@@ -1042,12 +1060,25 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border-bottom: var(--hairline-soft);
   cursor: pointer;
   text-align: left;
+  /* 菜单宽被 max-width 钳住时单项保持单行高度（JS 估高的前提）；
+     超长文案裁断不换行——flex 容器上 ellipsis 不作用于匿名子项，用 nowrap+hidden 兜底 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color .2s;
 }
 .pg-menu-item:last-child { border-bottom: none; }
 .pg-menu-item:hover { color: var(--accent-magenta-ink); }
 .pg-menu-item--danger { color: var(--accent-danger-ink); }
 .pg-menu-item--danger:hover { color: var(--accent-danger-ink); } /* 悬停走深档——与全站 hover→ink 同律 */
+
+/* 滚动链截断：弹层/内滚容器滚到缘后不再链到文档——Android 防下拉刷新
+   整页重载（弹窗状态全丢），iOS 防遮罩下橡皮筋。
+   覆盖全屏遮罩与所有自成滚动器的容器；watch-view 是移动态整页滚动器 */
+.atp-overlay, .fb-overlay, .pg-menu, .atp-list, .watch-view, .watch-main,
+.watch-side-body, .playlist-scroll, .dql-scroll, .dtl-scroll, .topnav-suggest {
+  overscroll-behavior: contain;
+}
 
 /* ── 添加到歌单对话框：居中模态，复用 pg-menu 发丝皮 ── */
 .atp-overlay {
@@ -1061,11 +1092,17 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .atp-dialog {
   width: min(300px, 86vw);
+  /* dvh 随可视高收缩——Android resizes-content 键盘弹出时弹窗仍留在可视区；
+     矮屏（手机横屏/键盘态）再给一档净空 */
   max-height: 60vh;
+  max-height: 60dvh;
   display: flex;
   flex-direction: column;
   background: var(--paper);
   border: var(--hairline);
+}
+@media (max-height: 540px) {
+  .atp-dialog { max-height: calc(100dvh - 24px); }
 }
 .atp-list { overflow-y: auto; min-height: 0; } /* 显式化收缩意图（overflow 已隐式清零，注释防回归） */
 .atp-name {
@@ -1107,6 +1144,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 /* 内陷环与 border 连成 ~2.4px 墨带——与 .pg-field:focus-within 同构的「加粗框」签名 */
 .atp-new input:focus-visible { outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
+/* preflight 的 ::placeholder 灰（#9ca3af opacity:1）在纸面 ~2.8:1 且离盘——回墨档 */
+.atp-new input::placeholder { color: var(--ink-64); }
 
 /* ── 点歌台（asp-*）：atp 模态皮的加宽变体，行式结果列表 ── */
 .asp-dialog { width: min(380px, 92vw); }

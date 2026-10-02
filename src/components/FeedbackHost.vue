@@ -156,6 +156,9 @@ export default {
 .fb-dialog {
   width: min(340px, calc(100vw - 48px));
   padding: 20px;
+  /* 长错误文案在矮屏/键盘态会被上下裁到按钮不可达——限高内滚 */
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
 }
 
 .fb-message {

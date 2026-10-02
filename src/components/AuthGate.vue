@@ -109,6 +109,9 @@ export default {
   background: #f4f1ea;
   z-index: 1000;
   padding: 16px;
+  /* 键盘弹出/横屏矮视口时卡片可高过视口——容器可滚，提交键不被裁 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .auth-card {
   width: 100%;
@@ -121,6 +124,9 @@ export default {
   flex-direction: column;
   gap: 12px;
   font-family: 'Courier New', ui-monospace, monospace;
+  /* 超高时 margin:auto 居中语义+可滚：顶缘不被 flex 居中裁掉 */
+  margin: auto;
+  max-height: calc(100dvh - 32px);
 }
 .auth-title {
   display: flex;
@@ -140,7 +146,8 @@ export default {
   border: 1.5px solid #1a1a1a;
   border-radius: 6px;
   padding: 10px 12px;
-  font-size: 14px;
+  /* ≥16px：iOS 聚焦不触发整页 zoom（autofocus 挂载即聚焦，低于 16 必中招） */
+  font-size: 16px;
   font-family: inherit;
   background: #fafaf8;
   outline: none;

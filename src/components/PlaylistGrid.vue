@@ -464,10 +464,11 @@ export default {
   flex-shrink: 0;
 }
 
-/* 卡片网格：自适应列数 */
+/* 卡片网格：自适应列数。minmax 下限 140px——360px 视口（内容宽 320px）
+   恰好转 2 列；160 会让 360/375 档塌成单列巨卡，一屏只见一张 */
 .playlist-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 16px;
 }
 

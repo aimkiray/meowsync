@@ -20,7 +20,7 @@
           class="pg-chip"
           :title="`${song.name} - ${songArtists(song)}`"
           @click="$emit('play-song', song, recents)"
-        >{{ song.name }}</button>
+        ><span class="truncate min-w-0">{{ song.name }}</span></button>
       </div>
     </section>
 
