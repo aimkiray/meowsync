@@ -216,6 +216,9 @@ function extOf(url) {
   const mime = url.searchParams.get('mime') || '';
   if (mime.startsWith('audio/mp4')) return 'm4a';
   if (mime.startsWith('audio/webm')) return 'webm';
+  // progressive 合流兜底（闸控链下排到首位的形态）：video/mp4 容器含
+  // AAC 轨——下载端 MIME_EXT 同口径按音频工件落 m4a，前端 type 同步
+  if (mime.startsWith('video/mp4')) return 'm4a';
   return null;
 }
 
@@ -350,6 +353,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
                 console.info(`[unlock] ${item.id} ${source}: 不在代理白名单`);
                 continue;
               }
+              // splice 可能换掉首链——checked 对齐过滤后的 urls[0]，
+              // extOf/HEAD 探测的口径必须是最终下发链而非被滤掉的链
+              checked = normalizeOutboundUrl(urls[0]);
             }
 
             // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。

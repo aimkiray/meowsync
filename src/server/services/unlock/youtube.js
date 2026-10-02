@@ -152,11 +152,15 @@ async function resolve(info, { signal, purpose } = {}) {
     try {
       // 闸控感知取流（services/youtube-resolve.js）：SABR 闸控的视频
       // 探测→VISIONOS 重解，自适应批已证 403 时合流档提首——此前这里
-      // 裸拿 ANDROID/IOS 自适应首条，被闸视频解锁「成功」却回链 403
+      // 裸拿 ANDROID/IOS 自适应首条，被闸视频解锁「成功」却回链 403。
+      // 单候选 30s 子预算：探测+重解病态叠加最坏 ~55s，不封顶会让 1 号
+      // 候选烧穿 60s 整源预算、后排候选永不出场——超时按死候选记簿续试
+      const candSignal = AbortSignal.any(
+        [AbortSignal.timeout(30000), ...(signal ? [signal] : [])]);
       const { streams } = await resolveYoutubeStreams(cand.videoId, {
         kind: 'audio',
         prefer: purpose === 'download' ? 'best' : '',
-        signal,
+        signal: candSignal,
       });
       const head = streams[0];
       if (head) {
