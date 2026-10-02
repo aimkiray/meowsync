@@ -106,6 +106,7 @@ test('resolve：AI 选定候选取流成功才落批准 verdict', async () => {
   resolveStreamsImpl = async (vid) => ({ streams: [{ url: `u-${vid}`, br: 128 }] });
   const r = await resolve(info, {});
   assert.equal(r.url, 'u-y');
+  assert.deepEqual(r.urls, ['u-y']);   // 整条候选链透出给 vault 逐链 mint
   assert.deepEqual(verdictWrites, [{ vkey: 'r1@yt_y@stub-model', kind: 'unlock', ok: 1, detail: 't-y' }]);
 });
 
