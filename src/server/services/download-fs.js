@@ -6,7 +6,7 @@ const fs = require('fs');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 const { dataDir } = require('../db/client');
 const { estimateDuration } = require('./netease-api');
-const fileDownloader = require('./file-downloader');
+const { sanitizeFilename } = require('./download-io');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const { BV_TRACK_ID_RE, YT_TRACK_ID_RE } = require('../../shared/predicates.js');
 
