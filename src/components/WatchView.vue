@@ -347,6 +347,7 @@ import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 import { songSourceUrl, songSourceName, songCoverUrl } from '../lib/song'
+import { LS_KEYS } from '../lib/storage'
 
 export default {
   name: 'WatchView',
@@ -404,9 +405,9 @@ export default {
     const safeSetLs = (k, v) => { try { localStorage.setItem(k, v) } catch { /* 存不上就只用会话值 */ } }
     const lyricFontSize = ref(
       Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MIN,
-        parseInt(safeGetLs('meowsync-lyric-fs')) || 18)))
+        parseInt(safeGetLs(LS_KEYS.LYRIC_FONT_SIZE)) || 18)))
     watch(lyricFontSize, v => {
-      safeSetLs('meowsync-lyric-fs', String(v))
+      safeSetLs(LS_KEYS.LYRIC_FONT_SIZE, String(v))
     })
     const lyricOffsetLabel = computed(() => {
       const s = props.lyricOffsetMs / 1000
@@ -583,11 +584,11 @@ export default {
 
     // ── 外部导入曲视频模式（B 站/YouTube 同一机制） ──
     // 偏好持久化：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开。
-    // LS key 留 'meowsync-bili-video'：YouTube 接入沿用既有偏好，不换名重置用户选择
+    // LS_KEYS.VIDEO_MODE 沿用 B 站时代键名：YouTube 接入不换名重置用户选择
     const mediaVideoRef = ref(null)
-    const videoOn = ref(safeGetLs('meowsync-bili-video') !== '0')
+    const videoOn = ref(safeGetLs(LS_KEYS.VIDEO_MODE) !== '0')
     watch(videoOn, v => {
-      safeSetLs('meowsync-bili-video', v ? '1' : '0')
+      safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0')
       // 开视频就是用户最自然的重试入口——复位失败闩重新拉流
       if (v) mediaVideoFailed.value = false
     })

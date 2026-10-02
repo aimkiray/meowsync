@@ -19,6 +19,7 @@
  * 'default' 不写属性（:root 基线即默认主题，UI 显示名 retro）；未知/非法 id 一律回落 default。
  */
 import { ref, readonly } from 'vue'
+import { LS_KEYS } from './storage'
 
 export const THEMES = [
   { id: 'default', label: 'retro', pill: 'retro' },
@@ -26,7 +27,7 @@ export const THEMES = [
 ]
 
 // 与 index.html 内联脚本共用键名，改动须同步
-const STORAGE_KEY = 'meowsync-theme'
+const STORAGE_KEY = LS_KEYS.THEME
 const VALID = new Set(THEMES.map(t => t.id))
 
 function readStoredTheme() {

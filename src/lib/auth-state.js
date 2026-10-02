@@ -1,8 +1,9 @@
 import { reactive } from 'vue'
+import { LS_KEYS } from './storage'
 
 // 登录态模块级单例（与本项目 composable 惯例同型——ref 模块单例）。
 // booted=false 期间 App 不渲染主壳：防止未判定就先打出一堆 401
-const SETUP_DISMISS_KEY = 'meowsync-setup-dismissed'
+const SETUP_DISMISS_KEY = LS_KEYS.SETUP_DISMISSED
 
 export const authState = reactive({
   booted: false,        // /auth/status 已回包
