@@ -466,23 +466,34 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
   const createPlaylistOpen = ref(false)
   const createPlaylistName = ref('')
   const createPlaylistInput = ref(null)
+  // 触发键在 open 同步段捕获——不能挪进 watcher 里读 document.activeElement：
+  // 互斥收口（如 atp-over-create）时兄弟窗的 cleanup 归还先跑（watcher id 序），
+  // watcher 内读到的会是被污染的旧窗触发键而非本次真实触发键
+  let createPrevFocus = null
 
   const openCreatePlaylist = () => {
+    if (createPlaylistOpen.value) return // 重入不清空已输入名
+    createPrevFocus = document.activeElement
     createPlaylistName.value = ''
     createPlaylistOpen.value = true
   }
   const closeCreatePlaylist = () => { createPlaylistOpen.value = false }
 
   // 焦点进出与 atp 弹窗同款：开时进输入框、关时归还触发键。
-  // 归还前先验可见：提交后 selectPlaylistAndShow 会合上移动端抽屉/切视图，
-  // 归还目标若已隐藏，焦点落在不可见元素上会让下一次 Tab 从文档头重走
+  // 归还推迟到 rAF（本帧渲染之后）：提交路径上 selectPlaylistAndShow 会合上
+  // 移动端抽屉/切视图，其 DOM patch 排在 watcher flush 之后的独立 flush——
+  // 同步或 microtask 归还都会赶在 patch 前，把焦点落到随后才隐藏的元素上。
+  // visibilityProperty 覆盖抽屉的 visibility:hidden 关闭态
   watch(createPlaylistOpen, async (v, _prev, onCleanup) => {
     if (!v) return
-    const prevFocus = document.activeElement
+    const prevFocus = createPrevFocus
+    createPrevFocus = null
     onCleanup(() => {
       if (!(prevFocus instanceof HTMLElement)) return
-      if (prevFocus.checkVisibility?.() === false) return
-      prevFocus.focus()
+      requestAnimationFrame(() => {
+        if (prevFocus.checkVisibility?.({ visibilityProperty: true }) === false) return
+        prevFocus.focus({ preventScroll: true })
+      })
     })
     await nextTick()
     createPlaylistInput.value?.focus()

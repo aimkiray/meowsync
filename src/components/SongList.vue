@@ -17,16 +17,20 @@
         <p class="playlist-hero-sub">
           {{ selectedPlaylist.creator?.nickname || '神秘创建者' }} · {{ selectedPlaylist.trackCount || songs.length }} 首
         </p>
-        <!-- 主按钮墨块 / 随机、VIP 过滤同为幽灵键；on 态 accent 字 + ✓ 前缀 -->
+        <!-- 主按钮墨块 / 随机、VIP 过滤同为幽灵键；on 态 accent 字 + ✓ 前缀。
+             loadingSongs 期 disabled：远端单拉取未落地时点播放会把旧单曲目拍进
+             队列却冠新单 playingPlaylistId（queueTitle/历史/刷新恢复全错位） -->
         <div class="playlist-hero-actions">
           <button
             @click="$emit('play-all')"
             class="ink-btn"
+            :disabled="loadingSongs"
             title="播放全部"
           ><PixelIcon name="play" :size="18" /> 播放</button>
           <button
             @click="$emit('play-shuffle')"
             class="ink-btn ink-btn--ghost"
+            :disabled="loadingSongs"
             title="随机播放"
           ><PixelIcon name="shuffle" :size="15" /> 随机</button>
           <button
