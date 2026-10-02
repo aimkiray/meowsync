@@ -10,7 +10,7 @@ const {
   listTracksByPlaylistId
 } = require('../repositories/playlistTracks');
 const { httpError } = require('../lib/http-error');
-const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
+const { deletingPlaylists, isNeteasePlaylistDeleting, beginNeteasePlaylistImport, endNeteasePlaylistImport } = require('../lib/deletion-locks');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 
 // callNeteaseApi 对上游非 200 是 reject(answer{status,body,cookie})——不是 Error、
@@ -108,6 +108,11 @@ async function fetchRemotePlaylist(neteasePlaylistId) {
 }
 
 async function importPlaylistFromNetease(neteasePlaylistId, options = {}) {
+  // 在途登记先于上游往返：多腿串行抓取可远超墓碑 TTL——删除方在此期间落的
+  // 墓碑靠本计数续命到导入结束，"删除先于在途 fetch 返回→复活行"的窗口被
+  // 结构性关死（原 130s 固定 TTL 对千曲歌单不够用）
+  beginNeteasePlaylistImport(neteasePlaylistId);
+  try {
   const remotePlaylist = await fetchRemotePlaylist(neteasePlaylistId);
 
   // 歌单行 + 曲目表两写同事务：中途失败不留"有歌单没曲目"的半导入数据。
@@ -143,6 +148,9 @@ async function importPlaylistFromNetease(neteasePlaylistId, options = {}) {
     throw httpError(404, '歌单在导入后被删除');
   }
   return detail;
+  } finally {
+    endNeteasePlaylistImport(neteasePlaylistId);
+  }
 }
 
 function getPlaylistDetail(id) {

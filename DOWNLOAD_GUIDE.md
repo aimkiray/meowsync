@@ -86,7 +86,7 @@ curl -X POST http://localhost:3101/downloads/queues/{queueId}/retry    # 重置�
 ### 删除队列 / 任务 / 歌曲文件
 
 ```bash
-curl -X DELETE http://localhost:3101/downloads/queues/{queueId}        # 中止队列并连带删除已落盘文件
+curl -X DELETE http://localhost:3101/downloads/queues/{queueId}        # 级联删除该歌单全部下载足迹（任务/队列/歌单行+盘上文件）
 curl -X DELETE http://localhost:3101/downloads/tasks/{taskId}
 curl -X DELETE 'http://localhost:3101/downloads/songs/{songId}?playlistId=1'
 curl -X DELETE http://localhost:3101/downloads/playlists/1/files       # 清空歌单全部已下载文件

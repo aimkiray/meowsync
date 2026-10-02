@@ -4,7 +4,7 @@
 const { getDb } = require('../db/client');
 const playlistsRepo = require('../repositories/playlists');
 const playlistTracksRepo = require('../repositories/playlistTracks');
-const { deletingPlaylists } = require('../lib/deletion-locks');
+const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
 const { httpError } = require('../lib/http-error');
 
 /**
@@ -14,6 +14,10 @@ const { httpError } = require('../lib/http-error');
 function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
   const db = getDb();
   return db.transaction(() => {
+    // 墓碑复查收敛在服务层：路由层前置检查（downloads.js mirror 路由）与本写
+    // 之间一旦插入 await/新增调用方就开窗——行删后 upsert 以同 netease id 复活
+    // 新行，路由的检查点与下面的行 id 复查都够不着这个复活窗
+    if (isNeteasePlaylistDeleting(localId)) throw httpError(409, '该歌单正在删除中');
     const row = playlistsRepo.upsertPlaylist({
       neteasePlaylistId: localId,
       name,

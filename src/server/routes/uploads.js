@@ -27,7 +27,10 @@ const { rateLimit } = require('../lib/rate-limit');
 
 const app = new Hono();
 
-// uploads 伪歌单锚点：文件资产的 playlist 归属（netease_playlist_id 列承载）
+// uploads 伪歌单锚点：文件资产的 playlist 归属（netease_playlist_id 列承载）。
+// 此行是承重不变量——对应歌单行永不可级联删（deletePlaylistCascade 服务层
+// 400 拦）；绕过删除会让全部 file_* 登记失联、uploads/ 目录出收割视野成
+// 永久孤儿。懒建自愈只保证锚行存在，救不回失联登记
 const UPLOADS_PLAYLIST_ID = 'local_uploads';
 
 // 扩展名白名单——文件名可伪造，白名单决定落盘形态与 file 端点的 MIME

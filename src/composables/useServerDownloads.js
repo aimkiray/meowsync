@@ -232,11 +232,15 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
         toast(wantVideo ? '视频下载成功' : '下载成功', 'success')
       } catch (error) {
         console.error('下载失败:', error)
-        // 本地单 409 = 撞删除墓碑（镜像/级联途中）——与 PlaylistPanel 同款改写
-        if (stillCurrent()) toast(
-          isLocalPlaylist.value && error.response?.status === 409
-            ? '歌单清理中，请稍候重试'
-            : '下载失败: ' + apiErrorMessage(error), 'error')
+        // 409 过载：按消息区分删除墓碑（管理页级联/镜像删除后 ~130s 重下会撞）
+        // 与"任务进行中"等并发冲突——前者是可重试语义，后者照原文透传
+        if (stillCurrent()) {
+          const message = apiErrorMessage(error)
+          toast(
+            error.response?.status === 409 && /正在删除中/.test(message)
+              ? '歌单清理中，请稍候重试'
+              : '下载失败: ' + message, 'error')
+        }
       } finally {
         if (stillCurrent()) {
           serverDownloadingStates.value[song.id] = false

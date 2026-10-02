@@ -6,18 +6,35 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpDataDir } from './helpers.mjs';
+import { dirname, join } from 'node:path';
+import { seed, tmpDataDir } from './helpers.mjs';
 
 process.env.DATA_DIR = tmpDataDir('meowsync-qdel-');
 const require = createRequire(import.meta.url);
 
-let app, tasksRepo, queuesRepo, playlistsRepo, downloadFs;
+// 排空测试用 stub：下载函数挂起至 abort——不起真协程就验证不了级联的
+// abort+drain 语义（这正是队列删除升级的主要价值面）。必须早于任何
+// download-manager 加载（require.cache 播种）
+const hangUntilAbort = (...args) => new Promise((_, reject) => {
+  const signal = args.find(a => a && typeof a.aborted === 'boolean' && typeof a.addEventListener === 'function');
+  const abort = () => reject(Object.assign(new Error('下载已取消'), { name: 'AbortError' }));
+  if (signal?.aborted) return abort();
+  signal?.addEventListener('abort', abort, { once: true });
+});
+seed('../src/server/services/file-downloader.js', {
+  downloadAudio: hangUntilAbort,
+  downloadVideo: hangUntilAbort,
+  downloadLyrics: hangUntilAbort,
+  downloadCover: hangUntilAbort
+});
+
+let app, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, downloadFs;
 before(() => {
   app = require('../src/server/routes/downloads.js');
   tasksRepo = require('../src/server/repositories/downloadTasks.js');
   queuesRepo = require('../src/server/repositories/downloadQueues.js');
   playlistsRepo = require('../src/server/repositories/playlists.js');
+  playlistTracksRepo = require('../src/server/repositories/playlistTracks.js');
   downloadFs = require('../src/server/services/download-fs.js');
 });
 
@@ -32,7 +49,7 @@ function seedDownload(neteaseId, { queue = true } = {}) {
     songName: '歌', artist: '艺人', status: 'completed', downloadAudio: true
   });
   const audioPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', `${task.songId}.mp3`);
-  mkdirSync(join(audioPath, '..'), { recursive: true });
+  mkdirSync(dirname(audioPath), { recursive: true });
   writeFileSync(audioPath, `audio-bytes-${neteaseId}`);
   tasksRepo.updateTask(task.id, { audioPath });
   return { pl, queue: q, task: tasksRepo.findTaskById(task.id), audioPath };
@@ -76,13 +93,54 @@ test('级联只清目标歌单：邻歌单的队列/任务/文件幸存', async 
   assert.ok(existsSync(b.audioPath));
 });
 
+test('同歌单多队列连坐删除（deleteQueuesByPlaylist 全量语义）', async () => {
+  const { pl, queue } = seedDownload('777010');
+  // schema 允许一歌单多队列——管理页删任一行 = 删歌单，兄弟队列随行
+  const sibling = queuesRepo.createQueue({ playlistId: pl.id, name: 'sibling', status: 'cancelled', totalTasks: 0 });
+
+  const res = await del(queue.id);
+  assert.equal(res.status, 200);
+  assert.equal(queuesRepo.findQueueById(sibling.id), null);
+  assert.equal(playlistsRepo.findPlaylistById(pl.id), null);
+});
+
+test('并发删除同一歌单足迹 → 一路 200 一路 409', async () => {
+  const { queue } = seedDownload('777011');
+  // cascade 的 deletingPlaylists 在首个 await 前同步登记——顺序发射即确定性命中
+  const [first, second] = await Promise.all([del(queue.id), del(queue.id)]);
+  const codes = [first.status, second.status].sort((x, y) => x - y);
+  assert.deepEqual(codes, [200, 409]);
+});
+
+test('级联后墓碑窗内重下同歌单 → 409 可重试语义', async () => {
+  const { pl, queue } = seedDownload('777012');
+  assert.equal((await del(queue.id)).status, 200);
+  // quick 下载走 resolvePlaylistId → 墓碑命中 409（~130s 窗内防复活）
+  const res = await app.request(`http://t/downloads/playlists/${pl.neteasePlaylistId}/quick`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(res.status, 409);
+});
+
 test('local_uploads 伪歌单不可经队列删除级联清空（服务层不变量）', async () => {
   // 伪歌单是全部 file_ 上传资产的登记锚——队列删除升级为级联后，伪歌单上
   // 挂的队列（异常数据形态）绝不能一键清掉所有上传音源
-  const { pl, queue, audioPath } = seedDownload('local_uploads');
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_uploads', name: '上传库', source: 'local' });
+  const queue = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 0 });
+  const task = tasksRepo.createTask({
+    playlistId: pl.id, queueId: queue.id, songId: 'file_guard1',
+    songName: '资产', artist: '', status: 'completed', downloadAudio: true
+  });
+  const audioPath = join(downloadFs.DOWNLOAD_BASE_DIR, 'uploads', 'audio', 'file_guard1.mp3');
+  mkdirSync(dirname(audioPath), { recursive: true });
+  writeFileSync(audioPath, 'uploaded-bytes');
+  tasksRepo.updateTask(task.id, { audioPath });
 
   const res = await del(queue.id);
   assert.equal(res.status, 400);
+  assert.match((await res.json()).message || '', /不可删除/);
 
   assert.ok(queuesRepo.findQueueById(queue.id));
   assert.equal(tasksRepo.listTasksByPlaylist(pl.id).length, 1);
@@ -93,4 +151,31 @@ test('local_uploads 伪歌单不可经队列删除级联清空（服务层不变
 test('删除不存在的队列 → 404', async () => {
   const res = await del(999999);
   assert.equal(res.status, 404);
+});
+
+test('锁释放断言：local_uploads 400 之后再发同请求仍 400（锁泄漏会变 409）', async () => {
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_uploads', name: '上传库2', source: 'local' });
+  const queue = queuesRepo.createQueue({ playlistId: pl.id, name: 'q', status: 'completed', totalTasks: 0 });
+  assert.equal((await del(queue.id)).status, 400);
+  assert.equal((await del(queue.id)).status, 400); // deletingPlaylists 若泄漏，第二次拿 409
+});
+
+test('在途协程级联：abort+排空后任务/队列/歌单行全清', async () => {
+  const dm = require('../src/server/services/download-manager.js');
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777013', name: 'live-pl' });
+  playlistTracksRepo.replaceTracksForPlaylist(pl.id, [
+    { id: 'song_live1', name: '活着的歌', ar: [{ name: 'a' }], al: { name: 'b' }, dt: 60000 }
+  ]);
+  const queue = await dm.createDownloadQueue(pl.id, {
+    downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
+  });
+  await dm.startQueue(queue.id);
+  // 让协程跑到 downloadAudio 挂起点（微任务一跳）
+  await new Promise(r => setImmediate(r));
+
+  const res = await del(queue.id);
+  assert.equal(res.status, 200);
+  assert.equal(tasksRepo.listTasksByPlaylist(pl.id).length, 0);
+  assert.equal(queuesRepo.findQueueById(queue.id), null);
+  assert.equal(playlistsRepo.findPlaylistById(pl.id), null);
 });
