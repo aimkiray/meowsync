@@ -10,7 +10,7 @@ const app = new Hono();
 // Innertube 原语（fetchPlayer/pickStreamList/innertubeSearch）在 lib/youtube.js
 // ——解锁层 services/unlock/youtube.js 复用同一实现，不维护两份客户端表
 const { fetchPlayer, fetchPlayerWith, pickStreamList, fetchYtPlaylistPage } = require('../lib/youtube');
-const { fetchStream } = require('../services/file-downloader');
+const { fetchStream } = require('../services/download-io');
 
 // 「SABR 闸控」探测缓存：videoId → {gated, ts}。自适应流被闸时签名批
 // 寿命 ~6h，探测结果缓存 30min 同量级——连播/重试不重复白打上游
