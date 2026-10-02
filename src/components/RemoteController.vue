@@ -432,12 +432,13 @@ onUnmounted(() => {
 }
 
 /* 轨道/柄色由 .pg-range + .pg-range--on-ink 全局供给；这里只补布局、焦点环、14px 加大柄（触屏遥控）。
-   本页是手机专用遥控面——input 自身扩成 40px 命中带（视觉轨道仍细），
-   pan-x 防竖滚抢走横拖手势 */
+   本页是手机专用遥控面——input 自身扩成 40px 命中带（视觉轨道仍细）。
+   pan-y：原生 range 横拖由浏览器内部处理不受 pointercancel 影响，
+   竖滑放行滚页——pan-x 反而会把这两条 40px 带变成滚动死区 */
 .rc-slider {
   flex: 1;
   height: 40px;
-  touch-action: pan-x;
+  touch-action: pan-y;
   outline: none;
 }
 .rc-slider:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }

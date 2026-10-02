@@ -2,9 +2,10 @@
   <nav class="topnav">
     <div class="topnav-inner">
       <div class="topnav-left">
-        <!-- 移动端：汉堡键呼出歌单库抽屉 -->
+        <!-- 移动端：汉堡键呼出歌单库抽屉（lg:hidden 死声明——pg-icobtn 的
+             display 在 utilities 层后同特异度胜出，隐藏须走 scoped media） -->
         <button
-          class="pg-icobtn pg-icobtn--bare topnav-hamburger lg:hidden"
+          class="pg-icobtn pg-icobtn--bare topnav-hamburger"
           @click="$emit('toggle-sidebar')"
           :aria-expanded="sidebarOpen"
           aria-label="歌单库"
@@ -126,7 +127,7 @@
 </template>
 
 <script>
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
@@ -359,14 +360,22 @@ export default {
     // combobox 键盘交互：↓↑ 在建议间移动，Enter 选中或搜索，Esc 关下拉
     const onKeydown = (e) => {
       if (suggestOpen.value && suggestions.value.length) {
+        // aria-activedescendant 语义要求激活项可见——下拉限高内滚后须跟随滚动
+        const scrollActiveIntoView = () => {
+          nextTick(() => {
+            document.getElementById(`suggest-item-${activeIndex.value}`)?.scrollIntoView({ block: 'nearest' })
+          })
+        }
         if (e.key === 'ArrowDown') {
           e.preventDefault()
           activeIndex.value = (activeIndex.value + 1) % suggestions.value.length
+          scrollActiveIntoView()
           return
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault()
           activeIndex.value = (activeIndex.value - 1 + suggestions.value.length) % suggestions.value.length
+          scrollActiveIntoView()
           return
         }
         if (e.key === 'Enter' && activeIndex.value >= 0 && suggestions.value[activeIndex.value]) {
@@ -475,6 +484,11 @@ export default {
 
 .topnav-hamburger {
   flex-shrink: 0;
+}
+/* ≥lg 侧栏是常驻静态列，抽屉键退场——不能用 lg:hidden：
+   .pg-icobtn{display:inline-flex} 在 utilities 层后同特异度后序胜出 */
+@media (min-width: 1024px) {
+  .topnav-hamburger { display: none; }
 }
 
 .topnav-title {

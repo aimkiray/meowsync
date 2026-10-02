@@ -259,11 +259,11 @@
           <div v-if="!currentSong" class="watch-empty">选择一首歌开始播放喵~</div>
           <template v-else>
             <div v-if="songSwitching" class="watch-empty">
-              <div class="pixel-loading mx-auto mb-4"></div>
+              <div class="pixel-loading mb-4"></div>
               <p>正在切换歌曲喵...</p>
             </div>
             <div v-else-if="loadingLyrics" class="watch-empty">
-              <div class="pixel-loading mx-auto mb-4"></div>
+              <div class="pixel-loading mb-4"></div>
               <p>加载歌词中喵...</p>
             </div>
             <div v-else-if="!lyrics.length" class="watch-empty">暂无歌词</div>
@@ -291,7 +291,7 @@
           class="watch-side-body"
         >
           <div v-if="relatedLoading" class="watch-empty">
-            <div class="pixel-loading mx-auto mb-4"></div>
+            <div class="pixel-loading mb-4"></div>
             <p>加载相关歌曲喵...</p>
           </div>
           <div v-else-if="!relatedSongs.length" class="watch-empty">暂无相关推荐</div>

@@ -69,7 +69,7 @@
                 min="0"
                 max="100"
                 step="1"
-                class="w-full jirai-slider"
+                class="jirai-slider"
                 aria-label="音量"
                 @input="$emit('update-volume', Number($event.target.value))"
               />
@@ -278,7 +278,8 @@ export default {
   position: absolute;
   left: 24px;
   right: 24px;
-  /* 命中壳顶沿 ≈16+env+24——控件行须让到壳上方再叠 8px 气隙 */
+  /* 命中壳顶沿 ≈16+env+24=40+env——本行底沿 46+env，留 6px 气隙
+     （≤768 档壳顶 36+env / 行底 44+env → 8px） */
   bottom: calc(46px + env(safe-area-inset-bottom, 0px));
   display: flex;
   justify-content: space-between;

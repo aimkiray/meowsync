@@ -22,7 +22,7 @@
         @pointerdown="onProgressPointerDown"
         @pointermove="onProgressPointerMove"
         @pointerup="onProgressPointerUp"
-        @pointercancel="onProgressPointerUp"
+        @pointercancel="onProgressPointerCancel"
         @lostpointercapture="onProgressPointerUp"
       >
         <div class="player-progress-fill bp-progress-fill" :style="{ '--p': seekProgress }"></div>
@@ -285,6 +285,10 @@ export default {
       emit('seek', dragProgress.value)
     }
 
+    /* 浏览器接管手势（pan-y 竖滑起步）时只收拖拽态不 emit——
+       用户本意是滚动页面，按触点位置 seek 是误操作 */
+    const onProgressPointerCancel = () => { dragActive.value = false }
+
     return {
       formatTime,
       songArtists,
@@ -323,15 +327,16 @@ export default {
   background: var(--white-16);
   cursor: pointer;
   z-index: 2;
-  /* 4px 裸条对触屏是不可点目标——none 防横滑被手势抢走 pointer 链 */
-  touch-action: none;
+  /* 横滑 seek 不被浏览器手势抢走；竖滑放行——命中带探进主区底缘，
+     none 会在那里造成 16px 滚动死区 */
+  touch-action: pan-y;
 }
-/* 隐形命中带：上 6px（少抢列表末行）+ 下 14px（沉进墨条内沿空档），
-   触屏实际命中 ~24px 而不动视觉 */
+/* 隐形命中带向上探 16px（主区末行底缘死角，误触面窄）——向下只留 1px：
+   .player-inner 内播放键顶缘 y≈4、走带键 y≈10，多探会截胡控件点击 */
 .bp-progress::before {
   content: '';
   position: absolute;
-  inset: -6px 0 -14px;
+  inset: -16px 0 -1px;
 }
 .bp-progress-fill { background: var(--accent-magenta); } /* 已播部分=accent 本色（retro 火烈鸟粉 / glitch teal 同覆写） */
 
