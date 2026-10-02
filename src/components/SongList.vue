@@ -623,7 +623,6 @@
    否则透明底图标永远压在 "3:45" 上 */
 @media (hover: none) {
   .song-row-main { padding-right: 44px; }
-  .song-duration { margin-right: 0; }
   .song-menu-btn {
     opacity: 1;
     pointer-events: auto;

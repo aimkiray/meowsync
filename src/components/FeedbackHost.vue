@@ -27,18 +27,22 @@
         aria-modal="true"
         :aria-label="state.confirm.message"
       >
-        <p class="fb-message">{{ state.confirm.message }}</p>
-        <div class="fb-actions">
-          <button
-            ref="cancelBtn"
-            class="fb-btn ink-btn ink-btn--ghost ink-btn--sm"
-            @click="answer(false)"
-          >取消</button>
-          <button
-            class="fb-btn ink-btn ink-btn--sm"
-            :class="{ 'fb-btn--danger': state.confirm.danger }"
-            @click="answer(true)"
-          >{{ state.confirm.confirmText }}</button>
+        <!-- 内滚挂 body 层：pg-corners 四角标画在 dialog border-box 外 7px，
+             overflow 若直接挂 dialog 会常时裁掉它们（不止滚动时） -->
+        <div class="fb-dialog-body">
+          <p class="fb-message">{{ state.confirm.message }}</p>
+          <div class="fb-actions">
+            <button
+              ref="cancelBtn"
+              class="fb-btn ink-btn ink-btn--ghost ink-btn--sm"
+              @click="answer(false)"
+            >取消</button>
+            <button
+              class="fb-btn ink-btn ink-btn--sm"
+              :class="{ 'fb-btn--danger': state.confirm.danger }"
+              @click="answer(true)"
+            >{{ state.confirm.confirmText }}</button>
+          </div>
         </div>
       </div>
     </div>
@@ -150,13 +154,20 @@ export default {
   align-items: center;
   justify-content: center;
   background: var(--scrim);
+  /* 固定遮罩默认 overflow:visible，overscroll-behavior 对非滚动容器是
+     死声明——hidden 使其恒处滚动边界，contain 才真正截链 */
+  overflow: hidden;
 }
 
 /* 纸面盒 + 角部裁切标记（pg-panel/pg-corners 提供盒与 tick） */
 .fb-dialog {
   width: min(340px, calc(100vw - 48px));
+}
+
+.fb-dialog-body {
   padding: 20px;
-  /* 长错误文案在矮屏/键盘态会被上下裁到按钮不可达——限高内滚 */
+  /* 长错误文案在矮屏/键盘态会被上下裁到按钮不可达——限高内滚
+     （挂在内层：dialog 保持 overflow:visible 才不裁 pg-corners 角标） */
   max-height: calc(100dvh - 48px);
   overflow-y: auto;
 }

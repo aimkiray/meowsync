@@ -38,7 +38,7 @@
 
     <div class="app-body">
       <!-- 移动端侧栏抽屉遮罩 -->
-      <div v-if="sidebarOpen" class="sidebar-scrim lg:hidden" @click="sidebarOpen = false"></div>
+      <div v-if="sidebarOpen" class="sidebar-scrim" @click="sidebarOpen = false"></div>
 
       <!-- 左侧：歌单库（桌面常驻 / 移动端抽屉） -->
       <aside class="app-sidebar" :class="{ 'app-sidebar--open': sidebarOpen }" aria-label="歌单库">

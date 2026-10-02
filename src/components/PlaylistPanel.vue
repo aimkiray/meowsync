@@ -203,7 +203,7 @@ export default {
         // 开出视口后 scroll-close 又挡住滚动，菜单就永远不可达
         const button = event.target.closest('button') || event.target
         const rect = button.getBoundingClientRect()
-        const menuWidth = 200 // 估宽按长项实测（对齐 SongList 同款钳位）
+        const menuWidth = 160 // 本菜单全是短项，实际宽恒等于 pg-menu 的 min-width
         // 菜单高度按可见项数算：临时歌单隐藏 4 项只剩"删除歌单"，
         // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空。
         // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 5 项悬空更安全

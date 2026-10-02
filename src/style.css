@@ -474,8 +474,9 @@ html {
 html, body, #app { height: 100%; }
 
 /* overflow-x:clip 而非 hidden——hidden 使 body 成为滚动容器（整页可拖拽
-   露出底条下方条带、且污染后代 sticky 的滚动脉络），clip 只裁不建容器 */
-html, body { overflow-x: clip; }
+   露出底条下方条带、且污染后代 sticky 的滚动脉络），clip 只裁不建容器。
+   前档 hidden 是给不识别 clip 的老内核（Safari<16）的回落 */
+html, body { overflow-x: hidden; overflow-x: clip; }
 
 body {
   font-family: var(--font-body);
@@ -577,9 +578,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 
 /* ═══ 应用壳：纸面 masthead / 彩纸主区 / 墨色底条 ═══ */
 .app-shell {
-  /* 三档高度：% 走 html/body 链兜老内核小视口 → vh 兜底 → dvh 现代值 */
+  /* 两档高度：% 走 html/body/#app 链（老内核小视口，vh 恒为大视口高会
+     把底条推出可视区）→ dvh 现代值。不挂 100vh 中档——它恒胜 100%
+     使第一档成为死代码 */
   height: 100%;
-  height: 100vh;
   height: 100dvh;
   display: flex;
   flex-direction: column;
@@ -1074,9 +1076,13 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 
 /* 滚动链截断：弹层/内滚容器滚到缘后不再链到文档——Android 防下拉刷新
    整页重载（弹窗状态全丢），iOS 防遮罩下橡皮筋。
-   覆盖全屏遮罩与所有自成滚动器的容器；watch-view 是移动态整页滚动器 */
-.atp-overlay, .fb-overlay, .pg-menu, .atp-list, .watch-view, .watch-main,
-.watch-side-body, .playlist-scroll, .dql-scroll, .dtl-scroll, .topnav-suggest {
+   覆盖全屏遮罩与所有自成滚动器的容器；watch-view 是移动态整页滚动器。
+   .app-shell 恒在滚动边界（overflow:hidden），contain 在其上截断内层
+   向文档的传导，兜住清单外新增滚动器的漏挂 */
+.app-shell, .atp-overlay, .fb-overlay, .pg-menu, .atp-list, .watch-view,
+.watch-main, .watch-side-body, .playlist-scroll, .dql-scroll, .dtl-scroll,
+.topnav-suggest, .song-rows, .home-feed, .playlist-grid-wrap,
+.fb-dialog-body, .rc-queue-list {
   overscroll-behavior: contain;
 }
 
@@ -1089,6 +1095,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   align-items: center;
   justify-content: center;
   background: var(--scrim); /* 与 fb-overlay/sidebar-scrim 同令牌，主题随动 */
+  /* 同上：hidden 使 overscroll-behavior:contain 在遮罩面上生效 */
+  overflow: hidden;
 }
 .atp-dialog {
   width: min(300px, 86vw);
