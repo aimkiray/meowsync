@@ -94,7 +94,8 @@
             :key="task.id"
             class="dtl-task"
           >
-            <DownloadTaskRow :task="task" :retrying-task-ids="retryingTaskIds" />
+            <!-- 重试钮只在 failed 渲染，completed 组转发是死路径——与上段对称保留，防未来动作漏接 -->
+            <DownloadTaskRow :task="task" :retrying-task-ids="retryingTaskIds" @retry-task="$emit('retry-task', $event)" />
           </div>
           <button
             v-if="pgCompleted.hasMore.value"
@@ -137,61 +138,61 @@ const props = defineProps({
     type: String,
     default: ''
   }
-});
+})
 
-defineEmits(['retry-task']);
+defineEmits(['retry-task'])
 
-const showCompleted = ref(false);
+const showCompleted = ref(false)
 
 watch(() => props.selectedQueue?.id, () => {
-  showCompleted.value = false;
-});
+  showCompleted.value = false
+})
 
 // 全量下载成功的队列默认展开 completed 组——否则右栏只剩一条收起行，面板是空的。
 // watch 只在 allDone false→true 时触发，用户手动收起后不打扰
 watch(
   () => props.tasks.length > 0 && props.tasks.every(t => t.status === 'completed'),
-  (allDone) => { if (allDone) showCompleted.value = true; },
+  (allDone) => { if (allDone) showCompleted.value = true },
   { immediate: true }
-);
+)
 
 const taskStats = computed(() => ({
   total: props.tasks.length,
   downloading: props.tasks.filter(task => task.status === 'downloading').length,
   completed: props.tasks.filter(task => task.status === 'completed').length,
   failed: props.tasks.filter(task => task.status === 'failed').length
-}));
+}))
 
 const groupedTasks = computed(() => ({
   failed: props.tasks.filter(task => task.status === 'failed'),
   downloading: props.tasks.filter(task => task.status === 'downloading'),
   pending: props.tasks.filter(task => task.status === 'pending'),
   completed: props.tasks.filter(task => task.status === 'completed')
-}));
+}))
 
 // 每组独立渐进渲染窗——大队列的 pending/completed 都可上千，全量渲卡。
 // 复位只认队列身份（与 showCompleted 复位同 watch 键）；
 // 2s 轮询换 tasks 引用不回卷（前缀窗自夹，不丢滚动位置）
-const scrollEl = ref(null);
+const scrollEl = ref(null)
 const mkGroupWindow = (get) => usePagedList({
   source: computed(get),
   pageSize: 100,
   resetWhen: () => props.selectedQueue?.id,
   scrollRoot: () => scrollEl.value
-});
+})
 // pgXxx 是普通对象——模板里 pgXxx.rows.value 的 .value 是必须的：
 // Vue 只自动解包渲染上下文顶层 ref，嵌套在普通对象内的 ref 永不自动解包
-const pgFailed = mkGroupWindow(() => groupedTasks.value.failed);
-const pgDownloading = mkGroupWindow(() => groupedTasks.value.downloading);
-const pgPending = mkGroupWindow(() => groupedTasks.value.pending);
-const pgCompleted = mkGroupWindow(() => groupedTasks.value.completed);
+const pgFailed = mkGroupWindow(() => groupedTasks.value.failed)
+const pgDownloading = mkGroupWindow(() => groupedTasks.value.downloading)
+const pgPending = mkGroupWindow(() => groupedTasks.value.pending)
+const pgCompleted = mkGroupWindow(() => groupedTasks.value.completed)
 
 // 同构三段的组描述数组：key 对 groupedTasks，pg 是该组的渐进窗
 const taskGroups = [
   { key: 'failed', tag: 'failed:', tagClass: 'dtl-group-tag--fail', pg: pgFailed },
   { key: 'downloading', tag: 'downloading:', tagClass: '', pg: pgDownloading },
   { key: 'pending', tag: 'pending:', tagClass: '', pg: pgPending }
-];
+]
 </script>
 
 <style scoped>

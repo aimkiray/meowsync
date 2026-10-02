@@ -52,7 +52,7 @@
               class="playlist-play-overlay"
               title="播放歌单"
               aria-label="播放歌单"
-              @click.stop="$emit('play-playlist', playlist)"
+              @click.stop="$emit('play-playlist', playlist); closeMenu()"
             ><PixelIcon name="play" :size="22" /></button>
           </div>
           <div class="pl-info">
@@ -145,7 +145,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
 import { copyText, shareOrCopy, playlistShareUrl, mixShareIds, isEmptyMixShareUrl } from '../lib/share'
@@ -188,6 +188,10 @@ export default {
     // 滚动监听必须包箭头：直传 closeMenu 会把 Event 对象塞进 playlistId 形参，
     // 定点判定 String(event) 与任何歌单 id 不等 → 滚动关菜单静默失效
     const closeOnScroll = () => closeMenu()
+
+    // 列表重排（同步回写/增删）会让 fixed 菜单悬空指错行——
+    // 成员或次序真的变了才关（与 DownloadQueueList 同口径）
+    watch(() => props.userPlaylists.map(p => p.id).join(','), () => closeMenu())
 
     onMounted(() => {
       document.addEventListener('click', handleClickOutside)
@@ -280,6 +284,8 @@ export default {
 
     // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
     const sharePlaylist = async (playlist) => {
+      // .stop 阻断了 document click 外关——本行按钮点按也要关已开着的别行菜单
+      closeMenu()
       const shareUrl = playlistShareUrl(playlist)
       if (isEmptyMixShareUrl(shareUrl)) {
         toast('歌单里没有可分享的歌曲', 'info')

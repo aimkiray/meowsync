@@ -93,8 +93,8 @@ export interface DownloadTask {
   songId: string;
   songName: string;
   artist?: string;
-  album?: string;
-  coverUrl?: string;
+  album?: string | null;
+  coverUrl?: string | null;
   status: DownloadTaskStatus;
   progress?: number;
   errorMessage?: string | null;
@@ -110,9 +110,11 @@ export interface DownloadTask {
   videoPath?: string | null;
   /** 视频实际到手档位（file-downloader metaOf）：h/w 像素、codec、br 码率、source=progressive|adaptive */
   videoMeta?: { h?: number; w?: number; codec?: string | null; br?: number | null; source?: string } | null;
+  // bitrate/progress/retryCount/timestamps 列有默认值兜底，但老库补列前的
+  // 存量行可为 NULL——消费方按 | null 防御（类型是意图声明，非运行时保证）
   bitrate?: number;
-  fileSize?: number;
-  durationMs?: number;
+  fileSize?: number | null;
+  durationMs?: number | null;
   /** completed 但文件被外部删除 → false（前端据此重露下载入口） */
   filesIntact?: boolean;
   providerData?: ProviderData | null;

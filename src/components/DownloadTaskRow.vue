@@ -71,25 +71,25 @@ const props = defineProps({
     type: Array,
     default: () => []
   }
-});
+})
 
-defineEmits(['retry-task']);
+defineEmits(['retry-task'])
 
 // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底。
 // coverUrl 是上游 http 明文 CDN 地址：HTTPS 部署下被动混合内容
 // 会被浏览器拦截，显式升级 https（*.music.126.net 均支持 TLS）
-const coverSrc = computed(() => httpsCover(props.task.coverUrl));
-const statusLabel = computed(() => taskStatusMeta(props.task.status).label);
-const chipTierClass = computed(() => statusChipClass(taskStatusMeta(props.task.status).tier));
-const isRetrying = computed(() => props.retryingTaskIds.includes(props.task.id));
+const coverSrc = computed(() => httpsCover(props.task.coverUrl))
+const statusLabel = computed(() => taskStatusMeta(props.task.status).label)
+const chipTierClass = computed(() => statusChipClass(taskStatusMeta(props.task.status).tier))
+const isRetrying = computed(() => props.retryingTaskIds.includes(props.task.id))
 // undefined/>100 会产生非法/溢出样式
-const clampedProgress = computed(() => Math.max(0, Math.min(100, props.task.progress || 0)));
+const clampedProgress = computed(() => Math.max(0, Math.min(100, props.task.progress || 0)))
 // 实际到手档位透出：1080p avc1 / 合流降级等——比裸"视频"章多一层对账面
 const videoFlagTitle = computed(() => {
-  const meta = props.task.videoMeta;
-  if (!meta?.h) return null;
-  return `实际画质 ${meta.h}p${meta.codec ? ' ' + meta.codec : ''}${meta.source === 'progressive' ? '（合流）' : ''}`;
-});
+  const meta = props.task.videoMeta
+  if (!meta?.h) return null
+  return `实际画质 ${meta.h}p${meta.codec ? ' ' + meta.codec : ''}${meta.source === 'progressive' ? '（合流）' : ''}`
+})
 </script>
 
 <style scoped>
