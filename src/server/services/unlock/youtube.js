@@ -3,7 +3,8 @@
 // 候选期就有 lengthSeconds，选错的概率更低；且不再需要 Docker 里的 yt-dlp。
 // 回链是 googlevideo 带 ip= 签名的本机绑定链——播放必须经 /audio-proxy
 // 中转（resolveSongUrls 的 source==='youtube' 分支），直发客户端必 403
-const { fetchPlayer, innertubeSearch, pickStreamList } = require('../../lib/youtube');
+const { innertubeSearch } = require('../../lib/youtube');
+const { resolveYoutubeStreams } = require('../youtube-resolve');
 const { pickByDuration } = require('./match');
 const { aiEnabled, askAiJson, AI_MODEL } = require('../../lib/ai');
 const { getVerdict, upsertVerdict } = require('../../repositories/lyricAi');
@@ -148,10 +149,16 @@ async function resolve(info, { signal, purpose } = {}) {
   for (const cand of ordered) {
     if (signal?.aborted) throw new Error('aborted');
     try {
-      const player = await fetchPlayer(cand.videoId, signal);
-      const audio = pickStreamList(player.streamingData, 'audio',
-        purpose === 'download' ? 'best' : '')[0];
-      if (audio?.url) {
+      // 闸控感知取流（services/youtube-resolve.js）：SABR 闸控的视频
+      // 探测→VISIONOS 重解，自适应批已证 403 时合流档提首——此前这里
+      // 裸拿 ANDROID/IOS 自适应首条，被闸视频解锁「成功」却回链 403
+      const { streams } = await resolveYoutubeStreams(cand.videoId, {
+        kind: 'audio',
+        prefer: purpose === 'download' ? 'best' : '',
+        signal,
+      });
+      const head = streams[0];
+      if (head) {
         // AI 选定候选取流验证成功才落批准 verdict——「批准」承诺的是
         // 「是这首歌且能播」，未经流验证的批准会把死候选永久压队首
         if (pickedId && cand.videoId === pickedId) {
@@ -159,7 +166,7 @@ async function resolve(info, { signal, purpose } = {}) {
             upsertVerdict(unlockVkey(info.id, pickedId), 'unlock', 1, cleanField(cand.title));
           } catch { /* verdict 落库失败不阻塞解锁 */ }
         }
-        return { url: audio.url, br: audio.bitrate || null, durationSec: cand.durationSec };
+        return { url: head.url, br: head.br, durationSec: cand.durationSec };
       }
       failed += 1;
       markDead(info, cand);
