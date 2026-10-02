@@ -15,7 +15,8 @@ const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
 //   gates.mediaImport   — 外部导入闸（选单作废在途导入，导入也反向占住本闸）
 //   gates.preview       — id 预览闸（选单作废在途预览）
 //   playingPlaylistId   — 播放队列归属歌单 id（播放器域 ref；移除歌单时清归属）
-export function usePlaylistLibrary({ gates, playingPlaylistId }) {
+//   loading             — 侧栏整板 spinner（App 持；URL 歌单首载期间置位）
+export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
   const userPlaylists = ref([]) // 用户添加的歌单
   const selectedPlaylist = ref(null)
   const songs = ref([])
@@ -161,6 +162,10 @@ export function usePlaylistLibrary({ gates, playingPlaylistId }) {
 
       savePlaylistsToStorage()
       console.log('✅ 歌单已移除:', playlist.name)
+
+      // 作废在途 select：被删歌单若正有一个 detail 请求在飞，
+      // 迟到回包会把 songs/selectedPlaylist 盖写回来「复活」视图
+      gates.select.invalidate()
 
       // 如果移除的是当前选中的歌单，清空选择
       if (String(selectedPlaylist.value?.id) === String(playlistId)) {
@@ -491,7 +496,10 @@ export function usePlaylistLibrary({ gates, playingPlaylistId }) {
         }
         
         console.log('🌐 加载歌单:', validIds)
-        
+
+        // 侧栏整板 spinner 亮起——URL 歌单首载是唯一真正吃 loading 的路径
+        loading.value = true
+
         // 并行加载所有歌单
         const playlistPromises = validIds.map(async (id) => {
           try {
@@ -526,6 +534,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId }) {
         console.log('✅ URL歌单加载完成')
       } catch (error) {
         console.error('❌ 加载URL歌单失败:', error)
+      } finally {
+        loading.value = false
       }
     }
 

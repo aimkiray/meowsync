@@ -201,7 +201,7 @@ const memoSanitize = (name, maxBytes) => {
   const key = `${maxBytes}:${name}`;
   let out = sanitizeMemo.get(key);
   if (out === undefined) {
-    out = fileDownloader.sanitizeFilename(name, maxBytes);
+    out = sanitizeFilename(name, maxBytes);
     if (sanitizeMemo.size > 4096) sanitizeMemo.clear();
     sanitizeMemo.set(key, out);
   }

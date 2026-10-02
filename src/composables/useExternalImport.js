@@ -248,6 +248,10 @@ export function useExternalImport({
   // 网易云单曲导入：?song= 分享链与顶栏粘贴 music.163.com/song?id=N 同走此路。
   // 幂等壳 single_song_<id>——重复导入复用壳、原地补齐空壳曲目
   const importNeteaseSongById = async (songId) => {
+    // 与 importExternalMedia 同闸：detail 回包期间用户若已点进别处，
+    // 迟到的导入不得盖写 selectedPlaylist/songs 或强跳 watch
+    const myReq = gates.mediaImport.claim()
+    gates.select.invalidate()
     try {
       // 检查是否已经存在相同的临时歌单
       const tempPlaylistId = `single_song_${songId}`
@@ -255,11 +259,13 @@ export function useExternalImport({
       // 壳在但曲目空（脏数据/旧版本剥离壳）：原地补曲目——不 unshift 同 id 双壳
       if (existingPlaylist && !existingPlaylist.tracks?.length) {
         const songDetail = await musicApi.getSongDetail(songId)
+        if (!gates.mediaImport.isCurrent(myReq)) return
         existingPlaylist.tracks = [songDetail]
         existingPlaylist.trackCount = 1
         savePlaylistsToStorage()
       }
 
+      if (!gates.mediaImport.isCurrent(myReq)) return
       if (existingPlaylist && existingPlaylist.tracks?.length) {
         console.log('🎵 找到已存在的单曲分享歌单，直接使用')
         // 使用已存在的歌单
@@ -274,6 +280,7 @@ export function useExternalImport({
         console.log('🎵 创建新的单曲分享歌单')
         // 获取歌曲详情
         const songDetail = await musicApi.getSongDetail(songId)
+        if (!gates.mediaImport.isCurrent(myReq)) return
         console.log('🎵 获取到歌曲详情:', songDetail)
 
         // 创建一个临时歌单包含这首歌

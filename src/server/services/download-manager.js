@@ -12,7 +12,7 @@ const { deletingPlaylists, deletingQueues, deletingNeteasePlaylists, isNeteasePl
 // 路径/fs/纯计算助手已抽到 download-fs.js（DOWNLOAD_BASE_DIR 唯一来源也在那）
 const {
   DOWNLOAD_BASE_DIR, isExternalSongId, durationLooksTruncated,
-  drainWithTimeout, providerDataOf, retryDelayMs,
+  drainWithTimeout, DRAIN_TIMEOUT_MS, providerDataOf, retryDelayMs,
   isUnderDownloadDir, sanitizeErrorMessage, toPublicTask, deleteFiles,
   taskFilesIntact, taskLockKeys,
 } = require('./download-fs');

@@ -13,7 +13,7 @@ import { buildQQSong } from '../lib/external-songs'
 //   searchQuery / currentSong / watchTab — App 持有的共享输入与播放器态
 //   userPlaylists / selectedPlaylist / loadingSongs / selectPlaylist — 库域
 //   playSong / playSongFromSearch / playSongFromRelated / playPlaylist —
-//     播放器域（声明在 App 后部，惰性转发防 TDZ）
+//     播放器域（usePlayer 先实例化；惰性转发是双向循环依赖下的惯例写法）
 export function useSearchNav({
   gates,
   searchQuery, currentSong, watchTab,

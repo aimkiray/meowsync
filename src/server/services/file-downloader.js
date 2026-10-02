@@ -5,8 +5,8 @@ const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
 // 字节流原语（fetchStream/streamToFile/fatalError 等）在 download-io.js——
 // 本文件只做 provider 媒体编排与四类工件下载入口
 const {
-  mergeLrcTrans, sanitizeFilename, fatalError, errnoToFatal, throwIfAborted,
-  describeError, watchStall, fetchStream, removePartial, streamToFile,
+  MIME_EXT, mergeLrcTrans, fatalError, errnoToFatal, throwIfAborted,
+  describeError, fetchStream, removePartial, streamToFile,
   extFromUrl, pathWithExt,
 } = require('./download-io');
 const qq = require('../lib/qq');
@@ -25,6 +25,14 @@ const { QQ_SONG_ID_RE: QQ_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, NETEASE_ID_RE }
 // durationLooksTruncated 对 falsy br 短路跳过，完整性由 streamToFile 的
 // content-length 对账兜底
 const QQ_TIER_BR = { RS01: null, F000: null, M800: 320000, M500: 128000, C400: 96000 };
+
+// 体积上限：明文源站被 302 到无限流/超大文件的威胁模型下，写完再对账已经磁盘写满
+const MAX_AUDIO_BYTES = 512 * 1024 * 1024;
+const MAX_COVER_BYTES = 32 * 1024 * 1024;
+// 解锁源实际回的非 mp3 格式白名单——URL path 后缀不在名单内一律回退 mp3/jpg，
+// 防止上游注入怪异扩展名（.php/.html）落盘
+const AUDIO_EXTS = new Set(['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wav', 'webm']);
+const COVER_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 
 // 任务码率映射档梯：bitrate 是"目标下限"语义——<320k 的队列请求说明用户只要
 // 省流量档，不给拉无损；>=320k（含默认）走完整档梯，归档取最优
