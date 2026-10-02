@@ -385,6 +385,7 @@ import { serverCaps, loadServerCaps } from './lib/caps'
 import { isConfirmOpen, resolveConfirm, toast, pixelConfirm } from './lib/feedback'
 import { httpsCover } from './lib/url'
 import { readShareParams, consumeUrlShareParams } from './lib/share-params'
+import { LS_KEYS, readJSON, writeJSON } from './lib/storage'
 import { createReqGate } from './lib/req-gate'
 import { usePlaylistLibrary } from './composables/usePlaylistLibrary'
 import { usePlayer } from './composables/usePlayer'
@@ -429,8 +430,12 @@ export default {
     const searchQuery = ref('')
     const loading = ref(false)
     const showVipSongs = ref(true) // 控制VIP歌曲显示，默认显示
-    // watch 播放页：右栏 tab（待播/歌词/相关）与 YTM UP NEXT 自动播放开关
-    const watchTab = ref('queue')
+    // watch 播放页：右栏 tab（待播/歌词/相关）与 YTM UP NEXT 自动播放开关。
+    // tab 记忆进 localStorage——刷新回到上次停留的面板（脏值/越界键回落 queue）
+    const WATCH_TABS = ['queue', 'lyrics', 'related']
+    const savedWatchTab = readJSON(LS_KEYS.WATCH_TAB)
+    const watchTab = ref(WATCH_TABS.includes(savedWatchTab) ? savedWatchTab : 'queue')
+    watch(watchTab, t => writeJSON(LS_KEYS.WATCH_TAB, t))
     const playingPlaylistId = ref(null) // 快照所属歌单 id——持久化恢复用它而非浏览态 id
     const fullscreenLyricMode = ref('original')
     const fullscreenInteractionMode = ref('auto')

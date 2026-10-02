@@ -8,6 +8,7 @@ export const LS_KEYS = {
   // 历史沿用名：B 站时代起的视频偏好开关，YouTube 接入不换名以保留用户选择
   VIDEO_MODE: 'meowsync-bili-video',
   LYRIC_FONT_SIZE: 'meowsync-lyric-fs',
+  WATCH_TAB: 'meowsync-watch-tab',
 }
 
 // localStorage JSON 读写（全部带异常防护，脏数据不再阻断调用方）
