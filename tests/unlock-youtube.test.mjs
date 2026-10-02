@@ -103,10 +103,13 @@ test('resolve：AI 选定候选取流成功才落批准 verdict', async () => {
   const info = mkInfo('r1');
   searchImpl = async () => [cand('x'), cand('y'), cand('z')];
   aiScript = [{ pick: 2 }];
-  resolveStreamsImpl = async (vid) => ({ streams: [{ url: `u-${vid}`, br: 128 }] });
+  resolveStreamsImpl = async (vid) => ({
+    streams: [{ url: `u-${vid}-1`, br: 128 }, { url: `u-${vid}-2`, br: null }]
+  });
   const r = await resolve(info, {});
-  assert.equal(r.url, 'u-y');
-  assert.deepEqual(r.urls, ['u-y']);   // 整条候选链透出给 vault 逐链 mint
+  assert.equal(r.url, 'u-y-1');
+  // 整条候选链保序透出给 vault 逐链 mint——单元素退化实现会挂此断言
+  assert.deepEqual(r.urls, ['u-y-1', 'u-y-2']);
   assert.deepEqual(verdictWrites, [{ vkey: 'r1@yt_y@stub-model', kind: 'unlock', ok: 1, detail: 't-y' }]);
 });
 

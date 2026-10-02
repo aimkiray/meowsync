@@ -50,7 +50,10 @@ const progF = (tag, h = 360) => ({
 });
 const sd = ({ ad = [], fm = [] } = {}) => ({ adaptiveFormats: ad, formats: fm });
 
-const errStatus = (n) => Object.assign(new Error(`upstream ${n}`), { upstreamStatus: n });
+// errStatus 对齐真 fetchStream 的 4xx 错误形态：upstreamStatus+fatal 双挂
+//（download-io.js 对非 429 的 4xx 两者都挂；5xx/超时则都不挂——无定论路径
+// 的桩用裸 Error 而非 errStatus(5xx)，后者形状失真）
+const errStatus = (n) => Object.assign(new Error(`upstream ${n}`), { upstreamStatus: n, fatal: true });
 const reset = () => {
   fetchPlayerImpl = async () => ({ streamingData: {} });
   fetchPlayerWithImpl = async () => ({ streamingData: {} });
@@ -142,9 +145,13 @@ test('判定缓存命中免重探；TTL 过期重探', async () => {
   fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('x')] }) });
   fetchStreamImpl = async () => { throw errStatus(403); };
   fetchPlayerWithImpl = async () => ({ streamingData: sd({ ad: [audioF('v')] }) });
-  await resolve('vid00000007', { kind: 'audio' });
-  await resolve('vid00000007', { kind: 'audio' });
+  const r1 = await resolve('vid00000007', { kind: 'audio' });
+  assert.equal(r1.streams[0].url, GV('a-v'));
+  const r2 = await resolve('vid00000007', { kind: 'audio' });
   assert.equal(fetchStreamCalls.length, 1);          // 缓存命中——探测只打一发
+  // 命中的是"已闸"判定而非直接返原批：VISIONOS 升级链必须照样走
+  assert.equal(fetchPlayerWithCalls.length, 2);
+  assert.equal(r2.streams[0].url, GV('a-v'));
   // 拨快 31min 越过 GATE_TTL_MS——下次 resolve 重新探测
   const realNow = Date.now;
   try {
@@ -187,10 +194,12 @@ test('gateCache LRU：命中刷新排序，满容淘汰真最旧而非最近活�
   // 新增 v512 → 淘汰最旧 = v1（v0 已 touch 到尾）；v0/v512 入缓存
   await resolve(vid(512), { kind: 'audio' });
   assert.equal(fetchStreamCalls.length, probesAtFill + 1);
-  // v0 仍命中（未被误淘）；v1 被淘 → 重探
+  // 逐步断言淘的是谁——v0（刚 touch 过）仍命中零探测；v1 被淘重探。
+  // 若实现无 touch，v0 才是淘汰受害者——这两步的计数区分得出
   await resolve(vid(0), { kind: 'audio' });
+  assert.equal(fetchStreamCalls.length, probesAtFill + 1);    // v0 仍命中
   await resolve(vid(1), { kind: 'audio' });
-  assert.equal(fetchStreamCalls.length, probesAtFill + 2);    // v0 未增探测，v1 +1
+  assert.equal(fetchStreamCalls.length, probesAtFill + 2);    // v1 重探
 });
 
 test('探测目标限同 kind 最大档：video/audio 各自过滤 + contentLength 最大', async () => {
@@ -244,4 +253,16 @@ test('候选去重保序：同 url 跨批只出现一次', async () => {
   fetchStreamImpl = async () => ({ data: { destroy() {} } });
   const r = await resolve('vid00000013', { kind: 'audio' });
   assert.deepEqual(r.streams.map(s => s.url), [GV('a-x'), GV('p-x')]);
+});
+
+test('VISIONOS 阶段 abort 穿透——不得吞成 deadAdaptive 回落', async () => {
+  reset();
+  const resolve = freshResolve();
+  fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('x')], fm: [progF('x')] }) });
+  fetchStreamImpl = async () => { throw errStatus(403); };     // 闸控命中
+  const ctl = new AbortController();
+  // abort 落在 VISIONOS 段内部（真实现 fetchPlayerWith 循环顶查 signal）
+  fetchPlayerWithImpl = async () => { ctl.abort(); throw new Error('canceled'); };
+  await assert.rejects(() => resolve('vid00000014', { kind: 'audio', signal: ctl.signal }));
+  // abort 穿透而非回落——若吞成 deadAdaptive 会返回 streams 而非抛错
 });
