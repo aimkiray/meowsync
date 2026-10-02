@@ -416,6 +416,7 @@ export default {
     PlaylistGrid,
     HomeFeed,
     SongList,
+    SongFormDialog,
     WatchView,
     FeedbackHost,
     BottomPlayer,
