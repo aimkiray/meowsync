@@ -327,13 +327,14 @@ import { readJSON, writeJSON } from './lib/storage'
 import { formatTime } from './lib/format'
 import { isVipUnplayable, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, visibleSongs } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
-import { toast, toastDismiss, isConfirmOpen, resolveConfirm } from './lib/feedback'
+import { toast, isConfirmOpen, resolveConfirm } from './lib/feedback'
 import { glitchBurst } from './lib/theme'
-import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, providerPlaylistShellId, isResolvableTrackId } from './lib/url'
-import { buildBilibiliSong, buildYouTubeSong, buildQQSong, MEDIA_IMPORT_SPECS, redirectDataOf } from './lib/external-songs'
+import { httpsCover, isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, extractNeteaseSongId, extractYouTubeId, isSongmidLike, SONGMID_RE } from './lib/url'
+import { buildBilibiliSong, buildYouTubeSong, buildQQSong } from './lib/external-songs'
 import { readShareParams, consumeUrlShareParams } from './lib/share-params'
 import { createReqGate } from './lib/req-gate'
 import { usePlaylistLibrary } from './composables/usePlaylistLibrary'
+import { useExternalImport } from './composables/useExternalImport'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
@@ -446,6 +447,23 @@ export default {
       loadPlaylistById, collectSelectedPlaylist, selectedPlaylistInLibrary,
       selectPlaylist, appendSongToLibraryPlaylist, removeSongFromPlaylist, syncPlaylist,
     } = usePlaylistLibrary({ gates, playingPlaylistId })
+
+    // 外部导入域（composables/useExternalImport.js）：单曲 resolve 导入 / 三源整单导入 /
+    // mix 内容分享导入 / 网易云单曲壳。playSong/enterWatch/selectPlaylistAndShow 声明在
+    // 后部——惰性转发让闭包在调用时才取值（实例化于 TDZ 之前的等价语义）
+    const {
+      importExternalMedia, importBilibili, importYouTube, importQQ,
+      importBilibiliOrFav, importYouTubeOrPlaylist,
+      importQQPlaylist, importBiliFavlist, importYouTubePlaylist,
+      importNeteaseSongById, importMixPlaylist,
+    } = useExternalImport({
+      gates,
+      userPlaylists, selectedPlaylist, songs, loadingSongs, savePlaylistsToStorage,
+      searchQuery, currentSong,
+      playSong: (s, o) => playSong(s, o),
+      enterWatch: () => enterWatch(),
+      selectPlaylistAndShow: (p, o) => selectPlaylistAndShow(p, o),
+    })
 
 
     let volumeSaveTimer = null
@@ -668,303 +686,6 @@ export default {
       }
     }
 
-    // 曲目归一化构造器与单曲导入 spec 表已收敛到 lib/external-songs.js——
-    // 归一形态是跨边界契约（服务端 resolve/下载器共用口径），不属于组件
-    const importExternalMedia = async (input, kind) => {
-      const spec = MEDIA_IMPORT_SPECS[kind]
-      const myReq = gates.mediaImport.claim()
-      // 占住 select 闸：resolve 慢（远端多跳），期间在途的 selectPlaylist
-      // 回包不得在落壳之后盖掉 selectedPlaylist/songs
-      gates.select.invalidate()
-      loadingSongs.value = false // 被顶的 selectPlaylist 不会再复位 loading——收掉
-      searchQuery.value = '' // 提前清框——防用户重复回车并发多个 resolve
-      try {
-        console.log(`${spec.icon} 解析 ${spec.tag} 视频:`, input)
-        toast(`正在解析 ${spec.tag} 视频…`, 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
-        const data = await spec.resolve(input)
-        // 解析期间用户点了别的歌/再导入——过期意图不得抢播放+强跳视图
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        const song = spec.build(data)
-        console.log(`${spec.icon} 解析完成:`, song.name, '网易云匹配:', data.matched?.id ?? '无', '提取歌名:', data.songName)
-
-        // 与 ?song= 分享壳同款的幂等壳：同视频重复导入直接复用，不重复入库
-        const shellId = spec.shellIdOf(data)
-        let shell = userPlaylists.value.find(p => String(p.id) === shellId)
-        if (shell) {
-          // 壳在但曲目空/陈旧：原地刷新曲目与元信息（不 unshift——同 id 双壳会渲染冲突）。
-          // 锚曲放回头位，用户后来追加进壳的曲保留不丢
-          shell.tracks = [song, ...(shell.tracks || []).filter(t => String(t.id) !== String(song.id))]
-          shell.trackCount = shell.tracks.length
-          shell.name = spec.shellNameOf(song, data)
-          shell.coverImgUrl = song.al?.picUrl || ''
-          savePlaylistsToStorage()
-        } else {
-          shell = {
-            id: shellId,
-            name: spec.shellNameOf(song, data),
-            coverImgUrl: song.al?.picUrl || '',
-            creator: { nickname: spec.creator },
-            trackCount: 1,
-            tracks: [song]
-          }
-          userPlaylists.value.unshift(shell)
-          // 与单曲分享壳同一个上限桶（保留最近 10 个），倒序 splice 防下标错位
-          const tempIndexes = userPlaylists.value
-            .map((p, i) => isSingleSongShellId(p.id) ? i : -1)
-            .filter(i => i !== -1)
-          for (const i of tempIndexes.slice(10).reverse()) {
-            userPlaylists.value.splice(i, 1)
-          }
-          savePlaylistsToStorage()
-        }
-
-        selectedPlaylist.value = shell
-        currentSong.value = song
-        songs.value = shell.tracks || []
-
-        await playSong(song)
-        enterWatch()
-      } catch (error) {
-        if (!gates.mediaImport.isCurrent(myReq)) return // 过期请求的转跳/失败都不打扰用户
-        // 服务端把输入解成了 QQ 歌单/B 站收藏夹（短链跳解形态前端谓词看不穿）——
-        // 按结构化字段自动转歌单导入，别让"请粘到顶栏"的提示死循环。
-        // redirectDataOf 归一 .data（resolve 重抛）与 .response.data（裸 axios）双口径
-        const errData = redirectDataOf(error)
-        if (errData?.disstid) {
-          importQQPlaylist(errData.disstid)
-          return
-        }
-        if (errData?.favlist) {
-          importBiliFavlist(errData.favlist)
-          return
-        }
-        if (errData?.playlist) {
-          importYouTubePlaylist(errData.playlist)
-          return
-        }
-        console.error(`❌ ${spec.tag} 导入失败:`, error)
-        searchQuery.value = input // 失败还原输入——用户可直接回车重试
-        toast(`${spec.tag} 导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
-      }
-    }
-    const importBilibili = (input) => importExternalMedia(input, 'bilibili')
-    const importYouTube = (input) => importExternalMedia(input, 'youtube')
-    const importQQ = (input) => importExternalMedia(input, 'qq')
-    // 收藏夹/歌单输入先判——favlist/medialist URL 也满足 isBilibiliInput、
-    // watch?v=&list= 也满足 isYouTubeInput，顶栏分发已挡一遍，这里是
-    // ?bili=/?yt= 分享链/直调路径的双保险
-    const importBilibiliOrFav = (input) =>
-      extractBiliFavlistId(input) ? importBiliFavlist(input) : importBilibili(input)
-    const importYouTubeOrPlaylist = (input) =>
-      extractYouTubePlaylistId(input) ? importYouTubePlaylist(input) : importYouTube(input)
-
-    // QQ 歌单导入：disstid → 归一曲目 → 幂等壳 local_pl_qq_<id>——与手动建单
-    // 同权（local_pl_ 前缀全链已通：mix 内容分享链/服务端镜像下载/持久化）。
-    // 重复导入原地刷新曲目与元信息而不是再复制一份
-    const importQQPlaylist = async (disstid) => {
-      gates.select.invalidate()
-      const myReq = gates.mediaImport.claim()  // 大千曲歌单分页在途时，迟到的回包不得抢视图
-      loadingSongs.value = false
-      try {
-        toast('正在导入 QQ 歌单…', 'info', 30000)
-        const data = await musicApi.getQQPlaylist(disstid)
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        const tracks = (data.tracks || []).map(buildQQSong)
-        if (!tracks.length) {
-          toast('QQ 歌单为空或全部不可解析', 'error')
-          return
-        }
-        const shellId = providerPlaylistShellId('qq', disstid)
-        let pl = userPlaylists.value.find(p => String(p.id) === shellId)
-        if (!pl) {
-          pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
-          userPlaylists.value.unshift(pl)
-        }
-        pl.name = data.name || `QQ 歌单 ${disstid}`
-        pl.coverImgUrl = data.cover || tracks[0]?.al?.picUrl || ''
-        pl.creator = { nickname: data.creator || 'QQ 音乐' }
-        // 重导保留用户向该本地单追加的曲目——整表替换会静默丢追加
-        // （B 站壳同款保留形态；新集没有的本地追加留在尾部）
-        const newIds = new Set(tracks.map(t => String(t.id)))
-        pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
-        pl.trackCount = pl.tracks.length
-        savePlaylistsToStorage()
-        // 正选中该壳时视图数组已换引用——force 防同 id 短路留陈旧视图
-        selectPlaylistAndShow(pl, { force: true })
-        searchQuery.value = ''
-        toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首）`, 'success')
-      } catch (e) {
-        if (!gates.mediaImport.isCurrent(myReq)) return  // 过期请求的失败不打扰用户
-        toast(`QQ 歌单导入失败：${e.message}`, 'error', 5000)
-      }
-    }
-
-    // B 站收藏夹导入：fid/mlN/分享链 → local_pl_bili_<fid> 幂等壳——
-    // 与 QQ 歌单同一形态（手动歌单同权：mix 分享/镜像下载/追加保留全通）。
-    // 服务端已按预算跑过词源匹配，matchedCount/skipped 透出给用户
-    const importBiliFavlist = async (input) => {
-      gates.select.invalidate()
-      const myReq = gates.mediaImport.claim()
-      loadingSongs.value = false
-      // 先清框：导入在途期间（最坏 ~60s+）输入还在的话回车会双发吃限流桶
-      searchQuery.value = ''
-      const progressToast = toast('正在导入 B 站收藏夹…', 'info', 120000)
-      try {
-        const data = await musicApi.getBiliFavlist(input)
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        const tracks = (data.tracks || []).map(buildBilibiliSong)
-        if (!tracks.length) {
-          toast('收藏夹为空或条目全部失效', 'error')
-          return
-        }
-        const shellId = providerPlaylistShellId('bili', data.fid)
-        let pl = userPlaylists.value.find(p => String(p.id) === shellId)
-        if (!pl) {
-          pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
-          userPlaylists.value.unshift(pl)
-        }
-        pl.name = data.name || `B 站收藏夹 ${data.fid}`
-        pl.coverImgUrl = httpsCover(data.cover || '') || tracks[0]?.al?.picUrl || ''
-        pl.creator = { nickname: data.creator || 'Bilibili' }
-        // 重导保留本地追加曲目（与 QQ 歌单同口径）；新集曲目原地替换
-        const newIds = new Set(tracks.map(t => String(t.id)))
-        pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
-        pl.trackCount = pl.tracks.length
-        savePlaylistsToStorage()
-        // 正选中该壳时视图数组已换引用——force 防同 id 短路留陈旧视图
-        selectPlaylistAndShow(pl, { force: true })
-        const note = [
-          data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
-          data.skipped ? `跳过失效 ${data.skipped}` : '',
-          data.truncated ? '超出上限部分未导入' : '',
-        ].filter(Boolean).join('，')
-        toast(`已导入 B 站收藏夹「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
-      } catch (e) {
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        searchQuery.value = input // 失败还原输入——用户可直接回车重试
-        toast(`收藏夹导入失败：${e.message || '请检查链接后重试'}`, 'error', 5000)
-      } finally {
-        toastDismiss(progressToast) // 进度 toast 完成即退——stale/失败路径也收
-      }
-    }
-
-    // YouTube 歌单导入：listId/分享链 → local_pl_yt_<id> 幂等壳——与
-    // B 站收藏夹同一形态（重导保留本地追加，matchedCount/skipped 透出）。
-    // 服务端已按预算跑过词源匹配
-    const importYouTubePlaylist = async (input) => {
-      gates.select.invalidate()
-      const myReq = gates.mediaImport.claim()
-      loadingSongs.value = false
-      searchQuery.value = ''
-      const progressToast = toast('正在导入 YouTube 歌单…', 'info', 120000)
-      try {
-        const data = await musicApi.getYouTubePlaylist(input)
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        const tracks = (data.tracks || []).map(buildYouTubeSong)
-        if (!tracks.length) {
-          toast('歌单为空或条目全部失效', 'error')
-          return
-        }
-        const shellId = providerPlaylistShellId('yt', data.listId)
-        let pl = userPlaylists.value.find(p => String(p.id) === shellId)
-        if (!pl) {
-          pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
-          userPlaylists.value.unshift(pl)
-        }
-        pl.name = data.name || `YouTube 歌单 ${data.listId}`
-        pl.coverImgUrl = httpsCover(data.cover || '') || tracks[0]?.al?.picUrl || ''
-        pl.creator = { nickname: data.creator || 'YouTube' }
-        const newIds = new Set(tracks.map(t => String(t.id)))
-        pl.tracks = [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))]
-        pl.trackCount = pl.tracks.length
-        savePlaylistsToStorage()
-        // 正选中该壳时视图数组已换引用——force 防同 id 短路留陈旧视图
-        selectPlaylistAndShow(pl, { force: true })
-        const note = [
-          data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
-          data.skipped ? `跳过失效 ${data.skipped}` : '',
-          data.truncated ? '超出上限部分未导入' : '',
-        ].filter(Boolean).join('，')
-        toast(`已导入 YouTube 歌单「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
-      } catch (e) {
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        searchQuery.value = input
-        toast(`歌单导入失败：${e.message || '请检查链接后重试'}`, 'error', 5000)
-      } finally {
-        toastDismiss(progressToast)
-      }
-    }
-
-    // 网易云单曲导入：?song= 分享链与顶栏粘贴 music.163.com/song?id=N 同走此路。
-    // 幂等壳 single_song_<id>——重复导入复用壳、原地补齐空壳曲目
-    const importNeteaseSongById = async (songId) => {
-      try {
-        // 检查是否已经存在相同的临时歌单
-        const tempPlaylistId = `single_song_${songId}`
-        let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
-        // 壳在但曲目空（脏数据/旧版本剥离壳）：原地补曲目——不 unshift 同 id 双壳
-        if (existingPlaylist && !existingPlaylist.tracks?.length) {
-          const songDetail = await musicApi.getSongDetail(songId)
-          existingPlaylist.tracks = [songDetail]
-          existingPlaylist.trackCount = 1
-          savePlaylistsToStorage()
-        }
-
-        if (existingPlaylist && existingPlaylist.tracks?.length) {
-          console.log('🎵 找到已存在的单曲分享歌单，直接使用')
-          // 使用已存在的歌单
-          selectedPlaylist.value = existingPlaylist
-          currentSong.value = existingPlaylist.tracks[0]
-          songs.value = existingPlaylist.tracks || []
-
-          // 自动播放并进入 watch 播放页
-          await playSong(existingPlaylist.tracks[0])
-          enterWatch()
-        } else {
-          console.log('🎵 创建新的单曲分享歌单')
-          // 获取歌曲详情
-          const songDetail = await musicApi.getSongDetail(songId)
-          console.log('🎵 获取到歌曲详情:', songDetail)
-
-          // 创建一个临时歌单包含这首歌
-          const tempPlaylist = {
-            id: tempPlaylistId,
-            name: `单曲分享 - ${songDetail.name}`,
-            coverImgUrl: songDetail.al?.picUrl || songDetail.album?.picUrl || '',
-            creator: { nickname: '分享歌曲' },
-            trackCount: 1,
-            tracks: [songDetail]
-          }
-
-          // 添加到用户歌单列表；临时分享歌单数量设上限，每分享一首
-          // 永久长一个歌单会把列表无限撑长——保留最近 10 个
-          userPlaylists.value.unshift(tempPlaylist)
-          const tempIndexes = userPlaylists.value
-            .map((p, i) => isSingleSongShellId(p.id) ? i : -1)
-            .filter(i => i !== -1)
-          // 倒序删除：升序 splice 会让后续下标前移错位
-          for (const i of tempIndexes.slice(10).reverse()) {
-            userPlaylists.value.splice(i, 1)
-          }
-          savePlaylistsToStorage()
-
-          // 设置当前歌曲（selectedPlaylist 同步指向临时歌单：
-          // 播放快照与刷新恢复都靠它定位队列归属）
-          selectedPlaylist.value = tempPlaylist
-          currentSong.value = songDetail
-          songs.value = tempPlaylist.tracks || []
-
-          // 自动播放并进入 watch 播放页
-          await playSong(songDetail)
-          enterWatch()
-        }
-
-        console.log('✅ 单首歌曲分享加载完成并开始播放')
-      } catch (error) {
-        console.error('❌ 加载单首歌曲失败:', error)
-        toast('分享的歌曲加载失败，请稍后重试', 'error')
-      }
-    }
 
     const savePlayerStateToStorage = () => {
       const state = {
@@ -2689,137 +2410,6 @@ export default {
     // 从URL参数获取歌单ID列表
     // 分享链参数解析已收敛到 lib/share-params.js:readShareParams——
     // 一趟解析出 { playlistIds, songId, bili, yt, qq, qqpl, mix }
-
-    const MIX_IMPORT_CAP = 300      // 与生成侧 shareUrlFor 的截断对齐
-    const MIX_RESOLVE_CAP = 10      // bv_/yt_ 逐项 resolve——客户端预算共桶（服务端两端点各 12/min 分桶）
-    const importMixPlaylist = async (mix) => {
-      const sep = mix.lastIndexOf('~')
-      // [...str] 按码点切——slice 按 code unit 会斩断 emoji 代理对留孤代理
-      const name = [...(mix.slice(0, sep).trim() || '分享歌单')].slice(0, 60).join('')
-      const seen = new Set()
-      const ids = []
-      for (const raw of mix.slice(sep + 1).split(',')) {
-        const id = raw.trim()
-        if (!isResolvableTrackId(id)) continue
-        if (seen.has(id)) continue
-        seen.add(id)
-        ids.push(id)
-        if (ids.length >= MIX_IMPORT_CAP) break
-      }
-      if (!ids.length) {
-        toast('分享链接里没有可导入的歌曲', 'info')
-        return
-      }
-
-      // 确定性壳 id（fnv-1a32）：同一链接重复打开复用壳而非复制
-      let h = 0x811c9dc5
-      for (const ch of ids.join(',')) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0 }
-      const mixId = `local_pl_mix_${h.toString(36)}`
-      const existing = userPlaylists.value.find(p => String(p.id) === mixId)
-      if (existing?.tracks?.length) {
-        // 同 ids 改名重分享：壳 id 锚内容，名字跟随最新链接自愈
-        if (name !== '分享歌单' && existing.name !== name) {
-          existing.name = name
-          savePlaylistsToStorage()
-        }
-        selectPlaylistAndShow(existing)
-        toast(`歌单「${existing.name}」已在库中`, 'info')
-        return
-      }
-
-      const myReq = gates.mediaImport.claim()
-      gates.select.invalidate()
-      loadingSongs.value = false
-      toast(`正在导入分享歌单「${name}」…`, 'info', 30000)
-      try {
-        const numericIds = ids.filter(id => /^\d+$/.test(id))
-        const detailMap = new Map()
-        // 批量详情按 50/块切分——上游单请求 ids 串过长会被截断
-        for (let i = 0; i < numericIds.length; i += 50) {
-          const chunk = await musicApi.getSongsDetail(numericIds.slice(i, i + 50))
-          for (const s of chunk) detailMap.set(String(s.id), s)
-        }
-        const tracks = []
-        let resolveCount = 0
-        let skipped = 0
-        for (const id of ids) {
-          if (!gates.mediaImport.isCurrent(myReq)) return
-          if (/^\d+$/.test(id)) {
-            const s = detailMap.get(id)
-            if (s) tracks.push(s); else skipped++
-            continue
-          }
-          // bv_/yt_/qq_ 共用客户端 resolve 预算——同链混排外部曲总数封顶（服务端三端点分桶各 12/min）
-          if (++resolveCount > MIX_RESOLVE_CAP) { skipped++; continue }
-          const ym = YT_TRACK_ID_RE.exec(id)
-          if (ym) {
-            try {
-              // 传 ?yt= 形态而非裸 id——服务端 [?&]yt= 分支无 \D 要求，
-              // 全数字 videoId（理论存在）也能解
-              tracks.push(buildYouTubeSong(await musicApi.resolveYouTube(`?yt=${ym[1]}`)))
-            } catch { skipped++ }
-            continue
-          }
-          const qm = QQ_SONG_ID_RE.exec(id)
-          if (qm) {
-            try {
-              tracks.push(buildQQSong(await musicApi.resolveQQ(`?qq=${qm[1]}`)))
-            } catch { skipped++ }
-            continue
-          }
-          const m = BV_TRACK_ID_RE.exec(id)
-          if (!m) { skipped++; continue }
-          try {
-            const input = m[2] ? `${m[1]}?p=${m[2]}` : m[1]
-            tracks.push(buildBilibiliSong(await musicApi.resolveBilibili(input)))
-          } catch { skipped++ }
-        }
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        if (!tracks.length) {
-          toast('歌单曲目全部解析失败，请稍后重试', 'error')
-          return
-        }
-        const pl = existing || {
-          id: mixId, name,
-          coverImgUrl: tracks[0]?.al?.picUrl || '',
-          creator: { nickname: '分享导入' },
-          trackCount: 0, tracks: [], isLocal: true
-        }
-        pl.tracks = tracks
-        pl.trackCount = tracks.length
-        if (name !== '分享歌单') pl.name = name
-        if (!pl.coverImgUrl) pl.coverImgUrl = tracks[0]?.al?.picUrl || ''
-        if (existing) {
-          // 空壳重建也要提头——留在原位的旧壳可能被下面的封顶剪枝当场剪掉
-          const idx = userPlaylists.value.findIndex(p => String(p.id) === mixId)
-          if (idx > 0) {
-            userPlaylists.value.splice(idx, 1)
-            userPlaylists.value.unshift(pl)
-          }
-        } else {
-          userPlaylists.value.unshift(pl)
-        }
-        // mix 壳是分享导入的快照，封顶 20 个（最新的在头）——防长期累积撞配额。
-        // 被剪掉的壳可能已建过服务端镜像——剪枝时同步级联清，防孤儿行+文件泄漏
-        let mixSeen = 0
-        const pruned = []
-        userPlaylists.value = userPlaylists.value.filter(p => {
-          if (!String(p.id).startsWith('local_pl_mix_')) return true
-          if (++mixSeen <= 20) return true
-          pruned.push(p.id)
-          return false
-        })
-        for (const pid of pruned) downloadsApi.removeLocalMirror(pid).catch(() => {})
-        savePlaylistsToStorage()
-        // force：existing 空壳可能正被选中——同 id 短路会留下陈旧空列表视图
-        selectPlaylistAndShow(pl, { force: true })
-        toast(`已导入「${name}」（${tracks.length} 首${skipped ? `，跳过 ${skipped} 首` : ''}）`, 'success')
-      } catch (error) {
-        if (!gates.mediaImport.isCurrent(myReq)) return
-        console.error('mix 导入失败:', error)
-        toast(`导入分享歌单失败：${error.message || '请稍后重试'}`, 'error', 5000)
-      }
-    }
 
     // URL歌单加载（playlistIds 由 readShareParams 在挂载处一趟解析后传入）
     const loadDefaultPlaylists = async (urlPlaylistIds) => {

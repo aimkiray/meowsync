@@ -1,4 +1,4 @@
-import http from './http';
+import http, { API_BASE_URL } from './http';
 
 // 共享实例已统一剥 r.data（返回 {code,...} body）+ 10s 默认超时：
 // 轮询/查询类请求挂起时必须能 settle——裸 axios 无超时会让
@@ -87,11 +87,14 @@ export const downloadsApi = {
   },
 
   // 已下载工件的本地回放地址：在线流被上游闸控/签名失效时的兜底源。
-  // 同源 cookie 鉴权，媒体元素直接消费；kind=video 取 videoPath
+  // 同源 cookie 鉴权，媒体元素直接消费；kind=video 取 videoPath。
+  // 媒体元素不走 axios——裸相对路径会解析到页面源：跨源部署
+  // （VITE_API_BASE_URL/开发期独立 API 端口）下打到静态服务器拿 404，
+  // 必须拼 API_BASE_URL（同源时它就是页面 origin，等价不变）
   songFileUrl: (playlistId, songId, kind) => {
     const params = new URLSearchParams({ playlistId: String(playlistId) });
     if (kind) params.set('kind', kind);
-    return `/downloads/songs/${encodeURIComponent(songId)}/file?${params}`;
+    return `${API_BASE_URL}/downloads/songs/${encodeURIComponent(songId)}/file?${params}`;
   },
 
   // 删除已下载的歌曲

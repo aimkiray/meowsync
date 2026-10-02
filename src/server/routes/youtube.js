@@ -2,7 +2,7 @@ const { Hono } = require('hono');
 const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
 const streamVault = require('../lib/stream-vault');
 const { rateLimit } = require('../lib/rate-limit');
-const { matchNeteaseSong } = require('../services/netease-match');
+const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const { extractYouTubeId, extractYouTubePlaylistId, YT_ID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
@@ -132,25 +132,13 @@ app.get('/youtube/resolve', async (c) => {
     // artistFromAuthor 是剥掉 ' - Topic'/'VEVO' 后的干净歌手名——前端兜底显示用
     const { songName, candidates, artistFromAuthor } = extractYtSong(vd.title, author);
 
-    // 匹配预算与 bilibili 同款：整条链超时当无匹配，不阻塞解析返回
-    let budgetTimer;
-    const budgetCtrl = new AbortController();
-    const matchBudget = new Promise(resolve => {
-      // 预算耗尽不只让 race 判负——abort 停掉在途的云搜/AI 复核，
-      // 否则孤儿流程继续烧上游请求与 AI 额度
-      budgetTimer = setTimeout(() => {
-        budgetCtrl.abort();
-        resolve({ song: null, query: null });
-      }, 25000);
-      budgetTimer.unref?.();
+    // 匹配预算收敛进 services/netease-match.js:matchWithBudget——
+    // 整条链超时当无匹配，不阻塞解析返回
+    const { song: matched, query: matchedBy } = await matchWithBudget({
+      candidates, durationSec: duration, tag: 'youtube',
+      reqSignal: c.req.raw.signal,
+      sourceInfo: { title: vd.title || '', author },
     });
-    const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, duration, 'youtube',
-        AbortSignal.any([c.req.raw.signal, budgetCtrl.signal]),
-        { title: vd.title || '', author }),
-      matchBudget,
-    ]);
-    clearTimeout(budgetTimer);
     // matchNeteaseSong 因断连早退后，继续构造响应只是写给死 socket
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
 
@@ -170,12 +158,7 @@ app.get('/youtube/resolve', async (c) => {
       authorClean: artistFromAuthor || null,
       cover: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
       songName,
-      matched: matched ? {
-        id: matched.id,
-        name: matched.name,
-        ar: matched.ar || matched.artists || [],
-        al: matched.al || matched.album || {},
-      } : null,
+      matched: toMatchedJson(matched),
       matchedBy,
       hasVideo,
       audioQuality: audio ? { itag: audio.itag, bitrate: audio.bitrate, mimeType: audio.mimeType } : null,
@@ -260,28 +243,14 @@ app.get('/youtube/playlist', async (c) => {
       return c.json({ code: 404, message: '歌单不存在或不可公开访问' }, 404);
     }
 
-    // 词源匹配并发池：总预算到点 abort，在途判定被掐断的曲目按无匹配回落
-    const budgetCtrl = new AbortController();
-    const matchSignal = AbortSignal.any([signal, budgetCtrl.signal]);
-    const budgetTimer = setTimeout(() => budgetCtrl.abort(), PL_MATCH_BUDGET_MS);
-    budgetTimer.unref?.();
-    let cursor = 0;
-    let matchedCount = 0;
-    const worker = async () => {
-      while (cursor < tracks.length && !matchSignal.aborted) {
-        const t = tracks[cursor++];
-        const { song: matched, query } = await matchNeteaseSong(
-          t.candidates, t.duration, 'youtube-pl', matchSignal,
-          { title: t.title, author: t.author }).catch(() => ({ song: null }));
-        if (matched && !matchSignal.aborted) {
-          t.matched = { id: matched.id, name: matched.name, ar: matched.ar || matched.artists || [], al: matched.al || matched.album || {} };
-          t.matchedBy = query;
-          matchedCount++;
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(PL_MATCH_CONCURRENCY, tracks.length) }, worker));
-    clearTimeout(budgetTimer);
+    // 词源匹配并发池收敛进 services/netease-match.js:matchTracksPool
+    const matchedCount = await matchTracksPool(tracks, {
+      signal, budgetMs: PL_MATCH_BUDGET_MS, concurrency: PL_MATCH_CONCURRENCY,
+      tag: 'youtube-pl',
+      candidatesOf: (t) => t.candidates,
+      durationOf: (t) => t.duration,
+      infoOf: (t) => ({ title: t.title, author: t.author }),
+    });
     if (signal?.aborted) return c.body(null, 499);
 
     return c.json({

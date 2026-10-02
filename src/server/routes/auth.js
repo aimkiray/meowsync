@@ -106,10 +106,10 @@ app.post('/auth/login', async (c) => {
     return fail(c, 429, '尝试太频繁，请 10 分钟后再试');
   }
   const acctKey = `auth-login:acct:${body.username.trim().toLowerCase()}`;
-  const user = usersRepo.findByUsername(body.username.trim());
+  const user = usersRepo.findAuthByUsername(body.username.trim());
   // 用户不存在也对 dummy hash 跑完整校验——「用户不存在」与「密码错误」
   // 在响应文案和时序上都必须不可区分
-  const stored = user ? user.password_hash : await getDummyHash();
+  const stored = user ? user.passwordHash : await getDummyHash();
   const ok = await verifyPassword(body.password, stored);
   if (!user || !ok) {
     console.warn(`[auth] 登录失败 user=${body.username} ip=${clientIp(c)}`);
@@ -119,7 +119,7 @@ app.post('/auth/login', async (c) => {
   // 合法用户不该被 8 次/10min 自锁（cookie 反复失效场景）
   refundByKey(acctKey);
   // 参数落后基线的旧 hash 透明升档
-  if (needsRehash(user.password_hash)) {
+  if (needsRehash(user.passwordHash)) {
     hashPassword(body.password)
       .then(h => usersRepo.updatePasswordHash(user.id, h))
       .catch(() => { /* 升档失败不阻塞登录 */ });

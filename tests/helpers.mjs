@@ -29,3 +29,32 @@ export const tmpDataDir = (prefix = 'meowsync-test-') => {
   process.on('exit', () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清扫尽力而为 */ } });
   return dir;
 };
+
+// netease-match 模块的完整 stub 面：路由消费 matchWithBudget/matchTracksPool/
+// toMatchedJson——三者都委托回 matchNeteaseSong 录制桩，调用记录与 per-call
+// impl 语义保持可观测。getImpl 惰性取实现（测试用例内重赋 matchImpl 生效）
+export const seedMatchModule = (matchCalls, getImpl) => {
+  const call = (...args) => { matchCalls.push(args); return getImpl()(...args); };
+  seed('../src/server/services/netease-match.js', {
+    matchNeteaseSong: call,
+    matchWithBudget: ({ candidates, durationSec, tag, sourceInfo }) =>
+      call(candidates, durationSec, tag, null, sourceInfo),
+    matchTracksPool: async (tracks, o) => {
+      let n = 0;
+      for (const t of tracks) {
+        const r = await call(o.candidatesOf(t), o.durationOf(t), o.tag, null, o.infoOf(t))
+          .catch(() => ({ song: null }));
+        if (r?.song) {
+          t.matched = { id: r.song.id, name: r.song.name, ar: r.song.ar || r.song.artists || [], al: r.song.al || r.song.album || {} };
+          t.matchedBy = r.query;
+          n++;
+        }
+      }
+      return n;
+    },
+    toMatchedJson: (song) => song ? {
+      id: song.id, name: song.name,
+      ar: song.ar || song.artists || [], al: song.al || song.album || {},
+    } : null,
+  });
+};

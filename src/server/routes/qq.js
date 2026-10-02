@@ -3,7 +3,7 @@ const { fail } = require('../lib/http-error');
 const { tokenMatches } = require('../lib/token-eq');
 const { rateLimit } = require('../lib/rate-limit');
 const streamVault = require('../lib/stream-vault');
-const { matchNeteaseSong } = require('../services/netease-match');
+const { matchWithBudget, toMatchedJson } = require('../services/netease-match');
 const {
   hasQqCookie, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
   getSongDetail, pickStreamUrl, getLyric, getPlaylist, searchSongs,
@@ -66,32 +66,17 @@ app.get('/qq/resolve', async (c) => {
     const candidates = [...new Set([
       `${t.artists.join(' ')} ${t.name}`.trim(), t.name,
     ].filter(Boolean))].slice(0, 3);
-    let budgetTimer;
-    const budgetCtrl = new AbortController();
-    const matchBudget = new Promise(resolve => {
-      budgetTimer = setTimeout(() => {
-        budgetCtrl.abort();
-        resolve({ song: null, query: null });
-      }, 25000);
-      budgetTimer.unref?.();
+    // 匹配预算收敛进 services/netease-match.js:matchWithBudget
+    const { song: matched, query: matchedBy } = await matchWithBudget({
+      candidates, durationSec: t.intervalSec, tag: 'qq',
+      reqSignal: c.req.raw.signal,
+      sourceInfo: { title: t.name, author: t.artists.join(' ') },
     });
-    const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, t.intervalSec, 'qq',
-        AbortSignal.any([c.req.raw.signal, budgetCtrl.signal]),
-        { title: t.name, author: t.artists.join(' ') }),
-      matchBudget,
-    ]);
-    clearTimeout(budgetTimer);
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     return c.json({
       code: 200,
       ...trackJson(t),
-      matched: matched ? {
-        id: matched.id,
-        name: matched.name,
-        ar: matched.ar || matched.artists || [],
-        al: matched.al || matched.album || {},
-      } : null,
+      matched: toMatchedJson(matched),
       matchedBy,
     });
   } catch (e) {
