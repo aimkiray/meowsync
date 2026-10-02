@@ -727,7 +727,11 @@ export default {
 /* 主区页内视图（青纸画布）——走带已移除（底栏承担），信息面板垂直居中 */
 /* 布局壳的盒模型已上模板工具类（mobile-first）：移动基态单列整页滚
    ——本层是唯一滚动器；≥901px 转双栏内滚，车道移交各栏 */
-.watch-view { scrollbar-gutter: stable; }
+.watch-view {
+  scrollbar-gutter: stable;
+  /* 顶条钉高：watch-tabs 的 sticky top 与本条 height 同源（--topnav-h 先例） */
+  --watch-top-h: 52px;
+}
 
 /* 浮层顶行：返回键钉左页角。
    移动基态入流 sticky——.watch-view 是真滚动器，absolute 会随内容滚走、
@@ -740,9 +744,10 @@ export default {
   right: 0;
   z-index: 5;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 10px 20px;
+  /* 定高 52px（10 上 + 32 ink-btn--sm + 10 下）让 tabs 钉点有单一事实源 */
+  height: var(--watch-top-h);
+  padding: 0 20px;
   /* sticky 钉顶时衬画布色——滚过的歌词/队列行不透字 */
   background: var(--view-canvas, var(--paper));
   pointer-events: none;
@@ -865,10 +870,11 @@ export default {
 
 .watch-tabs {
   flex-shrink: 0;
-  /* 单列整页滚下 tabs 随页流走会迫使深滚用户滚回顶——钉在 52px 顶条
-     （10px padding×2 + ink-btn--sm 32px）之下；宽屏侧栏内滚时惰性 */
+  /* 单列整页滚下 tabs 随页流走会迫使深滚用户滚回顶——钉在顶条之下
+     （top 与 --watch-top-h 同源；宽屏块内复位 static——sticky 的 inset
+     约束在非滚动 scrollport 上仍生效，不复位会被强压 32px） */
   position: sticky;
-  top: 52px;
+  top: var(--watch-top-h, 52px);
   z-index: 4;
   /* 滚过内容不透字（同 .watch-top 的画布衬底） */
   background: var(--view-canvas, var(--paper));
@@ -1069,9 +1075,14 @@ export default {
   /* 宽屏顶行回浮层不占流——栏内自滚，键位钉在各栏内容之上 */
   .watch-top {
     position: absolute;
+    height: auto;
     padding: 20px;
     background: none;
   }
+
+  /* sticky inset 约束在非滚动 scrollport 上仍生效——不显式复位，
+     tabs 会被 --watch-top-h(52px) 钉点从侧栏天然位（20px）强压 32px */
+  .watch-tabs { position: static; }
 
   /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
      （旧浏览器不认两关键字写法时回退到上行 stable）。

@@ -126,6 +126,7 @@ export default {
   font-family: 'Courier New', ui-monospace, monospace;
   /* 超高时 margin:auto 居中语义+可滚：顶缘不被 flex 居中裁掉 */
   margin: auto;
+  max-height: calc(100vh - 32px);
   max-height: calc(100dvh - 32px);
 }
 .auth-title {

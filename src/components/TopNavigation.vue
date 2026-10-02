@@ -574,6 +574,7 @@ export default {
   border: var(--hairline);
   /* 8 条建议 ~300px + 窄屏双行顶栏 ~97px——手机横屏会顶出视口底缘，
      限高内滚兜底 */
+  max-height: calc(100vh - var(--topnav-h, 56px) - 8px);
   max-height: calc(100dvh - var(--topnav-h, 56px) - 8px);
   overflow-y: auto;
 }

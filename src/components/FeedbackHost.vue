@@ -167,7 +167,9 @@ export default {
 .fb-dialog-body {
   padding: 20px;
   /* 长错误文案在矮屏/键盘态会被上下裁到按钮不可达——限高内滚
-     （挂在内层：dialog 保持 overflow:visible 才不裁 pg-corners 角标） */
+     （挂在内层：dialog 保持 overflow:visible 才不裁 pg-corners 角标）。
+     vh 先行再 dvh——与 .pg-menu/.atp-dialog 同款双档回落 */
+  max-height: calc(100vh - 48px);
   max-height: calc(100dvh - 48px);
   overflow-y: auto;
 }

@@ -2,13 +2,13 @@
   <div class="bottom-player" role="region" aria-label="播放器">
     <!-- 当前播放歌曲的迷你信息与走带（无歌曲时同构骨架：控件禁用、占位兜底） -->
     <div class="player-content">
-      <!-- 进度条：沉在墨条顶缘，按下即 seek + 拖拽（按 .1s 量化读数） -->
+      <!-- 进度条：沉在墨条顶缘，按下即 seek + 拖拽（按 .1s 量化读数）。
+           无 @click——pointer 链已全覆盖鼠/触/笔，click 会与 pointerup 双发 seek -->
       <div
         class="player-progress-bar bp-progress"
-        @click="seekTo"
         role="slider"
         aria-label="播放进度"
-        :aria-valuenow="Math.round((currentTime / (duration || 1)) * 100)"
+        :aria-valuenow="Math.round(seekProgress)"
         :aria-valuetext="`${formatTime(currentTime)} / ${formatTime(duration)}`"
         aria-valuemin="0"
         aria-valuemax="100"
@@ -217,6 +217,8 @@ export default {
     // 进度条拖拽状态：按下期间 UI 播放在这里走，不跟随 props.currentTime 抢
     const dragActive = ref(false)
     const dragProgress = ref(0)
+    // 多指隔离：第二指 pointerdown 不得覆写进行中的拖拽（RemoteController 同款纪律）
+    const dragPointerId = ref(null)
 
     const seekProgress = computed(() => {
       if (dragActive.value) return dragProgress.value * 100
@@ -250,11 +252,6 @@ export default {
     }
 
     // seek 契约：emit 归一化比例 0-1（App.seekTo 负责换算秒）。无歌曲时进度条仅作骨架占位
-    const seekTo = (e) => {
-      if (!props.currentSong) return
-      emit('seek', positionFromEvent(e, e.currentTarget))
-    }
-
     const seekToPosition = (pos) => {
       if (!props.currentSong) return
       emit('seek', pos)
@@ -267,27 +264,34 @@ export default {
     }
 
     const onProgressPointerDown = (e) => {
-      if (e.button !== 0 || !props.currentSong) return
+      if (e.button !== 0 || !props.currentSong || dragActive.value) return
       const bar = e.currentTarget
       bar.setPointerCapture?.(e.pointerId)
       dragActive.value = true
+      dragPointerId.value = e.pointerId
       dragProgress.value = positionFromEvent(e, bar)
     }
 
     const onProgressPointerMove = (e) => {
-      if (!dragActive.value) return
+      if (!dragActive.value || e.pointerId !== dragPointerId.value) return
       dragProgress.value = positionFromEvent(e, e.currentTarget)
     }
 
     const onProgressPointerUp = (e) => {
-      if (!dragActive.value) return
+      if (!dragActive.value || e.pointerId !== dragPointerId.value) return
       dragActive.value = false
-      emit('seek', dragProgress.value)
+      dragPointerId.value = null
+      // 发 up 点实况而非末次 move 值——coalesced events 下甩动松手不滞后
+      emit('seek', positionFromEvent(e, e.currentTarget))
     }
 
     /* 浏览器接管手势（pan-y 竖滑起步）时只收拖拽态不 emit——
        用户本意是滚动页面，按触点位置 seek 是误操作 */
-    const onProgressPointerCancel = () => { dragActive.value = false }
+    const onProgressPointerCancel = (e) => {
+      if (e.pointerId !== dragPointerId.value) return
+      dragActive.value = false
+      dragPointerId.value = null
+    }
 
     return {
       formatTime,
@@ -298,12 +302,12 @@ export default {
       atQueueEnd,
       atQueueStart,
       playModeIcon,
-      seekTo,
       seekToPosition,
       nudgeSeek,
       onProgressPointerDown,
       onProgressPointerMove,
-      onProgressPointerUp
+      onProgressPointerUp,
+      onProgressPointerCancel
     }
   }
 }
@@ -331,12 +335,19 @@ export default {
      none 会在那里造成 16px 滚动死区 */
   touch-action: pan-y;
 }
-/* 隐形命中带向上探 16px（主区末行底缘死角，误触面窄）——向下只留 1px：
-   .player-inner 内播放键顶缘 y≈4、走带键 y≈10，多探会截胡控件点击 */
+/* 隐形命中带向上探：条体顶缘在 y=-1，带覆盖 y∈[-17,3]（总高 20px，
+   对齐触控目标下限）——底沿钉在 y=3，恰在播放键顶缘 y≈4 上方留 1px。
+   用 top+height 而非 inset 的 bottom——hover 加高（4→6px）向下生长时
+   带形不变；bottom 锚法会把带底拖进控件区回漏点击。
+   代价写在明处：向上探 16px 侵入主区末行底缘（song-row 下半段点击
+   会变 seek——误触面窄且竖滑仍可滚页，换取不窃控件点击） */
 .bp-progress::before {
   content: '';
   position: absolute;
-  inset: -16px 0 -1px;
+  top: -16px;
+  left: 0;
+  right: 0;
+  height: 20px;
 }
 .bp-progress-fill { background: var(--accent-magenta); } /* 已播部分=accent 本色（retro 火烈鸟粉 / glitch teal 同覆写） */
 
