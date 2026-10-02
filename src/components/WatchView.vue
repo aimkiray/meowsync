@@ -57,7 +57,7 @@
             target="_blank"
             rel="noopener noreferrer"
             :title="`回源：在${sourceName}打开原页`"
-          ><PixelIcon name="external" :size="14" /> 回源 · {{ sourceName }}</a>
+          ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
           <!-- 音画切换仅对有视频流的外部导入曲（B 站/YouTube）出现；关闭即只拉音频流省流量 -->
           <button
             v-if="currentSong?.bilibili?.hasVideo || currentSong?.youtube?.hasVideo || currentSong?.file?.hasVideo"
