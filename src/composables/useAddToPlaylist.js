@@ -359,5 +359,8 @@ export function useAddToPlaylist({
     songPickerOpen, songPickerQuery, songPickerResults, songPickerSearching,
     songPickerAdded, songPickerPending, songPickerInput, pickerTakenIds,
     openSongPicker, closeSongPicker, addPickedSong, songPickerSearch,
+    // 触发键快照——picker→songForm 跳转时把归还目标传过去（picker 自己的
+    // prevFocus 即「添加歌曲」hero 键，关 songForm 还到它才算闭环）
+    getPickerPrevFocus: () => pickerPrevFocus,
   }
 }

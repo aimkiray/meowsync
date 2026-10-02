@@ -1428,12 +1428,20 @@ function getTaskArtifactPath(playlistId, songId, kind = 'audio') {
   if (resolvedPlaylistId === null) {
     throw httpError(404, '歌单不存在');
   }
-  const field = kind === 'video' ? 'videoPath' : 'audioPath';
+  // kind 映射：audio/video 是播放工件；cover/lyrics 服务上传曲的封面回看与
+  // 歌词读取（uploads 登记行的 cover_path/lyrics_path 列）
+  const field = kind === 'video' ? 'videoPath'
+    : kind === 'cover' ? 'coverPath'
+    : kind === 'lyrics' ? 'lyricsPath'
+    : 'audioPath';
   const tasks = downloadTasksRepo.listTasksByPlaylist(resolvedPlaylistId)
     .filter(t => t.songId === String(songId) && t.status === 'completed');
   for (const t of tasks) {
-    if (t[field] && isUnderDownloadDir(t[field]) && fs.existsSync(t[field])) {
-      return t[field];
+    // audio 缺位时回落 videoPath：只传视频的上传曲没有音频工件——mp4/webm
+    // 的音轨浏览器能直解（Howl format 含 mp4/webm），比 404 强
+    const candidate = t[field] || (kind === 'audio' ? t.videoPath : null)
+    if (candidate && isUnderDownloadDir(candidate) && fs.existsSync(candidate)) {
+      return candidate;
     }
   }
   return null;

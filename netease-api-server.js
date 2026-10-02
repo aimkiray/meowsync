@@ -109,7 +109,8 @@ if (downloadToken) {
     const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
       || p === '/playlists' || p.startsWith('/playlists/')
       || p === '/ai' || p.startsWith('/ai/')
-      || p === '/song-meta' || p.startsWith('/song-meta/'))
+      || p === '/song-meta' || p.startsWith('/song-meta/')
+      || p === '/uploads' || p.startsWith('/uploads/'))
       && c.req.method !== 'GET' && c.req.method !== 'HEAD';
     if (!protectedWrite) return next();
     // 已登录会话放行（authGate 已验过并 set('user')——直接消费不二次查库）
@@ -129,6 +130,7 @@ app.route('/', require('./src/server/routes/auth'));
 app.route('/', require('./src/server/routes/proxy'));
 app.route('/', require('./src/server/routes/playlists'));
 app.route('/', require('./src/server/routes/downloads'));
+app.route('/', require('./src/server/routes/uploads'));
 app.route('/', require('./src/server/routes/songmeta'));
 app.route('/', require('./src/server/routes/bilibili'));
 app.route('/', require('./src/server/routes/youtube'));

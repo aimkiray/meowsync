@@ -48,7 +48,7 @@
           :user-playlists="userPlaylists"
           @select-playlist="selectPlaylistAndShow"
           @play-playlist="playPlaylistFromSidebar"
-          @remove-playlist="removePlaylistFromLibrary"
+          @remove-playlist="handleRemovePlaylist"
           @open-create-playlist="handleOpenCreatePlaylist"
           @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
         />
@@ -78,9 +78,10 @@
           @play-shuffle="playPlaylistAndWatch(true)"
           @play-next="playNextInQueue"
           @add-to-queue="addToQueueEnd"
-          @add-to-playlist="openAddToPlaylist"
-          @add-songs="openSongPicker"
-          @remove-from-playlist="removeSongFromPlaylist"
+          @add-to-playlist="handleOpenAddToPlaylist"
+          @add-songs="handleOpenSongPicker"
+          @edit-song="openSongForm"
+          @remove-from-playlist="handleRemoveSongFromPlaylist"
           @sync-playlist="syncPlaylist"
           @collect-playlist="collectSelectedPlaylist"
           @toggle-vip-songs="showVipSongs = !showVipSongs"
@@ -97,7 +98,7 @@
           @open="openSearchPlaylist"
           @add="addPlaylistToLibrary"
           @play-song="openWatchSearchSong"
-          @add-to-playlist="openAddToPlaylist"
+          @add-to-playlist="handleOpenAddToPlaylist"
           @close="closeSearchView"
           @load-more-songs="loadMoreSearchSongs"
         />
@@ -131,7 +132,7 @@
           @clear-queue="clearQueue"
           @play-song="playSongFromRelated"
           @open-source="openQueueSource"
-          @add-to-playlist="openAddToPlaylist"
+          @add-to-playlist="handleOpenAddToPlaylist"
         />
         <AdminPanel v-else />
       </main>
@@ -281,6 +282,20 @@
             ><PixelIcon name="search" :size="12" /> {{ songPickerSearching ? '…' : '搜索' }}</button>
           </div>
           <div class="atp-list" role="list" aria-label="搜索结果">
+            <!-- 「从 0 新建」入口：上传音频/视频/歌词/封面组成本地 file_ 曲，
+                 与搜歌并列是点歌台的第二条进曲通道 -->
+            <div v-if="canCreateLocalSong" class="asp-row asp-row--create" role="listitem">
+              <div class="asp-text">
+                <div class="asp-name">新建歌曲</div>
+                <div class="asp-artist">上传本地音频/视频文件</div>
+              </div>
+              <button
+                class="ink-btn ink-btn--sm asp-add"
+                aria-haspopup="dialog"
+                aria-label="新建歌曲（上传本地文件）"
+                @click="openSongForm()"
+              ><PixelIcon name="plus" :size="12" /> 创建</button>
+            </div>
             <div
               v-for="song in songPickerResults"
               :key="song.id"
@@ -313,6 +328,17 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- 歌曲表单：新建（song=null）/编辑（song=对象）双模——互斥由 open 侧收口，
+         四窗冻结链见 onGlobalKeydown -->
+    <SongFormDialog
+      :open="songFormOpen"
+      :song="songFormSong"
+      :busy="songFormBusy"
+      @close="closeSongForm"
+      @submit="submitSongForm"
+      @abort="abortSongFormUpload"
+    />
 
     <!-- 全局 toast + 确认模态宿主（替代原生 alert/confirm） -->
     <FeedbackHost />
@@ -350,7 +376,7 @@ import { useRemoteControl } from './composables/useRemoteControl'
 import { useHomeFeed } from './composables/useHomeFeed'
 import { visibleSongs } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
-import { isConfirmOpen, resolveConfirm, toast } from './lib/feedback'
+import { isConfirmOpen, resolveConfirm, toast, pixelConfirm } from './lib/feedback'
 import { httpsCover } from './lib/url'
 import { readShareParams, consumeUrlShareParams } from './lib/share-params'
 import { createReqGate } from './lib/req-gate'
@@ -364,6 +390,9 @@ import PlaylistPanel from './components/PlaylistPanel.vue'
 import PlaylistGrid from './components/PlaylistGrid.vue'
 import HomeFeed from './components/HomeFeed.vue'
 import SongList from './components/SongList.vue'
+import SongFormDialog from './components/SongFormDialog.vue'
+import { uploadFile, deleteUploadedSong } from './api/uploads'
+import { isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId } from './lib/song'
 import WatchView from './components/WatchView.vue'
 import FeedbackHost from './components/FeedbackHost.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
@@ -425,7 +454,7 @@ export default {
       savePlaylistsToStorage, loadPlaylistsFromStorage,
       addPlaylistToLibrary, removePlaylistFromLibrary, handlePlaylistDownloadsDeleted,
       collectSelectedPlaylist, selectedPlaylistInLibrary,
-      selectPlaylist, appendSongToLibraryPlaylist, removeSongFromPlaylist, syncPlaylist,
+      selectPlaylist, appendSongToLibraryPlaylist, removeSongFromPlaylist, applyTrackEdit, syncPlaylist,
       loadDefaultPlaylists,
       createPlaylistOpen, createPlaylistName, createPlaylistInput,
       openCreatePlaylist, closeCreatePlaylist, createLocalPlaylist,
@@ -440,6 +469,207 @@ export default {
       toast(`已创建歌单《${pl.name}》`, 'success')
       await selectPlaylistAndShow(pl)
     }
+
+    // ── 歌曲表单域：SongFormDialog 的 open/close/submit 编排 ──
+    // 双模：song=null → 从 0 新建（点歌台「新建歌曲」入口进来，落到当前单）；
+    // song=对象 → 编辑（file_ 曲可换源文件；其他曲只改元数据）。
+    // 上传编排在这层而非组件内——组件只管表单，资产上送/落库是域职责
+    const songFormOpen = ref(false)
+    const songFormSong = ref(null)
+    const songFormBusy = ref(false)
+    let songFormPrevFocus = null
+
+    const openSongForm = (song = null, returnFocus = null) => {
+      if (songFormOpen.value) return
+      // 焦点锚三条路：菜单路径 emit 带的 ⋯键 ＞ 点歌台路径的 hero「添加歌曲」
+      // 键（pickerPrevFocus）＞ 兜底 activeElement。两条直达路径的触发元素
+      // （menuitem/创建键）随后都随弹层卸载——抓它们等于没抓
+      songFormPrevFocus = returnFocus
+        || (songPickerOpen.value ? getPickerPrevFocus() : null)
+        || document.activeElement
+      // 互斥收口：四窗无叠加态
+      addTargetSong.value = null
+      closeSongPicker()
+      closeCreatePlaylist()
+      songFormSong.value = song
+      songFormOpen.value = true
+    }
+
+    const closeSongForm = () => {
+      songFormOpen.value = false
+      songFormSong.value = null
+    }
+
+    // 歌单被切走/置空时收口（picker 在 useAddToPlaylist 有同款 watcher）——
+    // 不关的话提交按「切换后的 selectedPlaylist」写错单的 trackOverrides
+    watch(selectedPlaylist, () => { if (songFormOpen.value) closeSongForm() })
+
+    // 焦点归还：rAF（本帧渲染 patch 全落地后）+ 可见性门槛——同三窗不变量
+    watch(songFormOpen, (open) => {
+      if (open) return
+      const el = songFormPrevFocus
+      songFormPrevFocus = null
+      if (!el?.focus) return
+      requestAnimationFrame(() => {
+        if (typeof el.checkVisibility === 'function'
+            && !el.checkVisibility({ visibilityProperty: true })) return
+        el.focus({ preventScroll: true })
+      })
+    })
+
+    // create：逐个上传拿 songId（音频先行——它决定 songId 归属）→ 组装 file_ 曲落单
+    // edit file_：同 songId 复传=服务端换源语义 → 就地改元数据 + file 位更新
+    // edit 其他曲：纯元数据——远端成员走 trackOverrides，本地成员就地+custom
+    // 新建入口显隐与 submit 目标校验同源——壳单（single_song_/saved_queue_）
+    // 与未收藏远端单都不是创建位，入口直接不亮（而不是点了才报错）
+    const canCreateLocalSong = computed(() => {
+      const pl = selectedPlaylist.value
+      return !!pl && !isEphemeralPlaylistId(pl.id)
+        && (isLocalPlaylistId(pl.id) || selectedPlaylistInLibrary.value)
+    })
+
+    // 在途上传的 abort 句柄——「中止上传」键/Esc(busy) 走它断 xhr
+    let songFormAbort = null
+    const abortSongFormUpload = () => songFormAbort?.()
+    const runUpload = (args) => {
+      const up = uploadFile(args)
+      songFormAbort = up.abort
+      return up.promise.finally(() => { if (songFormAbort === up.abort) songFormAbort = null })
+    }
+
+    const submitSongForm = async ({ song, meta, files, setProgress }) => {
+      songFormBusy.value = true
+      let createdSongId = null
+      try {
+        const KIND_ORDER = ['audio', 'video', 'cover', 'lyrics']
+        if (!song) {
+          const pl = selectedPlaylist.value
+          // 目标=当前打开的歌单：local_pl_ 直接落 tracks；远端单走 addedTracks
+          // 追加位（file 块已进持久化白名单）。闸与 asp-row--create 显隐同源
+          if (!canCreateLocalSong.value) {
+            toast('请先打开一个本地歌单或已收藏歌单再新建歌曲', 'error')
+            return
+          }
+          let songId = null
+          const uploaded = {}
+          for (const kind of KIND_ORDER) {
+            const f = files[kind]
+            if (!f) continue
+            const r = await runUpload({ kind, file: f, songId, onProgress: v => setProgress(kind, v) })
+            songId = r.songId
+            createdSongId = r.songId // catch 回滚用——首个上传即建立登记行
+            uploaded[kind] = true
+          }
+          if (!songId) return // 组件侧已拦——双保险
+          const track = {
+            id: songId,
+            name: meta.name,
+            ar: [{ name: meta.artist || '未知艺术家' }],
+            al: { name: meta.album || '' },
+            dt: meta.durationMs || 0,
+            custom: true,
+            file: {
+              hasAudio: !!uploaded.audio, // video-only 曲此位 false——音频位不该谎称「已有」
+              hasVideo: !!uploaded.video,
+              hasCover: !!uploaded.cover,
+              hasLyrics: !!uploaded.lyrics,
+              // 封面版本戳：img 缓存按 URL 键，换源不戳 URL 视图滞留旧图
+              ...(uploaded.cover ? { coverV: Date.now() } : {}),
+            },
+          }
+          // 必须传库对象而非 selectedPlaylist 快照——远端单的快照写了不落库
+          //（addPickedSong 同款先解库对象再追加）
+          const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id))
+          const res = libPl && appendSongToLibraryPlaylist(libPl, track)
+          // 早退也要回滚已传资产（理论难撞 exists，但库对象窗口期消失可达）——
+          // 留着就是 uploads/ 下无收割者的孤儿文件
+          if (res === 'exists') {
+            if (createdSongId) deleteUploadedSong(createdSongId).catch(() => {})
+            toast('该曲目已在歌单中', 'info'); return
+          }
+          if (!res) {
+            if (createdSongId) deleteUploadedSong(createdSongId).catch(() => {})
+            toast('歌单入库失败，无法添加', 'error'); return
+          }
+          toast(`已添加《${track.name}》`, 'success')
+        } else {
+          const sid = song.id
+          const filePatch = {}
+          if (isFileTrackId(sid)) {
+            for (const kind of KIND_ORDER) {
+              const f = files[kind]
+              if (!f) continue
+              await runUpload({ kind, file: f, songId: sid, onProgress: v => setProgress(kind, v) })
+              if (kind === 'audio') filePatch.hasAudio = true
+              if (kind === 'video') filePatch.hasVideo = true
+              if (kind === 'cover') { filePatch.hasCover = true; filePatch.coverV = Date.now() }
+              if (kind === 'lyrics') filePatch.hasLyrics = true
+            }
+          }
+          const plId = selectedPlaylist.value?.id
+          // 未入库的歌单（未收藏远端单）没有可持久化的落点——applyTrackEdit
+          // 静默 miss 不能配「已保存」的 toast，明说让用户先收藏
+          if (!plId || !applyTrackEdit(plId, sid, meta, Object.keys(filePatch).length ? filePatch : null)) {
+            toast('歌单未入库，编辑无法持久保存——请先收藏该歌单', 'error')
+            return
+          }
+          toast(`已保存《${meta.name}》`, 'success')
+        }
+        closeSongForm()
+      } catch (e) {
+        // create 中途失败：首个上传已建了登记行+工件——留着就是隐形孤儿资产
+        //（reapOrphanFiles 只扫数字目录够不到 uploads/），回滚删掉
+        if (!song && createdSongId) {
+          deleteUploadedSong(createdSongId).catch(() => {})
+        }
+        toast(e?.message === '已取消' ? '已取消上传' : (e?.message || '保存失败'), e?.message === '已取消' ? 'info' : 'error')
+      } finally {
+        songFormBusy.value = false
+        songFormAbort = null
+      }
+    }
+
+    // file_ 曲从歌单移除时追问是否删资产——曲删了文件还在盘上挂着
+    //（uploads 伪歌单的登记行不归歌单生命周期管）。在其他歌单仍被引用的
+    // 曲不删资产（登记行是按 songId 的，一删全灭）
+    const fileTrackRefCount = (songId) => {
+      const inLists = userPlaylists.value.reduce((n, pl) => {
+        const inTracks = pl.tracks?.some(t => String(t.id) === String(songId))
+        const inAdded = pl.addedTracks?.some(t => String(t.id) === String(songId))
+        return n + (inTracks || inAdded ? 1 : 0)
+      }, 0)
+      // 播放队列/历史里的 file_ 也算活引用——曲还在播就把资产删了，回放必 404
+      const inQueue = playingSongs.value?.some(t => String(t.id) === String(songId)) ? 1 : 0
+      return inLists + inQueue
+    }
+
+    const handleRemoveSongFromPlaylist = async (song) => {
+      const wasFile = isFileTrackId(song?.id)
+      removeSongFromPlaylist(song)
+      // 移除后全库零引用才追问删资产——登记行按 songId，一删所有歌单都断源
+      if (!wasFile || fileTrackRefCount(song.id) > 0) return
+      if (!await pixelConfirm(`「${song.name}」已不再被任何歌单引用。连服务器上的文件（音频/视频/歌词/封面）一起删掉吗？`, { confirmText: '删除文件', danger: true })) return
+      await deleteUploadedSong(song.id)
+        .then(() => toast('已删除服务器上的文件', 'success'))
+        .catch(e => toast(e?.message || '删除文件失败', 'error'))
+    }
+
+    // 整单删除后清扫孤儿 file_ 资产：单没了登记行/文件还挂在 uploads 伪歌单
+    //（reapOrphanFiles 够不到 uploads/）——先在删前快照本单的 file_ 引用，
+    // 删后全库零引用的才追问（仍在别单/队列里的不删）
+    const handleRemovePlaylist = async (playlistId) => {
+      const pl = userPlaylists.value.find(p => String(p.id) === String(playlistId))
+      const fileIds = new Set()
+      for (const t of pl?.tracks || []) if (isFileTrackId(t?.id)) fileIds.add(String(t.id))
+      for (const t of pl?.addedTracks || []) if (isFileTrackId(t?.id)) fileIds.add(String(t.id))
+      removePlaylistFromLibrary(playlistId)
+      const orphans = [...fileIds].filter(id => fileTrackRefCount(id) === 0)
+      if (!orphans.length) return
+      if (!await pixelConfirm(`歌单已删除。其中 ${orphans.length} 个本地上传曲目的服务器文件（音频/视频/歌词/封面）要一起删掉吗？`, { confirmText: '删除文件', danger: true })) return
+      for (const id of orphans) await deleteUploadedSong(id).catch(() => {})
+      toast('已删除服务器上的文件', 'success')
+    }
+
 
     const filteredSongs = computed(() =>
       visibleSongs(songs.value, showVipSongs.value, serverCaps.value)
@@ -537,6 +767,7 @@ export default {
       songPickerOpen, songPickerQuery, songPickerResults, songPickerSearching,
       songPickerAdded, songPickerPending, songPickerInput, pickerTakenIds,
       openSongPicker, closeSongPicker, addPickedSong, songPickerSearch,
+      getPickerPrevFocus,
     } = useAddToPlaylist({
       gates,
       userPlaylists, selectedPlaylist, songs,
@@ -544,12 +775,30 @@ export default {
       closeCreatePlaylist,
     })
 
-    // 侧栏「+」开新建弹窗：跨域互斥收口——atp/点歌台若因 Tab 逃逸还开着，
+    // 侧栏「+」开新建弹窗：跨域互斥收口——atp/点歌台/歌曲表单若因 Tab 逃逸还开着，
     // 先收掉再开（双层模态时 Esc 会关掉看不见的底层窗——顺序与视觉堆叠相反）
     const handleOpenCreatePlaylist = () => {
       addTargetSong.value = null
       closeSongPicker()
+      closeSongForm()
       openCreatePlaylist()
+    }
+
+    // 点歌台同款互斥收口（模板唯一入口——裸 openSongPicker 不再直绑）
+    const handleOpenSongPicker = () => {
+      addTargetSong.value = null
+      closeCreatePlaylist()
+      closeSongForm()
+      openSongPicker()
+    }
+
+    // atp 同款（行菜单「添加到歌单」/队列面板等三处 emit 共用此口）
+    const handleOpenAddToPlaylist = (song) => {
+      if (!song) return // 无效曲不误关其他窗（与 openSongPicker 同律）
+      closeSongPicker()
+      closeCreatePlaylist()
+      closeSongForm()
+      openAddToPlaylist(song)
     }
 
     // 远程控制：host 模式 state_update 广播 + 指令执行 + 断线重连（composables/
@@ -570,8 +819,13 @@ export default {
         if (e.key === 'Escape') resolveConfirm(false) // 兜底：焦点逃出 overlay 时仍能关
         return
       }
-      // 三弹窗冻结：三窗互斥本无叠加态，但防线按堆叠序顶层优先
-      //（模板序 atp:172 < create:221 < picker:256——万一叠加，Esc 先关看得见的）
+      // 四弹窗冻结：互斥本无叠加态，但防线按堆叠序顶层优先
+      //（模板序 atp < create < picker < songForm——万一叠加，Esc 先关看得见的）
+      if (songFormOpen.value) {
+        // busy 期 Esc 映射到中止上传——大文件在飞时 Escape 的直觉就是「停」
+        if (e.key === 'Escape') songFormBusy.value ? abortSongFormUpload() : closeSongForm()
+        return
+      }
       // 点歌台模态冻结。Esc 连框内焦点也收（输入态下 Esc 的直觉就是关窗）；
       // 非 Esc 键直接 return——空格/斜杠不会穿透到全局快捷键
       if (songPickerOpen.value) {
@@ -817,6 +1071,11 @@ export default {
       playPlaylistFromSidebar,
       playNextInQueue,
       addToQueueEnd,
+      // 歌曲表单域（新建/编辑 + 上传编排）
+      songFormOpen, songFormSong, songFormBusy,
+      openSongForm, closeSongForm, submitSongForm, abortSongFormUpload,
+      canCreateLocalSong, handleRemovePlaylist,
+      handleOpenSongPicker, handleOpenAddToPlaylist, handleRemoveSongFromPlaylist,
       queueJump,
       queueRemove,
       queueMove,

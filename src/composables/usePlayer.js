@@ -11,7 +11,7 @@ import { formatTime } from '../lib/format'
 import { toast } from '../lib/feedback'
 import { glitchBurst } from '../lib/theme'
 import { httpsCover } from '../lib/url'
-import { isEphemeralPlaylistId, isLocalPlaylistId } from '../lib/song'
+import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl } from '../lib/song'
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
@@ -513,7 +513,10 @@ export function usePlayer({
         // 优先级最高——文件在盘上，不再打上游玩一遍注定失败的链
         const songUrlData = options._localFile
           ? { url: downloadsApi.songFileUrl(options._localFile, song.id) }
-          : song.bilibili
+          : isFileTrackId(song.id)
+            // 上传曲没有在线链——资产就是服务端 uploads/ 工件，直连 file 端点
+            ? { url: fileArtifactUrl(song.id) }
+            : song.bilibili
             ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
             : song.youtube
               ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio') }
@@ -542,7 +545,7 @@ export function usePlayer({
         // 否则过期回调会误销毁后来创建的实例
         const newHowl = new Howl({
           src: [songUrlData.url],
-          format: ['mp4', 'mp3', 'flac'],
+          format: ['mp4', 'mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'webm'],
           html5: true,
           preload: true,
           onload: () => {
@@ -562,9 +565,13 @@ export function usePlayer({
             const expectedDuration = (song.dt || song.duration) / 1000
             const actualDuration = newHowl.duration()
 
-            if (Math.abs(expectedDuration - actualDuration) > 5) {
+            // dt=0 是「时长未知」（上传曲留空/老数据缺字段）而非「预期 0:00」——
+            // 不比较，否则每首没填时长的上传曲都误报 VIP 试听横幅
+            if (expectedDuration > 0 && Math.abs(expectedDuration - actualDuration) > 5) {
               // 外部导入曲的时长差是稿件换源/分P错位而非 VIP 试听，文案区分避免误报
-              durationWarning.value = (song.bilibili || song.youtube || song.qq)
+              durationWarning.value = isFileTrackId(song.id)
+                ? `填写的时长与实际音轨不一致：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
+                : (song.bilibili || song.youtube || song.qq)
                 ? `音画时长不一致：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
                 : `VIP 歌曲试听版本：预期 ${formatTime(expectedDuration)}，实际 ${formatTime(actualDuration)}`
             }
@@ -787,6 +794,31 @@ export function usePlayer({
     // 外部导入曲（B 站/YouTube）的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_*/yt_* id
     // ——过期判定锚 song.id，不锚歌词请求的 id
     const loadLyrics = async (song, signal = null) => {
+      // file_ 曲：词源=用户上传的 .lrc 工件（file 端点 kind=lyrics）。无资产时 404 → 空词。
+      // 词属主键用 song.id——file 词与曲同生死，offset 校准也挂它（song_lyric_meta 按 id 存）
+      if (isFileTrackId(song?.id)) {
+        lyricOffsetMs.value = 0
+        lyricOwnerKey.value = null
+        try {
+          loadingLyrics.value = true
+          const metaPromise = downloadsApi.getSongMeta(song.id).catch(() => null)
+          const res = await fetch(fileArtifactUrl(song.id, 'lyrics'), { signal, credentials: 'include' })
+          const text = res.ok ? await res.text() : null
+          const meta = await metaPromise
+          if (signal?.aborted || currentPlayingId !== song.id) return
+          lyricOffsetMs.value = meta?.offsetMs ?? 0
+          lyricOwnerKey.value = song.id
+          lyrics.value = text ? parseLyrics(text) : []
+          currentLyricIndex.value = 0
+          if (lyrics.value.length > 0) startLyricSync()
+        } catch (error) {
+          if (signal?.aborted || error.name === 'AbortError') return
+          if (currentPlayingId === song.id) { lyrics.value = []; currentLyricIndex.value = 0; lyricOwnerKey.value = null }
+        } finally {
+          if (!signal?.aborted && currentPlayingId === song.id) loadingLyrics.value = false
+        }
+        return
+      }
       // 外部导入曲未匹配到网易云时无歌词源——bv_*/yt_* id 打 /lyric 必死还拖三重试，直接置空；
       // qq_ 不在此列——QQ 曲有自家权威词源（/qq/lyric），无匹配也能出词
       if ((song?.bilibili || song?.youtube) && !song.neteaseId) {

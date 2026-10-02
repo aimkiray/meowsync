@@ -1,7 +1,23 @@
 // 歌单 id 谓词唯一真相源在 src/shared/predicates.js——
 // re-export 保持既有调用面（App/SongList/PlaylistPanel/WatchView 均从此导入）
-import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE, YT_ID_RE } from '../shared/predicates.js'
-export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId } from '../shared/predicates.js'
+import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE, YT_ID_RE, FILE_TRACK_ID_RE } from '../shared/predicates.js'
+import { resolveApiBaseUrl } from './api-base'
+export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, isFileTrackId } from '../shared/predicates.js'
+
+// 上传资产的归属伪歌单——与服务端 routes/uploads.js 的 UPLOADS_PLAYLIST_ID 同源契约：
+// file_ 曲的一切工件（audio/video/cover/lyrics）都经 file 端点按此 playlistId 取
+export const UPLOADS_PLAYLIST_ID = 'local_uploads'
+
+// file_ 曲工件 URL：与 downloadsApi.songFileUrl 同形但留在 lib 层——song.js
+// 是纯函数库，不引 axios 链（api/uploads.js 经 http.js 拖实例副作用）。
+// v 参数：换源后 URL 恒定，靠它戳破 <img>/<audio> 的 URL 键缓存
+//（服务端 ETag 管 revalidate，img src 不变浏览器压根不 revalidate）
+export function fileArtifactUrl(songId, kind, v) {
+  const params = new URLSearchParams({ playlistId: UPLOADS_PLAYLIST_ID })
+  if (kind) params.set('kind', kind)
+  if (v != null) params.set('v', String(v))
+  return `${resolveApiBaseUrl()}/downloads/songs/${encodeURIComponent(songId)}/file?${params}`
+}
 
 /** 歌曲是否 VIP 付费（App 与 SongList 共用同一谓词，避免两处过滤逻辑漂移） */
 export function isVipSong(song) {
@@ -27,8 +43,12 @@ export function songArtists(song) {
 }
 
 // 封面统一兜底：provider 曲封面在 al.picUrl；网易云曲另有顶层 picUrl /
-// album.picUrl 形态——展示侧收口一条，比逐处 || 链少漂移
+// album.picUrl 形态——展示侧收口一条，比逐处 || 链少漂移。
+// file_ 曲的封面是本地工件：扩展名由服务端登记行持有，客户端不推 URL——
+// hasCover 位存在即走 file 端点（按行查 coverPath，任意图片扩展名都命中）
 export function songCoverUrl(song) {
+  // coverV 版本戳随换封面刷新——URL 不变 <img> 不会重取，视图会滞留旧图
+  if (song?.file?.hasCover) return fileArtifactUrl(song.id, 'cover', song.file.coverV)
   return song?.picUrl || song?.al?.picUrl || song?.album?.picUrl || ''
 }
 
@@ -39,11 +59,12 @@ export function visibleSongs(list, showVip, caps) {
   return (list || []).filter(song => !isVipUnplayable(song, caps))
 }
 
-/** 导入来源标签：youtube/bilibili/qq 字段即持久化的来源凭据（行内小牌用） */
+/** 导入来源标签：youtube/bilibili/qq/file 字段即持久化的来源凭据（行内小牌用） */
 export function songSource(song) {
   if (song?.bilibili) return 'B站'
   if (song?.youtube) return 'YouTube'
   if (song?.qq) return 'QQ音乐'
+  if (song?.file || isFileTrackId(song?.id)) return '本地上传'
   return null
 }
 
@@ -56,6 +77,7 @@ export function songSourceName(song) {
   if (song?.bilibili || BV_TRACK_ID_RE.test(id)) return 'B站'
   if (song?.youtube || YT_TRACK_ID_RE.test(id)) return 'YouTube'
   if (song?.qq || QQ_SONG_ID_RE.test(id)) return 'QQ音乐'
+  if (song?.file || FILE_TRACK_ID_RE.test(id)) return '本地上传'
   if (NETEASE_ID_RE.test(id)) return '网易云'
   return null
 }
@@ -109,4 +131,25 @@ export function externalCoverUrl(song) {
   if (YT_ID_RE.test(id)) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
   const cover = String(song?.bilibili?.cover || '')
   return /^https?:\/\//i.test(cover) ? cover : null
+}
+
+/**
+ * trackOverrides 应用器：远端单曲目不可就地改写（下次 detail 拉取会覆盖），
+ * 编辑落库对象上的 trackOverrides{songId:{name?,artist?,album?,durationMs?,coverUrl?}}，
+ * 渲染前 merge——local_pl_/addedTracks 成员直接改字段不走这层。
+ * 覆盖优先级最高：name/artist 换显示串；album 只改 al.name 不伤 al.picUrl
+ * （封面换绑走 coverUrl——al.picUrl 是 provider 封面的既有槽位不能丢）。
+ * file_ 曲不经过此函数（它的编辑直接写库对象成员）。
+ */
+export function applyTrackOverrides(song, overrides) {
+  const o = overrides?.[String(song?.id ?? '')]
+  if (!o) return song
+  const out = { ...song }
+  if (o.name) out.name = o.name
+  // != null 而非真值闸：''=用户显式清空，与就地分支同口径（空艺人→未知艺术家）
+  if (o.artist != null) out.ar = [{ name: o.artist || '未知艺术家' }]
+  if (o.album != null) out.al = { ...(song.al || {}), name: o.album }
+  if (o.durationMs != null) out.dt = o.durationMs // 0=用户清空回「自动」，也要覆盖
+  if (o.coverUrl) out.picUrl = o.coverUrl
+  return out
 }
