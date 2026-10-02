@@ -16,6 +16,7 @@
           <video
             v-if="mediaVideoActive"
             ref="mediaVideoRef"
+            :key="mediaVideoKey"
             class="watch-cover watch-cover--video"
             :src="mediaVideoUrl"
             :aria-label="`视频画面：${currentSong?.name || ''}`"
@@ -60,7 +61,9 @@
           ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
           <!-- 音画切换仅对有视频流的外部导入曲（B 站/YouTube）出现；关闭即只拉音频流省流量 -->
           <button
-            v-if="currentSong?.bilibili?.hasVideo || currentSong?.youtube?.hasVideo || currentSong?.file?.hasVideo"
+            v-if="currentSong?.bilibili?.hasVideo || currentSong?.bilibili?.hasDownloadableVideo
+              || currentSong?.youtube?.hasVideo || currentSong?.youtube?.hasDownloadableVideo
+              || currentSong?.file?.hasVideo"
             class="ink-btn ink-btn--ghost watch-action"
             :class="{ 'watch-action--on': videoOn }"
             @click="videoOn = !videoOn"
@@ -611,41 +614,70 @@ export default {
     // 视频源键：两个 provider 各取各自的定位串——换曲（哪怕同 provider）必然换键
     const mediaVideoKey = computed(() => {
       const song = props.currentSong
-      if (song?.bilibili?.hasVideo) return `bv:${song.bilibili.bvid}:${song.bilibili.cid || 0}:${song.bilibili.page || 1}`
-      if (song?.youtube?.hasVideo) return `yt:${song.youtube.videoId}`
+      // 下载口径也出 key——纯非 avc1 稿件（hasDownloadableVideo 但无
+      // hasVideo）可能有已下载本地档可放（hvc1-in-mp4 Safari 能解）
+      if (song?.bilibili?.hasVideo || song?.bilibili?.hasDownloadableVideo)
+        return `bv:${song.bilibili.bvid}:${song.bilibili.cid || 0}:${song.bilibili.page || 1}`
+      if (song?.youtube?.hasVideo || song?.youtube?.hasDownloadableVideo)
+        return `yt:${song.youtube.videoId}`
       // videoV 版本戳随换源刷新——key 不变 <video> 不重载，旧画面继续播
       if (song?.file?.hasVideo) return `file:${song.id}:${song.file.videoV || 0}`
       return null
     })
-    const mediaVideoActive = computed(() => !!(mediaVideoKey.value && videoOn.value && !mediaVideoFailed.value))
+    // mediaVideoUrl 空串（探测在途）不挂载 <video>：src="" 会解析成页面
+    // URL 被当媒体加载，error 误闩封面；URL 就绪才出元素
+    const mediaVideoActive = computed(() =>
+      !!(mediaVideoKey.value && videoOn.value && !mediaVideoFailed.value && mediaVideoUrl.value))
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
     // 的视频下载此前是纯只写功能（App 内无处可播）。按队列归属歌单探测
     // （任务行以歌单维度登记；别的歌单下的下载对不上 playlistId，漏探回落
     // 在线流，安全方向）。切歌竞态用序号丢弃
     const downloadedVideoUrl = ref(null)
+    // 探测在途闸：探测未落地前不往 <video> 绑在线流——否则每首已下载曲
+    // 都白烧一次 CDN 请求，且秒挂型流（闸控 403）的 error 会先于探测闩封面
+    const dlProbeSettled = ref(false)
     let dlVideoSeq = 0
     watch([mediaVideoKey, () => props.queueOwner?.id], async () => {
       const seq = ++dlVideoSeq
       downloadedVideoUrl.value = null
       const song = props.currentSong
       const plId = props.queueOwner?.id
-      if (!plId || !(song?.bilibili?.hasVideo || song?.youtube?.hasVideo)) return
+      // 探测门用下载口径：hasDownloadableVideo 曲可能有本地视频档（下载链
+      // 收全编码）——只认 hasVideo 会把已下载的纯非 avc1 稿件挡在门外
+      const probeable = song?.bilibili?.hasVideo || song?.bilibili?.hasDownloadableVideo
+        || song?.youtube?.hasVideo || song?.youtube?.hasDownloadableVideo
+      if (!plId || !probeable) {
+        dlProbeSettled.value = true
+        return
+      }
+      dlProbeSettled.value = false
       try {
         const st = await downloadsApi.getSongDownloadStatus(plId, song.id)
         if (seq !== dlVideoSeq) return
-        if (st?.task?.videoPath) {
+        // http 拦截器剥到 body——任务行在 st.data.task；completed 门禁：
+        // 非完成态行的 videoPath 打 /file 恒 404（服务端双查 status+existsSync），
+        // 白烧一跳
+        if (st?.data?.task?.status === 'completed' && st?.data?.task?.videoPath) {
           downloadedVideoUrl.value = downloadsApi.songFileUrl(plId, song.id, 'video')
         }
       } catch { /* 探测失败回落在线流 */ }
+      finally { if (seq === dlVideoSeq) dlProbeSettled.value = true }
     }, { immediate: true })
     const mediaVideoUrl = computed(() => {
       const song = props.currentSong
       const b = song?.bilibili
-      if (b?.hasVideo) return downloadedVideoUrl.value
-        || musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page)
+      if (b?.hasVideo || b?.hasDownloadableVideo) {
+        if (!dlProbeSettled.value) return ''
+        // 下载口径曲无在线流可退（无 avc1）——本地档缺席即空串，不挂载
+        return downloadedVideoUrl.value
+          || (b.hasVideo ? musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page) : '')
+      }
       const y = song?.youtube
-      if (y?.hasVideo) return downloadedVideoUrl.value
-        || musicApi.youtubeStreamUrl(y.videoId, 'video')
+      if (y?.hasVideo || y?.hasDownloadableVideo) {
+        if (!dlProbeSettled.value) return ''
+        return downloadedVideoUrl.value
+          || (y.hasVideo ? musicApi.youtubeStreamUrl(y.videoId, 'video') : '')
+      }
       // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）；videoV 戳
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
       return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video', song.file.videoV) : ''
@@ -653,7 +685,10 @@ export default {
     // 本地档解码失败（hev1/av01-in-mp4 等 Safari 放不动的封装）——先回落
     // 在线流再闩封面：清 downloadedVideoUrl 让 mediaVideoUrl 换源重载，
     // watcher 顺带复位 mediaVideoFailed；在线源也失败才真闩
-    const onMediaVideoError = () => {
+    const onMediaVideoError = (e) => {
+      // 迟到的旧元素 error（换曲后 DOM 复用期）：key 换绑后旧元素的迟投
+      // 事件不能打到新歌状态——按 target 身份闸
+      if (e?.target && e.target !== mediaVideoRef.value) return
       if (downloadedVideoUrl.value && mediaVideoUrl.value === downloadedVideoUrl.value) {
         downloadedVideoUrl.value = null
         return
@@ -686,9 +721,10 @@ export default {
     watch(() => props.currentTime, syncMediaVideo)
     watch(() => props.isPlaying, syncMediaVideo)
     // 切歌/开关视频时 src 变化或元素重建——等到新 metadata 落地再对齐时钟，
-    // 避免对空 player 空 seek；监听键用 mediaVideoKey（两首外部曲互切时 active 不变）。
+    // 避免对空 player 空 seek；监听键含 mediaVideoUrl——同曲换源（本地档
+    // 解码失败回落在线流）active/key 都不变，但新资源要从 0 起播需重对齐
     // immediate 覆盖挂载瞬间条件已满足的情形（syncMediaVideo 也兜底）
-    watch([mediaVideoActive, mediaVideoKey], async () => {
+    watch([mediaVideoActive, mediaVideoKey, mediaVideoUrl], async () => {
       if (!mediaVideoActive.value) return
       await nextTick()
       const v = mediaVideoRef.value

@@ -127,14 +127,19 @@ async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', sig
   // 候选回链逐个过代理白名单——signatureCipher 跳过、非 googlevideo
   // 域拒；整条链随 token/返回值下发，代理/调用方试到第一个能通的档
   const seen = new Set();
+  // pickStreamList('video') 在批内无 avc1 时会把 progressive mp4 从 adaptive
+  // 通道送回——按 url 属集补判 prog，否则合流档被标 false、br 拿容器总
+  // 码率冒充音轨码率污染下游对账
+  const progUrls = new Set(progressive.map(f => f.url));
   const streams = [];
-  for (const [f, prog] of (deadAdaptive
+  for (const [f, viaProgList] of (deadAdaptive
     ? [...progressive.map(x => [x, true]), ...adaptive.map(x => [x, false])]
     : [...adaptive.map(x => [x, false]), ...progressive.map(x => [x, true])])) {
     const checked = normalizeOutboundUrl(f.url);
     if (!checked.ok || !isAllowedHost(checked.url.hostname)) continue;
     if (seen.has(f.url)) continue;
     seen.add(f.url);
+    const prog = viaProgList || progUrls.has(f.url);
     streams.push({ url: f.url, mimeType: f.mimeType || '', br: prog ? null : (f.bitrate || null) });
   }
   return { streams, gated };

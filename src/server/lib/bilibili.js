@@ -160,7 +160,9 @@ function pickStreamList(data, kind, prefer = '', opts = {}) {
         || (Array.isArray(f.backup_url) && f.backup_url.length));
       // flac.audio 文档形态是单对象；上游若改成多档数组 concat 也兼容
       const flac = [].concat(dash.flac?.audio || []).filter(hasUrl);
-      const dolby = (Array.isArray(dash.dolby?.audio) ? dash.dolby.audio : [])
+      // dolby.audio 同 flac 兼容单对象/数组形态——routes 的 hasDolby 谓词
+      // 两种形态都认，这里漏单对象会让「有杜比标」的稿件下载不到杜比轨
+      const dolby = [].concat(dash.dolby?.audio || [])
         .filter(hasUrl).sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
       return [...flac, ...dolby, ...regular];
     }
@@ -170,22 +172,23 @@ function pickStreamList(data, kind, prefer = '', opts = {}) {
   // 裸像素序靠上游数组顺序碰巧正确（首项即最高 id），上游改序即静默降级。
   // frameRate/frame_rate 上游两种拼法都出现过；bandwidth 天然随档位递增
   const bvFps = (v) => Number(v?.frameRate ?? v?.frame_rate) || 0;
-  const all = dash.video || [];
+  const px = (v) => (v?.height || 0) * (v?.width || 0);
+  const all = Array.isArray(dash.video) ? dash.video : [];
   if (opts.anyCodec) {
     // 下载档放开编码面：4K/8K/HDR/杜比视界常只发 hev1/av01——像素更高的
     // 非 avc1 档必须可达（hev1/dvh1/av01/vp9 进 mp4 均合法封装）；同像素
     // 仍优先 avc1 保浏览器直放——播放链不传 anyCodec，兼容性口径不受牵连
     const avcRank = (v) => (v?.codecs || '').startsWith('avc1') ? 1 : 0;
-    return all.slice().sort((a, b) => (b.height * b.width) - (a.height * a.width)
+    return all.slice().sort((a, b) => px(b) - px(a)
       || avcRank(b) - avcRank(a)
       || bvFps(b) - bvFps(a)
-      || (b.bandwidth || 0) - (a.bandwidth || 0));
+      || (b?.bandwidth || 0) - (a?.bandwidth || 0));
   }
-  const avc = all.filter(v => (v.codecs || '').startsWith('avc1'));
+  const avc = all.filter(v => (v?.codecs || '').startsWith('avc1'));
   return (avc.length ? avc : all)
-    .slice().sort((a, b) => (b.height * b.width) - (a.height * a.width)
+    .slice().sort((a, b) => px(b) - px(a)
       || bvFps(b) - bvFps(a)
-      || (b.bandwidth || 0) - (a.bandwidth || 0));
+      || (b?.bandwidth || 0) - (a?.bandwidth || 0));
 }
 const pickStreams = (data) => ({
   audio: pickStreamList(data, 'audio')[0] || null,
@@ -240,7 +243,8 @@ async function resolveBiliPlayurl({ bvid, cid, page = 1, signal, fnval = 4048, q
 // 单档流的主链+备份链摊平成顺序候选——端口策略/边缘拒绝按档降级
 const flatUrls = (s, extra = {}) =>
   [s?.baseUrl, s?.base_url,
-    ...(Array.isArray(s?.backupUrl) ? s.backupUrl : (s?.backup_url || []))]
+    ...(Array.isArray(s?.backupUrl) ? s.backupUrl
+      : (Array.isArray(s?.backup_url) ? s.backup_url : []))]
     .filter(u => typeof u === 'string' && u)
     .map(url => ({ url, ...extra }));
 
@@ -267,7 +271,10 @@ async function resolveBiliMedia({ bvid, cid, page = 1, signal }) {
         w: s?.width || 0, h: s?.height || 0,
         codec: s?.codecs || ''
       })),
+    // 合流音轨限 audio/mp4 与 yt 侧口径对齐——上游若混入 opus/eac3 等非
+    // mp4 封装轨，-c:a copy 进 mp4 产的是浏览器无声文件
     audios: pickStreamList(dash, 'audio')
+      .filter(s => (s?.mimeType || '').startsWith('audio/mp4'))
       .flatMap(s => flatUrls(s, { mimeType: s?.mimeType || '', br: s?.bandwidth || null })),
     // MP4 合流（durl）：无 ffmpeg 兜底 + 匿名 DASH 封顶 480p 时反超到 720p
     // 的升级路——实测同一稿件 dash 只回 480p/360p 而 fnval=1&qn=80 的 durl

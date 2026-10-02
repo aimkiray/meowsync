@@ -675,7 +675,9 @@ async function processTask(task, queueId, signal) {
     let lastReported = -1;
     const reportProgress = (value) => {
       // progress 回调每 chunk 触发一次——按百分点节流，且 DB 写入失败不得穿透 'data' 监听器
-      const rounded = Math.floor(value);
+      // 高水位钳位：视频候选降档重试会让源内 progress 回卷（90→0）——进度
+      // 条语义是「任务整体完成度」，相位间回退不写库
+      const rounded = Math.max(lastReported, Math.floor(value));
       if (rounded === lastReported) return;
       lastReported = rounded;
       try {
@@ -956,6 +958,7 @@ const resetTaskFields = (extra = {}) => ({
   lyricsPath: null,
   coverPath: null,
   videoPath: null,
+  videoMeta: null,
   fileSize: null,
   ...extra
 });
@@ -1334,6 +1337,14 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     // 已落盘段，只补视频相位；旧队列计数回调对齐
     if (queueTask.status === 'completed' && taskFilesIntact(queueTask)) {
       if (options.downloadVideo === true && isExternalSongId(songId) && !queueTask.videoPath) {
+        // 摘出=改写队列成员关系——活体队列（含控制器排空/僵尸态）按非完好
+        // 分支同款 ownerActive 纪律 409，等队列终结再补；否则任务会从
+        // 运行中队列的详情页飞行中消失，且 standalone 绕过队列并发限额
+        const owner = downloadQueuesRepo.findQueueById(queueTask.queueId);
+        const ownerBusy = queueHasLiveController(queueTask.queueId);
+        if (ownerBusy || (owner && ['pending', 'running', 'paused'].includes(owner.status))) {
+          throw httpError(409, '该歌曲所属下载队列仍在运行，请等队列结束后再补视频');
+        }
         getDb().transaction(() => {
           downloadTasksRepo.updateTask(queueTask.id, {
             queueId: null,
@@ -1341,9 +1352,18 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
             progress: 0,
             errorMessage: null,
             completedAt: null,
-            downloadVideo: true
+            downloadVideo: true,
+            // retryCount 是相位级预算——老行若在音频相位打满 3 次，补视频
+            // 首个瞬态错误就判死；翻 pending 时归零
+            retryCount: 0,
+            providerData: providerDataOf(track)
           });
           recountQueueCounters(queueTask.queueId);
+          // 摘空壳回收：单曲队列摘完留 completed 0/0 幽灵壳——start/retry
+          // 均不可用的纯残留顺手删（无活控制器已由上方 ownerBusy 闸保证）
+          if (owner && downloadTasksRepo.listTasksByQueue(queueTask.queueId).length === 0) {
+            try { downloadQueuesRepo.deleteQueue(queueTask.queueId); } catch { /* 壳已消失 */ }
+          }
         })();
         retryAfter.delete(queueTask.id);
         return dispatchStandalone(downloadTasksRepo.findTaskById(queueTask.id) || queueTask);
@@ -1391,20 +1411,30 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     // 已下载行上的「补视频」请求：翻 pending 让协程只跑缺失的视频相位——
     // audioPath/lyricsPath/coverPath 保留，分段幂等自动跳过已落盘工件
     if (options.downloadVideo === true && isExternalSongId(songId) && !task.videoPath) {
+      // 完成写库与 standaloneRunning 摘 entry 之间有微任务薄窗——在跑协程
+      // 的行翻 pending 后 dispatch 会 409 被吞，行永卡 pending 无人消费
+      if (standaloneRunning.has(task.id)) {
+        throw httpError(409, '该歌曲正在下载中');
+      }
       task = downloadTasksRepo.updateTask(task.id, {
         status: 'pending',
         progress: 0,
         errorMessage: null,
         completedAt: null,
-        downloadVideo: true
+        downloadVideo: true,
+        // retryCount 相位级预算归零——老行打满 3 次后补视频首个瞬态错误
+        // 直接判死（与摘出分支同口径）
+        retryCount: 0
       });
     } else {
       return task;
     }
   }
-  // 只看内存态：DB 里残留的 downloading 孤儿行不在 standaloneRunning 里，
-  // 不挡下载（原地重跑即自愈）；真正在跑的任务才冲突
-  if (task && task.status === 'downloading' && standaloneRunning.has(task.id)) {
+  // 只看内存态：DB 里残留的 downloading/pending 孤儿行不在
+  // standaloneRunning 里，不挡下载（原地重跑即自愈）；在跑与退避窗内的
+  // 任务一律 409——pending 退避行也算在跑（协程持有，重试钟还没走完），
+  // 放行会让本次 flag 同步改写别人协程的行却无人派新协程
+  if (task && standaloneRunning.has(task.id)) {
     throw httpError(409, '该歌曲正在下载中');
   }
 
@@ -1417,12 +1447,20 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
       downloadVideo: options.downloadVideo === true && isExternalSongId(songId),
-      // 幻影清册：videoPath 登记但文件已被外删、本次又不补视频——留着它
-      // taskFilesIntact 永假，行在 UI 永远钉在「未下载」且任何普通重跑都
-      // 修不好（视频相位按 flag 跳过）。清册让完好文件重新算 intact；
-      // 文件还在的 videoPath 保留（del 语义不归 flag 同步管）
-      ...(options.downloadVideo !== true && task.videoPath && !pathPresent(task.videoPath)
+      // 幻影清册：路径登记但文件已被外删、本次请求又不开对应相位——留着
+      // 它 taskFilesIntact 永假，行在 UI 永远钉在「未下载」且任何普通重跑
+      // 都修不好（相位按 flag 跳过）。清册让完好文件重新算 intact；文件
+      // 还在的登记保留（del 语义不归 flag 同步管）。开相位的幻影不清——
+      // processTask 的 existsSync 幂等检查会真补回那段
+      ...(!(options.downloadVideo === true && isExternalSongId(songId))
+        && task.videoPath && !pathPresent(task.videoPath)
         ? { videoPath: null, videoMeta: null } : {}),
+      ...(options.downloadLyrics === false
+        && task.lyricsPath && !pathPresent(task.lyricsPath)
+        ? { lyricsPath: null } : {}),
+      ...(options.downloadCover === false
+        && task.coverPath && !pathPresent(task.coverPath)
+        ? { coverPath: null } : {}),
       providerData: providerDataOf(track)
     }) || task;
   } else {

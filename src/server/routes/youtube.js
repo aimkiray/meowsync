@@ -109,6 +109,12 @@ app.get('/youtube/resolve', async (c) => {
     // progressive（formats 里的合并流）兜底也认——含音画的 360p 比没有强
     const videoFormats = pickStreamList(player.streamingData, 'video');
     const hasVideo = videoFormats.length > 0;
+    // 下载口径独立于浏览器直放口径：下载链收全编码自适应轨（vp9/av01 合
+    // 流进 mp4 合法），只发 webm 的稿件同样可下载
+    const hasDownloadableVideo = hasVideo
+      || (Array.isArray(player.streamingData?.adaptiveFormats)
+        && player.streamingData.adaptiveFormats.some(f =>
+          (f?.mimeType || '').startsWith('video/') && typeof f?.url === 'string' && f.url));
     const audio = pickStreamList(player.streamingData, 'audio')[0] || null;
     const video = videoFormats[0] || null;
 
@@ -124,6 +130,7 @@ app.get('/youtube/resolve', async (c) => {
       matched: toMatchedJson(matched),
       matchedBy,
       hasVideo,
+      hasDownloadableVideo,
       audioQuality: audio ? { itag: audio.itag, bitrate: audio.bitrate, mimeType: audio.mimeType } : null,
       videoQuality: video ? { itag: video.itag, width: video.width, height: video.height } : null,
     });

@@ -32,10 +32,13 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
     return isResolvableTrackId(id)
   }
 
-  // 「下载视频到服务器」可见性：只有导入时确认有可放视频流（hasVideo）的
-  // 外部曲才亮——无流曲点了必失败，不亮比亮着报错诚实
+  // 「下载视频到服务器」可见性：下载口径 hasDownloadableVideo 优先于
+  // 播放口径 hasVideo——下载链能合流非 avc1 档（hev1/av01/vp9→mp4），
+  // 只发非 avc1 的稿件（4K 独占编码）拿不到入口是新能力的死角；
+  // 旧数据无该字段时按 hasVideo 兜底（保守方向：宁可少亮不瞎亮）
   const canServerVideo = (song) =>
-    Boolean(song?.bilibili?.hasVideo || song?.youtube?.hasVideo)
+    Boolean(song?.bilibili?.hasDownloadableVideo || song?.bilibili?.hasVideo
+      || song?.youtube?.hasDownloadableVideo || song?.youtube?.hasVideo)
 
   // file_ 工件下载走 <a href> 直链 + 服务端 Content-Disposition——blob 全量
   // 进内存对 2GB 视频曲是实打实的内存压力。download 属性空值：同源时文件名
