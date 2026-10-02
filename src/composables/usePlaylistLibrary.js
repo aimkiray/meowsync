@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
 import { readJSON, writeJSON } from '../lib/storage'
@@ -458,6 +458,60 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
   }
 
+  // ── 新建空白歌单 ──
+  // local_pl_<ts> 与导入壳/mix 链同族：isLocalPlaylistId 全链路现成正确
+  //（持久化保留 tracks / 内嵌加载 / ?mix= 内容分享链 / 服务端镜像下载），
+  // 又不继承 saved_queue_ 的「播放上下文物件」语义（随机键等歌单级操作正常可用）。
+  // 弹窗态也放本域——创建是库行为，冻结/焦点逻辑与 atp/点歌台同款集中管
+  const createPlaylistOpen = ref(false)
+  const createPlaylistName = ref('')
+  const createPlaylistInput = ref(null)
+
+  const openCreatePlaylist = () => {
+    createPlaylistName.value = ''
+    createPlaylistOpen.value = true
+  }
+  const closeCreatePlaylist = () => { createPlaylistOpen.value = false }
+
+  // 焦点进出与 atp 弹窗同款：开时进输入框、关时归还触发键。
+  // 归还前先验可见：提交后 selectPlaylistAndShow 会合上移动端抽屉/切视图，
+  // 归还目标若已隐藏，焦点落在不可见元素上会让下一次 Tab 从文档头重走
+  watch(createPlaylistOpen, async (v, _prev, onCleanup) => {
+    if (!v) return
+    const prevFocus = document.activeElement
+    onCleanup(() => {
+      if (!(prevFocus instanceof HTMLElement)) return
+      if (prevFocus.checkVisibility?.() === false) return
+      prevFocus.focus()
+    })
+    await nextTick()
+    createPlaylistInput.value?.focus()
+  })
+
+  // 建空白本地单。返回库内响应式代理——调用方再写字段/追加曲才走依赖追踪；
+  // 空名返回 null（toast/关窗由调用方决定）
+  const createLocalPlaylist = (name, { coverImgUrl = '' } = {}) => {
+    const trimmed = String(name || '').trim()
+    if (!trimmed) return null
+    // Date.now 同毫秒双建会撞号——撞上就后错一毫秒（撞率≈0，一次自增即收敛）
+    let id = `local_pl_${Date.now()}`
+    while (userPlaylists.value.some(p => p.id === id)) {
+      id = `local_pl_${Number(id.slice(9)) + 1}`
+    }
+    const pl = {
+      id,
+      name: trimmed,
+      coverImgUrl,
+      creator: { nickname: '我' },
+      trackCount: 0,
+      tracks: [],
+      isLocal: true
+    }
+    userPlaylists.value.unshift(pl)
+    savePlaylistsToStorage()
+    return userPlaylists.value.find(p => p.id === pl.id) || pl
+  }
+
     // URL歌单加载（playlistIds 由 readShareParams 在挂载处一趟解析后传入）
     const loadDefaultPlaylists = async (urlPlaylistIds) => {
       try {
@@ -559,6 +613,9 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     loadPlaylistById,
     collectSelectedPlaylist,
     selectedPlaylistInLibrary,
+    // 新建空白歌单（侧栏 + 弹窗）
+    createPlaylistOpen, createPlaylistName, createPlaylistInput,
+    openCreatePlaylist, closeCreatePlaylist, createLocalPlaylist,
     // URL 默认歌单加载
     loadDefaultPlaylists,
     // 选择与同步

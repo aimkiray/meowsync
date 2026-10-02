@@ -16,11 +16,13 @@ import { buildBilibiliSong, buildYouTubeSong, buildQQSong } from '../lib/externa
 // deps（App 注入的跨域共享）：
 //   gates.picker — 点歌台内搜索/解析竞态闸
 //   userPlaylists / selectedPlaylist / songs — 库域 state
-//   addPlaylistToLibrary / appendSongToLibraryPlaylist — 库域动作
+//   addPlaylistToLibrary / appendSongToLibraryPlaylist / createLocalPlaylist — 库域动作
+//   closeCreatePlaylist — 库域弹窗互斥收口（三弹窗显式互斥，不指望 UI 不可达兜底）
 export function useAddToPlaylist({
   gates,
   userPlaylists, selectedPlaylist, songs,
-  addPlaylistToLibrary, appendSongToLibraryPlaylist,
+  addPlaylistToLibrary, appendSongToLibraryPlaylist, createLocalPlaylist,
+  closeCreatePlaylist,
 }) {
 
   // ── 添加到歌单（待播/相关/歌单页/搜索结果行尾键共用入口） ──
@@ -36,6 +38,7 @@ export function useAddToPlaylist({
   )
   const openAddToPlaylist = (song) => {
     closeSongPicker() // 与点歌台显式互斥（行菜单在模态外层但防御性收口）
+    closeCreatePlaylist() // 与新建歌单弹窗同款互斥
     if (!song || song.id == null) {
       toast('这首歌无法加入歌单', 'error')
       return
@@ -62,25 +65,17 @@ export function useAddToPlaylist({
     addTargetSong.value = null
   }
 
-  // 用户新建歌单用 local_pl_ 前缀：isLocalPlaylistId 全链路（持久化保留 tracks /
-  // 内嵌加载 / ?mix= 内容分享链 / 镜像服务端下载）现成正确，且不继承 saved_queue_
-  // 的「播放上下文物件」语义（playerIsTemp 不禁随机）
+  // 「新建歌单并加入」：建单收口在库域 createLocalPlaylist（壳构造/持久化单源），
+  // 封面取被加曲的图——空壳比封面兜底音符更有辨识度
   const createPlaylistAndAdd = () => {
     const name = newPlaylistName.value.trim()
     const song = addTargetSong.value
     if (!name || !song) return
-    const pl = {
-      id: `local_pl_${Date.now()}`,
-      name,
-      coverImgUrl: song.al?.picUrl || song.album?.picUrl || '',
-      creator: { nickname: '我' },
-      trackCount: 0,
-      tracks: [],
-      isLocal: true
-    }
-    userPlaylists.value.unshift(pl)
-    // 传回库内响应式代理而非裸字面量——addSongToPlaylist 的字段赋值才走依赖
-    addSongToPlaylist(userPlaylists.value.find(p => p.id === pl.id) || pl)
+    const pl = createLocalPlaylist(name, {
+      coverImgUrl: song.al?.picUrl || song.album?.picUrl || ''
+    })
+    // pl 已是库内响应式代理——addSongToPlaylist 的字段赋值走依赖追踪
+    if (pl) addSongToPlaylist(pl)
   }
 
   // ── 点歌台（歌单 hero「添加歌曲」）：搜索网易云 / 粘歌曲链接/ID / B 站、YouTube 链接，
@@ -128,6 +123,7 @@ export function useAddToPlaylist({
     pickerAbort?.abort()   // 连带中止在途 resolve 的 HTTP（服务端级联断上游）
     pickerAbort = null
     addTargetSong.value = null // 与 atp 弹窗显式互斥——不指望 UI 不可达兜底
+    closeCreatePlaylist()      // 与新建歌单弹窗同款互斥
     songPickerQuery.value = ''
     songPickerResults.value = []
     songPickerSearching.value = false

@@ -72,7 +72,9 @@
 
     <div v-else-if="songs.length === 0" class="song-state">
       <PixelIcon name="note" :size="36" class="song-state-icon" />
-      <p class="song-state-text">从左侧选择歌单，或在顶部搜索发现新歌单喵~</p>
+      <!-- 空歌单与未选歌单分文案：前者指路「添加歌曲」入口 -->
+      <p class="song-state-text">{{ selectedPlaylist ? '歌单还是空的喵~' : '从左侧选择歌单，或在顶部搜索发现新歌单喵~' }}</p>
+      <p v-if="selectedPlaylist && !isShareShell" class="song-state-sub">点上方「添加歌曲」搜歌/粘链接进来</p>
     </div>
 
     <div v-else ref="rowsEl" class="flex-1 min-h-0 overflow-y-auto song-rows">
@@ -406,6 +408,11 @@
 .song-state-text {
   font-size: 12px;
   color: var(--ink-86);
+}
+
+.song-state-sub {
+  font-size: 11px; /* 站内次级信息行档（pl-meta/song-artist/panel-state-sub 同规约） */
+  color: var(--ink-64);
 }
 
 /* ── 歌曲行：留白节奏（无分隔线）+ 悬停浅墨 + 当前曲墨底反白 ── */

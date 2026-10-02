@@ -1,7 +1,16 @@
 <template>
   <!-- 歌单库侧栏："library" 媒体库列表，发丝线行排 -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
-    <p class="pg-label panel-label"><GlitchText text="library 我的歌单" /></p>
+    <div class="panel-head">
+      <p class="pg-label panel-label"><GlitchText text="library 我的歌单" /></p>
+      <button
+        class="pg-icobtn pg-icobtn--bare panel-create-btn"
+        title="新建歌单"
+        aria-label="新建歌单"
+        aria-haspopup="dialog"
+        @click="$emit('open-create-playlist')"
+      ><PixelIcon name="plus" :size="15" /></button>
+    </div>
 
     <div v-if="loading" class="panel-state">
       <div class="pixel-loading" aria-hidden="true"></div>
@@ -10,7 +19,7 @@
 
     <div v-else-if="userPlaylists.length === 0" class="panel-state">
       <p class="panel-state-text">还没有添加歌单喵~</p>
-      <p class="panel-state-sub">用顶部搜索框找歌单吧！</p>
+      <p class="panel-state-sub">点上方 + 新建一个，或用顶部搜索框找歌单吧！</p>
     </div>
 
     <div v-else class="playlist-scroll flex-1 min-h-0 overflow-y-auto">
@@ -164,7 +173,7 @@ export default {
       default: false
     }
   },
-  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted'],
+  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted', 'open-create-playlist'],
   setup(props, { emit }) {
     const openMenuId = ref(null)
     const menuPositions = ref({})
@@ -303,6 +312,12 @@ export default {
         closeMenu(pid)
         return
       }
+      // 空本地单的 tracks 是权威空集——镜像建空壳+建 0 任务队列是纯空炮
+      if (isLocalPlaylistId(playlist.id) && !(playlist.tracks?.length)) {
+        toast('歌单还没有歌曲，先添加几首吧', 'info')
+        closeMenu(pid)
+        return
+      }
       downloadingIds.add(pid)
       try {
         let mirrorNote = ''
@@ -421,10 +436,21 @@ export default {
   padding: 20px 0 0; /* 与主区首行同轴：全站 masthead→内容 = 20 */
 }
 
+/* 头行：label 左 + 新建键右——右缘与行块可视缘同轴（行块左右内收 12px） */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 12px;
+  flex-shrink: 0;
+}
+
 .panel-label {
   padding: 8px 12px 10px; /* 与栏内 12px 内容轴同缘（封面左缘） */
   flex-shrink: 0;
 }
+
+.panel-create-btn { margin: 4px 0 6px; }
 
 .panel-state {
   /* 与列表态 .playlist-scroll 同律：标题下方纯留白，无分隔线 */
@@ -457,6 +483,8 @@ export default {
   /* 窄轨行块 ~55px：操作簇在该态已 display:none（style.css ~:738），
      64px 保留位无物可让——回收为对称 6px 让封面居中 */
   .app-sidebar:not(.app-sidebar--open) .pl-row-main { padding: 9px 6px; }
+  /* 窄轨 label/行内件全藏后头行只剩 + 键——与居中封面列对位 */
+  .app-sidebar:not(.app-sidebar--open) .panel-head { justify-content: center; padding-right: 0; }
 }
 
 /* 歌单行：留白节奏（无分隔线），整行可点；
