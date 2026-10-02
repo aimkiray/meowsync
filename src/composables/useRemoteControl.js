@@ -1,5 +1,6 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { resolveApiBaseUrl } from '../lib/api-base'
+import { songCoverUrl } from '../lib/song'
 import { toast } from '../lib/feedback'
 // WS 消息类型与服务端 remote.js 同源
 import { MSG_TYPES } from '../shared/protocol.js'
@@ -46,7 +47,7 @@ export function useRemoteControl(deps) {
     return {
       id: song.id,
       name: song.name,
-      al: { picUrl: song.al?.picUrl ?? song.album?.picUrl ?? '' },
+      al: { picUrl: songCoverUrl(song) },
       ar: artistList.map(a => ({ name: a?.name ?? '' }))
     }
   }

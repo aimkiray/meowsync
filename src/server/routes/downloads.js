@@ -244,8 +244,9 @@ app.get('/downloads/songs/:songId/status', async (c) => {
 });
 
 // 已下载工件的本地回放：在线流被上游闸控/签名失效时，前端回落播落盘文件。
-// 单段 Range（seek 必需），与 proxy.js 同口径拒多段/反段；kind=video 给
-// videoPath（WatchView 视频模式播本地档）
+// 单段 Range（seek 必需）；多段/畸形→400、反段/越界→416（比 proxy.js 的 400
+// 更贴 RFC——Range 语义端点按 Range 规范回）
+// kind=video 给 videoPath（WatchView 视频模式播本地档）
 const ARTIFACT_MIME = {
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
   ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', webm: 'audio/webm',
@@ -261,7 +262,18 @@ app.get('/downloads/songs/:songId/file', async (c) => {
     if (!playlistId) return fail(c, 400, '缺少 playlistId 参数');
     const filePath = downloadManager.getTaskArtifactPath(playlistId, songId, kind);
     if (!filePath) return fail(c, 404, '文件不存在或尚未下载完成');
-    const stat = fs.statSync(filePath);
+    // stat→stream 单次 open 锁同一 inode：并发 DELETE/换源重传的窗口里，
+    // 两次按路径 lookup 会让 Content-Length/ETag 描述旧文件、body 读新文件
+    //（截断/弱校验器错标——换源正是本端点 ETag 要防的场景）。fd 路径下
+    // 删掉旧文件 body 仍是旧 inode 的完整字节，响应始终自洽
+    let fd;
+    try {
+      fd = fs.openSync(filePath, 'r');
+    } catch {
+      return fail(c, 404, '文件不存在或尚未下载完成');
+    }
+    const closeFd = () => { try { fs.closeSync(fd); } catch { /* 已关 */ } };
+    const stat = fs.fstatSync(fd);
     const ext = path.extname(filePath).slice(1).toLowerCase();
     // webm 二义：上传白名单里它同时是 audio/video 扩展——kind=video 优先判视频，
     // 否则 <video> 拿到 audio/webm 会按音轨播（有画面的上传视频丢画面）
@@ -269,9 +281,16 @@ app.get('/downloads/songs/:songId/file', async (c) => {
       : ARTIFACT_MIME[ext] || (kind === 'video' ? 'video/mp4' : 'application/octet-stream');
 
     // 上传曲换源不换 URL（/file?kind=…）——启发式缓存会拿旧文件。
-    // no-cache + ETag(size-mtime) 使 revalidate 落 304 而非全量重拉
-    const etag = `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
-    if (c.req.header('if-none-match') === etag) {
+    // no-cache + ETag(size-mtime) 使 revalidate 落 304 而非全量重拉。
+    // mtimeMs 保留浮点：同 size + 同毫秒内的两次换源不撞 tag
+    const etag = `W/"${stat.size}-${stat.mtimeMs}"`;
+    // If-None-Match 多值/* 弱比较（RFC 9110 列表语义）——只认单值会把该 304
+    // 的再验证多发成 200 全量（安全方向，但白烧带宽）
+    const inm = c.req.header('if-none-match');
+    const etagBare = etag.slice(3, -1);
+    if (inm && (inm.trim() === '*'
+        || inm.split(',').some(t => t.trim().replace(/^W\//, '').replace(/^"|"$/g, '') === etagBare))) {
+      closeFd();
       return c.body(null, 304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
     }
 
@@ -286,6 +305,7 @@ app.get('/downloads/songs/:songId/file', async (c) => {
     if (range) {
       const m = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
       if (!m || (!m[1] && !m[2])) {
+        closeFd();
         return c.json({ code: 400, message: 'unsupported range' }, 400);
       }
       if (!m[1]) {
@@ -296,6 +316,7 @@ app.get('/downloads/songs/:songId/file', async (c) => {
         if (m[2]) end = Math.min(parseInt(m[2], 10), stat.size - 1);
       }
       if (start > end || start >= stat.size) {
+        closeFd();
         return c.body(null, 416, { 'Content-Range': `bytes */${stat.size}` });
       }
       status = 206;
@@ -308,8 +329,23 @@ app.get('/downloads/songs/:songId/file', async (c) => {
       'Cache-Control': 'no-cache',
       'ETag': etag
     };
+    // download=<文件名基底>：触发附件语义并给真实扩展名——客户端 <a href> 直链
+    // 下载不再把整文件 blob 进内存（file_ 视频上限 2GB）。RFC5987 filename* 编码
+    const downloadName = c.req.query('download');
+    if (downloadName) {
+      const safe = String(downloadName).slice(0, 200).replace(/[\r\n"\\]/g, '_');
+      headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(safe)}.${ext}`;
+    }
     if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
-    return c.body(fs.createReadStream(filePath, { start, end }), status, headers);
+    // fd 交给 stream 持有（autoClose）——createReadStream 自身抛错时回收兜底
+    let stream;
+    try {
+      stream = fs.createReadStream(filePath, { fd, start, end, autoClose: true });
+    } catch (e) {
+      closeFd();
+      throw e;
+    }
+    return c.body(stream, status, headers);
   } catch (error) {
     return handleError(c, error, '读取下载文件失败');
   }

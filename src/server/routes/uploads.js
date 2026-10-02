@@ -39,6 +39,9 @@ const KIND_DEFS = {
   lyrics: { exts: new Set(['lrc', 'txt']), maxBytes: 4 * 1024 * 1024, dir: 'lyrics' },
 };
 const KIND_PATH_COL = { audio: 'audioPath', video: 'videoPath', cover: 'coverPath', lyrics: 'lyricsPath' };
+// 对应的 download_* 就位标记列——filesIntact 的 audio 完整性检查是 flag 门控，
+// 补传/换源不置位会留「path 有值但 flag=0」的幻影已下载态
+const KIND_DL_FIELD = { audio: 'downloadAudio', video: 'downloadVideo', cover: 'downloadCover', lyrics: 'downloadLyrics' };
 
 const uploadsDir = (kind) => path.join(DOWNLOAD_BASE_DIR, 'uploads', KIND_DEFS[kind].dir);
 
@@ -81,23 +84,55 @@ async function streamRequestBody(c, outputPath, maxBytes) {
     throw httpError(400, '缺少请求体');
   }
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  // 磁盘余量预检：声明长度 > 可用空间直接 507——不写到一半才 ENOSPC 白烧带宽
+  //（ENOSPC 仍由写路径兜底；statfs 不可用的平台跳过这道闸）
+  try {
+    if (declared > 0) {
+      const st = fs.statfsSync(path.dirname(outputPath));
+      if (st.bavail * st.bsize < declared) throw httpError(507, '磁盘空间不足');
+    }
+  } catch (e) { if (e?.status) throw e; /* statfs 不可用的平台跳过 */ }
   // .part 名带随机段：同 songId 并发/重试不共享残片（inflight 锁已挡并发，
   // 随机段是纵深——锁失效路径下也不互相 truncate）
   const partPath = `${outputPath}.${crypto.randomBytes(4).toString('hex')}.part`;
   const ws = fs.createWriteStream(partPath);
-  // ws 'error' 全程要有人接：无监听时 ENOSPC/EIO 直接 uncaughtException 杀进程；
-  // error 同时打断挂起的 drain/end await（race 语义——errP 先 settle 即输）
-  const errP = new Promise((_, reject) => ws.once('error', reject));
+  // ws 'error' 全程要有人接：无监听时 ENOSPC/EIO 直接 uncaughtException 杀进程。
+  // 必须用 on 不用 once——对已 error/destroy 的流再 write/end 会再发 'error'，
+  // once 摘除后第二次 error 无监听照样杀进程。errP settle 后再 reject 是 no-op，
+  // 监听器常驻只为吸收迟到 error（download-io.js 的 error noop sink 同族先例）
+  const errP = new Promise((_, reject) => ws.on('error', reject));
   const reader = body.getReader();
   let total = 0;
-  const cleanup = () => {
+  const cleanup = async () => {
     ws.destroy();
+    // destroy 先于挂起的 fs.open 完成时，open 会迟到落地把路径重新建出来
+    //（先 rm 再重建 = 漏收孤儿 .part——大单 chunk 首片即超限时正撞此窗）。
+    // 等 'close'（fd 真正关闭，此后不再有重建源）再删才闭环；5s 上限防
+    // open 病态挂死拖住请求——超时后漏收的残片由启动期 reapUploadPartFiles 兜
+    if (!ws.closed) {
+      await Promise.race([
+        new Promise(r => ws.once('close', r)),
+        new Promise(r => { const t = setTimeout(r, 5000); t.unref?.(); }),
+      ]);
+    }
     try { fs.rmSync(partPath, { force: true }); } catch { /* Windows 句柄未释兜底 */ }
   };
+  // 停滞看门狗（watchStall 同族）：限流管次数不管字节——慢速攻击每 <stall 发
+  // 1 字节即可长期占满 MAX_INFLIGHT 工位，合法上传全 429。destroy 触发 error
+  // → errP 冒泡成 408，与断流同路径清理
+  const STALL_MS = 60000;
+  let lastChunkAt = Date.now();
+  const stallTimer = setInterval(() => {
+    if (Date.now() - lastChunkAt <= STALL_MS) return;
+    try { reader.cancel(); } catch { /* 忽略 */ }
+    ws.destroy(httpError(408, '上传停滞超时'));
+  }, 5000);
+  stallTimer.unref();
   try {
     while (true) {
       const { done, value } = await Promise.race([reader.read(), errP]);
       if (done) break;
+      lastChunkAt = Date.now();
       total += value.byteLength;
       if (total > maxBytes) {
         try { await reader.cancel(); } catch { /* 忽略 */ }
@@ -114,20 +149,21 @@ async function streamRequestBody(c, outputPath, maxBytes) {
       errP,
     ]);
   } catch (err) {
-    cleanup();
+    await cleanup();
     try { await reader.cancel(); } catch { /* 忽略 */ }
     throw err;
   } finally {
+    clearInterval(stallTimer);
     reader.releaseLock?.();
   }
   if (total === 0) {
-    cleanup();
+    await cleanup();
     throw httpError(400, '空文件');
   }
   try {
     fs.renameSync(partPath, outputPath);
   } catch (err) {
-    cleanup();
+    await cleanup();
     throw err;
   }
   return total;
@@ -137,6 +173,8 @@ async function streamRequestBody(c, outputPath, maxBytes) {
 // 同 songId 复传同 kind = 换源：旧路径文件清掉再登记新路径（换扩展名不留孤儿）
 app.post('/uploads', async (c) => {
   try {
+    // 停机窗：10s 强推窗口内的在途上传会被截成 .part 孤儿（downloads 系同闸）
+    if (downloadManager.isShuttingDown?.()) return fail(c, 503, '服务正在停机，请稍后再试');
     if (!rateLimit(c, 'uploads', 20)) {
       return fail(c, 429, '上传过于频繁，请稍后再试');
     }
@@ -147,7 +185,7 @@ app.post('/uploads', async (c) => {
     const filename = String(c.req.query('filename') || '').slice(0, 240);
     const ext = (filename.match(/\.([0-9A-Za-z]{1,8})$/)?.[1] || '').toLowerCase();
     if (!def.exts.has(ext)) {
-      return fail(c, 400, `不支持的文件类型 .${ext}（${kind} 允许：${[...def.exts].join('/')}）`);
+      return fail(c, 400, `不支持的文件类型 ${ext ? `.${ext}` : '（无扩展名）'}（${kind} 允许：${[...def.exts].join('/')}）`);
     }
 
     let songId = String(c.req.query('songId') || '');
@@ -205,49 +243,60 @@ async function handleUpload(c, { kind, def, ext, filename, songId }) {
   }
 
   const displayName = filename.replace(/\.[0-9A-Za-z]{1,8}$/, '') || songId;
-  if (existing) {
-    const updated = downloadTasksRepo.updateTask(existing.id, {
-      [KIND_PATH_COL[kind]]: outputPath,
-      fileSize: size,
-      providerData: { ...(existing.providerData || {}), upload: true, originalName: filename },
-    });
-    // 行在写盘窗口内被并发 DELETE 抹掉：updateTask 对不存在行静默 0 行——
-    // 不校验就 200 假成功+隐形孤儿（uploads/ 无收割者）。行没了回收新文件
-    if (!updated) {
-      fs.rmSync(outputPath, { force: true });
-      throw httpError(409, '曲目登记行已不存在，请重试');
-    }
-  } else {
-    let task;
-    try {
-      task = downloadTasksRepo.createTask({
-        playlistId: alive.id,
-        songId,
-        songName: displayName,
-        artist: '',
-        album: null,
-        coverUrl: null,
-        status: 'completed',
-        progress: 100,
-        durationMs: 0,
-        // 资产就位标记：对应 kind 的 download_* 列=1 使行语义=「该工件已在盘」
-        downloadAudio: kind === 'audio',
-        downloadVideo: kind === 'video',
-        downloadCover: kind === 'cover',
-        downloadLyrics: kind === 'lyrics',
-        providerData: { upload: true, originalName: filename },
+  // 曲名/原始文件名只随媒体工件更新——后传的封面/歌词文件名不该覆盖显示名
+  const isMediaKind = kind === 'audio' || kind === 'video';
+  // 登记段统一兜底：任何失败（撞 UNIQUE/行被并发 DELETE 抹掉/DB IO 错）新文件
+  // 都回收——uploads/ 不在 reapOrphanFiles 视野，漏回收 = 永久孤儿
+  try {
+    if (existing) {
+      const updated = downloadTasksRepo.updateTask(existing.id, {
+        [KIND_PATH_COL[kind]]: outputPath,
+        [KIND_DL_FIELD[kind]]: true,
+        fileSize: size,
+        ...(isMediaKind ? { songName: displayName } : {}),
+        providerData: { ...(existing.providerData || {}), upload: true, ...(isMediaKind ? { originalName: filename } : {}) },
       });
-    } catch (e) {
-      // UNIQUE 撞行（窗口内并发插入/墓碑行残留）：回收新文件回落接管
-      if (!/UNIQUE/i.test(e.message || '')) throw e;
-      fs.rmSync(outputPath, { force: true });
-      throw httpError(409, '曲目登记冲突，请重试');
+      // 行在写盘窗口内被并发 DELETE 抹掉：updateTask 对不存在行静默 0 行——
+      // 不校验就 200 假成功+隐形孤儿（外层 catch 统一回收新文件）
+      if (!updated) throw httpError(409, '曲目登记行已不存在，请重试');
+    } else {
+      let task;
+      try {
+        task = downloadTasksRepo.createTask({
+          playlistId: alive.id,
+          songId,
+          songName: displayName,
+          artist: '',
+          album: null,
+          coverUrl: null,
+          status: 'completed',
+          progress: 100,
+          durationMs: 0,
+          // 资产就位标记：对应 kind 的 download_* 列=1 使行语义=「该工件已在盘」
+          downloadAudio: kind === 'audio',
+          downloadVideo: kind === 'video',
+          downloadCover: kind === 'cover',
+          downloadLyrics: kind === 'lyrics',
+          providerData: { upload: true, originalName: filename },
+        });
+      } catch (e) {
+        // UNIQUE 撞行（窗口内并发插入/墓碑行残留）：回收新文件回落接管
+        if (!/UNIQUE/i.test(e.message || '')) throw e;
+        throw httpError(409, '曲目登记冲突，请重试');
+      }
+      // stamp 与 createTask 同步相邻——今天撞不上删行窗；仍校验固化不变量
+      //（一旦中间插入 await，行窗口消失假 200 就会复活）
+      const stamped = downloadTasksRepo.updateTask(task.id, { [KIND_PATH_COL[kind]]: outputPath, fileSize: size });
+      if (!stamped) throw httpError(409, '曲目登记行已不存在，请重试');
     }
-    downloadTasksRepo.updateTask(task.id, { [KIND_PATH_COL[kind]]: outputPath, fileSize: size });
+  } catch (e) {
+    fs.rmSync(outputPath, { force: true });
+    throw e;
   }
 
-  // 不透出服务器绝对路径（toPublicTask 相对化同口径）——客户端只消费 songId
-  return c.json({ code: 200, songId, kind, size });
+  // 不透出服务器绝对路径（toPublicTask 相对化同口径）——客户端只消费 songId。
+  // 包封走仓惯例 {code, data:{...}}
+  return c.json({ code: 200, data: { songId, kind, size } });
 }
 
 // DELETE /uploads/:songId —— 删登记行 + 全部资产文件（复用删除语义：

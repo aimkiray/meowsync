@@ -179,7 +179,7 @@
       <div
         v-if="showDownloadMenu"
         class="download-menu-overlay"
-        @click="closeDownloadMenu"
+        @click.self="closeDownloadMenu(true)"
       >
         <div
           class="pg-menu"
@@ -847,12 +847,17 @@ export default {
       return menuPositions.value[songId] || { top: '0px', left: '0px' }
     }
 
-    // 关闭菜单：所有关闭路径收口到这里，顺带清位置缓存（只增不减会泄漏）
-    const closeDownloadMenu = () => {
+    // 关闭菜单：所有关闭路径收口到这里，顺带清位置缓存（只增不减会泄漏）。
+    // restoreFocus=true（Esc/遮罩点击解散）：焦点归还 ⋯触发键——菜单散了焦点
+    // 不落 body。菜单项激活路径不传——下一跳（弹窗/动作）自己管焦点
+    const closeDownloadMenu = (restoreFocus = false) => {
       if (showDownloadMenu.value !== null) {
         delete menuPositions.value[showDownloadMenu.value]
       }
       showDownloadMenu.value = null
+      if (restoreFocus && menuTriggerBtn?.isConnected) {
+        menuTriggerBtn.focus({ preventScroll: true })
+      }
     }
 
     // ⋯ 菜单操作：下一首播放 / 队尾追加 / 分享——先关菜单再派发给父组件
@@ -925,7 +930,7 @@ export default {
     // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌；Escape 同关
     if (typeof window !== 'undefined') {
       const closeOnScroll = () => { closeDownloadMenu() }
-      const closeOnEscape = (e) => { if (e.key === 'Escape') closeDownloadMenu() }
+      const closeOnEscape = (e) => { if (e.key === 'Escape') closeDownloadMenu(true) }
       window.addEventListener('scroll', closeOnScroll, true)
       window.addEventListener('keydown', closeOnEscape)
       onBeforeUnmount(() => {

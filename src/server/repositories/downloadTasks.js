@@ -104,6 +104,10 @@ function updateTask(id, updates) {
     fields.push('retry_count = @retry_count');
     params.retry_count = updates.retryCount;
   }
+  if (updates.songName !== undefined) {
+    fields.push('song_name = @song_name');
+    params.song_name = updates.songName;
+  }
   if (updates.audioPath !== undefined) {
     fields.push('audio_path = @audio_path');
     params.audio_path = updates.audioPath;

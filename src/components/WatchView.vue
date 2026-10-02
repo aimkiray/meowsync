@@ -44,7 +44,8 @@
           <button class="ink-btn ink-btn--ghost watch-action" @click="$emit('open-fullscreen')" title="全屏歌词模式">
             <PixelIcon name="expand" :size="14" /> 沉浸
           </button>
-          <button class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
+          <!-- file_ 上传曲没有源站可分享链接（?song= 只收数字 id）——死链不亮 -->
+          <button v-if="!isFileTrackId(currentSong?.id)" class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
             <PixelIcon name="share" :size="14" /> 分享歌曲
           </button>
           <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）；
@@ -351,7 +352,7 @@ import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
-import { songSourceUrl, songSourceName, songCoverUrl, fileArtifactUrl } from '../lib/song'
+import { songSourceUrl, songSourceName, songCoverUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
 import { LS_KEYS } from '../lib/storage'
 
 export default {
@@ -611,7 +612,8 @@ export default {
       const song = props.currentSong
       if (song?.bilibili?.hasVideo) return `bv:${song.bilibili.bvid}:${song.bilibili.cid || 0}:${song.bilibili.page || 1}`
       if (song?.youtube?.hasVideo) return `yt:${song.youtube.videoId}`
-      if (song?.file?.hasVideo) return `file:${song.id}`
+      // videoV 版本戳随换源刷新——key 不变 <video> 不重载，旧画面继续播
+      if (song?.file?.hasVideo) return `file:${song.id}:${song.file.videoV || 0}`
       return null
     })
     const mediaVideoActive = computed(() => !!(mediaVideoKey.value && videoOn.value && !mediaVideoFailed.value))
@@ -621,8 +623,9 @@ export default {
       if (b?.hasVideo) return musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page)
       const y = song?.youtube
       if (y?.hasVideo) return musicApi.youtubeStreamUrl(y.videoId, 'video')
-      // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）
-      return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video') : ''
+      // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）；videoV 戳
+      // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
+      return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video', song.file.videoV) : ''
     })
     // 复位键用 mediaVideoUrl——同曲换源（B 站换P/YouTube 重导）时新源该重新尝试
     watch(mediaVideoUrl, () => { mediaVideoFailed.value = false })
@@ -702,7 +705,7 @@ export default {
       formatDuration,
       formatTime,
       httpsCover,
-      songCoverUrl,
+      songCoverUrl, isFileTrackId,
       TABS,
       setTab,
       moveTab,
