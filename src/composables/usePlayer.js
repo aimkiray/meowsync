@@ -1093,6 +1093,12 @@ export function usePlayer({
         return
       }
 
+      // 加载窗（howl 已建、onload 未至，最长看门狗 ~20s）：此时 howl.play()
+      // 走 Howler 内部 _queue 排队，onload 的 autoplay 分支又补一次 play——
+      // 两条 _inactiveSound 各起一个轨道叠加成双音轨。加载中本就无声可听，
+      // 播放键按了也无可闻反馈——吞掉这次点击是唯一不叠轨的口径
+      if (howl.state?.() === 'loading') return
+
       if (isPlaying.value) {
         howl.pause()
       } else {
@@ -1268,6 +1274,10 @@ export function usePlayer({
 
     const openFullscreenPlayer = () => {
       if (!currentSong.value) return
+      // 元素级全屏（watch 视频全屏键）激活时：overlay 开在 top layer 之下
+      // 完全不可见，退出视频全屏后用户会意外落在沉浸层——此时拒开
+      if (typeof document !== 'undefined'
+        && (document.fullscreenElement || document.webkitFullscreenElement)) return
       isFullscreenPlayerOpen.value = true // 由 watch 统一持久化
     }
 
