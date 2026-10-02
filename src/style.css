@@ -1153,7 +1153,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* 内陷环与 border 连成 ~2.4px 墨带——与 .pg-field:focus-within 同构的「加粗框」签名 */
 .atp-new input:focus-visible { outline: 1.2px solid var(--ink); outline-offset: -1.2px; }
 /* preflight 的 ::placeholder 灰（#9ca3af opacity:1）在纸面 ~2.8:1 且离盘——回墨档 */
-.atp-new input::placeholder { color: var(--ink-64); }
+.atp-new input::placeholder, .asp-search input::placeholder,
+.auth-input::placeholder { color: var(--ink-64); }
 
 /* ── 点歌台（asp-*）：atp 模态皮的加宽变体，行式结果列表 ── */
 .asp-dialog { width: min(380px, 92vw); }
