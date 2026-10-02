@@ -48,6 +48,7 @@ const clientHeaders = (form, vd) => ({
 let visitorDataCache = null;
 let visitorDataAt = 0;
 let visitorDataFailAt = 0;          // 抓取失败负缓存——首页不可达时别每请求白打
+let visitorDataInflight = null;     // 冷缓存并发单飞：在途抓取共享同一 promise
 const VISITOR_TTL_MS = 30 * 60e3;
 const VISITOR_FAIL_TTL_MS = 2 * 60e3;
 const DESKTOP_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
@@ -72,25 +73,37 @@ const freshVisitorData = () =>
 async function getVisitorData(extraSignal) {
   if (freshVisitorData()) return visitorDataCache;
   if (Date.now() - visitorDataFailAt < VISITOR_FAIL_TTL_MS) return null;
-  try {
-    const res = await fetch('https://www.youtube.com', {
-      headers: { 'User-Agent': DESKTOP_UA },
-      signal: timedSignal(extraSignal),
-    });
-    if (!res.ok) throw new Error(`visitorData 抓取 HTTP ${res.status}`);
-    const html = await res.text();
-    const m = html.match(/"VISITOR_DATA":"([^"]+)"/);
-    if (!m) throw new Error('visitorData 提取失败');
-    visitorDataCache = m[1];
-    visitorDataAt = Date.now();
-    return visitorDataCache;
-  } catch (e) {
-    // abort 先穿透——客户端断连不是上游故障，别拿它给失败负缓存盖章
-    if (extraSignal?.aborted) throw e;
-    visitorDataFailAt = Date.now();
-    console.warn('[youtube] visitorData 抓取失败:', e.message);
-    return null;
+  // 单飞：冷缓存并发（VISIONOS 升级/LOGIN_REQUIRED 重试各源同时触发）
+  // 共享一次首页抓取。共享 promise 不带调用方 signal——首调用方断连
+  // 不该让搭车者陪绑（unlock.js inflightRank 同款先例）；抓取自身只挂
+  // 内部超时。搭车者用自己 signal 决定吃不吃结果
+  if (!visitorDataInflight) {
+    visitorDataInflight = (async () => {
+      try {
+        const res = await fetch('https://www.youtube.com', {
+          headers: { 'User-Agent': DESKTOP_UA },
+          signal: AbortSignal.timeout(YT_TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error(`visitorData 抓取 HTTP ${res.status}`);
+        const html = await res.text();
+        const m = html.match(/"VISITOR_DATA":"([^"]+)"/);
+        if (!m) throw new Error('visitorData 提取失败');
+        visitorDataCache = m[1];
+        visitorDataAt = Date.now();
+        return visitorDataCache;
+      } catch (e) {
+        // 内部超时/上游失败才盖负缓存章——调用方 abort 根本到不了这里
+        visitorDataFailAt = Date.now();
+        console.warn('[youtube] visitorData 抓取失败:', e.message);
+        return null;
+      }
+    })().finally(() => { visitorDataInflight = null; });
   }
+  const vd = await visitorDataInflight;
+  // 等待期间调用方断连：abort 穿透语义与旧版一致（fetchPlayerWith 上层
+  // 靠 throw 判取消）。已作废的结果照常回填缓存——下一调用方仍受益
+  if (extraSignal?.aborted) throw new Error('aborted');
+  return vd;
 }
 
 // 指定客户端形态直解：clientName 用于「已知 ANDROID 流被闸」的升级路径——

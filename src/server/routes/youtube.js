@@ -316,6 +316,10 @@ app.get('/youtube/stream', async (c) => {
     const gate = gateCache.get(videoId);
     if (gate && Date.now() - gate.ts <= GATE_TTL_MS) {
       gated = gate.gated;
+      // LRU touch：命中挪尾——满容淘汰按插入序删头，不刷新会让
+      // 高频热播视频的旧判定先被挤掉（stream-vault resolve 同款）
+      gateCache.delete(videoId);
+      gateCache.set(videoId, gate);
     } else if (probeTarget) {
       gated = await probeGated(probeTarget, c.req.raw.signal);
       if (gated !== null) {
