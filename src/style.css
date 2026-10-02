@@ -1174,6 +1174,14 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border-bottom: var(--hairline-soft);
 }
 .asp-row:last-child { border-bottom: none; }
+/* 「从 0 新建」入口行：常驻列表顶——与结果行同款骨架，但用虚线底与
+   弱墨字把它和「搜索结果」语义分开（它不是一首歌，是创建通道） */
+.asp-row--create {
+  border-bottom: 1.2px dashed var(--ink-64);
+  background: transparent;
+}
+.asp-row--create .asp-name { color: var(--ink); }
+.asp-row--create .asp-artist { color: var(--ink-64); }
 .asp-cover {
   width: 32px;
   height: 32px;

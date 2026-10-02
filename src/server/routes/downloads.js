@@ -249,7 +249,10 @@ app.get('/downloads/songs/:songId/status', async (c) => {
 const ARTIFACT_MIME = {
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
   ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', webm: 'audio/webm',
-  mp4: 'video/mp4'
+  mp4: 'video/mp4', mkv: 'video/x-matroska', mov: 'video/quicktime',
+  // kind=cover：上传曲的封面工件；kind=lyrics：.lrc/.txt 歌词
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  lrc: 'text/plain; charset=utf-8', txt: 'text/plain; charset=utf-8'
 };
 app.get('/downloads/songs/:songId/file', async (c) => {
   try {
@@ -260,12 +263,26 @@ app.get('/downloads/songs/:songId/file', async (c) => {
     if (!filePath) return fail(c, 404, '文件不存在或尚未下载完成');
     const stat = fs.statSync(filePath);
     const ext = path.extname(filePath).slice(1).toLowerCase();
-    const type = ARTIFACT_MIME[ext] || (kind === 'video' ? 'video/mp4' : 'application/octet-stream');
+    // webm 二义：上传白名单里它同时是 audio/video 扩展——kind=video 优先判视频，
+    // 否则 <video> 拿到 audio/webm 会按音轨播（有画面的上传视频丢画面）
+    const type = (kind === 'video' && ext === 'webm') ? 'video/webm'
+      : ARTIFACT_MIME[ext] || (kind === 'video' ? 'video/mp4' : 'application/octet-stream');
+
+    // 上传曲换源不换 URL（/file?kind=…）——启发式缓存会拿旧文件。
+    // no-cache + ETag(size-mtime) 使 revalidate 落 304 而非全量重拉
+    const etag = `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+    if (c.req.header('if-none-match') === etag) {
+      return c.body(null, 304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
+    }
 
     let start = 0;
     let end = stat.size - 1;
     let status = 200;
-    const range = c.req.header('range');
+    // If-Range：缓存再验证带 Range 时浏览器发 etag——不匹配（换源后）必须
+    // 忽略 Range 回 200 全量，否则 206 拼的是新旧文件混血的坏段
+    const ifRange = c.req.header('if-range');
+    let range = c.req.header('range');
+    if (range && ifRange && ifRange !== etag) range = undefined;
     if (range) {
       const m = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
       if (!m || (!m[1] && !m[2])) {
@@ -287,7 +304,9 @@ app.get('/downloads/songs/:songId/file', async (c) => {
       'Content-Type': type,
       'Accept-Ranges': 'bytes',
       'Content-Length': String(end - start + 1),
-      'Access-Control-Allow-Origin': '*'
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-cache',
+      'ETag': etag
     };
     if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
     return c.body(fs.createReadStream(filePath, { start, end }), status, headers);

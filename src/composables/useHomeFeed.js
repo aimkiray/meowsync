@@ -23,7 +23,9 @@ export function useHomeFeed({ userPlaylists, selectedPlaylist, playingPlaylistId
       // B 站导入曲的播放源/歌词源字段——丢了从历史点回会退成不可播
       bilibili: song.bilibili, neteaseId: song.neteaseId,
       youtube: song.youtube, // YouTube 导入曲同理——丢了从历史点回会退成不可播
-      qq: song.qq // qq_<mid> 同理——播放源与词源键都在里面
+      qq: song.qq, // qq_<mid> 同理——播放源与词源键都在里面
+      file: song.file, // file_ 上传曲的资产位——丢了历史回放的封面/视频/歌词标志全灭
+      custom: song.custom, // 用户编辑位——同 addedTracks 白名单之理
     }
     playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
     writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)

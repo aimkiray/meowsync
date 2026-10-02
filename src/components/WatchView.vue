@@ -59,7 +59,7 @@
           ><PixelIcon name="external" :size="14" /> 回源 · {{ sourceName }}</a>
           <!-- 音画切换仅对有视频流的外部导入曲（B 站/YouTube）出现；关闭即只拉音频流省流量 -->
           <button
-            v-if="currentSong?.bilibili?.hasVideo || currentSong?.youtube?.hasVideo"
+            v-if="currentSong?.bilibili?.hasVideo || currentSong?.youtube?.hasVideo || currentSong?.file?.hasVideo"
             class="ink-btn ink-btn--ghost watch-action"
             :class="{ 'watch-action--on': videoOn }"
             @click="videoOn = !videoOn"
@@ -351,7 +351,7 @@ import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
-import { songSourceUrl, songSourceName, songCoverUrl } from '../lib/song'
+import { songSourceUrl, songSourceName, songCoverUrl, fileArtifactUrl } from '../lib/song'
 import { LS_KEYS } from '../lib/storage'
 
 export default {
@@ -611,6 +611,7 @@ export default {
       const song = props.currentSong
       if (song?.bilibili?.hasVideo) return `bv:${song.bilibili.bvid}:${song.bilibili.cid || 0}:${song.bilibili.page || 1}`
       if (song?.youtube?.hasVideo) return `yt:${song.youtube.videoId}`
+      if (song?.file?.hasVideo) return `file:${song.id}`
       return null
     })
     const mediaVideoActive = computed(() => !!(mediaVideoKey.value && videoOn.value && !mediaVideoFailed.value))
@@ -619,7 +620,9 @@ export default {
       const b = song?.bilibili
       if (b?.hasVideo) return musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page)
       const y = song?.youtube
-      return y?.hasVideo ? musicApi.youtubeStreamUrl(y.videoId, 'video') : ''
+      if (y?.hasVideo) return musicApi.youtubeStreamUrl(y.videoId, 'video')
+      // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）
+      return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video') : ''
     })
     // 复位键用 mediaVideoUrl——同曲换源（B 站换P/YouTube 重导）时新源该重新尝试
     watch(mediaVideoUrl, () => { mediaVideoFailed.value = false })

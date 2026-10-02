@@ -3,7 +3,7 @@ import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
 import { readJSON, writeJSON } from '../lib/storage'
 import { toast } from '../lib/feedback'
-import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl } from '../lib/song'
+import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides } from '../lib/song'
 
 const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
 const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
@@ -46,7 +46,9 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
           id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege,
           bilibili: t.bilibili, neteaseId: t.neteaseId,
           youtube: t.youtube, // YouTube 导入曲的播放源——与 bilibili/neteaseId 同理不可剥
-          qq: t.qq // QQ 导入曲同理：剥掉后播放/分享/词源键全退化
+          qq: t.qq, // QQ 导入曲同理：剥掉后播放/分享/词源键全退化
+          file: t.file, // file_ 上传曲的资产位（hasVideo/hasLyrics/hasCover）——剥掉退化成无源死曲
+          custom: t.custom // 用户编辑位：剥掉后 healExternalAr 会把编辑还原回 provider 口径
         }))
       }
       return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
@@ -65,6 +67,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       // bv_ 数据保持不动），存量导入曲加载即自愈
       let healedAny = false
       const healExternalAr = (t) => {
+        // custom 位=用户显式编辑过的曲——自愈会还原 provider 口径覆盖用户意图，停手
+        if (t?.custom) return t
         const ext = t && externalArtistName(t)
         // 只在确实偏离口径时改写——无病曲不动引用，也不触发无意义回写
         if (ext && !(t.ar?.length === 1 && t.ar[0]?.name === ext)) {
@@ -266,7 +270,11 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
           libPl.lastSyncedAt = Date.now()
         }
         const visibleTracks = fetchedTracks.filter(t => !removedSet.has(String(t.id)))
+        // trackOverrides：远端曲目的本地编辑覆盖层（远端单不可就地改写——下次
+        // detail 拉取即覆盖）。addedTracks 成员是本地对象就地编辑不走这层
+        const overrides = libPl?.trackOverrides ?? playlist.trackOverrides
         songs.value = [...visibleTracks, ...addedTracks]
+          .map(t => applyTrackOverrides(t, overrides))
         console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
 
         // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
@@ -605,6 +613,82 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       }
     }
 
+    // ── 曲目编辑 ──
+    // 落点三分支：local_pl_ 成员改 pl.tracks；远端单 addedTracks 成员改追加表；
+    // 远端成员（detail 拉来的）写 trackOverrides 覆盖层——远端对象不可就地改写
+    // （下次 detail 即覆盖）。统一打 custom 位挡 healExternalAr 还原。就地改时
+    // 若该单正开着，同步 songs.value 里的渲染对象
+    const applyTrackEdit = (playlistId, songId, meta, filePatch) => {
+      const pl = userPlaylists.value.find(p => String(p.id) === String(playlistId))
+      const sid = String(songId)
+      const apply = (t) => {
+        if (!t) return false
+        // custom 位=「用户改过」挡 healExternalAr 还原——但用户开了编辑窗
+        // 什么也没动就保存不该打这个位（会永久冻住 provider 自愈）
+        const nextArtist = meta.artist !== undefined ? (meta.artist || '未知艺术家') : undefined
+        const changed =
+          (meta.name != null && t.name !== meta.name) ||
+          (nextArtist !== undefined && (t.ar || []).map(a => a?.name).filter(Boolean).join(', ') !== nextArtist) ||
+          (meta.album !== undefined && (t.al?.name || '') !== meta.album) ||
+          (meta.durationMs != null && (t.dt || 0) !== meta.durationMs) ||
+          (filePatch && Object.entries(filePatch).some(([k, v]) => t.file?.[k] !== v))
+        if (meta.name != null) t.name = meta.name
+        if (nextArtist !== undefined) t.ar = [{ name: nextArtist }]
+        if (meta.album !== undefined) {
+          t.al = typeof t.al === 'object' && t.al ? { ...t.al, name: meta.album } : { name: meta.album }
+        }
+        if (meta.durationMs != null) t.dt = meta.durationMs // 0=清空回「自动」
+        if (filePatch) t.file = { ...(t.file || {}), ...filePatch }
+        if (changed) t.custom = true
+        return true
+      }
+      let hit = false
+      if (pl) {
+        // pl.tracks 分支只收本地单：远端单的 tracks 是 detail 合并回来的
+        // 展示缓存（savePlaylistsToStorage 会剥掉它）——就地改=写进不持久化的
+        // 字段，刷新即丢。远端成员必须落到下面的 trackOverrides 覆盖层
+        if (isLocalPlaylistId(pl.id) && pl.tracks?.some(t => String(t.id) === sid && apply(t))) hit = true
+        if (!hit && pl.addedTracks?.some(t => String(t.id) === sid && apply(t))) {
+          // 曲落进 addedTracks 后若还留着旧 override 键，merge 期它会遮蔽
+          // 这份就地编辑——进追加表即摘 override
+          if (pl.trackOverrides?.[sid] != null) {
+            const { [sid]: _drop, ...rest } = pl.trackOverrides
+            pl.trackOverrides = rest
+          }
+          hit = true
+        }
+        if (!hit) {
+          // 远端成员：覆盖层 merge（不重建对象——其他曲的 override 不动）
+          const prev = pl.trackOverrides?.[sid] || {}
+          pl.trackOverrides = {
+            ...(pl.trackOverrides || {}),
+            [sid]: {
+              ...prev,
+              name: meta.name, artist: meta.artist, album: meta.album,
+              durationMs: meta.durationMs,
+              // coverUrl 是预留通道（filePatch 暂无产出）——undefined 死键会
+              // 清掉假想旧值，只在有值时写
+              ...(filePatch?.coverUrl ? { coverUrl: filePatch.coverUrl } : {}),
+            },
+          }
+          hit = true
+        }
+        savePlaylistsToStorage()
+      }
+      // 渲染层同步：打开的正是这张单就同改 songs.value。就地落点时库对象与
+      // 渲染对象是同一引用——apply 幂等，再跑一遍无害；overrides 落点还要补
+      // coverUrl 通道（apply 不写 picUrl——它只认 filePatch.file 位）
+      const viewIdx = songs.value.findIndex(t => String(t.id) === sid)
+      if (viewIdx !== -1 && String(selectedPlaylist.value?.id) === String(playlistId)) {
+        const cur = songs.value[viewIdx]
+        apply(cur)
+        if (pl?.trackOverrides?.[sid]) {
+          songs.value[viewIdx] = applyTrackOverrides(cur, pl.trackOverrides)
+        }
+      }
+      return hit
+    }
+
   return {
     // state
     userPlaylists,
@@ -633,6 +717,7 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     selectPlaylist,
     appendSongToLibraryPlaylist,
     removeSongFromPlaylist,
+    applyTrackEdit,
     syncPlaylist,
   }
 }

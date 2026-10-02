@@ -117,6 +117,12 @@ app.delete('/playlists/:id', async (c) => {
     return c.json({ code: 400, message: '无效的歌单 ID' }, 400);
   }
   try {
+    // local_uploads 伪歌单是全库上传资产的登记锚——级联会清掉所有 file_ 曲
+    // 的音源文件（曲目还在歌单里但资产没了）——直接拦，比确认框更诚实
+    const target = findPlaylistById(id);
+    if (target?.neteasePlaylistId === 'local_uploads') {
+      return c.json({ code: 400, message: '本地上传资产库不可删除' }, 400);
+    }
     // 级联删除：deletingPlaylists 锁持有到行删除之后才释放，排空清理也在锁内
     const deleted = await deletePlaylistCascade(id);
     if (!deleted) {

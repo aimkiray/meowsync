@@ -27,7 +27,7 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3101}
       # 可选：远程遥控令牌（设置后 ?token= 必填；前端构建需同步设 VITE_REMOTE_TOKEN）
       - REMOTE_TOKEN=${REMOTE_TOKEN:-}
-      # 公网/局域网暴露时必需：/downloads、/playlists、/song-meta、/ai 写接口鉴权令牌
+      # 公网/局域网暴露时必需：/downloads、/playlists、/song-meta、/ai、/uploads 写接口鉴权令牌
       - DOWNLOAD_TOKEN=${DOWNLOAD_TOKEN:-}
       # 在会改写 Host 的反向代理后部署时才需要设为 1
       - TRUST_PROXY=${TRUST_PROXY:-}

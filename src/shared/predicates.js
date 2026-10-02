@@ -34,6 +34,11 @@ export const QQ_SONG_ID_RE = /^qq_([0-9A-Za-z]{10,20})$/;
 // 非法 bvid 由服务端 BVID_RE 严校拒收计数 skipped，别把两头收同一条
 export const BV_TRACK_ID_RE = /^bv_(BV[0-9A-Za-z]{10})(?:_p(\d+))?$/i;
 export const YT_TRACK_ID_RE = /^yt_([A-Za-z0-9_-]{11})$/;
+// 用户上传/自建曲目 id：file_<36进制戳+随机>——服务端 local_uploads 伪歌单
+// 下登记 download_tasks（文件资产行），播放走 /downloads/songs/:id/file。
+// 刻意不进 isResolvableTrackId：接收端没有那份文件，mix 分享链应滤掉它；
+// 「下载到服务器」对它也无意义（文件本就在盘上）
+export const FILE_TRACK_ID_RE = /^file_[0-9a-z]{8,40}$/;
 
 // 本地歌单 id 前缀族
 // - single_song_*：单曲分享临时壳
@@ -52,6 +57,11 @@ export const MIRROR_PLAYLIST_ID_RE = /^(local_pl_|saved_queue_)[\w-]{1,64}$/;
 export function isResolvableTrackId(id) {
   const s = String(id ?? '');
   return NETEASE_ID_RE.test(s) || QQ_SONG_ID_RE.test(s) || BV_TRACK_ID_RE.test(s) || YT_TRACK_ID_RE.test(s);
+}
+
+// file_ 上传曲判定：本地资产，播放/编辑面需要单独识别
+export function isFileTrackId(id) {
+  return FILE_TRACK_ID_RE.test(String(id ?? ''));
 }
 
 // 外部歌单导入壳 id 的构造/解析对——生产侧 App.vue 导入器、解析侧

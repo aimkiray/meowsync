@@ -5,7 +5,7 @@
 const PREFIXES = [
   '/downloads', '/playlists', '/audio-proxy', '/remote',
   '/ping', '/healthz', '/bilibili', '/youtube', '/qq',
-  '/song-meta', '/ai', '/auth'
+  '/song-meta', '/ai', '/auth', '/uploads'
 ];
 
 // 已摘除的上游路由家族首段——历史上这些是 API（JSON 404/鉴权），摘除后若不

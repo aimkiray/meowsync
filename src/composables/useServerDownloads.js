@@ -3,6 +3,7 @@ import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { apiErrorMessage } from '../api/http.js'
 import { isResolvableTrackId } from '../lib/url'
+import { isFileTrackId, fileArtifactUrl } from '../lib/song'
 import { toast, pixelConfirm } from '../lib/feedback'
 
 // SongList 的服务端下载子域：状态批量映射、行级下载/删除/视频补件、
@@ -36,6 +37,29 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
   const canServerVideo = (song) =>
     Boolean(song?.bilibili?.hasVideo || song?.youtube?.hasVideo)
 
+  // file_ 曲浏览器下载：file 端点拿 blob → a[download]。扩展名从
+  // Content-Type 推（客户端不背上传扩展名）；识别不了回落 .bin
+  const FILE_EXT_BY_MIME = {
+    'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/flac': 'flac',
+    'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/webm': 'weba',
+    'video/mp4': 'mp4', 'video/webm': 'webm', 'video/x-matroska': 'mkv', 'video/quicktime': 'mov',
+  }
+  const downloadFileArtifact = async (song) => {
+    const res = await fetch(fileArtifactUrl(song.id), { credentials: 'include' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const blob = await res.blob()
+    const mime = (res.headers.get('content-type') || '').split(';')[0].trim()
+    const ext = FILE_EXT_BY_MIME[mime] || 'bin'
+    const artists = song.ar?.map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `${artists} - ${song.name}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000) // click 同步取流是异步——延迟吊销
+  }
+
   // 直接下载（浏览器下载，最高码率）
   const downloadSongDirect = async (song, bitrate = 320000) => {
     if (!song) {
@@ -51,8 +75,10 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
       toast(`正在获取「${song.name}」…`, 'info')
       // 外部导入曲没有网易云下载链——拉自己的 /bilibili|youtube|qq/stream
       // （prefer=best：B 站可拿 Hi-Res FLAC/杜比，YouTube 拿 Opus 251，
-      // QQ 可拿 RS01/F000 无损档）
-      if (song.bilibili?.bvid) await musicApi.downloadBilibiliSong(song)
+      // QQ 可拿 RS01/F000 无损档）。file_ 曲资产就在服务端 uploads/，
+      // file 端点直取 blob（与下方 downloadSong 的 blob 链同构）
+      if (isFileTrackId(song.id)) await downloadFileArtifact(song)
+      else if (song.bilibili?.bvid) await musicApi.downloadBilibiliSong(song)
       else if (song.youtube?.videoId) await musicApi.downloadYouTubeSong(song)
       else if (song.qq?.mid) await musicApi.downloadQQSong(song)
       else await musicApi.downloadSong(song, bitrate)

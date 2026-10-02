@@ -222,6 +222,20 @@
           >
             <PixelIcon name="m-list" :size="13" /> 添加到歌单
           </div>
+          <!-- 编辑：元数据（名字/艺人/专辑/时长）对所有曲开放；file_ 上传曲
+               另可换音频/视频/封面/歌词源文件。分享壳隐藏——壳不持久化，编辑
+               写了也没处落 -->
+          <div
+            v-if="selectedPlaylist && !isShareShell"
+            class="pg-menu-item"
+            role="menuitem"
+            tabindex="0"
+            @click="editFromMenu"
+            @keydown.enter="editFromMenu"
+            @keydown.space.prevent="editFromMenu"
+          >
+            <PixelIcon name="edit" :size="13" /> 编辑歌曲
+          </div>
           <!-- 从歌单移除：远端曲写墓碑防同步复活，本地追加/本地单曲直接删。
                分享壳（single_song_）隐藏——移除唯一曲只会留个待剪枝的空壳 -->
           <div
@@ -235,7 +249,9 @@
           >
             <PixelIcon name="close" :size="13" /> 从歌单移除
           </div>
+          <!-- file_ 曲没有可分享的源链接（?song= 只收数字 id）——死链不亮 -->
           <div
+            v-if="!isFileTrackId(menuSong?.id)"
             class="pg-menu-item"
             role="menuitem"
             tabindex="0"
@@ -269,7 +285,7 @@
             @keydown.enter="downloadSongDirect(menuSong, 320000)"
             @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
-            <PixelIcon name="download" :size="13" /> {{ (menuSong?.bilibili || menuSong?.youtube || menuSong?.qq) ? '获取源文件（最优音质）' : '获取源文件 (320k)' }}
+            <PixelIcon name="download" :size="13" /> {{ isFileTrackId(menuSong?.id) ? '下载文件' : (menuSong?.bilibili || menuSong?.youtube || menuSong?.qq) ? '获取源文件（最优音质）' : '获取源文件 (320k)' }}
           </div>
 
           <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
@@ -683,7 +699,7 @@ import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
-import { isVipSong, visibleSongs, isLocalPlaylistId, isSingleSongShellId, songSource, songSourceName, songSourceUrl, songCoverUrl } from '../lib/song'
+import { isVipSong, visibleSongs, isLocalPlaylistId, isSingleSongShellId, isFileTrackId, songSource, songSourceName, songSourceUrl, songCoverUrl } from '../lib/song'
 import { serverCaps } from '../lib/caps'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
@@ -729,10 +745,11 @@ export default {
       default: true
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'edit-song', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const menuPositions = ref({})
+    let menuTriggerBtn = null // 最近开菜单的 ⋯键——edit-song emit 的焦点归还目标
 
 
     // 过滤后的歌曲列表（根据VIP显示设置）——谓词与 App.vue 同一份（lib/song.js）
@@ -794,21 +811,23 @@ export default {
         }
         // 计算菜单位置：下方空间不足时翻到按钮上方，左右越界时收回视口内
         const button = event.target.closest('button')
+        menuTriggerBtn = button // ⋯键本体——菜单项要归还焦点时它是活着的锚
         const rect = button.getBoundingClientRect()
         // 估宽按最长项实测 ~200px（「获取源文件（最优音质）」「回源·源名」），
         // 不是 min-width 160——估低会把右缘钳点放错，长菜单右端出视口。
         // .pg-menu 另有 max-width:calc(100vw-16px) 双保险
         const menuWidth = 200
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
-        // 固定项=下一首+队尾+添歌单+分享+源文件 5 项；可回源多"回源"，有已选歌单
-        // （除分享壳）多"从歌单移除"，可达服务端下载链多"下载到服务器"，外部
-        // 有视频流的再多"下载视频到服务器"。
+        // 固定项=下一首+队尾+添歌单+源文件 4 项；可分享（非 file_）多"分享歌曲"，
+        // 可回源多"回源"，有已选歌单（除分享壳）多"编辑歌曲"+"从歌单移除"两项，
+        // 可达服务端下载链多"下载到服务器"，外部有视频流的再多"下载视频到服务器"。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const serverOk = !isShareShell.value && props.selectedPlaylist && canServerDownload(targetSong)
-        const itemCount = 5
+        const itemCount = 4
+          + (!isFileTrackId(targetSong?.id) ? 1 : 0)
           + (songSourceUrl(targetSong) ? 1 : 0)
-          + ((props.selectedPlaylist && !isShareShell.value) ? 1 : 0)
+          + ((props.selectedPlaylist && !isShareShell.value) ? 2 : 0)
           + (serverOk ? 1 : 0)
           + (serverOk && canServerVideo(targetSong) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
@@ -854,6 +873,15 @@ export default {
       const song = menuSong.value
       closeDownloadMenu()
       if (song) emit('add-to-playlist', song)
+    }
+
+    // 编辑：emit 给 App 开 SongFormDialog（表单态/上传编排在 App 侧）。
+    // 第二参带 ⋯触发键——menuitem 在菜单卸载时就死了，关窗焦点要还到 ⋯上
+    const editFromMenu = () => {
+      const song = menuSong.value
+      const trigger = menuTriggerBtn
+      closeDownloadMenu()
+      if (song) emit('edit-song', song, trigger)
     }
 
     // 从歌单移除：远端曲走墓碑、本地曲真删——合并语义在 App 侧统一
@@ -939,6 +967,7 @@ export default {
       openSourceFromMenu,
       shareSong,
       downloadSongDirect,
+      editFromMenu,
       canServerDownload,
       toggleServerDownload,
       downloadServerVideo,
@@ -946,6 +975,7 @@ export default {
       getMenuPosition,
       closeDownloadMenu,
       httpsCover,
+      isFileTrackId,
       songCoverUrl
     }
   }
