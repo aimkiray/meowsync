@@ -149,8 +149,6 @@
       :playback-list="playingSongs"
       :current-index="currentPlayingIndex()"
       :is-temp-playlist="playerIsTemp"
-      :side-panel-open="centerView === 'watch'"
-      :panel-tab="watchTab"
       :play-mode="playMode"
       :play-mode-text="getPlayModeText()"
       :shuffle-on="shuffleOn"
