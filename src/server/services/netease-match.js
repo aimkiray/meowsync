@@ -281,4 +281,68 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   return { song: null, query: null };
 }
 
-module.exports = { matchNeteaseSong, shareName, nameHitNeedsConfirm, MATCH_DUR_TOLERANCE_SEC };
+// 归一 matched 投影：三路由 resolve/批量导入共用同一下发形态
+function toMatchedJson(song) {
+  return song ? {
+    id: song.id,
+    name: song.name,
+    ar: song.ar || song.artists || [],
+    al: song.al || song.album || {},
+  } : null;
+}
+
+// 单条匹配带总预算：race(match, 预算)——预算耗尽不只让 race 判负，
+// abort 停掉在途云搜/AI 复核，否则孤儿流程继续烧上游请求与 AI 额度。
+// reqSignal 级联客户端断连（Hono c.req.raw.signal）
+async function matchWithBudget({ candidates, durationSec, tag, reqSignal, sourceInfo, budgetMs = 25000 }) {
+  const budgetCtrl = new AbortController();
+  let budgetTimer;
+  const budget = new Promise(resolve => {
+    budgetTimer = setTimeout(() => {
+      budgetCtrl.abort();
+      resolve({ song: null, query: null });
+    }, budgetMs);
+    budgetTimer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      matchNeteaseSong(candidates, durationSec, tag,
+        AbortSignal.any([reqSignal, budgetCtrl.signal].filter(Boolean)), sourceInfo),
+      budget,
+    ]);
+  } finally {
+    clearTimeout(budgetTimer); // match 抛错也收——unref 兜底不保险，泄漏的 timer 会空 abort
+  }
+}
+
+// 批量匹配并发池：worker 模型，总预算到点 abort——在途判定被掐断的曲目按
+// 无匹配回落。命中原地写 t.matched/t.matchedBy 并返回命中数
+async function matchTracksPool(tracks, { signal, budgetMs, concurrency, tag, candidatesOf, durationOf, infoOf }) {
+  const budgetCtrl = new AbortController();
+  const matchSignal = AbortSignal.any([signal, budgetCtrl.signal].filter(Boolean));
+  const budgetTimer = setTimeout(() => budgetCtrl.abort(), budgetMs);
+  budgetTimer.unref?.();
+  let cursor = 0;
+  let matchedCount = 0;
+  const worker = async () => {
+    while (cursor < tracks.length && !matchSignal.aborted) {
+      const t = tracks[cursor++];
+      const { song: matched, query } = await matchNeteaseSong(
+        candidatesOf(t), durationOf(t), tag, matchSignal, infoOf(t))
+        .catch(() => ({ song: null }));
+      if (matched && !matchSignal.aborted) {
+        t.matched = toMatchedJson(matched);
+        t.matchedBy = query;
+        matchedCount++;
+      }
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(concurrency, tracks.length) }, worker));
+  } finally {
+    clearTimeout(budgetTimer);
+  }
+  return matchedCount;
+}
+
+module.exports = { matchNeteaseSong, matchWithBudget, matchTracksPool, toMatchedJson, shareName, nameHitNeedsConfirm, MATCH_DUR_TOLERANCE_SEC };

@@ -15,7 +15,7 @@ let matchImpl = async () => ({ song: null, query: null });
 let rateImpl = () => true;
 
 // seed/getJson 公共脚手架在 tests/helpers.mjs
-import { seed, getJson } from './helpers.mjs';
+import { seed, getJson, seedMatchModule } from './helpers.mjs';
 
 seed('../src/server/lib/rate-limit.js', { rateLimit: (...a) => rateImpl(...a) });
 seed('../src/server/lib/youtube.js', {
@@ -30,9 +30,7 @@ seed('../src/server/lib/youtube.js', {
   fetchPlayer: async () => ({}), fetchPlayerWith: async () => ({}),
   pickStreamList: () => [],
 });
-seed('../src/server/services/netease-match.js', {
-  matchNeteaseSong: (...args) => { matchCalls.push(args); return matchImpl(...args); },
-});
+seedMatchModule(matchCalls, () => matchImpl);
 const app = require('../src/server/routes/youtube.js');
 
 const item = (i, over = {}) => ({

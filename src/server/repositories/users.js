@@ -8,8 +8,19 @@ function countUsers() {
 
 function findByUsername(username) {
   return getDb().prepare(
+    'SELECT id, username, role FROM users WHERE username = ?'
+  ).get(String(username || ''));
+}
+
+// 登录专用：唯一取 password_hash 的出口，返回映射成域字段名的对象——
+// 其余调用方走 findByUsername，hash 列不离开本模块
+function findAuthByUsername(username) {
+  const row = getDb().prepare(
     'SELECT id, username, password_hash, role FROM users WHERE username = ?'
   ).get(String(username || ''));
+  return row
+    ? { id: row.id, username: row.username, passwordHash: row.password_hash, role: row.role }
+    : undefined;
 }
 
 // UNIQUE(username) 是并发 setup 的最后防线——重复插入抛错由路由层转 409
@@ -25,4 +36,4 @@ function updatePasswordHash(userId, passwordHash) {
     .run(String(passwordHash), userId);
 }
 
-module.exports = { countUsers, findByUsername, createUser, updatePasswordHash };
+module.exports = { countUsers, findByUsername, findAuthByUsername, createUser, updatePasswordHash };

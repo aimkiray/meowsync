@@ -51,6 +51,13 @@ test('users：创建/查找 NOCASE/唯一约束/计数', () => {
   assert.equal(usersRepo.findByUsername('ADMIN').username, 'Admin');
   assert.equal(usersRepo.findByUsername('ghost'), undefined);
   assert.throws(() => usersRepo.createUser('admin', 'x'));        // UNIQUE
+  // findAuthByUsername 是 password_hash 唯一出口：映射域字段名，无库列名泄漏
+  const authRow = usersRepo.findAuthByUsername('ADMIN');
+  assert.equal(authRow.passwordHash, 'a2id$x');
+  assert.equal('password_hash' in authRow, false);
+  assert.equal(usersRepo.findAuthByUsername('ghost'), undefined);
+  // findByUsername 不带 hash 列
+  assert.equal('passwordHash' in usersRepo.findByUsername('admin'), false);
 });
 
 // ── sessions repo ──

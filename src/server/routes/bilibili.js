@@ -2,7 +2,7 @@ const { Hono } = require('hono');
 const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
 const streamVault = require('../lib/stream-vault');
 const { rateLimit } = require('../lib/rate-limit');
-const { matchNeteaseSong } = require('../services/netease-match');
+const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const { tokenMatches } = require('../lib/token-eq');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
@@ -71,24 +71,13 @@ app.get('/bilibili/resolve', async (c) => {
     // 先 trim 再去重——page.part 带空白会带脏串进云搜（与 youtube.js 同口径）
     const candidates = [...new Set([songName, page?.part, cleanTitle]
       .map(c => (c || '').trim()).filter(Boolean))].slice(0, 3);
-    let budgetTimer;
-    const budgetCtrl = new AbortController();
-    const matchBudget = new Promise(resolve => {
-      // 预算耗尽不只让 race 判负——abort 停掉在途的云搜/AI 复核，
-      // 否则孤儿流程继续烧上游请求与 AI 额度
-      budgetTimer = setTimeout(() => {
-        budgetCtrl.abort();
-        resolve({ song: null, query: null });
-      }, 25000);
-      budgetTimer.unref?.();
+    // 匹配预算收敛进 services/netease-match.js:matchWithBudget——
+    // 整条链超时当无匹配不阻塞解析；预算耗尽 abort 在途云搜/AI 复核
+    const { song: matched, query: matchedBy } = await matchWithBudget({
+      candidates, durationSec: duration, tag: 'bilibili',
+      reqSignal: c.req.raw.signal,
+      sourceInfo: { title: view.title || '', author: view.owner?.name || '' },
     });
-    const { song: matched, query: matchedBy } = await Promise.race([
-      matchNeteaseSong(candidates, duration, 'bilibili',
-        AbortSignal.any([c.req.raw.signal, budgetCtrl.signal]),
-        { title: view.title || '', author: view.owner?.name || '' }),
-      matchBudget,
-    ]);
-    clearTimeout(budgetTimer);
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     const { audio, video } = pickStreams(playurl);
     // hasVideo 只给「浏览器解得动的 avc1」——hevc/av01 流存在也不能宣称可视频
@@ -112,12 +101,7 @@ app.get('/bilibili/resolve', async (c) => {
       owner: view.owner?.name || '',
       songName,
       tags: tagNames,
-      matched: matched ? {
-        id: matched.id,
-        name: matched.name,
-        ar: matched.ar || matched.artists || [],
-        al: matched.al || matched.album || {},
-      } : null,
+      matched: toMatchedJson(matched),
       matchedBy,
       hasVideo: avcStreams.length > 0,
       hasHiRes,
@@ -208,30 +192,16 @@ app.get('/bilibili/favlist', async (c) => {
       return c.json({ code: 404, message: '收藏夹不存在或不可公开访问' }, 404);
     }
 
-    // 词源匹配并发池：总预算到点 abort，在途判定被掐断的曲目按无匹配回落
-    const budgetCtrl = new AbortController();
-    const matchSignal = AbortSignal.any([signal, budgetCtrl.signal]);
-    const budgetTimer = setTimeout(() => budgetCtrl.abort(), FAV_MATCH_BUDGET_MS);
-    budgetTimer.unref?.();
-    let cursor = 0;
-    let matchedCount = 0;
-    const worker = async () => {
-      while (cursor < tracks.length && !matchSignal.aborted) {
-        const t = tracks[cursor++];
-        const candidates = [...new Set([t.songName, t.title]
-          .map(x => (x || '').trim()).filter(Boolean))].slice(0, 3);
-        const { song: matched, query } = await matchNeteaseSong(
-          candidates, t.duration, 'bilibili-fav', matchSignal,
-          { title: t.title, author: t.owner }).catch(() => ({ song: null }));
-        if (matched && !matchSignal.aborted) {
-          t.matched = { id: matched.id, name: matched.name, ar: matched.ar || matched.artists || [], al: matched.al || matched.album || {} };
-          t.matchedBy = query;
-          matchedCount++;
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(FAV_MATCH_CONCURRENCY, tracks.length) }, worker));
-    clearTimeout(budgetTimer);
+    // 词源匹配并发池收敛进 services/netease-match.js:matchTracksPool——
+    // 总预算到点 abort，在途判定被掐断的曲目按无匹配回落
+    const matchedCount = await matchTracksPool(tracks, {
+      signal, budgetMs: FAV_MATCH_BUDGET_MS, concurrency: FAV_MATCH_CONCURRENCY,
+      tag: 'bilibili-fav',
+      candidatesOf: (t) => [...new Set([t.songName, t.title]
+        .map(x => (x || '').trim()).filter(Boolean))].slice(0, 3),
+      durationOf: (t) => t.duration,
+      infoOf: (t) => ({ title: t.title, author: t.owner }),
+    });
     if (signal?.aborted) return c.body(null, 499);
 
     return c.json({

@@ -14,7 +14,7 @@ const matchCalls = [];
 let matchImpl = async () => ({ song: null, query: null });
 
 // seed/getJson 公共脚手架在 tests/helpers.mjs
-import { seed, getJson } from './helpers.mjs';
+import { seed, getJson, seedMatchModule } from './helpers.mjs';
 
 // 限流桶按源 IP 计数（合成请求全是 'local'）——用例数会超 6/min 配额，
 // 预播种可控 stub；429 用例通过 rateImpl 翻转
@@ -47,9 +47,7 @@ seed('../src/server/lib/bilibili.js', {
   viewQuery: (id) => `bvid=${id}`, parseBvid: async () => null,
   BILI_COOKIE: false, QN_HEIGHT: {},
 });
-seed('../src/server/services/netease-match.js', {
-  matchNeteaseSong: (...args) => { matchCalls.push(args); return matchImpl(...args); },
-});
+seedMatchModule(matchCalls, () => matchImpl);
 const app = require('../src/server/routes/bilibili.js');
 
 const media = (i, over = {}) => ({
