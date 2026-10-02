@@ -186,9 +186,12 @@ const tasksGate = createReqGate()
 async function loadQueues(options = {}) {
   const { silent = false } = options
   const my = queuesGate.claim()
+  // 谁置旗谁收旗：被 gate 丢弃的超期响应 finally 不再够着 isCurrent——
+  // 若按 isCurrent 决定清旗，"非静默在途 + 静默新认领"组合会让 loading 永真卡死
+  const showSpinner = !silent && !hasLoadedQueues.value
 
   try {
-    if (!silent && !hasLoadedQueues.value) {
+    if (showSpinner) {
       loadingQueues.value = true
     }
     const response = await downloadsApi.listQueues()
@@ -231,7 +234,7 @@ async function loadQueues(options = {}) {
       loadError.value = '加载失败: ' + (apiErrorMessage(error))
     }
   } finally {
-    if (!silent && queuesGate.isCurrent(my)) {
+    if (showSpinner) {
       loadingQueues.value = false
     }
   }
@@ -240,9 +243,10 @@ async function loadQueues(options = {}) {
 async function loadTasks(queueId, options = {}) {
   const { silent = false } = options
   const my = tasksGate.claim()
+  const showSpinner = !silent && !hasLoadedTasks.value
 
   try {
-    if (!silent && !hasLoadedTasks.value) {
+    if (showSpinner) {
       loadingTasks.value = true
     }
     // 单端点拿 队列+任务 原子快照——队列行与任务列表同一时刻，不会出现
@@ -274,7 +278,7 @@ async function loadTasks(queueId, options = {}) {
       tasksError.value = '加载失败: ' + (apiErrorMessage(error))
     }
   } finally {
-    if (!silent && tasksGate.isCurrent(my)) {
+    if (showSpinner) {
       loadingTasks.value = false
     }
   }
