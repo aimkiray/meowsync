@@ -65,8 +65,28 @@
             class="ink-btn ink-btn--ghost"
             title="搜索歌曲加入本歌单（支持 B 站/YouTube 链接）"
           ><PixelIcon name="plus" :size="15" /> 添加歌曲</button>
+          <!-- 排序模式入口：本地单重排 tracks 本序，已入库远端单落 trackOrder
+               覆盖层；未入库预览单无持久化落点（与 applyTrackEdit 同口径）不出入口 -->
+          <button
+            v-if="canReorder && !reorderMode"
+            @click="reorderMode = true"
+            class="ink-btn ink-btn--ghost"
+            :disabled="loadingSongs"
+            title="拖拽或逐行移动调整歌曲顺序"
+          ><PixelIcon name="grip" :size="15" /> 排序</button>
         </div>
       </div>
+    </div>
+
+    <!-- 排序模式工具条：归拢一键整理 + 完成收态。常态 hero 键不动 -->
+    <div v-if="reorderMode" class="reorder-bar">
+      <span class="pg-label pg-label--dim reorder-bar-hint">拖拽行或用行尾 ↑ ↓ 调整顺序</span>
+      <button
+        class="ink-btn ink-btn--ghost"
+        @click="$emit('group-by-artist')"
+        title="相同作者的歌曲自动归拢到一起"
+      ><PixelIcon name="m-list" :size="14" /> 按歌手归拢</button>
+      <button class="ink-btn" @click="exitReorderMode">完成</button>
     </div>
 
     <div v-if="loadingSongs" class="song-state">
@@ -83,27 +103,36 @@
 
     <div v-else ref="rowsEl" class="flex-1 min-h-0 overflow-y-auto song-rows">
       <div
-        v-for="(song, index) in pagedRows"
+        v-for="(song, index) in displayRows"
         :key="song.id"
         class="song-row"
         :class="{
           'song-row--playing': isCurrent(song),
-          'song-row--vip': isVipSong(song)
+          'song-row--vip': isVipSong(song),
+          'song-row--reorder': reorderMode,
+          'song-row--dragging': reorderMode && dragIndex === index,
+          'song-row--dragover': reorderMode && dragOverIndex === index && dragIndex !== index
         }"
+        :draggable="reorderMode"
+        @dragstart="onRowDragStart(index, $event)"
+        @dragover="onRowDragOver(index, $event)"
+        @drop="onRowDrop(index, $event)"
+        @dragend="onRowDragEnd"
       >
         <div
-          @click="$emit('play-song', song)"
-          @keydown.enter="$emit('play-song', song)"
-          @keydown.space.prevent="$emit('play-song', song)"
+          @click="onRowActivate(song)"
+          @keydown.enter="onRowActivate(song)"
+          @keydown.space.prevent="onRowActivate(song)"
           class="song-row-main"
-          tabindex="0"
-          role="button"
-          :aria-label="`播放 ${song.name}`"
+          :tabindex="reorderMode ? -1 : 0"
+          :role="reorderMode ? undefined : 'button'"
+          :aria-label="reorderMode ? undefined : `播放 ${song.name}`"
         >
-          <!-- 行首序号：常态等宽数字，悬停/当前曲换 ▶ -->
+          <!-- 行首序号：常态等宽数字，悬停/当前曲换 ▶；排序模式换 grip 把手+位次 -->
           <span class="song-row-index">
+            <PixelIcon v-if="reorderMode" name="grip" :size="13" class="song-row-grip" />
             <span class="song-row-index-num">{{ index + 1 }}</span>
-            <span class="song-row-index-play"><PixelIcon name="play" :size="16" /></span>
+            <span v-if="!reorderMode" class="song-row-index-play"><PixelIcon name="play" :size="16" /></span>
           </span>
           <div
             class="song-cover-wrap"
@@ -143,9 +172,26 @@
           <div class="song-duration">{{ formatDuration(song.dt || song.duration) }}</div>
         </div>
 
-        <!-- 行尾 ⋯ 菜单键：悬停/聚焦时露出，触屏常显 -->
+        <!-- 行尾 ⋯ 菜单键：悬停/聚焦时露出，触屏常显；排序模式换 ↑↓ 位移键 -->
         <div class="song-actions">
+          <template v-if="reorderMode">
+            <button
+              class="song-move-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
+              @click.stop="$emit('move-song', index, index - 1)"
+              :disabled="index === 0"
+              title="上移"
+              aria-label="上移"
+            >↑</button>
+            <button
+              class="song-move-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
+              @click.stop="$emit('move-song', index, index + 1)"
+              :disabled="index === displayRows.length - 1"
+              title="下移"
+              aria-label="下移"
+            >↓</button>
+          </template>
           <button
+            v-else
             class="song-menu-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             @click.stop="toggleDownloadMenu(song.id, $event)"
             title="更多操作"
@@ -158,9 +204,10 @@
         </div>
       </div>
 
-      <!-- 渐进渲染哨兵：IO 命中自动扩窗，也是键盘可达的「加载更多」键 -->
+      <!-- 渐进渲染哨兵：IO 命中自动扩窗，也是键盘可达的「加载更多」键；
+           排序模式渲全量（隐藏曲被排除会错落 trackOrder 尾部）故哨兵不介入 -->
       <button
-        v-if="pgHasMore"
+        v-if="pgHasMore && !reorderMode"
         :ref="bindSentinel"
         class="song-list-more ink-btn ink-btn--ghost"
         @click="loadMoreRows()"
@@ -169,7 +216,7 @@
       <!-- YTM 曲目列表全滚动：底部只留计数（分页器拆除） -->
       <div class="song-list-footer">
         <span class="pg-label pg-label--dim">
-          共 {{ filteredSongs.length }} 首<template v-if="!showVipSongs && songs.length > filteredSongs.length">（隐藏 {{ songs.length - filteredSongs.length }} 首VIP）</template>
+          共 {{ displayRows.length }} 首<template v-if="!reorderMode && !showVipSongs && songs.length > filteredSongs.length">（隐藏 {{ songs.length - filteredSongs.length }} 首VIP）</template>
         </span>
       </div>
     </div>
@@ -656,6 +703,41 @@
   }
 }
 
+/* ── 排序模式：工具条 + 拖拽态 + 行尾位移键 ── */
+.reorder-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: var(--hairline-soft);
+  flex-shrink: 0;
+}
+.reorder-bar-hint { flex: 1; }
+
+/* 整行即把手：主区 grab 光标；激活语义已被 onRowActivate 拦住 */
+.song-row--reorder .song-row-main { cursor: grab; }
+.song-row--dragging { opacity: .45; }
+/* drop 指示线：目标行底缘 accent 发丝（比整行换底更能表达「插到这」） */
+.song-row--dragover .song-row-main { box-shadow: inset 0 -2px 0 var(--accent-magenta-on-ink); }
+
+/* 排序态行首：grip 把手 + 位次数字并排，悬停不再切 ▶（播放已禁用） */
+.song-row--reorder .song-row-index { width: 44px; gap: 4px; }
+.song-row--reorder .song-row-index-num,
+.song-row--reorder:hover .song-row-index-num,
+.song-row--reorder:focus-within .song-row-index-num { display: inline; }
+.song-row-grip { color: var(--ink-64); flex-shrink: 0; }
+
+/* 排序态行尾：↑↓ 常显（不走 reveal-swap），时长固隐防叠字 */
+.song-row--reorder .song-duration { opacity: 0; }
+.song-move-btn {
+  opacity: 1;
+  pointer-events: auto;
+  color: var(--ink-64);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.song-move-btn:disabled { opacity: .3; cursor: default; }
+
 /* 窄屏 hero 单列化：与 watch 页同向（YTM 歌单头双栏→单列折叠） */
 @media (max-width: 640px) {
   .playlist-hero {
@@ -692,7 +774,7 @@
 </style>
 
 <script>
-import { computed, ref, onBeforeUnmount } from 'vue'
+import { computed, ref, onBeforeUnmount, watch } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
 import { useServerDownloads } from '../composables/useServerDownloads.js'
 import { httpsCover } from '../lib/url'
@@ -745,7 +827,7 @@ export default {
       default: true
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'edit-song', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'edit-song', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs', 'move-song', 'group-by-artist'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const menuPositions = ref({})
@@ -932,7 +1014,12 @@ export default {
     // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌；Escape 同关
     if (typeof window !== 'undefined') {
       const closeOnScroll = () => { closeDownloadMenu() }
-      const closeOnEscape = (e) => { if (e.key === 'Escape') closeDownloadMenu(true) }
+      const closeOnEscape = (e) => {
+        if (e.key !== 'Escape') return
+        // 菜单优先：开着菜单时 Esc 归菜单（焦点归还触发键）；否则收排序态
+        if (showDownloadMenu.value !== null) { closeDownloadMenu(true); return }
+        if (reorderMode.value) exitReorderMode()
+      }
       window.addEventListener('scroll', closeOnScroll, true)
       window.addEventListener('keydown', closeOnEscape)
       onBeforeUnmount(() => {
@@ -944,9 +1031,77 @@ export default {
     // 歌曲 id 类型混用（数字/字符串）——统一 String 比较，否则当前曲高亮会丢
     const isCurrent = (song) => String(song.id) === String(props.currentSong?.id)
 
+    // ── 排序模式 ──
+    // 入口闸：单曲分享壳无歌单语义；未入库预览单无持久化落点（与 applyTrackEdit
+    // 同口径——做了也只活到下次选单）。模式内渲全量 props.songs 绕开 VIP 过滤
+    // 与渐进窗：隐藏曲被排除会错落 trackOrder 尾部，分页窗外行无法被拖——
+    // 全量 DOM 是瞬态编辑态的可签收代价（千曲单偏重但功能正确优先）
+    const reorderMode = ref(false)
+    const dragIndex = ref(-1)
+    const dragOverIndex = ref(-1)
+    const canReorder = computed(() =>
+      !isShareShell.value
+      && (isLocalPlaylist.value || props.playlistInLibrary)
+      && props.songs.length > 1
+    )
+    // displayRows 是行渲染的唯一入口——排序态绕过 filteredSongs/pagedRows
+    const displayRows = computed(() => reorderMode.value ? props.songs : pagedRows.value)
+
+    const exitReorderMode = () => {
+      reorderMode.value = false
+      dragIndex.value = -1
+      dragOverIndex.value = -1
+    }
+    // 切单/曲数塌缩自动收态：滞留排序态会让新单继承错位的 displayRows 口径
+    watch(() => props.selectedPlaylist?.id, exitReorderMode)
+    watch(() => props.songs.length <= 1 && reorderMode.value, (collapsed) => {
+      if (collapsed) exitReorderMode()
+    })
+
+    // 排序态行点击不播放（拖拽与点击共享同一热区，激活语义让位给位移）
+    const onRowActivate = (song) => {
+      if (!reorderMode.value) emit('play-song', song)
+    }
+
+    // HTML5 DnD：dragIndex/dragOverIndex 驱动视觉态，drop 时发全量下标位移。
+    // from==to 与越界由 App 侧 moveSongInPlaylist 边界闸兜底（双保险）
+    const onRowDragStart = (index, e) => {
+      if (!reorderMode.value) return
+      dragIndex.value = index
+      e.dataTransfer.effectAllowed = 'move'
+      try { e.dataTransfer.setData('text/plain', String(index)) } catch { /* 个别宿主禁写——index 走 ref 不依赖 dataTransfer */ }
+    }
+    const onRowDragOver = (index, e) => {
+      if (dragIndex.value < 0) return
+      e.preventDefault() // 必须 prevent 才允许 drop
+      e.dataTransfer.dropEffect = 'move'
+      dragOverIndex.value = index
+    }
+    const onRowDrop = (index, e) => {
+      e.preventDefault()
+      const from = dragIndex.value
+      if (from >= 0 && from !== index) emit('move-song', from, index)
+      onRowDragEnd()
+    }
+    const onRowDragEnd = () => {
+      dragIndex.value = -1
+      dragOverIndex.value = -1
+    }
+
     return {
       filteredSongs,
       pagedRows,
+      displayRows,
+      reorderMode,
+      canReorder,
+      dragIndex,
+      dragOverIndex,
+      exitReorderMode,
+      onRowActivate,
+      onRowDragStart,
+      onRowDragOver,
+      onRowDrop,
+      onRowDragEnd,
       pgHasMore,
       renderedCount,
       loadMoreRows,
