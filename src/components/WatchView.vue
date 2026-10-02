@@ -10,7 +10,7 @@
     <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
       <!-- ══ 左栏 ══ -->
       <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
-        <div class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }">
+        <div ref="coverWrapRef" class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }">
           <!-- 外部导入曲视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
                音频模式回落网易云匹配封面——不加载视频即省流量 -->
           <video
@@ -25,6 +25,26 @@
             preload="auto"
             @error="onMediaVideoError"
           ></video>
+          <!-- 悬停控制层：中央半透明播放/暂停走全局 toggle-play（视频元素静音、
+               时钟锚 Howler——syncMediaVideo 自动跟着收放）；右下全屏锁在 wrap
+               上做元素级 fullscreen——控制层随 wrap 一起进全屏仍可用 -->
+          <div v-if="mediaVideoActive" class="watch-video-controls">
+            <button
+              type="button"
+              class="watch-video-toggle"
+              @click="$emit('toggle-play')"
+              :title="isPlaying ? '暂停' : '播放'"
+              :aria-label="isPlaying ? '暂停' : '播放'"
+            ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="26" /></button>
+            <button
+              type="button"
+              class="watch-video-fs"
+              @click="toggleVideoFullscreen"
+              :title="videoFullscreen ? '退出全屏' : '全屏'"
+              :aria-label="videoFullscreen ? '退出全屏' : '视频全屏'"
+              :aria-pressed="videoFullscreen"
+            ><PixelIcon name="expand" :size="14" /></button>
+          </div>
           <img
             v-else-if="coverUrl"
             :src="httpsCover(coverUrl)"
@@ -346,7 +366,7 @@
 </template>
 
 <script>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
@@ -383,7 +403,7 @@ export default {
     autoplay: { type: Boolean, default: false }
   },
   emits: [
-    'back', 'open-fullscreen',
+    'back', 'open-fullscreen', 'toggle-play',
     'update:tab', 'update:autoplay',
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
     'play-song', 'open-source', 'add-to-playlist',
@@ -603,11 +623,48 @@ export default {
     // 偏好持久化：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开。
     // LS_KEYS.VIDEO_MODE 沿用 B 站时代键名：YouTube 接入不换名重置用户选择
     const mediaVideoRef = ref(null)
+    const coverWrapRef = ref(null)
     const videoOn = ref(safeGetLs(LS_KEYS.VIDEO_MODE) !== '0')
     watch(videoOn, v => {
       safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0')
       // 开视频就是用户最自然的重试入口——复位失败闩重新拉流
       if (v) mediaVideoFailed.value = false
+    })
+
+    // 元素级全屏锁在封面 wrap 上（不是 video 元素本身）——悬停控制层随
+    // wrap 一起进全屏仍可用；视频元素静音、时钟锚 Howler，全屏态音频继续
+    // 走原管线不中断。webkit 前缀兜底旧 Safari
+    const videoFullscreen = ref(false)
+    const toggleVideoFullscreen = async () => {
+      try {
+        const fsEl = document.fullscreenElement || document.webkitFullscreenElement
+        if (fsEl) {
+          await (document.exitFullscreen || document.webkitExitFullscreen).call(document)
+        } else {
+          const el = coverWrapRef.value
+          await (el?.requestFullscreen || el?.webkitRequestFullscreen)?.call(el)
+        }
+      } catch { /* 全屏被权限/iframe 策略拒——静默，icon 态随 fullscreenchange 不翻 */ }
+    }
+    // Esc/手势/系统级退出不经过本键——以 fullscreenchange 同步 icon 态
+    const onFullscreenChange = () => {
+      videoFullscreen.value = !!(document.fullscreenElement || document.webkitFullscreenElement)
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('fullscreenchange', onFullscreenChange)
+      window.addEventListener('webkitfullscreenchange', onFullscreenChange)
+      onBeforeUnmount(() => {
+        window.removeEventListener('fullscreenchange', onFullscreenChange)
+        window.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+      })
+    }
+    // 全屏中视频模式消失（切到无视频曲/关视频开关/换源失败闩封面）——控制层
+    // 随之卸载，留在全屏只剩 Esc 一条路；主动退全屏交还页面
+    watch(mediaVideoActive, (on) => {
+      if (!on && (document.fullscreenElement || document.webkitFullscreenElement)) {
+        try { (document.exitFullscreen || document.webkitExitFullscreen)?.call(document) }
+        catch { /* 已在退出流程中 */ }
+      }
     })
     // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
     const mediaVideoFailed = ref(false)
@@ -796,6 +853,9 @@ export default {
       sourceUrl,
       sourceName,
       mediaVideoRef,
+      coverWrapRef,
+      videoFullscreen,
+      toggleVideoFullscreen,
       videoOn,
       mediaVideoFailed,
       mediaVideoActive,
@@ -875,8 +935,89 @@ export default {
 }
 
 /* 视频态 wrap 必须占满栏宽：wrap 在 align-items:center 的 flex 栏里是
-   shrink-to-fit，否则视频 width:% 与 wrap 构成循环约束、退回片源内建宽 */
-.watch-cover-wrap--video { width: 100%; }
+   shrink-to-fit，否则视频 width:% 与 wrap 构成循环约束、退回片源内建宽。
+   relative 是悬停控制层（.watch-video-controls）的定位锚 */
+.watch-cover-wrap--video { width: 100%; position: relative; }
+
+/* 视频悬停控制层：默认隐，wrap 悬停/焦点进入露出（focus-within 兜键盘
+   Tab——透明度为 0 的键可聚焦但不可见是键盘陷阱）；层自身不吃指针，
+   穿透到视频/行背景，两枚子键各开 pointer-events */
+.watch-video-controls {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity .16s ease;
+  pointer-events: none;
+}
+.watch-cover-wrap--video:hover .watch-video-controls,
+.watch-cover-wrap--video:focus-within .watch-video-controls {
+  opacity: 1;
+}
+/* 触屏没有悬停态——控制层常显，半透明不遮画面 */
+@media (hover: none) {
+  .watch-video-controls { opacity: 1; }
+}
+
+/* 中央播放/暂停：半透明墨底圆形——像素风的方角体系里，圆形是「媒体
+   传输键」的跨站通用符（YouTube/Netflix 同款），特意破例 */
+.watch-video-toggle {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  cursor: pointer;
+  transition: background .15s ease, transform .15s ease;
+}
+.watch-video-toggle:hover { background: rgba(0, 0, 0, .75); transform: scale(1.06); }
+.watch-video-toggle:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* 右下全屏键：同款半透明墨底，方角小键贴视频下缘 */
+.watch-video-fs {
+  pointer-events: auto;
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.watch-video-fs:hover { background: rgba(0, 0, 0, .75); }
+.watch-video-fs:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* 元素全屏态：wrap 黑场居中，视频吃满屏（16:9 信箱由 object-fit:contain
+   兜住，宽高 100% 只为占满容器）；悬停控制层此时仍在屏内可用 */
+.watch-cover-wrap:fullscreen {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.watch-cover-wrap:fullscreen .watch-cover--video {
+  width: 100%;
+  height: 100%;
+}
 
 /* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
    与 .watch-top 返回键的 padding 同源对齐；居中态下的标题/操作在

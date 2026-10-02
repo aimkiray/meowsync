@@ -127,6 +127,7 @@
           @lyric-offset-reset="resetLyricOffset"
           @back="watchBack"
           @open-fullscreen="openFullscreenPlayer"
+          @toggle-play="togglePlay"
           @queue-jump="queueJump"
           @queue-remove="queueRemove"
           @queue-move="queueMove"
