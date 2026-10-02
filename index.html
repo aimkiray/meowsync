@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/cinnamoroll1.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- resizes-content：Android 键盘弹出时收缩布局视口——居中弹窗的
+         底部输入行不会被键盘盖住（无此声明默认 overlays-content 视口不缩） -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <!-- 视频封面（hdslb 等图床）对第三方 Referer 一律 403、无 Referer 放行；
          meta 随文档走——Vite dev/preview 与任何不经 Hono 的服务形态都生效
          （Hono secureHeaders 对生产响应也下同款头，双保险） -->
@@ -24,7 +26,7 @@
     <style>
       /* 启动闪屏——先于令牌 CSS 加载，字面量须与 style.css :root 默认主题保持一致；
          新主题若需改闪屏色，在此追加 :root[data-theme="id"] .boot-splash 钩子 */
-      .boot-splash { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #fefefe; font-family: 'JetBrains Mono', monospace; }
+      .boot-splash { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: #fefefe; font-family: 'JetBrains Mono', monospace; }
       .boot-splash-card { border: 1.2px solid #1e1e1e; padding: 24px 32px; text-align: center; }
       .boot-splash-card p { margin: 0; letter-spacing: .05em; color: #1e1e1e; }
       .boot-splash-name { font-size: 12px; }

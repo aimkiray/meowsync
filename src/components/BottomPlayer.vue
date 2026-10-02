@@ -323,6 +323,15 @@ export default {
   background: var(--white-16);
   cursor: pointer;
   z-index: 2;
+  /* 4px 裸条对触屏是不可点目标——none 防横滑被手势抢走 pointer 链 */
+  touch-action: none;
+}
+/* 隐形命中带：上 6px（少抢列表末行）+ 下 14px（沉进墨条内沿空档），
+   触屏实际命中 ~24px 而不动视觉 */
+.bp-progress::before {
+  content: '';
+  position: absolute;
+  inset: -6px 0 -14px;
 }
 .bp-progress-fill { background: var(--accent-magenta); } /* 已播部分=accent 本色（retro 火烈鸟粉 / glitch teal 同覆写） */
 
@@ -332,8 +341,9 @@ export default {
   display: flex;
   align-items: center;
   gap: 16px;
-  /* 竖向 padding 4 + 播放键 60 = 总高 68 不变——放大键而不撑高条 */
-  padding: 4px 16px;
+  /* 竖向 padding 4 + 播放键 60 = 总高 68 不变——放大键而不撑高条；
+     左右缘横屏让出刘海/圆角死区（safe-area 与底值取大） */
+  padding: 4px max(16px, env(safe-area-inset-right, 0px)) 4px max(16px, env(safe-area-inset-left, 0px));
   max-width: 1440px;
   margin: 0 auto;
 }
@@ -489,7 +499,8 @@ export default {
 }
 
 /* ≤455px：沉浸键也收——421–455 档半幅见底，与 ≤420 的 YTM 稀疏化
-   合并收口（此时右簇仅剩时间戳） */
+   合并收口；此时右簇全空（时间戳本就 lg:inline 不显示），
+   剩余空间让给标题区 */
 @media (max-width: 455px) {
   .bp-xtra { display: none; }
 }

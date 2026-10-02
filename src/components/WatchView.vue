@@ -7,7 +7,7 @@
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
     </div>
 
-    <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-14 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
+    <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
       <!-- ══ 左栏 ══ -->
       <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto">
         <div class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }">
@@ -151,6 +151,8 @@
                     :src="httpsCover(songCoverUrl(song))"
                     :alt="song.name"
                     class="watch-queue-thumb"
+                    loading="lazy"
+                    decoding="async"
                   />
                   <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
                   <div class="queue-row-info">
@@ -313,6 +315,8 @@
                 :src="httpsCover(songCoverUrl(song))"
                 :alt="song.name"
                 class="watch-queue-thumb"
+                loading="lazy"
+                decoding="async"
               />
               <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
               <div class="queue-row-info">
@@ -724,10 +728,12 @@ export default {
    ——本层是唯一滚动器；≥901px 转双栏内滚，车道移交各栏 */
 .watch-view { scrollbar-gutter: stable; }
 
-/* 浮层顶行：返回钉左页角 / 沉浸钉右页角；不占流——待播栏顶部空间整体释放。
+/* 浮层顶行：返回钉左页角 / 沉浸钉右页角。
+   移动基态入流 sticky——.watch-view 是真滚动器，absolute 会随内容滚走、
+   深滚后失去唯一返回路径；宽屏态改回 absolute 不占流（栏内自滚）。
    pointer-events:none 带子让下方内容可点，仅按键自身接收点击 */
 .watch-top {
-  position: absolute;
+  position: sticky;
   top: 0;
   left: 0;
   right: 0;
@@ -735,7 +741,9 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px;
+  padding: 10px 20px;
+  /* sticky 钉顶时衬画布色——滚过的歌词/队列行不透字 */
+  background: var(--view-canvas, var(--paper));
   pointer-events: none;
 }
 .watch-top > * { pointer-events: auto; }
@@ -745,8 +753,10 @@ export default {
 
 .watch-cover {
   /* width 里的 100% 对 shrink-to-fit 父级是循环%——fallback 分支塌成 42px。
-     min() 只留物理上限，收窄交给 max-width。移动基态按视口宽取小（单列） */
+     min() 只留物理上限，收窄交给 max-width。移动基态按视口宽取小（单列）；
+     横屏矮机再受 55svh 高约束（svh 不可识别时整条作废、回退上行声明） */
   width: min(64vw, 320px);
+  width: min(64vw, 320px, 55svh);
   max-width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
@@ -897,9 +907,10 @@ export default {
 .watch-grip:hover { color: var(--ink); }
 .watch-grip:active { cursor: grabbing; color: var(--ink); } /* teal 画布上 -ink 档仅 2.17:1，拖拽态用实墨 */
 
-/* 触屏无 hover——把手常显（且升到实墨，半透明档不可见） */
+/* 触屏无 hover——把手常显（且升到实墨，半透明档不可见）；
+   宽 20→28px 够到 24px 触控地板外沿，也给拖拽一根能抓住的条 */
 @media (hover: none){
-  .watch-grip { opacity: 1; pointer-events: auto; color: var(--ink); }
+  .watch-grip { opacity: 1; pointer-events: auto; color: var(--ink); width: 28px; }
 }
 
 /* 相关行点击区已收进 .queue-row-main（行容器化以容纳行尾 + 键），cursor 由它提供 */
@@ -932,6 +943,8 @@ export default {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 窄屏三件套（存为/清空/自动播放 label）放不下时换行，不硬裁 */
+  flex-wrap: wrap;
   padding: 10px 4px 12px;
   border-top: var(--hairline-soft);
   margin-top: 6px;
@@ -1006,7 +1019,9 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px 10px;
+  /* ≤330px 视口两组 ~290px 放不下——换行而不裁右边组 */
+  flex-wrap: wrap;
   padding: 4px 16px;
   flex-shrink: 0;
 }
@@ -1039,9 +1054,19 @@ export default {
 @media (min-width: 901px) {
   .watch-view { scrollbar-gutter: auto; }
 
+  /* 宽屏顶行回浮层不占流——栏内自滚，键位钉在各栏内容之上 */
+  .watch-top {
+    position: absolute;
+    padding: 20px;
+    background: none;
+  }
+
   /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
-     （旧浏览器不认两关键字写法时回退到上行 stable） */
+     （旧浏览器不认两关键字写法时回退到上行 stable）。
+     safe center：内容超高时向上对称溢出，顶部封面被裁且无法滚达——
+     safe 让溢出改走底部（不支持 safe 的浏览器回退原 center 行为） */
   .watch-main {
+    justify-content: safe center;
     scrollbar-gutter: stable;
     scrollbar-gutter: stable both-edges;
   }

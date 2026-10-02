@@ -90,11 +90,11 @@
         ><PixelIcon name="note" :size="40" /></div>
       </div>
 
-      <div
-        class="player-progress-bar fullscreen-player__progress"
-        @click="onSeekClick"
-      >
-        <div class="player-progress-fill" :style="{ '--p': progressPercentage }"></div>
+      <!-- 命中壳 24px（触屏可点）+ 内层 4px 视觉轨道（pill 裁切保留） -->
+      <div class="fullscreen-player__progress-hit" @click="onSeekClick">
+        <div class="player-progress-bar fullscreen-player__progress">
+          <div class="player-progress-fill" :style="{ '--p': progressPercentage }"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -229,7 +229,11 @@ export default {
   position: relative;
   z-index: 1;
   min-height: 100%;
-  padding: 24px;
+  /* 刘海/Home 指示条：沉浸层是 viewport-fit:cover 下的全 bleed 面，
+     顶栏键与底部进度条必须让出安全区，否则退出键压在状态栏下、
+     进度条落进 Home 手势热区 */
+  padding: calc(24px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-right, 0px))
+    calc(24px + env(safe-area-inset-bottom, 0px)) calc(24px + env(safe-area-inset-left, 0px));
 }
 
 .fullscreen-player__topbar {
@@ -258,6 +262,11 @@ export default {
   line-height: 1.05;
   color: rgb(126, 49, 88);
   text-shadow: 2px 2px 0 rgba(255, 255, 255, 0.8);
+  /* 超长曲名防无限增高——fixed 层不可滚，标题吃高会把底部控件顶出视口 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 .fullscreen-player__artist {
@@ -269,7 +278,8 @@ export default {
   position: absolute;
   left: 24px;
   right: 24px;
-  bottom: 38px;
+  /* 命中壳顶沿 ≈16+env+24——控件行须让到壳上方再叠 8px 气隙 */
+  bottom: calc(46px + env(safe-area-inset-bottom, 0px));
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
@@ -280,11 +290,22 @@ export default {
   width: min(100%, 520px);
 }
 
-.fullscreen-player__progress {
+/* 命中壳：定位与触控语义在这层——click 读的是壳 rect（与轨道同宽，比例不变）。
+   抬高让出 Home 指示条热区（iOS ~34px），否则点按触发系统手势 */
+.fullscreen-player__progress-hit {
   position: absolute;
   left: 24px;
   right: 24px;
-  bottom: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  height: 24px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+.fullscreen-player__progress {
+  position: static;
+  width: 100%;
   margin: 0;
   height: 4px;
   border-radius: 999px;
@@ -423,11 +444,15 @@ export default {
   color: white;
 }
 
-/* 顶栏三键与播放键同族底色（control-button 粉 tint），退出键同档 */
+/* 顶栏三键与播放键同族底色（control-button 粉 tint），退出键同档。
+   全局 reset 剥光 padding 后命中盒只剩字形高 ~20px——退出是触屏唯一
+   关闭路径（无 Esc/下滑手势），补内距到 40px 档 */
 .fullscreen-player__topbar-button {
   background: rgba(182, 125, 158, 0.32);
   color: white;
   border: 1px solid rgba(255, 255, 255, 0.22);
+  padding: 8px 14px;
+  min-height: 40px;
 }
 
 .fullscreen-player__cover {
@@ -467,7 +492,7 @@ export default {
   .fullscreen-player__bottom {
     left: 16px;
     right: 16px;
-    bottom: 40px;
+    bottom: calc(44px + env(safe-area-inset-bottom, 0px));
     flex-direction: column-reverse;
     align-items: stretch;
   }
@@ -492,10 +517,16 @@ export default {
     width: min(32vw, 160px);
   }
 
-  .fullscreen-player__progress {
+  .fullscreen-player__progress-hit {
     left: 16px;
     right: 16px;
-    bottom: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
+}
+
+/* 手机横屏/矮视口：装饰封面退场——absolute 底块不占流，内容堆栈
+   ~320px 高时封面会压住标题区、控件叠上顶栏文字 */
+@media (max-height: 500px) {
+  .fullscreen-player__cover { display: none; }
 }
 </style>
