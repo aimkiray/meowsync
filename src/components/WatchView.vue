@@ -9,7 +9,7 @@
 
     <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
       <!-- ══ 左栏 ══ -->
-      <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto">
+      <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
         <div class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }">
           <!-- 外部导入曲视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
                音频模式回落网易云匹配封面——不加载视频即省流量 -->
@@ -787,10 +787,10 @@ export default {
 
 /* 外部导入曲视频模式：16:9 信箱（外部视频多为横屏，方形裁切会砍画面）；
    image-rendering 像素化是封面的印刷效果，视频不该继承。
-   移动基态占满栏宽（整页滚动，高度不占视口预算）；宽屏上限 62vh 反推宽
-   （封面 min(46vh,420px) 面积约 17.6万px²；960×540 ≈ 51.8万，~3×） */
+   移动基态占满栏宽（整页滚动，高度不占视口预算）；宽屏上限 70vh 反推宽
+   （封面 min(46vh,420px) 面积约 17.6万px²；1152×648 ≈ 74.7万，~4×） */
 .watch-cover--video {
-  width: min(100%, 1080px);
+  width: min(100%, 1280px);
   aspect-ratio: 16 / 9;
   object-fit: contain;
   image-rendering: auto;
@@ -800,6 +800,17 @@ export default {
 /* 视频态 wrap 必须占满栏宽：wrap 在 align-items:center 的 flex 栏里是
    shrink-to-fit，否则视频 width:% 与 wrap 构成循环约束、退回片源内建宽 */
 .watch-cover-wrap--video { width: 100%; }
+
+/* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
+   与 .watch-top 返回键的 padding 同源对齐；居中态下的标题/操作在
+   左对齐大播放器下面会失调，一并转左（YTM watch 视频页同款排法） */
+.watch-main--video {
+  padding-left: 0;
+  padding-right: 0;
+  align-items: flex-start;
+  text-align: left;
+}
+.watch-main--video .watch-actions { justify-content: flex-start; }
 
 /* 音画切换的开启态：实心反色——与 pg-tab--active 同一语义 */
 .watch-action--on {
@@ -1103,7 +1114,7 @@ export default {
 
   .watch-cover { width: min(46vh, 420px); }
   /* 视频是主内容、须明显大于方形封面 */
-  .watch-cover--video { width: min(100%, 1080px, calc(62vh * 16 / 9)); }
+  .watch-cover--video { width: min(100%, 1280px, calc(70vh * 16 / 9)); }
   .watch-banner { width: min(46vh, 420px); }
 
   /* 栏界标尺回竖版（gap 24 → 栏内 padding-left 24：标尺两侧留白对称） */
