@@ -61,6 +61,27 @@ test('progressive：durl 单段 + qn=80 反超判高；memoize 只打一跳', as
   assert.ok(fnval1Calls[0].url.includes('qn=80'));
 });
 
+test('DASH playurl 显式求顶档 qn=127——缺省会让 accept_quality 高档不进 dash.video', async () => {
+  const calls = stubFetch(() => okJson(DASH_480P));
+  await resolveBiliMedia({ bvid: 'BV1x', cid: '7' });
+  const dashCalls = calls.filter(c => c.url.includes('fnval=4048'));
+  assert.equal(dashCalls.length, 1);
+  assert.ok(dashCalls[0].url.includes('qn=127'), dashCalls[0].url);
+});
+
+test('pickStreamList video 次键：同像素先比帧率再比码率（1080P60 优先 1080P）', async () => {
+  const { pickStreamList } = require('../src/server/lib/bilibili.js');
+  const lowFps = { id: 80, codecs: 'avc1.640028', mimeType: 'video/mp4', width: 1920, height: 1080, frameRate: '30.000', bandwidth: 1500000, baseUrl: 'https://a/1080p30' };
+  const hiFps = { id: 116, codecs: 'avc1.640032', mimeType: 'video/mp4', width: 1920, height: 1080, frameRate: '60.000', bandwidth: 3000000, baseUrl: 'https://a/1080p60' };
+  const hiBr = { id: 112, codecs: 'avc1.640028', mimeType: 'video/mp4', width: 1920, height: 1080, frame_rate: '30.000', bandwidth: 4000000, baseUrl: 'https://a/1080p+' };
+  // 上游序打乱时排序也必须拿 60 帧档（fps 先于 bandwidth）；frame_rate
+  // 蛇形拼法也认（上游两种字段名都出现过）
+  const out = pickStreamList({ dash: { video: [lowFps, hiBr, hiFps] } }, 'video', 'best');
+  assert.equal(out[0].id, 116);
+  assert.equal(out[1].id, 112); // 同为 30fps 段时 bandwidth 决胜
+  assert.equal(out[2].id, 80);
+});
+
 test('progressive：durl 多段（分段视频）→ 返回空，不摊平成候选', async () => {
   stubFetch((u) => {
     if (u.includes('fnval=1')) {

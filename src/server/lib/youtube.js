@@ -253,7 +253,7 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
 // 低通截断），播放器兼容性由用户本地承担，归档就该拿第一代完整频带。
 // video 取 adaptive avc1（H.264 全浏览器可放），按分辨率/bitrate 降序。
 // signatureCipher 混淆流（无 url 只有签名参数）跳过——本服务不做签名反解
-function pickStreamList(data, kind, prefer = '') {
+function pickStreamList(data, kind, prefer = '', opts = {}) {
   const adaptive = Array.isArray(data?.adaptiveFormats) ? data.adaptiveFormats : [];
   const progressive = Array.isArray(data?.formats) ? data.formats : [];
   const usable = (f) => typeof f?.url === 'string' && f.url;
@@ -272,12 +272,26 @@ function pickStreamList(data, kind, prefer = '') {
   const avc = adaptive.filter(f =>
     usable(f) && (f.mimeType || '').startsWith('video/mp4')
     && (f.mimeType || '').includes('avc1'));
+  // adaptiveOnly（下载链）：合流档自带音轨，混进 videos 会让 ffmpegMux 产出
+  // 双音轨 mp4——下载侧合流由 file-downloader 的 progressive 兜底相位接管，
+  // 这里只交纯净 video-only 轨；播放链（未传参）保持合流兜底旧语义
+  if (opts.adaptiveOnly) {
+    // 同像素决胜帧率再比码率——1080p60 与 1080p30 同面积，裸像素序撞上谁
+    // 在前取谁（Innertube 序不定）；fps/bitrate 都是上游直给字段，缺省 0
+    return avc.slice().sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0))
+      || (b.fps || 0) - (a.fps || 0)
+      || (b.bitrate || 0) - (a.bitrate || 0));
+  }
   // progressive 兜底同样限 video/mp4——webm 合并流 Safari 放不了，宁缺毋滥
   // （hasVideo 语义 = 浏览器解得动的流存在）
   const mp4Progressive = progressive.filter(f =>
     usable(f) && (f.mimeType || '').startsWith('video/mp4'));
+  // 同像素决胜帧率再比码率——1080p60 与 1080p30 同面积，裸像素序撞上谁
+  // 在前取谁（Innertube 序不定）；fps/bitrate 都是上游直给字段，缺省 0
   return (avc.length ? avc : mp4Progressive)
-    .sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0)));
+    .slice().sort((a, b) => ((b.height || 0) * (b.width || 0)) - ((a.height || 0) * (a.width || 0))
+      || (b.fps || 0) - (a.fps || 0)
+      || (b.bitrate || 0) - (a.bitrate || 0));
 }
 
 // renderer 树通用读文本——runs 拼接优先，simpleText 兜底

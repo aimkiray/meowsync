@@ -290,7 +290,13 @@ const TaskRow = {
         ]),
         h('div', { class: 'dtr-flags' }, [
           rowProps.task.downloadAudio ? h('span', { class: 'dtr-flag' }, '音频') : null,
-          rowProps.task.downloadVideo ? h('span', { class: 'dtr-flag' }, '视频') : null,
+          rowProps.task.downloadVideo ? h('span', {
+            class: 'dtr-flag',
+            // 实际到手档位透出：1080p avc1 / 合流降级等——比裸"视频"章多一层对账面
+            title: rowProps.task.videoMeta?.h
+              ? `实际画质 ${rowProps.task.videoMeta.h}p${rowProps.task.videoMeta.codec ? ' ' + rowProps.task.videoMeta.codec : ''}${rowProps.task.videoMeta.source === 'progressive' ? '（合流）' : ''}`
+              : null
+          }, `视频${rowProps.task.videoMeta?.h ? ' ' + rowProps.task.videoMeta.h + 'p' : ''}`) : null,
           rowProps.task.downloadLyrics ? h('span', { class: 'dtr-flag' }, '歌词') : null,
           rowProps.task.downloadCover ? h('span', { class: 'dtr-flag' }, '封面') : null
         ].filter(Boolean)),

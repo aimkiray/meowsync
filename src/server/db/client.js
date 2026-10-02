@@ -68,6 +68,9 @@ const DOWNLOAD_TASK_COLUMNS = {
   lyrics_path: 'TEXT',
   cover_path: 'TEXT',
   video_path: 'TEXT',
+  // 实际到手视频档快照 {h,w,codec,br,source}——选流降档无痕是排障黑洞，
+  // 落库让"360p vs 4K"对账可查；JSON 文本与 provider_data 同构
+  video_meta: 'TEXT',
   bitrate: 'INTEGER DEFAULT 320000',
   file_size: 'INTEGER',
   // 源私有履约数据快照（Music Assistant provider_mappings.details 同思路）：

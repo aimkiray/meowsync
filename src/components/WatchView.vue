@@ -346,6 +346,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
 import { musicApi } from '../api/music'
+import { downloadsApi } from '../api/downloads'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { shareOrCopy, songShareUrl } from '../lib/share'
@@ -617,12 +618,34 @@ export default {
       return null
     })
     const mediaVideoActive = computed(() => !!(mediaVideoKey.value && videoOn.value && !mediaVideoFailed.value))
+    // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
+    // 的视频下载此前是纯只写功能（App 内无处可播）。按队列归属歌单探测
+    // （任务行以歌单维度登记；别的歌单下的下载对不上 playlistId，漏探回落
+    // 在线流，安全方向）。切歌竞态用序号丢弃
+    const downloadedVideoUrl = ref(null)
+    let dlVideoSeq = 0
+    watch([mediaVideoKey, () => props.queueOwner?.id], async () => {
+      const seq = ++dlVideoSeq
+      downloadedVideoUrl.value = null
+      const song = props.currentSong
+      const plId = props.queueOwner?.id
+      if (!plId || !(song?.bilibili?.hasVideo || song?.youtube?.hasVideo)) return
+      try {
+        const st = await downloadsApi.getSongDownloadStatus(plId, song.id)
+        if (seq !== dlVideoSeq) return
+        if (st?.task?.videoPath) {
+          downloadedVideoUrl.value = downloadsApi.songFileUrl(plId, song.id, 'video')
+        }
+      } catch { /* 探测失败回落在线流 */ }
+    }, { immediate: true })
     const mediaVideoUrl = computed(() => {
       const song = props.currentSong
       const b = song?.bilibili
-      if (b?.hasVideo) return musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page)
+      if (b?.hasVideo) return downloadedVideoUrl.value
+        || musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page)
       const y = song?.youtube
-      if (y?.hasVideo) return musicApi.youtubeStreamUrl(y.videoId, 'video')
+      if (y?.hasVideo) return downloadedVideoUrl.value
+        || musicApi.youtubeStreamUrl(y.videoId, 'video')
       // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）；videoV 戳
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
       return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video', song.file.videoV) : ''
