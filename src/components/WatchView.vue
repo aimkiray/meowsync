@@ -105,7 +105,7 @@
             @click="videoOn = !videoOn"
             :title="videoOn ? '切到纯音频（省流量）' : '切到视频模式'"
             :aria-pressed="videoOn"
-          ><PixelIcon name="play" :size="14" /> {{ videoOn ? '视频开' : '仅音频' }}</button>
+          ><PixelIcon name="play" :size="14" /> {{ videoOn ? '视频' : '音频' }}</button>
         </div>
 
         <!-- 播放错误/警告在操作行下方——归属左栏信息区，不占右栏 tab 顶部 -->
