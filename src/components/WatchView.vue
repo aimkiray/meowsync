@@ -627,6 +627,19 @@ export default {
       scrollRowIntoCenter(lyricContainer.value,
         lyricContainer.value?.querySelector(`[data-lyric-index="${i}"]`), smooth)
     }
+    // 单列态整页滚：自动跟随只在歌词区覆盖视口中线时进行——用户还停在
+    // 封面/操作区，或歌词区偏离正中时，不把整页拽过去。宽屏歌词栏自滚、
+    // 不动整页，恒跟随。切 tab 是显式请求，centerCurrentRow 不走此闸
+    const lyricsFollowable = () => {
+      if (window.matchMedia('(min-width: 901px)').matches) return true
+      const view = lyricContainer.value?.closest('.watch-view')
+      const list = lyricContainer.value?.querySelector('.watch-lyric-list')
+      if (!view || !list) return false
+      const v = view.getBoundingClientRect()
+      const r = list.getBoundingClientRect()
+      const mid = v.top + v.height / 2
+      return r.top <= mid && r.bottom >= mid
+    }
 
     // ── 歌词/队列定位滚动 ──
     const centerCurrentRow = () => {
@@ -645,13 +658,14 @@ export default {
     watch(() => props.currentLyricIndex, async (i) => {
       if (props.tab !== 'lyrics' || i < 0) return
       await nextTick()
+      if (!lyricsFollowable()) return
       const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
       scrollLyricIntoCenter(i, smooth)
     })
 
     // 字号变化全列重排——不等下一 tick 就重居中当前行，长间奏不空屏
     watch(lyricFontSize, () => nextTick(() => {
-      if (props.tab === 'lyrics' && props.currentLyricIndex >= 0) {
+      if (props.tab === 'lyrics' && props.currentLyricIndex >= 0 && lyricsFollowable()) {
         scrollLyricIntoCenter(props.currentLyricIndex, false)
       }
     }))
