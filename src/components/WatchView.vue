@@ -1493,8 +1493,8 @@ export default {
    ≥901px 回栏内滚（flex:1+min-height:0+overflow，见 min-width 块） */
 .watch-side-body {
   padding-top: 8px;
-  /* 滚动影替尺：画布色盖片 local 随内容滚走 → 钉在顶缘的 scroll 影显露；
-     回到顶时盖片重新遮住影——边界只在内容压在 tab 下时出现。
+  /* 滚动影叠尺：基座发丝线之外，内容压到 tab 下时再叠一道 scroll 影——
+     画布色盖片 local 随内容滚走 → 钉在顶缘的影显露；回顶时盖片重新遮住。
      盖片须跟该处实际底色 --view-canvas（watch=teal），写 --paper 会漏白缝 */
   background:
     linear-gradient(var(--view-canvas, var(--paper)), var(--view-canvas, var(--paper))) 0 0 / 100% 14px local no-repeat,
