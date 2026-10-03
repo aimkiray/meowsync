@@ -686,13 +686,19 @@ export default {
     // 声明在此（监听挂载点之前）：pokeControls 后声明但回调体惰性求值，无 TDZ
     const onFsKey = () => { if (videoFullscreen.value) pokeControls() }
     // 后台 tab：rAF 冻结→syncMediaVideo 停摆，<video> 自走续播+拉流——
-    // 隐藏即暂停（不卸载：切窗频繁，卸载=全量重缓冲）。回前台经
-    // syncMediaVideo 接回（isPlaying 续播 + 0.45s 漂移校正），声明同 onFsKey 惰性求值
+    // 隐藏即暂停（不卸载：切窗频繁，卸载=全量重缓冲；pause 后 preload 仅
+    // 续到 buffer-ahead 上限，有界）。后台换曲的新挂载也不许起播——
+    // play 分支全部带 hidden 闸；回前台经 syncMediaVideo 接回（isPlaying
+    // 续播 + 0.45s 漂移校正）。可见性迁移=重试点：hidden 期 error 闩的
+    // failed 一并复位，声明同 onFsKey 惰性求值
     const onVis = () => {
       const v = mediaVideoRef.value
-      if (!v) return
-      if (document.hidden) v.pause()
-      else syncMediaVideo()
+      if (!document.hidden) {
+        mediaVideoFailed.value = false
+        syncMediaVideo()
+        return
+      }
+      if (v) v.pause()
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('fullscreenchange', onFullscreenChange)
@@ -883,7 +889,9 @@ export default {
     let mediaPlayTrying = false
     const syncMediaVideo = () => {
       const v = mediaVideoRef.value
-      if (!v || !mediaVideoActive.value || v.error) return
+      // document.hidden 闸：后台 tab 里 rAF 虽停，本函数仍会被 onVis 外的
+      // watcher（isPlaying 翻转等）调到——后台不许 play/seek，回前台由 onVis 接回
+      if (!v || !mediaVideoActive.value || v.error || document.hidden) return
       if (props.isPlaying && v.paused && !mediaPlayTrying) {
         mediaPlayTrying = true
         // play() 在极端旧内核可同步抛错——try 兜底防 mediaPlayTrying 卡死
@@ -910,7 +918,9 @@ export default {
       const align = () => { v.currentTime = props.currentTime }
       if (v.readyState >= 1) align()
       else v.addEventListener('loadedmetadata', align, { once: true })
-      if (props.isPlaying) v.play().catch(() => {})
+      // hidden 闸：后台 tab 里换曲/重挂不许起播——静音视频后台自走=整首白烧
+      // 流+解码；align 照常（seek 静默无流损），回前台由 onVis→syncMediaVideo 续播
+      if (props.isPlaying && !document.hidden) v.play().catch(() => {})
     }, { immediate: true })
 
     const shareSong = async () => {

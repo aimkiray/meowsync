@@ -1576,7 +1576,7 @@ function getTaskArtifactPath(playlistId, songId, kind = 'audio') {
     // bv_/yt_ 任务不回落——UI 提交恒 downloadAudio:true，出现「无 audioPath
     // 有 videoPath」的行只可能是手工 API 构造，拿 mp4 当音频源等于在 watch
     // 页外消费视频档（与「视频只在 watch 页可见」口径冲突）
-    const candidate = t[field] || (kind === 'audio' && FILE_TRACK_ID_RE.test(t.songId) ? t.videoPath : null)
+    const candidate = t[field] || (kind === 'audio' && FILE_TRACK_ID_RE.test(t.songId) ? t.videoPath : null);
     if (candidate && isUnderDownloadDir(candidate) && fs.existsSync(candidate)) {
       return candidate;
     }

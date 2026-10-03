@@ -979,8 +979,9 @@ export default {
         case 'q': case 'Q':
           // 元素全屏期间禁导航——在 top layer 下隐形拆页（watchBack 会
           // 卸载 WatchView 顺带退全屏）；沉浸层开着同理——遮罩下换视图
-          // 用户看不见，关层落在意外页面
-          if (currentSong.value && !isFullscreenPlayerOpen.value
+          // 用户看不见，关层落在意外页面。e.repeat 闸：同 tab 开合语义下
+          // 连打=反复进出 watch 页（视频重解流地址+history 栈灌水）
+          if (currentSong.value && !e.repeat && !isFullscreenPlayerOpen.value
             && !(document.fullscreenElement || document.webkitFullscreenElement)) {
             openWatchPanel('queue')
           }
