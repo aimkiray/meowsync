@@ -19,7 +19,7 @@
  * 'default' 不写属性（:root 基线即默认主题，UI 显示名 retro）；未知/非法 id 一律回落 default。
  */
 import { ref, readonly } from 'vue'
-import { LS_KEYS } from './storage'
+import { LS_KEYS } from './storage.js'
 
 export const THEMES = [
   { id: 'default', label: 'retro', pill: 'retro' },

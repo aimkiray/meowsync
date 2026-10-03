@@ -8,8 +8,8 @@
           :key="t.id"
           class="fb-toast"
           :class="`fb-toast--${t.type}`"
-          @pointerenter="toastHold(t.id, 'pointer')"
-          @pointerleave="toastRelease(t.id, 'pointer')"
+          @pointerenter="toastHold(t.id, 'pointer:' + $event.pointerId)"
+          @pointerleave="toastRelease(t.id, 'pointer:' + $event.pointerId)"
           @focusin="toastHold(t.id, 'focus')"
           @focusout="toastRelease(t.id, 'focus')"
         >

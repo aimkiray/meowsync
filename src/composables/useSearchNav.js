@@ -2,7 +2,7 @@ import { ref, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music'
 import { apiErrorMessage } from '../api/http'
 import { toast } from '../lib/feedback'
-import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl'
+import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl.js'
 import { buildQQSong } from '../lib/external-songs'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
@@ -133,7 +133,7 @@ export function useSearchNav({
     else {
       centerView.value = 'home'
       // 同步地址栏——否则 UI 在首页而 URL 停在 ?view=watch，刷新又回 watch
-      window.history.replaceState(null, '', buildNavUrl())
+      window.history.replaceState(null, '', buildNavUrl().toString())
     }
   }
 

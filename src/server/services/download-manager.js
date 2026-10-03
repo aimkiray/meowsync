@@ -1160,7 +1160,8 @@ function listTasks({ playlistId, queueId, status, standalone } = {}) {
   if (playlistId !== undefined && playlistId !== null && playlistId !== '') {
     const resolved = findExistingPlaylistId(playlistId);
     if (resolved === null) return [];
-    const wantStandalone = standalone === true || standalone === '1' || standalone === 'true';
+    const wantStandalone = standalone === true || standalone === 1
+      || standalone === '1' || standalone === 'true';
     return wantStandalone
       ? downloadTasksRepo.listStandaloneTasksByPlaylist(resolved)
       : downloadTasksRepo.listTasksByPlaylist(resolved);
@@ -1620,6 +1621,7 @@ async function deleteSongFiles(playlistId, songId) {
   for (const task of tasks) retryAfter.delete(task.id);
   const allPaths = [...new Set(tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath]))];
   const deletedFiles = deleteFiles(allPaths);
+  pruneEmptyPlaylistDirs(resolvedPlaylistId); // 与 deleteTask 同口径剪空骨架
 
   return { success: true, deletedFiles };
 }
@@ -1669,6 +1671,7 @@ async function deletePlaylistDownloadedFiles(playlistId) {
     downloadedTasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath])
   )];
   const deletedFiles = deleteFiles(allPaths);
+  pruneEmptyPlaylistDirs(resolvedPlaylistId); // 与 deleteTask 同口径剪空骨架
 
   return {
     success: true,
@@ -1768,13 +1771,23 @@ function pruneEmptyPlaylistDirs(playlistId) {
   const playlistDir = path.join(DOWNLOAD_BASE_DIR, String(playlistId));
   try {
     if (!isUnderDownloadDir(playlistDir)) return;
+    // 在途写者闸：同歌单兄弟任务的锁键持满 processTask 全程——fetch
+    // 等待期 type 目录真空，盲剪会抽走 mkdir→createWriteStream 间隙的
+    // 目录（ENOENT 靠重试自愈但烧 retryCount），有持锁者本轮不剪
+    for (const k of activePaths) {
+      if (k.startsWith(playlistDir + path.sep)) return;
+    }
     for (const sub of ['audio', 'lyrics', 'covers', 'videos']) {
       const subDir = path.join(playlistDir, sub);
-      if (fs.existsSync(subDir) && fs.readdirSync(subDir).length === 0) {
+      // symlink/junction 不剪：Windows 下 rmdirSync 拆的是链接本身——
+      // 用户的目录重定向布置不该被顺手拆掉（reapOrphanFiles 同口径）
+      if (fs.existsSync(subDir) && !fs.lstatSync(subDir).isSymbolicLink()
+          && fs.readdirSync(subDir).length === 0) {
         fs.rmdirSync(subDir);
       }
     }
-    if (fs.existsSync(playlistDir) && fs.readdirSync(playlistDir).length === 0) {
+    if (fs.existsSync(playlistDir) && !fs.lstatSync(playlistDir).isSymbolicLink()
+        && fs.readdirSync(playlistDir).length === 0) {
       fs.rmdirSync(playlistDir);
     }
   } catch {
@@ -2260,5 +2273,9 @@ module.exports = {
   recoverStaleStates,
   reapOrphanFiles,
   shutdownAll,
-  isShuttingDown: () => shuttingDown
+  isShuttingDown: () => shuttingDown,
+  // 测试缝：剪目录的持锁闸只有 activePaths 可注入才能确定性地打——
+  // 生产路径照常走 deleteTask/deleteSongFiles/deletePlaylistDownloadedFiles
+  pruneEmptyPlaylistDirs,
+  activePaths
 };
