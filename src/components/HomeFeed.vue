@@ -152,11 +152,15 @@ export default {
   setup() {
     // 离场滚动记忆：换页即整卸——回首页还停在原货架位置（数据全本地，首帧即完整）
     const feedEl = ref(null)
+    let cancelScrollRestore = null
     onMounted(() => nextTick(() => {
       const m = readScrollMem('home')
-      if (m) restoreScrollTop(feedEl.value, m.top)
+      if (m) cancelScrollRestore = restoreScrollTop(feedEl.value, m.top)
     }))
-    onBeforeUnmount(() => writeScrollMem('home', { top: feedEl.value?.scrollTop ?? 0 }))
+    onBeforeUnmount(() => {
+      cancelScrollRestore?.() // 等待窗内卸载即停轮询
+      writeScrollMem('home', { top: feedEl.value?.scrollTop ?? 0 })
+    })
     return { httpsCover, songArtists, coverSizeUrl, feedEl }
   }
 }

@@ -15,22 +15,24 @@ export const readScrollMem = (key) => mem.get(key) ?? null
 
 // 还位滚动：内容异步灌入时 scrollHeight 尚未长够，直接写 scrollTop 会被
 // 钳 0——轮询到内容够高再落笔；已够高立即写（同步列表零等待）。等待窗内
-// 用户先动滚轮/手指 = 显式意图，放弃还位不抢滚动
+// 用户先动滚轮/手指 = 显式意图，放弃还位不抢滚动。返回取消函数——调用方
+// 在 onBeforeUnmount 调用，避免等待窗内卸载后 interval 对游离节点空转
 export const restoreScrollTop = (el, top, { timeoutMs = 2500 } = {}) => {
-  if (!el || !(top > 0)) return
-  const enough = () => el.scrollHeight >= top + el.clientHeight - 4
-  let iv = null
   const done = () => {
     if (iv) clearInterval(iv)
-    el.removeEventListener('wheel', done)
-    el.removeEventListener('touchstart', done)
     iv = null
+    el?.removeEventListener('wheel', done)
+    el?.removeEventListener('touchstart', done)
   }
-  if (enough()) { el.scrollTop = top; return }
+  let iv = null
+  if (!el || !(top > 0)) return done
+  const enough = () => el.scrollHeight >= top + el.clientHeight - 4
+  if (enough()) { el.scrollTop = top; return done }
   el.addEventListener('wheel', done, { once: true, passive: true })
   el.addEventListener('touchstart', done, { once: true, passive: true })
   iv = setInterval(() => {
     if (enough()) { el.scrollTop = top; done() }
   }, 120)
   setTimeout(done, timeoutMs)
+  return done
 }

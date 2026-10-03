@@ -879,14 +879,17 @@ export default {
     // 键绑歌单身份（换内容不还原）；还原须先把前缀窗物化回原深度，
     // 否则 scrollTop 会被窗高钳在 150 行处
     const scrollMemKey = () => `songs:${props.selectedPlaylist?.id ?? ''}`
+    let cancelScrollRestore = null
     onMounted(() => {
       const m = readScrollMem(scrollMemKey())
       if (!m) return
       ensureRendered((m.count || 0) - 1)
-      nextTick(() => restoreScrollTop(rowsEl.value, m.top))
+      nextTick(() => { cancelScrollRestore = restoreScrollTop(rowsEl.value, m.top) })
     })
-    onBeforeUnmount(() =>
-      writeScrollMem(scrollMemKey(), { top: rowsEl.value?.scrollTop ?? 0, count: renderedCount.value }))
+    onBeforeUnmount(() => {
+      cancelScrollRestore?.() // 等待窗内卸载即停轮询
+      writeScrollMem(scrollMemKey(), { top: rowsEl.value?.scrollTop ?? 0, count: renderedCount.value })
+    })
 
     // 菜单打开的目标歌曲：从全量 songs 里查（不依赖渲染切片）
     const menuSong = computed(() =>

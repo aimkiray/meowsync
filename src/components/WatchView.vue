@@ -453,18 +453,21 @@ export default {
 
     // 离场滚动记忆：换页即整卸——单列页滚 .watch-view、宽屏左栏 .watch-main、
     // 相关栏各自还位。队列/歌词两栏不存：重挂即按当前行重居中（与切 tab
-    // 同律的 centerCurrentRow），存了也会被居中盖掉
+    // 同律的 centerCurrentRow），存了也会被居中盖掉；view 页滚同理——
+    // queue/lyrics tab 下单列态 scrollIntoView 连滚整页，还位只留 related
+    const scrollRestoreCancels = []
     onMounted(() => nextTick(() => {
       for (const [key, el] of [
-        ['watch:view', viewEl.value],
+        ...(props.tab === 'related' ? [['watch:view', viewEl.value]] : []),
         ['watch:main', mainColEl.value],
         ['watch:related', relatedEl.value],
       ]) {
         const m = readScrollMem(key)
-        if (m && el) restoreScrollTop(el, m.top)
+        if (m && el) scrollRestoreCancels.push(restoreScrollTop(el, m.top))
       }
     }))
     onBeforeUnmount(() => {
+      scrollRestoreCancels.forEach(fn => fn?.()) // 等待窗内卸载即停轮询
       writeScrollMem('watch:view', { top: viewEl.value?.scrollTop ?? 0 })
       writeScrollMem('watch:main', { top: mainColEl.value?.scrollTop ?? 0 })
       writeScrollMem('watch:related', { top: relatedEl.value?.scrollTop ?? 0 })
@@ -661,9 +664,15 @@ export default {
       if (props.tab === 'queue') nextTick(() => centerCurrentRow())
     })
     // 歌词异步到稿：暂停态下 currentLyricIndex 不变，其 watcher 不会触发——
-    // 挂载时 tab=lyrics 的居中扑空后恒停在词首，到稿补一次
+    // 挂载时 tab=lyrics 的居中扑空后恒停在词首，到稿补一次。每曲只补一
+    // 次：AI 译文合并会二次重赋值 lyrics（初稿后秒级落地），那时用户
+    // 可能已滚离当前行——无闸再居中等于硬拽
+    let lyricCenteredFor = null
     watch(() => props.lyrics, (l) => {
-      if (props.tab === 'lyrics' && l?.length) nextTick(() => centerCurrentRow())
+      if (props.tab !== 'lyrics' || !l?.length) return
+      if (lyricCenteredFor === props.currentSong?.id) return
+      lyricCenteredFor = props.currentSong?.id
+      nextTick(() => centerCurrentRow())
     })
 
     // 单列态（<901px，与模板 wide: 断点同源）滚动器是 .watch-view 整页——
@@ -763,8 +772,9 @@ export default {
     const videoOn = ref(safeGetLs(LS_KEYS.VIDEO_MODE) !== '0')
     watch(videoOn, v => {
       safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0')
-      // 开视频就是用户最自然的重试入口——复位失败闩重新拉流
-      if (v) mediaVideoFailed.value = false
+      // 开视频就是用户最自然的重试入口——复位失败闩重新拉流；
+      // 自愈预算同刷：手动重试后当 key 仍可再排一次自动重试
+      if (v) { mediaVideoFailed.value = false; mediaRetriedKey = null }
     })
 
     // 元素级全屏锁在封面 wrap 上（不是 video 元素本身）——悬停控制层随
@@ -952,8 +962,11 @@ export default {
         if (seq !== dlVideoSeq) return
         // http 拦截器剥到 body——任务行在 st.data.task；completed 门禁：
         // 非完成态行的 videoPath 打 /file 恒 404（服务端双查 status+existsSync），
-        // 白烧一跳。确认结果无条件回写——命中也刷新、miss 清过期缓存
-        const url = (st?.data?.task?.status === 'completed' && st?.data?.task?.videoPath)
+        // 白烧一跳。filesIntact 是全工件存在性合取——行还在但档被外部删
+        // 的幻影 completed 不再回写死 URL（否则缓存钉住它每趟白烧 404）。
+        // 误伤面：歌词档缺失会把在盘视频档误判 null——回落在线流安全
+        const url = (st?.data?.task?.status === 'completed' && st?.data?.task?.videoPath
+          && st?.data?.task?.filesIntact !== false)
           ? downloadsApi.songFileUrl(plId, song.id, 'video')
           : null
         downloadedVideoUrl.value = url
@@ -995,6 +1008,7 @@ export default {
         && new URL(mediaVideoUrl.value, window.location.href).href !== curSrc) return
       if (downloadedVideoUrl.value && mediaVideoUrl.value === downloadedVideoUrl.value) {
         downloadedVideoUrl.value = null
+        dlVideoCache.delete(mediaVideoKey.value) // 404 过的档别留缓存，下次挂载不再先挂死链
         return
       }
       mediaVideoFailed.value = true
@@ -1048,11 +1062,15 @@ export default {
     const VIDEO_DRIFT_SEC = 0.3 // 唇形可感约 0.1s 起——在可感偏移与校正跳切频率间取中
     let mediaPlayTrying = false
     // play() 在极端旧内核可同步抛错、部分内核不返 promise——统一走带闩封装：
-    // 闩挡同元素并发 play（竞速 abort 报错噪音），finally 保证闩必解
+    // 闩挡同元素并发 play（竞速 abort 报错噪音），finally 保证闩必解。
+    // 身份闸：旧元素被 key 重建/摘除后其迟 settle 的 finally 不能误清新
+    // 元素的闩（新闩由挂载 watcher 自管复位）
     const tryMediaPlay = (v) => {
       mediaPlayTrying = true
       try {
-        Promise.resolve(v.play()).catch(() => {}).finally(() => { mediaPlayTrying = false })
+        Promise.resolve(v.play()).catch(() => {}).finally(() => {
+          if (mediaVideoRef.value === v) mediaPlayTrying = false
+        })
       } catch { mediaPlayTrying = false }
     }
     const syncMediaVideo = () => {
@@ -1064,13 +1082,23 @@ export default {
       // 不戳 play（否则每帧空戳一遍）；seek 目标按时长截断，钉在 duration
       // 的指针不再每帧重 seek 同一值（旧版此处是 seek+play 双风暴）
       const dur = Number.isFinite(v.duration) ? v.duration : Infinity
-      if (props.isPlaying && v.paused && !mediaPlayTrying
-        && !(v.ended && props.currentTime >= dur)) {
+      // 钉在流边界即终态：容器元数据 duration 可比实际流长（尾包缺口），
+      // seekable.end 才是真终点——目标不可达时 UA 钳回的点会永远 |diff|>阈，
+      // 每完成一次 seek 立刻重发下一个（串行空 seek）。缓冲卡顿期画面同样
+      // 钉在边界上，此处不戳 seek 等缓冲续上再跳，顺带降噪
+      const seekEnd = v.seekable?.length ? v.seekable.end(v.seekable.length - 1) : dur
+      // 音频已越过真实流尾且视频钉在流尾（或已 ended）= 终态：不戳 play
+      // （ended 元素 play 会从头重播再 ended，每帧一遍是风暴）、不重发
+      // 不可达 seek。回拖音频到流尾内即解锁（比较基准是 seekEnd 而非
+      // duration——duration 元数据可能虚高）
+      const atTail = props.currentTime >= seekEnd
+        && (v.ended || v.currentTime >= seekEnd - VIDEO_DRIFT_SEC)
+      if (props.isPlaying && v.paused && !mediaPlayTrying && !atTail) {
         tryMediaPlay(v)
       } else if (!props.isPlaying && !v.paused) v.pause()
       const target = Math.min(props.currentTime, dur)
       // v.seeking 中不叠 seek——缓冲卡顿期的校正打进未缓冲段只会再卡
-      if (!v.seeking && Math.abs(v.currentTime - target) > VIDEO_DRIFT_SEC) {
+      if (!v.seeking && !atTail && Math.abs(v.currentTime - target) > VIDEO_DRIFT_SEC) {
         v.currentTime = target
       }
     }

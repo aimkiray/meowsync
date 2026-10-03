@@ -54,7 +54,7 @@ const pageMem = {
 </script>
 
 <script setup>
-import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, onUnmounted, nextTick, watch } from 'vue'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { toast, pixelConfirm } from '../lib/feedback'
 import { downloadsApi } from '../api/downloads'
@@ -101,8 +101,11 @@ const deletingTaskIds = ref([])
 const gridEl = ref(null)
 
 // 卸载时把可复现的数据态回写快照（loading/轮询/序号闸等瞬态不存）；
-// 顺带记外层滚动位（<xl 单列时唯一滚动器）
-onUnmounted(() => {
+// 顺带记外层滚动位（<xl 单列时唯一滚动器）。必须 onBeforeUnmount——
+// 模板 ref 在子树拆除时已 detach，onUnmounted 里 gridEl.value 恒 null
+let cancelScrollRestore = null
+onBeforeUnmount(() => {
+  cancelScrollRestore?.() // 等待窗内卸载即停轮询
   Object.assign(pageMem, {
     queues: queues.value, tasks: tasks.value, standaloneTasks: standaloneTasks.value,
     selectedQueue: selectedQueue.value,
@@ -613,9 +616,14 @@ onMounted(async () => {
   // 回场还位外层滚动（快照数据已先渲一帧，再后台重拉）
   nextTick(() => {
     const m = readScrollMem('downloads')
-    if (m) restoreScrollTop(gridEl.value, m.top)
+    if (m) cancelScrollRestore = restoreScrollTop(gridEl.value, m.top)
   })
   await loadQueues()
+  // 快照恢复的选中态下 tasks/standaloneTasks 也是旧值——立即静默重拉，
+  // 不等首个 pollTick（2s 节拍）才刷新
+  if (selectedQueue.value?.id != null) {
+    void loadTasks(selectedQueue.value.id, { silent: true })
+  }
   startPolling()
   document.addEventListener('visibilitychange', handleVisibilityChange)
 })
