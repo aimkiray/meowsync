@@ -119,11 +119,12 @@
             <div
               v-else-if="remoteMode === 'off'"
               class="pg-menu-head topnav-menu-remote"
+              role="presentation"
               title="添加 ?mode=host 启用远程控制"
             >remote: off</div>
 
             <div role="group" aria-label="主题">
-              <div class="pg-menu-head">主题</div>
+              <div class="pg-menu-head" role="presentation">主题</div>
               <button
                 v-for="t in THEMES" :key="t.id"
                 class="pg-menu-item"
@@ -447,7 +448,8 @@ export default {
     }
 
     const pickCenterView = () => { emit('toggle-center-view'); closeMenu() }
-    const pickTheme = (id) => { setTheme(id); closeMenu() }
+    // 主题切换没有「下一跳」接管焦点——与 Esc 同为解散语义，归还触发键
+    const pickTheme = (id) => { setTheme(id); closeMenu(true) }
     const pickLogout = () => { closeMenu(); logout() }
 
     // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
@@ -464,18 +466,22 @@ export default {
       closeMenu(ae === menuBtn.value || !!ae?.closest?.('#topnav-menu'))
     }
 
+    // 直传 closeMenu 会把 Event 对象塞进 restoreFocus 形参（真事件源→真值
+    // →resize 时强拽焦点）——必须包箭头，同 PlaylistPanel closeOnScroll 注释坑
+    const onResizeClose = () => closeMenu()
+
     onMounted(() => {
       document.addEventListener('pointerdown', onDocPointerDown)
       document.addEventListener('keydown', onMenuKeydown)
       // ≥1472 时 inner 居中、触发键距右缘随视口漂移；resize 菜单位置即过期
-      window.addEventListener('resize', closeMenu)
+      window.addEventListener('resize', onResizeClose)
     })
     onBeforeUnmount(() => {
       clearTimeout(suggestTimer)
       suggestAbort?.abort()
       document.removeEventListener('pointerdown', onDocPointerDown)
       document.removeEventListener('keydown', onMenuKeydown)
-      window.removeEventListener('resize', closeMenu)
+      window.removeEventListener('resize', onResizeClose)
     })
 
     // 登出：作废服务端 session 后整页重载（与登录成功同一收束路径）。
@@ -656,7 +662,7 @@ export default {
   z-index: var(--z-menu);
   background: var(--paper);
   border: var(--hairline);
-  /* 8 条建议 ~300px + 窄屏双行顶栏 ~97px——手机横屏会顶出视口底缘，
+  /* 8 条建议 ~300px + 窄屏双行顶栏 ~93px——手机横屏会顶出视口底缘，
      限高内滚兜底 */
   max-height: calc(100vh - var(--topnav-h, 56px) - 8px);
   max-height: calc(100dvh - var(--topnav-h, 56px) - 8px);

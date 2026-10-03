@@ -928,7 +928,8 @@ export default {
       }
       const el = e.target
       if (e.defaultPrevented) return // 组件已处理（如 role=button 行的 space.prevent）
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable
+        || el.closest?.('[role="menu"]'))) return // 菜单内焦点：↑↓/字母键属于菜单语义，不穿透全局热键
       if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return
       switch (e.key) {
         case ' ':
