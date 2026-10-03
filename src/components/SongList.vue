@@ -107,6 +107,7 @@
     </div>
 
     <div v-else ref="rowsEl" class="flex-1 min-h-0 overflow-y-auto song-rows" @dragleave="onRowsDragLeave">
+      <!-- 拖拽监听器只在排序态挂载（v-on 对象）：常挂=每行 4 个永不触发的死监听 -->
       <div
         v-for="(song, index) in displayRows"
         :key="song.id"
@@ -1072,6 +1073,7 @@ export default {
       reorderMode.value = false
       dragIndex.value = -1
       dragOverIndex.value = -1
+      dragSong = null // 程序化退出无 dragend 兜底，拖中快照一并清
       if (wasActive && sortBtn.value?.isConnected) {
         sortBtn.value.focus({ preventScroll: true })
       }

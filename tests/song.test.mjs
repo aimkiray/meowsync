@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   UPLOADS_PLAYLIST_ID, fileArtifactUrl, isVipSong, isVipUnplayable,
-  songArtists, songCoverUrl, visibleSongs, songSource, songSourceName,
+  songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, visibleSongs,
+  songSource, songSourceName,
   songSourceUrl, externalArtistName, externalCoverUrl, applyTrackOverrides,
   isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId
 } from '../src/lib/song.js'
@@ -149,4 +150,58 @@ test('node 环境契约：resolveApiBaseUrl 回落空串，裸值调用不炸', 
   assert.equal(resolveApiBaseUrl(), '')
   assert.equal(songSource(null), null)        // 裸值经 ?. 链安全
   assert.equal(songSource(undefined), null)
+})
+
+test('coverSizeUrl：四 provider 缩放语法 + 幂等 + 放行面', () => {
+  // 网易云 ?param={w}y{h}
+  assert.equal(coverSizeUrl('http://p1.music.126.net/a/b.jpg', 96),
+    'http://p1.music.126.net/a/b.jpg?param=96y96')
+  assert.equal(coverSizeUrl('https://p2.music.126.net/a/b.jpg?x=1', 96),
+    'https://p2.music.126.net/a/b.jpg?x=1&param=96y96')
+  // 已带 param 改写值而非追加（first-wins 未定义语义兜底）
+  assert.equal(coverSizeUrl('https://p1.music.126.net/a/b.jpg?param=200y200', 96),
+    'https://p1.music.126.net/a/b.jpg?param=96y96')
+  // 协议相对与大小写域
+  assert.equal(coverSizeUrl('//p1.MUSIC.126.NET/x.jpg', 80),
+    '//p1.MUSIC.126.NET/x.jpg?param=80y80')
+  // B站 @ 后缀挂 path（query 之前）；已缩放幂等
+  assert.equal(coverSizeUrl('https://i0.hdslb.com/bfs/archive/x.jpg', 96),
+    'https://i0.hdslb.com/bfs/archive/x.jpg@96w_96h_1c.jpg')
+  assert.equal(coverSizeUrl('https://i0.hdslb.com/bfs/archive/x.jpg?f=1', 96),
+    'https://i0.hdslb.com/bfs/archive/x.jpg@96w_96h_1c.jpg?f=1')
+  assert.equal(coverSizeUrl('https://i0.hdslb.com/bfs/archive/x.jpg@300w_300h_1c.jpg', 96),
+    'https://i0.hdslb.com/bfs/archive/x.jpg@300w_300h_1c.jpg')
+  // YouTube 档位名归一到 mq；mq/default 幂等
+  assert.equal(coverSizeUrl('https://i.ytimg.com/vi/a/hqdefault.jpg', 96),
+    'https://i.ytimg.com/vi/a/mqdefault.jpg')
+  assert.equal(coverSizeUrl('https://i.ytimg.com/vi/a/maxresdefault.jpg', 96),
+    'https://i.ytimg.com/vi/a/mqdefault.jpg')
+  assert.equal(coverSizeUrl('https://i.ytimg.com/vi/a/mqdefault.jpg', 96),
+    'https://i.ytimg.com/vi/a/mqdefault.jpg')
+  // QQ T002R 段 px 随行；非 T002R（T001R/qpic）放行
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 240),
+    'https://y.gtimg.cn/music/photo_new/T002R240x240M000x.jpg')
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T001R300x300M000x.jpg', 96),
+    'https://y.gtimg.cn/music/photo_new/T001R300x300M000x.jpg')
+  // 放行面：file_ 端点 / data: / blob: / 未知域 / 空值
+  const fileCov = fileArtifactUrl('file_abc12345', 'cover', 7)
+  assert.equal(coverSizeUrl(fileCov, 96), fileCov)
+  assert.equal(coverSizeUrl('data:image/png;base64,AAA', 96), 'data:image/png;base64,AAA')
+  assert.equal(coverSizeUrl('https://p.qpic.cn/music_cover/x/150.jpg', 96),
+    'https://p.qpic.cn/music_cover/x/150.jpg')
+  assert.equal(coverSizeUrl('', 96), '')
+  assert.equal(coverSizeUrl(null, 96), '')
+  assert.equal(coverSizeUrl(undefined, 96), '')
+})
+
+test('songThumbUrl：file_ 曲放行原图、provider 曲走缩略、空曲空串', () => {
+  // file_ 上传封面没有服务端缩放通道——原样经 file 端点出（量小）
+  assert.equal(songThumbUrl(FILE_OBJ, 96), fileArtifactUrl('file_abc12345', 'cover', 3))
+  // provider 曲按 al.picUrl 走对应 CDN 语法
+  const ne = { id: '1', al: { picUrl: 'https://p1.music.126.net/abc/x.jpg' } }
+  assert.equal(songThumbUrl(ne, 96), 'https://p1.music.126.net/abc/x.jpg?param=96y96')
+  const bv = { id: 'bv_BV1xx411c7mD', al: { picUrl: 'https://i0.hdslb.com/bfs/a.jpg' } }
+  assert.equal(songThumbUrl(bv, 80), 'https://i0.hdslb.com/bfs/a.jpg@80w_80h_1c.jpg')
+  assert.equal(songThumbUrl(null, 96), '')
+  assert.equal(songThumbUrl({ id: '1' }, 96), '') // 无封面字段
 })

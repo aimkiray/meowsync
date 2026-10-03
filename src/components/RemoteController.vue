@@ -11,7 +11,7 @@
       <div class="rc-cover-wrap">
         <img
           v-if="songCoverUrl(state.currentSong)"
-          :src="httpsCover(songThumbUrl(state.currentSong, 96))"
+          :src="httpsCover(songThumbUrl(state.currentSong, 480))"
           :alt="state.currentSong?.name || '专辑封面'"
           class="rc-cover"
           :class="{ 'playing-animation': state.isPlaying }"

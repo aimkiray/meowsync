@@ -62,24 +62,28 @@ export function songCoverUrl(song) {
 export function coverSizeUrl(url, px = 96) {
   const s = String(url || '')
   if (!s) return ''
-  // 网易云 p*.music.126.net：?param={w}y{h} 服务端裁剪缩放
+  // 网易云 p*.music.126.net：?param={w}y{h} 服务端裁剪缩放；
+  // 上游偶发已带 param 的 URL——重复键是 first-wins 未定义，改写其值而非追加
   if (/music\.126\.net/i.test(s)) {
-    return `${s}${s.includes('?') ? '&' : '?'}param=${px}y${px}`
+    return /[?&]param=\d+y\d+/i.test(s)
+      ? s.replace(/([?&]param=)\d+y\d+/i, `$1${px}y${px}`)
+      : `${s}${s.includes('?') ? '&' : '?'}param=${px}y${px}`
   }
-  // B站 i*.hdslb.com：@ 后缀挂在 path 尾（在 query 之前），_1c 居中裁方
+  // B站 i*.hdslb.com：@ 后缀挂在 path 尾（在 query 之前），_1c 居中裁方；
+  // .jpg 服务端转码兜底——裸 .webp 在老内核（pre-Big-Sur Safari）直接白图
   if (/hdslb\.com/i.test(s)) {
     if (/@\d+w_/.test(s)) return s
     const qi = s.indexOf('?')
     const path = qi === -1 ? s : s.slice(0, qi)
-    return `${path}@${px}w_${px}h_1c.webp${qi === -1 ? '' : s.slice(qi)}`
+    return `${path}@${px}w_${px}h_1c.jpg${qi === -1 ? '' : s.slice(qi)}`
   }
   // YouTube i.ytimg.com：default/mq/hq/maxres 是固定档位名，降档到 mq
   if (/i\.ytimg\.com/i.test(s)) {
     return s.replace(/(?:maxres|sd|hq)default/i, 'mqdefault')
   }
-  // QQ y.gtimg.cn：T002R{w}x{h} 尺寸嵌在路径段
+  // QQ y.gtimg.cn：T002R{w}x{h} 尺寸嵌在路径段（p.qpic.cn 无公开缩放通道，放行）
   if (/y\.gtimg\.cn/i.test(s)) {
-    return /T002R\d+x\d+/i.test(s) ? s.replace(/T002R\d+x\d+/i, 'T002R150x150') : s
+    return /T002R\d+x\d+/i.test(s) ? s.replace(/T002R\d+x\d+/i, `T002R${px}x${px}`) : s
   }
   return s
 }
