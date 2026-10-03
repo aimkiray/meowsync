@@ -1,7 +1,7 @@
 <template>
   <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
-  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden">
+  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
     <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
@@ -603,6 +603,7 @@ export default {
       if (t === 'related' && relatedFor !== props.currentSong?.id) loadRelated()
       // 切到队列/歌词时把当前行滚进视野（与原抽屉一致）
       if (t === 'queue' || t === 'lyrics') nextTick(centerCurrentRow)
+      if (t === 'lyrics') lyricFollowPausedUntil = 0
     })
     watch(() => props.currentSong?.id, () => {
       if (props.tab === 'related') loadRelated()
@@ -640,6 +641,18 @@ export default {
       const mid = v.top + v.height / 2
       return r.top <= mid && r.bottom >= mid
     }
+    // 手动滑动后暂停自动跟随：手指滑动/滚轮期间及之后 4s 内不抢滚动——
+    // 用户往回翻或往后看歌词时不被下一行拽回。单列态整页都是歌词的滚动器，
+    // 页内任意处滑动都算；宽屏只认歌词栏内的滑动（左栏/队列滚动不影响歌词）。
+    // 轻点不产生 touchmove，不暂停；切到歌词 tab 是显式请求，清掉暂停
+    const LYRIC_FOLLOW_PAUSE_MS = 4000
+    let lyricFollowPausedUntil = 0
+    const wideMq = window.matchMedia('(min-width: 901px)')
+    const pauseLyricFollow = (e) => {
+      if (wideMq.matches && !lyricContainer.value?.contains(e.target)) return
+      lyricFollowPausedUntil = Date.now() + LYRIC_FOLLOW_PAUSE_MS
+    }
+    const lyricFollowPaused = () => Date.now() < lyricFollowPausedUntil
 
     // ── 歌词/队列定位滚动 ──
     const centerCurrentRow = () => {
@@ -658,14 +671,14 @@ export default {
     watch(() => props.currentLyricIndex, async (i) => {
       if (props.tab !== 'lyrics' || i < 0) return
       await nextTick()
-      if (!lyricsFollowable()) return
+      if (lyricFollowPaused() || !lyricsFollowable()) return
       const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
       scrollLyricIntoCenter(i, smooth)
     })
 
     // 字号变化全列重排——不等下一 tick 就重居中当前行，长间奏不空屏
     watch(lyricFontSize, () => nextTick(() => {
-      if (props.tab === 'lyrics' && props.currentLyricIndex >= 0 && lyricsFollowable()) {
+      if (props.tab === 'lyrics' && props.currentLyricIndex >= 0 && !lyricFollowPaused() && lyricsFollowable()) {
         scrollLyricIntoCenter(props.currentLyricIndex, false)
       }
     }))
@@ -1027,7 +1040,8 @@ export default {
       mediaVideoActive,
       mediaVideoKey,
       mediaVideoUrl,
-      onMediaVideoError
+      onMediaVideoError,
+      pauseLyricFollow
     }
   }
 }
