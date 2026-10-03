@@ -49,9 +49,10 @@
           <div class="grid-card-cover">
             <img
               v-if="pl.coverImgUrl"
-              :src="httpsCover(pl.coverImgUrl)"
+              :src="httpsCover(coverSizeUrl(pl.coverImgUrl, 320))"
               :alt="pl.name"
               loading="lazy"
+              decoding="async"
             />
             <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
           </div>
@@ -84,9 +85,10 @@
           <div class="grid-card-cover">
             <img
               v-if="al.picUrl"
-              :src="httpsCover(al.picUrl)"
+              :src="httpsCover(coverSizeUrl(al.picUrl, 320))"
               :alt="al.name"
               loading="lazy"
+              decoding="async"
             />
             <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
           </div>
@@ -107,7 +109,7 @@
 
 <script>
 import { httpsCover } from '../lib/url'
-import { songArtists, songCoverUrl } from '../lib/song'
+import { songArtists, songCoverUrl, coverSizeUrl } from '../lib/song'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -146,7 +148,7 @@ export default {
     }
   },
   setup() {
-    return { httpsCover, songArtists }
+    return { httpsCover, songArtists, coverSizeUrl }
   }
 }
 </script>

@@ -42,9 +42,11 @@
           <div class="pl-cover-wrap">
             <img
               v-if="playlist.coverImgUrl"
-              :src="httpsCover(playlist.coverImgUrl)"
+              :src="httpsCover(coverSizeUrl(playlist.coverImgUrl, 96))"
               :alt="playlist.name"
               class="pl-cover"
+              loading="lazy"
+              decoding="async"
             />
             <div v-else class="pl-cover pl-cover--fallback"><PixelIcon name="note" :size="16" /></div>
             <!-- 悬停 ▶ 直接播放整个歌单 -->
@@ -160,7 +162,7 @@ import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
 import { copyText, shareOrCopy, playlistShareUrl, mixShareIds, isEmptyMixShareUrl } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
-import { isLocalPlaylistId, isSingleSongShellId } from '../lib/song'
+import { isLocalPlaylistId, isSingleSongShellId, coverSizeUrl } from '../lib/song'
 import { isNeteasePlaylist } from '../shared/predicates.js'
 import { toast, pixelConfirm } from '../lib/feedback'
 import PixelIcon from './PixelIcon.vue'
@@ -482,7 +484,8 @@ export default {
        isShareShell,
        isNeteasePlaylist,
        getMenuPosition,
-       httpsCover
+       httpsCover,
+       coverSizeUrl,
      }
   }
 }

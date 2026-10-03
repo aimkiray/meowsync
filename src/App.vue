@@ -321,7 +321,7 @@
               <img
                 v-if="song.al?.picUrl"
                 class="asp-cover"
-                :src="httpsCover(song.al.picUrl)"
+                :src="httpsCover(coverSizeUrl(song.al.picUrl, 80))"
                 alt=""
                 loading="lazy"
               />
@@ -409,7 +409,7 @@ import HomeFeed from './components/HomeFeed.vue'
 import SongList from './components/SongList.vue'
 import SongFormDialog from './components/SongFormDialog.vue'
 import { uploadFile, deleteUploadedSong } from './api/uploads'
-import { isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId } from './lib/song'
+import { isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, coverSizeUrl } from './lib/song'
 import WatchView from './components/WatchView.vue'
 import FeedbackHost from './components/FeedbackHost.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
@@ -1241,7 +1241,8 @@ export default {
       moveSongInPlaylist,
       groupSongsByArtist,
       syncPlaylist,
-      httpsCover
+      httpsCover,
+      coverSizeUrl
     }
   }
 }
