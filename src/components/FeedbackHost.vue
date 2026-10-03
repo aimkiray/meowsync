@@ -71,9 +71,12 @@ export default {
     const answer = (ok) => resolveConfirm(ok)
 
     // 动作键：执行回调后无论成败都回收 toast——动作语义是"响应即跳转"，
-    // 失败路径（导航被拦等）由目标侧自行交代，挂着的 toast 没有价值
+    // 失败路径（导航被拦等）由目标侧自行交代，挂着的 toast 没有价值。
+    // onAction 按同步语义设计——返回 Promise 的 rejection 只兜 noise 不交代
     const runToastAction = (t) => {
-      try { t.action?.onAction?.() } finally { toastDismiss(t.id) }
+      try {
+        Promise.resolve(t.action?.onAction?.()).catch(() => {})
+      } finally { toastDismiss(t.id) }
     }
 
     // 模态内焦点循环——两个按钮间往复，不让 Tab 逃出去点背景页
@@ -145,7 +148,7 @@ export default {
   cursor: pointer;
 }
 
-.fb-toast-action:hover {
+.fb-toast-action:hover:not(:disabled) {
   background: var(--ink);
   color: var(--paper);
 }

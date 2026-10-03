@@ -45,6 +45,19 @@ export function queueProgress(queue) {
   return Math.min(100, Math.round((queue.completedTasks / queue.totalTasks) * 100))
 }
 
+// 深链预选挑队列：一歌单可有多条兄弟队列（终态壳收养未净）——
+// running 优先，否则取 id 最新行。侧栏歌单 id（数字/local_pl_*）经 String 归一
+export function pickQueueForPlaylist(queues, sidebarPlaylistId) {
+  if (sidebarPlaylistId == null || !Array.isArray(queues)) return null
+  const pl = String(sidebarPlaylistId)
+  const matches = queues.filter(
+    queue => queue?.neteasePlaylistId != null && String(queue.neteasePlaylistId) === pl
+  )
+  if (!matches.length) return null
+  return matches.find(queue => queue.status === 'running')
+    ?? matches.reduce((latest, queue) => (queue.id > latest.id ? queue : latest))
+}
+
 // 状态过滤 select 的选项单：标签与 QUEUE_STATUS_META 同源（第四处抄写收编），
 // 顺序按交互习惯排——活跃态在前。加/改状态只需动 META 表与这里的顺序数组
 export const queueStatusFilterOptions = [

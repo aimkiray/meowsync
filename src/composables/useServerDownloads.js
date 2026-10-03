@@ -219,14 +219,14 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
             }
             // 任务行被外部删掉（管理面板清理）：没有可等的目标，快速退出
             if (stData && stData.task === null) {
-              throw new Error('下载任务已不存在（可能在下载管理中被清理）')
+              throw new Error('下载任务已不存在（可能在下载页中被清理）')
             }
           }
           // 用户已切走歌单：静默结束（状态不属于当前视图，不该弹窗打扰）
           if (!stillCurrent()) return
           if (terminal !== 'completed') {
             // 非失败语义的提示单独提示——混进"下载失败:"前缀是误导
-            toast('下载仍在后台进行中，可稍后在下载管理里查看结果')
+            toast('下载仍在后台进行中，可稍后在下载页里查看结果')
             return
           }
         }

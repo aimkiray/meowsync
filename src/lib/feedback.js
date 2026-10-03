@@ -2,7 +2,8 @@ import { reactive } from 'vue'
 import { glitchBurst } from './theme.js'
 
 // 全局反馈服务：pixel-toast（轻提示）+ pixel-confirm（确认框）。
-// 宿主组件 FeedbackHost.vue 挂在 App 根；业务代码只 import 这两个函数。
+// 宿主组件 FeedbackHost.vue 挂在 App 根；业务侧只用 toast/pixelConfirm
+// （toastDismiss 是手动回收通道，长驻 toast 完成时才需要）。
 // error/danger 事件顺带推进 glitch 世代计数——GlitchText 实例在
 // glitch 主题下同代 burst（张力表盘语义，其他主题下为零成本 no-op）
 const state = reactive({
@@ -15,7 +16,9 @@ let toastSeq = 0
 // 返回 toast id 供 toastDismiss 手动回收——长驻进度 toast（外部导入
 // 最坏分钟级）在完成后需要立即退场，不能挂着等超时。
 // action: { label, onAction }——带操作入口的 toast（"查看进度"类跳转），
-// 默认驻留翻倍到 6s 保证用户读得完点得上；点动作后由宿主回收
+// 默认驻留翻倍到 6s 保证用户读得完点得上；点动作后由宿主回收。
+// 契约：action 必须是第 4 实参，duration 用 null 占位取默认——
+// 误放第 3 参会被当毫秒值 NaN→0ms 立即消失且 action 静默不渲染
 export function toast(text, type = 'info', duration, action = null) {
   if (type === 'error') glitchBurst()
   const id = ++toastSeq

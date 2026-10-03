@@ -48,6 +48,9 @@ export function useSearchNav({
   // 等 DownloadsPanel 挂载再读 location 早已没有 pl。
   // 此后只被「查看进度」导航与 popstate 回放更新，面板消费后自行一次性预选
   const downloadsPl = ref(initialView === 'downloads' ? urlParams.get('pl') : null)
+  // 意图序号：同一歌单再次点「查看进度」时值不变、prop watcher 不 fire——
+  // 序号单调递增把同值重发穿透给面板（popstate 回放不 bump，靠 pl 变化区分）
+  const downloadsPlSeq = ref(0)
 
   // 导航 URL 构造：push 与初始化 normalize 共用，保证 pl 语义一致。
   // playlist 显式传入——调用处先 push 再 selectPlaylist，读 selectedPlaylist
@@ -177,6 +180,7 @@ export function useSearchNav({
   // 快照落地后按 neteasePlaylistId === pl 匹配队列并选中
   const openDownloadsForPlaylist = (playlistId) => {
     downloadsPl.value = playlistId != null ? String(playlistId) : null
+    downloadsPlSeq.value += 1 // 同 pl 重发也要穿透——序号是意图的新鲜度戳
     centerView.value = 'downloads'
     sidebarOpen.value = false // 移动端抽屉下点进来也要落主区
     pushNavState()
@@ -370,7 +374,7 @@ export function useSearchNav({
     // 导航
     buildNavUrl, pushNavState, applyUrlNav, normalizeNavEntry,
     navHome, closeSearchView, toggleCenterView, watchBack,
-    downloadsPl, openDownloadsForPlaylist,
+    downloadsPl, downloadsPlSeq, openDownloadsForPlaylist,
     enterWatch, openWatchPanel,
     // 打开动作
     selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,

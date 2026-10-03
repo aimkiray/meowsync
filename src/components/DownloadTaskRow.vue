@@ -52,9 +52,9 @@
       <div v-else-if="task.status === 'completed'" class="dtr-done">
         <PixelIcon name="check" :size="11" />下载完成喵
       </div>
-      <!-- standalone 行的删除入口：downloading 态服务端 409 拒删——
-           只在非进行中露出，失败路径也有错误 toast 兜底 -->
-      <div v-if="deletable && task.status !== 'downloading'" class="dtr-actions">
+      <!-- standalone 行的删除入口：downloading/pending 都藏——pending 的
+           standalone 多在退避协程里（standaloneRunning），服务端一样 409 -->
+      <div v-if="deletable && task.status !== 'downloading' && task.status !== 'pending'" class="dtr-actions">
         <button
           class="ink-btn ink-btn--ghost ink-btn--sm dtr-del-btn"
           :disabled="deleting"

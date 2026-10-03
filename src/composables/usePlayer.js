@@ -760,7 +760,9 @@ export function usePlayer({
           const pl = (selectedPlaylist.value && String(selectedPlaylist.value.id) === String(playlistId))
             ? selectedPlaylist.value
             : userPlaylists.value.find(p => String(p.id) === String(playlistId))
-          // 仅 local_pl_* 可镜像——数字/壳 id 会被服务端形态闸直接 400，省一跳
+          // 仅本地 id（local_pl_*/saved_queue_）可镜像——数字 id 会被服务端
+          // 形态闸 400；single_song_ 壳虽过 isLocalPlaylistId 但无服务端
+          // 镜像语义，会白跑一次 400 由 catch 吞掉（一跳 vs 判定成本，放行）
           if (pl && isLocalPlaylistId(pl.id)) await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
           const submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, { bitrate: 320000 })
           downloaded = submitted?.data?.status === 'completed'
