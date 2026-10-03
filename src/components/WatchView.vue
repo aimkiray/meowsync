@@ -95,12 +95,14 @@
             rel="noopener noreferrer"
             :title="`回源：在${sourceName}打开原页`"
           ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
-          <!-- 音画切换对有视频能力的外部导入曲出现；关闭即只拉音频流省流量。
-               键不能对「仅可下载」档隐藏——它是探测已下载视频的入口；无可放源时
-               靠 title 提示降级（点按只会重探一次，探测无果视觉不变） -->
+          <!-- 音画切换对「可能有视频」的曲出现；关闭即只拉音频流省流量。
+               bv/yt 按 provider 存在性出键（与 mediaVideoKey 同律）——导入标记
+               可能被裁/老数据缺标，盘上躺着档的曲也要能切回音频、VIDEO_MODE=0
+               的用户也要有入口开视频重探；file_ 仍按 hasVideo（上传曲的标记
+               即工件真相，探测链对它关闭）。无可放源时靠 title 提示降级
+               （探测无果视觉不变） -->
           <button
-            v-if="currentSong?.bilibili?.hasVideo || currentSong?.bilibili?.hasDownloadableVideo
-              || currentSong?.youtube?.hasVideo || currentSong?.youtube?.hasDownloadableVideo
+            v-if="currentSong?.bilibili?.bvid || currentSong?.youtube?.videoId
               || currentSong?.file?.hasVideo"
             class="ink-btn ink-btn--ghost watch-action"
             :class="{ 'watch-action--on': videoOn }"
@@ -773,8 +775,8 @@ export default {
     watch(videoOn, v => {
       safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0')
       // 开视频就是用户最自然的重试入口——复位失败闩重新拉流；
-      // 自愈预算同刷：手动重试后当 key 仍可再排一次自动重试
-      if (v) { mediaVideoFailed.value = false; mediaRetriedKey = null }
+      // 自愈预算与档重探戳同刷：手动重试后当 key 可再排一次自动重试/重探
+      if (v) { mediaVideoFailed.value = false; mediaRetriedKey = null; dlReprobedKey = null }
     })
 
     // 元素级全屏锁在封面 wrap 上（不是 video 元素本身）——悬停控制层随

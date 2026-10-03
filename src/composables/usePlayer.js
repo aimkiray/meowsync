@@ -11,7 +11,7 @@ import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
 import { formatTime } from '../lib/format.js'
 import { toast } from '../lib/feedback.js'
 import { glitchBurst } from '../lib/theme.js'
-import { httpsCover } from '../lib/url.js'
+import { httpsCover, isResolvableTrackId } from '../lib/url.js'
 import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song.js'
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
@@ -513,10 +513,13 @@ export function usePlayer({
         // 本地已下载音频工件优先于在线流（与 watch 页视频档同律）：盘上
         // 有档就不打上游玩一遍。audioReady 跨歌单寻址——暂存/搜索队列或
         // 别单借源的播放没有归属上下文也能命中，回带的 audioPlaylistId
-        // 是 /file 寻址键。_localTried 是本地档解码失败后的回落戳——
-        // 跳过探测不重蹈同一份坏档；_localFile 是兜底链显式钉档，不探
+        // 是 /file 寻址键。_localTried 是本地档解码失败后的回落戳（值=
+        // 失败档的寻址歌单，真值即可跳过探测）——不重蹈同一份坏档；
+        // _localFile 是兜底链显式钉档，不探。
+        // isResolvableTrackId 即服务端下载白名单（数字/qq_/bv_/yt_）——
+        // 不可能有任务行的 id 形态不白打探测
         let localPlId = options._localFile ?? null
-        if (localPlId === null && !isFileTrackId(song.id) && !options._localTried) {
+        if (localPlId === null && isResolvableTrackId(song.id) && !options._localTried) {
           const plHint = playingPlaylistId.value || selectedPlaylist.value?.id || null
           const st = await downloadsApi.getSongDownloadStatus(plHint, song.id, abortSignal).catch(() => null)
           if (abortSignal.aborted || currentPlayingId !== song.id) return
@@ -654,7 +657,9 @@ export function usePlayer({
               console.log('🔁 本地已下载档加载失败，回落在线流:', song.name)
               clearHowlWatchdog()
               if (howl === newHowl) howl = null
-              playSong(song, { ...options, _localTried: true, preserveContext: true })
+              // _localTried 捎带失败档的寻址歌单：playDownloadedCopy 凭它避开
+              // 再钉同一份坏档（真值语义不变——探测门照常跳过）
+              playSong(song, { ...options, _localTried: localPlId, preserveContext: true })
               return
             }
             // 流地址失效自愈：vault token 随服务重启蒸发（404）/上游签名
@@ -786,7 +791,17 @@ export function usePlayer({
         // 寻址回带命中行的 audioPlaylistId 作 /file 寻址键（暂存/搜索
         // 队列的播放没有归属单也能找到别单的档）
         const st = await downloadsApi.getSongDownloadStatus(playlistId, song.id).catch(() => null)
-        let audioPlId = st?.data?.audioReady === true ? st.data.audioPlaylistId : null
+        // 等状态期间用户切了歌：静默弃——不得再落 toast/镜像/真提交下载任务
+        // 这些副作用（下载任务最长跑几分钟，没人等的提交是纯浪费）
+        if (currentPlayingId !== song.id) return
+        // audioPlaylistId != null 闸与播放探测同口径：audioReady 为真但寻址键
+        // 缺席时按「没档」走提交下载路径，绝不能把 undefined 钉进 _localFile
+        // （undefined 的 _localFile 等于没钉——在线链再败会无限回环本函数）。
+        // _localTried 命中的同一行档不重钉——刚败过的坏档直连只会再败一次，
+        // 转交提交下载路径还有重下/别单档自愈的机会
+        let audioPlId = st?.data?.audioReady === true && st.data.audioPlaylistId != null
+          && st.data.audioPlaylistId !== options._localTried
+          ? st.data.audioPlaylistId : null
         if (audioPlId === null) {
           toast('在线源不可用，先下载到服务器再播…', 'info')
           // 未镜像的本地单先补镜像（幂等：内容签名未变时服务端直接短路返回）
