@@ -792,9 +792,10 @@
 </style>
 
 <script>
-import { computed, ref, onBeforeUnmount, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
 import { useServerDownloads } from '../composables/useServerDownloads.js'
+import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -866,13 +867,26 @@ export default {
     const rowsEl = ref(null)
     const {
       rows: pagedRows, hasMore: pgHasMore, renderedCount,
-      loadMore: loadMoreRows, bindSentinel,
+      loadMore: loadMoreRows, ensureRendered, bindSentinel,
     } = usePagedList({
       source: filteredSongs,
       pageSize: 150,
       resetWhen: () => props.selectedPlaylist?.id,
       scrollRoot: () => rowsEl.value,
     })
+
+    // 离场滚动记忆：点歌进 watch 即整卸——回来还在原行附近，不塌回顶部。
+    // 键绑歌单身份（换内容不还原）；还原须先把前缀窗物化回原深度，
+    // 否则 scrollTop 会被窗高钳在 150 行处
+    const scrollMemKey = () => `songs:${props.selectedPlaylist?.id ?? ''}`
+    onMounted(() => {
+      const m = readScrollMem(scrollMemKey())
+      if (!m) return
+      ensureRendered((m.count || 0) - 1)
+      nextTick(() => restoreScrollTop(rowsEl.value, m.top))
+    })
+    onBeforeUnmount(() =>
+      writeScrollMem(scrollMemKey(), { top: rowsEl.value?.scrollTop ?? 0, count: renderedCount.value }))
 
     // 菜单打开的目标歌曲：从全量 songs 里查（不依赖渲染切片）
     const menuSong = computed(() =>

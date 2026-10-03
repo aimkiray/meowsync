@@ -1,7 +1,7 @@
 <template>
   <!-- 首页发现流（白纸画布）：最近播放 chips + 最近歌单/专辑横向货架。
        货架全部由本地播放历史派生，零网络请求。页脚版本戳收版（print-grid 签名） -->
-  <div class="home-feed">
+  <div ref="feedEl" class="home-feed">
     <header class="home-head">
       <p class="pg-label">home · discover</p>
       <h2 class="home-title" data-nosnippet><GlitchText text="发现音乐" /></h2>
@@ -108,7 +108,9 @@
 </template>
 
 <script>
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { httpsCover } from '../lib/url'
+import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { songArtists, songCoverUrl, coverSizeUrl } from '../lib/song'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
@@ -148,7 +150,14 @@ export default {
     }
   },
   setup() {
-    return { httpsCover, songArtists, coverSizeUrl }
+    // 离场滚动记忆：换页即整卸——回首页还停在原货架位置（数据全本地，首帧即完整）
+    const feedEl = ref(null)
+    onMounted(() => nextTick(() => {
+      const m = readScrollMem('home')
+      if (m) restoreScrollTop(feedEl.value, m.top)
+    }))
+    onBeforeUnmount(() => writeScrollMem('home', { top: feedEl.value?.scrollTop ?? 0 }))
+    return { httpsCover, songArtists, coverSizeUrl, feedEl }
   }
 }
 </script>

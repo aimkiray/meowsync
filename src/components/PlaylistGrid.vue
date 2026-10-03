@@ -163,8 +163,9 @@
 </template>
 
 <script>
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
+import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { shareOrCopy, playlistShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
@@ -270,7 +271,7 @@ export default {
     const wrapEl = ref(null)
     const {
       rows: pagedResults, hasMore: gridHasMore, renderedCount: gridRendered,
-      loadMore: loadMoreGrid, bindSentinel,
+      loadMore: loadMoreGrid, ensureRendered: ensureGridRendered, bindSentinel,
     } = usePagedList({
       source: computed(() => props.results),
       pageSize: 40,
@@ -285,13 +286,29 @@ export default {
     // 届时要换显式身份键（searchQuery/搜索序号）
     const {
       rows: pagedSongs, hasMore: songHasMore, renderedCount: songRendered,
-      loadMore: loadMoreSongs, bindSentinel: bindSongSentinel,
+      loadMore: loadMoreSongs, ensureRendered: ensureSongRendered, bindSentinel: bindSongSentinel,
     } = usePagedList({
       source: computed(() => props.songs),
       pageSize: 100,
       resetWhen: () => props.songs[0]?.id,
       scrollRoot: () => wrapEl.value,
     })
+
+    // 离场滚动记忆：搜索结果数据在 nav 层不丢，丢的是滚动位与两个前缀窗——
+    // 重挂先把两窗物化回各自深度再还 scrollTop，否则被窗高钳在首页处
+    const SEARCH_SCROLL_KEY = 'search-grid'
+    onMounted(() => {
+      const m = readScrollMem(SEARCH_SCROLL_KEY)
+      if (!m) return
+      ensureGridRendered((m.grid || 0) - 1)
+      ensureSongRendered((m.songs || 0) - 1)
+      nextTick(() => restoreScrollTop(wrapEl.value, m.top))
+    })
+    onBeforeUnmount(() => writeScrollMem(SEARCH_SCROLL_KEY, {
+      top: wrapEl.value?.scrollTop ?? 0,
+      grid: gridRendered.value,
+      songs: songRendered.value,
+    }))
 
     return {
       httpsCover: httpsCoverUrl,

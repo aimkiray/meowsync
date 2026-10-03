@@ -1,7 +1,7 @@
 <template>
   <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
-  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
+  <div ref="viewEl" class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
     <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
@@ -9,7 +9,7 @@
 
     <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
       <!-- ══ 左栏 ══ -->
-      <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
+      <div ref="mainColEl" class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
         <div ref="coverWrapRef" class="watch-cover-wrap"
           :class="{ 'watch-cover-wrap--video': mediaVideoActive, 'watch-cover-wrap--idle': videoFullscreen && !controlsVisible }"
           @mousemove="pokeControls" @pointerdown="pokeControls">
@@ -95,7 +95,9 @@
             rel="noopener noreferrer"
             :title="`回源：在${sourceName}打开原页`"
           ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
-          <!-- 音画切换仅对有视频流的外部导入曲（B 站/YouTube）出现；关闭即只拉音频流省流量 -->
+          <!-- 音画切换对有视频能力的外部导入曲出现；关闭即只拉音频流省流量。
+               键不能对「仅可下载」档隐藏——它是探测已下载视频的入口；无可放源时
+               靠 title 提示降级（点按只会重探一次，探测无果视觉不变） -->
           <button
             v-if="currentSong?.bilibili?.hasVideo || currentSong?.bilibili?.hasDownloadableVideo
               || currentSong?.youtube?.hasVideo || currentSong?.youtube?.hasDownloadableVideo
@@ -103,7 +105,8 @@
             class="ink-btn ink-btn--ghost watch-action"
             :class="{ 'watch-action--on': videoOn }"
             @click="videoOn = !videoOn"
-            :title="videoOn ? '切到纯音频（省流量）' : '切到视频模式'"
+            :title="videoOn ? '切到纯音频（省流量）'
+              : (hasPlayableVideo ? '切到视频模式' : '切到视频模式（需已下载视频档）')"
             :aria-pressed="videoOn"
           ><PixelIcon name="play" :size="14" /> {{ videoOn ? '视频' : '音频' }}</button>
         </div>
@@ -330,6 +333,7 @@
           aria-labelledby="watch-tab-related"
           v-show="tab === 'related'"
           class="watch-side-body"
+          ref="relatedEl"
         >
           <div v-if="relatedLoading" class="watch-empty">
             <div class="pixel-loading mb-4"></div>
@@ -382,8 +386,9 @@
 </template>
 
 <script>
-import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
+import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
 import PixelIcon from './PixelIcon.vue'
@@ -394,6 +399,17 @@ import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
 import { LS_KEYS } from '../lib/storage'
+
+// 已下载视频档的会话缓存（mediaVideoKey → 本地 URL）：离开再进 watch 时
+// 本地档即知即挂，不等探测 RTT。模块域共享——组件每次重挂 setup 全新，
+// 下载删除由探测复验清条目（FIFO 封顶防长会话膨胀）
+const dlVideoCache = new Map()
+const DL_VIDEO_CACHE_CAP = 80
+const dlCacheSet = (k, v) => {
+  dlVideoCache.delete(k)
+  dlVideoCache.set(k, v)
+  if (dlVideoCache.size > DL_VIDEO_CACHE_CAP) dlVideoCache.delete(dlVideoCache.keys().next().value)
+}
 
 export default {
   name: 'WatchView',
@@ -431,6 +447,28 @@ export default {
   setup(props, { emit }) {
     const queueContainer = ref(null)
     const lyricContainer = ref(null)
+    const viewEl = ref(null)
+    const mainColEl = ref(null)
+    const relatedEl = ref(null)
+
+    // 离场滚动记忆：换页即整卸——单列页滚 .watch-view、宽屏左栏 .watch-main、
+    // 相关栏各自还位。队列/歌词两栏不存：重挂即按当前行重居中（与切 tab
+    // 同律的 centerCurrentRow），存了也会被居中盖掉
+    onMounted(() => nextTick(() => {
+      for (const [key, el] of [
+        ['watch:view', viewEl.value],
+        ['watch:main', mainColEl.value],
+        ['watch:related', relatedEl.value],
+      ]) {
+        const m = readScrollMem(key)
+        if (m && el) restoreScrollTop(el, m.top)
+      }
+    }))
+    onBeforeUnmount(() => {
+      writeScrollMem('watch:view', { top: viewEl.value?.scrollTop ?? 0 })
+      writeScrollMem('watch:main', { top: mainColEl.value?.scrollTop ?? 0 })
+      writeScrollMem('watch:related', { top: relatedEl.value?.scrollTop ?? 0 })
+    })
 
     // 待播队列渐进渲染窗：前缀窗保 index==全局下标（拖拽/jump/remove 语义不破）；
     // 快照语义不挂 resetWhen——队列替换/增删不回卷，centerCurrentRow 前
@@ -520,6 +558,9 @@ export default {
     }
 
     // ── 队列拖拽排序（YTM UP NEXT：握把按下后拖动实时换位）──
+    // 拖拽中组件被卸（q 热键跳页等）时兜底摘 window 监听——不然 onMove
+    // 会继续向存活父级 emit queue-move，队列在不可见页下被改
+    let activeDragEnd = null
     const startDrag = (index, event) => {
       event.preventDefault()
       const container = queueContainer.value
@@ -562,12 +603,14 @@ export default {
         }
       }
       const onEnd = () => {
+        activeDragEnd = null
         dragIndex.value = -1
         window.removeEventListener('pointermove', onMove)
         window.removeEventListener('pointerup', onEnd)
         window.removeEventListener('pointercancel', onEnd)
         window.removeEventListener('blur', onEnd)
       }
+      activeDragEnd = onEnd
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onEnd)
       window.addEventListener('pointercancel', onEnd)
@@ -599,14 +642,28 @@ export default {
       }
     }
 
+    // 【序】immediate 挂载即跑——离开再进 watch 时按持久化 tab 补一次
+    // centerCurrentRow/loadRelated（旧版只在「变化」时跑：related tab 重进
+    // 恒空、歌词/队列栏塌回顶部）。centerCurrentRow/lyricFollowPausedUntil
+    // 声明都在下方——箭头包一层惰性求值躲 TDZ；let 声明只能上移到 watcher 前
+    let lyricFollowPausedUntil = 0
     watch(() => props.tab, (t) => {
       if (t === 'related' && relatedFor !== props.currentSong?.id) loadRelated()
       // 切到队列/歌词时把当前行滚进视野（与原抽屉一致）
-      if (t === 'queue' || t === 'lyrics') nextTick(centerCurrentRow)
+      if (t === 'queue' || t === 'lyrics') nextTick(() => centerCurrentRow())
       if (t === 'lyrics') lyricFollowPausedUntil = 0
-    })
+    }, { immediate: true })
+    // 恢复链/换曲晚到也要落位：挂载 immediate 跑时队列还空、currentSong 未
+    // 落地，centerCurrentRow/loadRelated 双双扑空——对象到齐后按切 tab 同律
+    // 补一次（队列跟随当前行本就应随换曲走，不算抢滚动）
     watch(() => props.currentSong?.id, () => {
       if (props.tab === 'related') loadRelated()
+      if (props.tab === 'queue') nextTick(() => centerCurrentRow())
+    })
+    // 歌词异步到稿：暂停态下 currentLyricIndex 不变，其 watcher 不会触发——
+    // 挂载时 tab=lyrics 的居中扑空后恒停在词首，到稿补一次
+    watch(() => props.lyrics, (l) => {
+      if (props.tab === 'lyrics' && l?.length) nextTick(() => centerCurrentRow())
     })
 
     // 单列态（<901px，与模板 wide: 断点同源）滚动器是 .watch-view 整页——
@@ -649,7 +706,7 @@ export default {
     // 触点——另根手指搭在页外（如底部播放条）时基线/探测仍配对同一根手指
     const LYRIC_FOLLOW_PAUSE_MS = 4000
     const SWIPE_SLOP_PX = 10
-    let lyricFollowPausedUntil = 0
+    // lyricFollowPausedUntil 上移到 props.tab watcher 前（immediate 序要）
     let touchStartY = 0
     const wideMq = window.matchMedia('(min-width: 901px)')
     const onWatchTouchStart = (e) => { touchStartY = e.targetTouches?.[0]?.clientY ?? 0 }
@@ -695,6 +752,14 @@ export default {
     // LS_KEYS.VIDEO_MODE 沿用 B 站时代键名：YouTube 接入不换名重置用户选择
     const mediaVideoRef = ref(null)
     const coverWrapRef = ref(null)
+    // <video> 止流清场：pause+摘 src+load 让解码器/缓冲区当帧释放——
+    // 不等 DOM 移除后 GC 的惰性回收（脱离文档的媒体元素照样拉流，
+    // 缓冲面按 MB 计）。v-if 摘元素的所有路径共用：切音频/开沉浸层/
+    // 换 key/组件卸载
+    const releaseVideoEl = (v) => {
+      if (!v) return
+      try { v.pause(); v.removeAttribute('src'); v.load() } catch { /* 卸载期媒体异常无碍 */ }
+    }
     const videoOn = ref(safeGetLs(LS_KEYS.VIDEO_MODE) !== '0')
     watch(videoOn, v => {
       safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0')
@@ -765,14 +830,13 @@ export default {
         window.removeEventListener('fullscreenerror', onFullscreenError)
         window.removeEventListener('webkitfullscreenerror', onFullscreenError)
         clearTimeout(controlsHideTimer)
+        clearTimeout(mediaRetryTimer)
+        activeDragEnd?.() // 拖拽中卸载：摘 window 指针监听
         window.removeEventListener('keydown', onFsKey)
         document.removeEventListener('visibilitychange', onVis)
         // <video> 显式清场：pause+摘 src+load 让解码器/缓冲区当帧释放，
         // 不等 DOM 移除后 GC 的惰性回收（视频流的缓冲面是按 MB 计的）
-        const v = mediaVideoRef.value
-        if (v) {
-          try { v.pause(); v.removeAttribute('src'); v.load() } catch { /* 卸载期媒体异常无碍 */ }
-        }
+        releaseVideoEl(mediaVideoRef.value)
         // 卸载先于 DOM 移除——主动退掉自持的全屏，不等浏览器对脱离
         // 元素的事后清理（行为更确定，少一帧悬空全屏帧）
         const fsEl = document.fullscreenElement || document.webkitFullscreenElement
@@ -816,6 +880,10 @@ export default {
     })
     // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
     const mediaVideoFailed = ref(false)
+    // 瞬时断流自愈：每 mediaVideoKey 允许一次延迟复位重试——复位重挂即
+    // 真重试，真死链会再 error 回闩且不再排新计时（上界=1，防重试循环）
+    let mediaRetryTimer = null
+    let mediaRetriedKey = null
     // 视频源键：两个 provider 各取各自的定位串——换曲（哪怕同 provider）必然换键
     const mediaVideoKey = computed(() => {
       const song = props.currentSong
@@ -838,6 +906,11 @@ export default {
     const mediaVideoActive = computed(() =>
       !!(mediaVideoKey.value && videoOn.value && !props.fullscreenPlayerOpen
         && !mediaVideoFailed.value && mediaVideoUrl.value))
+    // 有无「确定可放」的视频源：在线流（hasVideo）或探测落地的本地档——
+    // 音画切换键的 title 据此提示「需已下载视频档」而非空许诺
+    const hasPlayableVideo = computed(() =>
+      !!(props.currentSong?.bilibili?.hasVideo || props.currentSong?.youtube?.hasVideo
+        || props.currentSong?.file?.hasVideo || downloadedVideoUrl.value))
     // 关层重挂=天然重试点：failed 闩若来自限流/瞬时断流（层开关不动 URL，
     // watch(mediaVideoUrl) 不会自愈），复位让这次重挂真重试——流确实死了
     // 会再 error 回闩，代价一跳
@@ -855,9 +928,13 @@ export default {
     let dlVideoSeq = 0
     watch([mediaVideoKey, () => props.queueOwner?.id, videoOn], async () => {
       const seq = ++dlVideoSeq
-      downloadedVideoUrl.value = null
       const song = props.currentSong
       const plId = props.queueOwner?.id
+      // 下载档会话缓存（模块域 dlVideoCache）：离开再进 watch 时本地档
+      // 即知即挂——免等探测 RTT 才出 <video>（封面→16:9 的迟到换形）；探测
+      // 照跑复验：档没了清缓存换在线源，探测失败则信任缓存值继续用
+      const cached = dlVideoCache.get(mediaVideoKey.value) ?? null
+      downloadedVideoUrl.value = cached
       // 探测门用下载口径：hasDownloadableVideo 曲可能有本地视频档（下载链
       // 收全编码）——只认 hasVideo 会把已下载的纯非 avc1 稿件挡在门外。
       // 视频关着时不探——纯音频用户不该为每首视频曲白打一跳 status 请求
@@ -868,17 +945,21 @@ export default {
         dlProbeSettled.value = true
         return
       }
-      dlProbeSettled.value = false
+      // 缓存命中即放行（本地档当帧可挂，探测后台复验）；未命中才压闸等 RTT
+      dlProbeSettled.value = !!cached
       try {
         const st = await downloadsApi.getSongDownloadStatus(plId, song.id)
         if (seq !== dlVideoSeq) return
         // http 拦截器剥到 body——任务行在 st.data.task；completed 门禁：
         // 非完成态行的 videoPath 打 /file 恒 404（服务端双查 status+existsSync），
-        // 白烧一跳
-        if (st?.data?.task?.status === 'completed' && st?.data?.task?.videoPath) {
-          downloadedVideoUrl.value = downloadsApi.songFileUrl(plId, song.id, 'video')
-        }
-      } catch { /* 探测失败回落在线流 */ }
+        // 白烧一跳。确认结果无条件回写——命中也刷新、miss 清过期缓存
+        const url = (st?.data?.task?.status === 'completed' && st?.data?.task?.videoPath)
+          ? downloadsApi.songFileUrl(plId, song.id, 'video')
+          : null
+        downloadedVideoUrl.value = url
+        if (url) dlCacheSet(mediaVideoKey.value, url)
+        else dlVideoCache.delete(mediaVideoKey.value)
+      } catch { /* 探测失败回落在线流（缓存值保留） */ }
       finally { if (seq === dlVideoSeq) dlProbeSettled.value = true }
     }, { immediate: true })
     const mediaVideoUrl = computed(() => {
@@ -917,6 +998,17 @@ export default {
         return
       }
       mediaVideoFailed.value = true
+      // 中途 CDN 抖一下不该把整曲打成封面——10s 后复位闩重挂真重试；
+      // 每 key 只排一次（mediaRetriedKey 戳），死链回闩后不再自愈
+      if (mediaRetriedKey !== mediaVideoKey.value) {
+        mediaRetriedKey = mediaVideoKey.value
+        clearTimeout(mediaRetryTimer)
+        mediaRetryTimer = setTimeout(() => {
+          if (mediaVideoFailed.value && mediaRetriedKey === mediaVideoKey.value) {
+            mediaVideoFailed.value = false
+          }
+        }, 10000)
+      }
     }
     // 复位键用 mediaVideoUrl——同曲换源（B 站换P/YouTube 重导）时新源该重新尝试
     watch(mediaVideoUrl, () => { mediaVideoFailed.value = false })
@@ -939,26 +1031,47 @@ export default {
       }
     })
 
+    // v-if 摘 <video> 不等于止流——脱离 DOM 的媒体元素照样拉流到 GC 回收。
+    // 切音频（「省流量」键的本职）、开沉浸层、换 key 重建全走这条路：
+    // flush:'pre' 抢在 patch 前跑，此刻元素仍在 DOM、ref 仍指向它——就地
+    // pause+摘 src+load 当帧止流，与 onBeforeUnmount 同函数。
+    // mediaVideoUrl 刻意不入依赖：同键换源（本地↔在线）元素不摘，
+    // src 属性更新自身即触发资源重选，剥 src 反而打断续播
+    watch([mediaVideoActive, mediaVideoKey], () => {
+      releaseVideoEl(mediaVideoRef.value)
+    }, { flush: 'pre' })
+
     // 音画同步：视频元素静音播放，时钟完全听 Howler——每帧对比 currentTime，
     // 漂移超阈值才 seek（RAF 每帧触发，此处只做减法+偶尔 seek，开销可忽略）。
     // 顺带 reconcile paused 态——watch(isPlaying) 只在翻转时触发，组件重挂载
     // （返回→重进 watch）与单曲循环重播时视频会停在末帧/暂停态，这里兜底拉起
-    const VIDEO_DRIFT_SEC = 0.45
+    const VIDEO_DRIFT_SEC = 0.3 // 唇形可感约 0.1s 起——在可感偏移与校正跳切频率间取中
     let mediaPlayTrying = false
+    // play() 在极端旧内核可同步抛错、部分内核不返 promise——统一走带闩封装：
+    // 闩挡同元素并发 play（竞速 abort 报错噪音），finally 保证闩必解
+    const tryMediaPlay = (v) => {
+      mediaPlayTrying = true
+      try {
+        Promise.resolve(v.play()).catch(() => {}).finally(() => { mediaPlayTrying = false })
+      } catch { mediaPlayTrying = false }
+    }
     const syncMediaVideo = () => {
       const v = mediaVideoRef.value
       // document.hidden 闸：后台 tab 里 rAF 虽停，本函数仍会被 onVis 外的
       // watcher（isPlaying 翻转等）调到——后台不许 play/seek，回前台由 onVis 接回
       if (!v || !mediaVideoActive.value || v.error || document.hidden) return
-      if (props.isPlaying && v.paused && !mediaPlayTrying) {
-        mediaPlayTrying = true
-        // play() 在极端旧内核可同步抛错——try 兜底防 mediaPlayTrying 卡死
-        try {
-          Promise.resolve(v.play()).catch(() => {}).finally(() => { mediaPlayTrying = false })
-        } catch { mediaPlayTrying = false }
+      // 音画时长错位（导入曲常态）：音频更长的尾段里 v.ended 是真「播完」——
+      // 不戳 play（否则每帧空戳一遍）；seek 目标按时长截断，钉在 duration
+      // 的指针不再每帧重 seek 同一值（旧版此处是 seek+play 双风暴）
+      const dur = Number.isFinite(v.duration) ? v.duration : Infinity
+      if (props.isPlaying && v.paused && !mediaPlayTrying
+        && !(v.ended && props.currentTime >= dur)) {
+        tryMediaPlay(v)
       } else if (!props.isPlaying && !v.paused) v.pause()
-      if (Math.abs(v.currentTime - props.currentTime) > VIDEO_DRIFT_SEC) {
-        v.currentTime = props.currentTime
+      const target = Math.min(props.currentTime, dur)
+      // v.seeking 中不叠 seek——缓冲卡顿期的校正打进未缓冲段只会再卡
+      if (!v.seeking && Math.abs(v.currentTime - target) > VIDEO_DRIFT_SEC) {
+        v.currentTime = target
       }
     }
     watch(() => props.currentTime, syncMediaVideo)
@@ -973,12 +1086,13 @@ export default {
       await nextTick()
       const v = mediaVideoRef.value
       if (!v) return
+      mediaPlayTrying = false // 新元素不继承旧元素可能永不 settle 的 play 闩
       const align = () => { v.currentTime = props.currentTime }
       if (v.readyState >= 1) align()
       else v.addEventListener('loadedmetadata', align, { once: true })
       // hidden 闸：后台 tab 里换曲/重挂不许起播——静音视频后台自走=整首白烧
       // 流+解码；align 照常（seek 静默无流损），回前台由 onVis→syncMediaVideo 续播
-      if (props.isPlaying && !document.hidden) v.play().catch(() => {})
+      if (props.isPlaying && !document.hidden) tryMediaPlay(v)
     }, { immediate: true })
 
     const shareSong = async () => {
@@ -1002,6 +1116,9 @@ export default {
     return {
       queueContainer,
       lyricContainer,
+      viewEl,
+      mainColEl,
+      relatedEl,
       queueTotalLabel,
       queueRows,
       queueHasMore,
@@ -1047,6 +1164,7 @@ export default {
       mediaVideoActive,
       mediaVideoKey,
       mediaVideoUrl,
+      hasPlayableVideo,
       onMediaVideoError,
       pauseLyricFollow,
       onWatchTouchStart
