@@ -179,7 +179,7 @@ export default {
     // 淡出；mousemove/pointerdown/任意键戳醒。暂停态常显——画面静止时
     // 控件是唯一状态读数（与 WatchView 视频控制层同一语义、同一时长）
     const chromeOn = ref(true)
-    let chromeHideTimer = 0
+    let chromeHideTimer = null
     const wake = () => {
       chromeOn.value = true
       clearTimeout(chromeHideTimer)
@@ -267,11 +267,30 @@ export default {
   opacity: 0;
   pointer-events: none;
 }
-/* focus-within 兜底：键盘焦点落在控件上时强制露出——
-   隐掉的控件仍可 Tab 进去，不给焦点载体是键盘陷阱 */
-.fullscreen-player__topbar:focus-within,
-.fullscreen-player__bottom:focus-within {
+/* 键盘焦点露出用 :has(:focus-visible) 而非 :focus-within——鼠标点过的键
+   持 :focus 不持 :focus-visible：focus-within 会把栏钉成恒显（配合
+   cursor:none 形成「恒显 chrome+消失光标」的最坏组合）；音量 range 拖
+   杆点击持 :focus-visible——焦点在可操作件上就该常显，语义正确。
+   pointer-events 一并归还：露出的栏必须可点（idle 规则把它收走过）。
+   无 :has 的老浏览器退 focus-within：宁恒显勿键盘陷阱 */
+.fullscreen-player__topbar:has(:focus-visible),
+.fullscreen-player__bottom:has(:focus-visible) {
   opacity: 1;
+  pointer-events: auto;
+}
+@supports not (selector(:has(:focus-visible))) {
+  .fullscreen-player__topbar:focus-within,
+  .fullscreen-player__bottom:focus-within {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fullscreen-player__topbar,
+  .fullscreen-player__bottom,
+  .fullscreen-player__progress-hit {
+    transition: none;
+  }
 }
 
 .fullscreen-player__content {
@@ -503,6 +522,14 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.22);
   padding: 8px 14px;
   min-height: 40px;
+}
+
+/* 全局环是 currentColor——本页键色 white 落粉底上偏虚，换深色环
+   （box-shadow 晕环被 :407 的 none !important 剥光，只能走 outline 本身） */
+.fullscreen-player__topbar-button:focus-visible,
+.fullscreen-player__control-button:focus-visible,
+.fullscreen-player__close:focus-visible {
+  outline-color: rgba(0, 0, 0, .85);
 }
 
 .fullscreen-player__cover {

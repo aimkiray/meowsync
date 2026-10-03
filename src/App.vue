@@ -978,7 +978,9 @@ export default {
           break
         case '/':
           e.preventDefault()
-          topNavRef.value?.focusSearch()
+          // 沉浸层开着时搜索框在遮罩下不可见——接焦后 INPUT 守卫吞掉
+          // 全部热键且零视觉反馈，是比"没反应"更糟的静默失能
+          if (!isFullscreenPlayerOpen.value) topNavRef.value?.focusSearch()
           break
       }
     }

@@ -677,17 +677,22 @@ export default {
     const onFullscreenError = (e) => {
       if (e?.target === coverWrapRef.value) toast('全屏请求被浏览器拒绝', 'error')
     }
+    // 视频全屏下全局热键（←→/↑↓/m 等）也是操作——戳醒控制层给读数，不盲按。
+    // 声明在此（监听挂载点之前）：pokeControls 后声明但回调体惰性求值，无 TDZ
+    const onFsKey = () => { if (videoFullscreen.value) pokeControls() }
     if (typeof window !== 'undefined') {
       window.addEventListener('fullscreenchange', onFullscreenChange)
       window.addEventListener('webkitfullscreenchange', onFullscreenChange)
       window.addEventListener('fullscreenerror', onFullscreenError)
       window.addEventListener('webkitfullscreenerror', onFullscreenError)
+      window.addEventListener('keydown', onFsKey)
       onBeforeUnmount(() => {
         window.removeEventListener('fullscreenchange', onFullscreenChange)
         window.removeEventListener('webkitfullscreenchange', onFullscreenChange)
         window.removeEventListener('fullscreenerror', onFullscreenError)
         window.removeEventListener('webkitfullscreenerror', onFullscreenError)
-        clearTimeout(fsHideTimer)
+        clearTimeout(controlsHideTimer)
+        window.removeEventListener('keydown', onFsKey)
         // 卸载先于 DOM 移除——主动退掉自持的全屏，不等浏览器对脱离
         // 元素的事后清理（行为更确定，少一帧悬空全屏帧）
         const fsEl = document.fullscreenElement || document.webkitFullscreenElement
@@ -703,10 +708,11 @@ export default {
     // 控制层自隐：JS 驱动（CSS :hover 会让静止光标下的控件恒显）——
     // mousemove/pointerdown 戳醒 + 播放中 2.6s 自隐；暂停态常显
     // （画面静止时控件是唯一状态读数）。非全屏同律：光标停在画面上
-    // 不动也要收。focus-within 在 CSS 层兜底键盘焦点
+    // 不动也要收。键盘焦点露出在 CSS 层走 :has(:focus-visible)
     const controlsOn = ref(false)
-    let controlsHideTimer = 0
+    let controlsHideTimer = null
     const pokeControls = () => {
+      if (!mediaVideoActive.value) return // 封面/图态没有控制层，不空转戳醒
       controlsOn.value = true
       clearTimeout(controlsHideTimer)
       if (props.isPlaying) controlsHideTimer = setTimeout(() => { controlsOn.value = false }, 2600)
@@ -931,14 +937,14 @@ export default {
       videoFullscreen,
       toggleVideoFullscreen,
       canElementFs,
-      controlsOn,
       controlsVisible,
       pokeControls,
       videoOn,
       mediaVideoFailed,
       mediaVideoActive,
       mediaVideoKey,
-      mediaVideoUrl
+      mediaVideoUrl,
+      onMediaVideoError
     }
   }
 }
@@ -1035,18 +1041,33 @@ export default {
   pointer-events: none;
 }
 .watch-video-controls--on,
-.watch-cover-wrap--video:focus-within .watch-video-controls {
+.watch-cover-wrap--video:has(:focus-visible) .watch-video-controls {
   opacity: 1;
 }
 /* 子键 pointer-events 随可见性走：层隐（opacity 0）时键不可见也不可点——
-   否则静止画面上的点击会命中隐形全屏键；focus-within 露出态同样恢复可点 */
+   否则静止画面上的点击会命中隐形全屏键；键盘焦点露出态同样恢复可点 */
 .watch-video-controls :is(.watch-video-toggle, .watch-video-fs) { pointer-events: none; }
 .watch-video-controls--on :is(.watch-video-toggle, .watch-video-fs),
-.watch-cover-wrap--video:focus-within :is(.watch-video-toggle, .watch-video-fs) {
+.watch-cover-wrap--video:has(:focus-visible) :is(.watch-video-toggle, .watch-video-fs) {
   pointer-events: auto;
+}
+/* 键盘焦点露出用 :has(:focus-visible) 而非 :focus-within——鼠标点过的键
+   持 :focus 不持 :focus-visible：focus-within 会把控件钉成恒显（配合
+   cursor:none 形成「恒显控件+消失光标」的最坏组合）。range 拖杆点击
+   持 :focus-visible——焦点在可操作件上就该常显，语义正确。
+   无 :has 的老浏览器退 focus-within：宁恒显勿键盘陷阱 */
+@supports not (selector(:has(:focus-visible))) {
+  .watch-cover-wrap--video:focus-within .watch-video-controls { opacity: 1; }
+  .watch-cover-wrap--video:focus-within :is(.watch-video-toggle, .watch-video-fs) {
+    pointer-events: auto;
+  }
 }
 /* 全屏下控件收掉时连光标一起隐——同沉浸页/流媒体播放器的 idle 手势 */
 .watch-cover-wrap--idle { cursor: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .watch-video-controls, .watch-video-toggle { transition: none; }
+}
 
 /* 中央播放/暂停：半透明墨底圆形——像素风的方角体系里，圆形是「媒体
    传输键」的跨站通用符（YouTube/Netflix 同款），特意破例 */
