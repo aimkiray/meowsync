@@ -12,7 +12,7 @@
           <span class="fb-toast-tag">{{ t.type }}:</span>
           <span class="fb-toast-text">{{ t.text }}</span>
           <button
-            v-if="t.action"
+            v-if="t.action?.label && t.action?.onAction"
             type="button"
             class="fb-toast-action"
             @click="runToastAction(t)"
@@ -173,6 +173,8 @@ export default {
 .fb-toast-leave-active {
   transition: opacity 0.18s, transform 0.18s;
 }
+/* 淡出窗内动作键仍可点会双发 onAction——摘出 DOM 前禁指 */
+.fb-toast-leave-active { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
   .fb-toast-enter-active,
   .fb-toast-leave-active { transition: none; }

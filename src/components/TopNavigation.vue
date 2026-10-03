@@ -92,9 +92,10 @@
           title="添加 ?mode=host 启用远程控制"
         >remote: off</span>
 
-        <!-- 下载页入口（与 toast「查看进度」/歌单菜单「下载进度」同视图） -->
+        <!-- 下载页入口（与 toast「查看进度」/歌单菜单「下载进度」同视图）；
+             host 模式藏入口但深链仍可切进来——downloads 视图下保留「返回」逃生 -->
         <button
-          v-if="remoteMode === 'off'"
+          v-if="remoteMode === 'off' || isDownloadsView"
           @click="$emit('toggle-center-view')"
           class="ink-btn ink-btn--ghost topnav-action"
           :title="isDownloadsView ? '返回上一页' : '打开下载页'"

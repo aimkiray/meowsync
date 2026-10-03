@@ -1585,10 +1585,13 @@ async function deleteSongFiles(playlistId, songId) {
   }
   // 同上：只拒真实在跑的任务（内存控制器），孤儿 downloading 行不挡删除。
   // 僵尸协程同样算在跑——它还在写这个队列的文件
-  if (tasks.some(t => standaloneRunning.has(t.id)
+  const blocking = tasks.find(t => standaloneRunning.has(t.id)
     || (t.status === 'downloading' && t.queueId
-        && queueHasLiveController(t.queueId)))) {
-    throw httpError(409, '任务正在下载中，请先取消所在队列');
+        && queueHasLiveController(t.queueId)));
+  if (blocking) {
+    throw httpError(409, blocking.queueId
+      ? '任务正在下载中，请先取消所在队列'
+      : '任务正在下载中，请稍候再删');
   }
   // 删除窗口锁（理由同 deleteTask）：排空期间在跑判定会失效
   if (deletingPlaylists.has(resolvedPlaylistId)
@@ -2028,9 +2031,18 @@ async function shutdownAll() {
 
   for (const task of downloadTasksRepo.listTasksByStatus('downloading')) {
     downloadTasksRepo.updateTask(task.id, {
-      status: 'pending',
+      status: task.queueId ? 'pending' : 'failed',
       errorMessage: '服务停机中断'
     });
+  }
+  // 与 recoverStaleStates 同口径：无消费者的 standalone pending 是死态
+  for (const task of downloadTasksRepo.listTasksByStatus('pending')) {
+    if (!task.queueId) {
+      downloadTasksRepo.updateTask(task.id, {
+        status: 'failed',
+        errorMessage: '服务停机中断'
+      });
+    }
   }
 }
 
@@ -2174,10 +2186,22 @@ function recoverStaleStates() {
   }
   for (const task of downloadTasksRepo.listTasksByStatus('downloading')) {
     downloadTasksRepo.updateTask(task.id, {
-      status: 'pending',
+      // standalone 置 failed：无消费者的 pending 是死态（UI 对 pending 藏
+      // 删除键、重试只认 failed），failed 行才有重试+删除入口
+      status: task.queueId ? 'pending' : 'failed',
       progress: 0,
       errorMessage: '服务重启中断'
     });
+  }
+  // 退避协程内被 SIGKILL 的 standalone 停在 pending——同样是孤儿死态，一并收敛
+  for (const task of downloadTasksRepo.listTasksByStatus('pending')) {
+    if (!task.queueId) {
+      downloadTasksRepo.updateTask(task.id, {
+        status: 'failed',
+        progress: 0,
+        errorMessage: '服务重启中断'
+      });
+    }
   }
   // 老库 playlist_id/queue_id 是 ALTER 补列、无 FK 级联——父行已删的子行残留
   // 会成幻影 completed（指向已删文件），孤儿行在启动时清理。

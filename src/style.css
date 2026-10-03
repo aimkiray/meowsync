@@ -1063,6 +1063,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .pg-menu-item:last-child { border-bottom: none; }
 .pg-menu-item:hover { color: var(--accent-magenta-ink); }
+.pg-menu-item:disabled { opacity: .45; cursor: default; color: inherit; }
 .pg-menu-item--danger { color: var(--accent-danger-ink); }
 .pg-menu-item--danger:hover { color: var(--accent-danger-ink); } /* 悬停走深档——与全站 hover→ink 同律 */
 

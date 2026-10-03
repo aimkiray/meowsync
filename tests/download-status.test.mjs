@@ -61,12 +61,19 @@ test('pickQueueForPlaylist：深链预选匹配与挑队列规则', () => {
   assert.equal(pickQueueForPlaylist(queues, 777)?.id, 12)
   assert.equal(pickQueueForPlaylist(queues, '777')?.id, 12)
   assert.equal(pickQueueForPlaylist(queues, 'local_pl_x')?.id, 20)
-  // 多匹配时 running 优先于最新 id
-  const withRunning = [...queues, { id: 5, status: 'running', neteasePlaylistId: '777' }]
+  // 多匹配时 running 优先于最新 id——且 running 项不靠在数组末位，
+  // 否则"取末位"的错误实现也能混过断言
+  const withRunning = [
+    ...queues,
+    { id: 5, status: 'running', neteasePlaylistId: '777' },
+    { id: 99, status: 'completed', neteasePlaylistId: '777' }
+  ]
   assert.equal(pickQueueForPlaylist(withRunning, '777')?.id, 5)
-  // 未命中/空入参归 null
+  // 未命中/空入参归 null；'null'/'undefined' 字面串不得误配孤儿行
   assert.equal(pickQueueForPlaylist(queues, 'no-such'), null)
   assert.equal(pickQueueForPlaylist(queues, null), null)
+  assert.equal(pickQueueForPlaylist(queues, 'null'), null)
+  assert.equal(pickQueueForPlaylist(queues, 'undefined'), null)
   assert.equal(pickQueueForPlaylist(null, '777'), null)
 })
 

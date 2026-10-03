@@ -80,8 +80,9 @@ export function useSearchNav({
     const url = buildNavUrl(playlist)
     // 同视图重复操作（重搜/重点同一歌单）不堆历史，否则 Back 显得失灵
     if (url.toString() === window.location.href) return
-    // 打标记供 watchBack 判断：冷启动直达页（无站内历史）按「返回」应回首页而非退站
-    window.history.pushState({ meowsyncNav: 1 }, '', url.toString())
+    // 打标记供 watchBack 判断：冷启动直达页（无站内历史）按「返回」应回首页而非退站；
+    // dplSeq 随条目冻结——回放旧条目时不重发已被新意图取代的预选
+    window.history.pushState({ meowsyncNav: 1, dplSeq: downloadsPlSeq.value }, '', url.toString())
   }
 
   // popstate → 按 URL 还原视图；view=songs&pl= 时回选对应歌单
@@ -104,10 +105,12 @@ export function useSearchNav({
       else if (plId && /^\d+$/.test(plId)) { previewPlaylistById(plId); return }
       else if (!selectedPlaylist.value) { centerView.value = 'home'; return }
     }
-    // popstate 回放深链：重新武装预选意图（面板对已消费值幂等，
-    // 同值回放到已预选过的条目不会强抢用户手选）
+    // popstate 回放深链：pl 与 seq 一起回放——消费键 pl::seq 随条目冻结，
+    // 回到已结算过的条目是幂等 no-op，不会强抢用户在其后手选的队列
     if (view === 'downloads') {
       downloadsPl.value = params.get('pl')
+      // state=null 的只有归一化首条目，其 pl 意图在冷启动 seq 0 时已结算
+      downloadsPlSeq.value = window.history.state?.dplSeq ?? 0
     }
     // 冷加载的 ?view=search 没有任何结果，落在空网格上不如回首页
     if (view === 'search' && !searchResults.value.length
@@ -169,10 +172,17 @@ export function useSearchNav({
   // 顶栏「下载」键：在 下载页 ⇄ 上一视图 之间往返；搜索态点它应进下载页。
   // 通用入口无预选目标——清掉残留意图，否则旧深链的 pl 会借尸还魂进 URL
   const toggleCenterView = () => {
-    if (centerView.value !== 'downloads') downloadsPl.value = null
-    centerView.value = centerView.value === 'downloads'
-      ? (selectedPlaylist.value ? 'songs' : 'home')
-      : 'downloads'
+    if (centerView.value === 'downloads') {
+      // 「返回」言出必行=回到进入下载页前的条目：站内历史走 back 回放
+      //（watch/search 进的下载页能真回去，而不是新压一条 songs/home 把
+      // Back 键语义搞成死循环）；直达页无站内历史才落确定性路由
+      if (window.history.state?.meowsyncNav) { window.history.back(); return }
+      centerView.value = selectedPlaylist.value ? 'songs' : 'home'
+      pushNavState() // URL 还停在 ?view=downloads——无 popstate 可放，手动同步
+      return
+    }
+    downloadsPl.value = null
+    centerView.value = 'downloads'
     pushNavState()
   }
 

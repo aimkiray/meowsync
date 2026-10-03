@@ -105,6 +105,8 @@
             <button
               v-if="!isShareShell(playlist)"
               @click.stop="viewDownloadProgress(playlist)"
+              :disabled="downloadingIds.has(playlist.id)"
+              :title="downloadingIds.has(playlist.id) ? '队列创建中，稍候' : ''"
               class="pg-menu-item"
               role="menuitem"
             >
@@ -153,7 +155,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
 import { copyText, shareOrCopy, playlistShareUrl, mixShareIds, isEmptyMixShareUrl } from '../lib/share'
@@ -334,7 +336,8 @@ export default {
 
     // 下载歌单——同一歌单在途请求合并：双击/连点不发第二个 POST，
     // 服务端对活跃队列本就 409，这里省掉那条注定失败的往返与错误 toast
-    const downloadingIds = new Set()
+    // reactive 壳——菜单项 :disabled 绑定要跟踪 has()，裸 Set 不触发重渲
+    const downloadingIds = reactive(new Set())
     const downloadPlaylist = async (playlist) => {
       const pid = String(playlist.id)
       if (downloadingIds.has(pid)) {
@@ -409,7 +412,7 @@ export default {
     // 侧栏身份即深链身份，local_pl_*/数字 id 都直接可寻址）
     const viewDownloadProgress = (playlist) => {
       emit('view-download-progress', playlist.id)
-      closeMenu()
+      closeMenu(playlist.id)
     }
 
     const deletePlaylistDownloads = async (playlist) => {
