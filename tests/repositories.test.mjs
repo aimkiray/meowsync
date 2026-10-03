@@ -8,10 +8,12 @@ import { tmpDataDir } from './helpers.mjs';
 process.env.DATA_DIR = tmpDataDir('meowsync-test-');
 const require = createRequire(import.meta.url);
 
-let songMetaRepo, lyricAiRepo;
+let songMetaRepo, lyricAiRepo, playlistsRepo, downloadQueuesRepo;
 before(() => {
   songMetaRepo = require('../src/server/repositories/songLyricMeta.js');
   lyricAiRepo = require('../src/server/repositories/lyricAi.js');
+  playlistsRepo = require('../src/server/repositories/playlists.js');
+  downloadQueuesRepo = require('../src/server/repositories/downloadQueues.js');
 });
 
 test('songLyricMeta：0/缺省行语义一致、upsert 覆盖、delete 归零', () => {
@@ -46,3 +48,17 @@ test('lyricAi 判定缓存：vkey 键隔离、ok/detail 往返', () => {
   assert.equal(lyricAiRepo.getLyricVerdict('id@m2@sig1').ok, 1);
 });
 
+
+test('downloadQueues：neteasePlaylistId 透出（?view=downloads&pl= 深链映射承重列）', () => {
+  // 深链按"侧栏歌单 id === 队列 neteasePlaylistId"匹配——镜像单存 local_pl_*
+  // 原文、远端单存数字串；投影缺失/改名会让整链静默全灭，这里钉住
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_test_x', name: '镜像单' });
+  const q = downloadQueuesRepo.createQueue({ playlistId: pl.id, name: 'q', totalTasks: 0 });
+  assert.equal(q.neteasePlaylistId, 'local_pl_test_x');
+  assert.equal(downloadQueuesRepo.findQueueById(q.id).neteasePlaylistId, 'local_pl_test_x');
+  assert.equal(downloadQueuesRepo.listQueues().find(x => x.id === q.id).neteasePlaylistId, 'local_pl_test_x');
+  // 数字侧栏 id 与 TEXT 列同形落库（String 归一在消费侧，存储层原样透传）
+  const plNum = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777014', name: '远端单' });
+  const qNum = downloadQueuesRepo.createQueue({ playlistId: plNum.id, name: 'qn', totalTasks: 0 });
+  assert.equal(String(qNum.neteasePlaylistId), '777014');
+});

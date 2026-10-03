@@ -291,6 +291,10 @@
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
 }
+/* 动作键随容器圆角档——圆角窗内方角钮会戳破 glitch 的柔和语言 */
+:root[data-theme="glitch-restoration"] .fb-toast-action {
+  border-radius: 4px;
+}
 /* 添加到歌单模态 = dialog 族（同 fb-dialog 档：8px 半径 + .18 深影 + fade 入场）；
    overflow:hidden 防 pg-menu-item 方角 hover 底戳穿圆角 */
 :root[data-theme="glitch-restoration"] .atp-dialog {

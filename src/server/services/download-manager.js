@@ -1180,7 +1180,10 @@ function deleteTask(taskId) {
   if (standaloneRunning.has(task.id)
     || (task.status === 'downloading' && task.queueId
         && queueHasLiveController(task.queueId))) {
-    throw httpError(409, '任务正在下载中，请先取消所在队列');
+    // standalone 任务没有"所在队列"可取消——文案按归属分支给可执行指引
+    throw httpError(409, task.queueId
+      ? '任务正在下载中，请先取消所在队列'
+      : '任务正在下载中，请稍候再删');
   }
   // 删除窗口锁：级联排空会先把控制器移出 Map 再 await——窗口内"在跑"判定
   // 失效，行删后协程继续写盘成孤儿文件

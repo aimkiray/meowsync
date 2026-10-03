@@ -310,13 +310,13 @@ export default {
 
     const removePlaylist = async (playlistId) => {
       // 语义分岔要说清：本地单移除连带清服务端镜像与已下载文件；远端单只从
-      // 列表移除，服务器上的已下载资源保留（要清走下载管理页删歌单）
+      // 列表移除，服务器上的已下载资源保留（要清走下载页删歌单）
       const pl = props.userPlaylists.find(p => String(p.id) === String(playlistId))
       const confirmText = isLocalPlaylistId(pl?.id)
         ? '确定要删除该歌单吗？其已下载资源将一并清理'
         : isSingleSongShellId(pl?.id)
           ? '确定要从库中移除该歌单吗？'
-          : '确定要从库中移除该歌单吗？已下载文件保留在服务器（可在下载管理中清理）'
+          : '确定要从库中移除该歌单吗？已下载文件保留在服务器（可在下载页中清理）'
       if (!await pixelConfirm(confirmText, { confirmText: '移除', danger: true })) {
         closeMenu(playlistId)
         return

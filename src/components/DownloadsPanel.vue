@@ -48,7 +48,7 @@ import { toast, pixelConfirm } from '../lib/feedback'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
 import { createReqGate } from '../lib/req-gate'
-import { queueProgress } from '../lib/downloadStatus.js'
+import { queueProgress, pickQueueForPlaylist } from '../lib/downloadStatus.js'
 import DownloadQueueList from './DownloadQueueList.vue'
 import DownloadTaskList from './DownloadTaskList.vue'
 
@@ -59,6 +59,12 @@ const props = defineProps({
   preselectPlaylistId: {
     type: [String, Number],
     default: null
+  },
+  // 意图序号：同 pl 值重发「查看进度」时唯一变化位——消费键是 pl::seq 对，
+  // 序号 bump 使已消费过的同值意图重新可预选
+  preselectSeq: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -206,35 +212,28 @@ const queuesGate = createReqGate()
 const tasksGate = createReqGate()
 const standaloneGate = createReqGate()
 
-// 深链预选（?view=downloads&pl=）：消费即焚——同一值只预选一次，轮询不再
-// 重抢用户后续手选；同值返回导航是已知边界（prop 不变不重发）
+// 深链预选（?view=downloads&pl=）：消费键是 pl::seq 对——同 pl+seq 的组合
+// 只预选一次，轮询不重抢用户手选；seq bump（再点查看进度）或换 pl 都可重发。
+// 焚毁先于匹配是真缺席防刷屏闸——但调用方必须喂"当时最新快照"
+// （watcher 路径走 loadQueues 现拉，不在陈旧 queues 上空判）
 let preselectConsumed = null
 
 function applyPreselect(list) {
   const pl = props.preselectPlaylistId
-  if (pl == null || String(pl) === preselectConsumed) return
-  preselectConsumed = String(pl)
-  const matches = list.filter(
-    queue => queue.neteasePlaylistId != null && String(queue.neteasePlaylistId) === String(pl)
-  )
-  if (!matches.length) {
+  if (pl == null) return
+  const consumeKey = `${String(pl)}::${props.preselectSeq}`
+  if (consumeKey === preselectConsumed) return
+  preselectConsumed = consumeKey
+  const target = pickQueueForPlaylist(list, pl)
+  if (!target) {
     // 该歌单没建过队列（或队列已级联清掉）——给用户一句交代而不是静默落地
     toast('该歌单还没有下载队列', 'info')
     return
   }
-  // 一歌单可有多条兄弟队列（终态壳收养未净）：运行中优先，其次最新行
-  const target = matches.find(queue => queue.status === 'running')
-    ?? matches.reduce((latest, queue) => (queue.id > latest.id ? queue : latest))
   // 选中行可能被现有搜索/状态过滤藏掉——预选意图明确，清回全集
   queueSearch.value = ''
   queueStatusFilter.value = 'all'
-  selectionMissCount = 0
-  selectedQueue.value = target
-  tasks.value = []
-  standaloneTasks.value = []
-  hasLoadedTasks.value = false
-  tasksError.value = ''
-  loadTasks(target.id)
+  selectQueue(target)
 }
 
 async function loadQueues(options = {}) {
@@ -414,14 +413,17 @@ async function retryTask(taskId) {
 // standalone 分节：按歌单 id 拉全量任务滤 queueId==null。附属面失败静默——
 // 主任务列的 tasksError 语义专属队列任务，不背它的锅
 async function loadStandaloneTasks(playlistId) {
+  // claim 必须在 null 早退之前：清空/孤儿路径不认领会放跑在途旧响应
+  const my = standaloneGate.claim()
   if (playlistId == null) {
     standaloneTasks.value = []
     return
   }
-  const my = standaloneGate.claim()
   try {
     const response = await downloadsApi.listTasks({ playlistId })
     if (!standaloneGate.isCurrent(my)) return
+    // 归属校验与 loadTasks 同口径：selectQueue 交错时旧歌单的响应不写新名分
+    if (String(selectedQueue.value?.playlistId) !== String(playlistId)) return
     // 与主链同口径：畸形响应静默丢弃，不吞成"没有 standalone"假象——
     // 但 standalone 无独立错误态，保留旧数据比清空更诚实
     if (!response || !Array.isArray(response.data)) return
@@ -439,9 +441,12 @@ async function loadStandaloneTasks(playlistId) {
 async function deleteTask(taskId) {
   if (deletingTaskIds.value.includes(taskId)) return
   const task = standaloneTasks.value.find(t => t.id === taskId)
+  // 守门：删除入口只露在 standalone 分节——队列任务生命周期归队列调度器
+  // 管，行级删除会绕开状态机（未来新分节误接此 emit 不越权）
+  if (!task) return
   // 服务端会连盘上文件一起删；进行中任务 409 拒删走错误 toast
   if (!await pixelConfirm(
-    `确定要删除「${task?.songName || '该任务'}」的下载任务吗？已下载的文件将一并移除`,
+    `确定要删除「${task.songName || '该任务'}」的下载任务吗？已下载的文件将一并移除`,
     { confirmText: '删除', danger: true }
   )) return
   deletingTaskIds.value.push(taskId)
@@ -536,10 +541,15 @@ watch(() => selectedQueue.value?.id, (queueId) => {
   }
 })
 
-// 深链意图晚到（面板已挂载后从菜单/toast 再导航）：队列已载即就地预选
-watch(() => props.preselectPlaylistId, () => {
-  if (hasLoadedQueues.value) applyPreselect(queues.value)
-})
+// 深链意图晚到（面板已挂载后从菜单/toast 再导航）：必须 loadQueues 现拉
+// 鲜快照再判——刚建的队列可能还没进上一轮轮询快照，用旧集匹配会
+// 误报「还没有下载队列」并把意图焚毁（查看进度恰是"建完即点"的场景）
+watch(
+  () => [props.preselectPlaylistId, props.preselectSeq],
+  () => {
+    if (props.preselectPlaylistId != null && hasLoadedQueues.value) loadQueues()
+  }
+)
 
 onMounted(async () => {
   await loadQueues()
