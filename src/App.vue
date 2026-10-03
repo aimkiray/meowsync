@@ -222,7 +222,7 @@
               class="ink-btn ink-btn--sm"
               :disabled="!newPlaylistName.trim()"
               @click="createPlaylistAndAdd"
-            ><PixelIcon name="plus" :size="12" /> 新建</button>
+            >新建</button>
           </div>
         </div>
       </div>
@@ -258,7 +258,7 @@
               class="ink-btn ink-btn--sm"
               :disabled="!createPlaylistName.trim()"
               @click="submitCreatePlaylist"
-            ><PixelIcon name="plus" :size="12" /> 创建</button>
+            >创建</button>
           </div>
         </div>
       </div>
@@ -309,7 +309,7 @@
                 aria-haspopup="dialog"
                 aria-label="新建歌曲（上传本地文件）"
                 @click="openSongForm()"
-              ><PixelIcon name="plus" :size="12" /> 创建</button>
+              >创建</button>
             </div>
             <div
               v-for="song in songPickerResults"
