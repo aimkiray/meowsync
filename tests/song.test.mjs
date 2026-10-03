@@ -75,8 +75,10 @@ test('fileArtifactUrl + songCoverUrl：file 工件 URL 与封面兜底链', () =
   assert.equal(songCoverUrl({ id: 'x', picUrl: 'http://a/1.jpg' }), 'http://a/1.jpg')
   assert.equal(songCoverUrl({ id: 'x', al: { picUrl: 'http://a/2.jpg' } }), 'http://a/2.jpg')
   assert.equal(songCoverUrl({ id: 'x', album: { picUrl: 'http://a/3.jpg' } }), 'http://a/3.jpg')
-  assert.equal(songCoverUrl({ id: 'x', file: { hasCover: true }, picUrl: 'http://a/1.jpg' }),
-    fileArtifactUrl('x', 'cover', undefined))
+  const fileCover = songCoverUrl({ id: 'x', file: { hasCover: true }, picUrl: 'http://a/1.jpg' })
+  assert.equal(fileCover, fileArtifactUrl('x', 'cover', undefined))
+  assert.ok(fileCover.endsWith('kind=cover'))   // 字面锚点：v 省略时不得漏 'v=undefined'
+  assert.ok(!fileCover.includes('v='))
   assert.equal(songCoverUrl({ id: 'x' }), '')
 })
 
