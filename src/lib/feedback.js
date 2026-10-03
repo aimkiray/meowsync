@@ -15,7 +15,9 @@ let toastSeq = 0
 
 // 计时簿记：toast 自动退场可被悬停/聚焦暂停续跑——action toast 的 6s 对
 // 键盘 Tab 序（Teleport 落 body 尾）不友好，hold/release 兜底 WCAG 2.2.1。
-// holds 是占用源集合（pointer/focus 可同时占用），清空才真正续跑
+// holds 是占用源集合（pointer:<id>/focus 可同时占用），清空才真正续跑。
+// deadline/remaining 用 performance.now() 单调钟——与 setTimeout 同源，
+// 系统时钟回拨不会给 remaining 注入偏斜量放大驻留
 const toastTimers = new Map() // id -> { timer, deadline, remaining, holds:Set }
 
 export function toastHold(id, source) {
@@ -25,7 +27,7 @@ export function toastHold(id, source) {
   if (t.timer) {
     clearTimeout(t.timer)
     t.timer = null
-    t.remaining = Math.max(0, t.deadline - Date.now())
+    t.remaining = Math.max(0, t.deadline - performance.now())
   }
 }
 
@@ -34,7 +36,7 @@ export function toastRelease(id, source) {
   if (!t || !t.holds.delete(source) || t.holds.size || t.timer) return
   if (t.remaining <= 0) { toastDismiss(id); return }
   t.timer = setTimeout(() => toastDismiss(id), t.remaining)
-  t.deadline = Date.now() + t.remaining
+  t.deadline = performance.now() + t.remaining
 }
 
 // 返回 toast id 供 toastDismiss 手动回收——长驻进度 toast（外部导入
@@ -46,11 +48,13 @@ export function toastRelease(id, source) {
 export function toast(text, type = 'info', duration, action = null) {
   if (type === 'error') glitchBurst()
   const id = ++toastSeq
-  const ms = duration ?? (action ? 6000 : 2600)
+  const fallback = action ? 6000 : 2600
+  const raw = Number(duration ?? fallback)
+  const ms = Number.isFinite(raw) ? raw : fallback // 非数值 duration 退化取默认，簿记不产 NaN
   state.toasts.push({ id, text: String(text), type, action })
   toastTimers.set(id, {
     timer: setTimeout(() => toastDismiss(id), ms),
-    deadline: Date.now() + ms,
+    deadline: performance.now() + ms,
     remaining: ms,
     holds: new Set()
   })

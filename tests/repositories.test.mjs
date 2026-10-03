@@ -8,12 +8,13 @@ import { tmpDataDir } from './helpers.mjs';
 process.env.DATA_DIR = tmpDataDir('meowsync-test-');
 const require = createRequire(import.meta.url);
 
-let songMetaRepo, lyricAiRepo, playlistsRepo, downloadQueuesRepo;
+let songMetaRepo, lyricAiRepo, playlistsRepo, downloadQueuesRepo, downloadTasksRepo;
 before(() => {
   songMetaRepo = require('../src/server/repositories/songLyricMeta.js');
   lyricAiRepo = require('../src/server/repositories/lyricAi.js');
   playlistsRepo = require('../src/server/repositories/playlists.js');
   downloadQueuesRepo = require('../src/server/repositories/downloadQueues.js');
+  downloadTasksRepo = require('../src/server/repositories/downloadTasks.js');
 });
 
 test('songLyricMeta：0/缺省行语义一致、upsert 覆盖、delete 归零', () => {
@@ -61,4 +62,23 @@ test('downloadQueues：neteasePlaylistId 透出（?view=downloads&pl= 深链映�
   const plNum = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777014', name: '远端单' });
   const qNum = downloadQueuesRepo.createQueue({ playlistId: plNum.id, name: 'qn', totalTasks: 0 });
   assert.equal(String(qNum.neteasePlaylistId), '777014');
+});
+
+test('downloadTasks：listStandaloneTasksByPlaylist 只收 queue_id NULL 行', () => {
+  // 「未入队单曲」分节的服务端收窄面——收养语义靠这口闸：建队列 UPDATE
+  // queue_id 后行掉出 standalone 集，混入即越权展示
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_std_x', name: 'std' });
+  const q = downloadQueuesRepo.createQueue({ playlistId: pl.id, name: 'q', totalTasks: 0 });
+  const lone = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 's-lone', songName: '独立', artist: 'a'
+  });
+  const queued = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: q.id, songId: 's-queued', songName: '入队', artist: 'a'
+  });
+  const out = downloadTasksRepo.listStandaloneTasksByPlaylist(pl.id);
+  assert.deepEqual(out.map(t => t.songId), ['s-lone']);
+  // 收养后行掉出集（findAnyTaskByPlaylistAndSongId 的收养写 queueId=新值）
+  downloadTasksRepo.updateTask(lone.id, { queueId: q.id });
+  assert.equal(downloadTasksRepo.listStandaloneTasksByPlaylist(pl.id).length, 0);
+  assert.equal(queued.queueId, q.id);
 });

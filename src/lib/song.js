@@ -1,7 +1,7 @@
 // 歌单 id 谓词唯一真相源在 src/shared/predicates.js——
 // re-export 保持既有调用面（App/SongList/PlaylistPanel/WatchView 均从此导入）
 import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE, YT_ID_RE, FILE_TRACK_ID_RE } from '../shared/predicates.js'
-import { resolveApiBaseUrl } from './api-base'
+import { resolveApiBaseUrl } from './api-base.js'
 export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, isFileTrackId } from '../shared/predicates.js'
 
 // 上传资产的归属伪歌单——与服务端 routes/uploads.js 的 UPLOADS_PLAYLIST_ID 同源契约：

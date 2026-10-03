@@ -3,7 +3,7 @@
 // 现在一趟解析返回全字段——消费端（onMounted 引导编排）按序取用。
 //
 // 契约：返回 null/[] 表示「该参数不存在或不合法」，null 形态绝不进导入链。
-import { extractBiliFavlistId, extractYouTubePlaylistId, SONGMID_RE } from './url'
+import { extractBiliFavlistId, extractYouTubePlaylistId, SONGMID_RE } from './url.js'
 
 // 一次性消费的消费键表——与下方 readShareParams 的产出字段对应（playlist/playlists
 // 合并到 playlistIds 一槽；p 是 ?bili= 的分 P 伴生参）

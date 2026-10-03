@@ -58,6 +58,18 @@ test('writeNavParams：songs/downloads 之外视图两域都不写 pl', () => {
   }
 })
 
+test('writeNavParams：交叉域不串味——songs 视图 downloadsPl 不抢占 pl 位', () => {
+  // 离开下载页后 downloadsPl ref 未清，再进 songs 必须只认 songsPl——
+  // 若两域谁后写谁赢，旧意图会借尸到歌单地址栏态上
+  const p = params()
+  writeNavParams(p, { view: 'songs', songsPl: 777, downloadsPl: 'x' })
+  assert.equal(p.get('pl'), '777')
+  // songsPl 为 null 的 songs 视图清残留意图与旧 pl——不残留死链
+  const p2 = params('pl=old')
+  writeNavParams(p2, { view: 'songs', songsPl: null, downloadsPl: 'x' })
+  assert.equal(p2.get('pl'), null)
+})
+
 test('readNavParams：view 过词表闸、pl 原样透传', () => {
   assert.deepEqual(readNavParams(params('view=songs&pl=7')), { view: 'songs', pl: '7' })
   assert.deepEqual(readNavParams(params('view=downloads')), { view: 'downloads', pl: null })
@@ -79,9 +91,11 @@ test('resolveNavView：兜底阶梯——search 空结果/watch 无曲/非法视
   assert.equal(resolveNavView({ view: 'watch', hasSong: true }), 'watch')
   assert.equal(resolveNavView({ view: 'watch', hasSelectedPlaylist: true }), 'songs')
   assert.equal(resolveNavView({ view: 'watch' }), 'home')
-  // songs/downloads 直通（各自的选中/预选副作用在 composable 层）
+  // songs/downloads 直通（各自的选中/预选副作用在 composable 层）——
+  // 全 flags 假也要直通：songs 无选中单的回落由分支早退处理，不在这层
   assert.equal(resolveNavView({ view: 'songs' }), 'songs')
-  assert.equal(resolveNavView({ view: 'downloads' }), 'downloads')
+  assert.equal(resolveNavView({ view: 'songs', hasSelectedPlaylist: false, hasSong: false }), 'songs')
+  assert.equal(resolveNavView({ view: 'downloads', hasSelectedPlaylist: false }), 'downloads')
 })
 
 test('NAV_VIEWS 词表：五视图锁定（增删视图先改这里）', () => {

@@ -56,6 +56,8 @@ export const downloadsApi = {
     });
   },
 
+  // params: { playlistId, queueId, status, standalone }——standalone=1
+  // 收窄到 queue_id IS NULL 的未入队单曲任务（下载页「未入队单曲」分节）
   listTasks: (params = {}) => {
     return http.get(`/downloads/tasks`, { params });
   },

@@ -83,7 +83,7 @@ const queueStatusFilter = ref('all')
 const hasLoadedQueues = ref(false)
 const hasLoadedTasks = ref(false)
 // 未入队单曲（queue_id NULL 的 standalone 单曲下载）：队列任务接口看不见它们，
-// 删除/重试需要可见入口——按选中队列的歌单顺带拉全量任务滤出
+// 删除/重试需要可见入口——按选中队列的歌单走 standalone=1 服务端收窄查询
 const standaloneTasks = ref([])
 const deletingTaskIds = ref([])
 
@@ -227,7 +227,13 @@ function applyPreselect(list) {
   const pl = props.preselectPlaylistId
   if (pl == null) return
   const consumeKey = `${String(pl)}::${props.preselectSeq}`
-  if (preselectConsumed.has(consumeKey)) return
+  if (preselectConsumed.has(consumeKey)) {
+    // 已结算意图的失效复检：队列在面板外死亡（侧栏删本地单级联/别端
+    // DELETE）时主动把 &pl= 死链清掉——否则刷新重放缺席 toast。
+    // 消费过即曾匹配/报错过：此刻缺席就是真死亡，不需两轮判定
+    if (!pickQueueForPlaylist(list, pl)) emit('preselect-expired')
+    return
+  }
   preselectConsumed.add(consumeKey)
   const target = pickQueueForPlaylist(list, pl)
   if (!target) {
@@ -418,8 +424,9 @@ async function retryTask(taskId) {
   }
 }
 
-// standalone 分节：按歌单 id 拉全量任务滤 queueId==null。附属面失败静默——
-// 主任务列的 tasksError 语义专属队列任务，不背它的锅
+// standalone 分节：standalone=1 服务端收窄（queue_id IS NULL）+ 客户端
+// 复核作收养窗口双保险。附属面失败静默——主任务列的 tasksError 语义
+// 专属队列任务，不背它的锅
 async function loadStandaloneTasks(playlistId) {
   // claim 必须在 null 早退之前：清空/孤儿路径不认领会放跑在途旧响应
   const my = standaloneGate.claim()
@@ -490,13 +497,15 @@ async function deleteQueue(queueId) {
 
   try {
     await downloadsApi.deleteQueue(queueId)
-    await loadQueues()
-    // 预选目标被级联带走（删的是选中队列或同歌单兄弟）——把 URL 上的
-    // &pl= 意图一并清掉，否则下次刷新重放死链报缺席
-    if (props.preselectPlaylistId != null
-        && !pickQueueForPlaylist(queues.value, props.preselectPlaylistId)) {
-      emit('preselect-expired')
+    // 删的正是预选目标所属歌单：先把意图键预焚——loadQueues 内的
+    // applyPreselect 走已结算分支只清死链不报"还没有下载队列"
+    //（队列明明刚被自己删掉，那句 toast 时机是误导）；失败不焚，
+    // 队列还在的意图理应继续生效
+    if (doomed?.neteasePlaylistId != null && props.preselectPlaylistId != null
+        && String(doomed.neteasePlaylistId) === String(props.preselectPlaylistId)) {
+      preselectConsumed.add(`${String(props.preselectPlaylistId)}::${props.preselectSeq}`)
     }
+    await loadQueues()
     // 级联连坐删同歌单兄弟队列——选中项落在同一歌单上即清，别等两轮缺席判定
     if (String(selectedQueue.value?.id) === String(queueId)
         || (doomed?.playlistId != null

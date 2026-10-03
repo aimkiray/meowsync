@@ -6,18 +6,21 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { mkdirSync, writeFileSync, existsSync, symlinkSync, readdirSync } from 'node:fs';
 import { tmpDataDir } from './helpers.mjs';
 
 process.env.DATA_DIR = tmpDataDir('meowsync-dlstack-');
 const require = createRequire(import.meta.url);
 
-let io, fs, fd, dm;
+let io, fs, fd, dm, playlistsRepo, downloadTasksRepo;
 before(() => {
   io = require('../src/server/services/download-io.js');
   fs = require('../src/server/services/download-fs.js');
   fd = require('../src/server/services/file-downloader.js');
   dm = require('../src/server/services/download-manager.js');
+  playlistsRepo = require('../src/server/repositories/playlists.js');
+  downloadTasksRepo = require('../src/server/repositories/downloadTasks.js');
 });
 
 const task = (over = {}) => ({
@@ -82,4 +85,92 @@ test('penetratesCandidates：本地 errno fatal 穿透，DNS guard/上游 4xx �
   // EFBIG 不再穿透：FAT32 落盘目录 4GiB 天花板是候选体积问题，低档能装
   const efbig = new Error('too big'); efbig.code = 'EFBIG';
   assert.equal(io.penetratesCandidates(io.errnoToFatal(efbig)), false);
+});
+
+// pruneEmptyPlaylistDirs：deleteTask/deleteSongFiles/deletePlaylistDownloadedFiles
+// 共用的骨架清理——只有全空才剪，持锁/符号链接/越界三种保命闸各有专测。
+
+test('pruneEmptyPlaylistDirs：四类子目录全空 → 连歌单根一起剪', () => {
+  const plDir = join(fs.DOWNLOAD_BASE_DIR, '880011');
+  for (const sub of ['audio', 'lyrics', 'covers', 'videos']) {
+    mkdirSync(join(plDir, sub), { recursive: true });
+  }
+  dm.pruneEmptyPlaylistDirs(880011);
+  assert.ok(!existsSync(plDir), '全空的歌单目录应整个消失');
+});
+
+test('pruneEmptyPlaylistDirs：兄弟任务的文件在场 → 该目录与歌单根都留', () => {
+  const plDir = join(fs.DOWNLOAD_BASE_DIR, '880012');
+  for (const sub of ['audio', 'lyrics', 'covers', 'videos']) {
+    mkdirSync(join(plDir, sub), { recursive: true });
+  }
+  writeFileSync(join(plDir, 'audio', 'sibling.mp3'), 'x'); // 别条任务的文件
+  dm.pruneEmptyPlaylistDirs(880012);
+  assert.ok(existsSync(join(plDir, 'audio', 'sibling.mp3')));
+  assert.ok(!existsSync(join(plDir, 'lyrics')), '空 lyrics 照剪');
+  assert.ok(!existsSync(join(plDir, 'covers')) && !existsSync(join(plDir, 'videos')));
+  assert.ok(existsSync(plDir), 'audio 还活着——歌单根不剪');
+});
+
+test('pruneEmptyPlaylistDirs：activePaths 持锁路径落在歌单根下 → 整轮不剪', () => {
+  const plDir = join(fs.DOWNLOAD_BASE_DIR, '880013');
+  for (const sub of ['audio', 'lyrics']) mkdirSync(join(plDir, sub), { recursive: true });
+  // 在途写者：mkdir 已过、createWriteStream 未开——锁键已持满 processTask 全程
+  const lockKey = join(plDir, 'audio', 'inflight.mp3');
+  dm.activePaths.add(lockKey);
+  try {
+    dm.pruneEmptyPlaylistDirs(880013);
+    assert.ok(existsSync(join(plDir, 'lyrics')), '持锁期间空目录也不能剪');
+    assert.ok(existsSync(plDir));
+  } finally {
+    dm.activePaths.delete(lockKey);
+  }
+  dm.pruneEmptyPlaylistDirs(880013); // 锁释放后同一调用正常收敛
+  assert.ok(!existsSync(plDir));
+});
+
+test('pruneEmptyPlaylistDirs：符号链接目录不拆（用户重定向布置）', () => {
+  const plDir = join(fs.DOWNLOAD_BASE_DIR, '880014');
+  const target = join(dirname(fs.DOWNLOAD_BASE_DIR), 'redirect-target-880014');
+  mkdirSync(join(plDir, 'audio'), { recursive: true });
+  mkdirSync(target, { recursive: true });
+  try {
+    symlinkSync(target, join(plDir, 'covers'), 'dir');
+  } catch {
+    return; // 平台不允许建链接时本用例无意义（Windows 未开开发者模式）
+  }
+  dm.pruneEmptyPlaylistDirs(880014);
+  assert.ok(existsSync(join(plDir, 'covers')), '符号链接本身不能被 rmdir');
+  assert.ok(existsSync(target), '链接目标更不能被动到');
+  assert.ok(!existsSync(join(plDir, 'audio')), '真空目录照剪');
+});
+
+test('pruneEmptyPlaylistDirs：逃出下载根的 playlistId 一律不碰', () => {
+  // playlistId 进 path.join 前只 String()——'..' 段能逃出 DOWNLOAD_BASE_DIR，
+  // isUnderDownloadDir 闸是唯一防线
+  const escapeDir = join(dirname(fs.DOWNLOAD_BASE_DIR), 'escape-sentinel-880015');
+  mkdirSync(escapeDir, { recursive: true });
+  dm.pruneEmptyPlaylistDirs('../escape-sentinel-880015');
+  assert.ok(existsSync(escapeDir), '下载根外的目录不许被剪');
+});
+
+test('deleteTask 端到端：行删后文件删、空骨架剪净', () => {
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_prune_e2e', name: 'prune' });
+  const t = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 's-prune', songName: 'n', artist: 'a',
+    status: 'completed'
+  });
+  const plDir = join(fs.DOWNLOAD_BASE_DIR, String(pl.id));
+  const audio = join(plDir, 'audio', 's-prune.mp3');
+  const lyrics = join(plDir, 'lyrics', 's-prune.lrc');
+  mkdirSync(dirname(audio), { recursive: true });
+  mkdirSync(dirname(lyrics), { recursive: true });
+  writeFileSync(audio, 'a');
+  writeFileSync(lyrics, 'l');
+  downloadTasksRepo.updateTask(t.id, { audioPath: audio, lyricsPath: lyrics });
+  const res = dm.deleteTask(t.id);
+  assert.equal(res.deletedFiles, 2);
+  assert.ok(!existsSync(audio) && !existsSync(lyrics));
+  assert.ok(!existsSync(plDir), '最后一条任务的骨架应剪净——不再有 reap 兜底等待');
+  assert.equal(readdirSync(fs.DOWNLOAD_BASE_DIR).includes(String(pl.id)), false);
 });

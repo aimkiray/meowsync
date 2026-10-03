@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import { LS_KEYS } from './storage'
+import { LS_KEYS } from './storage.js'
 
 // 登录态模块级单例（与本项目 composable 惯例同型——ref 模块单例）。
 // booted=false 期间 App 不渲染主壳：防止未判定就先打出一堆 401

@@ -72,6 +72,8 @@ curl http://localhost:3101/downloads/queues/{queueId}
 ```bash
 curl 'http://localhost:3101/downloads/tasks?queueId={queueId}'
 # 或按歌单/状态过滤：?playlistId=1 / ?status=completed
+# 只看未入队单曲任务：?playlistId=1&standalone=1（queue_id IS NULL 的行，
+# 即歌曲行直接下载产生、不经队列调度的任务）
 ```
 
 ### 暂停 / 恢复 / 取消 / 重试队列
@@ -159,6 +161,8 @@ data/downloads/
 - bitrate：音频码率
 - file_size：文件大小（字节）
 - duration_ms：时长（毫秒）
+- video_meta：实际到手视频档快照 JSON（{h,w,codec,br,source}，选流降档对账用）
+- provider_data：源私有履约数据快照 JSON（qq mediaMid 等 opaque blob，下载协程原样取用）
 - created_at / updated_at / completed_at：时间戳
 - UNIQUE(playlist_id, song_id)：同一歌单的同一首歌只允许一条任务行——standalone 与队列任务共享此唯一域，建队列时收养而非重复插入
 

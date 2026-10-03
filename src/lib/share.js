@@ -1,4 +1,4 @@
-import { isLocalPlaylistId, isResolvableTrackId, parseProviderShellId } from './url'
+import { isLocalPlaylistId, isResolvableTrackId, parseProviderShellId } from './url.js'
 
 /** 复制文本到剪贴板：Clipboard API → textarea+execCommand 降级。返回是否成功。 */
 export async function copyText(text) {
