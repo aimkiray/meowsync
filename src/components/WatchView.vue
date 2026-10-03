@@ -30,7 +30,8 @@
               disablepictureinpicture
               disableremoteplayback
               @error="onMediaVideoError"
-              @click="$emit('toggle-play')"
+              @pointerdown="onVideoPointerDown"
+              @click="onVideoClick"
             ></video>
             <!-- 悬停控制层：中央半透明播放/暂停走全局 toggle-play（视频元素静音、
                  时钟锚 Howler——syncMediaVideo 自动跟着收放）；右下全屏锁在 wrap
@@ -718,6 +719,12 @@ export default {
       if (props.isPlaying) controlsHideTimer = setTimeout(() => { controlsOn.value = false }, 2600)
     }
     const controlsVisible = computed(() => controlsOn.value || !props.isPlaying)
+    // 首触语义（YTM 同款）：层隐时首触只戳醒不暂停（戳＝亮控件，再点才动作），
+    // 层显态点击才 toggle。pointerdown 在 video 上先于 wrap 冒泡的戳醒执行，
+    // 捕获的是戳前可见性——桌面鼠标路径恒先 mousemove 故点击恒可暂停
+    let tapWasVisible = false
+    const onVideoPointerDown = () => { tapWasVisible = controlsVisible.value }
+    const onVideoClick = () => { if (tapWasVisible) emit('toggle-play') }
     watch(videoFullscreen, (on) => {
       clearTimeout(controlsHideTimer)
       // 进全屏走 poke（亮一轮＋播放中顺便挂上自隐计时）；退出即清态
@@ -939,8 +946,9 @@ export default {
       canElementFs,
       controlsVisible,
       pokeControls,
+      onVideoPointerDown,
+      onVideoClick,
       videoOn,
-      mediaVideoFailed,
       mediaVideoActive,
       mediaVideoKey,
       mediaVideoUrl,
@@ -1027,9 +1035,9 @@ export default {
 
 /* 视频悬停控制层：默认隐，JS --on 驱动露出（戳醒 2.6s 自隐，暂停常显；
    全屏/非全屏/触屏同律——CSS :hover 与 hover:none 都会让控件恒显压屏，
-   故全态移交 JS）；focus-within 兜键盘 Tab——透明度为 0 的键可聚焦但
-   不可见是键盘陷阱。层自身不吃指针，穿透到视频/行背景，两枚子键各开
-   pointer-events */
+   故全态移交 JS）；键盘 Tab 由 :has(:focus-visible) 兜底露出——透明度
+   为 0 的键可聚焦但不可见是键盘陷阱。层自身不吃指针，穿透到视频/行
+   背景，两枚子键各开 pointer-events */
 .watch-video-controls {
   position: absolute;
   inset: 0;
@@ -1066,7 +1074,7 @@ export default {
 .watch-cover-wrap--idle { cursor: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .watch-video-controls, .watch-video-toggle { transition: none; }
+  .watch-video-controls, .watch-video-toggle, .watch-video-fs { transition: none; }
 }
 
 /* 中央播放/暂停：半透明墨底圆形——像素风的方角体系里，圆形是「媒体

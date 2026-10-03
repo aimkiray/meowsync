@@ -974,13 +974,21 @@ export default {
           }
           break
         case 'q': case 'Q':
-          if (currentSong.value) openWatchPanel('queue')
+          // 元素全屏期间禁导航——在 top layer 下隐形拆页（watchBack 会
+          // 卸载 WatchView 顺带退全屏），与 'f' 闸同一防的事故形态
+          if (currentSong.value
+            && !(document.fullscreenElement || document.webkitFullscreenElement)) {
+            openWatchPanel('queue')
+          }
           break
         case '/':
           e.preventDefault()
-          // 沉浸层开着时搜索框在遮罩下不可见——接焦后 INPUT 守卫吞掉
-          // 全部热键且零视觉反馈，是比"没反应"更糟的静默失能
-          if (!isFullscreenPlayerOpen.value) topNavRef.value?.focusSearch()
+          // 沉浸层/元素全屏开着时搜索框在遮罩下不可见——接焦后 INPUT 守卫
+          // 吞掉全部热键且零视觉反馈，是比"没反应"更糟的静默失能
+          if (!isFullscreenPlayerOpen.value
+            && !(document.fullscreenElement || document.webkitFullscreenElement)) {
+            topNavRef.value?.focusSearch()
+          }
           break
       }
     }
