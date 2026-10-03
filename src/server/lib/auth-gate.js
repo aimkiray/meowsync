@@ -1,7 +1,7 @@
 // 进站大门：session cookie 优先，x-download-token 作 API 客户端旁路。
 // users 表空 → 全放行（向后兼容现有局域网无登录部署——与 DOWNLOAD_TOKEN
 // 「未配即开放」同口径；公网部署请完成 /auth/setup）。
-// 注册顺序见 netease-api-server.js：cors → 本中间件 → 静态 → 路由。
+// 注册顺序见 netease-api-server.js：cors → 本中间件 → compress → 静态 → 路由。
 const { isApiPath } = require('./api-path');
 const { corsOrigins, trustProxyEnabled } = require('./env');
 const { fail } = require('./http-error');

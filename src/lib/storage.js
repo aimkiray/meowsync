@@ -26,10 +26,14 @@ export function readJSON(key, fallback = null) {
   }
 }
 
+// 返回成败——配额满/存储禁用时调用方决定是否告知用户（此前静默 console.warn，
+// 「已保存」类 toast 会撒谎：刷新后数据消失）
 export function writeJSON(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value))
+    return true
   } catch (e) {
     console.warn(`localStorage 写入 ${key} 失败:`, e.message)
+    return false
   }
 }

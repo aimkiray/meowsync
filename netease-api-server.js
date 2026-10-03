@@ -98,8 +98,9 @@ const hasDist = fs.existsSync(path.join(distDir, 'index.html'));
 if (hasDist) {
   const staticMiddleware = serveStatic({
     root: distDir,
-    // dist 出现 .br/.gz/.zst 伴生档即自动投送（postbuild 产物；暂无也无害，
-    // 仅多一次 stat）。Accept-Encoding 不带 br 的客户端静默走压缩中间件的 gzip
+    // dist 出现 .br/.gz 伴生档即自动投送（postbuild 产物；暂无也无害，仅
+    // 多一次 stat；.zst 变体也支持但 postbuild 不产）。Accept-Encoding 不带
+    // br 的客户端静默走压缩中间件的 gzip
     precompressed: true,
     onFound: (_p, c) => {
       // /assets/* 文件名带内容 hash（Vite [name]-[hash]）——内容变名就变，
@@ -111,9 +112,13 @@ if (hasDist) {
         : 'no-cache');
     }
   });
-  // 仅 GET/HEAD 走静态文件（Express serve-static 语义），其余方法放行给 API/404
+  // 仅 GET/HEAD 走静态文件（Express serve-static 语义），其余方法放行给 API/404。
+  // Range 头在进 serveStatic 前剥掉：precompressed 对 Range 会按 .br/.gz 档
+  // 切字节段再报 206（Content-Range 对着压缩流——解码必废，hono/node-server
+  // 上游缺陷）；剥头回 200 全量，前端本就不对静态资源发 Range
   app.use('/*', (c, next) => {
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next();
+    c.req.raw.headers.delete('range');
     return staticMiddleware(c, next);
   });
 }

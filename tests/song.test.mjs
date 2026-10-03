@@ -5,7 +5,8 @@ import {
   songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, visibleSongs,
   songSource, songSourceName,
   songSourceUrl, externalArtistName, externalCoverUrl, applyTrackOverrides,
-  isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId
+  isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
+  slimTrack
 } from '../src/lib/song.js'
 
 // song.js 导出面烟测——本文件曾藏「export {x} from 'y' 不绑本地作用域，
@@ -204,4 +205,59 @@ test('songThumbUrl：file_ 曲放行原图、provider 曲走缩略、空曲空�
   assert.equal(songThumbUrl(bv, 80), 'https://i0.hdslb.com/bfs/a.jpg@80w_80h_1c.jpg')
   assert.equal(songThumbUrl(null, 96), '')
   assert.equal(songThumbUrl({ id: '1' }, 96), '') // 无封面字段
+})
+
+// ── slimTrack：localStorage 持久化投影——白名单字段缺失=刷新后功能退化 ──
+
+test('slimTrack：接口原对象瘦到白名单——alia/privilege 深字段/无关键全剥', () => {
+  const fat = {
+    id: '1', name: '歌', ar: [{ name: '甲', id: 7, tns: ['x'] }], artists: [{ name: '不该取' }],
+    al: { name: '专', picUrl: 'http://c', id: 55, publishTime: 1, alia: ['big'], company: 'x' },
+    picUrl: 'http://p', dt: 200000, duration: 199, fee: 1, mv: 99,
+    privilege: { fee: 1, chargeInfoList: [{ a: 1 }], freeTrialPrivilege: { big: true }, payed: 1 },
+    alia: ['别'], tns: ['t'], mark: 1, copyright: 1, mst: 9, cp: 2, sq: { big: 1 },
+    bilibili: { bvid: 'BV1', author: 'UP' }, neteaseId: 'n1', custom: { lyricOffset: 5 },
+  }
+  const s = slimTrack(fat)
+  assert.deepEqual(s, {
+    id: '1', name: '歌',
+    ar: [{ name: '甲' }],                              // 只留 name——id/tns 剥
+    al: { id: 55, name: '专', picUrl: 'http://c', pic_str: undefined },
+    picUrl: 'http://p', dt: 200000, duration: 199, fee: 1,
+    privilege: { fee: 1 },                             // 套餐明细全剥
+    neteaseId: 'n1',
+    bilibili: { bvid: 'BV1', author: 'UP' },           // provider 整对象透传
+    youtube: undefined, qq: undefined, file: undefined,
+    custom: { lyricOffset: 5 },
+  })
+  // 剥掉的字段不在键集里（不是 undefined——真没有）
+  for (const k of ['mv', 'alia', 'tns', 'mark', 'copyright', 'mst', 'cp', 'sq', 'artists', 'album'])
+    assert.ok(!(k in s), `${k} 不该出现在瘦身结果`)
+})
+
+test('slimTrack：旧数据形态——字符串 ar 成员/字符串 al/artists 回折不丢', () => {
+  const legacy = {
+    id: '2', name: '老歌',
+    artists: ['纯字符串艺人', { name: '混合对象' }], // ar 缺席时回折 artists
+    album: '字符串专辑',                              // 非对象原样透传
+    dt: 100,
+  }
+  const s = slimTrack(legacy)
+  assert.deepEqual(s.ar, [{ name: '纯字符串艺人' }, { name: '混合对象' }])
+  assert.equal(s.al, '字符串专辑')
+})
+
+test('slimTrack：al 缺 picUrl 时回捞 album.picUrl（封面不丢）', () => {
+  const s = slimTrack({ id: '3', al: { name: 'A' }, album: { name: 'B', picUrl: 'http://b' } })
+  assert.equal(s.al.picUrl, 'http://b') // 主形 al 胜名，封面回捞次形
+  assert.equal(s.al.name, 'A')
+})
+
+test('slimTrack：空值/无 id 原样返回；provider/custom/file 整对象透传', () => {
+  assert.equal(slimTrack(null), null)
+  assert.equal(slimTrack(undefined), undefined)
+  const bare = { name: '没 id' }
+  assert.equal(slimTrack(bare), bare)
+  const f = { id: 'file_x', file: { hasVideo: true, hasCover: true, coverV: 2, videoV: 1 } }
+  assert.deepEqual(slimTrack(f).file, f.file)
 })

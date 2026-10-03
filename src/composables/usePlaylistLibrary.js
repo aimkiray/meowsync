@@ -4,6 +4,7 @@ import { downloadsApi } from '../api/downloads.js'
 import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
 import { toast } from '../lib/feedback.js'
 import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides, slimTrack } from '../lib/song.js'
+import { SAVED_QUEUE_PREFIX } from '../shared/predicates.js'
 import { applyTrackOrder, groupTracksByArtist, moveTrackByIds } from '../lib/track-order.js'
 
 const PLAYLISTS_STORAGE_KEY = LS_KEYS.PLAYLISTS
@@ -42,13 +43,35 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
   const pruneSavedQueues = () => {
     const queueIndexes = []
     userPlaylists.value.forEach((p, i) => {
-      if (String(p?.id || '').startsWith('saved_queue_')) queueIndexes.push(i)
+      if (String(p?.id || '').startsWith(SAVED_QUEUE_PREFIX)) queueIndexes.push(i)
     })
+    const pruned = []
     for (const i of queueIndexes.slice(SAVED_QUEUE_CAP).reverse()) {
+      pruned.push(userPlaylists.value[i].id)
       userPlaylists.value.splice(i, 1)
+    }
+    if (!pruned.length) return
+    // 被剪的队列可能建过服务端镜像（镜像行+下载任务+下载档）——与
+    // local_pl_mix_ 剪枝同律级联清，否则孤儿行+文件永久泄漏。
+    // file_ 上传资产不动：那是用户原档，静默删是真数据丢失
+    for (const pid of pruned) downloadsApi.removeLocalMirror(pid).catch(() => {})
+    // 悬空引用照 removePlaylistFromLibrary 同口径清：selectedPlaylist 残留
+    // 会让行级写路径对脱库对象落盘谎称成功；playingPlaylistId 残留会持续
+    // 写进 player-state，恢复时 find 落空还盖死 selectedPlaylistId 回落
+    for (const pid of pruned) {
+      if (String(selectedPlaylist.value?.id) === String(pid)) {
+        gates.select.invalidate()
+        loadingSongs.value = false
+        selectedPlaylist.value = null
+        songs.value = []
+      }
+      if (String(playingPlaylistId.value) === String(pid)) {
+        playingPlaylistId.value = null
+      }
     }
   }
 
+  let saveFailWarned = false
   const savePlaylistsToStorage = () => {
     pruneSavedQueues()
     // 持久化时剥离大体积 tracks（selectedPlaylist 切回时会重新拉取详情），
@@ -68,7 +91,11 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       }
       return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
     })
-    writeJSON(PLAYLISTS_STORAGE_KEY, toStore)
+    // 配额写爆一次性提示——静默失败=刷新后歌单库消失，比提示烦人严重得多
+    if (!writeJSON(PLAYLISTS_STORAGE_KEY, toStore) && !saveFailWarned) {
+      saveFailWarned = true
+      toast('歌单库存储空间已满，本次修改刷新后可能丢失', 'error')
+    }
   }
 
   const loadPlaylistsFromStorage = () => {

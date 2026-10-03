@@ -15,9 +15,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- 字族表非阻塞加载：自托管/局域网部署下 fonts.googleapis.com 可能
-         不可达，同步阻塞会把首帧拖到请求超时——media=print 先不渲，onload
-         切回 all；noscript 兜底无 JS 环境（display=swap 已在 URL 里） -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+         不可达，同步阻塞会把首帧拖到请求超时——media=print 先不渲，加载完
+         由下方主题脚本切回 all（不能写 onload 内联处理器：生产 CSP 的
+         script-src 没有 unsafe-hashes 会拒执→media 恒为 print 字族全灭）；
+         noscript 兜底无 JS 环境（display=swap 已在 URL 里） -->
+    <link id="gfonts" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet" media="print">
     <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet"></noscript>
     <script>
       // 首帧前恢复持久化主题，避免主题闪变；未知值由 CSS 自然回落默认
@@ -26,6 +28,13 @@
         var t = localStorage.getItem('meowsync-theme')
         if (t) document.documentElement.setAttribute('data-theme', t)
       } catch (e) {}
+      // 字族表 media 翻转：load 派发只发生在任务间隙，本同步脚本内
+      // gf.sheet 已就位即直翻（缓存命中），否则挂监听——两路不重叠
+      var gf = document.getElementById('gfonts')
+      if (gf) {
+        if (gf.sheet) gf.media = 'all'
+        else gf.addEventListener('load', function () { gf.media = 'all' })
+      }
     </script>
     <style>
       /* 启动闪屏——先于令牌 CSS 加载，字面量须与 style.css :root 默认主题保持一致；

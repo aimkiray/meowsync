@@ -134,11 +134,13 @@ export function usePlayer({
     }
 
     const restorePlaybackState = async (savedState) => {
-      // 优先按播放队列所属歌单恢复（播 A 浏览 B 的场景），兼容旧存档回落浏览态
-      const targetPlaylistId = savedState?.playingPlaylistId ?? savedState?.selectedPlaylistId
-      if (!targetPlaylistId || !savedState?.currentSongId) return
-
-      const playlist = userPlaylists.value.find(p => String(p.id) === String(targetPlaylistId))
+      if (!savedState?.currentSongId) return
+      // 优先按播放队列所属歌单恢复（播 A 浏览 B 的场景），兼容旧存档回落
+      // 浏览态；死 id（被 FIFO 修剪/手动删的 saved_queue_ 等）要跳过而非
+      // 挡死回落——按序逐个 resolve 到库里真实存在的单
+      const playlist = [savedState?.playingPlaylistId, savedState?.selectedPlaylistId]
+        .map(id => id != null && userPlaylists.value.find(p => String(p.id) === String(id)))
+        .find(Boolean)
       if (!playlist) return
 
       const selected = await selectPlaylist(playlist)
