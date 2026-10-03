@@ -2,7 +2,7 @@ import { ref, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music'
 import { apiErrorMessage } from '../api/http'
 import { toast } from '../lib/feedback'
-import { isLocalPlaylistId } from '../lib/url'
+import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl'
 import { buildQQSong } from '../lib/external-songs'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
@@ -32,7 +32,8 @@ export function useSearchNav({
   const searchSongLoadingMore = ref(false)
 
   // ── URL 导航（YTM 式：视图/歌单可寻址，浏览器前进后退生效） ──
-  const NAV_VIEWS = new Set(['home', 'songs', 'search', 'watch', 'downloads'])
+  // 寻址规则本体在 lib/navUrl.js（writeNavParams/readNavParams/resolveNavView
+  // 纯函数可测）；这里只剩 window.history/location 的薄壳与歌单回选副作用
   let suppressNavPush = false // popstate 回放时不再重复入栈
 
   // 首帧视图种子：onMounted 的恢复链是 await 串行（歌单详情/续播动辄秒级），
@@ -57,21 +58,11 @@ export function useSearchNav({
   // 会记成"上一个"歌单（off-by-one 历史错位）
   const buildNavUrl = (playlist = selectedPlaylist.value) => {
     const url = new URL(window.location.href)
-    url.searchParams.delete('view')
-    url.searchParams.delete('pl')
-    url.searchParams.set('view', centerView.value)
-    // 本地内存态歌单（single_song_/saved_queue_）不进 URL——id 非数字，刷新也无法按歌单恢复
-    if (
-      centerView.value === 'songs' &&
-      playlist?.id != null &&
-      !isLocalPlaylistId(playlist.id)
-    ) {
-      url.searchParams.set('pl', String(playlist.id))
-    }
-    // downloads 深链的 pl 是预选意图而非歌单态——独立于上面的 songs 分支保留
-    if (centerView.value === 'downloads' && downloadsPl.value != null) {
-      url.searchParams.set('pl', String(downloadsPl.value))
-    }
+    writeNavParams(url.searchParams, {
+      view: centerView.value,
+      songsPl: playlist?.id,
+      downloadsPl: downloadsPl.value
+    })
     return url
   }
 
@@ -88,42 +79,34 @@ export function useSearchNav({
   // popstate → 按 URL 还原视图；view=songs&pl= 时回选对应歌单
   const applyUrlNav = () => {
     const params = new URLSearchParams(window.location.search)
-    const view = params.get('view')
-    if (!view || !NAV_VIEWS.has(view)) {
-      centerView.value = 'home'
-      return
-    }
+    const { view, pl } = readNavParams(params)
     if (view === 'songs') {
-      const plId = params.get('pl')
-      const target = plId
-        ? userPlaylists.value.find(p => String(p.id) === String(plId))
+      const target = pl
+        ? userPlaylists.value.find(p => String(p.id) === String(pl))
         : null
       // pl 无效/歌单已被删：有选中歌单则仅切视图，否则退回首页。
       // 库外数字 pl = 预览单地址栏态——回落预览路径让 ?pl= 可刷新/可回退
       //（分享链 ?playlist=X&view=songs&pl=X 的接收端若删过默认单也能预览兜底）
       if (target) selectPlaylist(target)
-      else if (plId && /^\d+$/.test(plId)) { previewPlaylistById(plId); return }
+      else if (pl && /^\d+$/.test(pl)) { previewPlaylistById(pl); return }
       else if (!selectedPlaylist.value) { centerView.value = 'home'; return }
     }
     // popstate 回放深链：pl 与 seq 一起回放——消费键 pl::seq 随条目冻结，
     // 回到已结算过的条目是幂等 no-op，不会强抢用户在其后手选的队列
     if (view === 'downloads') {
-      downloadsPl.value = params.get('pl')
+      downloadsPl.value = pl
       // state=null 的只有归一化首条目，其 pl 意图在冷启动 seq 0 时已结算
       downloadsPlSeq.value = window.history.state?.dplSeq ?? 0
     }
-    // 冷加载的 ?view=search 没有任何结果，落在空网格上不如回首页
-    if (view === 'search' && !searchResults.value.length
-        && !searchSongResults.value.length && !searching.value) {
-      centerView.value = 'home'
-      return
-    }
-    // watch 页必须有正在播放的歌——冷加载空 watch 没有意义
-    if (view === 'watch' && !currentSong.value) {
-      centerView.value = selectedPlaylist.value ? 'songs' : 'home'
-      return
-    }
-    centerView.value = view
+    // 兜底阶梯（lib 纯函数）：search 无结果落 home、watch 无曲落 songs/home
+    centerView.value = resolveNavView({
+      view,
+      hasSelectedPlaylist: selectedPlaylist.value != null,
+      hasSong: currentSong.value != null,
+      hasSearchResults: searchResults.value.length > 0
+        || searchSongResults.value.length > 0,
+      searching: searching.value
+    })
   }
 
   // 规范化当前历史条目：回退到首个条目时不会退出应用。
@@ -194,6 +177,15 @@ export function useSearchNav({
     centerView.value = 'downloads'
     sidebarOpen.value = false // 移动端抽屉下点进来也要落主区
     pushNavState()
+  }
+
+  // 预选意图的失效通道：DownloadsPanel 匹配落空（队列已级联清掉等）或
+  // 预选队列被删除时上报——清意图并在当前历史条目上同步 URL，否则 &pl=
+  // 死链挂在地址栏，刷新/回放每次都重放一次「还没有下载队列」
+  const clearDownloadsPl = () => {
+    if (downloadsPl.value == null) return
+    downloadsPl.value = null
+    window.history.replaceState(window.history.state, '', buildNavUrl().toString())
   }
 
   // 侧栏选歌单：回歌曲视图 + 移动端收起抽屉
@@ -384,7 +376,7 @@ export function useSearchNav({
     // 导航
     buildNavUrl, pushNavState, applyUrlNav, normalizeNavEntry,
     navHome, closeSearchView, toggleCenterView, watchBack,
-    downloadsPl, downloadsPlSeq, openDownloadsForPlaylist,
+    downloadsPl, downloadsPlSeq, openDownloadsForPlaylist, clearDownloadsPl,
     enterWatch, openWatchPanel,
     // 打开动作
     selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,

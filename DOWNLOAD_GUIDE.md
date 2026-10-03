@@ -124,8 +124,10 @@ data/downloads/
     │   └── {艺术家} - {歌名}.{mp3|m4a|flac|...}   # 扩展名跟随实际音频源格式
     ├── lyrics/
     │   └── {艺术家} - {歌名}.lrc
-    └── covers/
-        └── {song_id}.{jpg|png|webp}
+    ├── covers/
+    │   └── {song_id}.{jpg|png|webp}
+    └── videos/
+        └── {艺术家} - {歌名}.mp4                 # 仅 download_video=1 时产出
 ```
 
 下载中的文件以 `*.part` 后缀暂存，校验通过后才重命名为最终名。
@@ -134,27 +136,31 @@ data/downloads/
 
 ### download_queues（下载队列）
 - id：队列 ID
-- playlist_id：歌单 ID
+- playlist_id：歌单 ID（FK → playlists，级联删除）
 - name：队列名称
 - status：状态（pending/running/paused/completed/failed/cancelled）
-- total_tasks：总任务数
-- completed_tasks：已完成任务数
-- failed_tasks：失败任务数
+- total_tasks / completed_tasks / failed_tasks：任务计数（recount 维护）
 - bitrate：音频码率
 - concurrent_limit：并发数
+- download_audio / download_lyrics / download_cover / download_video：工件开关（0/1）
+- created_at / updated_at / completed_at：时间戳
 
 ### download_tasks（下载任务）
 - id：任务 ID
-- playlist_id：歌单 ID
-- song_id：歌曲 ID
-- song_name：歌曲名称
-- artist：艺术家
+- playlist_id：歌单 ID（FK → playlists，级联删除）
+- queue_id：所属队列 ID（FK → download_queues，级联删除）；**NULL = 未入队单曲任务**（歌曲行直接下载产生，无队列调度器，靠自身循环重试）
+- song_id / song_name / artist / album / cover_url：曲目身份
 - status：状态（pending/downloading/completed/failed）
 - progress：进度（0-100）
+- error_message：失败原因
 - retry_count：重试次数
-- audio_path：音频文件路径
-- lyrics_path：歌词文件路径
-- cover_path：封面文件路径
+- download_audio / download_lyrics / download_cover / download_video：工件开关（0/1）
+- audio_path / lyrics_path / cover_path / video_path：落盘文件路径
+- bitrate：音频码率
+- file_size：文件大小（字节）
+- duration_ms：时长（毫秒）
+- created_at / updated_at / completed_at：时间戳
+- UNIQUE(playlist_id, song_id)：同一歌单的同一首歌只允许一条任务行——standalone 与队列任务共享此唯一域，建队列时收养而非重复插入
 
 ## VIP 歌曲解锁
 

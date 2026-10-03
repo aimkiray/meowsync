@@ -13,6 +13,30 @@ const state = reactive({
 
 let toastSeq = 0
 
+// 计时簿记：toast 自动退场可被悬停/聚焦暂停续跑——action toast 的 6s 对
+// 键盘 Tab 序（Teleport 落 body 尾）不友好，hold/release 兜底 WCAG 2.2.1。
+// holds 是占用源集合（pointer/focus 可同时占用），清空才真正续跑
+const toastTimers = new Map() // id -> { timer, deadline, remaining, holds:Set }
+
+export function toastHold(id, source) {
+  const t = toastTimers.get(id)
+  if (!t) return
+  t.holds.add(source)
+  if (t.timer) {
+    clearTimeout(t.timer)
+    t.timer = null
+    t.remaining = Math.max(0, t.deadline - Date.now())
+  }
+}
+
+export function toastRelease(id, source) {
+  const t = toastTimers.get(id)
+  if (!t || !t.holds.delete(source) || t.holds.size || t.timer) return
+  if (t.remaining <= 0) { toastDismiss(id); return }
+  t.timer = setTimeout(() => toastDismiss(id), t.remaining)
+  t.deadline = Date.now() + t.remaining
+}
+
 // 返回 toast id 供 toastDismiss 手动回收——长驻进度 toast（外部导入
 // 最坏分钟级）在完成后需要立即退场，不能挂着等超时。
 // action: { label, onAction }——带操作入口的 toast（"查看进度"类跳转），
@@ -24,11 +48,19 @@ export function toast(text, type = 'info', duration, action = null) {
   const id = ++toastSeq
   const ms = duration ?? (action ? 6000 : 2600)
   state.toasts.push({ id, text: String(text), type, action })
-  setTimeout(() => toastDismiss(id), ms)
+  toastTimers.set(id, {
+    timer: setTimeout(() => toastDismiss(id), ms),
+    deadline: Date.now() + ms,
+    remaining: ms,
+    holds: new Set()
+  })
   return id
 }
 
 export function toastDismiss(id) {
+  const rec = toastTimers.get(id)
+  if (rec?.timer) clearTimeout(rec.timer)
+  toastTimers.delete(id)
   const i = state.toasts.findIndex(t => t.id === id)
   if (i !== -1) state.toasts.splice(i, 1)
 }

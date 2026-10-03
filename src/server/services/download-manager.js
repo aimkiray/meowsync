@@ -1147,8 +1147,9 @@ function getQueueProgress(queueId) {
 
 const VALID_TASK_STATUSES = new Set(['pending', 'downloading', 'completed', 'failed']);
 
-// 任务列表查询：playlistId 支持本地 id 或网易云 id（未导入则空数组，不触发导入）
-function listTasks({ playlistId, queueId, status } = {}) {
+// 任务列表查询：playlistId 支持本地 id 或网易云 id（未导入则空数组，不触发导入）。
+// standalone=1 收窄到 queue_id IS NULL 的单曲任务（「未入队单曲」分节专属面）
+function listTasks({ playlistId, queueId, status, standalone } = {}) {
   if (queueId !== undefined && queueId !== null && queueId !== '') {
     const n = Number(queueId);
     if (!Number.isInteger(n) || n <= 0) {
@@ -1158,7 +1159,11 @@ function listTasks({ playlistId, queueId, status } = {}) {
   }
   if (playlistId !== undefined && playlistId !== null && playlistId !== '') {
     const resolved = findExistingPlaylistId(playlistId);
-    return resolved === null ? [] : downloadTasksRepo.listTasksByPlaylist(resolved);
+    if (resolved === null) return [];
+    const wantStandalone = standalone === true || standalone === '1' || standalone === 'true';
+    return wantStandalone
+      ? downloadTasksRepo.listStandaloneTasksByPlaylist(resolved)
+      : downloadTasksRepo.listTasksByPlaylist(resolved);
   }
   if (status) {
     if (!VALID_TASK_STATUSES.has(status)) {
@@ -1203,6 +1208,9 @@ function deleteTask(taskId) {
   })();
   retryAfter.delete(taskId); // 行已不存在，退避条目失去意义
   const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath, task.videoPath]);
+  // 单任务删除同口径剪空骨架——否则最后一条 standalone 删完仍留
+  // downloads/<pl>/ 空目录等下次启动 reapOrphanFiles 兜底
+  pruneEmptyPlaylistDirs(task.playlistId);
   return { success: true, deletedFiles };
 }
 
@@ -1754,25 +1762,30 @@ async function deletePlaylistFiles(playlistId) {
   }
 }
 
-// 行删除事务提交后执行文件与目录清理（配合 deletePlaylistFiles 的返回值）
-function cleanupPlaylistFilesAndDirs(playlistId, filePaths) {
-  deleteFiles(filePaths);
+// 空目录修剪：type 目录与歌单根目录仅全空才删——同歌单其他任务
+// （standalone/兄弟队列）的文件在场时 rmdirSync 安全跳过
+function pruneEmptyPlaylistDirs(playlistId) {
   const playlistDir = path.join(DOWNLOAD_BASE_DIR, String(playlistId));
   try {
-    if (isUnderDownloadDir(playlistDir)) {
-      for (const sub of ['audio', 'lyrics', 'covers', 'videos']) {
-        const subDir = path.join(playlistDir, sub);
-        if (fs.existsSync(subDir) && fs.readdirSync(subDir).length === 0) {
-          fs.rmdirSync(subDir);
-        }
+    if (!isUnderDownloadDir(playlistDir)) return;
+    for (const sub of ['audio', 'lyrics', 'covers', 'videos']) {
+      const subDir = path.join(playlistDir, sub);
+      if (fs.existsSync(subDir) && fs.readdirSync(subDir).length === 0) {
+        fs.rmdirSync(subDir);
       }
-      if (fs.existsSync(playlistDir) && fs.readdirSync(playlistDir).length === 0) {
-        fs.rmdirSync(playlistDir);
-      }
+    }
+    if (fs.existsSync(playlistDir) && fs.readdirSync(playlistDir).length === 0) {
+      fs.rmdirSync(playlistDir);
     }
   } catch {
     // 目录清理失败无害——跳过不阻塞删除流程
   }
+}
+
+// 行删除事务提交后执行文件与目录清理（配合 deletePlaylistFiles 的返回值）
+function cleanupPlaylistFilesAndDirs(playlistId, filePaths) {
+  deleteFiles(filePaths);
+  pruneEmptyPlaylistDirs(playlistId);
 }
 
 // 歌单删除的完整级联：deletingPlaylists 锁必须持到 playlist 行级联删除之后才释放——
