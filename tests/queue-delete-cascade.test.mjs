@@ -349,3 +349,41 @@ test('status/file 契约：body.data.task 嵌套形态 + kind=video 的 Range �
   const q = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 0 });
   await del(q.id);
 });
+
+test('kind=audio 的 videoPath 兜底仅限 file_ 曲：bv_ 仅视频行 404', async () => {
+  // 收紧前：audio 请求在 audioPath 缺位时无条件回落 videoPath——bv_/yt_
+  // 任务（UI 恒 downloadAudio:true，仅视频行只能手工 API 构造）会把 mp4
+  // 当音频源播，等于 watch 页外消费视频档。收紧后只有 file_ 上传曲
+  // （video-only 上传没有音频工件，mp4 音轨即其音频）保留回落。
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '777019', name: 'pl-audiofb' });
+
+  // bv_ completed 行：无 audioPath、videoPath 落盘（手工构造形态）
+  const bvTask = tasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 'bv_BV7770190000', songName: '曲',
+    artist: '', status: 'completed', downloadAudio: false, downloadVideo: true
+  });
+  const bvVideo = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'bv_BV7770190000.mp4');
+  mkdirSync(dirname(bvVideo), { recursive: true });
+  writeFileSync(bvVideo, 'video-bytes');
+  tasksRepo.updateTask(bvTask.id, { videoPath: bvVideo });
+  const bvRes = await app.request(
+    `http://t/downloads/songs/bv_BV7770190000/file?playlistId=${pl.id}&kind=audio`);
+  assert.equal(bvRes.status, 404, 'bv_ 仅视频行的 audio 请求应 404 而非供 mp4');
+  // 同曲 kind=video 仍供档（WatchView 本地视频探测链不受影响）
+  const bvVid = await app.request(
+    `http://t/downloads/songs/bv_BV7770190000/file?playlistId=${pl.id}&kind=video`);
+  assert.equal(bvVid.status, 200);
+
+  // file_ completed 行：video-only 上传曲保留 audio→videoPath 兜底
+  const fileTask = tasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 'file_abcd1234', songName: '传',
+    artist: '', status: 'completed', downloadAudio: true, downloadVideo: true
+  });
+  const fileVideo = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'file_abcd1234.mp4');
+  writeFileSync(fileVideo, 'upload-video-bytes');
+  tasksRepo.updateTask(fileTask.id, { videoPath: fileVideo });
+  const fileRes = await app.request(
+    `http://t/downloads/songs/file_abcd1234/file?playlistId=${pl.id}&kind=audio`);
+  assert.equal(fileRes.status, 200, 'file_ video-only 曲的 audio 请求应回落 videoPath');
+  assert.match(fileRes.headers.get('content-type') || '', /video\/mp4/);
+});
