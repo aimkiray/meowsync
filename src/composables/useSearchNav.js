@@ -10,7 +10,8 @@ import { buildQQSong } from '../lib/external-songs.js'
 //
 // deps（App 注入的跨域共享）：
 //   gates.search / gates.preview — 搜索与预览竞态闸
-//   searchQuery / currentSong / watchTab — App 持有的共享输入与播放器态
+//   searchQuery / currentSong / watchTab / isFullscreenPlayerOpen — App 持有的
+//     共享输入与播放器态（沉浸层开时 popstate 先收层不换页）
 //   userPlaylists / selectedPlaylist / loadingSongs / selectPlaylist — 库域
 //   playSong / playSongFromSearch / playSongFromRelated / playPlaylist —
 //     播放器域（usePlayer 先实例化；惰性转发是双向循环依赖下的惯例写法）

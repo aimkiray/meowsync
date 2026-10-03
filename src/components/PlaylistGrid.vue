@@ -187,6 +187,11 @@ export default {
       type: Array,
       default: () => []
     },
+    // 当前搜索词——滚动记忆键的身份段：换词重挂不还旧词的位置
+    query: {
+      type: String,
+      default: ''
+    },
     // 服务端分页契约：null=本批不可深挖（QQ 源）；数字=上游 songCount
     songTotal: {
       type: Number,
@@ -295,20 +300,26 @@ export default {
     })
 
     // 离场滚动记忆：搜索结果数据在 nav 层不丢，丢的是滚动位与两个前缀窗——
-    // 重挂先把两窗物化回各自深度再还 scrollTop，否则被窗高钳在首页处
-    const SEARCH_SCROLL_KEY = 'search-grid'
+    // 重挂先把两窗物化回各自深度再还 scrollTop，否则被窗高钳在首页处。
+    // 键编查询词：别处（watch 页顶栏）发起的新搜索重挂本组件时，旧词位置
+    // 不会串进新词结果（结果落地前 reset 回卷，但还位轮询还活着会误写）
+    const scrollMemKey = () => `search-grid:${props.query ?? ''}`
+    let cancelScrollRestore = null
     onMounted(() => {
-      const m = readScrollMem(SEARCH_SCROLL_KEY)
+      const m = readScrollMem(scrollMemKey())
       if (!m) return
       ensureGridRendered((m.grid || 0) - 1)
       ensureSongRendered((m.songs || 0) - 1)
-      nextTick(() => restoreScrollTop(wrapEl.value, m.top))
+      nextTick(() => { cancelScrollRestore = restoreScrollTop(wrapEl.value, m.top) })
     })
-    onBeforeUnmount(() => writeScrollMem(SEARCH_SCROLL_KEY, {
-      top: wrapEl.value?.scrollTop ?? 0,
-      grid: gridRendered.value,
-      songs: songRendered.value,
-    }))
+    onBeforeUnmount(() => {
+      cancelScrollRestore?.() // 等待窗内卸载即停轮询
+      writeScrollMem(scrollMemKey(), {
+        top: wrapEl.value?.scrollTop ?? 0,
+        grid: gridRendered.value,
+        songs: songRendered.value,
+      })
+    })
 
     return {
       httpsCover: httpsCoverUrl,

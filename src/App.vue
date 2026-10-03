@@ -93,6 +93,7 @@
           v-else-if="centerView === 'search'"
           :results="searchResults"
           :songs="searchSongResults"
+          :query="searchQuery"
           :song-total="searchSongTotal"
           :song-loading-more="searchSongLoadingMore"
           :current-song="currentSong"
