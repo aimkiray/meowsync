@@ -1,8 +1,11 @@
 // 歌单 id 谓词唯一真相源在 src/shared/predicates.js——
 // re-export 保持既有调用面（App/SongList/PlaylistPanel/WatchView 均从此导入）
-import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE, YT_ID_RE, FILE_TRACK_ID_RE } from '../shared/predicates.js'
+import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE, YT_ID_RE, FILE_TRACK_ID_RE,
+  isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, isFileTrackId } from '../shared/predicates.js'
 import { resolveApiBaseUrl } from './api-base.js'
-export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, isFileTrackId } from '../shared/predicates.js'
+// 注意必须用 import + export 两段式：export {x} from 'y' 不绑本地作用域，
+// 本文件函数体（songSource 等）直接用谓词时裸 re-export 会 ReferenceError
+export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, isFileTrackId }
 
 // 上传资产的归属伪歌单——与服务端 routes/uploads.js 的 UPLOADS_PLAYLIST_ID 同源契约：
 // file_ 曲的一切工件（audio/video/cover/lyrics）都经 file 端点按此 playlistId 取
