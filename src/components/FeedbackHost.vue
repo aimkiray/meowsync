@@ -146,6 +146,7 @@ export default {
 .fb-toast-action {
   flex-shrink: 0;
   align-self: center;
+  height: 24px; /* 对齐小件档（icobtn--sm/chip 同档），不锁会漂到 ~23 脱档 */
   padding: 2px 8px;
   font-family: var(--font-mono);
   font-size: 11px;

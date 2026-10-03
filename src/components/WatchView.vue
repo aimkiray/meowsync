@@ -1345,7 +1345,7 @@ export default {
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  padding: 2px 4px;
+  padding: 4px 6px; /* 命中高 ~24.5——对齐仓内 24px 触控地板（lyric-tool 同档） */
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-86);
@@ -1411,8 +1411,8 @@ export default {
 .lyric-tool {
   font-size: 10px;
   line-height: 1;
-  padding: 6px;
-  min-height: 24px; /* 触控地板与仓内 pg-icobtn--sm 同档 */
+  padding: 5px 7px;
+  min-height: 24px; /* 触控地板与仓内 pg-icobtn--sm 同档（pad-block 5 凑整 24） */
   min-width: 24px;
   border: var(--hairline);
   background: transparent;
@@ -1423,6 +1423,7 @@ export default {
 .lyric-tool:hover:not(:disabled) { background: var(--ink-06); color: var(--ink); }
 .lyric-tool:disabled { opacity: .38; cursor: default; }
 .lyric-tool-val {
+  font-size: 10px; /* 裸 span 继承 body 16px 会夹在 10px 控件间形制分裂——显式同档 */
   font-variant-numeric: tabular-nums;
   color: var(--ink-86);
 }

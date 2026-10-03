@@ -632,13 +632,17 @@ export default {
 
 .topnav-search-input {
   width: 100%;
-  padding: 0 30px 0 8px;
+  /* 右侧两枚内嵌键都要让位：go（在流 26+6）贴框右缘，clear 再往左挪——
+     文本区须收在 clear 左缘之外（输入右缘 go−32 + clear 占位 26 + 4 余隙） */
+  padding: 0 36px 0 8px;
   font-size: 13px;
 }
 
 .topnav-search-clear {
   position: absolute;
-  right: 4px;
+  /* 坐进 go 左侧（go 在流占右 6..32）：绝对定位的 clear 若也贴右缘
+     会整枚压在 go 上——有字时 ✕ 把 › 遮得不可见不可点 */
+  right: 38px;
   top: 50%;
   transform: translateY(-50%);
   display: inline-flex;

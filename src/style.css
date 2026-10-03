@@ -674,6 +674,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    ≤768 顶栏改两行（8+32 行1 + 8+36 行2 + 8 + 1.2 发丝线 = 93.2），
    此值与 TopNavigation.vue 断点及右簇最高件（pg-icobtn 32px）成对维护 */
 :root { --topnav-h: 57.2px; }
+/* 控件高双档令牌：一级 36（ink-btn/pg-field）、紧凑 32（ink-btn--sm/
+   pg-icobtn/atp input/行内 CTA）——同行控件共用令牌，盒高不齐时
+   改令牌比对账逐件改数更不易漂移；小件档 24（icobtn--sm/chip/行内尾件） */
+:root { --ctrl-h: 36px; --ctrl-h-sm: 32px; }
 @media (max-width: 768px) { :root { --topnav-h: 93.2px; } }
 
 /* YTM watch 页是整页 surface：≥1024 藏歌单栏，两栏吃满 .app-body */
@@ -809,7 +813,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   font-size: 13px;
   letter-spacing: .02em;
   padding: 0 18px;
-  height: 36px; /* 锁名义高——不锁则按 font+pad 漂到 ~38，与 pg-field(36) 失配 */
+  height: var(--ctrl-h); /* 锁名义高——不锁则按 font+pad 漂到 ~38，与 pg-field 失配 */
   text-decoration: none; /* <a> 作按钮用时兜底——不依赖 preflight 的 inherit */
   cursor: pointer;
   transition: color .5s var(--ease-ink);
@@ -819,7 +823,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .ink-btn:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
 .ink-btn:disabled { opacity: .45; cursor: default; }
 
-.ink-btn--sm { height: 32px; padding: 0 12px; font-size: 12px; } /* 与 pg-icobtn(32) 同档 */
+.ink-btn--sm { height: var(--ctrl-h-sm); padding: 0 12px; font-size: 12px; } /* 与 pg-icobtn 同档 */
 
 /* 幽灵按钮：纸面描边墨字（次级动作） */
 .ink-btn--ghost {
@@ -832,7 +836,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* 图标方键（32px 发丝盒） */
 .pg-icobtn {
   width: 32px;
-  height: 32px;
+  height: var(--ctrl-h-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -886,11 +890,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    内容潜到 tab 下时才显现，静止零装饰 */
 .watch-tabs { border-bottom: none; }
 
-/* 芯片（25px 发丝小牌：标签/热搜/筛选） */
+/* 芯片（24px 发丝小牌：标签/热搜/筛选——与小件档 icobtn--sm 同高） */
 .pg-chip {
   display: inline-flex;
   align-items: center;
-  height: 25px;
+  height: 24px;
   padding: 0 10px;
   border: var(--hairline);
   font-family: var(--font-mono);
@@ -916,7 +920,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-field {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: var(--ctrl-h);
   border: var(--hairline);
   background: var(--paper);
 }
@@ -1060,7 +1064,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .atp-new {
   display: flex;
-  align-items: center; /* input 28px vs ink-btn--sm 32px——不居中会底沿悬空 4px */
+  align-items: center;
   gap: 8px;
   padding: 8px;
   border-top: var(--hairline-soft);
@@ -1068,7 +1072,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .atp-new input {
   flex: 1;
   min-width: 0;
-  height: 28px;
+  height: var(--ctrl-h-sm); /* 与同行 ink-btn--sm 同盒——曾 28px 悬空 4px */
   padding: 0 8px;
   border: var(--hairline);
   background: var(--paper);

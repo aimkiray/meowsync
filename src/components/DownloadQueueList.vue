@@ -210,7 +210,7 @@ function toggleMenu(queueId, event) {
   menuTriggerEl = event.currentTarget
   const rect = event.currentTarget.getBoundingClientRect()
   const menuWidth = 132
-  // 按该队列实际渲染的菜单项数估高（每项约 33px）——写死 180px 会让短菜单无谓上翻
+  // 按该队列实际渲染的菜单项数估高（实测每项 ≈39px）——写死 180px 会让短菜单无谓上翻
   const queue = props.queues?.find(q => q.id === queueId)
   const itemCount = queue
     ? 1
@@ -325,7 +325,7 @@ function getQueueCover(queue) {
 
 .dql-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center; /* chip 顶对会悬在标题块中段——中对齐整块更稳 */
   justify-content: space-between;
   gap: 12px;
   padding: 0 16px 12px;

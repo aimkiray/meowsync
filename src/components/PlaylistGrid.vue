@@ -485,7 +485,7 @@ export default {
   align-items: stretch; /* chip 戳记拉伸到与 ink-btn--sm 同高，入库瞬间不跳行高 */
   gap: 8px;
   margin-top: auto;
-  min-height: 30px;
+  min-height: var(--ctrl-h-sm); /* 行位恒占一档——30px 是钉高前的过时余量 */
 }
 .grid-add {
   flex: 1;
@@ -496,7 +496,7 @@ export default {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 32px; /* pg-chip 默认 25px 顶对齐会下缘悬空 7px——钉到 ink-btn--sm 同高 */
+  height: var(--ctrl-h-sm); /* pg-chip(24) 顶对齐会下缘悬空——钉到 ink-btn--sm 同高 */
 }
 
 .grid-share {
