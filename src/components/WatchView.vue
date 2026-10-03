@@ -1,7 +1,7 @@
 <template>
   <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
        走带/进度/音量不重复渲染——底部播放条已覆盖 -->
-  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
+  <div class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
     <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
@@ -644,12 +644,18 @@ export default {
     // 手动滑动后暂停自动跟随：手指滑动/滚轮期间及之后 4s 内不抢滚动——
     // 用户往回翻或往后看歌词时不被下一行拽回。单列态整页都是歌词的滚动器，
     // 页内任意处滑动都算；宽屏只认歌词栏内的滑动（左栏/队列滚动不影响歌词）。
-    // 轻点不产生 touchmove，不暂停；切到歌词 tab 是显式请求，清掉暂停
+    // 竖向位移 <10px 的 touchmove 视为轻点微漂、不暂停（真机点 A+/播放键常带
+    // 1–2 个）；切到歌词 tab 是显式请求，清掉暂停
     const LYRIC_FOLLOW_PAUSE_MS = 4000
+    const SWIPE_SLOP_PX = 10
     let lyricFollowPausedUntil = 0
+    let touchStartY = 0
     const wideMq = window.matchMedia('(min-width: 901px)')
+    const onWatchTouchStart = (e) => { touchStartY = e.touches[0]?.clientY ?? 0 }
     const pauseLyricFollow = (e) => {
       if (wideMq.matches && !lyricContainer.value?.contains(e.target)) return
+      if (e.type === 'touchmove'
+        && Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) < SWIPE_SLOP_PX) return
       lyricFollowPausedUntil = Date.now() + LYRIC_FOLLOW_PAUSE_MS
     }
     const lyricFollowPaused = () => Date.now() < lyricFollowPausedUntil
@@ -1041,7 +1047,8 @@ export default {
       mediaVideoKey,
       mediaVideoUrl,
       onMediaVideoError,
-      pauseLyricFollow
+      pauseLyricFollow,
+      onWatchTouchStart
     }
   }
 }
@@ -1545,7 +1552,7 @@ export default {
   /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
      （旧浏览器不认两关键字写法时回退到上行 stable）。
      视频态是左缘构图：左车道反把播放器推离返回键左缘（经典滚动条 11px）——
-     只留右车道，播放器向左吃满到返回键轴，右缘与竖向位置不动。
+     只留右车道，播放器向左吃满到返回键轴（栏宽绑定时增宽 11px、右缘不动）。
      safe center：内容超高时向上对称溢出，顶部封面被裁且无法滚达——
      safe 让溢出改走底部（不支持 safe 的浏览器回退原 center 行为） */
   .watch-main {
