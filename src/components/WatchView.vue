@@ -554,6 +554,9 @@ export default {
         // 现在能命中渲染窗外的行（原实现被 rows.length 截断）
         const target = Math.min(total - 1, Math.max(0, Math.round((y - rowTop0) / rowH)))
         if (target !== dragIndex.value) {
+          // 落点可越出前缀窗（容器底部死区映到未渲下标）——先物化再换位，
+          // 否则行落在窗外当场消失；与键盘 moveRow 的 ensureRendered 同律
+          queueEnsureRendered(target)
           emit('queue-move', { from: dragIndex.value, to: target })
           dragIndex.value = target
         }
