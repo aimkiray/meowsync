@@ -24,6 +24,7 @@
               class="watch-cover watch-cover--video"
               :src="mediaVideoUrl"
               :aria-label="`视频画面：${currentSong?.name || ''}`"
+              :poster="coverUrl ? httpsCover(coverUrl) : undefined"
               muted
               playsinline
               preload="auto"
@@ -684,12 +685,22 @@ export default {
     // 视频全屏下全局热键（←→/↑↓/m 等）也是操作——戳醒控制层给读数，不盲按。
     // 声明在此（监听挂载点之前）：pokeControls 后声明但回调体惰性求值，无 TDZ
     const onFsKey = () => { if (videoFullscreen.value) pokeControls() }
+    // 后台 tab：rAF 冻结→syncMediaVideo 停摆，<video> 自走续播+拉流——
+    // 隐藏即暂停（不卸载：切窗频繁，卸载=全量重缓冲）。回前台经
+    // syncMediaVideo 接回（isPlaying 续播 + 0.45s 漂移校正），声明同 onFsKey 惰性求值
+    const onVis = () => {
+      const v = mediaVideoRef.value
+      if (!v) return
+      if (document.hidden) v.pause()
+      else syncMediaVideo()
+    }
     if (typeof window !== 'undefined') {
       window.addEventListener('fullscreenchange', onFullscreenChange)
       window.addEventListener('webkitfullscreenchange', onFullscreenChange)
       window.addEventListener('fullscreenerror', onFullscreenError)
       window.addEventListener('webkitfullscreenerror', onFullscreenError)
       window.addEventListener('keydown', onFsKey)
+      document.addEventListener('visibilitychange', onVis)
       onBeforeUnmount(() => {
         window.removeEventListener('fullscreenchange', onFullscreenChange)
         window.removeEventListener('webkitfullscreenchange', onFullscreenChange)
@@ -697,6 +708,7 @@ export default {
         window.removeEventListener('webkitfullscreenerror', onFullscreenError)
         clearTimeout(controlsHideTimer)
         window.removeEventListener('keydown', onFsKey)
+        document.removeEventListener('visibilitychange', onVis)
         // 卸载先于 DOM 移除——主动退掉自持的全屏，不等浏览器对脱离
         // 元素的事后清理（行为更确定，少一帧悬空全屏帧）
         const fsEl = document.fullscreenElement || document.webkitFullscreenElement
@@ -756,11 +768,18 @@ export default {
     // mediaVideoUrl 空串（探测在途）不挂载 <video>：src="" 会解析成页面
     // URL 被当媒体加载，error 误闩封面；URL 就绪才出元素
     // 视频只在 watch 页真正可见时存在：videoOn 是偏好而非在场证明——
-    // 离开本页组件整体卸载；被沉浸歌词层盖住时虽仍挂载同样收掉（止流止损），
-    // 关层后媒体键/URL 未变 → <video> 重挂，对齐 watcher 负责接回音频时钟
+    // 离开本页组件整体卸载；被沉浸歌词层盖住时虽仍挂载同样收掉（止流止损）。
+    // 关层时本 computed 随 fullscreenPlayerOpen 翻回 true → <video> 重挂，
+    // 对齐 watcher 负责接回音频时钟
     const mediaVideoActive = computed(() =>
       !!(mediaVideoKey.value && videoOn.value && !props.fullscreenPlayerOpen
         && !mediaVideoFailed.value && mediaVideoUrl.value))
+    // 关层重挂=天然重试点：failed 闩若来自限流/瞬时断流（层开关不动 URL，
+    // watch(mediaVideoUrl) 不会自愈），复位让这次重挂真重试——流确实死了
+    // 会再 error 回闩，代价一跳
+    watch(() => props.fullscreenPlayerOpen, (open) => {
+      if (!open) mediaVideoFailed.value = false
+    })
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
     // 的视频下载此前是纯只写功能（App 内无处可播）。按队列归属歌单探测
     // （任务行以歌单维度登记；别的歌单下的下载对不上 playlistId，漏探回落

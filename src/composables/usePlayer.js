@@ -157,14 +157,16 @@ export function usePlayer({
 
       const restoredSong = restoredSongs[restoredIndex]
 
+      // 沉浸层 flag 先于 playSong 落地：恢复路径含网络跳（getSongUrl/loadLyrics），
+      // 落地晚会让 watch 页在层盖上前先挂一次 <video> 白拉流
+      if (savedState.isFullscreenPlayerOpen) {
+        isFullscreenPlayerOpen.value = true
+      }
+
       await playSong(restoredSong, {
         autoplay: false,
         seekTime: Number.isFinite(savedState.currentTime) ? savedState.currentTime : 0
       })
-
-      if (savedState.isFullscreenPlayerOpen) {
-        isFullscreenPlayerOpen.value = true
-      }
     }
 
     const clearHowlWatchdog = () => {
