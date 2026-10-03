@@ -1,5 +1,9 @@
 // 全仓 localStorage key 的唯一注册表——新增 key 先在这里登记，避免字面量散布
 export const LS_KEYS = {
+  // 历史沿用名（勿改串值——存量用户数据挂在旧 key 上）：歌单库是全仓最大
+  // 持久化负载，removedDefaultPlaylists 是其附属删除名单
+  PLAYLISTS: 'userPlaylists',
+  REMOVED_DEFAULT_PLAYLISTS: 'removedDefaultPlaylists',
   PLAYER_STATE: 'meowsync-player-state',
   PLAY_HISTORY: 'meowsync-play-history',
   PLAYLIST_HISTORY: 'meowsync-playlist-history',

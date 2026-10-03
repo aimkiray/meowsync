@@ -173,6 +173,8 @@ export default {
       error.value = ''
     }
 
+    // immediate：App 侧已改 v-if 懒挂载——mount 即 open=true 时 reset+聚焦
+    // 依赖首次 immediate 跑；常挂载旧形态下 open=false 的首跑是 no-op 无害
     watch(() => props.open, async (v) => {
       if (!v) {
         // 关窗即释放 File 句柄——500MB 的 Blob 引用不能驻留到下次开窗
@@ -183,7 +185,7 @@ export default {
       reset()
       await nextTick()
       nameInput.value?.focus({ preventScroll: true })
-    })
+    }, { immediate: true })
 
     const onPick = (kind, e) => {
       const f = e.target.files?.[0] || null

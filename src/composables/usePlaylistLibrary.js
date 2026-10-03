@@ -1,13 +1,18 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
-import { readJSON, writeJSON } from '../lib/storage.js'
+import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
 import { toast } from '../lib/feedback.js'
-import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides } from '../lib/song.js'
+import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides, slimTrack } from '../lib/song.js'
 import { applyTrackOrder, groupTracksByArtist, moveTrackByIds } from '../lib/track-order.js'
 
-const PLAYLISTS_STORAGE_KEY = 'userPlaylists'
-const REMOVED_DEFAULT_PLAYLISTS_KEY = 'removedDefaultPlaylists'
+const PLAYLISTS_STORAGE_KEY = LS_KEYS.PLAYLISTS
+const REMOVED_DEFAULT_PLAYLISTS_KEY = LS_KEYS.REMOVED_DEFAULT_PLAYLISTS
+// saved_queue_ 队列存盘双封顶：个数 FIFO 修剪（队列快照是临时产物，
+// 长期累积纯属配额浪费）；单条 tracks 封顶——saveQueueAsPlaylist 对
+// 五千曲歌单快照一份就是 ~10MB 原始对象，单条即撞爆 QuotaExceededError
+const SAVED_QUEUE_CAP = 5
+export const SAVED_QUEUE_TRACK_CAP = 500
 
 // 歌单库域：库 CRUD / 本地持久化 / selectPlaylist 单向同步合并 / 行级增删。
 //
@@ -31,26 +36,35 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     return Array.isArray(removed) ? removed.map(String) : []
   }
 
+  // saved_queue_ 个数 FIFO 修剪（与 single_song_ 壳的 SINGLE_SHELL_CAP 同律）——
+  // 内嵌进 savePlaylistsToStorage：一切新增路径都过它，「最多 N 个队列存盘」
+  // 的不变量不依赖调用方自觉
+  const pruneSavedQueues = () => {
+    const queueIndexes = []
+    userPlaylists.value.forEach((p, i) => {
+      if (String(p?.id || '').startsWith('saved_queue_')) queueIndexes.push(i)
+    })
+    for (const i of queueIndexes.slice(SAVED_QUEUE_CAP).reverse()) {
+      userPlaylists.value.splice(i, 1)
+    }
+  }
+
   const savePlaylistsToStorage = () => {
+    pruneSavedQueues()
     // 持久化时剥离大体积 tracks（selectedPlaylist 切回时会重新拉取详情），
-    // 本地内存态歌单（单曲分享/队列存盘）无法从接口重拉，tracks 必须保留
+    // 本地内存态歌单（单曲分享/队列存盘）无法从接口重拉，tracks 必须保留——
+    // 但过 slimTrack 白名单：接口原对象 ~2-4KB/曲，瘦身后 ~400-700B
     const toStore = userPlaylists.value.map(p => {
-      if (isLocalPlaylistId(p.id)) return p
+      if (isLocalPlaylistId(p.id)) {
+        return Array.isArray(p.tracks) ? { ...p, tracks: p.tracks.map(slimTrack) } : p
+      }
       // trackIds 是 detail 响应带进的完整成员表（千曲单 ~10KB+），客户端不读它——
       // 与 lastRemoteIds 职责重复，持久化剥掉
       const { tracks, trackIds, ...rest } = p
-      // addedTracks 瘦身到渲染+播放所需字段——接口返回的全对象（alia/嵌套 privilege 等）
-      // 单曲 ~2-3KB，长期累积会撞 localStorage 配额
+      // addedTracks 同走瘦身白名单——接口返回的全对象（alia/嵌套 privilege 等）
+      // 长期累积会撞 localStorage 配额
       if (Array.isArray(rest.addedTracks)) {
-        rest.addedTracks = rest.addedTracks.map(t => t && ({
-          // bilibili/neteaseId 是 B 站导入曲的播放源与歌词源——剥掉就退化成不可播对象
-          id: t.id, name: t.name, ar: t.ar, al: t.al, dt: t.dt, fee: t.fee, privilege: t.privilege,
-          bilibili: t.bilibili, neteaseId: t.neteaseId,
-          youtube: t.youtube, // YouTube 导入曲的播放源——与 bilibili/neteaseId 同理不可剥
-          qq: t.qq, // QQ 导入曲同理：剥掉后播放/分享/词源键全退化
-          file: t.file, // file_ 上传曲的资产位（hasVideo/hasLyrics/hasCover）——剥掉退化成无源死曲
-          custom: t.custom // 用户编辑位：剥掉后 healExternalAr 会把编辑还原回 provider 口径
-        }))
+        rest.addedTracks = rest.addedTracks.map(slimTrack)
       }
       return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
     })

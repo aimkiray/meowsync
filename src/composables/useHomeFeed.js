@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
-import { isSingleSongShellId } from '../lib/song.js'
+import { isSingleSongShellId, slimTrack } from '../lib/song.js'
 
 const PLAY_HISTORY_STORAGE_KEY = LS_KEYS.PLAY_HISTORY
 const PLAYLIST_HISTORY_STORAGE_KEY = LS_KEYS.PLAYLIST_HISTORY
@@ -16,17 +16,9 @@ export function useHomeFeed({ userPlaylists, selectedPlaylist, playingPlaylistId
   // 接口原始对象（含 alia 等大字段）整只塞 storage 会撑爆配额
   const recordPlayHistory = (song) => {
     if (!song || song.id == null) return
-    const entry = {
-      id: song.id, name: song.name,
-      ar: song.ar || song.artists, al: song.al || song.album,
-      dt: song.dt ?? song.duration, fee: song.fee, privilege: song.privilege,
-      // B 站导入曲的播放源/歌词源字段——丢了从历史点回会退成不可播
-      bilibili: song.bilibili, neteaseId: song.neteaseId,
-      youtube: song.youtube, // YouTube 导入曲同理——丢了从历史点回会退成不可播
-      qq: song.qq, // qq_<mid> 同理——播放源与词源键都在里面
-      file: song.file, // file_ 上传曲的资产位——丢了历史回放的封面/视频/歌词标志全灭
-      custom: song.custom, // 用户编辑位——同 addedTracks 白名单之理
-    }
+    // 与歌单库同一份 slimTrack 白名单——历史条目也只吃渲染+重播字段，
+    // 接口原对象（alia/嵌套 privilege）20 条就是 ~40-80KB 死重
+    const entry = slimTrack(song)
     playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
     writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
   }
