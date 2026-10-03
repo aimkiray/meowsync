@@ -8,6 +8,7 @@ const { importPlaylistFromNetease } = require('./playlist-sync');
 const fileDownloader = require('./file-downloader');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
+const { FILE_TRACK_ID_RE } = require('../../shared/predicates.js');
 const { deletingPlaylists, deletingQueues, deletingNeteasePlaylists, isNeteasePlaylistDeleting, markNeteasePlaylistDeleted } = require('../lib/deletion-locks');
 // 路径/fs/纯计算助手已抽到 download-fs.js（DOWNLOAD_BASE_DIR 唯一来源也在那）
 const {
@@ -1570,9 +1571,12 @@ function getTaskArtifactPath(playlistId, songId, kind = 'audio') {
   const tasks = downloadTasksRepo.listTasksByPlaylist(resolvedPlaylistId)
     .filter(t => t.songId === String(songId) && t.status === 'completed');
   for (const t of tasks) {
-    // audio 缺位时回落 videoPath：只传视频的上传曲没有音频工件——mp4/webm
-    // 的音轨浏览器能直解（Howl format 含 mp4/webm），比 404 强
-    const candidate = t[field] || (kind === 'audio' ? t.videoPath : null)
+    // audio 缺位时回落 videoPath 仅限 file_ 上传曲：video-only 上传没有音频
+    // 工件，mp4/webm 的音轨浏览器能直解（Howl format 含 mp4/webm），比 404 强。
+    // bv_/yt_ 任务不回落——UI 提交恒 downloadAudio:true，出现「无 audioPath
+    // 有 videoPath」的行只可能是手工 API 构造，拿 mp4 当音频源等于在 watch
+    // 页外消费视频档（与「视频只在 watch 页可见」口径冲突）
+    const candidate = t[field] || (kind === 'audio' && FILE_TRACK_ID_RE.test(t.songId) ? t.videoPath : null)
     if (candidate && isUnderDownloadDir(candidate) && fs.existsSync(candidate)) {
       return candidate;
     }

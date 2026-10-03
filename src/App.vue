@@ -968,16 +968,19 @@ export default {
           break
         case 'f': case 'F':
           // 元素级全屏（watch 视频）激活中：沉浸层是 top layer 之下的 Vue
-          // overlay——开着完全不可见，退出视频全屏后落在沉浸式层是事故
-          if (currentSong.value
+          // overlay——开着完全不可见，退出视频全屏后落在沉浸式层是事故。
+          // e.repeat 闸：按住连打会以 repeat 速率反复开闭，每次关→开都让
+          // watch 视频卸载重挂（白烧流地址解析，限流是 60/min 量级）
+          if (currentSong.value && !e.repeat
             && !(document.fullscreenElement || document.webkitFullscreenElement)) {
             isFullscreenPlayerOpen.value = !isFullscreenPlayerOpen.value
           }
           break
         case 'q': case 'Q':
           // 元素全屏期间禁导航——在 top layer 下隐形拆页（watchBack 会
-          // 卸载 WatchView 顺带退全屏），与 'f' 闸同一防的事故形态
-          if (currentSong.value
+          // 卸载 WatchView 顺带退全屏）；沉浸层开着同理——遮罩下换视图
+          // 用户看不见，关层落在意外页面
+          if (currentSong.value && !isFullscreenPlayerOpen.value
             && !(document.fullscreenElement || document.webkitFullscreenElement)) {
             openWatchPanel('queue')
           }
