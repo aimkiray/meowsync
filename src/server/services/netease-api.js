@@ -29,6 +29,13 @@ async function getContentLength(url, hops = 0, lookup = makeGuardedLookup()) {
   const checked = normalizeOutboundUrl(url);
   if (!checked.ok) return null;
   const current = checked.url;
+  // googlevideo 签名链对裸 HEAD 不友好：上游按请求形态记账，HEAD 会毒化
+  // 该 URL 的后续 Range 请求（探测语义见 services/youtube-resolve probeGated
+  // 注释——对 googlevideo 恒带 Range 的 GET）——探不到 size 按 null 降级，
+  // youtube 源反正有 durationSec/br 可供时长对账
+  if (current.hostname === 'googlevideo.com' || current.hostname.endsWith('.googlevideo.com')) {
+    return null;
+  }
   if (!(await resolvesToPublicIp(current.hostname))) {
     return null;
   }
@@ -315,9 +322,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）。
             // 逐源失败必须留痕——全静默 continue 下线上「该解的歌不解」无法
             // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛。
-            // unblocked.urls（youtube 闸控链）：整条候选链逐条过同一套校验，
-            // 活链集随 resolved 下发——代理逐试钉位，首档死掉自动换档到
-            // 合流兜底；无 urls 的源退化为单链（契约向后兼容）
+            // unblocked.urls（同字节镜像组）：整条候选链逐条过同一套校验，
+            // 活链集随 resolved 下发——代理逐试钉位，首链死掉自动换镜像；
+            // 无 urls 的源退化为单链（契约向后兼容）。跨字节实体的候选
+            // （不同分辨率/编码）不允许混排——代理换档语义见 proxy.js
             const rawUrls = Array.isArray(unblocked?.urls) && unblocked.urls.length
               ? unblocked.urls : [unblocked?.url];
             const urls = [];
