@@ -87,10 +87,12 @@ export const downloadsApi = {
     }, { timeout: 60000 });
   },
 
-  // 查询歌曲下载状态
-  getSongDownloadStatus: (playlistId, songId) => {
+  // 查询歌曲下载状态；signal 可选——播放链探测随切歌 abort（未 abort 的
+  // 结果也会被各调用方的 seq/stale 闸丢弃，abort 只是省一跳）
+  getSongDownloadStatus: (playlistId, songId, signal) => {
     return http.get(`/downloads/songs/${songId}/status`, {
-      params: { playlistId }
+      params: { playlistId },
+      signal
     });
   },
 

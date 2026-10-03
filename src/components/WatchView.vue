@@ -902,11 +902,12 @@ export default {
     // 视频源键：两个 provider 各取各自的定位串——换曲（哪怕同 provider）必然换键
     const mediaVideoKey = computed(() => {
       const song = props.currentSong
-      // 下载口径也出 key——纯非 avc1 稿件（hasDownloadableVideo 但无
-      // hasVideo）可能有已下载本地档可放（hvc1-in-mp4 Safari 能解）
-      if (song?.bilibili?.hasVideo || song?.bilibili?.hasDownloadableVideo)
+      // 按 provider 存在性出键而非导入期标记：标记被裁/老数据缺
+      // hasDownloadableVideo 的曲盘上可能有已下载档（档在不在以
+      // videoReady 探测为准），键在才让探测-下载档链路可达
+      if (song?.bilibili?.bvid)
         return `bv:${song.bilibili.bvid}:${song.bilibili.cid || 0}:${song.bilibili.page || 1}`
-      if (song?.youtube?.hasVideo || song?.youtube?.hasDownloadableVideo)
+      if (song?.youtube?.videoId)
         return `yt:${song.youtube.videoId}`
       // videoV 版本戳随换源刷新——key 不变 <video> 不重载，旧画面继续播
       if (song?.file?.hasVideo) return `file:${song.id}:${song.file.videoV || 0}`
@@ -948,7 +949,12 @@ export default {
     // 依赖不含 queueOwner：videoReady 跨歌单寻址后与归属无关——挂着它，
     // 播放到一半增删歌单翻转 queueOwner 会把 dlProbeSettled 打回 false
     // 拆掉 <video> 重缓冲。plId 仍随行报送（服务端给本单 task 字段用）
-    watch([mediaVideoKey, videoOn], async () => {
+    // dlProbeNonce 重探戳：本地档播放期 404（档被搬到别单/重下到新单）
+    // 时补一次重探找回——见 onMediaVideoError 本地档分支
+    const dlProbeNonce = ref(0)
+    // 重探单发戳：本地档 404 每 key 只补一次（坏档找回→再 error→不再探）
+    let dlReprobedKey = null
+    watch([mediaVideoKey, videoOn, dlProbeNonce], async () => {
       const seq = ++dlVideoSeq
       const song = props.currentSong
       const plId = props.queueOwner?.id ?? null
@@ -957,12 +963,12 @@ export default {
       // 照跑复验：档没了清缓存换在线源，探测失败则信任缓存值继续用
       const cached = dlVideoCache.get(mediaVideoKey.value) ?? null
       downloadedVideoUrl.value = cached
-      // 探测门用下载口径：hasDownloadableVideo 曲可能有本地视频档（下载链
-      // 收全编码）——只认 hasVideo 会把已下载的纯非 avc1 稿件挡在门外。
+      // 探测门按 provider 存在性而非导入期标记：标记被裁/老数据缺
+      // hasDownloadableVideo 的 bv_/yt_ 曲盘上可能有档——档在不在以
+      // videoReady 为准，不拿导入时的能力声明当工件真相。
       // 视频关着时不探——纯音频用户不该为每首视频曲白打一跳 status 请求
       const probeable = videoOn.value
-        && (song?.bilibili?.hasVideo || song?.bilibili?.hasDownloadableVideo
-          || song?.youtube?.hasVideo || song?.youtube?.hasDownloadableVideo)
+        && (song?.bilibili?.bvid || song?.youtube?.videoId)
       if (!probeable) {
         dlProbeSettled.value = true
         return
@@ -988,14 +994,15 @@ export default {
     const mediaVideoUrl = computed(() => {
       const song = props.currentSong
       const b = song?.bilibili
-      if (b?.hasVideo || b?.hasDownloadableVideo) {
+      // 与 mediaVideoKey 同口径按 provider 存在性进支：无标记曲只能靠
+      // 本地档——b.hasVideo 为假时在线流位空串，不挂载（档缺席即空）
+      if (b?.bvid) {
         if (!dlProbeSettled.value) return ''
-        // 下载口径曲无在线流可退（无 avc1）——本地档缺席即空串，不挂载
         return downloadedVideoUrl.value
           || (b.hasVideo ? musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page) : '')
       }
       const y = song?.youtube
-      if (y?.hasVideo || y?.hasDownloadableVideo) {
+      if (y?.videoId) {
         if (!dlProbeSettled.value) return ''
         // mediaStreamRetry 戳进 URL：服务端闸控判定缓存可能错——重试带
         // &retry=1 旁路缓存读强制重探（retry>0 恒映射 retry=1，重载实际靠
@@ -1023,6 +1030,12 @@ export default {
       if (downloadedVideoUrl.value && mediaVideoUrl.value === downloadedVideoUrl.value) {
         downloadedVideoUrl.value = null
         dlVideoCache.delete(mediaVideoKey.value) // 404 过的档别留缓存，下次挂载不再先挂死链
+        // 档可能被搬到别单（404 而非坏档）：同 key 补一次重探找回——
+        // 找回的是坏档会再 error，单次戳自然收敛，不会循环重探
+        if (dlReprobedKey !== mediaVideoKey.value) {
+          dlReprobedKey = mediaVideoKey.value
+          dlProbeNonce.value++
+        }
         return
       }
       mediaVideoFailed.value = true
