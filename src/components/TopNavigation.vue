@@ -548,20 +548,20 @@ export default {
   gap: 16px;
 }
 
-/* ≥1024 全栏侧栏态：搜索框左缘对齐内容列左缘（=侧栏 280 + 主区 padding 20）。
+/* ≥1024：搜索框左缘钉死在内容列左缘（=侧栏 280 + 主区 padding 20），
+   全视图同位——顶栏是跨视图锚，切进 watch（无侧栏）搜索位置不许跳。
    左列吃"内容缘 − gap − 顶栏 pad"的定宽，中列改 minmax(0,480) 让字段贴列左缘。
    顶栏 padding 16 只在 inner 未达 1440 上限时把 inner 推离 app-body 左缘，
    故列宽分两档：<1472 扣 16，≥1472（inner 居中后与 app-body 同缘）不扣。
-   watch 页 ≥1024 藏侧栏、内容缘贴 20，该视图不套对齐（保持原居中）。
    窄轨(768-1023)侧栏 64 + padding 20 = 84 目标缘 < 左簇 min-content(~186)，
    对齐必然重叠 logo——窄轨维持居中搜索。 */
 @media (min-width: 1024px) {
-  .app-shell:not([data-view="watch"]) .topnav-inner {
+  .topnav-inner {
     grid-template-columns: 268px minmax(0, 480px) 1fr;
   }
 }
 @media (min-width: 1472px) {
-  .app-shell:not([data-view="watch"]) .topnav-inner {
+  .topnav-inner {
     grid-template-columns: 284px minmax(0, 480px) 1fr;
   }
 }
