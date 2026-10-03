@@ -57,6 +57,8 @@
             :src="getQueueCover(queue)"
             :alt="queue.name"
             class="dql-cover"
+            loading="lazy"
+            decoding="async"
           />
           <div v-else class="dql-cover dql-cover--fb"><PixelIcon name="note" :size="18" /></div>
         </div>
@@ -155,6 +157,7 @@
 <script setup>
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { httpsCover } from '../lib/url'
+import { coverSizeUrl } from '../lib/song'
 import { queueStatusMeta, statusChipClass, queueProgress, queueStatusFilterOptions } from '../lib/downloadStatus.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -313,7 +316,7 @@ function getProgress(queue) {
 }
 
 function getQueueCover(queue) {
-  return httpsCover(queue.coverImgUrl || '')
+  return httpsCover(coverSizeUrl(queue.coverImgUrl || '', 96))
 }
 </script>
 

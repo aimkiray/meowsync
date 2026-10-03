@@ -1141,6 +1141,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   gap: 6px;
   padding: 6px 6px 6px 4px;
   transition: background .12s;
+  /* 大队列的屏外行跳布局/绘制（与 .song-row 同律）；auto 自记忆真实行高，
+     几何命中测算（startDrag）取被拖行实高，不吃占位值 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
 }
 /* 行间发丝分隔——印单的记账线，hover/当前行墨块在其上依旧清晰 */
 .queue-row + .queue-row { border-top: var(--hairline-soft); }

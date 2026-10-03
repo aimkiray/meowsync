@@ -144,7 +144,7 @@
 <script>
 import { ref, computed } from 'vue'
 import { formatTime } from '../lib/format'
-import { songArtists, songCoverUrl } from '../lib/song'
+import { songArtists, songThumbUrl } from '../lib/song'
 import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 
@@ -212,7 +212,8 @@ export default {
   emits: ['toggle-play', 'previous', 'next', 'update-volume', 'toggle-mute', 'toggle-shuffle', 'toggle-play-mode', 'open-watch', 'enter-fullscreen', 'seek'],
   setup(props, { emit }) {
     // 封面兜底收口在 lib/song.js:songCoverUrl（picUrl/al/album 三档）
-    const coverUrl = computed(() => songCoverUrl(props.currentSong))
+    // 底栏 ~50px 槽位走 CDN 缩略图（96 给 retina 档），不拉原始分辨率
+    const coverUrl = computed(() => songThumbUrl(props.currentSong, 96))
 
     // 进度条拖拽状态：按下期间 UI 播放在这里走，不跟随 props.currentTime 抢
     const dragActive = ref(false)

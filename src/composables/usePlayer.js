@@ -1,8 +1,9 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { Howl, Howler } from 'howler'
-// HTML5 音频池默认 10 太小：失败重试/快速切歌期间，在途 fetch 的节点
-// 来不及释放就被判 locked，报「Audio pool exhausted」伪错误——扩到 24
-Howler.html5PoolSize = 24
+// html5 池是全局常驻的 <audio> 元素组，每节点持有媒体缓冲区——单流播放
+// 没有并发需求，但失败重试/快速切歌期在途 fetch 节点来不及释放会被判
+// locked（「Audio pool exhausted」伪错误），故留 8 位缓冲不砍到 1~2
+Howler.html5PoolSize = 8
 import { musicApi, parseLyrics, mergeTranslations } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { aiApi } from '../api/ai.js'
@@ -913,7 +914,15 @@ export function usePlayer({
     // 「错歌词比没歌词更糟」→ 整组隐藏）；② 无官方译文且非中文语境 → 自动
     // 生成中文译文并按时间戳合并。全程后台异步，写回前复查词属主+加载序号。
     // 会话级缓存：判定/译文结果按 (词源,来源)/(词源) 记忆——重播/往返不再
-    // 重复请求，也避免「错词短暂闪现再被隐藏」
+    // 重复请求，也避免「错词短暂闪现再被隐藏」。LRU 帽防长会话只涨不消：
+    // 译文值是整段 LRC 文本（数 KB），无界 Map 随 AI 曲数线性涨
+    const AI_LYRIC_CACHE_CAP = 256
+    const cacheSet = (map, key, val) => {
+      if (map.size >= AI_LYRIC_CACHE_CAP && !map.has(key)) {
+        map.delete(map.keys().next().value) // Map 键序=插入序，挤掉最旧项
+      }
+      map.set(key, val)
+    }
     const aiLyricVerdicts = new Map()   // `${lyricId}|${title}|${author}` -> boolean
     const aiLyricTranslations = new Map() // lyricId -> tlyric 字符串
     let lyricProcSeq = 0 // 每次歌词落盘 +1；postProcess 捕获，ownsLyric 比对
@@ -950,7 +959,7 @@ export function usePlayer({
             // inconclusive（服务端故障放行）不缓存——恢复后重播要能重验，
             // 与服务端不落库 inconclusive 的口径一致
             if (v && typeof v.ok === 'boolean' && !v.inconclusive) {
-              aiLyricVerdicts.set(vkey, v.ok)
+              cacheSet(aiLyricVerdicts, vkey, v.ok)
             }
           } catch { ok = true /* 核验通道故障放行——AI 是增强不是门禁 */ }
         }
@@ -979,7 +988,7 @@ export function usePlayer({
           lines = r?.lines
           // 负结果也入会期缓存（skip 哨兵/already-zh/无词）——否则每播
           // 一次同首歌都重打一次 translate；请求异常走 catch 不缓存
-          aiLyricTranslations.set(lyricId, tlyric)
+          cacheSet(aiLyricTranslations, lyricId, tlyric)
         }
         if (!tlyric || !ownsLyric()) return
         // 服务端 tlyric 已回贴原时间戳并透传 [offset:] 标签——parse 后时序

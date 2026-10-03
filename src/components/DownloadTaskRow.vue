@@ -7,6 +7,8 @@
         :src="coverSrc"
         :alt="task.songName"
         class="dtr-cover-img"
+        loading="lazy"
+        decoding="async"
       />
       <div v-else class="dtr-cover-fb"><PixelIcon name="note" :size="14" /></div>
     </div>
@@ -68,6 +70,7 @@
 <script setup>
 import { computed } from 'vue'
 import { httpsCover } from '../lib/url'
+import { coverSizeUrl } from '../lib/song'
 import { taskStatusMeta, statusChipClass } from '../lib/downloadStatus.js'
 import PixelIcon from './PixelIcon.vue'
 
@@ -97,7 +100,7 @@ defineEmits(['retry-task', 'delete-task'])
 // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底。
 // coverUrl 是上游 http 明文 CDN 地址：HTTPS 部署下被动混合内容
 // 会被浏览器拦截，显式升级 https（*.music.126.net 均支持 TLS）
-const coverSrc = computed(() => httpsCover(props.task.coverUrl))
+const coverSrc = computed(() => httpsCover(coverSizeUrl(props.task.coverUrl, 96)))
 const statusLabel = computed(() => taskStatusMeta(props.task.status).label)
 const chipTierClass = computed(() => statusChipClass(taskStatusMeta(props.task.status).tier))
 const isRetrying = computed(() => props.retryingTaskIds.includes(props.task.id))

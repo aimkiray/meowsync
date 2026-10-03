@@ -55,6 +55,40 @@ export function songCoverUrl(song) {
   return song?.picUrl || song?.al?.picUrl || song?.album?.picUrl || ''
 }
 
+// 封面按展示档位走 CDN 缩放：列表 30~48px 小位不该拉原始分辨率——
+// 网易原图动辄 600~3000px，每张解码位图 1~8MB，长歌单是 tab 内存头号
+// 驱动。按各站图片服务的缩放语法改写 URL；file_ 本地工件与未知域原样
+// 放行（服务端 file 端点无缩放通道，量也小）。
+export function coverSizeUrl(url, px = 96) {
+  const s = String(url || '')
+  if (!s) return ''
+  // 网易云 p*.music.126.net：?param={w}y{h} 服务端裁剪缩放
+  if (/music\.126\.net/i.test(s)) {
+    return `${s}${s.includes('?') ? '&' : '?'}param=${px}y${px}`
+  }
+  // B站 i*.hdslb.com：@ 后缀挂在 path 尾（在 query 之前），_1c 居中裁方
+  if (/hdslb\.com/i.test(s)) {
+    if (/@\d+w_/.test(s)) return s
+    const qi = s.indexOf('?')
+    const path = qi === -1 ? s : s.slice(0, qi)
+    return `${path}@${px}w_${px}h_1c.webp${qi === -1 ? '' : s.slice(qi)}`
+  }
+  // YouTube i.ytimg.com：default/mq/hq/maxres 是固定档位名，降档到 mq
+  if (/i\.ytimg\.com/i.test(s)) {
+    return s.replace(/(?:maxres|sd|hq)default/i, 'mqdefault')
+  }
+  // QQ y.gtimg.cn：T002R{w}x{h} 尺寸嵌在路径段
+  if (/y\.gtimg\.cn/i.test(s)) {
+    return /T002R\d+x\d+/i.test(s) ? s.replace(/T002R\d+x\d+/i, 'T002R150x150') : s
+  }
+  return s
+}
+
+/** 曲封面缩略图：songCoverUrl + coverSizeUrl 的合成，列表行/小卡统一走它 */
+export function songThumbUrl(song, px = 96) {
+  return coverSizeUrl(songCoverUrl(song), px)
+}
+
 // 「VIP 隐藏开关」过滤谓词（App.vue filteredSongs 与 SongList 共用——
 // 此前两份手写副本）：showVip 时全量；否则滤掉 VIP 且当前凭据不可播的曲
 export function visibleSongs(list, showVip, caps) {

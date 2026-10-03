@@ -6,7 +6,7 @@
       <div class="playlist-hero-cover-wrap pg-corners">
         <img
           v-if="selectedPlaylist.coverImgUrl"
-          :src="httpsCover(selectedPlaylist.coverImgUrl)"
+          :src="httpsCover(coverSizeUrl(selectedPlaylist.coverImgUrl, 240))"
           :alt="selectedPlaylist.name"
           class="playlist-hero-cover"
         />
@@ -120,10 +120,12 @@
           'song-row--dragover-above': reorderMode && dragOverIndex === index && dragIndex > index
         }"
         :draggable="reorderMode"
-        @dragstart="onRowDragStart(index, $event)"
-        @dragover="onRowDragOver(index, $event)"
-        @drop="onRowDrop(index, $event)"
-        @dragend="onRowDragEnd"
+        v-on="reorderMode ? {
+          dragstart: (e) => onRowDragStart(index, e),
+          dragover: (e) => onRowDragOver(index, e),
+          drop: (e) => onRowDrop(index, e),
+          dragend: onRowDragEnd,
+        } : {}"
       >
         <div
           @click="onRowActivate(song)"
@@ -146,10 +148,11 @@
           >
             <img
               v-if="songCoverUrl(song)"
-              :src="httpsCover(songCoverUrl(song))"
+              :src="httpsCover(songThumbUrl(song, 96))"
               :alt="song.name"
               class="song-cover"
               loading="lazy"
+              decoding="async"
               draggable="false"
             />
             <div v-else class="song-cover song-cover--fallback"><PixelIcon name="note" :size="16" /></div>
@@ -795,7 +798,7 @@ import { httpsCover } from '../lib/url'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 import { formatDuration } from '../lib/format'
-import { isVipSong, visibleSongs, isLocalPlaylistId, isSingleSongShellId, isFileTrackId, songSource, songSourceName, songSourceUrl, songCoverUrl } from '../lib/song'
+import { isVipSong, visibleSongs, isLocalPlaylistId, isSingleSongShellId, isFileTrackId, songSource, songSourceName, songSourceUrl, songCoverUrl, songThumbUrl, coverSizeUrl } from '../lib/song'
 import { serverCaps } from '../lib/caps'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
@@ -1180,7 +1183,9 @@ export default {
       closeDownloadMenu,
       httpsCover,
       isFileTrackId,
-      songCoverUrl
+      songCoverUrl,
+      songThumbUrl,
+      coverSizeUrl
     }
   }
 }

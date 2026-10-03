@@ -11,7 +11,7 @@
       <div class="rc-cover-wrap">
         <img
           v-if="songCoverUrl(state.currentSong)"
-          :src="httpsCover(songCoverUrl(state.currentSong))"
+          :src="httpsCover(songThumbUrl(state.currentSong, 96))"
           :alt="state.currentSong?.name || '专辑封面'"
           class="rc-cover"
           :class="{ 'playing-animation': state.isPlaying }"
@@ -99,7 +99,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
-import { songCoverUrl } from '../lib/song'
+import { songCoverUrl, songThumbUrl } from '../lib/song'
 // WS 消息类型与 shared/protocol.js 同源——字面量漂移会被服务端拒收
 import { MSG_TYPES, CONTROL_TYPES } from '../shared/protocol.js'
 import PixelIcon from './PixelIcon.vue'

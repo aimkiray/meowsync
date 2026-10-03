@@ -188,7 +188,7 @@
                   </span>
                   <img
                     v-if="songCoverUrl(song)"
-                    :src="httpsCover(songCoverUrl(song))"
+                    :src="httpsCover(songThumbUrl(song, 80))"
                     :alt="song.name"
                     class="watch-queue-thumb"
                     loading="lazy"
@@ -353,7 +353,7 @@
             >
               <img
                 v-if="songCoverUrl(song)"
-                :src="httpsCover(songCoverUrl(song))"
+                :src="httpsCover(songThumbUrl(song, 80))"
                 :alt="song.name"
                 class="watch-queue-thumb"
                 loading="lazy"
@@ -392,7 +392,7 @@ import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
-import { songSourceUrl, songSourceName, songCoverUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
+import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
 import { LS_KEYS } from '../lib/storage'
 
 export default {
@@ -524,20 +524,26 @@ export default {
       event.preventDefault()
       const container = queueContainer.value
       if (!container) return
-      // 拖拽的落点域是全队列——渲染窗必须物化到底，
-      // 否则 querySelectorAll 只数得到已渲行，向下拖会被窗底截断
-      queueEnsureRendered(props.queue.length - 1)
       const pid = event.pointerId
       dragIndex.value = index
+      // 命中判定走几何而非 DOM：等距行列表把 clientY 换算成全队列下标——
+      // 不必再「物化到底」让落点域全量渲染（那会把大队列的瞬间 DOM 成本
+      // 绑进每次握把按下）。行高量被拖行本身（必在屏上=真实高），行顶
+      // 原点量首行位置（content-visibility 屏外占位不影响布局坐标）
+      const firstRow = container.querySelector('.queue-row')
+      const draggedRow = container.querySelectorAll('.queue-row')[index]
+      const rowH = draggedRow ? draggedRow.getBoundingClientRect().height : 0
+      const rowTop0 = firstRow
+        ? firstRow.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        : 0
+      const total = props.queue.length
 
       const onMove = (e) => {
-        if (e.pointerId !== pid || dragIndex.value === -1) return
-        const rows = container.querySelectorAll('.queue-row')
-        let target = rows.length - 1
-        for (let i = 0; i < rows.length; i++) {
-          const r = rows[i].getBoundingClientRect()
-          if (e.clientY < r.top + r.height / 2) { target = i; break }
-        }
+        if (e.pointerId !== pid || dragIndex.value === -1 || !rowH) return
+        const y = e.clientY - container.getBoundingClientRect().top + container.scrollTop
+        // 与原口径一致：越过行中点才算越过该行 → round 而非 floor；
+        // 现在能命中渲染窗外的行（原实现被 rows.length 截断）
+        const target = Math.min(total - 1, Math.max(0, Math.round((y - rowTop0) / rowH)))
         if (target !== dragIndex.value) {
           emit('queue-move', { from: dragIndex.value, to: target })
           dragIndex.value = target
@@ -715,6 +721,12 @@ export default {
         clearTimeout(controlsHideTimer)
         window.removeEventListener('keydown', onFsKey)
         document.removeEventListener('visibilitychange', onVis)
+        // <video> 显式清场：pause+摘 src+load 让解码器/缓冲区当帧释放，
+        // 不等 DOM 移除后 GC 的惰性回收（视频流的缓冲面是按 MB 计的）
+        const v = mediaVideoRef.value
+        if (v) {
+          try { v.pause(); v.removeAttribute('src'); v.load() } catch { /* 卸载期媒体异常无碍 */ }
+        }
         // 卸载先于 DOM 移除——主动退掉自持的全屏，不等浏览器对脱离
         // 元素的事后清理（行为更确定，少一帧悬空全屏帧）
         const fsEl = document.fullscreenElement || document.webkitFullscreenElement
@@ -962,7 +974,7 @@ export default {
       formatDuration,
       formatTime,
       httpsCover,
-      songCoverUrl, isFileTrackId,
+      songCoverUrl, songThumbUrl, isFileTrackId,
       TABS,
       setTab,
       moveTab,
@@ -1406,6 +1418,10 @@ export default {
   font-size: var(--lyric-fs, 18px);
   color: var(--ink-64);
   transition: color .25s, font-size .25s;
+  /* 长歌词（串烧/整张碟上千行）的屏外行跳布局/绘制；字号变档时 auto
+     记录的真实尺寸随之更新，scrollIntoView 会强制即时渲染目标行 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 30px;
 }
 
 /* 当前行三层强调：accent 深档字色（双主题都过纸面对比度线）+ 放一档

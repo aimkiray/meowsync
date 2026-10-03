@@ -27,7 +27,7 @@
           <span class="result-section-sub">歌曲 · 点击即播</span>
         </div>
         <div
-          v-for="(song, i) in songs"
+          v-for="(song, i) in pagedSongs"
           :key="song.id"
           class="song-result-row"
           :class="{ 'song-result-row--playing': String(currentSong?.id) === String(song.id) }"
@@ -48,10 +48,11 @@
             </span>
             <img
               v-if="songCoverUrl(song)"
-              :src="httpsCover(songCoverUrl(song))"
+              :src="httpsCover(songThumbUrl(song, 96))"
               :alt="song.name"
               class="song-result-cover"
               loading="lazy"
+              decoding="async"
             />
             <div v-else class="song-result-cover song-result-cover--fallback"><PixelIcon name="note" :size="16" /></div>
             <div class="song-result-info">
@@ -69,6 +70,14 @@
             @click.stop="$emit('add-to-playlist', song)"
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
+        <!-- 本地渲染窗扩窗：append 不换引用故认首行 id 当身份——
+             点服务端加载更多后窗不回卷，换新搜索才回卷 -->
+        <button
+          v-if="songHasMore"
+          :ref="bindSongSentinel"
+          class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
+          @click="loadMoreSongs()"
+        >显示更多 · {{ songRendered }} / {{ songs.length }}</button>
         <!-- 单曲深挖：服务端翻页（cloudsearch offset+songCount）——
              20 首封顶的时代结束；QQ 源结果（songTotal=null）不亮此键。
              刻意只点按不接 IO 哨兵：每次点击=一次上游请求，
@@ -104,9 +113,10 @@
             <div class="grid-card-cover">
               <img
                 v-if="playlist.coverImgUrl"
-                :src="httpsCover(playlist.coverImgUrl)"
+                :src="httpsCover(coverSizeUrl(playlist.coverImgUrl, 320))"
                 :alt="playlist.name"
                 loading="lazy"
+                decoding="async"
               />
               <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             </div>
@@ -158,7 +168,7 @@ import { usePagedList } from '../composables/usePagedList.js'
 import { shareOrCopy, playlistShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
-import { songCoverUrl } from '../lib/song'
+import { songCoverUrl, songThumbUrl, coverSizeUrl } from '../lib/song'
 import { formatTime } from '../lib/format'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -267,10 +277,23 @@ export default {
       resetWhen: () => props.results,
       scrollRoot: () => wrapEl.value,
     })
+    // 单曲结果渲染窗：服务端「加载更多」append 时数组整体换引用，
+    // 故 resetWhen 认首行 id（append 首行不变→窗不回卷；新搜索→回卷）
+    const {
+      rows: pagedSongs, hasMore: songHasMore, renderedCount: songRendered,
+      loadMore: loadMoreSongs, bindSentinel: bindSongSentinel,
+    } = usePagedList({
+      source: computed(() => props.songs),
+      pageSize: 100,
+      resetWhen: () => props.songs[0]?.id,
+      scrollRoot: () => wrapEl.value,
+    })
 
     return {
       httpsCover: httpsCoverUrl,
       songCoverUrl,
+      songThumbUrl,
+      coverSizeUrl,
       adding,
       inLibrary,
       handleAdd,
@@ -284,6 +307,11 @@ export default {
       gridRendered,
       loadMoreGrid,
       bindSentinel,
+      pagedSongs,
+      songHasMore,
+      songRendered,
+      loadMoreSongs,
+      bindSongSentinel,
     }
   }
 }
