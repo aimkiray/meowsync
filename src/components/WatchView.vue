@@ -415,7 +415,10 @@ export default {
     playbackError: { type: String, default: '' },
     durationWarning: { type: String, default: '' },
     tab: { type: String, default: 'queue' },
-    autoplay: { type: Boolean, default: false }
+    autoplay: { type: Boolean, default: false },
+    // 沉浸歌词层开着时本页仍挂载但被整体盖住——视频此时不可见，
+    // mediaVideoActive 据此收掉（卸载 <video> 止流，关层经对齐链重挂续播）
+    fullscreenPlayerOpen: { type: Boolean, default: false }
   },
   emits: [
     'back', 'open-fullscreen', 'toggle-play',
@@ -752,8 +755,12 @@ export default {
     })
     // mediaVideoUrl 空串（探测在途）不挂载 <video>：src="" 会解析成页面
     // URL 被当媒体加载，error 误闩封面；URL 就绪才出元素
+    // 视频只在 watch 页真正可见时存在：videoOn 是偏好而非在场证明——
+    // 离开本页组件整体卸载；被沉浸歌词层盖住时虽仍挂载同样收掉（止流止损），
+    // 关层后媒体键/URL 未变 → <video> 重挂，对齐 watcher 负责接回音频时钟
     const mediaVideoActive = computed(() =>
-      !!(mediaVideoKey.value && videoOn.value && !mediaVideoFailed.value && mediaVideoUrl.value))
+      !!(mediaVideoKey.value && videoOn.value && !props.fullscreenPlayerOpen
+        && !mediaVideoFailed.value && mediaVideoUrl.value))
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
     // 的视频下载此前是纯只写功能（App 内无处可播）。按队列归属歌单探测
     // （任务行以歌单维度登记；别的歌单下的下载对不上 playlistId，漏探回落
@@ -877,6 +884,7 @@ export default {
     // immediate 覆盖挂载瞬间条件已满足的情形（syncMediaVideo 也兜底）
     watch([mediaVideoActive, mediaVideoKey, mediaVideoUrl], async () => {
       if (!mediaVideoActive.value) return
+      pokeControls() // 重挂（沉浸层关/切歌/开关视频）亮一轮控件，沿用自隐计时
       await nextTick()
       const v = mediaVideoRef.value
       if (!v) return
