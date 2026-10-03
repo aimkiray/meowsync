@@ -1516,6 +1516,8 @@ export default {
 
   /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
      （旧浏览器不认两关键字写法时回退到上行 stable）。
+     视频态是左缘构图：左车道反把播放器推离返回键左缘（经典滚动条 11px）——
+     只留右车道，播放器向左吃满到返回键轴，右缘与竖向位置不动。
      safe center：内容超高时向上对称溢出，顶部封面被裁且无法滚达——
      safe 让溢出改走底部（不支持 safe 的浏览器回退原 center 行为） */
   .watch-main {
@@ -1523,6 +1525,7 @@ export default {
     scrollbar-gutter: stable;
     scrollbar-gutter: stable both-edges;
   }
+  .watch-main--video { scrollbar-gutter: stable; }
 
   .watch-cover { width: min(46vh, 420px); }
   /* 视频是主内容、须明显大于方形封面 */
