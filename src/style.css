@@ -885,18 +885,32 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   color: var(--paper);
 }
 
-/* watch 页 tab：纯文字式——无下标短线无墨块，激活态只靠墨色升档
-   （ink-86→ink）；tab 间竖向发丝分隔也摘掉，留白即边界 */
+/* watch 页 tab：下划线指示替代墨块——激活态墨色升档 + 600 字重 +
+   2px 墨线骑在基座发丝上（墨块在饱和画布上读作色块，线条才是标尺语）；
+   tab 间竖向发丝分隔摘掉，留白即边界 */
 .watch-tabs .pg-tab {
   border-right: none;
+  position: relative;
 }
 .watch-tabs .pg-tab--active {
   background: transparent;
   color: var(--ink);
+  font-weight: 600;
 }
-/* tab 基座去尺：与滚动区的边界感交给 .watch-side-body 的滚动影——
-   内容潜到 tab 下时才显现，静止零装饰 */
-.watch-tabs { border-bottom: none; }
+.watch-tabs .pg-tab::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--ink);
+  transform: scaleX(0);
+}
+.watch-tabs .pg-tab--active::after { transform: scaleX(1); }
+@media (prefers-reduced-motion: no-preference) {
+  .watch-tabs .pg-tab::after { transition: transform .2s var(--ease-ink); }
+}
 
 /* 芯片（24px 发丝小牌：标签/热搜/筛选——与小件档 icobtn--sm 同高） */
 .pg-chip {
