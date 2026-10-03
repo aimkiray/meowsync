@@ -3,7 +3,7 @@
        sage 画布上两张纸面发丝盒（队列列 / 任务列） -->
   <div class="downloads-panel flex flex-col relative m-3 sm:m-5 flex-1 min-h-0 overflow-hidden">
     <!-- <xl 单列时两行各按内容撑高会超出面板——给网格自身加纵向滚动兜底 -->
-    <div class="grid grid-cols-1 xl:grid-cols-[400px_minmax(0,1fr)] gap-4 flex-1 min-h-0 overflow-y-auto overscroll-contain xl:overflow-visible"
+    <div ref="gridEl" class="grid grid-cols-1 xl:grid-cols-[400px_minmax(0,1fr)] gap-4 flex-1 min-h-0 overflow-y-auto overscroll-contain xl:overflow-visible"
       style="scrollbar-gutter: stable"><!-- <xl 时本格是唯一滚动器；≥xl overflow:visible 时 gutter 自动失效 -->
       <div class="min-h-0 flex flex-col">
         <DownloadQueueList
@@ -42,8 +42,20 @@
   </div>
 </template>
 
+<script>
+// 跨挂载会话快照：本页经 v-if 换页即整卸——队列/任务数据、选中队列、过滤器
+// 抬到模块域，回场先渲旧值再由 onMounted 静默重拉（hasLoaded* 已立→无
+// spinner 闪、右栏不空）；选中项若已失效由既有 miss-2 机制清选
+const pageMem = {
+  queues: [], tasks: [], standaloneTasks: [], selectedQueue: null,
+  hasLoadedQueues: false, hasLoadedTasks: false,
+  queueSearch: '', queueStatusFilter: 'all',
+}
+</script>
+
 <script setup>
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { toast, pixelConfirm } from '../lib/feedback'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
@@ -72,20 +84,33 @@ const props = defineProps({
 // &pl= 死链残留 URL，刷新/回放每次都重放一次"还没有下载队列"
 const emit = defineEmits(['preselect-expired'])
 
-const queues = ref([])
-const selectedQueue = ref(null)
-const tasks = ref([])
+const queues = ref(pageMem.queues)
+const selectedQueue = ref(pageMem.selectedQueue)
+const tasks = ref(pageMem.tasks)
 const loadingQueues = ref(false)
 const loadingTasks = ref(false)
 const retryingTaskIds = ref([])
-const queueSearch = ref('')
-const queueStatusFilter = ref('all')
-const hasLoadedQueues = ref(false)
-const hasLoadedTasks = ref(false)
+const queueSearch = ref(pageMem.queueSearch)
+const queueStatusFilter = ref(pageMem.queueStatusFilter)
+const hasLoadedQueues = ref(pageMem.hasLoadedQueues)
+const hasLoadedTasks = ref(pageMem.hasLoadedTasks)
 // 未入队单曲（queue_id NULL 的 standalone 单曲下载）：队列任务接口看不见它们，
 // 删除/重试需要可见入口——按选中队列的歌单走 standalone=1 服务端收窄查询
-const standaloneTasks = ref([])
+const standaloneTasks = ref(pageMem.standaloneTasks)
 const deletingTaskIds = ref([])
+const gridEl = ref(null)
+
+// 卸载时把可复现的数据态回写快照（loading/轮询/序号闸等瞬态不存）；
+// 顺带记外层滚动位（<xl 单列时唯一滚动器）
+onUnmounted(() => {
+  Object.assign(pageMem, {
+    queues: queues.value, tasks: tasks.value, standaloneTasks: standaloneTasks.value,
+    selectedQueue: selectedQueue.value,
+    hasLoadedQueues: hasLoadedQueues.value, hasLoadedTasks: hasLoadedTasks.value,
+    queueSearch: queueSearch.value, queueStatusFilter: queueStatusFilter.value,
+  })
+  writeScrollMem('downloads', { top: gridEl.value?.scrollTop ?? 0 })
+})
 
 let pollInterval = null
 
@@ -585,6 +610,11 @@ watch(
 )
 
 onMounted(async () => {
+  // 回场还位外层滚动（快照数据已先渲一帧，再后台重拉）
+  nextTick(() => {
+    const m = readScrollMem('downloads')
+    if (m) restoreScrollTop(gridEl.value, m.top)
+  })
   await loadQueues()
   startPolling()
   document.addEventListener('visibilitychange', handleVisibilityChange)

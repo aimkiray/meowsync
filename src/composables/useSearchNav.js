@@ -16,7 +16,7 @@ import { buildQQSong } from '../lib/external-songs.js'
 //     播放器域（usePlayer 先实例化；惰性转发是双向循环依赖下的惯例写法）
 export function useSearchNav({
   gates,
-  searchQuery, currentSong, watchTab,
+  searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
   userPlaylists, selectedPlaylist, loadingSongs, selectPlaylist,
   playSong, playSongFromSearch, playSongFromRelated, playPlaylist,
 }) {
@@ -119,8 +119,27 @@ export function useSearchNav({
     } finally { suppressNavPush = false }
   }
 
+  // history.back() 的 popstate 是异步派发的——派发落地前再调 back() 会
+  // 连弹两级。发起即上闩，popstate 落地解锁；兜底超时防极端情况下闩死
+  let navBackPending = false
+  const navBack = () => {
+    if (navBackPending) return
+    navBackPending = true
+    setTimeout(() => { navBackPending = false }, 500)
+    window.history.back()
+  }
+
   // 浏览器前进/后退：按 URL 回放视图（不重入栈）
   const onPopState = () => {
+    navBackPending = false
+    // 沉浸层还开着时的 Back 先收层不换页（YTM 全屏歌词同款）——否则层下
+    // 页面被悄悄换掉，收层才惊觉。重推当前视图 URL 消费掉这次后退：
+    // 条目深度不变，被弹掉的 forward 条目作废可接受
+    if (isFullscreenPlayerOpen.value) {
+      isFullscreenPlayerOpen.value = false
+      pushNavState()
+      return
+    }
     suppressNavPush = true
     try { applyUrlNav() } finally { suppressNavPush = false }
   }
@@ -129,7 +148,7 @@ export function useSearchNav({
 
   const watchBack = () => {
     // 当前条目是我们 push 的 → 站内还有上一页可回；否则（分享链冷启动）回首页
-    if (window.history.state?.meowsyncNav) window.history.back()
+    if (window.history.state?.meowsyncNav) navBack()
     else {
       centerView.value = 'home'
       // 同步地址栏——否则 UI 在首页而 URL 停在 ?view=watch，刷新又回 watch
@@ -159,7 +178,7 @@ export function useSearchNav({
       // 「返回」言出必行=回到进入下载页前的条目：站内历史走 back 回放
       //（watch/search 进的下载页能真回去，而不是新压一条 songs/home 把
       // Back 键语义搞成死循环）；直达页无站内历史才落确定性路由
-      if (window.history.state?.meowsyncNav) { window.history.back(); return }
+      if (window.history.state?.meowsyncNav) { navBack(); return }
       centerView.value = selectedPlaylist.value ? 'songs' : 'home'
       pushNavState() // URL 还停在 ?view=downloads——无 popstate 可放，手动同步
       return
@@ -216,6 +235,7 @@ export function useSearchNav({
   // 已在 watch 且同 tab 再点 = 收起回上一页（YTM miniplayer 同款开合）
   const openWatchPanel = (tab) => {
     if (!currentSong.value) return // 没在播的歌：空 watch 页无意义
+    sidebarOpen.value = false // 热键/遥控链路不经过 scrim，抽屉不会自闭——与 navHome 同律收
     if (centerView.value === 'watch') {
       if (watchTab.value === tab) return watchBack()
       watchTab.value = tab
@@ -229,6 +249,7 @@ export function useSearchNav({
   // 点歌进入 watch 播放页（YTM：任何地方点歌都导航到 /watch）。
   // 调用处紧跟着就是 playSong——不能用 currentSong 做守卫，冷启动点歌时它还是 null
   const enterWatch = () => {
+    sidebarOpen.value = false // 键盘 q/遥控链路不经过 scrim，抽屉不会自闭
     if (centerView.value !== 'watch') {
       centerView.value = 'watch'
       pushNavState()

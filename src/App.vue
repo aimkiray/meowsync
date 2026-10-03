@@ -817,7 +817,7 @@ export default {
       handlePlaylistSearch, handleQQSongSearch, loadMoreSearchSongs,
     } = useSearchNav({
       gates,
-      searchQuery, currentSong, watchTab,
+      searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
       userPlaylists, selectedPlaylist, loadingSongs, selectPlaylist,
       playSong: (s, o) => playSong(s, o),
       playSongFromSearch: (s) => playSongFromSearch(s),
