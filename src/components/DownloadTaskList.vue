@@ -46,7 +46,7 @@
       <p class="dtl-state-text">加载任务中喵...</p>
     </div>
 
-    <div v-else-if="tasks.length === 0" class="dtl-empty">
+    <div v-else-if="tasks.length === 0 && standaloneTasks.length === 0" class="dtl-empty">
       <p class="dtl-empty-title">{{ emptyError || '这条队列里还没有任务喵~' }}</p>
       <p v-if="!emptyError" class="dtl-empty-sub">如果这是新建队列，稍等一下就会开始填充任务列表。</p>
     </div>
@@ -105,6 +105,35 @@
           >加载更多 · {{ pgCompleted.renderedCount.value }} / {{ groupedTasks.completed.length }}</button>
         </template>
       </section>
+
+      <!-- 未入队单曲：同歌单 queue_id=NULL 的 standalone 下载——不属于队列
+           调度（暂停/取消语义不适用），但重试/删除要可见 -->
+      <section v-if="standaloneTasks.length" class="dtl-group">
+        <div class="dtl-group-head">
+          <span class="dtl-group-tag">standalone:</span>
+          <span class="pg-label pg-label--dim">未入队单曲 · {{ standaloneTasks.length }} 条</span>
+        </div>
+        <div
+          v-for="task in pgStandalone.rows.value"
+          :key="task.id"
+          class="dtl-task"
+        >
+          <DownloadTaskRow
+            :task="task"
+            :retrying-task-ids="retryingTaskIds"
+            :deleting="deletingTaskIds.includes(task.id)"
+            deletable
+            @retry-task="$emit('retry-task', $event)"
+            @delete-task="$emit('delete-task', $event)"
+          />
+        </div>
+        <button
+          v-if="pgStandalone.hasMore.value"
+          :ref="pgStandalone.bindSentinel"
+          class="ink-btn ink-btn--ghost ink-btn--sm dtl-more"
+          @click="pgStandalone.loadMore()"
+        >加载更多 · {{ pgStandalone.renderedCount.value }} / {{ standaloneTasks.length }}</button>
+      </section>
     </div>
   </div>
 </template>
@@ -137,10 +166,19 @@ const props = defineProps({
   emptyError: {
     type: String,
     default: ''
+  },
+  // 未入队单曲分节：同歌单 queue_id=NULL 的 standalone 任务（与队列任务不同属）
+  standaloneTasks: {
+    type: Array,
+    default: () => []
+  },
+  deletingTaskIds: {
+    type: Array,
+    default: () => []
   }
 })
 
-defineEmits(['retry-task'])
+defineEmits(['retry-task', 'delete-task'])
 
 const showCompleted = ref(false)
 
@@ -186,6 +224,7 @@ const pgFailed = mkGroupWindow(() => groupedTasks.value.failed)
 const pgDownloading = mkGroupWindow(() => groupedTasks.value.downloading)
 const pgPending = mkGroupWindow(() => groupedTasks.value.pending)
 const pgCompleted = mkGroupWindow(() => groupedTasks.value.completed)
+const pgStandalone = mkGroupWindow(() => props.standaloneTasks)
 
 // 同构三段的组描述数组：key 对 groupedTasks，pg 是该组的渐进窗
 const taskGroups = [

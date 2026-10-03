@@ -18,6 +18,9 @@ function mapQueueRow(row) {
     downloadVideo: Boolean(row.download_video),
     // 歌单封面 URL（前端 getQueueCover 直接用作 img src）
     coverImgUrl: row.cover_img_url || '',
+    // 侧栏歌单身份：远端单=网易云数字 id，本地镜像单=local_pl_* 原文——
+    // 前端深链 ?view=downloads&pl= 按它把队列映射回侧栏歌单
+    neteasePlaylistId: row.netease_playlist_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at
@@ -131,10 +134,10 @@ function updateQueue(id, updates) {
 
 function findQueueById(id) {
   const db = getDb();
-  // 与 listQueues 同形 JOIN：selectedQueue 快照若缺 cover_img_url，
-  // DownloadsPanel 轮询刷新会把队列卡的封面冲成空串
+  // 与 listQueues 同形 JOIN：selectedQueue 快照若缺 cover_img_url/
+  // netease_playlist_id，DownloadsPanel 轮询刷新会把封面冲空、深链预选失锚
   const row = db.prepare(`
-    SELECT q.*, p.cover_img_url
+    SELECT q.*, p.cover_img_url, p.netease_playlist_id
     FROM download_queues q
     LEFT JOIN playlists p ON p.id = q.playlist_id
     WHERE q.id = ?
@@ -145,7 +148,7 @@ function findQueueById(id) {
 function listQueues() {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT q.*, p.cover_img_url
+    SELECT q.*, p.cover_img_url, p.netease_playlist_id
     FROM download_queues q
     LEFT JOIN playlists p ON p.id = q.playlist_id
     ORDER BY datetime(q.created_at) DESC

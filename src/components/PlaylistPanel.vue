@@ -103,6 +103,14 @@
               下载歌单
             </button>
             <button
+              v-if="!isShareShell(playlist)"
+              @click.stop="viewDownloadProgress(playlist)"
+              class="pg-menu-item"
+              role="menuitem"
+            >
+              下载进度
+            </button>
+            <button
               v-if="isNeteasePlaylist(playlist)"
               @click.stop="openInNetease(playlist)"
               class="pg-menu-item"
@@ -173,7 +181,7 @@ export default {
       default: false
     }
   },
-  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted', 'open-create-playlist'],
+  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted', 'open-create-playlist', 'view-download-progress'],
   setup(props, { emit }) {
     const openMenuId = ref(null)
     const menuPositions = ref({})
@@ -220,13 +228,13 @@ export default {
         menuTriggerEl = button
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 本菜单全是短项，实际宽恒等于 pg-menu 的 min-width
-        // 菜单高度按可见项数算：临时歌单隐藏 4 项只剩"删除歌单"，
-        // 按全量 5 项翻转会把菜单顶到按钮上方 150px 悬空。
-        // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 5 项悬空更安全
+        // 菜单高度按可见项数算：临时歌单隐藏 5 项只剩"删除歌单"，
+        // 按全量 6 项翻转会把菜单顶到按钮上方悬空。
+        // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 6 项悬空更安全
         const currentPlaylist = props.userPlaylists.find(p => p.id === playlistId)
         const itemCount = !currentPlaylist ? 1
           : isShareShell(currentPlaylist) ? 1
-          : isNeteasePlaylist(currentPlaylist) ? 5 : 4
+          : isNeteasePlaylist(currentPlaylist) ? 6 : 5
         const menuHeight = itemCount * 39 + 4 // 实测项高 ≈39（含发丝分隔）
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -369,13 +377,19 @@ export default {
         })
 
         // 服务端对终态队列原地复活而非另立行——按复用标记与完成度分文案：
-        // 复活且任务全数完好 = 没有东西要下，"继续下载"的文案会误导
+        // 复活且任务全数完好 = 没有东西要下，"继续下载"的文案会误导。
+        // 「查看进度」动作键补发现性闭环：toast 是后台下载的确认位，
+        // 进度在哪的问题正产生于此——action toast 驻留自动翻倍
         const queue = res?.data
         toast(!queue?.reused
           ? `下载队列已创建，正在后台下载${mirrorNote}`
           : queue.totalTasks > 0 && queue.completedTasks === queue.totalTasks
             ? `该歌单已全部下载${mirrorNote}`
-            : `继续下载该歌单的已有队列${mirrorNote}`, 'success')
+            : `继续下载该歌单的已有队列${mirrorNote}`,
+          'success', null, {
+            label: '查看进度',
+            onAction: () => emit('view-download-progress', playlist.id)
+          })
       } catch (error) {
         console.error('创建下载队列失败:', error)
         const message = apiErrorMessage(error)
@@ -389,6 +403,13 @@ export default {
         downloadingIds.delete(pid)
         closeMenu(pid) // 失败也要关菜单——否则菜单挂着看似还能点（定点关：别误杀新菜单）
       }
+    }
+
+    // 「下载进度」深链：交给 App 切下载页并预选本单队列（emit 只带 id——
+    // 侧栏身份即深链身份，local_pl_*/数字 id 都直接可寻址）
+    const viewDownloadProgress = (playlist) => {
+      emit('view-download-progress', playlist.id)
+      closeMenu()
     }
 
     const deletePlaylistDownloads = async (playlist) => {
@@ -452,6 +473,7 @@ export default {
        removePlaylist,
        sharePlaylist,
        downloadPlaylist,
+       viewDownloadProgress,
        deletePlaylistDownloads,
        isShareShell,
        isNeteasePlaylist,

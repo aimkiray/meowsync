@@ -51,6 +51,7 @@
           @remove-playlist="handleRemovePlaylist"
           @open-create-playlist="handleOpenCreatePlaylist"
           @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
+          @view-download-progress="openDownloadsForPlaylist"
         />
       </aside>
 
@@ -137,7 +138,7 @@
           @open-source="openQueueSource"
           @add-to-playlist="handleOpenAddToPlaylist"
         />
-        <DownloadsPanel v-else />
+        <DownloadsPanel v-else :preselect-playlist-id="downloadsPl" />
       </main>
     </div>
 
@@ -801,6 +802,7 @@ export default {
       searchSongTotal, searchSongLoadingMore,
       applyUrlNav, normalizeNavEntry,
       navHome, closeSearchView, toggleCenterView, watchBack,
+      downloadsPl, openDownloadsForPlaylist,
       enterWatch, openWatchPanel,
       selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,
       previewPlaylistById,
@@ -1184,6 +1186,8 @@ export default {
       openFullscreenPlayer,
       closeFullscreenPlayer,
       toggleCenterView,
+      downloadsPl,
+      openDownloadsForPlaylist,
       addTargetSong,
       newPlaylistName,
       atpInput,

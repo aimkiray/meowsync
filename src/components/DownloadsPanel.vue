@@ -32,7 +32,10 @@
           :selected-queue="selectedQueue"
           :retrying-task-ids="retryingTaskIds"
           :empty-error="tasksError"
+          :standalone-tasks="standaloneTasks"
+          :deleting-task-ids="deletingTaskIds"
           @retry-task="retryTask"
+          @delete-task="deleteTask"
         />
       </div>
     </div>
@@ -49,6 +52,16 @@ import { queueProgress } from '../lib/downloadStatus.js'
 import DownloadQueueList from './DownloadQueueList.vue'
 import DownloadTaskList from './DownloadTaskList.vue'
 
+const props = defineProps({
+  // 深链预选意图（?view=downloads&pl=<侧栏歌单id>，由 App 从 useSearchNav 下发）。
+  // 侧栏身份 = 远端单数字 id / 本地镜像 local_pl_*，与服务端队列透出的
+  // neteasePlaylistId 恒等可比；local_pl_* 经 String() 归一不丢形
+  preselectPlaylistId: {
+    type: [String, Number],
+    default: null
+  }
+})
+
 const queues = ref([])
 const selectedQueue = ref(null)
 const tasks = ref([])
@@ -59,6 +72,10 @@ const queueSearch = ref('')
 const queueStatusFilter = ref('all')
 const hasLoadedQueues = ref(false)
 const hasLoadedTasks = ref(false)
+// 未入队单曲（queue_id NULL 的 standalone 单曲下载）：队列任务接口看不见它们，
+// 删除/重试需要可见入口——按选中队列的歌单顺带拉全量任务滤出
+const standaloneTasks = ref([])
+const deletingTaskIds = ref([])
 
 let pollInterval = null
 
@@ -177,6 +194,7 @@ function selectQueue(queue) {
   selectionMissCount = 0
   // 立即清空旧队列任务——加载/轮询间隙不应在 B 名下展示 A 的任务列表
   tasks.value = []
+  standaloneTasks.value = []
   hasLoadedTasks.value = false
   tasksError.value = ''
   loadTasks(queue.id)
@@ -186,6 +204,38 @@ function selectQueue(queue) {
 // 晚出发的旧响应不覆盖新快照；loadTasks 另有选中队列归属校验兜跨队列竞态
 const queuesGate = createReqGate()
 const tasksGate = createReqGate()
+const standaloneGate = createReqGate()
+
+// 深链预选（?view=downloads&pl=）：消费即焚——同一值只预选一次，轮询不再
+// 重抢用户后续手选；同值返回导航是已知边界（prop 不变不重发）
+let preselectConsumed = null
+
+function applyPreselect(list) {
+  const pl = props.preselectPlaylistId
+  if (pl == null || String(pl) === preselectConsumed) return
+  preselectConsumed = String(pl)
+  const matches = list.filter(
+    queue => queue.neteasePlaylistId != null && String(queue.neteasePlaylistId) === String(pl)
+  )
+  if (!matches.length) {
+    // 该歌单没建过队列（或队列已级联清掉）——给用户一句交代而不是静默落地
+    toast('该歌单还没有下载队列', 'info')
+    return
+  }
+  // 一歌单可有多条兄弟队列（终态壳收养未净）：运行中优先，其次最新行
+  const target = matches.find(queue => queue.status === 'running')
+    ?? matches.reduce((latest, queue) => (queue.id > latest.id ? queue : latest))
+  // 选中行可能被现有搜索/状态过滤藏掉——预选意图明确，清回全集
+  queueSearch.value = ''
+  queueStatusFilter.value = 'all'
+  selectionMissCount = 0
+  selectedQueue.value = target
+  tasks.value = []
+  standaloneTasks.value = []
+  hasLoadedTasks.value = false
+  tasksError.value = ''
+  loadTasks(target.id)
+}
 
 async function loadQueues(options = {}) {
   const { silent = false } = options
@@ -231,9 +281,13 @@ async function loadQueues(options = {}) {
         selectionMissCount = 0
         selectedQueue.value = null
         tasks.value = []
+        standaloneTasks.value = []
         hasLoadedTasks.value = false
       }
     }
+
+    // 深链预选在真实快照上跑——预置假行会被上面的两轮缺席判定清掉
+    applyPreselect(activeQueues)
 
     hasLoadedQueues.value = true
     loadError.value = ''
@@ -283,6 +337,8 @@ async function loadTasks(queueId, options = {}) {
     }
     hasLoadedTasks.value = true
     tasksError.value = ''
+    // standalone 附属分节跟同一节拍刷新——自带 gate 且静默容错，不阻塞主链
+    loadStandaloneTasks(selectedQueue.value?.playlistId)
   } catch (error) {
     console.error('加载任务失败:', error)
     // 与队列侧同口径：首载失败给可见错误态，轮询静默失败不打断
@@ -352,6 +408,52 @@ async function retryTask(taskId) {
     toast('重试任务失败: ' + (apiErrorMessage(error)), 'error')
   } finally {
     retryingTaskIds.value = retryingTaskIds.value.filter(id => id !== taskId)
+  }
+}
+
+// standalone 分节：按歌单 id 拉全量任务滤 queueId==null。附属面失败静默——
+// 主任务列的 tasksError 语义专属队列任务，不背它的锅
+async function loadStandaloneTasks(playlistId) {
+  if (playlistId == null) {
+    standaloneTasks.value = []
+    return
+  }
+  const my = standaloneGate.claim()
+  try {
+    const response = await downloadsApi.listTasks({ playlistId })
+    if (!standaloneGate.isCurrent(my)) return
+    // 与主链同口径：畸形响应静默丢弃，不吞成"没有 standalone"假象——
+    // 但 standalone 无独立错误态，保留旧数据比清空更诚实
+    if (!response || !Array.isArray(response.data)) return
+    const nextStandalone = response.data.filter(task => task.queueId == null)
+    if (hasCollectionChanged(standaloneTasks.value, nextStandalone, hasTaskChanged)) {
+      standaloneTasks.value = nextStandalone
+    }
+  } catch (error) {
+    if (standaloneGate.isCurrent(my)) {
+      console.warn('[downloads] 未入队任务加载失败:', error?.message || error)
+    }
+  }
+}
+
+async function deleteTask(taskId) {
+  if (deletingTaskIds.value.includes(taskId)) return
+  const task = standaloneTasks.value.find(t => t.id === taskId)
+  // 服务端会连盘上文件一起删；进行中任务 409 拒删走错误 toast
+  if (!await pixelConfirm(
+    `确定要删除「${task?.songName || '该任务'}」的下载任务吗？已下载的文件将一并移除`,
+    { confirmText: '删除', danger: true }
+  )) return
+  deletingTaskIds.value.push(taskId)
+  try {
+    await downloadsApi.deleteTask(taskId)
+    toast('已删除下载任务', 'success')
+    await loadStandaloneTasks(selectedQueue.value?.playlistId)
+  } catch (error) {
+    console.error('删除任务失败:', error)
+    toast('删除失败: ' + (apiErrorMessage(error)), 'error')
+  } finally {
+    deletingTaskIds.value = deletingTaskIds.value.filter(id => id !== taskId)
   }
 }
 
@@ -428,9 +530,15 @@ function handleVisibilityChange() {
 watch(() => selectedQueue.value?.id, (queueId) => {
   if (!queueId) {
     tasks.value = []
+    standaloneTasks.value = []
     hasLoadedTasks.value = false
     tasksError.value = ''
   }
+})
+
+// 深链意图晚到（面板已挂载后从菜单/toast 再导航）：队列已载即就地预选
+watch(() => props.preselectPlaylistId, () => {
+  if (hasLoadedQueues.value) applyPreselect(queues.value)
 })
 
 onMounted(async () => {

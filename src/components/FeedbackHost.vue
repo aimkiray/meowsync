@@ -8,7 +8,16 @@
           :key="t.id"
           class="fb-toast"
           :class="`fb-toast--${t.type}`"
-        ><span class="fb-toast-tag">{{ t.type }}:</span> {{ t.text }}</div>
+        >
+          <span class="fb-toast-tag">{{ t.type }}:</span>
+          <span class="fb-toast-text">{{ t.text }}</span>
+          <button
+            v-if="t.action"
+            type="button"
+            class="fb-toast-action"
+            @click="runToastAction(t)"
+          >{{ t.action.label }}</button>
+        </div>
       </TransitionGroup>
     </div>
 
@@ -51,7 +60,7 @@
 
 <script>
 import { watch, nextTick, ref } from 'vue'
-import { useFeedbackState, resolveConfirm } from '../lib/feedback'
+import { useFeedbackState, resolveConfirm, toastDismiss } from '../lib/feedback'
 
 export default {
   name: 'FeedbackHost',
@@ -60,6 +69,12 @@ export default {
     const cancelBtn = ref(null)
 
     const answer = (ok) => resolveConfirm(ok)
+
+    // 动作键：执行回调后无论成败都回收 toast——动作语义是"响应即跳转"，
+    // 失败路径（导航被拦等）由目标侧自行交代，挂着的 toast 没有价值
+    const runToastAction = (t) => {
+      try { t.action?.onAction?.() } finally { toastDismiss(t.id) }
+    }
 
     // 模态内焦点循环——两个按钮间往复，不让 Tab 逃出去点背景页
     const cycleFocus = (e) => {
@@ -81,7 +96,7 @@ export default {
       }
     })
 
-    return { state, cancelBtn, answer, cycleFocus }
+    return { state, cancelBtn, answer, cycleFocus, runToastAction }
   }
 }
 </script>
@@ -101,6 +116,9 @@ export default {
 
 /* 纸面发丝盒 toast：左缘发丝色条（success 绿戳 / error 危险红 / info 墨色） */
 .fb-toast {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   padding: 9px 12px;
   font-family: var(--font-mono);
   font-weight: 300;
@@ -110,6 +128,26 @@ export default {
   background: var(--paper);
   border: var(--hairline);
   pointer-events: auto;
+}
+
+.fb-toast-text { flex: 1; min-width: 0; }
+
+/* toast 内动作键（"查看进度"）：发丝小钮，贴右缘不撑高 */
+.fb-toast-action {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: transparent;
+  border: var(--hairline);
+  cursor: pointer;
+}
+
+.fb-toast-action:hover {
+  background: var(--ink);
+  color: var(--paper);
 }
 
 /* 类型区分用色块而非彩字——绿色文字在纸面 <3:1 不达标 */
