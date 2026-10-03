@@ -236,3 +236,39 @@ test('getSongDownloadStatus：videoReady 跨歌单寻址且最新完成工件优
   const stBoth = await dm.getSongDownloadStatus(null, songId);
   assert.equal(stBoth.videoPlaylistId, plB.id, '双份在盘工件取最新 completed_at 的歌单');
 });
+
+test('getSongDownloadStatus：audioReady 跨歌单寻址且独立于全工件合取', async () => {
+  const songId = 'yt_crossplaud';
+  // B 单只有音频档（歌词/封面未下或缺失）——downloaded 全工件合取为假
+  // 也不挡 audioReady：播放只看音频档在不在盘
+  const plB = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_xa_b', name: 'xa-b' });
+  const audB = join(fs.DOWNLOAD_BASE_DIR, String(plB.id), 'audio', 'x.m4a');
+  mkdirSync(dirname(audB), { recursive: true });
+  writeFileSync(audB, 'a');
+  const tB = downloadTasksRepo.createTask({ playlistId: plB.id, queueId: null, songId, songName: 'n', artist: 'a' });
+  downloadTasksRepo.updateTask(tB.id, {
+    status: 'completed', audioPath: audB, completedAt: '2024-03-01T00:00:00.000Z'
+  });
+
+  // 无归属上下文：跨歌单命中 B 的音频档并回带寻址键
+  const st = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(st.audioReady, true);
+  assert.equal(st.audioPlaylistId, plB.id);
+  assert.equal(st.downloaded, false, '无 playlistId 时本单 task 缺席——downloaded 不参与播放判定');
+  assert.equal(st.videoReady, false);
+
+  // 幻影档（行在档删）不报 ready；另一歌单的新档顶上
+  const plA = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_xa_a', name: 'xa-a' });
+  const audA = join(fs.DOWNLOAD_BASE_DIR, String(plA.id), 'audio', 'x.m4a');
+  const tA = downloadTasksRepo.createTask({ playlistId: plA.id, queueId: null, songId, songName: 'n', artist: 'a' });
+  downloadTasksRepo.updateTask(tA.id, {
+    status: 'completed', audioPath: audA, completedAt: '2024-05-01T00:00:00.000Z'
+  });
+  // A 的 completed_at 更晚但档不在盘——B 的实档仍应赢（幻影不盖真档）
+  const st2 = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(st2.audioPlaylistId, plB.id, 'completed_at 更新的幻影档（行在档删）不得盖住实档');
+  mkdirSync(dirname(audA), { recursive: true });
+  writeFileSync(audA, 'a2');
+  const st3 = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(st3.audioPlaylistId, plA.id, '双份在盘音频档取最新 completed_at 的歌单');
+});

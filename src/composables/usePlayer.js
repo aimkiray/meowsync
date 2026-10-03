@@ -510,14 +510,28 @@ export function usePlayer({
 
         currentSong.value = song
 
+        // 本地已下载音频工件优先于在线流（与 watch 页视频档同律）：盘上
+        // 有档就不打上游玩一遍。audioReady 跨歌单寻址——暂存/搜索队列或
+        // 别单借源的播放没有归属上下文也能命中，回带的 audioPlaylistId
+        // 是 /file 寻址键。_localTried 是本地档解码失败后的回落戳——
+        // 跳过探测不重蹈同一份坏档；_localFile 是兜底链显式钉档，不探
+        let localPlId = options._localFile ?? null
+        if (localPlId === null && !isFileTrackId(song.id) && !options._localTried) {
+          const plHint = playingPlaylistId.value || selectedPlaylist.value?.id || null
+          const st = await downloadsApi.getSongDownloadStatus(plHint, song.id, abortSignal).catch(() => null)
+          if (abortSignal.aborted || currentPlayingId !== song.id) return
+          if (st?.data?.audioReady === true && st.data.audioPlaylistId != null) {
+            localPlId = st.data.audioPlaylistId
+          }
+        }
+
         // 获取歌曲播放URL：B 站导入曲走 /bilibili/stream 端点——服务端每次
         // 重解 playurl（CDN 签名会过期）再 302 进 audio-proxy，URL 不落库。
-        // _localFile：在线链全灭后的本地工件兜底（onloaderror 兜底链写入），
-        // 优先级最高——文件在盘上，不再打上游玩一遍注定失败的链
-        const songUrlData = options._localFile
-          ? { url: downloadsApi.songFileUrl(options._localFile, song.id) }
+        // 本地档（探测命中/_localFile 钉档）优先级最高——文件在盘上；
+        // file_ 上传曲没有在线链——资产就是服务端 uploads/ 工件，直连 file 端点
+        const songUrlData = localPlId !== null
+          ? { url: downloadsApi.songFileUrl(localPlId, song.id, 'audio') }
           : isFileTrackId(song.id)
-            // 上传曲没有在线链——资产就是服务端 uploads/ 工件，直连 file 端点
             ? { url: fileArtifactUrl(song.id) }
             : song.bilibili
             ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
@@ -633,6 +647,16 @@ export function usePlayer({
             // 无论是否过期都回收实例；过期时不得触碰新歌的共享状态（含看门狗）
             newHowl.unload()
             if (isStale()) return
+            // 探测命中的本地档失败（档坏/探测后被删）→ 转在线链：_localTried
+            // 跳过本地探测不重蹈同一份坏档；在线预算照常（_streamRetried 按
+            // 链上原值继承）。_localFile 钉档是链尾——败了不重探在线
+            if (localPlId !== null && !options._localFile) {
+              console.log('🔁 本地已下载档加载失败，回落在线流:', song.name)
+              clearHowlWatchdog()
+              if (howl === newHowl) howl = null
+              playSong(song, { ...options, _localTried: true, preserveContext: true })
+              return
+            }
             // 流地址失效自愈：vault token 随服务重启蒸发（404）/上游签名
             // 过期或风控（403）都让浏览器拿到 4xx → MEDIA_ERR_SRC_NOT_SUPPORTED。
             // 重解一次拿新链（各源端点本就每次重解签名）——单发闸防死循环，
@@ -757,9 +781,13 @@ export function usePlayer({
       if (currentPlayingId !== song.id) return
       songSwitching.value = true // 下载等待期维持切换态——底栏别装死
       try {
+        // audioReady 是工件维度判定（音频档在盘即可）——比全工件合取的
+        // downloaded 松：歌词/封面档缺失不该挡住在盘的 mp3/m4a；跨歌单
+        // 寻址回带命中行的 audioPlaylistId 作 /file 寻址键（暂存/搜索
+        // 队列的播放没有归属单也能找到别单的档）
         const st = await downloadsApi.getSongDownloadStatus(playlistId, song.id).catch(() => null)
-        let downloaded = st?.data?.downloaded === true
-        if (!downloaded) {
+        let audioPlId = st?.data?.audioReady === true ? st.data.audioPlaylistId : null
+        if (audioPlId === null) {
           toast('在线源不可用，先下载到服务器再播…', 'info')
           // 未镜像的本地单先补镜像（幂等：内容签名未变时服务端直接短路返回）
           const pl = (selectedPlaylist.value && String(selectedPlaylist.value.id) === String(playlistId))
@@ -770,25 +798,25 @@ export function usePlayer({
           // 镜像语义，会白跑一次 400 由 catch 吞掉（一跳 vs 判定成本，放行）
           if (pl && isLocalPlaylistId(pl.id)) await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
           const submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, { bitrate: 320000 })
-          downloaded = submitted?.data?.status === 'completed'
+          audioPlId = submitted?.data?.status === 'completed' ? playlistId : null
           // 提交即返回——终态轮询确认（音频档秒级完事，封顶 3min 防无限挂起）
           const deadline = Date.now() + 3 * 60 * 1000
-          while (!downloaded && Date.now() < deadline && currentPlayingId === song.id) {
+          while (audioPlId === null && Date.now() < deadline && currentPlayingId === song.id) {
             await new Promise(r => setTimeout(r, 1500))
             const st2 = await downloadsApi.getSongDownloadStatus(playlistId, song.id).catch(() => null)
-            if (st2?.data?.downloaded) { downloaded = true; break }
+            if (st2?.data?.audioReady === true) { audioPlId = st2.data.audioPlaylistId ?? playlistId; break }
             const ts = st2?.data?.task?.status
             if (ts === 'failed' || (st2?.data && st2.data.task === null)) break
           }
         }
         if (currentPlayingId !== song.id) return // 等下载期间用户切了歌——静默弃
-        if (!downloaded) {
+        if (audioPlId === null) {
           songSwitching.value = false
           playbackError.value = '在线源不可用，服务器下载仍在进行——完成后可重播'
           return
         }
         toast('已切换本地已下载文件播放', 'info')
-        playSong(song, { ...options, preserveContext: true, _streamRetried: true, _localFile: playlistId })
+        playSong(song, { ...options, preserveContext: true, _streamRetried: true, _localFile: audioPlId })
       } catch {
         if (currentPlayingId === song.id) {
           songSwitching.value = false

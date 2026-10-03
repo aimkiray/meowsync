@@ -1554,14 +1554,25 @@ async function getSongDownloadStatus(playlistId, songId) {
   // 端点的寻址键（工件按歌单目录组织，URL 必须带对的 playlistId）
   // 多歌单各持一份时取最新完成的工件（completed_at DESC）——老歌单可能
   // 躺着早期下载的劣化/旧版本档，新下载的档该赢。在盘判定用 pathPresent：
-  // EPERM/EIO/挂载抖动一律判「在」（误回落在线流的方向比误报在盘安全）
+  // EPERM/EIO/挂载抖动一律判「在」（误回落在线流的方向比误报在盘安全）。
+  // 音/视频各持一枚游标：最新行可能只有其一，按工件维度各自取新——
+  // audioReady 给播放链本地优先用（播放只看音频档在不在盘，不看全工件）
   let videoPlaylistId = null;
+  let audioPlaylistId = null;
   for (const t of downloadTasksRepo.listTasksBySongId(String(songId))) {
-    if (t.status !== 'completed' || !t.videoPath) continue;
-    if (isUnderDownloadDir(t.videoPath) && pathPresent(t.videoPath)) {
+    if (t.status !== 'completed') continue;
+    // file_ 行的 kind=audio 有 videoPath 回落（上传曲 video-only 工件，
+    // getTaskArtifactPath 同口径）——audioReady 反映的是「/file 能供音频」
+    const audioCandidate = t.audioPath || (FILE_TRACK_ID_RE.test(t.songId) ? t.videoPath : null);
+    if (videoPlaylistId === null && t.videoPath
+      && isUnderDownloadDir(t.videoPath) && pathPresent(t.videoPath)) {
       videoPlaylistId = t.playlistId;
-      break;
     }
+    if (audioPlaylistId === null && audioCandidate
+      && isUnderDownloadDir(audioCandidate) && pathPresent(audioCandidate)) {
+      audioPlaylistId = t.playlistId;
+    }
+    if (videoPlaylistId !== null && audioPlaylistId !== null) break;
   }
 
   return {
@@ -1570,6 +1581,8 @@ async function getSongDownloadStatus(playlistId, songId) {
     downloaded: Boolean(task && task.status === 'completed' && taskFilesIntact(task)),
     videoReady: videoPlaylistId !== null,
     videoPlaylistId,
+    audioReady: audioPlaylistId !== null,
+    audioPlaylistId,
     task: toPublicTask(task || null)
   };
 }
