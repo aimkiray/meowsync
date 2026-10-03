@@ -552,6 +552,14 @@ button {
 }
 body::-webkit-scrollbar { width: 0; background: transparent; }
 
+/* 移动端（单列 <901 或触屏主指针）滚动条全隐、照常可滚：经典滚动条平台上
+   10px 车道（叠加各滚动器 scrollbar-gutter:stable 的常驻预留）会把居中内容
+   左推半条。scrollbar-width:none 时车道随之归零；-webkit 行兜底不认标准属性的旧内核 */
+@media (max-width: 900.98px), (hover: none) and (pointer: coarse) {
+  * { scrollbar-width: none; }
+  ::-webkit-scrollbar { display: none; }
+}
+
 /* ═══ 应用壳：纸面 masthead / 彩纸主区 / 墨色底条 ═══ */
 .app-shell {
   /* 两档高度：% 走 html/body/#app 链（老内核小视口，vh 恒为大视口高会
