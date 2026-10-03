@@ -194,14 +194,14 @@ export default {
     watch(() => props.userPlaylists.map(p => p.id).join(','), () => closeMenu())
 
     onMounted(() => {
-      document.addEventListener('click', handleClickOutside)
+      document.addEventListener('pointerdown', handleClickOutside)
       // 菜单是 fixed 定位，面板滚动后位置脱节——滚动时直接关闭
       window.addEventListener('scroll', closeOnScroll, true)
       window.addEventListener('keydown', closeOnEscape)
     })
 
     onUnmounted(() => {
-      document.removeEventListener('click', handleClickOutside)
+      document.removeEventListener('pointerdown', handleClickOutside)
       window.removeEventListener('scroll', closeOnScroll, true)
       window.removeEventListener('keydown', closeOnEscape)
     })
@@ -433,8 +433,12 @@ export default {
     }
 
     // 点击外部关闭菜单
+     // pointerdown 先于 click 且不受 @click.stop 影响——用 click 会在别处
+     // .stop 控件的点击下漏关（queue 菜单项点击后 playlist 菜单残留）。
+     // 豁免菜单本体与触发键 .pl-action：同一行的 ⋯ 先 pointerdown 关再
+     // click 重开会变"关不掉"；分享键自身 closeMenu 兜底不影响
      const handleClickOutside = (event) => {
-       if (!event.target.closest('.playlist-menu')) {
+       if (!event.target.closest('.playlist-menu, .pl-action')) {
          closeMenu()
        }
      }

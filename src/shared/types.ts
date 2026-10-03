@@ -118,8 +118,9 @@ export interface DownloadTask {
   /** completed 但文件被外部删除 → false（前端据此重露下载入口） */
   filesIntact?: boolean;
   providerData?: ProviderData | null;
-  createdAt?: string;
-  updatedAt?: string;
+  // 老库补列前的存量行：created_at/updated_at 无 DEFAULT，可为 NULL
+  createdAt?: string | null;
+  updatedAt?: string | null;
   completedAt?: string | null;
   [k: string]: unknown;
 }
