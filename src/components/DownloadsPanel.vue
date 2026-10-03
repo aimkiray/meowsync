@@ -48,7 +48,7 @@ import { toast, pixelConfirm } from '../lib/feedback'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
 import { createReqGate } from '../lib/req-gate'
-import { queueProgress, pickQueueForPlaylist } from '../lib/downloadStatus.js'
+import { queueProgress, pickQueueForPlaylist, preselectOutcome, PRESELECT_OUTCOME } from '../lib/downloadStatus.js'
 import DownloadQueueList from './DownloadQueueList.vue'
 import DownloadTaskList from './DownloadTaskList.vue'
 
@@ -158,13 +158,16 @@ const queueEmptyText = computed(() => {
 // updated_at 是毫秒精度：同毫秒两次写会产同戳——比较集内的高变列（status/计数/
 // progress/errorMessage）直接比，把别名窗收窄到"同毫秒且比较集全同"（该窗口内
 // 只有未入集列的变化，它们仍靠 updatedAt 兜底）。
-// coverImgUrl（JOIN playlists 外来列，封面随歌单行变而本行戳不动）与
-// filesIntact（盘上文件实时判定，外部删文件无任何 DB 写）不随 updated_at——单列。
+// coverImgUrl/neteasePlaylistId/playlistId（JOIN playlists 外来列，歌单行变
+// 而本行戳不动——neteasePlaylistId 还是预选/失效判定所键的列，漏了会让
+// 旧快照把活的深链判死）与 filesIntact（盘上文件实时判定）不随 updated_at——单列。
 function hasQueueChanged(currentQueue, nextQueue) {
   if (!currentQueue || !nextQueue) return currentQueue !== nextQueue
   return currentQueue.id !== nextQueue.id
     || currentQueue.updatedAt !== nextQueue.updatedAt
     || currentQueue.coverImgUrl !== nextQueue.coverImgUrl
+    || currentQueue.neteasePlaylistId !== nextQueue.neteasePlaylistId
+    || currentQueue.playlistId !== nextQueue.playlistId
     || currentQueue.status !== nextQueue.status
     || currentQueue.totalTasks !== nextQueue.totalTasks
     || currentQueue.completedTasks !== nextQueue.completedTasks
@@ -226,23 +229,26 @@ const preselectConsumed = new Set()
 function applyPreselect(list) {
   const pl = props.preselectPlaylistId
   if (pl == null) return
-  const consumeKey = `${String(pl)}::${props.preselectSeq}`
-  if (preselectConsumed.has(consumeKey)) {
+  const target = pickQueueForPlaylist(list, pl)
+  const outcome = preselectOutcome({
+    consumed: preselectConsumed,
+    consumeKey: `${String(pl)}::${props.preselectSeq}`,
+    target
+  })
+  if (outcome === PRESELECT_OUTCOME.EXPIRED) {
     // 已结算意图的失效复检：队列在面板外死亡（侧栏删本地单级联/别端
-    // DELETE）时主动把 &pl= 死链清掉——否则刷新重放缺席 toast。
-    // 消费过即曾匹配/报错过：此刻缺席就是真死亡，不需两轮判定
-    if (!pickQueueForPlaylist(list, pl)) emit('preselect-expired')
+    // DELETE）时主动把 &pl= 死链清掉——否则刷新重放缺席 toast
+    emit('preselect-expired')
     return
   }
-  preselectConsumed.add(consumeKey)
-  const target = pickQueueForPlaylist(list, pl)
-  if (!target) {
+  if (outcome === PRESELECT_OUTCOME.MISS) {
     // 该歌单没建过队列（或队列已级联清掉）——给用户一句交代而不是静默落地；
     // 顺手把死意图回报掉：&pl= 死链留地址栏会每次刷新都重放这条 toast
     toast('该歌单还没有下载队列', 'info')
     emit('preselect-expired')
     return
   }
+  if (outcome !== PRESELECT_OUTCOME.SELECT) return
   // 选中行可能被现有搜索/状态过滤藏掉——预选意图明确，清回全集
   queueSearch.value = ''
   queueStatusFilter.value = 'all'
@@ -587,5 +593,10 @@ onMounted(async () => {
 onUnmounted(() => {
   stopPolling()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  // 三道 gate 全部作废——卸载后落地的响应不该再跑 applyPreselect：
+  // 深链落空 toast 会打在已离开的页面上，preselect-expired 也会改错历史条目
+  queuesGate.claim()
+  tasksGate.claim()
+  standaloneGate.claim()
 })
 </script>

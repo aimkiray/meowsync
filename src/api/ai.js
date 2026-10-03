@@ -1,4 +1,4 @@
-import http from './http'
+import http from './http.js'
 
 // AI 辅助接口走写通道——共享 http 实例已带 DOWNLOAD_TOKEN 头
 // （AI 调用消耗上游配额，属于需要门禁的写路径）。

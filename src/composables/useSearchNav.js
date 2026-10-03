@@ -1,9 +1,9 @@
 import { ref, onBeforeUnmount } from 'vue'
-import { musicApi } from '../api/music'
-import { apiErrorMessage } from '../api/http'
-import { toast } from '../lib/feedback'
+import { musicApi } from '../api/music.js'
+import { apiErrorMessage } from '../api/http.js'
+import { toast } from '../lib/feedback.js'
 import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl.js'
-import { buildQQSong } from '../lib/external-songs'
+import { buildQQSong } from '../lib/external-songs.js'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
 // 单曲深挖翻页、id 预览、watch 页进出。

@@ -44,7 +44,9 @@ export function toastRelease(id, source) {
 // action: { label, onAction }——带操作入口的 toast（"查看进度"类跳转），
 // 默认驻留翻倍到 6s 保证用户读得完点得上；点动作后由宿主回收。
 // 契约：action 必须是第 4 实参，duration 用 null 占位取默认——
-// 误放第 3 参会被当毫秒值 NaN→0ms 立即消失且 action 静默不渲染
+// 误放第 3 参（对象等）会按非数值退化回默认驻留，action 静默不渲染。
+// duration 边界语义：0/负数 = 下一拍立即退场；Infinity/NaN 也退化取默认；
+// 要粘性（不自动退场）用大毫秒值 + toastDismiss 回收，不要传 Infinity
 export function toast(text, type = 'info', duration, action = null) {
   if (type === 'error') glitchBurst()
   const id = ++toastSeq

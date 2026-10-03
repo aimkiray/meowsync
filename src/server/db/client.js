@@ -333,6 +333,8 @@ function initSchema(database) {
       lyrics_path TEXT,
       cover_path TEXT,
       video_path TEXT,
+      video_meta TEXT,
+      provider_data TEXT,
       bitrate INTEGER DEFAULT 320000,
       file_size INTEGER,
       duration_ms INTEGER,

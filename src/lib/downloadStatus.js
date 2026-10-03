@@ -65,3 +65,21 @@ export const queueStatusFilterOptions = [
   ...['running', 'paused', 'pending', 'failed', 'completed', 'cancelled']
     .map(value => ({ value, label: QUEUE_STATUS_META[value].label }))
 ]
+
+// 深链预选的判定核（纯函数面）：消费键账本 + 命中结果 → 四种裁决。
+// 副作用（emit/toast/选中）留在组件；判定的三态区分是失效上报的承重语义——
+// 已结算意图复检缺席只清死链不报「还没有下载队列」（自删/外部级联路径），
+// 首次落空才给那句交代性 toast。
+export const PRESELECT_OUTCOME = {
+  SKIP: 'skip',       // 已结算且队列仍在——什么都不做
+  EXPIRED: 'expired', // 已结算但队列已死——只上报失效清意图
+  MISS: 'miss',       // 首次结算落空——报错 toast + 上报失效
+  SELECT: 'select'    // 首次结算命中——选中该队列
+}
+export function preselectOutcome({ consumed, consumeKey, target }) {
+  if (consumed.has(consumeKey)) {
+    return target ? PRESELECT_OUTCOME.SKIP : PRESELECT_OUTCOME.EXPIRED
+  }
+  consumed.add(consumeKey)
+  return target ? PRESELECT_OUTCOME.SELECT : PRESELECT_OUTCOME.MISS
+}

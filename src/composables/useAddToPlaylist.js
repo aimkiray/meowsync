@@ -1,14 +1,14 @@
 import { ref, computed, watch, nextTick } from 'vue'
-import { musicApi } from '../api/music'
-import { apiErrorMessage } from '../api/http'
-import { toast } from '../lib/feedback'
-import { isSingleSongShellId, songCoverUrl } from '../lib/song'
+import { musicApi } from '../api/music.js'
+import { apiErrorMessage } from '../api/http.js'
+import { toast } from '../lib/feedback.js'
+import { isSingleSongShellId, songCoverUrl } from '../lib/song.js'
 import {
   extractBiliFavlistId, isBilibiliInput, extractYouTubePlaylistId,
   isYouTubeInput, extractYouTubeId, extractQQPlaylistId, isQQInput,
   isSongmidLike, extractNeteaseSongId,
-} from '../lib/url'
-import { buildBilibiliSong, buildYouTubeSong, buildQQSong } from '../lib/external-songs'
+} from '../lib/url.js'
+import { buildBilibiliSong, buildYouTubeSong, buildQQSong } from '../lib/external-songs.js'
 
 // 「加入歌单」域：atp 弹窗（把指定曲加进某单）与点歌台弹窗（往当前单搜/粘曲）
 // 两弹窗显式互斥（openAddToPlaylist 关 picker、openSongPicker 清 addTargetSong）

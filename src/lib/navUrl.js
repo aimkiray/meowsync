@@ -8,15 +8,18 @@ export const NAV_VIEWS = new Set(['home', 'songs', 'search', 'watch', 'downloads
 // 在既有 query 上重写 view/pl——其余参数（mode/mix/playlist 等）原样保留。
 // songs 的 pl 只在可寻址时写：本地内存态歌单（single_song_/saved_queue_/
 // local_pl_*）id 非数字、刷新无法按歌单恢复，写进 URL 是死链。
-// downloads 的 pl 是预选意图而非歌单态——独立于 songs 分支保留
+// downloads 的 pl 是预选意图而非歌单态——独立于 songs 分支保留；
+// single_song_ 之类注定无队列的串也会照写（深链是手搓/回放面，不担保
+// 可命中）——空匹配由面板侧落选 toast + preselect-expired 自净清链。
+// 空串闸：'' 当无意图处理，不给地址栏挂无意义 pl=
 export function writeNavParams(params, { view, songsPl = null, downloadsPl = null } = {}) {
   params.delete('view')
   params.delete('pl')
   if (view) params.set('view', view)
-  if (view === 'songs' && songsPl != null && !isLocalPlaylistId(songsPl)) {
+  if (view === 'songs' && songsPl != null && songsPl !== '' && !isLocalPlaylistId(songsPl)) {
     params.set('pl', String(songsPl))
   }
-  if (view === 'downloads' && downloadsPl != null) {
+  if (view === 'downloads' && downloadsPl != null && downloadsPl !== '') {
     params.set('pl', String(downloadsPl))
   }
   return params

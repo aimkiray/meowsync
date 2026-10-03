@@ -8,7 +8,7 @@
 //    数据只作缺省兜底 + neteaseId 词源
 // 3. provider 块持久化播放所需的源凭据（bvid/cid/videoId/mid...）
 import { httpsCover } from './url.js'
-import { musicApi } from '../api/music'
+import { musicApi } from '../api/music.js'
 
 // B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；歌曲名优先吃
 // 网易云匹配（双语词源的正主），封面/演唱者归视频自己的（导入的是

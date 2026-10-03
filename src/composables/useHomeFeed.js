@@ -1,6 +1,6 @@
 import { ref } from 'vue'
-import { readJSON, writeJSON, LS_KEYS } from '../lib/storage'
-import { isSingleSongShellId } from '../lib/song'
+import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
+import { isSingleSongShellId } from '../lib/song.js'
 
 const PLAY_HISTORY_STORAGE_KEY = LS_KEYS.PLAY_HISTORY
 const PLAYLIST_HISTORY_STORAGE_KEY = LS_KEYS.PLAYLIST_HISTORY

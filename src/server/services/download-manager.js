@@ -1148,7 +1148,9 @@ function getQueueProgress(queueId) {
 const VALID_TASK_STATUSES = new Set(['pending', 'downloading', 'completed', 'failed']);
 
 // 任务列表查询：playlistId 支持本地 id 或网易云 id（未导入则空数组，不触发导入）。
-// standalone=1 收窄到 queue_id IS NULL 的单曲任务（「未入队单曲」分节专属面）
+// standalone=1 收窄到 queue_id IS NULL 的单曲任务（「未入队单曲」分节专属面）。
+// 参数优先级 queueId > playlistId(+standalone) > status——组合传入时静默按
+// 超集回落（如 queueId+standalone 只回队列任务），不报错
 function listTasks({ playlistId, queueId, status, standalone } = {}) {
   if (queueId !== undefined && queueId !== null && queueId !== '') {
     const n = Number(queueId);
@@ -1770,6 +1772,10 @@ async function deletePlaylistFiles(playlistId) {
 function pruneEmptyPlaylistDirs(playlistId) {
   const playlistDir = path.join(DOWNLOAD_BASE_DIR, String(playlistId));
   try {
+    // 规范数字目录名闸（reapOrphanFiles 同口径）：函数已透出给测试，
+    // 'uploads'/'x' 这类非歌单 id 一律不碰——本应用的目录永远是纯数字
+    const name = String(playlistId);
+    if (!/^\d+$/.test(name) || name !== String(Number(name)) || Number(name) <= 0) return;
     if (!isUnderDownloadDir(playlistDir)) return;
     // 在途写者闸：同歌单兄弟任务的锁键持满 processTask 全程——fetch
     // 等待期 type 目录真空，盲剪会抽走 mkdir→createWriteStream 间隙的
@@ -2076,8 +2082,8 @@ async function shutdownAll() {
 // 崩溃/SIGKILL/OOM 截断在途流会把半成品留在最终文件名上而路径从未落库
 // （FD pipeline 完成与 updateTask 之间、行删与 unlink 之间）。
 // DB 是唯一事实源——歌单目录在 playlists 表里无行的整棵删除；歌单还在的，
-// audio/lyrics/covers 子目录里未被任何任务行引用的文件删除。
-// 保守边界：只动 downloads/<规范数字目录名>/{audio,lyrics,covers} 下的文件；
+// audio/lyrics/covers/videos 子目录里未被任何任务行引用的文件删除。
+// 保守边界：只动 downloads/<规范数字目录名>/{audio,lyrics,covers,videos} 下的文件；
 // 空库（DB 丢失/新建）不判任何目录为孤儿——丢一个 DB 文件不该抹掉下载库；
 // symlink 一律跳过（lstat 不跟随）——downloads/<id>/audio 链到大盘时不得
 // 顺着链接删光目标目录；目录搬迁特征（登记路径全在 base 外）跳过并告警

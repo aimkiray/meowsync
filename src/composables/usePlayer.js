@@ -3,15 +3,15 @@ import { Howl, Howler } from 'howler'
 // HTML5 音频池默认 10 太小：失败重试/快速切歌期间，在途 fetch 的节点
 // 来不及释放就被判 locked，报「Audio pool exhausted」伪错误——扩到 24
 Howler.html5PoolSize = 24
-import { musicApi, parseLyrics, mergeTranslations } from '../api/music'
-import { downloadsApi } from '../api/downloads'
-import { aiApi } from '../api/ai'
-import { readJSON, writeJSON, LS_KEYS } from '../lib/storage'
-import { formatTime } from '../lib/format'
-import { toast } from '../lib/feedback'
-import { glitchBurst } from '../lib/theme'
-import { httpsCover } from '../lib/url'
-import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song'
+import { musicApi, parseLyrics, mergeTranslations } from '../api/music.js'
+import { downloadsApi } from '../api/downloads.js'
+import { aiApi } from '../api/ai.js'
+import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
+import { formatTime } from '../lib/format.js'
+import { toast } from '../lib/feedback.js'
+import { glitchBurst } from '../lib/theme.js'
+import { httpsCover } from '../lib/url.js'
+import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song.js'
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、

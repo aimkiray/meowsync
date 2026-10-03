@@ -2,9 +2,9 @@ import { ref, watch, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { apiErrorMessage } from '../api/http.js'
-import { isResolvableTrackId } from '../lib/url'
-import { isFileTrackId, fileArtifactUrl } from '../lib/song'
-import { toast, pixelConfirm } from '../lib/feedback'
+import { isResolvableTrackId } from '../lib/url.js'
+import { isFileTrackId, fileArtifactUrl } from '../lib/song.js'
+import { toast, pixelConfirm } from '../lib/feedback.js'
 
 // SongList 的服务端下载子域：状态批量映射、行级下载/删除/视频补件、
 // 轮询生命周期（切单/卸载守卫）。deps 全注入——菜单开合留在组件侧。

@@ -1,4 +1,4 @@
-import http from './http'
+import http from './http.js'
 
 // 认证端点。响应已被 http 拦截器剥到 {code,data}——读 body.data
 export const authApi = {

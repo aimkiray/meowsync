@@ -78,6 +78,9 @@ export default {
     // 失败路径（导航被拦等）由目标侧自行交代，挂着的 toast 没有价值。
     // onAction 按同步语义设计——返回 Promise 的 rejection 只兜 noise 不交代
     const runToastAction = (t) => {
+      // 淡出窗 180ms 内 pointer-events 只挡得住指针——焦点还在动作键上时
+      // Enter/Space 会再发 click，已结算的 toast 不得二次派发 onAction
+      if (!state.toasts.includes(t)) return
       try {
         Promise.resolve(t.action?.onAction?.()).catch(() => {})
       } finally { toastDismiss(t.id) }

@@ -98,6 +98,19 @@ test('resolveNavView：兜底阶梯——search 空结果/watch 无曲/非法视
   assert.equal(resolveNavView({ view: 'downloads', hasSelectedPlaylist: false }), 'downloads')
 })
 
+test('writeNavParams：边界值——空串当无意图，数字 0 原样透传', () => {
+  const p = params()
+  writeNavParams(p, { view: 'songs', songsPl: '' })
+  assert.equal(p.get('pl'), null, '空串不是有效意图，不挂 pl=')
+  const p2 = params()
+  writeNavParams(p2, { view: 'downloads', downloadsPl: '' })
+  assert.equal(p2.get('pl'), null)
+  // '0' 是字符串原样透传（虽然现实里不会是有效歌单 id——判定在面板侧）
+  const p3 = params()
+  writeNavParams(p3, { view: 'downloads', downloadsPl: '0' })
+  assert.equal(p3.get('pl'), '0')
+})
+
 test('NAV_VIEWS 词表：五视图锁定（增删视图先改这里）', () => {
   assert.deepEqual([...NAV_VIEWS].sort(), ['downloads', 'home', 'search', 'songs', 'watch'])
 })
