@@ -380,31 +380,6 @@
    语义转换（我们的错误面没有 hint 态可转）；dive-loader 三点接力
    与既有 .pixel-loading 八步转圈同职能，不重复造轮 */
 
-/* 主题 pill 收进 lang-tabs 形：99px 胶囊 + teal 滑块 + teal 染色影；
-   规范无边框（白底+影独立成立）——置 transparent 保盒空间防位移；
-   tab 态用 opacity .55→1 + accent-deep（规范 lang-tab 契约） */
-:root[data-theme="glitch-restoration"] .theme-pill {
-  border-color: transparent;
-  border-radius: 99px;
-  box-shadow: 0 0 1px 0 rgba(45, 211, 190, .3), 0 4px 10px 0 rgba(45, 211, 190, .18);
-}
-:root[data-theme="glitch-restoration"] .theme-pill-tab {
-  border-radius: 99px;
-  font-weight: 700;
-  letter-spacing: .03em;
-  opacity: .55;
-  transition: opacity .15s ease-in, color .2s;
-}
-:root[data-theme="glitch-restoration"] .theme-pill-tab--on {
-  color: var(--accent-magenta-ink);
-  opacity: 1;
-}
-:root[data-theme="glitch-restoration"] .theme-pill-glider {
-  background: rgba(45, 211, 190, .18);
-  border-radius: 99px;
-}
-:root[data-theme="glitch-restoration"] .theme-pill:focus-within { outline-color: var(--accent-magenta-ink); }
-
 /* teal 拖拽指示线在白纸/淡画布上仅 ~1.8:1——走 accent-deep */
 :root[data-theme="glitch-restoration"] .queue-row--dragging { outline-color: var(--accent-magenta-ink); }
 
@@ -542,7 +517,7 @@ button {
 @media (forced-colors: active) {
   .pl-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
   .queue-row--current, .song-row--playing, .song-result-row--playing,
-  .transport--active, .pg-icobtn--pressed, .theme-pill-tab--on,
+  .transport--active, .pg-icobtn--pressed,
   .topnav-suggest-item--active, .rc-queue-row--current {
     outline: 1.2px solid transparent;
   }
@@ -871,55 +846,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .pg-icobtn--sm { width: 24px; height: 24px; } /* 行内尾键档：⋯/分享 */
 .pg-icobtn:disabled { opacity: .45; cursor: default; }
 
-/* 主题切换 pill：lang-tabs 形态的分段滑块胶囊。
-   radio 用 visually-hidden 变体而非 display:none——display:none 的 radio
-   不在 Tab 序里（skill a11y 契约点名此坑）；focus-within 供环。
-   glider 等宽 tab 假定：tab 固定 54px，translateX 走 index×100% */
-.theme-pill {
-  display: flex;
-  position: relative;
-  background: var(--paper);
-  border: var(--hairline);
-  padding: 3px;
-  flex-shrink: 0;
-}
-.theme-pill-radio {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  margin: 0;
-  pointer-events: none; /* label 隐式激活转发点击；否则 abs 定位的 input 拦截命中 */
-}
-.theme-pill-tab {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 26px;
-  width: 54px;
-  line-height: 1;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: .05em;
-  color: var(--ink-64);
-  cursor: pointer;
-  position: relative;
-  z-index: 2;
-  transition: color .2s;
-}
-.theme-pill-tab--on { color: var(--paper); }
-.theme-pill-tab:not(.theme-pill-tab--on):hover { color: var(--ink); } /* 与 pg-tab:hover 同律 */
-.theme-pill:focus-within { outline: 2px solid var(--ink); outline-offset: 2px; }
-.theme-pill-glider {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  height: 26px;
-  width: 54px;
-  z-index: 1;
-  background: var(--ink);
-  transition: transform .25s ease-out;
-}
+/* 主题切换已收进顶栏 ⋯ 菜单（menuitemradio）——原滑动胶囊样式族退役 */
 
 /* tab 条：激活态墨底反白（FAQ open 同构） */
 .pg-tabs {
@@ -1618,7 +1545,6 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
 @media (prefers-reduced-motion: reduce){
   html { scroll-behavior: auto; }
   .playing-animation { animation: none; }
-  .theme-pill-glider { transition: none; } /* 滑块位移 reduce 下瞬跳 */
 }
 
 /* ═══ 印刷装饰件 ═══ */
