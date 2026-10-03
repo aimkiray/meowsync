@@ -77,58 +77,77 @@
       </div>
 
       <div class="topnav-actions">
-        <!-- 远程控制模式指示 -->
-        <a
-          v-if="remoteMode === 'host'"
-          :href="controllerUrl"
-          target="_blank"
-          rel="noopener"
-          class="ink-btn ink-btn--ghost topnav-action"
-          title="在新标签页打开手机控制器"
-        >控制器</a>
-        <span
-          v-else-if="remoteMode === 'off'"
-          class="pg-label pg-label--dim topnav-remote-hint"
-          title="添加 ?mode=host 启用远程控制"
-        >remote: off</span>
-
-        <!-- 下载页入口（与 toast「查看进度」/歌单菜单「下载进度」同视图）；
-             host 模式藏入口但深链仍可切进来——downloads 视图下保留「返回」逃生 -->
+        <!-- 右簇全量收进单个 ⋯ 菜单：下载/控制器/主题/退出——顶栏只留
+             一个触发键；菜单走 pg-menu 族（PlaylistPanel 同口径：
+             pointerdown 外关、Esc 焦点归还、fixed 翻上兜底）。
+             顺带解开 640px 以下主题胶囊被隐藏后无处可切的死角 -->
         <button
-          v-if="remoteMode === 'off' || isDownloadsView"
-          @click="$emit('toggle-center-view')"
-          class="ink-btn ink-btn--ghost topnav-action"
-          :title="isDownloadsView ? '返回上一页' : '打开下载页'"
-        >{{ isDownloadsView ? '返回' : '下载' }}</button>
+          ref="menuBtn"
+          class="pg-icobtn pg-icobtn--bare topnav-menu-btn"
+          title="菜单"
+          aria-label="打开菜单"
+          aria-haspopup="menu"
+          :aria-expanded="menuOpen"
+          aria-controls="topnav-menu"
+          @click="toggleMenu"
+        ><PixelIcon name="kebab" :size="18" /></button>
 
-        <!-- 登录态：登出（会话作废服务端 session） -->
-        <button
-          v-if="authState.enabled && authState.authenticated"
-          class="ink-btn ink-btn--ghost topnav-action"
-          title="退出登录"
-          @click="logout"
-        >退出</button>
+        <Teleport to="body">
+          <div
+            v-if="menuOpen"
+            id="topnav-menu"
+            class="pg-menu topnav-menu"
+            role="menu"
+            aria-label="导航菜单"
+            :style="menuPos"
+          >
+            <!-- 下载页入口（与 toast「查看进度」/歌单菜单「下载进度」同视图）；
+                 host 模式藏入口但深链仍可切进来——downloads 视图下保留「返回」逃生 -->
+            <button
+              v-if="remoteMode === 'off' || isDownloadsView"
+              class="pg-menu-item" role="menuitem"
+              @click="pickCenterView"
+            >{{ isDownloadsView ? '返回' : '下载' }}</button>
+            <a
+              v-if="remoteMode === 'host'"
+              class="pg-menu-item" role="menuitem"
+              :href="controllerUrl" target="_blank" rel="noopener"
+              title="在新标签页打开手机控制器"
+              @click="closeMenu()"
+            >控制器</a>
+            <div
+              v-else-if="remoteMode === 'off'"
+              class="pg-menu-head topnav-menu-remote"
+              title="添加 ?mode=host 启用远程控制"
+            >remote: off</div>
 
-        <!-- 主题切换：lang-pill 滑动胶囊（三段态 = radio index），注册表见 lib/theme.js -->
-        <div class="theme-pill topnav-theme" role="radiogroup" aria-label="切换主题" :title="`主题：${themeLabel}`">
-          <span class="theme-pill-glider" :style="{ transform: `translateX(${themeIndex * 100}%)` }" aria-hidden="true"></span>
-          <label
-            v-for="t in THEMES" :key="t.id"
-            class="theme-pill-tab"
-            :class="{ 'theme-pill-tab--on': t.id === currentTheme }"
-          ><input
-            type="radio" class="theme-pill-radio" name="ms-theme"
-            :value="t.id" :checked="t.id === currentTheme"
-            @change="setTheme(t.id)"
-          ><span>{{ t.pill }}</span></label>
-        </div>
+            <div role="group" aria-label="主题">
+              <div class="pg-menu-head">主题</div>
+              <button
+                v-for="t in THEMES" :key="t.id"
+                class="pg-menu-item topnav-theme-item"
+                role="menuitemradio"
+                :aria-checked="t.id === currentTheme"
+                @click="pickTheme(t.id)"
+              ><span class="topnav-theme-check" aria-hidden="true"><PixelIcon
+                v-if="t.id === currentTheme" name="check" :size="12"
+              /></span>{{ t.pill }}</button>
+            </div>
+
+            <button
+              v-if="authState.enabled && authState.authenticated"
+              class="pg-menu-item" role="menuitem"
+              @click="pickLogout"
+            >退出登录</button>
+          </div>
+        </Teleport>
       </div>
     </div>
   </nav>
 </template>
 
 <script>
-import { ref, computed, onBeforeUnmount, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
@@ -161,7 +180,6 @@ export default {
   emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
-    const themeLabel = computed(() => THEMES.find(t => t.id === currentTheme.value)?.label || currentTheme.value)
 
     // 从URL或文本中提取歌单ID：网易云 ?id= / 本站歌单分享链 ?playlist(s)= / 纯数字。
     // 不收 song=——那是本站单曲分享参数（SongList/WatchView 生成 ?song=<id>&view=watch），
@@ -392,12 +410,56 @@ export default {
       }
     }
 
+    // ── 右簇 ⋯ 菜单 ──
+    const menuBtn = ref(null)
+    const menuOpen = ref(false)
+    const menuPos = ref({})
+
+    const toggleMenu = () => {
+      if (menuOpen.value) { closeMenu(); return }
+      const rect = menuBtn.value?.getBoundingClientRect?.()
+      if (!rect) return
+      // 菜单高按可见行数估（item≈39/head≈36）：下方放不下翻到上方
+      const rows = (props.remoteMode === 'off' || props.isDownloadsView ? 1 : 0)
+        + (props.remoteMode === 'host' || props.remoteMode === 'off' ? 1 : 0)
+        + 1 + THEMES.length
+        + (authState.enabled && authState.authenticated ? 1 : 0)
+      const h = rows * 39 + 8
+      menuPos.value = {
+        top: (rect.bottom + 4 + h <= window.innerHeight
+          ? rect.bottom + 4 : Math.max(8, rect.top - h - 4)) + 'px',
+        // 右缘对齐触发键右缘——菜单从顶栏右簇向左展开
+        right: Math.max(8, window.innerWidth - rect.right) + 'px'
+      }
+      menuOpen.value = true
+    }
+
+    const closeMenu = (restoreFocus = false) => {
+      const was = menuOpen.value
+      menuOpen.value = false
+      if (restoreFocus && was) menuBtn.value?.focus({ preventScroll: true })
+    }
+
+    const pickCenterView = () => { emit('toggle-center-view'); closeMenu() }
+    const pickTheme = (id) => { setTheme(id); closeMenu() }
+    const pickLogout = () => { closeMenu(); logout() }
+
+    // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
+    const onDocPointerDown = (e) => {
+      if (!e.target.closest('.topnav-menu, .topnav-menu-btn')) closeMenu()
+    }
+    const onMenuKeydown = (e) => { if (e.key === 'Escape') closeMenu(true) }
+
+    onMounted(() => {
+      document.addEventListener('pointerdown', onDocPointerDown)
+      document.addEventListener('keydown', onMenuKeydown)
+    })
     onBeforeUnmount(() => {
       clearTimeout(suggestTimer)
       suggestAbort?.abort()
+      document.removeEventListener('pointerdown', onDocPointerDown)
+      document.removeEventListener('keydown', onMenuKeydown)
     })
-
-    const themeIndex = computed(() => Math.max(0, THEMES.findIndex(t => t.id === currentTheme.value)))
 
     // 登出：作废服务端 session 后整页重载（与登录成功同一收束路径）。
     // 网络失败时 HttpOnly cookie 前端删不掉——重载后 status 若仍认证会
@@ -411,12 +473,16 @@ export default {
     return {
       controllerUrl,
       authState,
-      logout,
-      themeLabel,
-      themeIndex,
       THEMES,
       currentTheme,
-      setTheme,
+      menuBtn,
+      menuOpen,
+      menuPos,
+      toggleMenu,
+      closeMenu,
+      pickCenterView,
+      pickTheme,
+      pickLogout,
       extractPlaylistId,
       handleSearch,
       onKeydown,
@@ -641,15 +707,25 @@ export default {
   justify-self: end; /* grid 右列贴右缘 */
 }
 
-.topnav-remote-hint {
-  cursor: default;
-  white-space: nowrap;
+/* ⋯ 菜单：fixed 定位由 :style 给出（右缘对齐触发键）；
+   remote 提示沿用 pg-menu-head 的 mono 小字档 */
+.topnav-menu-remote { cursor: default; }
+
+/* 主题组与后续项的分隔：组内末项命中 .pg-menu-item:last-child 无底线，
+   组后还有项时由组级发丝线补上（无后续项则不画，末缘不叠双线） */
+.topnav-menu [role="group"]:not(:last-child) {
+  border-bottom: var(--hairline-soft);
 }
 
-/* 中屏：隐藏 remote 状态提示——它是右簇最重的非动作件，
-   隐藏后左右簇 min-content 接近相等，中列在 641-1100 区间仍近似居中 */
-@media (max-width: 1100px) {
-  .topnav-remote-hint { display: none; }
+/* 主题 radio 项：check 槽定宽对齐，选中态 accent 色 */
+.topnav-theme-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--accent-magenta-ink);
 }
 
 /* 窄屏两行布局：一行塞不下"导航+搜索+动作"——
@@ -672,7 +748,5 @@ export default {
 
 @media (max-width: 640px) {
   .topnav { padding: 0 12px; }
-  .topnav-theme { display: none; }
-  .topnav-action { padding: 0 10px; } /* 窄屏 ghost 键收紧——保搜索框宽度 */
 }
 </style>
