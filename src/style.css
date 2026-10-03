@@ -529,6 +529,7 @@ button {
 [aria-expanded="true"].song-menu-btn,
 [aria-expanded="true"].queue-menu-trigger,
 [aria-expanded="true"].topnav-hamburger,
+[aria-expanded="true"].topnav-menu-btn,
 [aria-expanded="true"].pl-action { outline: 1.2px solid var(--ink); outline-offset: -4px; }
 /* 反白行上的展开态改纸色——墨环在墨行上不可见 */
 .song-row--playing [aria-expanded="true"].song-menu-btn { outline-color: var(--paper); }
@@ -670,9 +671,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 
 /* 顶栏高度令牌：抽屉/遮罩顶缘锚定顶栏底（不盖住，☰ 才是关闭入口）。
-   ≤768 顶栏改两行（96+1.2 发丝线），此值与 TopNavigation.vue 断点成对维护 */
+   ≤768 顶栏改两行（8+32 行1 + 8+36 行2 + 8 + 1.2 发丝线 = 93.2），
+   此值与 TopNavigation.vue 断点及右簇最高件（pg-icobtn 32px）成对维护 */
 :root { --topnav-h: 57.2px; }
-@media (max-width: 768px) { :root { --topnav-h: 97.2px; } }
+@media (max-width: 768px) { :root { --topnav-h: 93.2px; } }
 
 /* YTM watch 页是整页 surface：≥1024 藏歌单栏，两栏吃满 .app-body */
 @media (min-width: 1024px){
@@ -981,6 +983,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border-bottom: var(--hairline-soft);
   cursor: pointer;
   text-align: left;
+  text-decoration: none; /* <a> 作菜单项用（控制器外链）——不依赖 preflight 的 inherit */
   /* 菜单宽被 max-width 钳住时单项保持单行高度（JS 估高的前提）；
      超长文案裁断不换行——flex 容器上 ellipsis 不作用于匿名子项，用 nowrap+hidden 兜底 */
   white-space: nowrap;

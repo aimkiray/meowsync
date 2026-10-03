@@ -4,7 +4,7 @@
  *   STORAGE_KEY 键名必须保持同步）。
  *
  * 新增主题只需四步：
- *   1. 在 THEMES 注册 { id, label }（id 即 data-theme 值）
+ *   1. 在 THEMES 注册 { id, name }（id 即 data-theme 值；name 是顶栏菜单里的展示名）
  *   2. 在 style.css 追加 `:root[data-theme="<id>"]` 令牌块，按需覆盖语义令牌
  *      （--ink 系/--paper/--label-grey/--white 系/--canvas 系/--accent 系/--scrim 等；
  *        视图画布色只改 --canvas-* 令牌值，无需复制 data-view 映射表；
@@ -22,8 +22,8 @@ import { ref, readonly } from 'vue'
 import { LS_KEYS } from './storage.js'
 
 export const THEMES = [
-  { id: 'default', label: 'retro', pill: 'retro' },
-  { id: 'glitch-restoration', label: 'glitch', pill: 'glitch' },
+  { id: 'default', name: 'retro' },
+  { id: 'glitch-restoration', name: 'glitch' },
 ]
 
 // 与 index.html 内联脚本共用键名，改动须同步
