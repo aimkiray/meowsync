@@ -4,8 +4,8 @@
 // （upload.onprogress 是浏览器里唯一的上行进度事件源）。
 // 返回 { promise, abort }——大文件（audio 512MB / video 2GB）上传中必须给
 // 逃生通道；abort 走 xhr.onabort → promise reject('已取消')
-import { API_BASE_URL } from './http'
-import { UPLOADS_PLAYLIST_ID, fileArtifactUrl } from '../lib/song'
+import { API_BASE_URL } from './http.js'
+import { UPLOADS_PLAYLIST_ID, fileArtifactUrl } from '../lib/song.js'
 
 export { UPLOADS_PLAYLIST_ID, fileArtifactUrl }
 

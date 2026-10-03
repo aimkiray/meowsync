@@ -1,7 +1,7 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
-import { resolveApiBaseUrl } from '../lib/api-base'
-import { songCoverUrl } from '../lib/song'
-import { toast } from '../lib/feedback'
+import { resolveApiBaseUrl } from '../lib/api-base.js'
+import { songCoverUrl } from '../lib/song.js'
+import { toast } from '../lib/feedback.js'
 // WS 消息类型与服务端 remote.js 同源
 import { MSG_TYPES } from '../shared/protocol.js'
 

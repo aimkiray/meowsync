@@ -1,4 +1,4 @@
-import http, { API_BASE_URL } from './http';
+import http, { API_BASE_URL } from './http.js';
 
 // 共享实例已统一剥 r.data（返回 {code,...} body）+ 10s 默认超时：
 // 轮询/查询类请求挂起时必须能 settle——裸 axios 无超时会让
@@ -121,8 +121,9 @@ export const downloadsApi = {
 
   // 本地歌单（local_pl_*/saved_queue_*）先镜像到服务端 DB，之后所有下载路由
   // 用 playlist.id 直调（服务端 findExistingPlaylistId 按 netease_playlist_id 解析镜像）。
-  // 返回 {playlistId, mirrored, skipped}——skipped = 无服务端下载源的曲目数
-  // （网易云数字、qq_/bv_/yt_ 前缀之外的不明 id 形态）
+  // 返回 {playlistId, mirrored, skipped, truncated}——skipped = 无服务端下载源
+  // 的曲目数（网易云数字、qq_/bv_/yt_ 前缀之外的不明 id 形态）；
+  // truncated = 投影超服务端上限被截断时置真
   mirrorLocalPlaylist: (playlist) => {
     // 瘦身投影：服务端只消费 id/name/ar/al/dt + provider 定位字段。本地
     // tracks 存的是全量曲对象（~2-3KB/首），原样上载 ~400 首就撞 1MB body

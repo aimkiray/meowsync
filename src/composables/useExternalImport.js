@@ -1,16 +1,16 @@
-import { musicApi } from '../api/music'
-import { downloadsApi } from '../api/downloads'
-import { toast, toastDismiss } from '../lib/feedback'
+import { musicApi } from '../api/music.js'
+import { downloadsApi } from '../api/downloads.js'
+import { toast, toastDismiss } from '../lib/feedback.js'
 import {
   httpsCover, extractBiliFavlistId, extractYouTubePlaylistId,
   isSingleSongShellId, providerPlaylistShellId, isResolvableTrackId,
   QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE,
-} from '../lib/url'
+} from '../lib/url.js'
 import {
   buildBilibiliSong, buildYouTubeSong, buildQQSong,
   MEDIA_IMPORT_SPECS, redirectDataOf,
-} from '../lib/external-songs'
-import { applyTrackOrder } from '../lib/track-order'
+} from '../lib/external-songs.js'
+import { applyTrackOrder } from '../lib/track-order.js'
 
 const MIX_IMPORT_CAP = 300   // 与生成侧 playlistShareUrl 的截断对齐
 const MIX_RESOLVE_CAP = 10   // bv_/yt_ 逐项 resolve——客户端预算共桶（服务端两端点各 12/min 分桶）

@@ -37,10 +37,38 @@ test('toastHold/toastRelease：暂停不超时、释放后续跑', (t) => {
   t.mock.timers.tick(99999)           // 暂停中永不超时
   assert.ok(has(id))
   toastRelease(id, 'pointer:1')       // 续跑——remaining≈全额（perf 真钟≈0 流逝）
-  t.mock.timers.tick(2599)
+  t.mock.timers.tick(2500)            // 2599 与全额只差 1ms——perf 真钟抖动会吃掉余量
   assert.ok(has(id))
-  t.mock.timers.tick(2)
+  t.mock.timers.tick(200)
   assert.ok(!has(id))                 // 续跑到点退
+})
+
+test('toastHold/toastRelease：多周期暂停按冻结余量续跑，不重发全额', async () => {
+  // 真钟用例——remaining 从 performance.now() 计算，mock.timers 走不了
+  // perf 钟，多周期的"消耗/冻结"只有真实流逝能模拟
+  const id = toast('x', 'info', 200)
+  toastHold(id, 'focus')
+  toastRelease(id, 'focus')
+  await new Promise(r => setTimeout(r, 90))   // 第一轮续跑消耗 ~90ms
+  toastHold(id, 'focus')                      // 再冻——余量应剩 ~110 而非 200
+  await new Promise(r => setTimeout(r, 60))   // 暂停中流逝不计
+  toastRelease(id, 'focus')
+  assert.ok(has(id))                          // 冻结余量续跑，没因长暂停即死
+  await new Promise(r => setTimeout(r, 180))  // ~110ms 余量耗尽
+  assert.ok(!has(id))                         // 按冻结余量退——重置回 200 会漏
+})
+
+test('toast：两条并存 toast 的簿记互不影响', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const a = toast('a')
+  const b = toast('b')
+  toastHold(a, 'focus')               // 冻 a——b 的计时器照常跑
+  t.mock.timers.tick(2600)
+  assert.ok(has(a))                   // a 暂停保活
+  assert.ok(!has(b))                  // b 独立到点退场
+  toastRelease(a, 'focus')
+  t.mock.timers.tick(2600)
+  assert.ok(!has(a))
 })
 
 test('toastHold/toastRelease：多源占用要全部释放才续跑', (t) => {

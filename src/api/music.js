@@ -1,5 +1,5 @@
-import api, { API_BASE_URL } from './http'
-import { httpsCover } from '../lib/url'
+import api, { API_BASE_URL } from './http.js'
+import { httpsCover } from '../lib/url.js'
 
 const RETRY_COUNT = 3
 const RETRY_DELAY = 500

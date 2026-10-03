@@ -1,6 +1,6 @@
 import axios from 'axios'
-import { resolveApiBaseUrl } from '../lib/api-base'
-import { authState } from '../lib/auth-state'
+import { resolveApiBaseUrl } from '../lib/api-base.js'
+import { authState } from '../lib/auth-state.js'
 
 export const API_BASE_URL = resolveApiBaseUrl()
 

@@ -94,6 +94,12 @@ curl -X DELETE 'http://localhost:3101/downloads/songs/{songId}?playlistId=1'
 curl -X DELETE http://localhost:3101/downloads/playlists/1/files       # 清空歌单全部已下载文件
 ```
 
+### 单任务重试（含未入队单曲任务）
+
+```bash
+curl -X POST http://localhost:3101/downloads/tasks/{taskId}/retry      # 失败任务复位重跑；standalone 任务同样适用
+```
+
 ### 单曲下载与状态查询
 
 ```bash
@@ -123,16 +129,18 @@ curl -X POST http://localhost:3101/downloads/playlists/{playlistId}/quick
 data/downloads/
 └── {playlist_id}/
     ├── audio/
-    │   └── {艺术家} - {歌名}.{mp3|m4a|flac|...}   # 扩展名跟随实际音频源格式
+    │   └── {艺术家} - {歌名} [({songId})].{mp3|m4a|flac|...}   # 扩展名跟随实际音频源格式；重名碰撞时追加 (songId) 后缀
     ├── lyrics/
     │   └── {艺术家} - {歌名}.lrc
     ├── covers/
-    │   └── {song_id}.{jpg|png|webp}
+    │   └── {song_id}.{jpg|jpeg|png|webp}         # 非数字 songId（bv_/yt_/qq_/file_*）落 task-{任务id}.{ext}
     └── videos/
-        └── {艺术家} - {歌名}.mp4                 # 仅 download_video=1 时产出
+        └── {艺术家} - {歌名}.mp4                 # 仅 download_video=1 且曲目为外部源（bv_/yt_）时产出
 ```
 
-下载中的文件以 `*.part` 后缀暂存，校验通过后才重命名为最终名。
+下载中的文件以 `*.part` 后缀暂存，校验通过后才重命名为最终名。外部源视频的
+装配过程另用非 `.part` 中间产物（`.mux` / `.v{N}` / `.audio` / `.prog.mp4`），
+完成后同样清理或改名。
 
 ## 数据库表结构
 

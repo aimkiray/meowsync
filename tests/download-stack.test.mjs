@@ -133,6 +133,7 @@ test('pruneEmptyPlaylistDirs：符号链接目录不拆（用户重定向布置�
   const plDir = join(fs.DOWNLOAD_BASE_DIR, '880014');
   const target = join(dirname(fs.DOWNLOAD_BASE_DIR), 'redirect-target-880014');
   mkdirSync(join(plDir, 'audio'), { recursive: true });
+  mkdirSync(join(plDir, 'videos'), { recursive: true }); // 循环序在 covers 之后
   mkdirSync(target, { recursive: true });
   try {
     symlinkSync(target, join(plDir, 'covers'), 'dir');
@@ -143,6 +144,9 @@ test('pruneEmptyPlaylistDirs：符号链接目录不拆（用户重定向布置�
   assert.ok(existsSync(join(plDir, 'covers')), '符号链接本身不能被 rmdir');
   assert.ok(existsSync(target), '链接目标更不能被动到');
   assert.ok(!existsSync(join(plDir, 'audio')), '真空目录照剪');
+  // POSIX 上 rmdirSync(链接)抛 ENOTDIR 且中止整轮——没有 lstat 闸时
+  // 排在 covers 之后的 videos 会因提前 throw 幸存，此断言在 POSIX 也钉得住
+  assert.ok(!existsSync(join(plDir, 'videos')), '链接闸缺失会让后续真空目录漏剪');
 });
 
 test('pruneEmptyPlaylistDirs：逃出下载根的 playlistId 一律不碰', () => {
@@ -152,6 +156,27 @@ test('pruneEmptyPlaylistDirs：逃出下载根的 playlistId 一律不碰', () =
   mkdirSync(escapeDir, { recursive: true });
   dm.pruneEmptyPlaylistDirs('../escape-sentinel-880015');
   assert.ok(existsSync(escapeDir), '下载根外的目录不许被剪');
+});
+
+test('listTasks：standalone 旗标只在 playlistId 分支生效且精确匹配', () => {
+  // 服务端收窄面的调度闸——repo 层已证 SQL 正确，这里钉服务层的旗标
+  // 解析与优先级：'1'/'true'/1/true 收 standalone；其余按超集回落
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_std_disp', name: 'std-disp' });
+  const qRepo = require('../src/server/repositories/downloadQueues.js');
+  const q = qRepo.createQueue({ playlistId: pl.id, name: 'qd', totalTasks: 0 });
+  downloadTasksRepo.createTask({ playlistId: pl.id, queueId: null, songId: 's-d1', songName: '独立', artist: 'a' });
+  downloadTasksRepo.createTask({ playlistId: pl.id, queueId: q.id, songId: 's-d2', songName: '入队', artist: 'a' });
+  const onlyLone = (r) => r.map(t => t.songId);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: '1' })), ['s-d1']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: 'true' })), ['s-d1']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: 1 })), ['s-d1']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: true })), ['s-d1']);
+  // 非白名单值按超集回落——'false'/'0' 不得误触发 standalone 模式
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: 'false' })), ['s-d1', 's-d2']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: '0' })), ['s-d1', 's-d2']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id })), ['s-d1', 's-d2']);
+  // queueId 优先级最高——与 standalone 组合也不收窄（静默超集回落）
+  assert.deepEqual(onlyLone(dm.listTasks({ queueId: q.id, standalone: '1' })), ['s-d2']);
 });
 
 test('deleteTask 端到端：行删后文件删、空骨架剪净', () => {

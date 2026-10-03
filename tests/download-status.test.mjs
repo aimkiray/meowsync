@@ -6,7 +6,9 @@ import {
   statusChipClass,
   queueProgress,
   queueStatusFilterOptions,
-  pickQueueForPlaylist
+  pickQueueForPlaylist,
+  preselectOutcome,
+  PRESELECT_OUTCOME
 } from '../src/lib/downloadStatus.js'
 
 // 词表与色档收编面：队列/任务状态 meta、tier→芯片类、进度、过滤选项。
@@ -85,4 +87,26 @@ test('queueStatusFilterOptions：all 居首 + 六个 META 键恰好各一次（�
   for (const opt of queueStatusFilterOptions.slice(1)) {
     assert.equal(opt.label, queueStatusMeta(opt.value).label)
   }
+})
+
+test('preselectOutcome：四态裁决与账本一次性焚毁', () => {
+  // 深链预选的判定核——三态区分是失效上报的承重语义：
+  // 已结算复检缺席只清死链（EXPIRED），首次落空才报错（MISS）
+  const q = { id: 7 }
+  const consumed = new Set()
+  // 首次命中 → SELECT 且键焚毁
+  assert.equal(preselectOutcome({ consumed, consumeKey: '777::0', target: q }), PRESELECT_OUTCOME.SELECT)
+  assert.ok(consumed.has('777::0'))
+  // 已结算且队列仍在 → SKIP（重复快照不重复选中）
+  assert.equal(preselectOutcome({ consumed, consumeKey: '777::0', target: q }), PRESELECT_OUTCOME.SKIP)
+  // 已结算但队列已死（自删/外部级联）→ EXPIRED：只清死链不报「还没有下载队列」
+  assert.equal(preselectOutcome({ consumed, consumeKey: '777::0', target: null }), PRESELECT_OUTCOME.EXPIRED)
+  // 不同 seq 是新键——同歌单再点「查看进度」正常重发
+  assert.equal(preselectOutcome({ consumed, consumeKey: '777::1', target: q }), PRESELECT_OUTCOME.SELECT)
+  // 首次落空 → MISS 且键焚毁（真缺席防刷屏闸：后续快照不重报 toast）
+  const c2 = new Set()
+  assert.equal(preselectOutcome({ consumed: c2, consumeKey: '888::0', target: null }), PRESELECT_OUTCOME.MISS)
+  assert.ok(c2.has('888::0'))
+  // MISS 之后队列仍缺席 → EXPIRED 而非再 MISS——「报错只报一次」就靠这条边
+  assert.equal(preselectOutcome({ consumed: c2, consumeKey: '888::0', target: null }), PRESELECT_OUTCOME.EXPIRED)
 })
