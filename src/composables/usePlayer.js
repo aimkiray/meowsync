@@ -13,6 +13,7 @@ import { toast } from '../lib/feedback.js'
 import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId } from '../lib/url.js'
 import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song.js'
+import { SAVED_QUEUE_TRACK_CAP } from './usePlaylistLibrary.js'
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
@@ -379,18 +380,20 @@ export function usePlayer({
     const saveQueueAsPlaylist = () => {
       if (!playingSongs.value.length) return
       const first = playingSongs.value[0]
+      // tracks 封顶防单条爆配额——长歌单全量快照一份就是 MB 级持久化负载
+      const capped = playingSongs.value.length > SAVED_QUEUE_TRACK_CAP
       const pl = {
         id: `saved_queue_${Date.now()}`,
         name: `${queueTitle.value} · 队列`,
         coverImgUrl: songCoverUrl(first) || '',
         creator: { nickname: '我的队列' },
-        trackCount: playingSongs.value.length,
-        tracks: playingSongs.value.slice(),
+        trackCount: capped ? SAVED_QUEUE_TRACK_CAP : playingSongs.value.length,
+        tracks: playingSongs.value.slice(0, SAVED_QUEUE_TRACK_CAP),
         isLocal: true
       }
       userPlaylists.value.unshift(pl)
       savePlaylistsToStorage()
-      toast(`已存为歌单「${pl.name}」`, 'success')
+      toast(capped ? `已存为歌单「${pl.name}」（截取前 ${SAVED_QUEUE_TRACK_CAP} 首）` : `已存为歌单「${pl.name}」`, 'success')
     }
 
 

@@ -107,6 +107,9 @@
     </div>
 
     <div v-else ref="rowsEl" class="flex-1 min-h-0 overflow-y-auto song-rows" @dragleave="onRowsDragLeave">
+      <!-- 虚拟滚动上沿 spacer：高度=窗外行数×行高，撑起真实 scrollHeight；
+           bindAnchor 是窗数学的列表上沿实测锚（本列表第一子元素） -->
+      <div v-if="!reorderMode" :ref="bindVAnchor" :style="{ height: vTopPad + 'px' }" aria-hidden="true"></div>
       <!-- 拖拽监听器只在排序态挂载（v-on 对象）：常挂=每行 4 个永不触发的死监听 -->
       <div
         v-for="(song, index) in displayRows"
@@ -140,7 +143,7 @@
           <!-- 行首序号：常态等宽数字，悬停/当前曲换 ▶；排序模式换 grip 把手+位次 -->
           <span class="song-row-index">
             <PixelIcon v-if="reorderMode" name="grip" :size="13" class="song-row-grip" />
-            <span class="song-row-index-num">{{ index + 1 }}</span>
+            <span class="song-row-index-num">{{ rowNumber(index) }}</span>
             <span v-if="!reorderMode" class="song-row-index-play"><PixelIcon name="play" :size="16" /></span>
           </span>
           <div
@@ -215,14 +218,8 @@
         </div>
       </div>
 
-      <!-- 渐进渲染哨兵：IO 命中自动扩窗，也是键盘可达的「加载更多」键；
-           排序模式渲全量（隐藏曲被排除会错落 trackOrder 尾部）故哨兵不介入 -->
-      <button
-        v-if="pgHasMore && !reorderMode"
-        :ref="bindSentinel"
-        class="song-list-more ink-btn ink-btn--ghost ink-btn--sm"
-        @click="loadMoreRows()"
-      >加载更多 · 已显示 {{ renderedCount }} / {{ filteredSongs.length }}</button>
+      <!-- 虚拟滚动下沿 spacer：撑出窗外余量（排序态渲全量不需要 spacer 对） -->
+      <div v-if="!reorderMode" :style="{ height: vBottomPad + 'px' }" aria-hidden="true"></div>
 
       <!-- YTM 曲目列表全滚动：底部只留计数（分页器拆除） -->
       <div class="song-list-footer">
@@ -776,12 +773,6 @@
   flex-wrap: wrap;
 }
 
-/* 渐进渲染哨兵行：与 footer 同款居中位，按钮几何走 ink-btn 原子不另造 */
-.song-list-more {
-  display: flex;
-  margin: 4px auto;
-}
-
 /* ── ⋯ 菜单点击捕手（菜单本体走全局 .pg-menu——teleport 出 scoped 域） ── */
 .download-menu-overlay {
   position: fixed;
@@ -793,7 +784,7 @@
 
 <script>
 import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { usePagedList } from '../composables/usePagedList.js'
+import { useVirtualList } from '../composables/useVirtualList.js'
 import { useServerDownloads } from '../composables/useServerDownloads.js'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { httpsCover } from '../lib/url'
@@ -858,37 +849,37 @@ export default {
       visibleSongs(props.songs, props.showVipSongs, serverCaps.value)
     )
 
-    // 渐进渲染窗：千曲歌单不再一次渲全量 DOM——前缀窗 150 起步，
-    // 哨兵行（IO 命中或手动点按）扩窗。复位只认歌单身份：
-    // silent 同步/单曲增删换 songs 引用时不回卷（不踢滚动位置）；
-    // showVipSongs 过滤开关同理不回卷（前缀窗自夹）。
+    // 真虚拟滚动：滑窗渲染替代前缀窗——DOM 恒定 ~视口量级（前缀窗滚到
+    // 底是全量同构，万曲单=万行+万封面 img）。行高 60px 均匀（.song-row-
+    // main 8px×2 padding + 44px 封面）→ y=i*60 纯算术可算。复位只认歌单
+    // 身份：silent 同步/单曲增删换 songs 引用时不回卷（不踢滚动位置）；
+    // showVipSongs 过滤开关同理不回卷（长度 watch 自夹窗）。
     // 已签收代价：窗外行不在 DOM——Ctrl+F/读屏只能覆盖已渲段
-    // （虚拟化常态代价；哨兵键可聚焦，键盘仍能扩窗触达全表）
+    // （虚拟化常态代价；此前缀窗同款限制）
     const rowsEl = ref(null)
     const {
-      rows: pagedRows, hasMore: pgHasMore, renderedCount,
-      loadMore: loadMoreRows, ensureRendered, bindSentinel,
-    } = usePagedList({
+      rows: vRows, startIndex: vStartIndex, topPad: vTopPad, bottomPad: vBottomPad,
+      bindAnchor: bindVAnchor,
+    } = useVirtualList({
       source: filteredSongs,
-      pageSize: 150,
+      rowHeight: 60,
+      scrollRoots: () => [rowsEl.value],
       resetWhen: () => props.selectedPlaylist?.id,
-      scrollRoot: () => rowsEl.value,
     })
 
     // 离场滚动记忆：点歌进 watch 即整卸——回来还在原行附近，不塌回顶部。
-    // 键绑歌单身份（换内容不还原）；还原须先把前缀窗物化回原深度，
-    // 否则 scrollTop 会被窗高钳在 150 行处
+    // 键绑歌单身份（换内容不还原）；spacer 让全量 scrollHeight 首帧就
+    // 真实存在——不再需要 ensureRendered 先物化前缀窗，直接还位
     const scrollMemKey = () => `songs:${props.selectedPlaylist?.id ?? ''}`
     let cancelScrollRestore = null
     onMounted(() => {
       const m = readScrollMem(scrollMemKey())
       if (!m) return
-      ensureRendered((m.count || 0) - 1)
       nextTick(() => { cancelScrollRestore = restoreScrollTop(rowsEl.value, m.top) })
     })
     onBeforeUnmount(() => {
       cancelScrollRestore?.() // 等待窗内卸载即停轮询
-      writeScrollMem(scrollMemKey(), { top: rowsEl.value?.scrollTop ?? 0, count: renderedCount.value })
+      writeScrollMem(scrollMemKey(), { top: rowsEl.value?.scrollTop ?? 0 })
     })
 
     // 菜单打开的目标歌曲：从全量 songs 里查（不依赖渲染切片）
@@ -1079,8 +1070,13 @@ export default {
       && (isLocalPlaylist.value || props.playlistInLibrary)
       && props.songs.length > 1
     )
-    // displayRows 是行渲染的唯一入口——排序态绕过 filteredSongs/pagedRows
-    const displayRows = computed(() => reorderMode.value ? props.songs : pagedRows.value)
+    // displayRows 是行渲染的唯一入口——排序态绕过 filteredSongs/虚拟窗
+    // （排序需要全量行在位：隐藏曲被排除会错落 trackOrder 尾部，且拖放
+    // 的几何语义是全表；全量 DOM 是排序态的已签收瞬时成本——滑窗与全量
+    // 等高，进出排序 scrollTop 原位保持）
+    const displayRows = computed(() => reorderMode.value ? props.songs : vRows.value)
+    // 行号：排序态 index 即全局序；滑窗态补 startIndex 偏移
+    const rowNumber = (i) => (reorderMode.value ? i : vStartIndex.value + i) + 1
 
     // 焦点归还锚：退出排序态（完成/Esc）把焦点还给入口键——键盘用户不落 body
     const sortBtn = ref(null)
@@ -1152,8 +1148,8 @@ export default {
 
     return {
       filteredSongs,
-      pagedRows,
       displayRows,
+      rowNumber,
       reorderMode,
       canReorder,
       dragIndex,
@@ -1166,10 +1162,9 @@ export default {
       onRowDrop,
       onRowDragEnd,
       onRowsDragLeave,
-      pgHasMore,
-      renderedCount,
-      loadMoreRows,
-      bindSentinel,
+      vTopPad,
+      vBottomPad,
+      bindVAnchor,
       rowsEl,
       menuSong,
       isLocalPlaylist,

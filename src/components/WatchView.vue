@@ -162,34 +162,38 @@
           </div>
           <div v-if="queue.length === 0" class="watch-empty">队列为空喵~</div>
           <template v-else>
-            <template v-for="(song, index) in queueRows" :key="queueKeyOf(song)">
+            <!-- 虚拟滚动上沿 spacer：锚位+衬高，行区起点=全局下标 0 的位置 -->
+            <div :ref="bindQueueAnchor" :style="{ height: queueTopPad + 'px' }" aria-hidden="true"></div>
+            <!-- v-for 的 i 是窗口内局部下标，全局下标=queueStartIndex+i——
+                 jump/remove/move/drag/已播判定全吃全局下标 -->
+            <template v-for="(song, i) in queueRows" :key="queueKeyOf(song)">
               <div
                 class="queue-row"
-                :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--played': index < currentQueueIndex, 'queue-row--dragging': dragIndex === index }"
+                :class="{ 'queue-row--current': String(song.id) === String(currentSong?.id), 'queue-row--played': queueStartIndex + i < currentQueueIndex, 'queue-row--dragging': dragIndex === queueStartIndex + i }"
               >
                 <button
                   type="button"
                   class="watch-grip"
                   title="拖拽排序 · ↑↓ 键移动"
                   aria-label="调整队列顺序"
-                  @pointerdown.stop="startDrag(index, $event)"
-                  @keydown.up.prevent.stop="moveRow(index, -1)"
-                  @keydown.down.prevent.stop="moveRow(index, 1)"
+                  @pointerdown.stop="startDrag(queueStartIndex + i, $event)"
+                  @keydown.up.prevent.stop="moveRow(queueStartIndex + i, -1)"
+                  @keydown.down.prevent.stop="moveRow(queueStartIndex + i, 1)"
                   @click.stop
                 ><PixelIcon name="grip" :size="13" /></button>
                 <div
                   class="queue-row-main"
                   role="button"
                   tabindex="0"
-                  @click="jumpTo(index)"
-                  @keydown.enter="jumpTo(index)"
-                  @keydown.space.prevent="jumpTo(index)"
+                  @click="jumpTo(queueStartIndex + i)"
+                  @keydown.enter="jumpTo(queueStartIndex + i)"
+                  @keydown.space.prevent="jumpTo(queueStartIndex + i)"
                 >
                   <span class="queue-row-index">
                     <!-- 当前行：播放中等幅器跳动、暂停定格矮条；已播行打勾 -->
                     <span v-if="String(song.id) === String(currentSong?.id)" class="queue-eq" :class="{ 'queue-eq--paused': !isPlaying }" aria-hidden="true"><i /><i /><i /></span>
-                    <template v-else-if="index < currentQueueIndex"><PixelIcon name="check" :size="11" /></template>
-                    <template v-else>{{ index + 1 }}</template>
+                    <template v-else-if="queueStartIndex + i < currentQueueIndex"><PixelIcon name="check" :size="11" /></template>
+                    <template v-else>{{ queueStartIndex + i + 1 }}</template>
                   </span>
                   <img
                     v-if="songCoverUrl(song)"
@@ -212,7 +216,7 @@
                   class="queue-row-remove pg-icobtn pg-icobtn--bare pg-icobtn--sm"
                   title="从队列移除"
                   aria-label="从队列移除"
-                  @click.stop="$emit('queue-remove', index)"
+                  @click.stop="$emit('queue-remove', queueStartIndex + i)"
                 ><PixelIcon name="close" :size="14" /></button>
                 <!-- 添加入口恒占最右槽位：当前行缺 remove 时位置依旧一致 -->
                 <button
@@ -225,16 +229,10 @@
                 ><PixelIcon name="plus" :size="14" /></button>
               </div>
               <!-- 「接下来」分节线：印单的分栏刻痕，只在当前行之后出现 -->
-              <div v-if="index === currentQueueIndex && index < queue.length - 1" class="queue-sec">接下来 · {{ queue.length - currentQueueIndex - 1 }} 首</div>
+              <div v-if="queueStartIndex + i === currentQueueIndex && queueStartIndex + i < queue.length - 1" class="queue-sec">接下来 · {{ queue.length - currentQueueIndex - 1 }} 首</div>
             </template>
-            <!-- 渐进渲染哨兵：千曲队列不一次渲全——前缀窗保全局下标语义
-                 （drag/move/jump/remove 全是全局 index），IO 或点按扩窗 -->
-            <button
-              v-if="queueHasMore"
-              :ref="bindQueueSentinel"
-              class="ink-btn ink-btn--ghost ink-btn--sm watch-queue-more"
-              @click="loadMoreQueue()"
-            >加载更多 · {{ queueRendered }} / {{ queue.length }}</button>
+            <!-- 虚拟滚动下沿 spacer -->
+            <div :style="{ height: queueBottomPad + 'px' }" aria-hidden="true"></div>
           </template>
 
           <!-- 队列页脚：操作与偏好收成一条发丝顶隔的栏；空队列时只剩居中开关 -->
@@ -389,7 +387,7 @@
 
 <script>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { usePagedList } from '../composables/usePagedList.js'
+import { useVirtualList } from '../composables/useVirtualList.js'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
@@ -475,17 +473,25 @@ export default {
       writeScrollMem('watch:related', { top: relatedEl.value?.scrollTop ?? 0 })
     })
 
-    // 待播队列渐进渲染窗：前缀窗保 index==全局下标（拖拽/jump/remove 语义不破）；
-    // 快照语义不挂 resetWhen——队列替换/增删不回卷，centerCurrentRow 前
-    // ensureRendered 物化目标行。pageSize 300：队列行远轻于曲目行
+    // 待播队列真虚拟滚动：滑窗替代前缀窗——队列可达千曲规模（快照自
+    // filteredSongs），前缀窗滚到底全量同构。行高 55.5px 均匀（首行
+    // 少 1px 发丝边/中途 queue-sec ~28px 是常量误差，overscan 吸收）。
+    // 快照语义不挂 resetWhen——队列替换/增删不回卷。双滚动根候选：
+    // ≥901px 内滚 queueContainer、<901px 整页 viewEl——每帧挑「此刻
+    // 真会滚的」，breakpoint 翻转不用 matchMedia。
+    // pinIndex=拖拽行：拖到窗外时行仍留 DOM（--dragging 与几何基准不丢）
+    // dragIndex 上移：pinIndex 传 ref 对象本体，setup 时引用不能 TDZ
+    const dragIndex = ref(-1)
     const {
-      rows: queueRows, hasMore: queueHasMore, renderedCount: queueRendered,
-      loadMore: loadMoreQueue, ensureRendered: queueEnsureRendered,
-      bindSentinel: bindQueueSentinel,
-    } = usePagedList({
+      rows: queueRows, startIndex: queueStartIndex,
+      topPad: queueTopPad, bottomPad: queueBottomPad,
+      bindAnchor: bindQueueAnchor,
+      scrollToIndex: queueScrollToIndex, ensureVisible: queueEnsureVisible,
+    } = useVirtualList({
       source: computed(() => props.queue),
-      pageSize: 300,
-      scrollRoot: () => queueContainer.value,
+      rowHeight: 55.5,
+      scrollRoots: () => [queueContainer.value, viewEl.value],
+      pinIndex: dragIndex,
     })
 
     // 歌词字号：本机偏好存 localStorage（不像时间校准那样随歌曲入库）。
@@ -505,7 +511,6 @@ export default {
       const s = props.lyricOffsetMs / 1000
       return (s >= 0 ? '+' : '') + s.toFixed(1) + 's'
     })
-    const dragIndex = ref(-1)
 
     const coverUrl = computed(() => songCoverUrl(props.currentSong))
     const artistText = computed(() =>
@@ -556,9 +561,9 @@ export default {
     const moveRow = (index, dir) => {
       const to = index + dir
       if (to < 0 || to >= props.queue.length) return
-      // 窗边界排序：目标行在窗外时先物化——否则行移出前缀窗后
-      // DOM（含聚焦的握把）卸载，焦点掉回 body，后续 ↑↓ 会命中全局音量热键
-      queueEnsureRendered(to)
+      // 窗边界排序：目标行在窗外时先滚进窗——否则行移出滑窗后 DOM
+      // （含聚焦的握把）卸载，焦点掉回 body，后续 ↑↓ 会命中全局音量热键
+      queueEnsureVisible(to)
       emit('queue-move', { from: index, to })
     }
 
@@ -574,13 +579,14 @@ export default {
       dragIndex.value = index
       // 命中判定走几何而非 DOM：等距行列表把 clientY 换算成全队列下标——
       // 不必再「物化到底」让落点域全量渲染（那会把大队列的瞬间 DOM 成本
-      // 绑进每次握把按下）。行高量被拖行本身（必在屏上=真实高），行顶
-      // 原点量首行位置（content-visibility 屏外占位不影响布局坐标）
+      // 绑进每次握把按下）。行高量被拖行本身（必在屏上=真实高）；
+      // 虚拟窗下 DOM 首行=全局 queueStartIndex 行，行顶原点回推至全局 0
       const firstRow = container.querySelector('.queue-row')
-      const draggedRow = container.querySelectorAll('.queue-row')[index]
+      const draggedRow = container.querySelectorAll('.queue-row')[index - queueStartIndex.value]
       const rowH = draggedRow ? draggedRow.getBoundingClientRect().height : 0
       const rowTop0 = firstRow
         ? firstRow.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+          - queueStartIndex.value * rowH
         : 0
       const total = props.queue.length
 
@@ -600,9 +606,9 @@ export default {
         // 现在能命中渲染窗外的行（原实现被 rows.length 截断）
         const target = Math.min(total - 1, Math.max(0, Math.round((y - rowTop0) / rowH)))
         if (target !== dragIndex.value) {
-          // 落点可越出前缀窗（容器底部死区映到未渲下标）——先物化再换位，
-          // 否则行落在窗外当场消失；与键盘 moveRow 的 ensureRendered 同律
-          queueEnsureRendered(target)
+          // 落点可越出滑窗——pinIndex(dragIndex) 会把被拖行钉在 DOM 里，
+          // 换位后 dragIndex=target 窗跟着挪；窗内行按真实位置渲染，
+          // 窗下被拖行只是不可见，不影响次序正确性
           emit('queue-move', { from: dragIndex.value, to: target })
           dragIndex.value = target
         }
@@ -734,12 +740,9 @@ export default {
       if (props.tab === 'lyrics') {
         scrollLyricIntoCenter(props.currentLyricIndex, false)
       } else {
-        // 当前行可能在渲染窗外——先扩窗物化再定位（nextTick 等 DOM 落地）
-        queueEnsureRendered(currentQueueIndex.value)
-        nextTick(() => {
-          scrollRowIntoCenter(queueContainer.value,
-            queueContainer.value?.querySelector('.queue-row--current'), false)
-        })
+        // 当前行可能在滑窗外——直接按全局下标滚到位（scrollToIndex 自动
+        // 挑当前真滚动根：宽屏 queueContainer、单列 viewEl；越界 -1 内部已挡）
+        queueScrollToIndex(currentQueueIndex.value, { align: 'center' })
       }
     }
 
@@ -1189,10 +1192,10 @@ export default {
       relatedEl,
       queueTotalLabel,
       queueRows,
-      queueHasMore,
-      queueRendered,
-      loadMoreQueue,
-      bindQueueSentinel,
+      queueStartIndex,
+      queueTopPad,
+      queueBottomPad,
+      bindQueueAnchor,
       lyricFontSize,
       LYRIC_FS_MIN,
       LYRIC_FS_MAX,
@@ -1619,12 +1622,6 @@ export default {
 }
 /* 空队列只剩自动播放开关——去掉顶隔线并居中，不吊在角落 */
 .watch-queue-foot--empty { border-top: none; justify-content: center; }
-
-/* 队列渐进渲染哨兵：居中 ghost 键 */
-.watch-queue-more {
-  display: flex;
-  margin: 8px auto 0;
-}
 
 .watch-autoplay {
   display: flex;

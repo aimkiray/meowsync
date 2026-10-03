@@ -349,7 +349,10 @@
 
     <!-- 歌曲表单：新建（song=null）/编辑（song=对象）双模——互斥由 open 侧收口，
          四窗冻结链见 onGlobalKeydown -->
+    <!-- v-if 懒挂载：组件自身 v-if="open"+Teleport 渲染不变；async chunk
+         未到时整个标签不渲（首次开窗一次 chunk fetch 的代价换它离开 index 包） -->
     <SongFormDialog
+      v-if="songFormOpen"
       :open="songFormOpen"
       :song="songFormSong"
       :busy="songFormBusy"
@@ -386,7 +389,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { authApi } from './api/auth'
 import { authState, authRequired, dismissSetup } from './lib/auth-state'
 import AuthGate from './components/AuthGate.vue'
@@ -406,19 +409,26 @@ import { useExternalImport } from './composables/useExternalImport'
 import { useAddToPlaylist } from './composables/useAddToPlaylist'
 import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
-import PlaylistGrid from './components/PlaylistGrid.vue'
 import HomeFeed from './components/HomeFeed.vue'
-import SongList from './components/SongList.vue'
-import SongFormDialog from './components/SongFormDialog.vue'
 import { uploadFile, deleteUploadedSong } from './api/uploads'
 import { isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, coverSizeUrl } from './lib/song'
-import WatchView from './components/WatchView.vue'
 import FeedbackHost from './components/FeedbackHost.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
 import PixelIcon from './components/PixelIcon.vue'
-import FullscreenPlayer from './components/FullscreenPlayer.vue'
-import RemoteController from './components/RemoteController.vue'
-import DownloadsPanel from './components/DownloadsPanel.vue'
+
+// 视图级代码分块：非首屏/动作后挂载的重组件按 chunk 懒取（Vite 自动连
+// 带各自 scoped CSS 与独有依赖离开 index 包；FullscreenPlayer 还拖着
+// 664 行的 canvas 歌词渲染器）。组件均经 v-if/v-else-if 分支挂载，
+// chunk 未到时该分支不渲——无 Suspense 需求。
+// WatchView/SongList 是热路径：挂载后 idle 预取同名模块暖 chunk 缓存，
+// 首次导航命中内存模块表零等待
+const PlaylistGrid = defineAsyncComponent(() => import('./components/PlaylistGrid.vue'))
+const SongList = defineAsyncComponent(() => import('./components/SongList.vue'))
+const SongFormDialog = defineAsyncComponent(() => import('./components/SongFormDialog.vue'))
+const WatchView = defineAsyncComponent(() => import('./components/WatchView.vue'))
+const FullscreenPlayer = defineAsyncComponent(() => import('./components/FullscreenPlayer.vue'))
+const RemoteController = defineAsyncComponent(() => import('./components/RemoteController.vue'))
+const DownloadsPanel = defineAsyncComponent(() => import('./components/DownloadsPanel.vue'))
 
 export default {
   name: 'App',
@@ -1090,6 +1100,12 @@ export default {
       // URL 导航意图最后生效：view/pl 参数压在恢复逻辑之上（用户显式给的地址优先）
       applyUrlNav()
       normalizeNavEntry()
+
+      // 热视图 chunk 闲时预取：WatchView/SongList 是点播/歌单两条主路径——
+      // 浏览器空闲期把模块拉进内存表，首次导航时 defineAsyncComponent 同步
+      // 命中不转圈。放初始化尾部执行，不与首屏关键请求争带宽
+      const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1200))
+      idle(() => { import('./components/WatchView.vue'); import('./components/SongList.vue') })
       console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
     })
 

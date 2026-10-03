@@ -14,7 +14,11 @@
     <title>MeowSync</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!-- 字族表非阻塞加载：自托管/局域网部署下 fonts.googleapis.com 可能
+         不可达，同步阻塞会把首帧拖到请求超时——media=print 先不渲，onload
+         切回 all；noscript 兜底无 JS 环境（display=swap 已在 URL 里） -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet"></noscript>
     <script>
       // 首帧前恢复持久化主题，避免主题闪变；未知值由 CSS 自然回落默认
       // 键名与 src/lib/theme.js 的 STORAGE_KEY 必须保持同步

@@ -26,6 +26,8 @@
           <p class="pg-label">songs</p>
           <span class="result-section-sub">歌曲 · 点击即播</span>
         </div>
+        <!-- 虚拟滚动上沿 spacer（行高 56px 均匀）；曲列深挖可累积数千行 -->
+        <div :ref="bindSongAnchor" :style="{ height: songTopPad + 'px' }" aria-hidden="true"></div>
         <div
           v-for="(song, i) in pagedSongs"
           :key="song.id"
@@ -43,7 +45,7 @@
             @keydown.space.prevent="$emit('play-song', song)"
           >
             <span class="song-result-index">
-              <span class="song-result-index-num">{{ i + 1 }}</span>
+              <span class="song-result-index-num">{{ songStartIndex + i + 1 }}</span>
               <span class="song-result-index-play"><PixelIcon name="play" :size="16" /></span>
             </span>
             <img
@@ -70,14 +72,8 @@
             @click.stop="$emit('add-to-playlist', song)"
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
-        <!-- 本地渲染窗扩窗：append 不换引用故认首行 id 当身份——
-             点服务端加载更多后窗不回卷，换新搜索才回卷 -->
-        <button
-          v-if="songHasMore"
-          :ref="bindSongSentinel"
-          class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
-          @click="loadMoreSongs()"
-        >显示更多 · {{ songRendered }} / {{ songs.length }}</button>
+        <!-- 虚拟滚动下沿 spacer -->
+        <div :style="{ height: songBottomPad + 'px' }" aria-hidden="true"></div>
         <!-- 单曲深挖：服务端翻页（cloudsearch offset+songCount）——
              20 首封顶的时代结束；QQ 源结果（songTotal=null）不亮此键。
              刻意只点按不接 IO 哨兵：每次点击=一次上游请求，
@@ -165,6 +161,7 @@
 <script>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
+import { useVirtualList } from '../composables/useVirtualList.js'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { shareOrCopy, playlistShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
@@ -283,24 +280,25 @@ export default {
       resetWhen: () => props.results,
       scrollRoot: () => wrapEl.value,
     })
-    // 单曲结果渲染窗：服务端「加载更多」append 时数组整体换引用，
-    // 故 resetWhen 认首行 id——append 首行不变→窗不回卷；新搜索回卷。
+    // 单曲结果真虚拟滚动：滑窗替代前缀窗（深挖可累积数千行，前缀窗
+    // 滚到底全量同构）。行高 56px 均匀（8px padding + 40px 封面）。
+    // resetWhen 认首行 id——append 不换首行→窗不回卷；新搜索回卷。
     // 不变式依赖：useSearchNav 的整组替换路径（新搜索/QQ 导入）总是先
     // 清空 [] 再填，空写会先把 key 刷成 undefined 触发 reset——若未来
     // 出现「不清空直接覆盖」的写入路径，同首行 id 的新搜索会漏回卷，
     // 届时要换显式身份键（searchQuery/搜索序号）
     const {
-      rows: pagedSongs, hasMore: songHasMore, renderedCount: songRendered,
-      loadMore: loadMoreSongs, ensureRendered: ensureSongRendered, bindSentinel: bindSongSentinel,
-    } = usePagedList({
+      rows: pagedSongs, startIndex: songStartIndex,
+      topPad: songTopPad, bottomPad: songBottomPad, bindAnchor: bindSongAnchor,
+    } = useVirtualList({
       source: computed(() => props.songs),
-      pageSize: 100,
+      rowHeight: 56,
+      scrollRoots: () => [wrapEl.value],
       resetWhen: () => props.songs[0]?.id,
-      scrollRoot: () => wrapEl.value,
     })
 
-    // 离场滚动记忆：搜索结果数据在 nav 层不丢，丢的是滚动位与两个前缀窗——
-    // 重挂先把两窗物化回各自深度再还 scrollTop，否则被窗高钳在首页处。
+    // 离场滚动记忆：搜索结果数据在 nav 层不丢，丢的是滚动位与卡片窗——
+    // 重挂先把卡片前缀窗物化回深度再还 scrollTop（曲列 spacer 天然全高）。
     // 键编查询词：别处（watch 页顶栏）发起的新搜索重挂本组件时，旧词位置
     // 不会串进新词结果（结果落地前 reset 回卷，但还位轮询还活着会误写）
     const scrollMemKey = () => `search-grid:${props.query ?? ''}`
@@ -309,7 +307,6 @@ export default {
       const m = readScrollMem(scrollMemKey())
       if (!m) return
       ensureGridRendered((m.grid || 0) - 1)
-      ensureSongRendered((m.songs || 0) - 1)
       nextTick(() => { cancelScrollRestore = restoreScrollTop(wrapEl.value, m.top) })
     })
     onBeforeUnmount(() => {
@@ -317,7 +314,6 @@ export default {
       writeScrollMem(scrollMemKey(), {
         top: wrapEl.value?.scrollTop ?? 0,
         grid: gridRendered.value,
-        songs: songRendered.value,
       })
     })
 
@@ -340,10 +336,10 @@ export default {
       loadMoreGrid,
       bindSentinel,
       pagedSongs,
-      songHasMore,
-      songRendered,
-      loadMoreSongs,
-      bindSongSentinel,
+      songStartIndex,
+      songTopPad,
+      songBottomPad,
+      bindSongAnchor,
     }
   }
 }

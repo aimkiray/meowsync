@@ -50,6 +50,13 @@ const { authGate } = require('./src/server/lib/auth-gate');
 const { rateLimit } = require('./src/server/lib/rate-limit');
 app.use('*', authGate);
 
+// gzip/deflate（CompressionStream，hono/compress 只出这两种）：
+// 挂在 authGate 后——401/403 早退小响应不值得压；下游静态文件/SPA fallback/
+// API JSON 全覆盖。中间件自带豁免面：206/HEAD/Transfer-Encoding/已编码/
+// no-transform/非可压 MIME（audio/woff2/png 等）一律放行，媒体流不受影。
+const { compress } = require('hono/compress');
+app.use('*', compress());
+
 // 健康检查：/ping 只探活；/healthz 探 DB 写路径（Docker HEALTHCHECK 用它）——
 // SELECT 1 是纯内存查询，磁盘满时照样通过；必须在事务里产生真实 WAL 写入，
 // 磁盘满/DB 损坏才暴露为 503 而不是"进程活着但功能全挂"
@@ -89,7 +96,21 @@ app.get('/healthz', (c) => {
 const distDir = path.join(__dirname, 'dist');
 const hasDist = fs.existsSync(path.join(distDir, 'index.html'));
 if (hasDist) {
-  const staticMiddleware = serveStatic({ root: distDir });
+  const staticMiddleware = serveStatic({
+    root: distDir,
+    // dist 出现 .br/.gz/.zst 伴生档即自动投送（postbuild 产物；暂无也无害，
+    // 仅多一次 stat）。Accept-Encoding 不带 br 的客户端静默走压缩中间件的 gzip
+    precompressed: true,
+    onFound: (_p, c) => {
+      // /assets/* 文件名带内容 hash（Vite [name]-[hash]）——内容变名就变，
+      // 可永久缓存（此前被 authGate 默认 no-store 盖掉，每次访问全量重拉
+      // 400KB+ 的字体与 JS）。index.html 与未哈希 public/ 档同名换内容必须
+      // 回源再验证——serveStatic 不处理条件请求，no-cache 再验证是整文件 200
+      c.header('Cache-Control', c.req.path.startsWith('/assets/')
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache');
+    }
+  });
   // 仅 GET/HEAD 走静态文件（Express serve-static 语义），其余方法放行给 API/404
   app.use('/*', (c, next) => {
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next();
@@ -157,6 +178,9 @@ if (hasDist) {
       || /\.[a-z0-9]+$/i.test(p)) {
       return c.json({ code: 404, message: 'Not Found' }, 404);
     }
+    // 与 serveStatic 的 index.html 同口径：壳同名换内容必须回源再验证
+    // （authGate 的 no-store 默认只对未显式声明的响应生效）
+    c.header('Cache-Control', 'no-cache');
     return c.html(indexHtml);
   });
 }

@@ -174,6 +174,39 @@ export function externalCoverUrl(song) {
   return /^https?:\/\//i.test(cover) ? cover : null
 }
 
+// 持久化瘦身投影：localStorage 曲对象只留「渲染+播放+自愈」读的字段。
+// 网易云接口原对象单曲 ~2-4KB（alia/mv/privilege.chargeInfoList 等死字段
+// 占大头），白名单后 ~400-700B——千曲本地单持久化从 ~8MB 压到 ~1MB。
+// 读者面（逐字段对过）：songArtists= ar/artists[].name；songCoverUrl=
+// file.hasCover/coverV + picUrl + al/album.picUrl；isVipSong= fee +
+// privilege.fee + qq.payPlay/vipOnly；externalArtistName= youtube.author*/
+// bilibili.author；externalCoverUrl= youtube.videoId 推导 + bilibili.cover；
+// provider 对象（bilibili/youtube/qq/file）是播放凭据与下载镜像键——结构本
+// 就紧凑（构建器收口），整体保留。dt/duration 双留：读者全走 dt||duration
+// 且 file_ 曲两字段语义不同（duration 是媒体秒数）
+export function slimTrack(t) {
+  if (!t || t.id == null) return t
+  const alSrc = t.al && typeof t.al === 'object' ? t.al : (t.album && typeof t.album === 'object' ? t.album : null)
+  const arSrc = Array.isArray(t.ar) ? t.ar : (Array.isArray(t.artists) ? t.artists : null)
+  return {
+    id: t.id, name: t.name,
+    // 成员可能是裸字符串（旧数据）：对象取 name、字符串透传——
+    // {name:'x'} 与 'x' 对 songArtists 的 a?.name 读取同义，不该丢
+    ar: arSrc ? arSrc.map(a => ({ name: typeof a === 'object' ? a?.name : a })) : undefined,
+    // al 可能是字符串形态（旧数据/上游简化对象——healExternalAr 同口径
+    // 只治对象形）：对象瘦身、非对象原样透传不丢专辑名
+    al: alSrc ? { name: alSrc.name, picUrl: alSrc.picUrl, pic_str: alSrc.pic_str } : (t.al ?? t.album),
+    picUrl: t.picUrl, dt: t.dt, duration: t.duration,
+    fee: t.fee,
+    // privilege 只读 fee（isVipSong）——chargeInfoList/freeTrialPrivilege 等
+    // ~500-900B/曲的套餐明细是持久化最大死重
+    privilege: t.privilege ? { fee: t.privilege.fee } : undefined,
+    neteaseId: t.neteaseId,
+    bilibili: t.bilibili, youtube: t.youtube, qq: t.qq, file: t.file,
+    custom: t.custom,
+  }
+}
+
 /**
  * trackOverrides 应用器：远端单曲目不可就地改写（下次 detail 拉取会覆盖），
  * 编辑落库对象上的 trackOverrides{songId:{name?,artist?,album?,durationMs?,coverUrl?}}，

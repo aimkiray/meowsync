@@ -11,16 +11,16 @@
 /* Fusion Pixel（本地打包位图等宽——glitch 主题主字族 / 歌词画布 / 版本戳） */
 @font-face{
   font-family: 'Fusion Pixel';
-  src: url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2'),
-       url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff') format('woff');
+  /* 只发 woff2：src 列表首个可解格式即被选中，.woff 回退在现代浏览器
+     永不下载（纯死字节——dist 每份 ~600KB 白占） */
+  src: url('./fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
 }
 @font-face{
   font-family: 'Fusion Pixel';
-  src: url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff2') format('woff2'),
-       url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff') format('woff');
+  src: url('./fonts/fusion-pixel-10px-monospaced-latin.otf.woff2') format('woff2');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
