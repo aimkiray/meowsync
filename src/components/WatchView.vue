@@ -645,17 +645,18 @@ export default {
     // 用户往回翻或往后看歌词时不被下一行拽回。单列态整页都是歌词的滚动器，
     // 页内任意处滑动都算；宽屏只认歌词栏内的滑动（左栏/队列滚动不影响歌词）。
     // 竖向位移 <10px 的 touchmove 视为轻点微漂、不暂停（真机点 A+/播放键常带
-    // 1–2 个）；切到歌词 tab 是显式请求，清掉暂停
+    // 1–2 个）；切到歌词 tab 是显式请求，清掉暂停。targetTouches 只读本页内
+    // 触点——另根手指搭在页外（如底部播放条）时基线/探测仍配对同一根手指
     const LYRIC_FOLLOW_PAUSE_MS = 4000
     const SWIPE_SLOP_PX = 10
     let lyricFollowPausedUntil = 0
     let touchStartY = 0
     const wideMq = window.matchMedia('(min-width: 901px)')
-    const onWatchTouchStart = (e) => { touchStartY = e.touches[0]?.clientY ?? 0 }
+    const onWatchTouchStart = (e) => { touchStartY = e.targetTouches?.[0]?.clientY ?? 0 }
     const pauseLyricFollow = (e) => {
       if (wideMq.matches && !lyricContainer.value?.contains(e.target)) return
       if (e.type === 'touchmove'
-        && Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) < SWIPE_SLOP_PX) return
+        && Math.abs((e.targetTouches?.[0]?.clientY ?? touchStartY) - touchStartY) < SWIPE_SLOP_PX) return
       lyricFollowPausedUntil = Date.now() + LYRIC_FOLLOW_PAUSE_MS
     }
     const lyricFollowPaused = () => Date.now() < lyricFollowPausedUntil
@@ -1077,7 +1078,7 @@ export default {
   display: flex;
   align-items: center;
   /* 定高 52px（10 上 + 32 ink-btn--sm + 10 下）让 tabs 钉点有单一事实源 */
-  height: var(--watch-top-h);
+  height: var(--watch-top-h, 52px);
   /* 列向 flex 滚动器里内容一溢出，收缩全落到本项（min-content 仅 32px 键高），
      tabs 钉点下漏 20px 透字缝——与 .watch-tabs 同律禁缩；宽屏 absolute 出流后无效无碍 */
   flex-shrink: 0;
