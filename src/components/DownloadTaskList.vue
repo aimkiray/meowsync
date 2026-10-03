@@ -242,7 +242,7 @@ const taskGroups = [
 
 .dtl-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center; /* chip 顶对会悬在标题块中段——中对齐整块更稳 */
   justify-content: space-between;
   gap: 12px;
   padding: 0 16px 12px;

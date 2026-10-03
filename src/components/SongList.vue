@@ -216,7 +216,7 @@
       <button
         v-if="pgHasMore && !reorderMode"
         :ref="bindSentinel"
-        class="song-list-more ink-btn ink-btn--ghost"
+        class="song-list-more ink-btn ink-btn--ghost ink-btn--sm"
         @click="loadMoreRows()"
       >加载更多 · 已显示 {{ renderedCount }} / {{ filteredSongs.length }}</button>
 
@@ -677,6 +677,7 @@
   right: 12px;
   transform: translateY(-50%);
   display: flex;
+  gap: 2px; /* 同 .pl-actions 惯例——两个 24px 尾键贴死命中区会连成一片 */
 }
 
 .song-menu-btn {
