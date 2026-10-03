@@ -1,5 +1,10 @@
 <template>
-  <div class="fullscreen-player fixed inset-0 z-[var(--z-fullscreen)]">
+  <div
+    class="fullscreen-player fixed inset-0 z-[var(--z-fullscreen)]"
+    :class="{ 'fullscreen-player--idle': chromeHidden }"
+    @mousemove="wake"
+    @pointerdown="wake"
+  >
     <TextAliveLyricCanvas
       class="fullscreen-player__canvas"
       :lyrics="lyrics"
@@ -101,7 +106,7 @@
 </template>
 
 <script>
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import TextAliveLyricCanvas from './TextAliveLyricCanvas.vue'
 import PixelIcon from './PixelIcon.vue'
 import { formatTime } from '../lib/format'
@@ -170,7 +175,24 @@ export default {
       emit('seek-to', (event.clientX - rect.left) / rect.width)
     }
 
+    // 沉浸页 idle 自隐：2.6s 无输入 → 光标+全部 chrome（顶栏/底栏/进度条）
+    // 淡出；mousemove/pointerdown/任意键戳醒。暂停态常显——画面静止时
+    // 控件是唯一状态读数（与 WatchView 视频控制层同一语义、同一时长）
+    const chromeOn = ref(true)
+    let chromeHideTimer = 0
+    const wake = () => {
+      chromeOn.value = true
+      clearTimeout(chromeHideTimer)
+      if (props.isPlaying) chromeHideTimer = setTimeout(() => { chromeOn.value = false }, 2600)
+    }
+    const chromeHidden = computed(() => !chromeOn.value && props.isPlaying)
+    watch(() => props.isPlaying, (p) => {
+      if (p) wake()                        // 恢复播放→亮一轮重新计自隐
+      else clearTimeout(chromeHideTimer)   // 暂停→常显（computed 的 !isPlaying 兜底）
+    })
+
     const handleKeydown = (event) => {
+      wake()
       if (event.key === 'Escape') {
         emit('close')
       }
@@ -179,11 +201,13 @@ export default {
     onMounted(() => {
       document.body.style.overflow = 'hidden'
       window.addEventListener('keydown', handleKeydown)
+      wake() // 挂载即亮一轮；播放中挂上自隐计时
     })
 
     onUnmounted(() => {
       document.body.style.overflow = ''
       window.removeEventListener('keydown', handleKeydown)
+      clearTimeout(chromeHideTimer)
     })
 
     return {
@@ -191,7 +215,9 @@ export default {
       formatTime,
       httpsCover,
       songCoverUrl,
-      onSeekClick
+      onSeekClick,
+      chromeHidden,
+      wake
     }
   }
 }
@@ -223,6 +249,29 @@ export default {
 .fullscreen-player__overlay {
   background: radial-gradient(circle at center, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 45%);
   pointer-events: none;
+}
+
+/* idle 自隐：光标与全部 chrome 一起收（流媒体播放器同手势）。
+   光标须 * 通配——按钮/滑杆自带 UA 游标不吃祖先继承 */
+.fullscreen-player--idle,
+.fullscreen-player--idle * { cursor: none !important; }
+
+.fullscreen-player__topbar,
+.fullscreen-player__bottom,
+.fullscreen-player__progress-hit {
+  transition: opacity .3s ease;
+}
+.fullscreen-player--idle .fullscreen-player__topbar,
+.fullscreen-player--idle .fullscreen-player__bottom,
+.fullscreen-player--idle .fullscreen-player__progress-hit {
+  opacity: 0;
+  pointer-events: none;
+}
+/* focus-within 兜底：键盘焦点落在控件上时强制露出——
+   隐掉的控件仍可 Tab 进去，不给焦点载体是键盘陷阱 */
+.fullscreen-player__topbar:focus-within,
+.fullscreen-player__bottom:focus-within {
+  opacity: 1;
 }
 
 .fullscreen-player__content {

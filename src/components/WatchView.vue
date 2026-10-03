@@ -10,8 +10,9 @@
     <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
       <!-- ══ 左栏 ══ -->
       <div class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
-        <div ref="coverWrapRef" class="watch-cover-wrap" :class="{ 'watch-cover-wrap--video': mediaVideoActive }"
-          @mousemove="pokeFsControls" @pointerdown="pokeFsControls">
+        <div ref="coverWrapRef" class="watch-cover-wrap"
+          :class="{ 'watch-cover-wrap--video': mediaVideoActive, 'watch-cover-wrap--idle': videoFullscreen && !controlsVisible }"
+          @mousemove="pokeControls" @pointerdown="pokeControls">
           <!-- 外部导入曲视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
                音频模式回落网易云匹配封面——不加载视频即省流量。
                video+控制层同包一个 template v-if：img/fallback 的 v-else 链
@@ -34,9 +35,9 @@
             <!-- 悬停控制层：中央半透明播放/暂停走全局 toggle-play（视频元素静音、
                  时钟锚 Howler——syncMediaVideo 自动跟着收放）；右下全屏锁在 wrap
                  上做元素级 fullscreen——控制层随 wrap 一起进全屏仍可用。
-                 全屏态改 --on class 驱动露出（mousemove/pointerdown 戳醒+自隐）——
-                 光标停在屏内 :hover 恒真，CSS 恒显会把中央键全程压在画面上 -->
-            <div class="watch-video-controls" :class="{ 'watch-video-controls--on': fsControlsOn }">
+                 --on class 驱动露出（mousemove/pointerdown 戳醒 + 播放中 2.6s 自隐，
+                 暂停常显）——光标停在屏内 :hover 恒真，CSS 恒显会把中央键全程压在画面上 -->
+            <div class="watch-video-controls" :class="{ 'watch-video-controls--on': controlsVisible }">
               <button
                 type="button"
                 class="watch-video-toggle"
@@ -699,27 +700,27 @@ export default {
         }
       })
     }
-    // 全屏态控制层自隐：桌面光标停在屏内 :hover 恒真、触屏 hover:none 恒真——
-    // CSS 恒显会把中央圆键全程压在画面正中；改 JS 驱动：mousemove/pointerdown
-    // 戳醒 + 播放中 2.6s 自隐；暂停态常显——画面静止时控件是唯一状态读数
-    const fsControlsOn = ref(false)
-    let fsHideTimer = 0
-    const pokeFsControls = () => {
-      if (!videoFullscreen.value) return
-      fsControlsOn.value = true
-      clearTimeout(fsHideTimer)
-      if (props.isPlaying) fsHideTimer = setTimeout(() => { fsControlsOn.value = false }, 2600)
+    // 控制层自隐：JS 驱动（CSS :hover 会让静止光标下的控件恒显）——
+    // mousemove/pointerdown 戳醒 + 播放中 2.6s 自隐；暂停态常显
+    // （画面静止时控件是唯一状态读数）。非全屏同律：光标停在画面上
+    // 不动也要收。focus-within 在 CSS 层兜底键盘焦点
+    const controlsOn = ref(false)
+    let controlsHideTimer = 0
+    const pokeControls = () => {
+      controlsOn.value = true
+      clearTimeout(controlsHideTimer)
+      if (props.isPlaying) controlsHideTimer = setTimeout(() => { controlsOn.value = false }, 2600)
     }
+    const controlsVisible = computed(() => controlsOn.value || !props.isPlaying)
     watch(videoFullscreen, (on) => {
-      clearTimeout(fsHideTimer)
+      clearTimeout(controlsHideTimer)
       // 进全屏走 poke（亮一轮＋播放中顺便挂上自隐计时）；退出即清态
-      if (on) pokeFsControls()
-      else fsControlsOn.value = false
+      if (on) pokeControls()
+      else controlsOn.value = false
     })
     watch(() => props.isPlaying, (p) => {
-      if (!videoFullscreen.value) return
-      if (p) pokeFsControls()                        // 恢复播放→重新计自隐
-      else { clearTimeout(fsHideTimer); fsControlsOn.value = true } // 暂停→常显
+      if (p) pokeControls()                 // 恢复播放→亮一轮重新计自隐
+      else clearTimeout(controlsHideTimer)  // 暂停→常显（computed 的 !isPlaying 兜底）
     })
     // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
     const mediaVideoFailed = ref(false)
@@ -930,8 +931,9 @@ export default {
       videoFullscreen,
       toggleVideoFullscreen,
       canElementFs,
-      fsControlsOn,
-      pokeFsControls,
+      controlsOn,
+      controlsVisible,
+      pokeControls,
       videoOn,
       mediaVideoFailed,
       mediaVideoActive,
@@ -1017,9 +1019,11 @@ export default {
    relative 是悬停控制层（.watch-video-controls）的定位锚 */
 .watch-cover-wrap--video { width: 100%; position: relative; }
 
-/* 视频悬停控制层：默认隐，wrap 悬停/焦点进入露出（focus-within 兜键盘
-   Tab——透明度为 0 的键可聚焦但不可见是键盘陷阱）；层自身不吃指针，
-   穿透到视频/行背景，两枚子键各开 pointer-events */
+/* 视频悬停控制层：默认隐，JS --on 驱动露出（戳醒 2.6s 自隐，暂停常显；
+   全屏/非全屏/触屏同律——CSS :hover 与 hover:none 都会让控件恒显压屏，
+   故全态移交 JS）；focus-within 兜键盘 Tab——透明度为 0 的键可聚焦但
+   不可见是键盘陷阱。层自身不吃指针，穿透到视频/行背景，两枚子键各开
+   pointer-events */
 .watch-video-controls {
   position: absolute;
   inset: 0;
@@ -1030,19 +1034,23 @@ export default {
   transition: opacity .16s ease;
   pointer-events: none;
 }
-.watch-cover-wrap--video:hover .watch-video-controls,
+.watch-video-controls--on,
 .watch-cover-wrap--video:focus-within .watch-video-controls {
   opacity: 1;
 }
-/* 触屏没有悬停态——控制层常显，半透明不遮画面 */
-@media (hover: none) {
-  .watch-video-controls { opacity: 1; }
+/* 子键 pointer-events 随可见性走：层隐（opacity 0）时键不可见也不可点——
+   否则静止画面上的点击会命中隐形全屏键；focus-within 露出态同样恢复可点 */
+.watch-video-controls :is(.watch-video-toggle, .watch-video-fs) { pointer-events: none; }
+.watch-video-controls--on :is(.watch-video-toggle, .watch-video-fs),
+.watch-cover-wrap--video:focus-within :is(.watch-video-toggle, .watch-video-fs) {
+  pointer-events: auto;
 }
+/* 全屏下控件收掉时连光标一起隐——同沉浸页/流媒体播放器的 idle 手势 */
+.watch-cover-wrap--idle { cursor: none; }
 
 /* 中央播放/暂停：半透明墨底圆形——像素风的方角体系里，圆形是「媒体
    传输键」的跨站通用符（YouTube/Netflix 同款），特意破例 */
 .watch-video-toggle {
-  pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1067,7 +1075,6 @@ export default {
 
 /* 右下全屏键：同款半透明墨底，方角小键贴视频下缘 */
 .watch-video-fs {
-  pointer-events: auto;
   position: absolute;
   right: 10px;
   bottom: 10px;
@@ -1109,20 +1116,6 @@ export default {
   width: 100%;
   height: 100%;
   border: 0;
-}
-
-/* 全屏态露出移交 JS（--on class）：光标停屏内 :hover 恒真 + 触屏
-   hover:none 恒真——CSS 恒显会全程遮挡；焦点留在键上（focus-within）
-   时仍强制露出，键盘用户不丢焦点载体 */
-.watch-cover-wrap:fullscreen .watch-video-controls,
-.watch-cover-wrap:-webkit-full-screen .watch-video-controls {
-  opacity: 0;
-}
-.watch-cover-wrap:fullscreen .watch-video-controls--on,
-.watch-cover-wrap:-webkit-full-screen .watch-video-controls--on,
-.watch-cover-wrap:fullscreen:focus-within .watch-video-controls,
-.watch-cover-wrap:-webkit-full-screen:focus-within .watch-video-controls {
-  opacity: 1;
 }
 
 /* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
