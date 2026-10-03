@@ -226,17 +226,15 @@ app.post('/downloads/songs/:songId', async (c) => {
   }
 });
 
-// 查询歌曲下载状态（读操作：未导入歌单返回 downloaded:false，不触发远端导入）
+// 查询歌曲下载状态（读操作：未导入歌单返回 downloaded:false，不触发远端导入）。
+// playlistId 可缺省：暂存/搜索队列的播放入口没有歌单上下文——此时
+// downloaded/task 如实报「无归属单可考」，videoReady 仍按跨歌单工件算
 app.get('/downloads/songs/:songId/status', async (c) => {
   try {
     const songId = c.req.param('songId');
     const { playlistId } = c.req.query();
 
-    if (!playlistId) {
-      return fail(c, 400, '缺少 playlistId 参数');
-    }
-
-    const status = await downloadManager.getSongDownloadStatus(playlistId, songId);
+    const status = await downloadManager.getSongDownloadStatus(playlistId || null, songId);
     return c.json({ code: 200, data: status });
   } catch (error) {
     return handleError(c, error, '查询下载状态失败');

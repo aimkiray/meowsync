@@ -382,9 +382,12 @@ export const musicApi = {
   // /audio-proxy——kind=video 拿 avc1 adaptive，audio 默认优先
   // mp4a（Safari 兼容）；prefer=best 给下载归档用——按码率取最优（Opus 251
   // 全频带，AAC 140 在 16kHz 被低通截断）
-  youtubeStreamUrl: (videoId, kind = 'audio', prefer = '') => {
+  youtubeStreamUrl: (videoId, kind = 'audio', prefer = '', retry = 0) => {
     const params = new URLSearchParams({ v: videoId, kind })
     if (prefer) params.set('prefer', prefer)
+    // 重试标记：服务端 gateCache 30min 判定可能误判——重试旁路缓存读
+    // 强制重探（服务端仍写新判定），不是无意义地重放同一个死链
+    if (retry > 0) params.set('retry', '1')
     return `${API_BASE_URL}/youtube/stream?${params}`
   },
 

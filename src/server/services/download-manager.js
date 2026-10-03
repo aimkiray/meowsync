@@ -1546,10 +1546,27 @@ async function getSongDownloadStatus(playlistId, songId) {
         .filter(t => t.songId === String(songId));
   const task = all.find(t => t.status === 'completed') || all[0] || null;
 
+  // 视频工件单独报可用性，且跨歌单寻址：downloaded/filesIntact 是全工件
+  // 存在性合取，歌词/封面档缺失会把在盘 mp4 误杀；任务行又按
+  // (playlist,song) 唯一登记——暂存/搜索队列或别单借源的播放入口不带
+  // 归属歌单上下文，只按本单查会漏掉视频在另一歌单的情形。任一歌单的
+  // completed 行 videoPath 在盘即可播；命中行带出的 playlistId 是 /file
+  // 端点的寻址键（工件按歌单目录组织，URL 必须带对的 playlistId）
+  let videoPlaylistId = null;
+  for (const t of downloadTasksRepo.listTasksBySongId(String(songId))) {
+    if (t.status !== 'completed' || !t.videoPath) continue;
+    if (isUnderDownloadDir(t.videoPath) && fs.existsSync(t.videoPath)) {
+      videoPlaylistId = t.playlistId;
+      break;
+    }
+  }
+
   return {
     // completed 行但文件被外部删掉 → 如实报未下载，让前端重新露出下载入口
     // （行不预改：下次下载走幂等校验/收养路径会自愈重跑）
     downloaded: Boolean(task && task.status === 'completed' && taskFilesIntact(task)),
+    videoReady: videoPlaylistId !== null,
+    videoPlaylistId,
     task: toPublicTask(task || null)
   };
 }

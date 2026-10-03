@@ -890,10 +890,15 @@ export default {
     })
     // 视频流加载失败（CDN 全被拒/404）→ 回落封面图而不是黑盒；切歌重置
     const mediaVideoFailed = ref(false)
-    // 瞬时断流自愈：每 mediaVideoKey 允许一次延迟复位重试——复位重挂即
-    // 真重试，真死链会再 error 回闩且不再排新计时（上界=1，防重试循环）
+    // 瞬时断流自愈：每 mediaVideoKey 至多两次延迟复位重试——复位重挂即
+    // 真重试，真死链会再 error 回闩且不再排新计时（上界=2，防重试循环）。
+    // mediaStreamRetry 喂 youtube 流 URL 的 retry 参数——重试旁路服务端
+    // 闸控判定缓存强制重探（见 onMediaVideoError）；bili/file 链用它只
+    // 作重试计数。切歌（key 换）清零，新源拿满重试预算
+    const mediaStreamRetry = ref(0)
     let mediaRetryTimer = null
     let mediaRetriedKey = null
+    let mediaRetryN = 0
     // 视频源键：两个 provider 各取各自的定位串——换曲（哪怕同 provider）必然换键
     const mediaVideoKey = computed(() => {
       const song = props.currentSong
@@ -907,6 +912,9 @@ export default {
       if (song?.file?.hasVideo) return `file:${song.id}:${song.file.videoV || 0}`
       return null
     })
+    // 切歌换键：重试预算清零——新源拿满重试机会（sync 抢在 mediaVideoUrl
+    // 重算前落地，避免新曲首 URL 就带旧 key 的 retry 戳）
+    watch(mediaVideoKey, () => { mediaStreamRetry.value = 0 }, { flush: 'sync' })
     // mediaVideoUrl 空串（探测在途）不挂载 <video>：src="" 会解析成页面
     // URL 被当媒体加载，error 误闩封面；URL 就绪才出元素
     // 视频只在 watch 页真正可见时存在：videoOn 是偏好而非在场证明——
@@ -928,9 +936,10 @@ export default {
       if (!open) mediaVideoFailed.value = false
     })
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
-    // 的视频下载此前是纯只写功能（App 内无处可播）。按队列归属歌单探测
-    // （任务行以歌单维度登记；别的歌单下的下载对不上 playlistId，漏探回落
-    // 在线流，安全方向）。切歌竞态用序号丢弃
+    // 的视频下载此前是纯只写功能（App 内无处可播）。探测跨歌单寻址——
+    // 任务行按 (playlist,song) 登记，暂存/搜索队列或别单借源的播放没有
+    // 归属歌单上下文，服务端 videoReady 按全表找档并回带寻址键
+    // videoPlaylistId。切歌竞态用序号丢弃
     const downloadedVideoUrl = ref(null)
     // 探测在途闸：探测未落地前不往 <video> 绑在线流——否则每首已下载曲
     // 都白烧一次 CDN 请求，且秒挂型流（闸控 403）的 error 会先于探测闩封面
@@ -939,7 +948,7 @@ export default {
     watch([mediaVideoKey, () => props.queueOwner?.id, videoOn], async () => {
       const seq = ++dlVideoSeq
       const song = props.currentSong
-      const plId = props.queueOwner?.id
+      const plId = props.queueOwner?.id ?? null
       // 下载档会话缓存（模块域 dlVideoCache）：离开再进 watch 时本地档
       // 即知即挂——免等探测 RTT 才出 <video>（封面→16:9 的迟到换形）；探测
       // 照跑复验：档没了清缓存换在线源，探测失败则信任缓存值继续用
@@ -951,7 +960,7 @@ export default {
       const probeable = videoOn.value
         && (song?.bilibili?.hasVideo || song?.bilibili?.hasDownloadableVideo
           || song?.youtube?.hasVideo || song?.youtube?.hasDownloadableVideo)
-      if (!plId || !probeable) {
+      if (!probeable) {
         dlProbeSettled.value = true
         return
       }
@@ -960,14 +969,12 @@ export default {
       try {
         const st = await downloadsApi.getSongDownloadStatus(plId, song.id)
         if (seq !== dlVideoSeq) return
-        // http 拦截器剥到 body——任务行在 st.data.task；completed 门禁：
-        // 非完成态行的 videoPath 打 /file 恒 404（服务端双查 status+existsSync），
-        // 白烧一跳。filesIntact 是全工件存在性合取——行还在但档被外部删
-        // 的幻影 completed 不再回写死 URL（否则缓存钉住它每趟白烧 404）。
-        // 误伤面：歌词档缺失会把在盘视频档误判 null——回落在线流安全
-        const url = (st?.data?.task?.status === 'completed' && st?.data?.task?.videoPath
-          && st?.data?.task?.filesIntact !== false)
-          ? downloadsApi.songFileUrl(plId, song.id, 'video')
+        // videoReady 是服务端按工件维度的在盘判定（任一歌单 completed 行
+        // videoPath 存在）——不查 filesIntact 合取：歌词/封面档缺失会把
+        // 在盘视频误杀；videoPlaylistId 是 /file 的寻址键，工件按歌单
+        // 目录组织，寻址用命中行的 playlistId 而非当前队列归属
+        const url = (st?.data?.videoReady === true && st?.data?.videoPlaylistId != null)
+          ? downloadsApi.songFileUrl(st.data.videoPlaylistId, song.id, 'video')
           : null
         downloadedVideoUrl.value = url
         if (url) dlCacheSet(mediaVideoKey.value, url)
@@ -987,8 +994,10 @@ export default {
       const y = song?.youtube
       if (y?.hasVideo || y?.hasDownloadableVideo) {
         if (!dlProbeSettled.value) return ''
+        // mediaStreamRetry 戳进 URL：服务端闸控判定缓存可能错——重试带
+        // &retry=1 旁路缓存读强制重探，URL 换绑本身也触发 <video> 重载
         return downloadedVideoUrl.value
-          || (y.hasVideo ? musicApi.youtubeStreamUrl(y.videoId, 'video') : '')
+          || (y.hasVideo ? musicApi.youtubeStreamUrl(y.videoId, 'video', '', mediaStreamRetry.value) : '')
       }
       // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）；videoV 戳
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
@@ -1013,12 +1022,21 @@ export default {
       }
       mediaVideoFailed.value = true
       // 中途 CDN 抖一下不该把整曲打成封面——10s 后复位闩重挂真重试；
-      // 每 key 只排一次（mediaRetriedKey 戳），死链回闩后不再自愈
+      // 每 key 至多两次（mediaRetriedKey 戳+计数），死链回闩后不再自愈。
+      // 重试戳 mediaStreamRetry：youtube URL 换绑 &retry=1——服务端闸控
+      // 判定缓存可能误判（SABR 探测无定论按未闸放行），重试旁路缓存读
+      // 强制重探拿新候选，不是重放同一条死链；bili/file 链无判定缓存，
+      // 计数不影响 URL，重挂本身即服务端重解
       if (mediaRetriedKey !== mediaVideoKey.value) {
         mediaRetriedKey = mediaVideoKey.value
+        mediaRetryN = 0
+      }
+      if (mediaRetryN < 2) {
+        mediaRetryN++
         clearTimeout(mediaRetryTimer)
         mediaRetryTimer = setTimeout(() => {
           if (mediaVideoFailed.value && mediaRetriedKey === mediaVideoKey.value) {
+            mediaStreamRetry.value++
             mediaVideoFailed.value = false
           }
         }, 10000)

@@ -70,17 +70,24 @@ test('探测 2xx → gated=false：自适应直解，合流拼尾，VISIONOS 不
   assert.equal(r.gated, false);
   assert.deepEqual(r.streams.map(s => s.url), [GV('a-x'), GV('p-x')]);
   assert.equal(fetchPlayerWithCalls.length, 0);
-  assert.equal(fetchStreamCalls.length, 1);                    // 探测一发
-  // 探测目标 = 同 kind 最大 contentLength 的自适应流；窗位 2MiB 处
-  assert.equal(fetchStreamCalls[0][0], GV('a-x'));
-  assert.equal(fetchStreamCalls[0][1].headers.Range, 'bytes=2097152-2098175');
+  // 探测两发：与客户端首请求同形的无界 bytes=0-，通了再补 ~90% 深处
+  // 无界探针（= 客户端 seek 真实形态）抓「头放行深位拒」
+  assert.equal(fetchStreamCalls.length, 2);
+  assert.equal(fetchStreamCalls[0][0], GV('a-x'));             // 探测目标 = 下发首链
+  assert.equal(fetchStreamCalls[0][1].headers.Range, 'bytes=0-');
+  assert.equal(fetchStreamCalls[1][0], GV('a-x'));
+  assert.equal(fetchStreamCalls[1][1].headers.Range, 'bytes=4500000-');  // 5MB×0.9
 });
 
-test('探测 403 → gated=true：VISIONOS 重解，候选整批换新签名', async () => {
+test('探测 403 → gated=true：VISIONOS 重解并复验，候选整批换新签名', async () => {
   reset();
   const resolve = freshResolve();
   fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('old')], fm: [progF('old')] }) });
-  fetchStreamImpl = async () => { throw errStatus(403); };
+  // 原批闸控、VISIONOS 新批畅通（新签名批的闸态与原批无继承关系）
+  fetchStreamImpl = async (url) => {
+    if (url.includes('-old')) throw errStatus(403);
+    return { data: { destroy() {} } };
+  };
   fetchPlayerWithImpl = async () => ({
     streamingData: sd({ ad: [audioF('new')], fm: [progF('new')] })
   });
@@ -89,6 +96,8 @@ test('探测 403 → gated=true：VISIONOS 重解，候选整批换新签名', a
   assert.deepEqual(fetchPlayerWithCalls.map(c => c[2]), ['VISIONOS']);
   // VISIONOS 批自适应提首（不受闸的新签名），其合流档随批拼尾
   assert.deepEqual(r.streams.map(s => s.url), [GV('a-new'), GV('p-new')]);
+  // 三发：原批首探 403 一发即走 + 新批复验头/深两发
+  assert.equal(fetchStreamCalls.length, 3);
 });
 
 test('探测 403 + VISIONOS 失败 → deadAdaptive：已证死链押尾，合流提首', async () => {
@@ -104,14 +113,49 @@ test('探测 403 + VISIONOS 失败 → deadAdaptive：已证死链押尾，合�
   assert.deepEqual(r.streams.map(s => s.url), [GV('p-old'), GV('a-old')]);
 });
 
+test('VISIONOS 批复验亦 403 → deadAdaptive：新批合流提首，死批押尾', async () => {
+  reset();
+  const resolve = freshResolve();
+  fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('old')], fm: [progF('old')] }) });
+  fetchStreamImpl = async () => { throw errStatus(403); };     // 两批皆闸
+  fetchPlayerWithImpl = async () => ({
+    streamingData: sd({ ad: [audioF('new')], fm: [progF('new')] })
+  });
+  const r = await resolve('vid00000004a', { kind: 'audio' });
+  // 新批复验坐实死批——streams[0] 须是新批合流而非已证 403 的新批自适应
+  assert.equal(r.streams[0].url, GV('p-new'));
+  assert.deepEqual(r.streams.map(s => s.url), [GV('p-new'), GV('a-new')]);
+  assert.equal(fetchStreamCalls.length, 2);                    // 首探+复验各一发 403
+});
+
 test('VISIONOS 批不回 formats → progressive 跨批结转原批兜底', async () => {
   reset();
   const resolve = freshResolve();
   fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('old')], fm: [progF('old')] }) });
-  fetchStreamImpl = async () => { throw errStatus(403); };
+  fetchStreamImpl = async (url) => {
+    if (url.includes('-old')) throw errStatus(403);
+    return { data: { destroy() {} } };
+  };
   fetchPlayerWithImpl = async () => ({ streamingData: sd({ ad: [audioF('new')], fm: [] }) });
   const r = await resolve('vid00000004', { kind: 'audio' });
   assert.deepEqual(r.streams.map(s => s.url), [GV('a-new'), GV('p-old')]);
+});
+
+test('头通深拒的窗口闸：bytes=0- 放行 + 深位 403 同样判闸', async () => {
+  reset();
+  const resolve = freshResolve();
+  fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('old')], fm: [progF('old')] }) });
+  // 首探放行、深探拒——SABR 放行窗的另一形态（2MiB 有界旧指纹必假阴）
+  fetchStreamImpl = async (url, opts) => {
+    if (opts?.headers?.Range === 'bytes=0-' && !url.includes('-new')) {
+      return { data: { destroy() {} } };
+    }
+    throw errStatus(403);
+  };
+  fetchPlayerWithImpl = async () => ({ streamingData: sd({ ad: [audioF('new')] }) });
+  const r = await resolve('vid00000004b', { kind: 'audio' });
+  assert.equal(r.gated, true);
+  assert.equal(fetchPlayerWithCalls.length, 1);
 });
 
 test('探测无定论（超时/5xx/网络错）→ gated=null 且不写缓存，次次重探', async () => {
@@ -136,7 +180,7 @@ test('416 → gated=false：探针越过 EOF 恰证 Range 通道畅通，且判�
   const r = await resolve('vid00000006', { kind: 'audio' });
   assert.equal(r.gated, false);
   await resolve('vid00000006', { kind: 'audio' });
-  assert.equal(fetchStreamCalls.length, 1);   // false 是确定性判定——同样缓存 30min
+  assert.equal(fetchStreamCalls.length, 2);   // 头/深两探；false 确定性判定同样缓存 30min
 });
 
 test('判定缓存命中免重探；TTL 过期重探', async () => {
@@ -147,8 +191,11 @@ test('判定缓存命中免重探；TTL 过期重探', async () => {
   fetchPlayerWithImpl = async () => ({ streamingData: sd({ ad: [audioF('v')] }) });
   const r1 = await resolve('vid00000007', { kind: 'audio' });
   assert.equal(r1.streams[0].url, GV('a-v'));
+  // r1 = 首探 403 + VISIONOS 复验 403 两发（新批每次重解必验——新签名批
+  // 的闸态与原批无继承关系，缓存命中只免原批探测）
+  assert.equal(fetchStreamCalls.length, 2);
   const r2 = await resolve('vid00000007', { kind: 'audio' });
-  assert.equal(fetchStreamCalls.length, 1);          // 缓存命中——探测只打一发
+  assert.equal(fetchStreamCalls.length, 3);          // 命中免首探，复验照打
   // 命中的是"已闸"判定而非直接返原批：VISIONOS 升级链必须照样走
   assert.equal(fetchPlayerWithCalls.length, 2);
   assert.equal(r2.streams[0].url, GV('a-v'));
@@ -157,25 +204,55 @@ test('判定缓存命中免重探；TTL 过期重探', async () => {
   try {
     Date.now = () => realNow() + 31 * 60e3;
     await resolve('vid00000007', { kind: 'audio' });
-    assert.equal(fetchStreamCalls.length, 2);
+    assert.equal(fetchStreamCalls.length, 5);        // 重探+复验
   } finally { Date.now = realNow; }
 });
 
-test('abort 穿透不写缓存：调用方断连的探测结果不得落 30min 判定', async () => {
+test('skipCache 旁路判定缓存读：重试路径强制重探，新判定照常回写', async () => {
   reset();
   const resolve = freshResolve();
   fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('x')] }) });
-  fetchStreamImpl = async (url, opts) => {
-    if (opts?.signal?.aborted) { const e = new Error('canceled'); e.aborted = true; throw e; }
-    return { data: { destroy() {} } };
-  };
+  await resolve('vid00000007a', { kind: 'audio' });
+  assert.equal(fetchStreamCalls.length, 2);                    // 头+深探写缓存
+  await resolve('vid00000007a', { kind: 'audio' });
+  assert.equal(fetchStreamCalls.length, 2);                    // 命中免探
+  // ?retry=1 的服务端落点——判定缓存可能误判，重试必须真探而非吃旧判定
+  await resolve('vid00000007a', { kind: 'audio', skipCache: true });
+  assert.equal(fetchStreamCalls.length, 4);
+  await resolve('vid00000007a', { kind: 'audio' });
+  assert.equal(fetchStreamCalls.length, 4);                    // 新判定回写后照常命中
+});
+
+test('abort 的调用方不污染共享探测——诚实完成的判定照常写缓存', async () => {
+  reset();
+  const resolve = freshResolve();
+  fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('x')] }) });
   const ctl = new AbortController();
   ctl.abort();
+  // 共享探测不带调用方 signal：断连方自查 signal 抛错，但探测本身诚实
+  // 跑完——不再被 abort 吞成无定论，写完的判定可被后来者直接复用
   await assert.rejects(() => resolve('vid00000008', { kind: 'audio', signal: ctl.signal }));
-  // 未写入缓存——干净 signal 重resolve真探测（否则断连污染成"未闸"30min）
+  assert.equal(fetchStreamCalls.length, 2);                    // 头+深探已完成
   const r = await resolve('vid00000008', { kind: 'audio' });
   assert.equal(r.gated, false);
-  assert.equal(fetchStreamCalls.length, 2);
+  assert.equal(fetchStreamCalls.length, 2);                    // 缓存命中零新探
+});
+
+test('同 (videoId,kind) 并发 resolve 共享在途探测（单飞）', async () => {
+  reset();
+  const resolve = freshResolve();
+  fetchPlayerImpl = async () => ({ streamingData: sd({ ad: [audioF('x')] }) });
+  fetchStreamImpl = async () => {
+    await new Promise(r => setTimeout(r, 5));   // 拉开在途窗口让第二家能搭上
+    return { data: { destroy() {} } };
+  };
+  const [r1, r2] = await Promise.all([
+    resolve('vid00000008a', { kind: 'audio' }),
+    resolve('vid00000008a', { kind: 'audio' }),
+  ]);
+  assert.equal(r1.gated, false);
+  assert.equal(r2.gated, false);
+  assert.equal(fetchStreamCalls.length, 2);                    // 一次探测两家搭车
 });
 
 test('gateCache LRU：命中刷新排序，满容淘汰真最旧而非最近活跃项', async () => {
@@ -185,40 +262,68 @@ test('gateCache LRU：命中刷新排序，满容淘汰真最旧而非最近活�
   fetchStreamImpl = async () => { throw errStatus(403); };
   fetchPlayerWithImpl = async () => ({ streamingData: sd({ ad: [audioF('v')] }) });
   const vid = (i) => `vid${String(i).padStart(8, '0')}`;
-  // 填满 512 容量——v0 最早插入
+  // 填满 512 容量——v0 最早插入；全 403 桩下每趟未命中 resolve =
+  // 首探+VISIONOS 复验两发，缓存命中 = 复验一发
   for (let i = 0; i < 512; i++) await resolve(vid(i), { kind: 'audio' });
   const probesAtFill = fetchStreamCalls.length;
   // v0 命中 + LRU touch 挪尾；此时插入序最旧的是 v1
   await resolve(vid(0), { kind: 'audio' });
-  assert.equal(fetchStreamCalls.length, probesAtFill);        // 命中免探
+  assert.equal(fetchStreamCalls.length, probesAtFill + 1);    // 命中免首探，复验一发
   // 新增 v512 → 淘汰最旧 = v1（v0 已 touch 到尾）；v0/v512 入缓存
   await resolve(vid(512), { kind: 'audio' });
-  assert.equal(fetchStreamCalls.length, probesAtFill + 1);
-  // 逐步断言淘的是谁——v0（刚 touch 过）仍命中零探测；v1 被淘重探。
+  assert.equal(fetchStreamCalls.length, probesAtFill + 3);    // 首探+复验
+  // 逐步断言淘的是谁——v0（刚 touch 过）仍命中免首探；v1 被淘重探。
   // 若实现无 touch，v0 才是淘汰受害者——这两步的计数区分得出
   await resolve(vid(0), { kind: 'audio' });
-  assert.equal(fetchStreamCalls.length, probesAtFill + 1);    // v0 仍命中
+  assert.equal(fetchStreamCalls.length, probesAtFill + 4);    // v0 复验一发
   await resolve(vid(1), { kind: 'audio' });
-  assert.equal(fetchStreamCalls.length, probesAtFill + 2);    // v1 重探
+  assert.equal(fetchStreamCalls.length, probesAtFill + 6);    // v1 重探+复验
 });
 
-test('探测目标限同 kind 最大档：video/audio 各自过滤 + contentLength 最大', async () => {
+test('探测目标 = 下发首链（排序头名），gateCache 键带 kind 互不串判', async () => {
   reset();
   const resolve = freshResolve();
-  // 混合批次：audio 小档 + audio 大档 + video 大档——kind=audio 必须探最大 audio
+  // 混合批：低码率巨档先行 + 低像素巨档先行——探测必须按下发序取首链
+  // 而非数组序/contentLength 最大档（旧口径探永不下发的 vp9 巨档假阴）
   fetchPlayerImpl = async () => ({
     streamingData: sd({
-      ad: [audioF('small', { len: '900000' }), audioF('big', { len: '9000000' }), videoF('v', { len: '99999999' })],
+      ad: [
+        audioF('alo', { len: '90000000', br: 70000 }),   // 巨但码率低——非首链
+        audioF('ahi', { len: '5000000', br: 130000 }),   // audio 排序头名
+        videoF('vlo', { len: '99999999', h: 360 }),      // 巨但像素低
+        videoF('vhi', { len: '8000000', h: 1080 }),      // video 排序头名
+      ],
     })
   });
+  const r = await resolve('vid00000009', { kind: 'audio' });
+  assert.equal(fetchStreamCalls[0][0], GV('a-ahi'));     // 探的即 streams[0]
+  assert.equal(r.streams[0].url, GV('a-ahi'));
+  assert.equal(fetchStreamCalls[1][1].headers.Range, 'bytes=4500000-'); // 5MB×0.9
+  // kind 分键：同 videoId 换 kind 不复用判定——音视频探测目标本就不同，
+  // 共键会让一边的假判串到另一边
+  await resolve('vid00000009', { kind: 'video' });
+  assert.equal(fetchStreamCalls[2][0], GV('v-vhi'));
+  assert.equal(fetchStreamCalls[3][1].headers.Range, 'bytes=7200000-'); // 8MB×0.9
+  // 两键各自缓存——再来一轮零新探测
   await resolve('vid00000009', { kind: 'audio' });
-  assert.equal(fetchStreamCalls.at(-1)[0], GV('a-big'));       // 不探 video 档
-  fetchStreamCalls = [];
-  await resolve('vid00000009', { kind: 'audio' });             // 复用缓存无新探测
-  assert.equal(fetchStreamCalls.length, 0);
-  // kind=video 探最大 video 档（缓存键按 videoId 共享——闸控是视频级签名策略）
-  await resolve('vid00000010', { kind: 'video' });
-  assert.equal(fetchStreamCalls.at(-1)[0], GV('v-v'));         // video kind 只探 video/ 流
+  await resolve('vid00000009', { kind: 'video' });
+  assert.equal(fetchStreamCalls.length, 4);
+});
+
+test('下发首链是合流档时退回批次签名代表：同 kind 最大自适应档', async () => {
+  reset();
+  const resolve = freshResolve();
+  // video kind 批内无 avc1（只有 vp9）——pickStreamList 回落合流；探合流
+  // 无信息量（合流签名批不被闸），退回 video/ 最大自适应档作批代表
+  fetchPlayerImpl = async () => ({
+    streamingData: sd({
+      ad: [{ url: GV('vp9'), mimeType: 'video/webm; codecs="vp09.00.40.08"', bitrate: 2e6, contentLength: '99999999', height: 720, width: 1280 }],
+      fm: [progF('x')],
+    })
+  });
+  await resolve('vid00000010a', { kind: 'video' });
+  assert.equal(fetchStreamCalls[0][0], GV('vp9'));       // 批代表兜底
+  assert.equal(fetchStreamCalls[0][1].headers.Range, 'bytes=0-');
 });
 
 test('白名单外 url 不进候选链也不当探测目标', async () => {
@@ -231,7 +336,7 @@ test('白名单外 url 不进候选链也不当探测目标', async () => {
     })
   });
   const r = await resolve('vid00000011', { kind: 'audio' });
-  assert.equal(fetchStreamCalls.at(-1)[0], GV('a-ok'));        // 探测目标跳过非白名单
+  assert.equal(fetchStreamCalls[0][0], GV('a-ok'));      // 探测目标跳过非白名单
   assert.deepEqual(r.streams.map(s => s.url), [GV('a-ok'), GV('p-ok')]);
 });
 

@@ -171,12 +171,13 @@ async function resolve(info, { signal, purpose } = {}) {
             upsertVerdict(unlockVkey(info.id, pickedId), 'unlock', 1, cleanField(cand.title));
           } catch { /* verdict 落库失败不阻塞解锁 */ }
         }
-        // 整条候选链透出：探测无定论（gated=null）但实际被闸时首链仍
-        // 可能死——下游 vault 逐链 mint，代理侧试到活档钉位，合流尾档
-        // 兜底（与 /stream 同权，不再押注单链）
+        // 回链单实体：跨码率/编码的候选是不同字节文件，混排换档会把同一
+        // offset 的另一文件字节拼给代理/下载器（bilibili 同字节镜像先例的
+        // 反面）——只下发首链；排序语义已保证首链即最优活档（闸控判定的
+        // deadAdaptive 场景合流在首）。死档由上游重试触发重解
         return {
           url: head.url,
-          urls: streams.map(s => s.url),
+          urls: [head.url],
           br: head.br,
           durationSec: cand.durationSec
         };

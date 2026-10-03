@@ -191,10 +191,13 @@ async function fetchCandidate(c, firstUrl) {
   return { kind: 'reject', send: () => c.json({ code: 502, message: 'too many redirects' }, 502) };
 }
 
-// 候选链调度：vault 条目可挂多候选（YouTube 自适应流被 SABR 闸控时 progressive
-// 合流档在链尾兜底）。从上次成功位 idx 起绕行一圈：单候选条目行为与旧版
-// 逐跳管线完全一致；多候选时 4xx/断连换下一档，成功后把 idx 钉住，
-// seek 的后续 Range 直吃可用档不再白探死链
+// 候选链调度：vault 条目可挂多候选——契约是「同一字节实体的镜像」
+//（bilibili 的 baseUrl/backup_url 组），跨分辨率/编码的不同文件混排会让
+// 换档把同一 offset 的另一文件字节当答案回给客户端（静默解码错乱）——
+// 生产侧（routes/youtube、bilibili 档选择、unlock）负责只 mint 同实体候选。
+// 从上次成功位 idx 起绕行一圈：单候选条目行为与旧版逐跳管线完全一致；
+// 多候选时 4xx/断连换下一镜像，成功后把 idx 钉住，seek 的后续 Range 直吃
+// 可用镜像不再白探死链
 async function proxyUpstream(c, entry) {
   const urls = entry.urls;
   const start = Math.min(entry.idx || 0, urls.length - 1);

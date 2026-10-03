@@ -6,36 +6,58 @@ const { fetchPlayer, fetchPlayerWith, pickStreamList } = require('../lib/youtube
 const { fetchStream } = require('./download-io');
 const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
 
-// 「SABR 闸控」探测缓存：videoId → {gated, ts}。自适应流被闸时签名批
-// 寿命 ~6h，探测结果缓存 30min 同量级——连播/重试不重复白打上游
+// 「SABR 闸控」探测缓存：`${videoId}:${kind}` → {gated, ts}。自适应流被闸
+// 时签名批寿命 ~6h，探测结果缓存 30min 同量级——连播/重试不重复白打上游。
+// 键带 kind：同曲音/视频 resolve 并发且探测目标不同（音轨≠视轨），共键
+// 会让后落地的假阴覆盖先到的真阳——实测 video 假阴就把整曲钉错 30min
 const GATE_TTL_MS = 30 * 60e3;
 const GATE_CACHE_MAX = 512;
 const gateCache = new Map();
+// 同键探测单飞：播放管线里 audio/video 两个 resolve 几乎并发，不共享在途
+// 探测会各探各写互踩（visitorDataInflight 同款先例）
+const probeInflight = new Map();
 
-// 闸控指纹：自适应流首段窗内的 Range 放行、窗外有界 Range 一律 403、全量
-// GET 同拒。窗口不是精确 1MiB——实测紧贴 1MiB 边界的 1KiB 探测会假阴，
-// 2MiB 深处才稳定 403。返回三态：false=未闸（2xx/416），true=闸控（403），
+// 闸控指纹：闸控签名批对「无界 Range」一律 403——bytes=0- 正是 Chrome 媒体
+// 元素的首请求形态（客户端不带 Range 时代理侧也注入同形），即用户实际
+// 可见的指纹。旧指纹探 2MiB 有界窗——闸控放行窗按时长计而非定长，高码率
+// 视频档 2MiB 必在窗内，是系统性假阴（实测 itag299 放行 ~64MB）。
+// 主探 bytes=0-；通了再补一发 ~90% 深处无界探针（= 客户端 seek/续播的
+// 真实请求形态）抓「头放行深位拒」的另一半。
+// 三态：false=未闸（两探皆过或探针越 EOF 416），true=闸控（任一 403），
 // null=无定论（超时/5xx/白名单外——不写缓存，逐请求退化照常走兜底链）。
-// abort 穿透不写缓存：断连被吞成"未闸"会污染 30min 判定
-async function probeGated(url, signal) {
+// 对 googlevideo 恒发带 Range 的 GET——裸 HEAD/无 Range 探测会毒化该 URL
+// 的后续请求（上游按请求形态记账），探测形状因此与客户端同形。
+// 共享探测不带调用方 signal：断连方的 await 侧自查 signal 抛错，探测本身
+// 诚实跑完再写缓存——被 abort 吞成无定论会拒绝写缓存逐请求退化白打上游
+async function probeGated(url, contentLength, signal) {
   const checked = normalizeOutboundUrl(url);
   if (!checked.ok || !isAllowedHost(checked.url.hostname)) return null;
-  try {
-    const resp = await fetchStream(url, {
-      timeout: 10000, signal,
-      headers: { Range: 'bytes=2097152-2098175' }
-    });
-    resp.data.destroy();
-    return false;
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    // 按机读状态码判（fetchStream 在 err.upstreamStatus 上挂的）——
-    // 403=闸控；416=探针越过 EOF 但 Range 通道畅通，恰证明未闸（短文件
-    // 场景），归 null 会让短流每次请求都白打探测
-    if (e?.upstreamStatus === 403) return true;
-    if (e?.upstreamStatus === 416) return false;
-    return null;
-  }
+  const tryRange = async (range) => {
+    try {
+      const resp = await fetchStream(url, {
+        timeout: 6000, signal,
+        headers: { Range: range }
+      });
+      resp.data.destroy();
+      return 'ok';
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      // 按机读状态码判（fetchStream 在 err.upstreamStatus 上挂的）——
+      // 403=闸控；416=探针越过 EOF 但 Range 通道畅通，恰证明未闸
+      // （小文件深位探测会撞上），归 null 会让短流每次请求都白打探测
+      if (e?.upstreamStatus === 403) return 'gated';
+      if (e?.upstreamStatus === 416) return 'ok';
+      return null;
+    }
+  };
+  const head = await tryRange('bytes=0-');
+  if (head !== 'ok') return head === 'gated' ? true : null;
+  const cl = parseInt(contentLength) || 0;
+  if (!cl) return false;   // 不知总长无法选深位——头探已过按未闸
+  const deep = await tryRange(`bytes=${Math.floor(cl * 0.9)}-`);
+  if (deep === 'gated') return true;
+  // 头通+深位无定论：「全程畅通」没证完，不给未闸背书
+  return deep === 'ok' ? false : null;
 }
 
 // formats 里的 progressive mp4 合流档——闸控视频唯一确定能拉全的形态，
@@ -53,11 +75,11 @@ function pickProgressiveMp4(sd) {
  * @returns {Promise<{streams: Array<{url: string, mimeType: string, br: number|null}>, gated: boolean|null}>}
  *   streams 已过代理白名单预筛且按 url 去重；progressive 档 br 一律 null
  *   （容器总码率不能当音轨码率报，会污染下游时长对账）。
- *   排序语义：正常/无定论 → [自适应…, 合流…]；闸控且 VISIONOS 重解失败 →
- *   [合流…, 已证 403 的自适应…]——死链押尾让单 URL 消费方（unlock 取
- *   首位）拿到的是真活链，代理逐试场景也少打空炮。
+ *   排序语义：正常/无定论 → [自适应…, 合流…]；闸控且 VISIONOS 重解/复验
+ *   失败 → [合流…, 已证 403 的自适应…]——消费方只取首链（跨字节实体
+ *   不能混排换档），死链押尾让首链恒是最优活档。
  */
-async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', signal } = {}) {
+async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', signal, skipCache = false } = {}) {
   let sd = (await fetchPlayer(videoId, signal)).streamingData;
   let adaptive = pickStreamList(sd, kind, prefer);
   // progressive 合流档是闸控视频的保底命——无条件拼链尾；audio kind
@@ -68,37 +90,66 @@ async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', sig
   // 同一批自适应流它签的 URL 完全不受限，能放回真最高档（实测 itag251
   // 全量 200）。只有确定性判定（2xx/403/416）才写缓存——超时/断连等
   // 无定论结果落缓存会把一次抖动放大成 30min 的误判。
-  // 探测目标限定自适应流：pickStreamList('video') 在缺 avc1 时会回落
-  // progressive——那恰是闸控下畅通的物料，探它只能得假阴。
-  // 且必须挑够长的流（最大 contentLength）：小档全长可能 < 探针起点
-  // 2MiB，越界得 416 会被误判成「未闸」（实测 itag139 全长 ~1.5MB）
-  const probeTarget = (Array.isArray(sd?.adaptiveFormats) ? sd.adaptiveFormats : [])
-    .filter(f => typeof f?.url === 'string' && f.url
-      && (f.mimeType || '').startsWith(kind === 'video' ? 'video/' : 'audio/'))
-    .sort((a, b) => (parseInt(b.contentLength) || 0) - (parseInt(a.contentLength) || 0))
-    .map(f => f.url)
-    .find(u => {
-      const chk = normalizeOutboundUrl(u);
+  // 探测目标 = 实际将下发的首个自适应候选（pickStreamList 排序头名过
+  // 白名单预筛）——探测对象必须与下发对象同一：旧口径取 contentLength
+  // 最大条目，kind=video 时探的是永不下发的 vp9 巨档（放行窗按文件时长
+  // 计，巨档窗口必含探针点），系统性假阴把整批判成未闸→死链下发→
+  // 换档糊片。
+  // 下发链无可服务自适应（缺 avc1 回落合流）时退回旧口径作批次签名
+  // 代表：探合流无信息量（合流签名批本就不被闸，恒放行=假阴），而同
+  // kind 自适应档能证明「这批签名被闸」→ VISIONOS 重解可能给出可服务
+  // 自适应；取 contentLength 最大者窗口最窄、403 最确证
+  const probeTargetOf = (fmts, sdData) => {
+    const progUrls = new Set(pickProgressiveMp4(sdData).map(f => f.url));
+    const served = (fmts || []).find(f => {
+      if (progUrls.has(f?.url)) return false;      // 合流壳不探——恒放行
+      if (typeof f?.url !== 'string' || !f.url) return false;
+      const chk = normalizeOutboundUrl(f.url);
       return chk.ok && isAllowedHost(chk.url.hostname);
     });
+    if (served) return served;
+    return (Array.isArray(sdData?.adaptiveFormats) ? sdData.adaptiveFormats : [])
+      .filter(f => typeof f?.url === 'string' && f.url
+        && (f.mimeType || '').startsWith(kind === 'video' ? 'video/' : 'audio/')
+        && (parseInt(f.contentLength) || 0) > 0)
+      .sort((a, b) => (parseInt(b.contentLength) || 0) - (parseInt(a.contentLength) || 0))
+      .find(f => {
+        const chk = normalizeOutboundUrl(f.url);
+        return chk.ok && isAllowedHost(chk.url.hostname);
+      });
+  };
+  const gateKey = `${videoId}:${kind}`;
+  const gate = skipCache ? null : gateCache.get(gateKey);
   let gated = null;
-  const gate = gateCache.get(videoId);
   if (gate && Date.now() - gate.ts <= GATE_TTL_MS) {
     gated = gate.gated;
     // LRU touch：命中挪尾——满容淘汰按插入序删头，不刷新会让
     // 高频热播视频的旧判定先被挤掉（stream-vault resolve 同款）
-    gateCache.delete(videoId);
-    gateCache.set(videoId, gate);
-  } else if (probeTarget) {
-    gated = await probeGated(probeTarget, signal);
-    if (gated !== null) {
-      // 陈旧键覆盖前先删——Map.set 对已存在 key 保留原插入位，不删会让
-      // 刷新后的热判定仍排在旧位置被满容淘汰先挤掉（与命中 touch 同口径）
-      gateCache.delete(videoId);
-      if (gateCache.size >= GATE_CACHE_MAX) {
-        gateCache.delete(gateCache.keys().next().value);
+    gateCache.delete(gateKey);
+    gateCache.set(gateKey, gate);
+  } else {
+    const target = probeTargetOf(adaptive, sd);
+    if (target) {
+      // 同键探测单飞：audio/video resolve 几乎并发，各探各写会互踩；
+      // 共享探测不带首调用方 signal——abort 穿透不污染缓存的语义靠各
+      // 等待方自查 signal 保住（visitorDataInflight 同款先例）
+      if (!probeInflight.has(gateKey)) {
+        probeInflight.set(gateKey, (async () => {
+          const g = await probeGated(target.url, target.contentLength, null);
+          if (g !== null) {
+            // 陈旧键覆盖前先删——Map.set 对已存在 key 保留原插入位，不删
+            // 会让刷新后的热判定仍排在旧位置被满容淘汰先挤掉
+            gateCache.delete(gateKey);
+            if (gateCache.size >= GATE_CACHE_MAX) {
+              gateCache.delete(gateCache.keys().next().value);
+            }
+            gateCache.set(gateKey, { gated: g, ts: Date.now() });
+          }
+          return g;
+        })().finally(() => probeInflight.delete(gateKey)));
       }
-      gateCache.set(videoId, { gated, ts: Date.now() });
+      gated = await probeInflight.get(gateKey);
+      if (signal?.aborted) throw new Error('aborted');
     }
   }
 
@@ -114,6 +165,13 @@ async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', sig
         // progressive 跨批结转：VISIONOS 不一定回 formats——保住原批
         // 合流兜底档，别因换客户端丢掉最后的活路（fd progressiveCarry 同款）
         if (prog.length) progressive = prog;
+        // 复验：新批签名同样可能被闸——将下发的首链再过同款探针；坐实
+        // 403 按死批处理让合流提首，无定论/通过都保留新批（它已是最好
+        // 的牌）。每趟重解必验：新签名批的闸态与原批无继承关系
+        const nv = probeTargetOf(adaptive, sd);
+        if (nv && (await probeGated(nv.url, nv.contentLength, signal)) === true) {
+          deadAdaptive = true;
+        }
       }
     } catch (e) {
       // VISIONOS 也拿不到就用原批——链尾合流档照样能播；abort 穿透。
@@ -125,7 +183,9 @@ async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', sig
   }
 
   // 候选回链逐个过代理白名单——signatureCipher 跳过、非 googlevideo
-  // 域拒；整条链随 token/返回值下发，代理/调用方试到第一个能通的档
+  // 域拒。消费方只取 streams[0]（跨分辨率/编码的候选是不同字节文件，
+  // 混排换档会把同一 offset 的另一文件字节拼给客户端——/stream 与解锁
+  // 链都只 mint 首链）；排序语义因此就是活链语义：首链即最优活档
   const seen = new Set();
   // pickStreamList('video') 在批内无 avc1 时会把 progressive mp4 从 adaptive
   // 通道送回——按 url 属集补判 prog，否则合流档被标 false、br 拿容器总

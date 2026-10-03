@@ -521,8 +521,10 @@ export function usePlayer({
             ? { url: fileArtifactUrl(song.id) }
             : song.bilibili
             ? { url: musicApi.bilibiliStreamUrl(song.bilibili.bvid, 'audio', song.bilibili.cid, song.bilibili.page) }
+            // _streamRetried 重试带 retry=1：旁路服务端闸控判定缓存读
+            // （30min 判定可能误判），强制重探拿新候选而非重放死链
             : song.youtube
-              ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio') }
+              ? { url: musicApi.youtubeStreamUrl(song.youtube.videoId, 'audio', '', options._streamRetried ? 1 : 0) }
               : song.qq
                 ? { url: musicApi.qqStreamUrl(song.qq.mid, '', song.qq.mediaMid) }
                 : await musicApi.getSongUrl(song.id, abortSignal)

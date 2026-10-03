@@ -226,6 +226,18 @@ function listTasksByStatus(status) {
   return rows.map(mapTaskRow);
 }
 
+// 同一曲跨歌单各有一行（(playlist_id, song_id) 唯一）——播放入口不总带
+// 歌单上下文，按曲找下载档需要全表视角
+function listTasksBySongId(songId) {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT * FROM download_tasks
+    WHERE song_id = ?
+    ORDER BY id ASC
+  `).all(songId);
+  return rows.map(mapTaskRow);
+}
+
 function deleteTask(id) {
   const db = getDb();
   db.prepare('DELETE FROM download_tasks WHERE id = ?').run(id);
@@ -273,6 +285,7 @@ module.exports = {
   listStandaloneTasksByPlaylist,
   listTasksByQueue,
   listTasksByStatus,
+  listTasksBySongId,
   deleteTask,
   findAnyTaskByPlaylistAndSongId,
   countTasksByQueueAndStatus

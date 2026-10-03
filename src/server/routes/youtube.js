@@ -262,19 +262,24 @@ app.get('/youtube/stream', async (c) => {
   try {
     // 闸控感知解析下沉 services/youtube-resolve.js：探测/VISIONOS 升级/
     // progressive 结转/白名单去重一份实现，解锁链共用同一判定
+    // skipCache（?retry=1）：前端重试时旁路 gateCache 读——缓存的误判
+    // 不再把第二次请求钉死在同一个错误判定上（缓存仍照常写入新判定）
     const { streams } = await resolveYoutubeStreams(videoId, {
-      kind, prefer: c.req.query('prefer'), signal: c.req.raw.signal
+      kind, prefer: c.req.query('prefer'), signal: c.req.raw.signal,
+      skipCache: c.req.query('retry') === '1'
     });
 
-    const urls = streams.map(s => s.url);
-    if (!urls.length) {
+    const head = streams[0];
+    if (!head) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
     // 探测/升级段的最后一个 await 与写响应之间仍可能断连——302 打死 socket
     // 前再查一次（与 /resolve 的 134 行同口径）
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
-    // vault token 化——googlevideo 链 ip= 即本机出口地址，不下发给访客
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(urls)}`, 302);
+    // vault 单实体：跨分辨率/编码的候选是不同字节文件，混排换档会把同一
+    // offset 的另一文件字节拼给客户端（bilibili 链同字节镜像先例的反面）——
+    // 只 mint 首链；次优档不是活链而是错位毒源。死档由前端重试触发重解
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(head.url)}`, 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] stream 失败:', e.message);

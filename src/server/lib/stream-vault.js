@@ -16,9 +16,10 @@ const SWEEP_INTERVAL_MS = 10 * 60e3;
 
 const vault = new Map(); // token -> { urls, idx, expiresAt, notAfter }
 
-// urlOrUrls 支持候选数组：部分 YouTube 视频的自适应流被 SABR 闸控
-// （只有 progressive 合流档可拉），代理侧逐个候选试到 2xx 为止并把 idx
-// 钉在成功位——后续 Range 直吃可用档，不再每跳白探一遍死链
+// urlOrUrls 支持候选数组——契约是「同一字节实体的镜像组」（bilibili 的
+// baseUrl/backup_url）：跨分辨率/编码的不同文件不能混排，代理换档会把
+// 同一 offset 的另一文件字节当答案回给客户端。代理侧逐个候选试到 2xx
+// 为止并把 idx 钉在成功位——后续 Range 直吃可用镜像，不再每跳白探死链
 function mint(urlOrUrls, { ttlMs = SLIDING_TTL_MS } = {}) {
   const token = randomBytes(24).toString('base64url');
   const now = Date.now();
