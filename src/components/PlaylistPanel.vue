@@ -105,8 +105,8 @@
             <button
               v-if="!isShareShell(playlist)"
               @click.stop="viewDownloadProgress(playlist)"
-              :disabled="downloadingIds.has(playlist.id)"
-              :title="downloadingIds.has(playlist.id) ? '队列创建中，稍候' : ''"
+              :disabled="downloadingIds.has(String(playlist.id))"
+              :title="downloadingIds.has(String(playlist.id)) ? '队列创建中，稍候' : ''"
               class="pg-menu-item"
               role="menuitem"
             >
