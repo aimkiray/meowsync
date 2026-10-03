@@ -285,6 +285,15 @@ export default {
     pointer-events: auto;
   }
 }
+/* 键盘露出栏内的光标一并归还——idle 的 *{cursor:none!important} 覆盖到
+   栏内子键，要靠更高特异度+!important 才能翻：露出 chrome 后鼠标悬停
+   不该无光标（不动鼠标的键盘用户无感，一动鼠标也会经 wake 自愈） */
+.fullscreen-player--idle .fullscreen-player__topbar:has(:focus-visible),
+.fullscreen-player--idle .fullscreen-player__topbar:has(:focus-visible) *,
+.fullscreen-player--idle .fullscreen-player__bottom:has(:focus-visible),
+.fullscreen-player--idle .fullscreen-player__bottom:has(:focus-visible) * {
+  cursor: auto !important;
+}
 @media (prefers-reduced-motion: reduce) {
   .fullscreen-player__topbar,
   .fullscreen-player__bottom,
@@ -525,10 +534,13 @@ export default {
 }
 
 /* 全局环是 currentColor——本页键色 white 落粉底上偏虚，换深色环
-   （box-shadow 晕环被 :407 的 none !important 剥光，只能走 outline 本身） */
+   （box-shadow 晕环被上方 !important 重置剥光，只能走 outline 本身）。
+   音量 range 同样待遇：它的环色是全局 --pixel-highlight 白 30%，而
+   range 恰是「焦点钉显」语义的依赖件——环不可见则钉显得不到解释 */
 .fullscreen-player__topbar-button:focus-visible,
 .fullscreen-player__control-button:focus-visible,
-.fullscreen-player__close:focus-visible {
+.fullscreen-player__close:focus-visible,
+.fullscreen-player__volume :deep(.jirai-slider:focus-visible) {
   outline-color: rgba(0, 0, 0, .85);
 }
 
