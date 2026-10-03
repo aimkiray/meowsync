@@ -471,6 +471,7 @@ export default {
        openMenuId,
        toggleMenu,
        closeMenu,
+       downloadingIds,
        openInNetease,
        copyShareLink,
        removePlaylist,
