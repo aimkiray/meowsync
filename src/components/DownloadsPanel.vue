@@ -212,18 +212,19 @@ const queuesGate = createReqGate()
 const tasksGate = createReqGate()
 const standaloneGate = createReqGate()
 
-// 深链预选（?view=downloads&pl=）：消费键是 pl::seq 对——同 pl+seq 的组合
-// 只预选一次，轮询不重抢用户手选；seq bump（再点查看进度）或换 pl 都可重发。
+// 深链预选（?view=downloads&pl=）：消费键是 pl::seq 对，用 Set 记账——
+// 历史回放会把 seq 倒带到旧值，单键记账会让"已结算的旧意图"漏过判重
+// 重新抢手选；seq bump（再点查看进度）产生新键，正常重发。
 // 焚毁先于匹配是真缺席防刷屏闸——但调用方必须喂"当时最新快照"
 // （watcher 路径走 loadQueues 现拉，不在陈旧 queues 上空判）
-let preselectConsumed = null
+const preselectConsumed = new Set()
 
 function applyPreselect(list) {
   const pl = props.preselectPlaylistId
   if (pl == null) return
   const consumeKey = `${String(pl)}::${props.preselectSeq}`
-  if (consumeKey === preselectConsumed) return
-  preselectConsumed = consumeKey
+  if (preselectConsumed.has(consumeKey)) return
+  preselectConsumed.add(consumeKey)
   const target = pickQueueForPlaylist(list, pl)
   if (!target) {
     // 该歌单没建过队列（或队列已级联清掉）——给用户一句交代而不是静默落地
@@ -233,7 +234,8 @@ function applyPreselect(list) {
   // 选中行可能被现有搜索/状态过滤藏掉——预选意图明确，清回全集
   queueSearch.value = ''
   queueStatusFilter.value = 'all'
-  selectQueue(target)
+  // 已在本队列上的重复点击不 reloadTasks——选中语义幂等，没必要清空重拉
+  if (target.id !== selectedQueue.value?.id) selectQueue(target)
 }
 
 async function loadQueues(options = {}) {
@@ -482,7 +484,8 @@ async function deleteQueue(queueId) {
     await loadQueues()
     // 级联连坐删同歌单兄弟队列——选中项落在同一歌单上即清，别等两轮缺席判定
     if (String(selectedQueue.value?.id) === String(queueId)
-        || (doomed?.playlistId != null && selectedQueue.value?.playlistId === doomed.playlistId)) {
+        || (doomed?.playlistId != null
+            && String(selectedQueue.value?.playlistId) === String(doomed.playlistId))) {
       selectionMissCount = 0 // 手动清选中同样要归零——loadQueues 内缺席计数会留下惰性 =1
       selectedQueue.value = null
       tasks.value = []
