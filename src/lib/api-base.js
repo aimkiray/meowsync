@@ -16,8 +16,10 @@ export function resolveApiBaseUrl() {
   // node --test 等无 DOM 环境：import.meta.env 为 undefined 且没有 window——
   // 返回空串让调用方产出同源相对 URL，lib 纯函数层才可被单测直调
   if (typeof window === 'undefined') return ''
-  const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
-  const envPort = String(import.meta.env.VITE_API_PORT ?? '').trim()
+  // import.meta.env 可空（有 window 但非 Vite 打包的环境——jsdom 测试件等），
+  // ?. 链到末位防 TypeError；Vite 构建期照常静态替换不受影响
+  const configuredBase = import.meta.env?.VITE_API_BASE_URL?.trim()
+  const envPort = String(import.meta.env?.VITE_API_PORT ?? '').trim()
   // 端口必须是合法 TCP 端口：非数字、0、>65535（new URL 直接抛错、请求必失败）都回退默认。
   // 默认 3101 = 开发环境 API 端口（Docker 生产是构建期 PROD → 走同源，不依赖此兜底）
   const fallbackPort = /^\d{1,5}$/.test(envPort) && Number(envPort) >= 1 && Number(envPort) <= 65535
@@ -85,21 +87,21 @@ export function resolveApiBaseUrl() {
   // 必须排除，否则 preview 模式下所有 API 请求打到静态服务器拿 HTML。
   // 收窄到 localhost：生产部署若恰好也跑在 3100（如 docker -p 3100:3002），
   // 远端访问不该被误判成 preview 而打到不存在的 3101
-  const vitePreviewPort = String(import.meta.env.VITE_PORT || '3100')
-  const isVitePreview = import.meta.env.PROD && pagePort === vitePreviewPort
+  const vitePreviewPort = String(import.meta.env?.VITE_PORT || '3100')
+  const isVitePreview = import.meta.env?.PROD && pagePort === vitePreviewPort
     && isLocalHost(window.location.hostname)
   if (isVitePreview) {
     console.warn(`[api] 检测到 vite preview（${window.location.origin}），API 推断为 ${fallbackPort} 端口；非 preview 部署请配置 VITE_API_BASE_URL`)
-  } else if (import.meta.env.PROD && pagePort === vitePreviewPort) {
+  } else if (import.meta.env?.PROD && pagePort === vitePreviewPort) {
     // 歧义场景无法静态区分：vite preview --host 的局域网访问 与 恰好跑在 3100 的
     // 生产部署。preview 时同源请求会拿到 index.html（200）被 axios 当成功解析——
     // 至少留告警便于定位；部署方请显式配置 VITE_API_BASE_URL 消除歧义
     console.warn(`[api] 页面端口 ${pagePort} 与 vite preview 端口相同：若这是 vite preview --host 的局域网访问，API 请求会打到静态服务器；若是生产部署请忽略（可用 VITE_API_BASE_URL 显式指定）`)
   }
   // 单进程部署/反代：生产构建产物与 API 同源——Docker 里没有 VITE_API_PORT，
-  // 用 import.meta.env.PROD 区分（构建产物恒为 PROD）。vite dev 没有任何 API
+  // 用 import.meta.env?.PROD 区分（构建产物恒为 PROD）。vite dev 没有任何 API
   // 代理，DEV 下同源只会把请求打到 dev server——开发环境永远走独立 API 端口
-  if (pageIsHttp && !isVitePreview && import.meta.env.PROD) {
+  if (pageIsHttp && !isVitePreview && import.meta.env?.PROD) {
     return window.location.origin
   }
   // 开发环境：vite 端口 + 独立 API 端口（默认 3101）

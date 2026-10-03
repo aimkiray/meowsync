@@ -14,8 +14,9 @@ export function httpsCover(url) {
 }
 
 // 输入谓词唯一真相源在 src/shared/predicates.js（服务端 require(ESM) 同消费）。
-// 此处 re-export 保持既有调用面不变
-export {
+// import + export 两段式保持既有调用面——export {x} from 'y' 不绑本地作用域，
+// 本文件函数体哪天用到这些名就会 ReferenceError（song.js 已踩过同款坑）
+import {
   SONGMID_RE,
   isSongmidLike,
   isNeteasePlaylist,
@@ -46,3 +47,34 @@ export {
   pickQqFromUrl,
   extractNeteaseSongId,
 } from '../shared/predicates.js';
+export {
+  SONGMID_RE,
+  isSongmidLike,
+  isNeteasePlaylist,
+  BVID_RE,
+  NETEASE_ID_RE,
+  NETEASE_ID_BOUNDED_RE,
+  QQ_SONG_ID_RE,
+  BV_TRACK_ID_RE,
+  YT_TRACK_ID_RE,
+  YT_ID_RE,
+  SINGLE_SONG_PREFIX,
+  SAVED_QUEUE_PREFIX,
+  LOCAL_PLAYLIST_PREFIX,
+  isLocalPlaylistId,
+  isEphemeralPlaylistId,
+  isSingleSongShellId,
+  isResolvableTrackId,
+  providerPlaylistShellId,
+  parseProviderShellId,
+  parseNumericId,
+  isBilibiliInput,
+  extractBiliFavlistId,
+  extractYouTubePlaylistId,
+  extractYouTubeId,
+  isYouTubeInput,
+  isQQInput,
+  extractQQPlaylistId,
+  pickQqFromUrl,
+  extractNeteaseSongId,
+};
