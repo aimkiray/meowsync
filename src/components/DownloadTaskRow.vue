@@ -52,6 +52,15 @@
       <div v-else-if="task.status === 'completed'" class="dtr-done">
         <PixelIcon name="check" :size="11" />下载完成喵
       </div>
+      <!-- standalone 行的删除入口：downloading 态服务端 409 拒删——
+           只在非进行中露出，失败路径也有错误 toast 兜底 -->
+      <div v-if="deletable && task.status !== 'downloading'" class="dtr-actions">
+        <button
+          class="ink-btn ink-btn--ghost ink-btn--sm dtr-del-btn"
+          :disabled="deleting"
+          @click="$emit('delete-task', task.id)"
+        >{{ deleting ? '删除中...' : '删除' }}</button>
+      </div>
     </div>
   </div>
 </template>
@@ -70,10 +79,20 @@ const props = defineProps({
   retryingTaskIds: {
     type: Array,
     default: () => []
+  },
+  // standalone 分节才开删除入口（队列任务生命周期归队列管，行级删除会
+  // 绕开调度器状态机）；deleting 由父级 deletingTaskIds 派生
+  deletable: {
+    type: Boolean,
+    default: false
+  },
+  deleting: {
+    type: Boolean,
+    default: false
   }
 })
 
-defineEmits(['retry-task'])
+defineEmits(['retry-task', 'delete-task'])
 
 // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底。
 // coverUrl 是上游 http 明文 CDN 地址：HTTPS 部署下被动混合内容
@@ -259,4 +278,17 @@ const videoFlagTitle = computed(() => {
 }
 
 .dtr-done svg { color: var(--accent-green); }
+
+/* standalone 删除动作行：与重试键同族 ghost 小钮 */
+.dtr-actions { margin-top: 8px; }
+
+.dtr-del-btn {
+  color: var(--accent-danger-ink);
+  border-color: var(--accent-danger-ink);
+}
+
+.dtr-del-btn:hover:not(:disabled) {
+  background: var(--accent-danger-ink);
+  color: var(--paper);
+}
 </style>

@@ -92,13 +92,13 @@
           title="添加 ?mode=host 启用远程控制"
         >remote: off</span>
 
-        <!-- 管理页面入口 -->
+        <!-- 下载页入口（与 toast「查看进度」/歌单菜单「下载进度」同视图） -->
         <button
           v-if="remoteMode === 'off'"
           @click="$emit('toggle-center-view')"
           class="ink-btn ink-btn--ghost topnav-action"
-          :title="isDownloadsView ? '返回歌曲列表' : '打开下载管理'"
-        >{{ isDownloadsView ? '歌曲' : '管理' }}</button>
+          :title="isDownloadsView ? '返回上一页' : '打开下载页'"
+        >{{ isDownloadsView ? '返回' : '下载' }}</button>
 
         <!-- 登录态：登出（会话作废服务端 session） -->
         <button

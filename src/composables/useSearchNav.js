@@ -43,6 +43,12 @@ export function useSearchNav({
   const initialView = urlParams.get('view')
   if (['songs', 'watch', 'downloads'].includes(initialView)) centerView.value = initialView
 
+  // downloads 深链预选意图（?view=downloads&pl=<侧栏歌单id>）：
+  // 必须此刻快照捕获——normalizeNavEntry 挂载期就会重建 URL，
+  // 等 DownloadsPanel 挂载再读 location 早已没有 pl。
+  // 此后只被「查看进度」导航与 popstate 回放更新，面板消费后自行一次性预选
+  const downloadsPl = ref(initialView === 'downloads' ? urlParams.get('pl') : null)
+
   // 导航 URL 构造：push 与初始化 normalize 共用，保证 pl 语义一致。
   // playlist 显式传入——调用处先 push 再 selectPlaylist，读 selectedPlaylist
   // 会记成"上一个"歌单（off-by-one 历史错位）
@@ -58,6 +64,10 @@ export function useSearchNav({
       !isLocalPlaylistId(playlist.id)
     ) {
       url.searchParams.set('pl', String(playlist.id))
+    }
+    // downloads 深链的 pl 是预选意图而非歌单态——独立于上面的 songs 分支保留
+    if (centerView.value === 'downloads' && downloadsPl.value != null) {
+      url.searchParams.set('pl', String(downloadsPl.value))
     }
     return url
   }
@@ -90,6 +100,11 @@ export function useSearchNav({
       if (target) selectPlaylist(target)
       else if (plId && /^\d+$/.test(plId)) { previewPlaylistById(plId); return }
       else if (!selectedPlaylist.value) { centerView.value = 'home'; return }
+    }
+    // popstate 回放深链：重新武装预选意图（面板对已消费值幂等，
+    // 同值回放到已预选过的条目不会强抢用户手选）
+    if (view === 'downloads') {
+      downloadsPl.value = params.get('pl')
     }
     // 冷加载的 ?view=search 没有任何结果，落在空网格上不如回首页
     if (view === 'search' && !searchResults.value.length
@@ -148,11 +163,22 @@ export function useSearchNav({
     pushNavState()
   }
 
-  // 顶栏「管理」键：在 下载管理 ⇄ 上一视图 之间往返；搜索态点它应进下载管理
+  // 顶栏「下载」键：在 下载页 ⇄ 上一视图 之间往返；搜索态点它应进下载页。
+  // 通用入口无预选目标——清掉残留意图，否则旧深链的 pl 会借尸还魂进 URL
   const toggleCenterView = () => {
+    if (centerView.value !== 'downloads') downloadsPl.value = null
     centerView.value = centerView.value === 'downloads'
       ? (selectedPlaylist.value ? 'songs' : 'home')
       : 'downloads'
+    pushNavState()
+  }
+
+  // 「查看进度」深链：预选意图 + 切下载页。DownloadsPanel 首个队列
+  // 快照落地后按 neteasePlaylistId === pl 匹配队列并选中
+  const openDownloadsForPlaylist = (playlistId) => {
+    downloadsPl.value = playlistId != null ? String(playlistId) : null
+    centerView.value = 'downloads'
+    sidebarOpen.value = false // 移动端抽屉下点进来也要落主区
     pushNavState()
   }
 
@@ -344,6 +370,7 @@ export function useSearchNav({
     // 导航
     buildNavUrl, pushNavState, applyUrlNav, normalizeNavEntry,
     navHome, closeSearchView, toggleCenterView, watchBack,
+    downloadsPl, openDownloadsForPlaylist,
     enterWatch, openWatchPanel,
     // 打开动作
     selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,

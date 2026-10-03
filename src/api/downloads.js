@@ -65,6 +65,12 @@ export const downloadsApi = {
     return http.post(`/downloads/tasks/${id}/retry`);
   },
 
+  // 删除单条任务（行+盘上文件）。服务端语义：进行中任务 409 拒删——
+  // standalone 行先删文件后删，下载页"未入队单曲"分节的删除入口走这里
+  deleteTask: (id) => {
+    return http.delete(`/downloads/tasks/${id}`);
+  },
+
   // 提交单曲下载到服务器（返回 pending/completed 任务行，不阻塞等下载完成——
   // 终态用 getSongDownloadStatus 轮询；completed 行是幂等短路返回）。
   // 超时仍要给足：歌单未导入时服务端先走两次上游往返才提交任务
