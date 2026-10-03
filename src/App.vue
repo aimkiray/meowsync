@@ -324,6 +324,7 @@
                 :src="httpsCover(coverSizeUrl(song.al.picUrl, 80))"
                 alt=""
                 loading="lazy"
+                decoding="async"
               />
               <div class="asp-text">
                 <div class="asp-name" :title="song.name">{{ song.name }}</div>

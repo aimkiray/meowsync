@@ -914,12 +914,14 @@ export function usePlayer({
     // 「错歌词比没歌词更糟」→ 整组隐藏）；② 无官方译文且非中文语境 → 自动
     // 生成中文译文并按时间戳合并。全程后台异步，写回前复查词属主+加载序号。
     // 会话级缓存：判定/译文结果按 (词源,来源)/(词源) 记忆——重播/往返不再
-    // 重复请求，也避免「错词短暂闪现再被隐藏」。LRU 帽防长会话只涨不消：
+    // 重复请求，也避免「错词短暂闪现再被隐藏」。容量帽防长会话只涨不消：
     // 译文值是整段 LRC 文本（数 KB），无界 Map 随 AI 曲数线性涨
     const AI_LYRIC_CACHE_CAP = 256
+    // FIFO 挤出（仅在 miss 后写入，Map 键序=插入序）；被挤条目重播时
+    // 重打一次服务端——verdict 服务端有落库缓存，translate 只多一跳
     const cacheSet = (map, key, val) => {
       if (map.size >= AI_LYRIC_CACHE_CAP && !map.has(key)) {
-        map.delete(map.keys().next().value) // Map 键序=插入序，挤掉最旧项
+        map.delete(map.keys().next().value)
       }
       map.set(key, val)
     }

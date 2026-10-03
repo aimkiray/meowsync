@@ -540,7 +540,16 @@ export default {
 
       const onMove = (e) => {
         if (e.pointerId !== pid || dragIndex.value === -1 || !rowH) return
-        const y = e.clientY - container.getBoundingClientRect().top + container.scrollTop
+        const cTop = container.getBoundingClientRect().top
+        let y = e.clientY - cTop + container.scrollTop
+        // 「接下来」分节线插在 currentQueueIndex 之后（~25px）——线下方的行
+        // 在可视空间整体下移了 secH，均距换算前得从 y 里扣掉；分隔线随拖拽
+        // 跨过当前曲会搬家，故每次 move 重查不缓存
+        const sec = container.querySelector('.queue-sec')
+        if (sec) {
+          const secTop = sec.getBoundingClientRect().top - cTop + container.scrollTop
+          if (y >= secTop) y -= sec.getBoundingClientRect().height
+        }
         // 与原口径一致：越过行中点才算越过该行 → round 而非 floor；
         // 现在能命中渲染窗外的行（原实现被 rows.length 截断）
         const target = Math.min(total - 1, Math.max(0, Math.round((y - rowTop0) / rowH)))

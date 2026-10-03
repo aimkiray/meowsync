@@ -278,7 +278,11 @@ export default {
       scrollRoot: () => wrapEl.value,
     })
     // 单曲结果渲染窗：服务端「加载更多」append 时数组整体换引用，
-    // 故 resetWhen 认首行 id（append 首行不变→窗不回卷；新搜索→回卷）
+    // 故 resetWhen 认首行 id——append 首行不变→窗不回卷；新搜索回卷。
+    // 不变式依赖：useSearchNav 的整组替换路径（新搜索/QQ 导入）总是先
+    // 清空 [] 再填，空写会先把 key 刷成 undefined 触发 reset——若未来
+    // 出现「不清空直接覆盖」的写入路径，同首行 id 的新搜索会漏回卷，
+    // 届时要换显式身份键（searchQuery/搜索序号）
     const {
       rows: pagedSongs, hasMore: songHasMore, renderedCount: songRendered,
       loadMore: loadMoreSongs, bindSentinel: bindSongSentinel,
