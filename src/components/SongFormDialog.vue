@@ -266,7 +266,7 @@ export default {
     return {
       isEdit, canEditFiles, form, picked, progress, error,
       nameInput, fileRefs, fileSlots, hasExisting, existingHint,
-      onPick, submit, onCancel, onLeftBtn, onOverlayDown, onOverlayClick,
+      onPick, submit, onCancel, onLeftBtn, onOverlayDown, onOverlayUp, onOverlayClick,
     }
   },
 }
