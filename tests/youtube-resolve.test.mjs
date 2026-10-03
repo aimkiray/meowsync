@@ -331,7 +331,7 @@ test('白名单外 url 不进候选链也不当探测目标', async () => {
   const resolve = freshResolve();
   fetchPlayerImpl = async () => ({
     streamingData: sd({
-      ad: [{ url: 'https://evil.example.invalid/a', mimeType: 'audio/mp4', bitrate: 1, contentLength: '9999999' }, audioF('ok')],
+      ad: [{ url: 'https://evil.example.invalid/a', mimeType: 'audio/mp4', bitrate: 999999, contentLength: '9999999' }, audioF('ok')],
       fm: [progF('ok')]
     })
   });

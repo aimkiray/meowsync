@@ -16,7 +16,7 @@ test('mint→resolve 往返；token 是 192bit opaque（不含原 URL 痕迹）'
   assert.equal(resolve(token).idx, 0);
 });
 
-test('mint 支持候选数组（闸控视频 progressive 兜底链）', () => {
+test('mint 支持候选数组（同字节镜像组——bilibili baseUrl/backup_url 先例）', () => {
   const urls = ['https://a.example/1', 'https://a.example/2'];
   const token = mint(urls);
   const entry = resolve(token);

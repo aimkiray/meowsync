@@ -1552,10 +1552,13 @@ async function getSongDownloadStatus(playlistId, songId) {
   // 归属歌单上下文，只按本单查会漏掉视频在另一歌单的情形。任一歌单的
   // completed 行 videoPath 在盘即可播；命中行带出的 playlistId 是 /file
   // 端点的寻址键（工件按歌单目录组织，URL 必须带对的 playlistId）
+  // 多歌单各持一份时取最新完成的工件（completed_at DESC）——老歌单可能
+  // 躺着早期下载的劣化/旧版本档，新下载的档该赢。在盘判定用 pathPresent：
+  // EPERM/EIO/挂载抖动一律判「在」（误回落在线流的方向比误报在盘安全）
   let videoPlaylistId = null;
   for (const t of downloadTasksRepo.listTasksBySongId(String(songId))) {
     if (t.status !== 'completed' || !t.videoPath) continue;
-    if (isUnderDownloadDir(t.videoPath) && fs.existsSync(t.videoPath)) {
+    if (isUnderDownloadDir(t.videoPath) && pathPresent(t.videoPath)) {
       videoPlaylistId = t.playlistId;
       break;
     }

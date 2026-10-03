@@ -1,6 +1,8 @@
 // 解锁源注册表——替代 @unblockneteasemusic/server 的 match()。
 // 每个 provider：async resolve(info, ctx) → {url, urls?, br, durationSec?} | null
-//   urls = 可选候选链（youtube 闸控链）——编排层逐条校验后整链 mint 进 vault
+//   urls = 可选镜像组——仅限同一字节实体的备份 URL（跨分辨率/编码的候选
+//     是不同文件，混排换档会把同 offset 的另一文件字节拼给客户端）；编排
+//     层逐条校验后整组 mint 进 vault，代理只在镜像间轮换
 //   info = {id, name, artists[], keyword, durationMs}
 //   ctx  = {signal, purpose:'playback'|'download'}
 // 返回 null/抛错 = 该源不可用，编排层续下一源（与 unm match 语义对齐）
