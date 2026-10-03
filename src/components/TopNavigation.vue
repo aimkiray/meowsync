@@ -114,6 +114,7 @@
               :href="controllerUrl" target="_blank" rel="noopener"
               title="在新标签页打开手机控制器"
               @click="closeMenu()"
+              @auxclick="closeMenu()"
             >控制器</a>
             <div
               v-else-if="remoteMode === 'off'"
@@ -125,13 +126,13 @@
               <div class="pg-menu-head">主题</div>
               <button
                 v-for="t in THEMES" :key="t.id"
-                class="pg-menu-item topnav-theme-item"
+                class="pg-menu-item"
                 role="menuitemradio"
                 :aria-checked="t.id === currentTheme"
                 @click="pickTheme(t.id)"
               ><span class="topnav-theme-check" aria-hidden="true"><PixelIcon
                 v-if="t.id === currentTheme" name="check" :size="12"
-              /></span>{{ t.pill }}</button>
+              /></span>{{ t.name }}</button>
             </div>
 
             <button
@@ -341,6 +342,7 @@ export default {
     }
 
     const onSearchFocus = () => {
+      closeMenu() // 「/」快捷键开着菜单聚焦搜索：建议下拉会与菜单同窗叠盖
       if (suggestions.value.length) suggestOpen.value = true
     }
 
@@ -432,6 +434,10 @@ export default {
         right: Math.max(8, window.innerWidth - rect.right) + 'px'
       }
       menuOpen.value = true
+      // 菜单 teleport 到 body 末尾——不主动移焦，键盘 Tab 会穿进菜单底下
+      // 的页面内容；开菜单即聚焦第一项（.pg-menu-item 均真实 button/a，
+      // 编程聚焦在鼠标点击后不出 :focus-visible 环，鼠标用户无感）
+      nextTick(() => document.querySelector('#topnav-menu .pg-menu-item')?.focus())
     }
 
     const closeMenu = (restoreFocus = false) => {
@@ -446,19 +452,30 @@ export default {
 
     // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
     const onDocPointerDown = (e) => {
+      if (!(e.target instanceof Element)) return
       if (!e.target.closest('.topnav-menu, .topnav-menu-btn')) closeMenu()
     }
-    const onMenuKeydown = (e) => { if (e.key === 'Escape') closeMenu(true) }
+    // Esc 解散菜单；焦点归还仅在焦点还在菜单/触发键内时进行——
+    // 用户已把焦点挪去搜索框等别处时不得强拽（/ 快捷键开着菜单聚焦
+    // 搜索的场景，Esc 关菜单不应夺走输入焦点）
+    const onMenuKeydown = (e) => {
+      if (e.key !== 'Escape' || !menuOpen.value) return
+      const ae = document.activeElement
+      closeMenu(ae === menuBtn.value || !!ae?.closest?.('#topnav-menu'))
+    }
 
     onMounted(() => {
       document.addEventListener('pointerdown', onDocPointerDown)
       document.addEventListener('keydown', onMenuKeydown)
+      // ≥1472 时 inner 居中、触发键距右缘随视口漂移；resize 菜单位置即过期
+      window.addEventListener('resize', closeMenu)
     })
     onBeforeUnmount(() => {
       clearTimeout(suggestTimer)
       suggestAbort?.abort()
       document.removeEventListener('pointerdown', onDocPointerDown)
       document.removeEventListener('keydown', onMenuKeydown)
+      window.removeEventListener('resize', closeMenu)
     })
 
     // 登出：作废服务端 session 后整页重载（与登录成功同一收束路径）。
