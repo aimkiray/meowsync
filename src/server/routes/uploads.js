@@ -309,7 +309,12 @@ async function handleUpload(c, { kind, def, ext, filename, songId }) {
       }
       // stamp 与 createTask 同步相邻——今天撞不上删行窗；仍校验固化不变量
       //（一旦中间插入 await，行窗口消失假 200 就会复活）
-      const stamped = downloadTasksRepo.updateTask(task.id, { [KIND_PATH_COL[kind]]: outputPath, fileSize: size });
+      const stamped = downloadTasksRepo.updateTask(task.id, {
+        [KIND_PATH_COL[kind]]: outputPath, fileSize: size,
+        // completed_at 参与「最新工件赢」的跨歌单排序——不传则 NULL 沉底，
+        // 同曲多份在盘工件时新上传档会输给旧下载档
+        completedAt: new Date().toISOString(),
+      });
       if (!stamped) throw httpError(409, '曲目登记行已不存在，请重试');
     }
   } catch (e) {

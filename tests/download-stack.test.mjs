@@ -272,3 +272,22 @@ test('getSongDownloadStatus：audioReady 跨歌单寻址且独立于全工件合
   const st3 = await dm.getSongDownloadStatus(null, songId);
   assert.equal(st3.audioPlaylistId, plA.id, '双份在盘音频档取最新 completed_at 的歌单');
 });
+
+test('getSongDownloadStatus：纯视频档行不误报 audioReady（bv/yt 的 videoPath 不是音频工件）', async () => {
+  const songId = 'bv_vonly';
+  // 只下载视频的任务行（download_audio=0）：videoPath 在盘但它是视频字节——
+  // audioReady 必须保持假，否则播放链会 _localFile 钉一份注定 404 的 kind=audio
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_vo', name: 'vo' });
+  const vid = join(fs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'x.mp4');
+  mkdirSync(dirname(vid), { recursive: true });
+  writeFileSync(vid, 'v');
+  const t = downloadTasksRepo.createTask({ playlistId: pl.id, queueId: null, songId, songName: 'n', artist: 'a' });
+  downloadTasksRepo.updateTask(t.id, {
+    status: 'completed', videoPath: vid, completedAt: '2024-06-01T00:00:00.000Z'
+  });
+
+  const st = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(st.videoReady, true);
+  assert.equal(st.audioReady, false, 'bv_/yt_ 行的 videoPath 不得算作音频工件');
+  assert.equal(st.audioPlaylistId, null);
+});
