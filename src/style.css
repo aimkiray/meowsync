@@ -1141,10 +1141,12 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   gap: 6px;
   padding: 6px 6px 6px 4px;
   transition: background .12s;
-  /* 大队列的屏外行跳布局/绘制（与 .song-row 同律）；auto 自记忆真实行高，
-     几何命中测算（startDrag）取被拖行实高，不吃占位值 */
+  /* 大队列的屏外行跳布局/绘制（与 .song-row 同律）。content-box 语义：
+     占位总高 = 值 + padding12 + hairline1。42.5 由实测反推校准（渲染行
+     54.5/55.5）——startDrag 的 y→下标换算吃的是占位累计偏移，估值每差
+     0.5px 深队列可积出一行级误命中；auto 在绘制后自记忆真实行高 */
   content-visibility: auto;
-  contain-intrinsic-size: auto 42px;
+  contain-intrinsic-size: auto 42.5px;
 }
 /* 行间发丝分隔——印单的记账线，hover/当前行墨块在其上依旧清晰 */
 .queue-row + .queue-row { border-top: var(--hairline-soft); }
