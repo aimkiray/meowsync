@@ -122,6 +122,7 @@
           :lyric-offset-ms="lyricOffsetMs"
           :playback-error="playbackError"
           :duration-warning="durationWarning"
+          :fullscreen-player-open="isFullscreenPlayerOpen"
           v-model:tab="watchTab"
           v-model:autoplay="autoplayOn"
           @lyric-offset-adjust="adjustLyricOffset"
