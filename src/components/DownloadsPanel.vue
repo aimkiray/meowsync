@@ -128,8 +128,9 @@ const queueEmptyText = computed(() => {
 // updateQueue/updateTask/recountQueueCounters——三者无条件 bump updated_at；
 // 旁路只有 DELETE（行消失由长度/id 维兜住）。新增裸写 UPDATE 路径必须先 bump
 // updated_at，否则这里漏判变更。
-// updated_at 是毫秒精度：同毫秒两次写会产同戳——计数/状态/progress 这些便宜列
-// 直接比，把别名窗封到"同毫秒且同值"（真·无变化，无漏判代价）。
+// updated_at 是毫秒精度：同毫秒两次写会产同戳——比较集内的高变列（status/计数/
+// progress/errorMessage）直接比，把别名窗收窄到"同毫秒且比较集全同"（该窗口内
+// 只有未入集列的变化，它们仍靠 updatedAt 兜底）。
 // coverImgUrl（JOIN playlists 外来列，封面随歌单行变而本行戳不动）与
 // filesIntact（盘上文件实时判定，外部删文件无任何 DB 写）不随 updated_at——单列。
 function hasQueueChanged(currentQueue, nextQueue) {
@@ -220,7 +221,11 @@ async function loadQueues(options = {}) {
       const matchedQueue = activeQueues.find(queue => queue.id === previousSelectedQueueId)
       if (matchedQueue) {
         selectionMissCount = 0
-        selectedQueue.value = matchedQueue
+        // 无实质变化不换对象引用——否则每轮 tick 都触发 displayQueues
+        // 全量重过滤排序 + 子树重渲（mapQueueRow 每响应都产新对象）
+        if (hasQueueChanged(selectedQueue.value, matchedQueue)) {
+          selectedQueue.value = matchedQueue
+        }
       } else if (++selectionMissCount >= 2) {
         // 连续两轮快照都缺席才判定删除——单轮缺席可能只是"响应快照早于用户点击"
         selectionMissCount = 0
@@ -269,9 +274,11 @@ async function loadTasks(queueId, options = {}) {
     if (hasCollectionChanged(tasks.value, nextTasks, hasTaskChanged)) {
       tasks.value = nextTasks
     }
-    // 顺手用同一快照刷新选中队列行（避免等下一轮 listQueues 才更新状态）
+    // 顺手用同一快照刷新选中队列行（避免等下一轮 listQueues 才更新状态）；
+    // 同上：无实质变化不换引用，防每 tick 重排重渲
     const freshQueue = response.data.queue
-    if (freshQueue && selectedQueue.value) {
+    if (freshQueue && selectedQueue.value
+        && hasQueueChanged(selectedQueue.value, freshQueue)) {
       selectedQueue.value = freshQueue
     }
     hasLoadedTasks.value = true
@@ -317,6 +324,12 @@ const retryQueue = (queueId) => runQueueAction(queueId, '重试队列', download
 
 async function cancelQueue(queueId) {
   if (!await pixelConfirm('确定要取消这个队列吗？未完成的任务将停止下载', { confirmText: '取消队列', danger: true })) return
+  // 已确认的意图不能静默吞——runQueueAction 的 busy 静默退适合无确认的点击，
+  // 走过 confirm 的必须给交代
+  if (busyQueueIds.has(queueId)) {
+    toast('该队列有操作进行中，请稍后再取消', 'info')
+    return
+  }
   await runQueueAction(queueId, '取消队列', downloadsApi.cancelQueue, { refreshTasks: true })
 }
 

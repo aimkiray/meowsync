@@ -40,8 +40,9 @@ export function statusChipClass(tier) {
 
 // 队列完成度百分比——DownloadsPanel 排序键与 DownloadQueueList 行展示共用
 export function queueProgress(queue) {
-  if (!queue || queue.totalTasks === 0) return 0
-  return Math.round((queue.completedTasks / queue.totalTasks) * 100)
+  if (!queue || !queue.totalTasks) return 0
+  // 计数漂移防御：completed>total 时仍钳 100（aria-valuenow 合法性）
+  return Math.min(100, Math.round((queue.completedTasks / queue.totalTasks) * 100))
 }
 
 // 状态过滤 select 的选项单：标签与 QUEUE_STATUS_META 同源（第四处抄写收编），
