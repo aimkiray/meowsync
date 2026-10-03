@@ -138,7 +138,12 @@
           @open-source="openQueueSource"
           @add-to-playlist="handleOpenAddToPlaylist"
         />
-        <DownloadsPanel v-else :preselect-playlist-id="downloadsPl" :preselect-seq="downloadsPlSeq" />
+        <DownloadsPanel
+          v-else
+          :preselect-playlist-id="downloadsPl"
+          :preselect-seq="downloadsPlSeq"
+          @preselect-expired="clearDownloadsPl"
+        />
       </main>
     </div>
 
@@ -802,7 +807,7 @@ export default {
       searchSongTotal, searchSongLoadingMore,
       applyUrlNav, normalizeNavEntry,
       navHome, closeSearchView, toggleCenterView, watchBack,
-      downloadsPl, downloadsPlSeq, openDownloadsForPlaylist,
+      downloadsPl, downloadsPlSeq, openDownloadsForPlaylist, clearDownloadsPl,
       enterWatch, openWatchPanel,
       selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,
       previewPlaylistById,
@@ -1189,6 +1194,7 @@ export default {
       downloadsPl,
       downloadsPlSeq,
       openDownloadsForPlaylist,
+      clearDownloadsPl,
       addTargetSong,
       newPlaylistName,
       atpInput,

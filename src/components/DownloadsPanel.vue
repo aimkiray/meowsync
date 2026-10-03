@@ -68,6 +68,10 @@ const props = defineProps({
   }
 })
 
+// 预选意图失效上报：父级据此清 downloadsPl 并同步地址栏——否则
+// &pl= 死链残留 URL，刷新/回放每次都重放一次"还没有下载队列"
+const emit = defineEmits(['preselect-expired'])
+
 const queues = ref([])
 const selectedQueue = ref(null)
 const tasks = ref([])
@@ -227,8 +231,10 @@ function applyPreselect(list) {
   preselectConsumed.add(consumeKey)
   const target = pickQueueForPlaylist(list, pl)
   if (!target) {
-    // 该歌单没建过队列（或队列已级联清掉）——给用户一句交代而不是静默落地
+    // 该歌单没建过队列（或队列已级联清掉）——给用户一句交代而不是静默落地；
+    // 顺手把死意图回报掉：&pl= 死链留地址栏会每次刷新都重放这条 toast
     toast('该歌单还没有下载队列', 'info')
+    emit('preselect-expired')
     return
   }
   // 选中行可能被现有搜索/状态过滤藏掉——预选意图明确，清回全集
@@ -422,7 +428,10 @@ async function loadStandaloneTasks(playlistId) {
     return
   }
   try {
-    const response = await downloadsApi.listTasks({ playlistId })
+    // standalone=1 服务端收窄——不再每 2s 把全歌单任务行搬过来客户端滤；
+    // 客户端仍复核 queueId==null：查询落地到应用之间的收养窗口会混入
+    // 刚被建队列收走的行，双保险成本是一次内存 filter
+    const response = await downloadsApi.listTasks({ playlistId, standalone: 1 })
     if (!standaloneGate.isCurrent(my)) return
     // 归属校验与 loadTasks 同口径：selectQueue 交错时旧歌单的响应不写新名分
     if (String(selectedQueue.value?.playlistId) !== String(playlistId)) return
@@ -482,6 +491,12 @@ async function deleteQueue(queueId) {
   try {
     await downloadsApi.deleteQueue(queueId)
     await loadQueues()
+    // 预选目标被级联带走（删的是选中队列或同歌单兄弟）——把 URL 上的
+    // &pl= 意图一并清掉，否则下次刷新重放死链报缺席
+    if (props.preselectPlaylistId != null
+        && !pickQueueForPlaylist(queues.value, props.preselectPlaylistId)) {
+      emit('preselect-expired')
+    }
     // 级联连坐删同歌单兄弟队列——选中项落在同一歌单上即清，别等两轮缺席判定
     if (String(selectedQueue.value?.id) === String(queueId)
         || (doomed?.playlistId != null

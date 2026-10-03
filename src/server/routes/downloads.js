@@ -159,9 +159,9 @@ app.delete('/downloads/queues/:id', async (c) => {
 
 app.get('/downloads/tasks', async (c) => {
   try {
-    const { playlistId, queueId, status } = c.req.query();
+    const { playlistId, queueId, status, standalone } = c.req.query();
     // playlistId 原样透传：download-manager 同时接受本地 id 与网易云 id
-    const tasks = downloadManager.listTasks({ playlistId, queueId, status });
+    const tasks = downloadManager.listTasks({ playlistId, queueId, status, standalone });
     return c.json({ code: 200, data: tasks.map(downloadManager.toPublicTask) });
   } catch (error) {
     return handleError(c, error, '获取任务列表失败');

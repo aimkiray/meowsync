@@ -8,6 +8,10 @@
           :key="t.id"
           class="fb-toast"
           :class="`fb-toast--${t.type}`"
+          @pointerenter="toastHold(t.id, 'pointer')"
+          @pointerleave="toastRelease(t.id, 'pointer')"
+          @focusin="toastHold(t.id, 'focus')"
+          @focusout="toastRelease(t.id, 'focus')"
         >
           <span class="fb-toast-tag">{{ t.type }}:</span>
           <span class="fb-toast-text">{{ t.text }}</span>
@@ -60,7 +64,7 @@
 
 <script>
 import { watch, nextTick, ref } from 'vue'
-import { useFeedbackState, resolveConfirm, toastDismiss } from '../lib/feedback'
+import { useFeedbackState, resolveConfirm, toastDismiss, toastHold, toastRelease } from '../lib/feedback'
 
 export default {
   name: 'FeedbackHost',
@@ -99,7 +103,7 @@ export default {
       }
     })
 
-    return { state, cancelBtn, answer, cycleFocus, runToastAction }
+    return { state, cancelBtn, answer, cycleFocus, runToastAction, toastHold, toastRelease }
   }
 }
 </script>

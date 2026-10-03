@@ -194,6 +194,18 @@ function listTasksByPlaylist(playlistId) {
   return rows.map(mapTaskRow);
 }
 
+// standalone 专属面：queue_id IS NULL 的单曲任务——下载页「未入队单曲」
+// 分节用它替代"拉全量客户端滤"，大歌单不用每 2s 搬一遍队列任务行
+function listStandaloneTasksByPlaylist(playlistId) {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT * FROM download_tasks
+    WHERE playlist_id = ? AND queue_id IS NULL
+    ORDER BY id ASC
+  `).all(playlistId);
+  return rows.map(mapTaskRow);
+}
+
 function listTasksByQueue(queueId) {
   const db = getDb();
   const rows = db.prepare(`
@@ -258,6 +270,7 @@ module.exports = {
   updateTask,
   findTaskById,
   listTasksByPlaylist,
+  listStandaloneTasksByPlaylist,
   listTasksByQueue,
   listTasksByStatus,
   deleteTask,
