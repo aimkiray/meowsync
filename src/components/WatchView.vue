@@ -1078,6 +1078,9 @@ export default {
   align-items: center;
   /* 定高 52px（10 上 + 32 ink-btn--sm + 10 下）让 tabs 钉点有单一事实源 */
   height: var(--watch-top-h);
+  /* 列向 flex 滚动器里内容一溢出，收缩全落到本项（min-content 仅 32px 键高），
+     tabs 钉点下漏 20px 透字缝——与 .watch-tabs 同律禁缩；宽屏 absolute 出流后无效无碍 */
+  flex-shrink: 0;
   padding: 0 20px;
   /* sticky 钉顶时衬画布色——滚过的歌词/队列行不透字 */
   background: var(--view-canvas, var(--paper));
