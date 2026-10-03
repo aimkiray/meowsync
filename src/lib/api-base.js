@@ -13,6 +13,9 @@ const LOCAL_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '::1']
 const isLocalHost = (host) => LOCAL_HOSTS.includes(host) || host.endsWith('.localhost')
 
 export function resolveApiBaseUrl() {
+  // node --test 等无 DOM 环境：import.meta.env 为 undefined 且没有 window——
+  // 返回空串让调用方产出同源相对 URL，lib 纯函数层才可被单测直调
+  if (typeof window === 'undefined') return ''
   const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim()
   const envPort = String(import.meta.env.VITE_API_PORT ?? '').trim()
   // 端口必须是合法 TCP 端口：非数字、0、>65535（new URL 直接抛错、请求必失败）都回退默认。
