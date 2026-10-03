@@ -71,3 +71,36 @@ test('窗数学：极小 total——end≥start 且窗不越界', () => {
   const r = w({ scrollTop: 0, listTop: 100, viewH: 800, rowH: 60, total: 3, overscan: 8 })
   assert.deepEqual(r, { start: 0, end: 3 })
 })
+
+// ── 深越界不变式（源塌缩钉：曾 start>end → 空窗+虚 spacer 逐帧回爬）──
+
+test('窗数学：scrollTop 深越列表底——start≤end 且一帧落末段', () => {
+  const r = w({ scrollTop: 100000, listTop: 0, viewH: 600, rowH: 60, total: 100, overscan: 8 })
+  assert.ok(r.start <= r.end, `start(${r.start}) 不得大于 end(${r.end})`)
+  assert.equal(r.end, 100)      // 末行必在窗
+  assert.ok(r.start >= 91)      // 末段附近而非空窗（收敛于一帧）
+  assert.ok(r.start < 100)
+})
+
+test('窗数学：scrollTop 恰越列表底——total=1 退化不崩', () => {
+  const r = w({ scrollTop: 9999, listTop: 0, viewH: 600, rowH: 60, total: 1, overscan: 8 })
+  assert.deepEqual(r, { start: 0, end: 1 })
+})
+
+test('窗数学：负 scrollTop（iOS 回弹）——start 钳 0 不产负窗', () => {
+  const r = w({ scrollTop: -500, listTop: 0, viewH: 600, rowH: 60, total: 100, overscan: 4 })
+  assert.equal(r.start, 0)
+  assert.ok(r.end > 0 && r.end <= 100)
+})
+
+test('窗数学：小数行高 55.5（WatchView 实测档）——floor/ceil 不漂窗', () => {
+  // scrollTop=1110 → first=floor(1110/55.5)=20；末视行=ceil(1770/55.5)=32
+  const r = w({ scrollTop: 1110, listTop: 0, viewH: 660, rowH: 55.5, total: 500, overscan: 6 })
+  assert.deepEqual(r, { start: 14, end: 38 })
+})
+
+test('窗数学：pin 边界——pin=0 与 pin=total-1 恰被纳入', () => {
+  const base = { scrollTop: 3000, listTop: 0, viewH: 300, rowH: 60, total: 100 }
+  assert.equal(w({ ...base, pin: 0 }).start, 0)
+  assert.equal(w({ ...base, pin: 99 }).end, 100)
+})

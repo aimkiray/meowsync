@@ -579,11 +579,23 @@ export default {
       dragIndex.value = index
       // 命中判定走几何而非 DOM：等距行列表把 clientY 换算成全队列下标——
       // 不必再「物化到底」让落点域全量渲染（那会把大队列的瞬间 DOM 成本
-      // 绑进每次握把按下）。行高量被拖行本身（必在屏上=真实高）；
-      // 虚拟窗下 DOM 首行=全局 queueStartIndex 行，行顶原点回推至全局 0
-      const firstRow = container.querySelector('.queue-row')
-      const draggedRow = container.querySelectorAll('.queue-row')[index - queueStartIndex.value]
-      const rowH = draggedRow ? draggedRow.getBoundingClientRect().height : 0
+      // 绑进每次握把按下）。pitch 取相邻行 top 差的中位数：单行 height
+      // 会把「.queue-row+.queue-row」发丝边漏掉（无边行——窗内首行/分节线
+      // 后行/全局 0 行——量矮 ~1.2px，乘上深下标就是数行级落点偏差）；
+      // 中位数天然滤掉跨 queue-sec（+~28px）的异常对。虚拟窗下 DOM 首行
+      // =全局 queueStartIndex 行，行顶原点回推至全局 0
+      const rowEls = [...container.querySelectorAll('.queue-row')]
+      const firstRow = rowEls[0]
+      const draggedRow = rowEls[index - queueStartIndex.value]
+      const diffs = []
+      for (let k = 1; k < rowEls.length; k++) {
+        const d = rowEls[k].getBoundingClientRect().top - rowEls[k - 1].getBoundingClientRect().top
+        if (d > 30 && d < 80) diffs.push(d) // pitch ~54-56px；跨 queue-sec 对（~83px）滤出
+      }
+      diffs.sort((a, b) => a - b)
+      const rowH = diffs.length
+        ? diffs[diffs.length >> 1]
+        : (draggedRow ? draggedRow.getBoundingClientRect().height : 0)
       const rowTop0 = firstRow
         ? firstRow.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
           - queueStartIndex.value * rowH

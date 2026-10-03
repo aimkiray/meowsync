@@ -174,10 +174,11 @@ export default {
     }
 
     // immediate：App 侧已改 v-if 懒挂载——mount 即 open=true 时 reset+聚焦
-    // 依赖首次 immediate 跑；常挂载旧形态下 open=false 的首跑是 no-op 无害
+    // 依赖首次 immediate 跑。!v 分支在本挂载形态下不可达（open=false 时
+    // 父级 v-if 直接卸载整实例、File 句柄随 GC 释放）——防御性保留以兼容
+    // 「常挂载+prop 翻转」的旧消费形态
     watch(() => props.open, async (v) => {
       if (!v) {
-        // 关窗即释放 File 句柄——500MB 的 Blob 引用不能驻留到下次开窗
         for (const k of Object.keys(picked)) picked[k] = null
         for (const k of Object.keys(progress)) delete progress[k]
         return

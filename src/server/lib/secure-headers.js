@@ -21,13 +21,14 @@ function secureHeaders() {
       h.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
     }
     // CSP 只加在 HTML 文档（index.html/SPA 兜底），JSON API 不需要。
-    // script-src 的 sha256 对应 index.html 内联主题恢复脚本——改那段脚本必须
-    // 同步重算（node -e "crypto…update(脚本体)"），否则首帧主题脚本被掐死
+    // script-src 的 sha256 对应 index.html 内联主题+字体翻转脚本——改那段
+    // 脚本必须同步重算（node -e "crypto…update(脚本体)"），否则首帧被掐死；
+    // 同理 index.html 里任何 onload/on* 内联处理器都会被本指令拒执
     const type = h.get('content-type') || '';
     if (type.includes('text/html') && !h.has('Content-Security-Policy')) {
       h.set('Content-Security-Policy', [
         "default-src 'self'",
-        "script-src 'self' 'sha256-pADVm4OreZWjbx4BMy3eguDHGUp6u17ELX/GgnIjmfQ='",
+        "script-src 'self' 'sha256-vpTmUE2u7N3JRUoytqzyaqhplbVzDyuIp3nr6+OBOBE='",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", // :style 绑定 + 内联启动样式 + 字体表
         // http: 必须保留——HTTP 部署（自托管常态）下网易图床/解锁源 CDN 的
         // http 封面与直链若被 CSP 掐死会全灭；https 页面里浏览器本就自动升级

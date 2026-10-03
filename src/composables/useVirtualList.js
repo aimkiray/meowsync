@@ -5,8 +5,12 @@ import { computed, ref, watch, watchEffect } from 'vue'
 export const computeVirtualWindow = ({ scrollTop, listTop, viewH, rowH, total, overscan, pin = null }) => {
   const first = Math.max(0, Math.floor((scrollTop - listTop) / rowH))
   const last = Math.min(total, Math.ceil((scrollTop + viewH - listTop) / rowH))
-  let start = Math.max(0, first - overscan)
-  let end = Math.min(total, Math.max(last + overscan, start))
+  // 深越界钳制：源塌缩（隐藏VIP/清空队列）而 scrollTop 还停在旧深度时
+  // first 可远超 total——start 若越出列表，空窗+虚 topPad 会让 scrollHeight
+  // 虚高、浏览器逐帧回爬 ~overscan 行/帧形成长抖。start 钳进 [0,total-1]、
+  // end 保底 start+1（total>0 永渲至少一行），一帧收敛到末行附近
+  let start = Math.min(Math.max(0, first - overscan), Math.max(0, total - 1))
+  let end = Math.min(total, Math.max(last + overscan, start + 1))
   if (pin != null && pin >= 0 && pin < total) {
     start = Math.min(start, pin)
     end = Math.max(end, pin + 1)
@@ -55,14 +59,19 @@ export function useVirtualList({
   const bottomPad = computed(() => Math.max(0, (total.value - endIndex.value) * rowHeight))
 
   // 挑「此刻实际会滚的」滚动根：样式可滚且内容真溢出者优先；内容还短
-  // （装不满）时首个可滚样式即唯一会滚的；全不命中 → null 走 viewport
+  // （装不满）时首个可滚样式即唯一会滚的；全不命中 → null 走 viewport。
+  // getClientRects 可见性闸：display:none 元素 computed overflowY 仍
+  // 报 auto（v-show 隐态面板会被误选——scrollTop 写读全哑、viewH=0
+  // 窗退化成顶部几行，且隐藏期的 scrollToIndex 会静默写丢）
   const pickScroller = () => {
     const els = (scrollRoots?.() || []).filter(Boolean)
     for (const el of els) {
+      if (!el.getClientRects().length) continue
       const oy = getComputedStyle(el).overflowY
       if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return el
     }
     for (const el of els) {
+      if (!el.getClientRects().length) continue
       const oy = getComputedStyle(el).overflowY
       if (oy === 'auto' || oy === 'scroll') return el
     }
@@ -95,8 +104,9 @@ export function useVirtualList({
 
   const scrollToIndex = (i, { align = 'nearest' } = {}) => {
     // 越界下标静默不滚——currentQueueIndex=-1（曲不在队）/清空瞬间的调用方
-    // 不该被拽到列表外
+    // 不该被拽到列表外；锚未挂载时 listTop=0 会把落点算到列表上方去
     if (!Number.isFinite(i) || i < 0 || i >= total.value) return
+    if (!anchorEl || !anchorEl.isConnected) return
     const sc = pickScroller()
     const viewH = sc ? sc.clientHeight : window.innerHeight
     const listTop = listTopOf(sc)
@@ -128,6 +138,8 @@ export function useVirtualList({
   }
 
   const reset = () => {
+    // 注意多根语义：所有候选根一并归零（含整页滚候选）——多根消费方
+    // 若只要「当前真滚动器」回卷，应自行挑根而非直接用本函数
     for (const el of (scrollRoots?.() || []).filter(Boolean)) el.scrollTop = 0
     startIndex.value = 0
     update()

@@ -9,12 +9,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-  "postbuild": "node scripts/compress-dist.mjs",
+    "postbuild": "node scripts/compress-dist.mjs",
     "preview": "vite preview",
     "start": "node start.js",
     "start:api": "node netease-api-server.js",
     "start:frontend": "vite",
     "build:prod": "vite build --mode production",
+    "postbuild:prod": "node scripts/compress-dist.mjs",
     "test": "node --test tests/",
     "typecheck": "tsc --noEmit"
   },

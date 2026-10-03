@@ -186,7 +186,9 @@ export function externalCoverUrl(song) {
 // 且 file_ 曲两字段语义不同（duration 是媒体秒数）
 export function slimTrack(t) {
   if (!t || t.id == null) return t
-  const alSrc = t.al && typeof t.al === 'object' ? t.al : (t.album && typeof t.album === 'object' ? t.album : null)
+  const alObj = t.al && typeof t.al === 'object' ? t.al : null
+  const albumObj = t.album && typeof t.album === 'object' ? t.album : null
+  const alSrc = alObj || albumObj
   const arSrc = Array.isArray(t.ar) ? t.ar : (Array.isArray(t.artists) ? t.artists : null)
   return {
     id: t.id, name: t.name,
@@ -194,8 +196,14 @@ export function slimTrack(t) {
     // {name:'x'} 与 'x' 对 songArtists 的 a?.name 读取同义，不该丢
     ar: arSrc ? arSrc.map(a => ({ name: typeof a === 'object' ? a?.name : a })) : undefined,
     // al 可能是字符串形态（旧数据/上游简化对象——healExternalAr 同口径
-    // 只治对象形）：对象瘦身、非对象原样透传不丢专辑名
-    al: alSrc ? { name: alSrc.name, picUrl: alSrc.picUrl, pic_str: alSrc.pic_str } : (t.al ?? t.album),
+    // 只治对象形）：对象瘦身、非对象原样透传不丢专辑名。al 与 album 混
+    // 存时主形缺 picUrl 回捞另一形（封面只挂在次形的混形曲不丢图）；
+    // al.id 保留——首页专辑架去重按 id 优先于 name（同名专辑不坍缩）
+    al: alSrc ? {
+      id: alSrc.id, name: alSrc.name,
+      picUrl: alSrc.picUrl ?? (alSrc === alObj ? albumObj : alObj)?.picUrl,
+      pic_str: alSrc.pic_str,
+    } : (t.al ?? t.album),
     picUrl: t.picUrl, dt: t.dt, duration: t.duration,
     fee: t.fee,
     // privilege 只读 fee（isVipSong）——chargeInfoList/freeTrialPrivilege 等

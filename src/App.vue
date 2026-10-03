@@ -420,15 +420,21 @@ import PixelIcon from './components/PixelIcon.vue'
 // 带各自 scoped CSS 与独有依赖离开 index 包；FullscreenPlayer 还拖着
 // 664 行的 canvas 歌词渲染器）。组件均经 v-if/v-else-if 分支挂载，
 // chunk 未到时该分支不渲——无 Suspense 需求。
+// chunk 拉取失败兜底：「旧页面+新部署」错配时 import() 打到的 hash 档
+// 已不存在，且浏览器模块表会把失败记忆化（会话内重试瞬拒）——除整页
+// 重载没有恢复路径。reload 时 index.html 走 no-cache 拿到新 hash 自愈；
+// 挂起 promise 防 loader resolve undefined 触发 Vue 警告
+const lazyView = (loader) => defineAsyncComponent(() =>
+  loader().catch(() => { location.reload(); return new Promise(() => {}) }))
 // WatchView/SongList 是热路径：挂载后 idle 预取同名模块暖 chunk 缓存，
 // 首次导航命中内存模块表零等待
-const PlaylistGrid = defineAsyncComponent(() => import('./components/PlaylistGrid.vue'))
-const SongList = defineAsyncComponent(() => import('./components/SongList.vue'))
-const SongFormDialog = defineAsyncComponent(() => import('./components/SongFormDialog.vue'))
-const WatchView = defineAsyncComponent(() => import('./components/WatchView.vue'))
-const FullscreenPlayer = defineAsyncComponent(() => import('./components/FullscreenPlayer.vue'))
-const RemoteController = defineAsyncComponent(() => import('./components/RemoteController.vue'))
-const DownloadsPanel = defineAsyncComponent(() => import('./components/DownloadsPanel.vue'))
+const PlaylistGrid = lazyView(() => import('./components/PlaylistGrid.vue'))
+const SongList = lazyView(() => import('./components/SongList.vue'))
+const SongFormDialog = lazyView(() => import('./components/SongFormDialog.vue'))
+const WatchView = lazyView(() => import('./components/WatchView.vue'))
+const FullscreenPlayer = lazyView(() => import('./components/FullscreenPlayer.vue'))
+const RemoteController = lazyView(() => import('./components/RemoteController.vue'))
+const DownloadsPanel = lazyView(() => import('./components/DownloadsPanel.vue'))
 
 export default {
   name: 'App',
@@ -903,6 +909,12 @@ export default {
       playingSongs, songSwitching, filteredSongs,
       playSong, nextSong, previousSong, updateVolume, currentPlayingIndex, playbackList
     })
+    // 控制器页首屏：mode 在 useRemoteControl 内同步定出——此处立即并发拉
+    // chunk，不等 auth 探活 RTT（否则首帧=auth RTT+chunk RTT 串行相加）；
+    // 与 lazyView 的 loader 同源 import，模块表去重不重复拉取
+    if (remoteMode.value === 'controller') {
+      import('./components/RemoteController.vue').catch(() => {})
+    }
 
     // 键盘快捷键（YTM 式）：空格播放暂停、←→ 进退、↑↓ 音量、M 静音、
     // F 全屏、Q 待播队列、/ 聚焦搜索；输入态/修饰键组合全部放行
@@ -1103,9 +1115,13 @@ export default {
 
       // 热视图 chunk 闲时预取：WatchView/SongList 是点播/歌单两条主路径——
       // 浏览器空闲期把模块拉进内存表，首次导航时 defineAsyncComponent 同步
-      // 命中不转圈。放初始化尾部执行，不与首屏关键请求争带宽
+      // 命中不转圈。放初始化尾部执行，不与首屏关键请求争带宽；catch 吞掉
+      // 断网/部署错配的 rejection——真 demand-load 时 lazyView 兜底重载
       const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1200))
-      idle(() => { import('./components/WatchView.vue'); import('./components/SongList.vue') })
+      idle(() => {
+        import('./components/WatchView.vue').catch(() => {})
+        import('./components/SongList.vue').catch(() => {})
+      })
       console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
     })
 
