@@ -696,7 +696,10 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     const finalPath = pathWithExt(outputPath, extFromUrl(songData.url, AUDIO_EXTS, 'mp3'));
     fs.mkdirSync(path.dirname(finalPath), { recursive: true });
 
-    const audioResponse = await fetchStream(songData.url, { timeout: 300000, signal });
+    // googlevideo 签名 URL 按请求形态记账：裸 GET 既可能 403 又会毒化该
+    // URL 的后续 Range 请求——解锁链产出 googlevideo（youtube provider）
+    // 时与下行直链同口径带 bytes=0-（语义同全量，其他 CDN 无副作用）
+    const audioResponse = await fetchStream(songData.url, { timeout: 300000, signal, headers: RANGE_ALL });
     if (audioResponse.status !== 200 && audioResponse.status !== 206) {
       audioResponse.data.destroy();
       throw fatalError(`上游返回 ${audioResponse.status}`);

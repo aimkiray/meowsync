@@ -199,3 +199,40 @@ test('deleteTask 端到端：行删后文件删、空骨架剪净', () => {
   assert.ok(!existsSync(plDir), '最后一条任务的骨架应剪净——不再有 reap 兜底等待');
   assert.equal(readdirSync(fs.DOWNLOAD_BASE_DIR).includes(String(pl.id)), false);
 });
+
+test('getSongDownloadStatus：videoReady 跨歌单寻址且最新完成工件优先', async () => {
+  const songId = 'yt_crossplvid';
+  // 歌单 A 持视频档（老档），歌单 B 同曲只有音频——无 playlistId 的
+  // 播放上下文（暂存/搜索队列）也要能找到 A 的视频并回带寻址键
+  const plA = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_xv_a', name: 'xv-a' });
+  const plB = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_xv_b', name: 'xv-b' });
+  const vidA = join(fs.DOWNLOAD_BASE_DIR, String(plA.id), 'videos', 'x.mp4');
+  mkdirSync(dirname(vidA), { recursive: true });
+  writeFileSync(vidA, 'v');
+  const tA = downloadTasksRepo.createTask({ playlistId: plA.id, queueId: null, songId, songName: 'n', artist: 'a' });
+  const tB = downloadTasksRepo.createTask({ playlistId: plB.id, queueId: null, songId, songName: 'n', artist: 'a' });
+  downloadTasksRepo.updateTask(tA.id, {
+    status: 'completed', videoPath: vidA, completedAt: '2024-01-01T00:00:00.000Z'
+  });
+  downloadTasksRepo.updateTask(tB.id, {
+    status: 'completed', completedAt: '2024-06-01T00:00:00.000Z'
+  });
+
+  // playlistId 缺省（无归属上下文）：仍命中 A 的档
+  const stNoPl = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(stNoPl.videoReady, true);
+  assert.equal(stNoPl.videoPlaylistId, plA.id);
+  // 归属歌单是 B（本单无视频档）：寻址也回落到 A——借源播放能放
+  const stPlB = await dm.getSongDownloadStatus(plB.id, songId);
+  assert.equal(stPlB.videoReady, true);
+  assert.equal(stPlB.videoPlaylistId, plA.id);
+
+  // 双份在盘工件：B 的 completed_at 更晚 → 新档赢——老歌单躺着的早期
+  // 下载不该盖过新下载的档
+  const vidB = join(fs.DOWNLOAD_BASE_DIR, String(plB.id), 'videos', 'x.mp4');
+  mkdirSync(dirname(vidB), { recursive: true });
+  writeFileSync(vidB, 'v2');
+  downloadTasksRepo.updateTask(tB.id, { videoPath: vidB });
+  const stBoth = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(stBoth.videoPlaylistId, plB.id, '双份在盘工件取最新 completed_at 的歌单');
+});

@@ -131,7 +131,7 @@ async function aiRankCandidates(info, usable, signal) {
 
 /**
  * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
- * @returns {{url: string, br: number|null, durationSec: number|null}|null}
+ * @returns {{url: string, urls: string[], br: number|null, durationSec: number|null}|null}
  */
 async function resolve(info, { signal, purpose } = {}) {
   // 无真实元数据（song_detail 缺失）时 keyword 为空/裸 id——搜索会

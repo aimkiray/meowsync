@@ -233,7 +233,7 @@ function listTasksBySongId(songId) {
   const rows = db.prepare(`
     SELECT * FROM download_tasks
     WHERE song_id = ?
-    ORDER BY id ASC
+    ORDER BY completed_at DESC, id DESC
   `).all(songId);
   return rows.map(mapTaskRow);
 }

@@ -412,6 +412,9 @@ function initSchema(database) {
     ['idx_playlist_tracks_playlist_id', 'playlist_tracks', 'playlist_id'],
     ['idx_playlist_tracks_song_id', 'playlist_tracks', 'song_id'],
     ['idx_download_tasks_playlist', 'download_tasks', 'playlist_id'],
+    // 跨歌单按曲寻址（videoReady 工件查找）走 song_id——(playlist,song)
+    // 唯一索引的最左列是 playlist_id 用不上
+    ['idx_download_tasks_song', 'download_tasks', 'song_id'],
     ['idx_download_tasks_status', 'download_tasks', 'status'],
     ['idx_download_queues_status', 'download_queues', 'status'],
     // cascade/建队列查重/属主判定都按 playlist_id 过滤——队列表全表扫

@@ -945,7 +945,10 @@ export default {
     // 都白烧一次 CDN 请求，且秒挂型流（闸控 403）的 error 会先于探测闩封面
     const dlProbeSettled = ref(false)
     let dlVideoSeq = 0
-    watch([mediaVideoKey, () => props.queueOwner?.id, videoOn], async () => {
+    // 依赖不含 queueOwner：videoReady 跨歌单寻址后与归属无关——挂着它，
+    // 播放到一半增删歌单翻转 queueOwner 会把 dlProbeSettled 打回 false
+    // 拆掉 <video> 重缓冲。plId 仍随行报送（服务端给本单 task 字段用）
+    watch([mediaVideoKey, videoOn], async () => {
       const seq = ++dlVideoSeq
       const song = props.currentSong
       const plId = props.queueOwner?.id ?? null
@@ -995,7 +998,9 @@ export default {
       if (y?.hasVideo || y?.hasDownloadableVideo) {
         if (!dlProbeSettled.value) return ''
         // mediaStreamRetry 戳进 URL：服务端闸控判定缓存可能错——重试带
-        // &retry=1 旁路缓存读强制重探，URL 换绑本身也触发 <video> 重载
+        // &retry=1 旁路缓存读强制重探（retry>0 恒映射 retry=1，重载实际靠
+        // mediaVideoFailed 闩的拆装而非 URL 换绑）；成功后 retry 戳保留——
+        // 后续重挂继续旁路缓存读拿最新判定，比重放可能过期的缓存更安全
         return downloadedVideoUrl.value
           || (y.hasVideo ? musicApi.youtubeStreamUrl(y.videoId, 'video', '', mediaStreamRetry.value) : '')
       }
@@ -1023,7 +1028,9 @@ export default {
       mediaVideoFailed.value = true
       // 中途 CDN 抖一下不该把整曲打成封面——10s 后复位闩重挂真重试；
       // 每 key 至多两次（mediaRetriedKey 戳+计数），死链回闩后不再自愈。
-      // 重试戳 mediaStreamRetry：youtube URL 换绑 &retry=1——服务端闸控
+      // 预算口径按挂载计：另一 key 也报过 error 才重置单槽戳——
+      // A→B(error)→A 给 A 新预算，A→B(干净)→A 不重置，防重试循环。
+      // 重试戳 mediaStreamRetry：youtube URL 带 &retry=1——服务端闸控
       // 判定缓存可能误判（SABR 探测无定论按未闸放行），重试旁路缓存读
       // 强制重探拿新候选，不是重放同一条死链；bili/file 链无判定缓存，
       // 计数不影响 URL，重挂本身即服务端重解

@@ -38,7 +38,7 @@ async function probeGated(url, contentLength, signal) {
         timeout: 6000, signal,
         headers: { Range: range }
       });
-      resp.data.destroy();
+      resp.data?.destroy?.();
       return 'ok';
     } catch (e) {
       if (signal?.aborted) throw e;
@@ -118,6 +118,8 @@ async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', sig
         return chk.ok && isAllowedHost(chk.url.hostname);
       });
   };
+  // 键不含 prefer：闸控判定是签名批级而非候选级——不同 prefer 的探针
+  // 目标不同，但「这批签名被不被闸」的答案是同一个
   const gateKey = `${videoId}:${kind}`;
   const gate = skipCache ? null : gateCache.get(gateKey);
   let gated = null;
@@ -172,10 +174,15 @@ async function resolveYoutubeStreams(videoId, { kind = 'audio', prefer = '', sig
         if (nv && (await probeGated(nv.url, nv.contentLength, signal)) === true) {
           deadAdaptive = true;
         }
+      } else {
+        // 无 streamingData 的回应（当前 fetchPlayerWith 不可达，属纵深防御）：
+        // 原批自适应已判闸，不补 else 会以正常序下发死链
+        deadAdaptive = true;
       }
     } catch (e) {
       // VISIONOS 也拿不到就用原批——链尾合流档照样能播；abort 穿透。
-      // 原批自适应已证 403：押尾，合流提首——否则单 URL 消费方拿到死链
+      // 原批自适应按本批探测或缓存判定已证被闸：押尾，合流提首——
+      // 否则单 URL 消费方拿到死链
       if (signal?.aborted) throw e;
       deadAdaptive = true;
       console.warn(`[youtube] ${videoId} VISIONOS 重解失败，回落原批:`, e.message);
