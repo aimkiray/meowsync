@@ -552,7 +552,8 @@ export default {
    侧列不设 min-width:0：列宽下限=内容 min-content，空间不足时
    中列先收缩（字段 max-width:100%），侧簇永不溢出侵入中列 */
 .topnav-inner {
-  max-width: 1440px;
+  /* 与底栏内列/player-inner 同帽同轴（style.css 注释：顶栏内列同轴消费） */
+  max-width: var(--content-max, 1440px);
   margin: 0 auto;
   height: 56px;
   display: grid;
@@ -572,11 +573,13 @@ export default {
    对齐必然重叠 logo——窄轨维持居中搜索。 */
 @media (min-width: 1024px) {
   .topnav-inner {
+    /* 268 = 侧栏 280 + 页缘 pad 20 − 顶栏外槽 16 − gap 16 → 搜索左缘钉 300 */
     grid-template-columns: 268px minmax(0, 480px) 1fr;
   }
 }
 @media (min-width: 1472px) {
   .topnav-inner {
+    /* 284 = 同式减外槽——≥1472 inner 居中，外槽 16 被 1440 帽抵进两侧 margin */
     grid-template-columns: 284px minmax(0, 480px) 1fr;
   }
 }
@@ -683,8 +686,8 @@ export default {
   border: var(--hairline);
   /* 8 条建议 ~300px + 窄屏双行顶栏 ~93px——手机横屏会顶出视口底缘，
      限高内滚兜底 */
-  max-height: calc(100vh - var(--topnav-h, 56px) - 8px);
-  max-height: calc(100dvh - var(--topnav-h, 56px) - 8px);
+  max-height: calc(100vh - var(--topnav-h, 57.2px) - 8px);
+  max-height: calc(100dvh - var(--topnav-h, 57.2px) - 8px);
   overflow-y: auto;
 }
 
