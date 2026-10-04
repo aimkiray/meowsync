@@ -1764,13 +1764,15 @@ export default {
   .watch-cover { width: min(46vh, 420px); }
   /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
      inset:0 才贴画面（wrap 恒 100% 栏宽时，高度约束生效、视频收窄，中央播放
-     键/右下全屏键会对到栏而非画面）。高度预算 356px ≈ 顶栏 57.2 + 底条 69.2 +
-     layout 纵向 padding 40 + 栏顶补距 56 + 标题/元/操作行 ~131——视口变矮时
-     视频等比收窄不溢出；280px 地板防极端矮窗塌缩，2 行标题/横幅超出走栏内
-     滚动（顶补距已让开返回键）。vh 行是 dvh 不识别的老内核兜底 */
+     键/右下全屏键会对到栏而非画面）。尺寸策略对齐 YTM watch 页：按视口高
+     预算收窄（356px ≈ 顶栏 57.2 + 底条 69.2 + layout 纵 pad 40 + 栏顶补距
+     56 + 标题/元/操作行 ~131；YTM 同款 --player-page-total-height-exclude-
+     player 为 408px），但守 300px 最小高度（300×16/9≈533 宽；YTM 300 /
+     ytd 240）——预算低于地板时停止压缩、左栏滚动补差（顶补距已让开返回键
+     浮层），视频不再塌成小窗。vh 行是 dvh 不识别的老内核兜底 */
   .watch-cover-wrap--video {
-    width: min(100%, 1280px, max(280px, calc((100vh - 356px) * 16 / 9)));
-    width: min(100%, 1280px, max(280px, calc((100dvh - 356px) * 16 / 9)));
+    width: min(100%, 1280px, max(533px, calc((100vh - 356px) * 16 / 9)));
+    width: min(100%, 1280px, max(533px, calc((100dvh - 356px) * 16 / 9)));
   }
   .watch-banner { width: min(46vh, 420px); }
 
