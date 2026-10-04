@@ -86,8 +86,15 @@ export function usePlayer({
     // 待落地 seek 挂账：playSong 先把 currentTime 清 0，恢复用的 seekTime 要等
     // onload 才写回——挂账期内一切落盘仍写挂账值，否则存档续播点被 0 覆盖
     let pendingSeekTime = null
+    // 恢复窗口（restoreUiState→restorePlaybackState）内禁止持久化：UI 态
+    // 还原会触发 prefs watcher 冲刷 savePlayerStateToStorage，此刻
+    // currentSong 尚为 null——写出 {currentSongId:null,currentTime:0}
+    // 会把存档续播点整个抹掉。App.vue 初始化用 try/finally 包住该窗口
+    let playerPersistSuspended = false
+    const setPlayerPersistSuspended = (v) => { playerPersistSuspended = !!v }
 
     const savePlayerStateToStorage = () => {
+      if (playerPersistSuspended) return
       const state = {
         selectedPlaylistId: selectedPlaylist.value?.id ?? null,
         // 播放队列归属歌单：播 A 浏览 B 时刷新恢复应回到 A，
@@ -1521,6 +1528,7 @@ export function usePlayer({
       // 持久化/会话
       savePlayerStateToStorage, loadPlayerStateFromStorage,
       restoreUiState, restorePlaybackState, savePlaybackTimeIfNeeded,
+      setPlayerPersistSuspended,
       setupMediaSessionHandlers, teardownMediaSession, getHowl,
     }
 }

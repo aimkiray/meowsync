@@ -58,8 +58,17 @@ async function fetchLyricRaw(id, signal) {
   const qqM = id.match(QQ_SONG_ID_RE);
   if (qqM) {
     const { getLyric } = require('../lib/qq');
-    const r = await getLyric(qqM[1], signal);
-    return { lrc: r.lyric || '', tlyric: r.trans || '' };
+    try {
+      const r = await getLyric(qqM[1], signal);
+      return { lrc: r.lyric || '', tlyric: r.trans || '' };
+    } catch (e) {
+      // 业务码（-1901/-1301 无词等）= 确定性无词——与 file-downloader 的
+      // NO_LYRICS 映射同口径：归一成空 lrc 走 skip:no-lyric 落哨兵，
+      // 否则无词 qq_ 曲每次重播都重打上游再 502、永远写不进缓存。
+      // 传输层错误（无 bizCode）照旧上抛
+      if (e && e.bizCode !== undefined) return { lrc: '', tlyric: '' };
+      throw e;
+    }
   }
   const res = await callNeteaseApi('lyric', { id }, { signal });
   return {

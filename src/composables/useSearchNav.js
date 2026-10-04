@@ -349,9 +349,14 @@ export function useSearchNav({
       // 零进展灭键：上游返空页/整页撞重时 offset 原地踏步，再点必空转
       if (!fresh.length) searchSongTotal.value = searchSongResults.value.length
     } catch (e) {
-      console.warn('[search] 深挖失败:', e?.message || e)
-      toast('加载更多失败，点按重试', 'error')
+      // 与上方落地闸同口径：旧深挖的迟到失败不盖新搜索的结果区
+      if (searchSongQuery.value === q && gates.search.isCurrent(myReq)) {
+        console.warn('[search] 深挖失败:', e?.message || e)
+        toast('加载更多失败，点按重试', 'error')
+      }
     } finally {
+      // 复位不能带闸——flag 只挡 loadMore 重入非世代态，闸了会让
+      // 新搜索的深挖永远看到 flag=true 而 early-return 死掉
       searchSongLoadingMore.value = false
     }
   }

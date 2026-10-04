@@ -212,11 +212,13 @@ function attachRemoteControl(server, options = {}) {
     maxPayload: MAX_PAYLOAD_BYTES,
     // 音频遥控消息小且低频，PMD 的 zlib 上下文是纯粹的 CPU 放大面
     perMessageDeflate: false,
-    // 回显 remote.<token> 子协议完成握手；不匹配则不协商（等效不带）
+    // 回显客户端自报的 remote.* 子协议完成协商——鉴权在 onUpgrade 的
+    // session|token 级联里已完成，这里不匹配 token：浏览器要求服务端
+    // 从 offered 列表回选一个，回 false 会因协商失败主动断连（会话已
+    // 认证但 VITE_REMOTE_TOKEN 陈旧/不一致的场景会莫名连不上）
     handleProtocols: (protocols) => {
-      if (!token) return false;
       for (const p of protocols) {
-        if (p.startsWith('remote.') && tokenMatches(p.slice(7), token)) return p;
+        if (p.startsWith('remote.')) return p;
       }
       return false;
     }

@@ -369,8 +369,13 @@ async function startQueue(queueId) {
     }
   }
 
-  downloadQueuesRepo.updateQueue(queueId, { status: 'running' });
+  // 复活 failed/completed 队列时清 completedAt——否则中途再 cancel 会落
+  // 「cancelled + 陈旧 completed_at」的展示漂移
+  downloadQueuesRepo.updateQueue(queueId, { status: 'running', completedAt: null });
 
+  // ⚠️ 检查→登记段（上方各 409 到此行）必须全程无 await——单协程不变量
+  // 靠「has/liveController 检查与 activeQueues.set 同事件循环原子」成立，
+  // 任何 await 都会开窗让第二协程启动，双闭包 inflightTaskIds 互判 stranded
   const controller = {
     queueId,
     playlistId: queue.playlistId,
@@ -481,7 +486,7 @@ async function processQueue(queueId, controller) {
       if (row.status !== 'downloading' || inflightTaskIds.has(row.id)) continue;
       try {
         downloadTasksRepo.updateTask(row.id, row.retryCount < 3
-          ? { status: 'pending', retryCount: row.retryCount + 1, errorMessage: '下载中断，已复位待重跑' }
+          ? { status: 'pending', retryCount: row.retryCount + 1, progress: 0, errorMessage: '下载中断，已复位待重跑' }
           : { status: 'failed', errorMessage: '下载中断' });
       } catch { /* 行可能已删 */ }
     }
@@ -2040,7 +2045,11 @@ async function retryTask(taskId) {
   // 放行会先动行再被 runStandaloneTask 409，状态已被污染
   const orphanedPending = task.status === 'pending'
     && (!task.queueId || !downloadQueuesRepo.findQueueById(task.queueId));
-  const retriable = (task.status === 'failed' || orphanedPending)
+  // standalone 行钉死 downloading（终态写全部失败后）：与孤儿 pending 同质——
+  // 无消费者。队列行的同款情形由 processQueue 的 converge 与重启期
+  // recoverStaleStates 覆盖，不在此放宽（有活体协程语义要守）
+  const orphanedDownloading = task.status === 'downloading' && !task.queueId;
+  const retriable = (task.status === 'failed' || orphanedPending || orphanedDownloading)
     && !standaloneRunning.has(taskId);
   if (!retriable) {
     throw httpError(409, '只能重试失败的任务');
@@ -2224,19 +2233,25 @@ async function shutdownAll() {
     if (!controller.settled) zombieControllers.add(controller);
   }
 
+  // 复位写逐行容错——DB 故障时一行写挂不该中断剩余行的复位
+  // （recoverStaleStates 下次启动同口径收敛，这里只尽量多救）
   for (const task of downloadTasksRepo.listTasksByStatus('downloading')) {
-    downloadTasksRepo.updateTask(task.id, {
-      status: task.queueId ? 'pending' : 'failed',
-      errorMessage: '服务停机中断'
-    });
+    try {
+      downloadTasksRepo.updateTask(task.id, {
+        status: task.queueId ? 'pending' : 'failed',
+        errorMessage: '服务停机中断'
+      });
+    } catch { /* 剩余行继续 */ }
   }
   // 与 recoverStaleStates 同口径：无消费者的 standalone pending 是死态
   for (const task of downloadTasksRepo.listTasksByStatus('pending')) {
     if (!task.queueId) {
-      downloadTasksRepo.updateTask(task.id, {
-        status: 'failed',
-        errorMessage: '服务停机中断'
-      });
+      try {
+        downloadTasksRepo.updateTask(task.id, {
+          status: 'failed',
+          errorMessage: '服务停机中断'
+        });
+      } catch { /* 剩余行继续 */ }
     }
   }
 }

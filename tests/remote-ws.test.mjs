@@ -170,6 +170,112 @@ test('remote：>64KB 帧被 maxPayload 断连', async () => {
   assert.equal(code, 1009); // ws 库对超限帧 close 1009 Message Too Big
 });
 
+// ── 鉴权级联（登录启用后 WS 不得裸奔——旁路洞的回归网）──
+// 桶注意：'remote-upgrade' 限流桶是模块级共享，用例会累计消耗；
+// 见末尾限流用例的「补满即见 429」稳健断言设计
+
+test('remote：启用登录后无凭据握手 401；session cookie 放行', async () => {
+  const usersRepo = require('../src/server/repositories/users.js');
+  const sessionsRepo = require('../src/server/repositories/sessions.js');
+  if (usersRepo.countUsers() === 0) {
+    usersRepo.createUser('wsgate', 'scrypt$test'); // 占位——级联只查会话不验密码
+  }
+  const srv3 = http.createServer((req, res) => res.end('ok'));
+  const remote3 = attachRemoteControl(srv3, { allowedOrigins: [], token: '' });
+  await new Promise(r => srv3.listen(0, '127.0.0.1', r));
+  const b3 = `ws://127.0.0.1:${srv3.address().port}`;
+  const conn3 = (opts = {}) => new Promise((resolve) => {
+    const ws = new WebSocket(`${b3}/remote`, opts);
+    ws.once('open', () => resolve(ws));
+    ws.once('error', (e) => resolve({ code: Number(String(e.message).match(/\d{3}/)?.[0]) || 0 }));
+  });
+  try {
+    // 无 session、无 token（server 未配）→ 登录启用后必须 401 而非裸奔
+    const noCred = await conn3();
+    assert.equal(noCred.code, 401);
+    // 错误 token 同样 401（authEnabled 分支拒一切无 session 请求）
+    const badTok = await conn3({ });
+    // ?token= 通道（query 参数）
+    const badQ = await new Promise((resolve) => {
+      const ws = new WebSocket(`${b3}/remote?token=wrong`);
+      ws.once('open', () => resolve(ws));
+      ws.once('error', (e) => resolve({ code: Number(String(e.message).match(/\d{3}/)?.[0]) || 0 }));
+    });
+    assert.equal(badQ.code, 401);
+    assert.equal(badTok.code, 401);
+    // 有效 session cookie → 放行（sessionFromCookieHeader 命中即跳级联）
+    const raw = sessionsRepo.createSession(usersRepo.findByUsername('wsgate').id);
+    const authed = await conn3({ headers: { cookie: `ms_session=${raw}` } });
+    assert.ok(authed instanceof WebSocket);
+    await closeWs(authed);
+  } finally {
+    remote3.close();
+    await new Promise(r => srv3.close(r));
+    // users 非空会让 authEnabled() 为真——不清掉的话后续用例的无凭据
+    // 连接全部吃 401（容量测试靠匿名握手）。还原空表开放态
+    const { getDb } = require('../src/server/db/client.js');
+    getDb().exec('DELETE FROM sessions; DELETE FROM users');
+  }
+});
+
+test('remote：REMOTE_TOKEN 服务端——?token=/子协议双通道放行，错配 401', async () => {
+  const srv4 = http.createServer((req, res) => res.end('ok'));
+  const remote4 = attachRemoteControl(srv4, { allowedOrigins: [], token: 's3cr3t' });
+  await new Promise(r => srv4.listen(0, '127.0.0.1', r));
+  const b4 = `ws://127.0.0.1:${srv4.address().port}`;
+  try {
+    const good = await new Promise((resolve) => {
+      const ws = new WebSocket(`${b4}/remote?token=s3cr3t`);
+      ws.once('open', () => resolve(ws));
+      ws.once('error', (e) => resolve({ code: Number(String(e.message).match(/\d{3}/)?.[0]) || 0 }));
+    });
+    assert.ok(good instanceof WebSocket);
+    await closeWs(good);
+    // 子协议通道（不落 URL 日志的优选通道）
+    const proto = await new Promise((resolve) => {
+      const ws = new WebSocket(`${b4}/remote`, ['remote.s3cr3t']);
+      ws.once('open', () => resolve(ws));
+      ws.once('error', (e) => resolve({ code: Number(String(e.message).match(/\d{3}/)?.[0]) || 0 }));
+    });
+    assert.ok(proto instanceof WebSocket);
+    await closeWs(proto);
+    const bad = await new Promise((resolve) => {
+      const ws = new WebSocket(`${b4}/remote?token=nope`);
+      ws.once('open', () => resolve(ws));
+      ws.once('error', (e) => resolve({ code: Number(String(e.message).match(/\d{3}/)?.[0]) || 0 }));
+    });
+    assert.equal(bad.code, 401);
+  } finally {
+    remote4.close();
+    await new Promise(r => srv4.close(r));
+  }
+});
+
+test('remote：未认证升级洪泛触发 429 限流（20/min/IP 滑窗）', async () => {
+  // 'remote-upgrade' 桶模块级共享——前序用例已消耗若干额度；
+  // 上限 25 发内必须见到 429（漏限流会跑满 25 发全 401 而穿帮）
+  const srv5 = http.createServer((req, res) => res.end('ok'));
+  const remote5 = attachRemoteControl(srv5, { allowedOrigins: [], token: 'x' });
+  await new Promise(r => srv5.listen(0, '127.0.0.1', r));
+  const b5 = `ws://127.0.0.1:${srv5.address().port}`;
+  try {
+    let saw429 = false;
+    for (let i = 0; i < 25 && !saw429; i++) {
+      const code = await new Promise((resolve) => {
+        const ws = new WebSocket(`${b5}/remote?token=bad`);
+        ws.once('open', () => resolve('open'));
+        ws.once('error', (e) => resolve(Number(String(e.message).match(/\d{3}/)?.[0]) || 0));
+      });
+      if (code === 429) saw429 = true;
+      else assert.equal(code, 401); // 未限流前应全部是 401
+    }
+    assert.ok(saw429, '25 发未认证升级内未见 429——remote-upgrade 限流未生效');
+  } finally {
+    remote5.close();
+    await new Promise(r => srv5.close(r));
+  }
+});
+
 // ── 容量与停机（module 级 controllers 集合——保持此序收尾）──
 
 test('remote：第 33 个 controller 握手 503；close 后容量释放', async () => {

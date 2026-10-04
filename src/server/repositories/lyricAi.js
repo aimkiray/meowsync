@@ -6,7 +6,10 @@ const { aiModel } = require('../lib/ai');
 // AI 产译文按模型键控——换模型后旧译文永不命中（不然模型升级后仍发旧译）。
 // 但两类行必须永命中：skip:* 哨兵（TTL 内）与官方译文（model='netease'/
 // 'qq'，词源事实与 AI 模型无关）。currentModel 缺省取当前配置模型——
-// file-downloader 等单参调用点同口径受益
+// file-downloader 等单参调用点同口径受益。
+// 例外：currentModel 为空（AI 完全未配置/模型被清空）时放行全部非 skip
+// 行——存量 AI 译文好过没有；这与「AI 关闭后已落库译文照常下发」的
+// 路由语义自洽（否则清模型关 AI 会让下载链静默丢译文）
 function getCachedTranslation(songId, currentModel = aiModel()) {
   return getDb().prepare(
     `SELECT tlyric FROM song_lyric_translation WHERE song_id = ?
@@ -14,8 +17,9 @@ function getCachedTranslation(songId, currentModel = aiModel()) {
        (model LIKE 'skip:%' AND updated_at >= datetime('now', '-7 days'))
        OR model IN ('netease', 'qq')
        OR model = ?
+       OR (? = '' AND model NOT LIKE 'skip:%')
      )`
-  ).get(songId, currentModel || '');
+  ).get(songId, currentModel || '', currentModel || '');
 }
 
 function upsertTranslation(songId, tlyric, model) {
