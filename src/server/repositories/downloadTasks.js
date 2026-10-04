@@ -44,17 +44,18 @@ function createTask(input) {
   const db = getDb();
   const now = new Date().toISOString();
 
-  const result = db.prepare(`
-    INSERT INTO download_tasks (
-      playlist_id, queue_id, song_id, song_name, artist, album, cover_url,
-      status, progress, download_audio, download_lyrics, download_cover, download_video,
-      bitrate, duration_ms, provider_data, created_at, updated_at
-    ) VALUES (
-      @playlist_id, @queue_id, @song_id, @song_name, @artist, @album, @cover_url,
-      @status, @progress, @download_audio, @download_lyrics, @download_cover, @download_video,
-      @bitrate, @duration_ms, @provider_data, @created_at, @updated_at
-    )
-  `).run({
+  // download_* 标志只写显式传入的键：未传时落 0 会把建表默认 1（要音频/歌词/
+  // 封面）悄悄改成"不要该工件"——缺省字段语义应交给 schema DEFAULT
+  const flagDefs = [
+    ['download_audio', input.downloadAudio],
+    ['download_lyrics', input.downloadLyrics],
+    ['download_cover', input.downloadCover],
+    ['download_video', input.downloadVideo]
+  ].filter(([, value]) => value !== undefined);
+  const flagColumns = flagDefs.map(([column]) => column);
+  const flagValues = flagDefs.map(([column]) => `@${column}`);
+
+  const params = {
     playlist_id: input.playlistId,
     queue_id: input.queueId || null,
     song_id: input.songId,
@@ -64,16 +65,25 @@ function createTask(input) {
     cover_url: input.coverUrl || null,
     status: input.status || 'pending',
     progress: input.progress || 0,
-    download_audio: input.downloadAudio ? 1 : 0,
-    download_lyrics: input.downloadLyrics ? 1 : 0,
-    download_cover: input.downloadCover ? 1 : 0,
-    download_video: input.downloadVideo ? 1 : 0,
     bitrate: input.bitrate || 320000,
     duration_ms: input.durationMs || 0,
     provider_data: input.providerData ? JSON.stringify(input.providerData) : null,
     created_at: now,
     updated_at: now
-  });
+  };
+  for (const [column, value] of flagDefs) params[column] = value ? 1 : 0;
+
+  const result = db.prepare(`
+    INSERT INTO download_tasks (
+      playlist_id, queue_id, song_id, song_name, artist, album, cover_url,
+      status, progress${flagColumns.length ? `, ${flagColumns.join(', ')}` : ''},
+      bitrate, duration_ms, provider_data, created_at, updated_at
+    ) VALUES (
+      @playlist_id, @queue_id, @song_id, @song_name, @artist, @album, @cover_url,
+      @status, @progress${flagValues.length ? `, ${flagValues.join(', ')}` : ''},
+      @bitrate, @duration_ms, @provider_data, @created_at, @updated_at
+    )
+  `).run(params);
 
   return findTaskById(result.lastInsertRowid);
 }

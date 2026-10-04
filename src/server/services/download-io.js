@@ -274,7 +274,22 @@ async function streamToFile(response, outputPath, { maxBytes, onProgress, maxTot
       response.data.destroy();
       throw fatalError('上游返回了压缩内容，无法校验完整性');
     }
-    const totalLength = parseInt(response.headers['content-length'], 10);
+    let totalLength = parseInt(response.headers['content-length'], 10);
+    // 206 必须按 Content-Range 对账而非 content-length：局部窗（自适应流只放
+    // 首段的实测行为）的 content-length 与窗口字节一致，会骗过对账把截断
+    // 工件当完整件登记。要求 `bytes 0-N/TOTAL`（start=0），体积闸与落盘校验
+    // 都用 TOTAL；缺/畸形头的 206 判**可重试**而非 fatal——非严格上游可能只是
+    // 少发头仍回全量字节，下次取链可能换到健康源（判死反而制造硬失败）
+    if (response.status === 206) {
+      const rangeHeader = String(response.headers['content-range'] || '').trim();
+      const m = /^bytes (\d+)-(\d+)\/(\d+|\*)$/i.exec(rangeHeader);
+      const rangeTotal = m && m[3] !== '*' ? parseInt(m[3], 10) : NaN;
+      if (!m || parseInt(m[1], 10) !== 0 || !Number.isFinite(rangeTotal) || rangeTotal <= 0) {
+        response.data.destroy();
+        throw new Error(`上游 206 响应缺少有效 Content-Range（${rangeHeader || '无此头'}）`);
+      }
+      totalLength = rangeTotal;
+    }
     // 声明就已超限：headers 到手即拒，不把上限先流一遍
     if (totalLength > maxBytes) {
       response.data.destroy();
@@ -315,8 +330,8 @@ async function streamToFile(response, outputPath, { maxBytes, onProgress, maxTot
       // 上游 200 但空 body 对该 URL 是确定性失败——标 fatal 不浪费重试
       throw fatalError('下载内容为空');
     }
-    // content-length 与落盘大小对账：
-    // - 小于声明 = 服务端截断（瞬时传输问题，可重试）
+    // 声明长度（200 的 content-length / 206 的 Content-Range TOTAL）与落盘大小对账：
+    // - 小于声明 = 服务端截断/局部窗（瞬时传输问题，可重试）
     // - 大于声明 = 上游虚报 length（确定性违规，重试结果相同）→ fatal
     if (totalLength > 0 && stats.size > totalLength) {
       throw fatalError(`上游虚报长度（${stats.size}/${totalLength} 字节）`);

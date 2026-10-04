@@ -356,10 +356,17 @@ async function startQueue(queueId) {
     throw httpError(409, '该歌单正在删除中');
   }
 
-  // failed/completed 队列没有 pending 任务可跑——直接启动会走正常收尾把它们
-  // 覆写成 completed，失败痕迹被掩盖（重试应走 /retry 接口而非 /start）
+  // failed/completed 队列没有可跑行时拒绝启动——直接启动会走正常收尾把
+  // failed 覆写成 completed，失败痕迹被掩盖（重试应走 /retry 接口）。
+  // 例外：终态下仍残留 pending/downloading 行（崩溃漂移/状态迁移写失败
+  // 钉死的行——新协程收尾会先把无主 downloading 行收敛回 pending）——
+  // 不放行它们就永远没有任何重启入口
   if (queue.status === 'failed' || queue.status === 'completed') {
-    throw httpError(409, '队列已完结，请使用重试接口');
+    const hasRunnable = downloadTasksRepo.listTasksByQueue(queueId)
+      .some(t => t.status === 'pending' || t.status === 'downloading');
+    if (!hasRunnable) {
+      throw httpError(409, '队列已完结，请使用重试接口');
+    }
   }
 
   downloadQueuesRepo.updateQueue(queueId, { status: 'running' });
@@ -384,7 +391,15 @@ async function startQueue(queueId) {
       // 并发 cancel 的终态不许被崩溃路径覆盖——cancelled 优先于 failed
       const row = downloadQueuesRepo.findQueueById(queueId);
       if (row && row.status !== 'cancelled') {
-        downloadQueuesRepo.updateQueue(queueId, { status: 'failed' });
+        // 终态必须与任务集合自洽：还有 pending/downloading 行时判 failed
+        // 会永久搁浅它们（failed_tasks=0 时 retryQueue 拒收、startQueue 拒
+        // 空终态）——回 pending 保留启动入口；downloading 行由下次协程
+        // 收尾的收敛步骤复位重跑
+        const rows = downloadTasksRepo.listTasksByQueue(queueId);
+        const status = rows.some(t => t.status === 'pending' || t.status === 'downloading')
+          ? 'pending'
+          : rows.some(t => t.status === 'failed') ? 'failed' : 'completed';
+        downloadQueuesRepo.updateQueue(queueId, { status });
       }
       recountQueueCounters(queueId); // 崩溃路径跳过了 processQueue 收尾，补一次重算
     } catch { /* 行可能已删 */ }
@@ -414,6 +429,10 @@ async function processQueue(queueId, controller) {
     ? queue.concurrentLimit
     : 3;
   const runningTasks = [];
+  // 本协程派出的在途任务 id——「行是 downloading 但 id 不在此集合」即钉死行
+  // （processTask 派发即翻 downloading，只有状态迁移写持续失败才留不住终态）。
+  // 与 runningTasks 同步生灭，供收敛步骤区分"真在跑"与"钉死"
+  const inflightTaskIds = new Set();
   // 路径锁 409 的延迟重试集合：持锁方（其他任务/standalone 下载）可能写几十秒，
   // 每轮立即重捞重试等于全速空转打 DB。记入 deferred 本轮跳过重试；
   // 任一在途任务 settle（说明有锁释放）或全卡死时 sleep 退避后清空重试。
@@ -452,6 +471,21 @@ async function processQueue(queueId, controller) {
       } catch { /* 任务行可能已被删 */ }
     }
   };
+  // 「downloading 且无在途 promise」的行收敛：完成/失败/复位的状态迁移写在
+  // DB 瞬时故障窗口内连续失败会把行钉在 downloading——pending 过滤看不见它、
+  // 终态判定又把它当"还在跑"，队列会判成 completed 而它永无恢复入口。
+  // retryCount 预算内复位 pending（分段幂等重跑补齐），耗尽判 failed；
+  // 复位必须消耗预算——状态写持续失败时"复位→重下→再钉死"会无界循环打上游
+  const convergeStrandedDownloading = () => {
+    for (const row of downloadTasksRepo.listTasksByQueue(queueId)) {
+      if (row.status !== 'downloading' || inflightTaskIds.has(row.id)) continue;
+      try {
+        downloadTasksRepo.updateTask(row.id, row.retryCount < 3
+          ? { status: 'pending', retryCount: row.retryCount + 1, errorMessage: '下载中断，已复位待重跑' }
+          : { status: 'failed', errorMessage: '下载中断' });
+      } catch { /* 行可能已删 */ }
+    }
+  };
   // unref：race 输掉的退避/暂停 timer 不该拖住进程退出
   const sleep = (ms) => new Promise(resolve => {
     const t = setTimeout(resolve, ms);
@@ -487,6 +521,9 @@ async function processQueue(queueId, controller) {
     if (pendingTasks.length === 0) {
       if (runningTasks.length === 0) {
         expireDeferred();
+        // 钉死的 downloading 行先收敛再判终态——复位 pending 的行下一轮
+        // 自然重派，判 failed 的进终态计数
+        convergeStrandedDownloading();
         // 收尾的唯一条件是"库里没有 pending 行"：expireDeferred 放行等锁任务的
         // 瞬间 deferred 会清空，但行仍是 pending 待派发——按 deferred.size 判断
         // 会提前 break，队列标 completed 而歌单缺歌（且无恢复入口：startQueue 拒
@@ -503,11 +540,13 @@ async function processQueue(queueId, controller) {
           await sleep(Math.min(Math.max(Math.min(...backoffAt) - Date.now(), 50), 1000));
           continue;
         }
-        // 全部剩余任务都在等路径锁：退避后重试一轮。
+        // 全部剩余任务都在等路径锁（或退避与等锁并存）：退避后重试一轮。
+        // 400ms 忙轮询在长持锁/长退避窗口内空扫 DB——2s 下限的探测粒度对
+        // 锁释放与退避到期都足够快，且不死等（退避到期分支上一条已精确睡）
         // 不得 deferred.clear()——clear 会销毁 since 时间戳，锁泄漏场景下
         // 每轮重建即"全新冲突"，15min 硬顶永不可达；expireDeferred 已放行
         // 锁释放的条目，仍持锁的必须留住计时
-        await sleep(400);
+        await sleep(2000);
         continue;
       }
       // 在途任务可能把失败任务复位 pending 或释放路径锁——等一个 settle 再重查。
@@ -538,6 +577,7 @@ async function processQueue(queueId, controller) {
       await waitWhilePaused();
       if (controller.cancelled) break;
 
+      inflightTaskIds.add(task.id);
       const taskPromise = processTask(task, queueId, controller.abort.signal)
         .then(() => {
           // 正常收尾（含内部自吞的失败）：本轮等锁结束——清掉时间戳化石，
@@ -571,6 +611,7 @@ async function processQueue(queueId, controller) {
           }
         })
         .finally(() => {
+          inflightTaskIds.delete(task.id);
           const index = runningTasks.indexOf(taskPromise);
           if (index > -1) {
             runningTasks.splice(index, 1);
@@ -595,8 +636,17 @@ async function processQueue(queueId, controller) {
     return;
   }
 
-  const failedCount = downloadTasksRepo.listTasksByQueue(queueId)
-    .filter(t => t.status === 'failed').length;
+  // 在途 promise 全部 settle 后再收一次口：它们的终态写若也失败，行会钉在
+  // downloading——收敛后复位/判死的结果才进终态判定（cancelled 时同理，
+  // 复位行留给下次启动消费）
+  convergeStrandedDownloading();
+
+  const taskRows = downloadTasksRepo.listTasksByQueue(queueId);
+  const failedCount = taskRows.filter(t => t.status === 'failed').length;
+  // 收敛后仍有 pending/downloading 行 = 工作未完：写 completed 会把它带进
+  // 「终态且无重启入口」的死态（前端对 completed 不露出启动键）——收回
+  // pending 保持可再启动，startQueue/retryQueue 的放行口径已允许带可跑行
+  const hasUnfinished = taskRows.some(t => t.status === 'pending' || t.status === 'downloading');
 
   // 有失败任务的队列不应标 completed——"完成但缺歌"会掩盖失败痕迹，
   // failed 终态让前端露出"重试"入口（retryQueue 正是为它设计的）。
@@ -605,8 +655,9 @@ async function processQueue(queueId, controller) {
     downloadQueuesRepo.updateQueue(queueId, controller.cancelled
       ? { status: 'cancelled' }
       : {
-          status: failedCount > 0 ? 'failed' : 'completed',
-          completedAt: new Date().toISOString()
+          status: hasUnfinished ? 'pending'
+            : failedCount > 0 ? 'failed' : 'completed',
+          completedAt: hasUnfinished ? null : new Date().toISOString()
         });
     recountQueueCounters(queueId);
   })();
@@ -616,6 +667,24 @@ async function processQueue(queueId, controller) {
 
 
 
+
+// 状态迁移写（completed/failed/复位 pending）是行归属的关键写：瞬时 DB 故障
+// （SQLITE_BUSY 打满 busy_timeout、SQLITE_IOERR 抖动）下裸吞会把行钉在
+// downloading——无在途 promise、retryTask/删除/启动各入口都不认它。
+// 做一次有限重试再交给调用方兜底（标 failed 或收尾收敛步骤）
+async function updateTaskWithRetry(taskId, fields, retries = 2) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return downloadTasksRepo.updateTask(taskId, fields);
+    } catch (error) {
+      if (attempt >= retries) throw error;
+      await new Promise(resolve => {
+        const t = setTimeout(resolve, 100);
+        t.unref?.();
+      });
+    }
+  }
+}
 
 async function processTask(task, queueId, signal) {
   // 锁获取也进 try：taskLockKeys 的 siblings 查询等早期抛错若越过 try，
@@ -820,7 +889,7 @@ async function processTask(task, queueId, signal) {
     }
 
     try {
-      const done = downloadTasksRepo.updateTask(task.id, {
+      const done = await updateTaskWithRetry(task.id, {
         status: 'completed',
         progress: 100,
         completedAt: new Date().toISOString()
@@ -829,6 +898,15 @@ async function processTask(task, queueId, signal) {
       if (!done) return;
       retryAfter.delete(task.id);
     } catch {
+      // 重试仍败（行已删或 DB 持续故障）：裸吞会把行钉在 downloading——
+      // 队列收尾按 pending 过滤判 completed 而它永无入口。兜底标 failed
+      // 让重试链接管；这步再失败交给收尾的「无在途 downloading 行」收敛
+      try {
+        downloadTasksRepo.updateTask(task.id, {
+          status: 'failed',
+          errorMessage: '完成状态写入失败'
+        });
+      } catch { /* DB 持续故障——收尾收敛步骤兜底 */ }
       return;
     }
 
@@ -847,13 +925,13 @@ async function processTask(task, queueId, signal) {
       // 取消/停机中止：残文件由 downloader 清理；任务复位 pending 供下次重跑
       retryAfter.delete(task.id); // 取消即清退避，恢复后应可立即重跑
       try {
-        downloadTasksRepo.updateTask(task.id, {
+        await updateTaskWithRetry(task.id, {
           status: 'pending',
           progress: 0,
           errorMessage: '已取消'
         });
       } catch {
-        // 任务行可能已随队列级联删除
+        // 任务行可能已随队列级联删除；钉住的 downloading 由收尾收敛兜底
       }
       return;
     }
@@ -861,10 +939,12 @@ async function processTask(task, queueId, signal) {
     console.error(`任务 ${task.id} 失败:`, error);
 
     // fatal（解锁失败/试听片段）是确定性失败，重试只会重复打上游；可重试错误走 retryCount 路径。
-    // 每步 DB 写独立兜底：行/队列可能已被并发删除，局部失败不得把行卡在 downloading
+    // 每步 DB 写独立兜底：行/队列可能已被并发删除；瞬时故障下裸吞会把行钉在
+    // downloading（无在途且无恢复入口）——状态迁移走有限重试，仍败则兜底
+    // 标 failed 或交给收尾收敛
     if (!error.fatal && task.retryCount < 3) {
       try {
-        downloadTasksRepo.updateTask(task.id, {
+        await updateTaskWithRetry(task.id, {
           retryCount: task.retryCount + 1,
           status: 'pending',
           errorMessage: sanitizeErrorMessage(error.message)
@@ -879,15 +959,24 @@ async function processTask(task, queueId, signal) {
             if (at <= now) retryAfter.delete(id);
           }
         }
-      } catch { /* 行已删 */ }
+      } catch {
+        // 复位写持续失败且行未被删：留在 downloading 等于钉死——尽力改判
+        // failed 让重试入口接住；再失败交给收尾收敛/重启恢复
+        try {
+          downloadTasksRepo.updateTask(task.id, {
+            status: 'failed',
+            errorMessage: '状态写入失败'
+          });
+        } catch { /* 行已删/DB 持续故障 */ }
+      }
     } else {
       retryAfter.delete(task.id);
       try {
-        downloadTasksRepo.updateTask(task.id, {
+        await updateTaskWithRetry(task.id, {
           status: 'failed',
           errorMessage: sanitizeErrorMessage(error.message)
         });
-      } catch { /* 行已删 */ }
+      } catch { /* 行已删/DB 持续故障——收尾收敛兜底 */ }
       if (queueId !== null && queueId !== undefined) {
         recountQueueCounters(queueId);
       }
@@ -1000,6 +1089,21 @@ function recountQueueCounters(queueId) {
     // 事务外（settle 回调/排空兜底）吞掉合理：队列行已删时读为空 return
     // 本就不写，能进 catch 的都是一次性读写失败
     if (getDb().inTransaction) throw error;
+  }
+}
+
+// 终态自洽收尾：failed 队列在失败/完成行被删光后既无 failed 也无
+// pending/downloading 行——留在 failed 是无入口死壳（start 拒空终态、
+// retry 要 failed 行、前端只剩「删除」），收回 pending 让用户可再启动
+// （无任务时启动会自然收尾成 completed 空壳，建队路径也会收养复活它）
+function reconcileTerminalQueue(queueId) {
+  const queue = downloadQueuesRepo.findQueueById(queueId);
+  if (!queue || queue.status !== 'failed') return;
+  if (queueHasLiveController(queueId)) return;
+  const hasRunnable = downloadTasksRepo.listTasksByQueue(queueId)
+    .some(t => t.status === 'pending' || t.status === 'failed' || t.status === 'downloading');
+  if (!hasRunnable) {
+    downloadQueuesRepo.updateQueue(queueId, { status: 'pending', completedAt: null });
   }
 }
 
@@ -1205,10 +1309,14 @@ function deleteTask(taskId) {
 
   // 行先删、文件后删：崩溃窗口反过来留的是"行还在但文件没了"的幻影
   // completed（收养时计成已下载、静默缺歌），比孤儿文件危害大。
-  // 行删+计数重算同事务：半途 SQLITE_BUSY 不留"行没了计数没动"的漂移
+  // 行删+计数重算+终态自洽同事务：半途 SQLITE_BUSY 不留漂移；
+  // 删光 failed 队列的最后行后它不能停在无入口的 failed 死壳
   getDb().transaction(() => {
     downloadTasksRepo.deleteTask(taskId);
-    if (task.queueId) recountQueueCounters(task.queueId);
+    if (task.queueId) {
+      recountQueueCounters(task.queueId);
+      reconcileTerminalQueue(task.queueId);
+    }
   })();
   retryAfter.delete(taskId); // 行已不存在，退避条目失去意义
   const deletedFiles = deleteFiles([task.audioPath, task.lyricsPath, task.coverPath, task.videoPath]);
@@ -1323,6 +1431,11 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
   }
 
   const resolvedPlaylistId = await resolvePlaylistId(playlistId);
+  // await 上游导入窗口内可能已开始停机——停机排空已结束后再建行/派协程
+  // 会落没有任何消费者的 pending 孤儿行（与 createDownloadQueue 同口径复查）
+  if (shuttingDown) {
+    throw httpError(409, '服务正在停机');
+  }
   if (deletingPlaylists.has(resolvedPlaylistId)) {
     throw httpError(409, '该歌单正在删除中');
   }
@@ -1648,14 +1761,17 @@ async function deleteSongFiles(playlistId, songId) {
   }
 
   // 行先删、文件后删（理由同 deleteTask：幻影 completed 行比孤儿文件危害大）。
-  // 行删+计数重算同事务——半途失败不留"删了一半/计数漂移"
+  // 行删+计数重算+终态自洽同事务——半途失败不留"删了一半/计数漂移"
   getDb().transaction(() => {
     const affectedQueues = new Set();
     for (const task of tasks) {
       downloadTasksRepo.deleteTask(task.id);
       if (task.queueId) affectedQueues.add(task.queueId);
     }
-    for (const qid of affectedQueues) recountQueueCounters(qid);
+    for (const qid of affectedQueues) {
+      recountQueueCounters(qid);
+      reconcileTerminalQueue(qid);
+    }
   })();
   for (const task of tasks) retryAfter.delete(task.id);
   const allPaths = [...new Set(tasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath]))];
@@ -1696,14 +1812,17 @@ async function deletePlaylistDownloadedFiles(playlistId) {
       && (task.status === 'completed' || task.status === 'failed')
   );
 
-  // 行先删、文件后删（理由同 deleteTask）；行删+计数重算同事务
+  // 行先删、文件后删（理由同 deleteTask）；行删+计数重算+终态自洽同事务
   getDb().transaction(() => {
     const affectedQueues = new Set();
     for (const task of downloadedTasks) {
       downloadTasksRepo.deleteTask(task.id);
       if (task.queueId) affectedQueues.add(task.queueId);
     }
-    for (const qid of affectedQueues) recountQueueCounters(qid);
+    for (const qid of affectedQueues) {
+      recountQueueCounters(qid);
+      reconcileTerminalQueue(qid);
+    }
   })();
   for (const task of downloadedTasks) retryAfter.delete(task.id);
   const allPaths = [...new Set(
@@ -2014,6 +2133,13 @@ async function retryQueue(queueId) {
   const failedTasks = tasks.filter(task => task.status === 'failed');
 
   if (failedTasks.length === 0) {
+    // 无 failed 但还有 pending/downloading 行（崩溃兜底回 pending、删除路径
+    // 收回、状态写失败钉死的行）——「没有可重试任务」会把这批行永久搁浅：
+    // failed_tasks=0 时 start 拒终态、retry 拒无失败，任何入口都不通。
+    // 退化为启动语义让协程正常消费/收尾（含无主 downloading 行的收敛）
+    if (tasks.some(t => t.status === 'pending' || t.status === 'downloading')) {
+      return startQueue(queueId);
+    }
     throw httpError(400, '没有可重试的失败任务');
   }
 
