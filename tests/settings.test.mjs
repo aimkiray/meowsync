@@ -104,6 +104,9 @@ test('settings.normalizeOverride：base_url 写时验 scheme/userinfo', () => {
   assert.ok(settings.normalizeOverride('ai_base_url', '///').error); // 归一化后空串不 phantom 落库
   // userinfo 内嵌凭据会被 GET 原文回显——Bearer 之外的第二认证通道必须挡
   assert.ok(settings.normalizeOverride('ai_base_url', 'https://user:pass@gateway/v1').error);
+  // query/fragment 会被 postChat 裸拼接吞掉路径——test 绿而真实调用 404
+  assert.ok(settings.normalizeOverride('ai_base_url', 'http://x/v1?foo=bar').error);
+  assert.ok(settings.normalizeOverride('ai_base_url', 'http://x/v1#frag').error);
 });
 
 test('settings.normalizeOverride：掩码尾标不可回写为密钥本体', () => {
@@ -133,20 +136,58 @@ test('settings.aiKeyBoundTo：env 密钥绑定其配置网关 origin', () => {
   repo.del('ai_base_url');
 });
 
-test('settings.persistRenewedQqCookie：在飞窗口内 override 被改则不覆盖新值', () => {
-  process.env.QQ_COOKIE = 'old-env-cookie';
-  repo.set('qq_cookie', 'cookie-v1');
-  // 续期发起时快照是 cookie-v1——在飞期间管理员改成 cookie-v2，续期值不得盖掉
-  repo.set('qq_cookie', 'cookie-v2');
-  settings.persistRenewedQqCookie('renewed-v1', 'cookie-v1');
-  assert.equal(repo.get('qq_cookie'), 'cookie-v2'); // 新 override 保住
-  assert.equal(process.env.NEW_QQ_COOKIE, 'renewed-v1'); // env 写仍生效
-  // 快照吻合的正常路径照旧写
-  repo.set('qq_cookie', 'cookie-v3');
-  settings.persistRenewedQqCookie('renewed-v3', 'cookie-v3');
-  assert.equal(repo.get('qq_cookie'), 'renewed-v3');
+test('settings.persistRenewedQqCookie：续期按来源归位，在飞改动不被旧值盖掉', () => {
+  process.env.QQ_COOKIE = 'env-account-A';
+  try {
+    // DB override（账号 B）发起的续期——回 DB，不写 env 槽：
+    // 否则清掉 override 后回落到的是账号 B 而非 env 的账号 A（静默换主）
+    repo.set('qq_cookie', 'cookie-B');
+    settings.persistRenewedQqCookie('renewed-B', 'cookie-B');
+    assert.equal(repo.get('qq_cookie'), 'renewed-B');
+    assert.equal(process.env.NEW_QQ_COOKIE, undefined);
+
+    // env 链（账号 A）发起的续期——回 NEW_QQ_COOKIE
+    repo.del('qq_cookie');
+    settings.persistRenewedQqCookie('renewed-A', 'env-account-A');
+    assert.equal(process.env.NEW_QQ_COOKIE, 'renewed-A');
+
+    // 在飞窗口内 override 被改：旧凭据续期值既不盖新 override 也不渗 env
+    repo.set('qq_cookie', 'cookie-v2');
+    settings.persistRenewedQqCookie('renewed-v1', 'cookie-v1');
+    assert.equal(repo.get('qq_cookie'), 'cookie-v2');
+    assert.equal(process.env.NEW_QQ_COOKIE, 'renewed-A'); // 未被 renewed-v1 污染
+
+    // 在飞窗口内 env 被换：envCur 与快照不符 → 不盖新 env
+    process.env.QQ_COOKIE = 'env-account-C';
+    delete process.env.NEW_QQ_COOKIE;
+    settings.persistRenewedQqCookie('renewed-A2', 'env-account-A');
+    assert.equal(process.env.NEW_QQ_COOKIE, undefined);
+  } finally {
+    repo.del('qq_cookie');
+    delete process.env.QQ_COOKIE;
+    delete process.env.NEW_QQ_COOKIE;
+  }
+});
+
+test('settings.persistRenewedQqCookie：脏行归一化后吻合也照写', () => {
+  // 写库侧挡过非 ASCII，但旧库/手工行可能带脏——比对口径须与 qqCookie()
+  // 消费口径一致，否则续期值在 override 阴影下永远落不进 DB
+  repo.set('qq_cookie', ' cookie-dirty\u4e2d ');
+  settings.persistRenewedQqCookie('renewed-dirty', 'cookie-dirty');
+  assert.equal(repo.get('qq_cookie'), 'renewed-dirty');
   repo.del('qq_cookie');
   delete process.env.NEW_QQ_COOKIE;
+});
+
+test('settings.aiKeyBoundTo：非法字符的 env 密钥按未配置处理', () => {
+  // env 直配未过写入校验——带 \n 的 key 会在 undici 头校验异常里被原文
+  // 回显，绑定层必须拒发（不读值、不落日志）
+  process.env.AI_BASE_URL = 'http://gw:8317';
+  process.env.AI_API_KEY = 'sk-bad\nkey';
+  assert.equal(settings.aiKeyBoundTo('http://gw:8317'), null);
+  assert.equal(settings.aiConfig().apiKey, null);
+  process.env.AI_API_KEY = 'sk-good';
+  assert.equal(settings.aiKeyBoundTo('http://gw:8317'), 'sk-good');
 });
 
 test('settings.describeSettings：qq_cookie 认 NEW_QQ_COOKIE 续期链首命中', () => {
@@ -249,7 +290,7 @@ test('POST /settings/ai-test：密钥回落过 origin 绑定 + 上游形态映�
   });
   body = await res.json();
   assert.equal(body.ok, false);
-  assert.equal(body.reason, 'incomplete');
+  assert.equal(body.reason, 'key-bound'); // 密钥在位但被 origin 绑定扣下
   assert.equal(calls.length, 1); // 未发出任何上游请求
 
   // 显式草稿 key + 异源 URL——管理员自输的密钥允许随行
@@ -267,6 +308,22 @@ test('POST /settings/ai-test：密钥回落过 origin 绑定 + 上游形态映�
     body: JSON.stringify({ baseUrl: 'javascript:x', apiKey: 'k' }),
   });
   assert.equal((await res.json()).reason, 'bad-url');
+
+  // 草稿 URL 异源 + env 密钥在位 → key-bound（区分「没配」与「绑定扣下」）
+  res = await settingsRoute.request('http://t/settings/ai-test', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ baseUrl: 'https://attacker.example' }),
+  });
+  assert.equal((await res.json()).reason, 'key-bound');
+
+  // 含非法字符的草稿 key → bad-key，不触达上游、不回显值
+  res = await settingsRoute.request('http://t/settings/ai-test', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ baseUrl: 'http://gw-a:8317', apiKey: 'sk-a\nb' }),
+  });
+  body = await res.json();
+  assert.equal(body.reason, 'bad-key');
+  assert.equal(body.message.includes('sk-a'), false); // 错误文案不携密钥
 });
 
 test('POST /settings/ai-test：上游非 2xx 与异常形态', async (t) => {

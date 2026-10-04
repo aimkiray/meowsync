@@ -274,25 +274,29 @@ export default {
       }
     }
 
+    // 世代戳：在飞期间输入被编辑 → 着陆的旧结果按作废处理
+    let testGen = 0
     const testAi = async () => {
+      const gen = ++testGen
       testing.value = true
       testResult.value = null
       try {
         // 草稿值直送——「填了还没存先测」是设置页的自然动作；
         // 空段由服务端回落生效配置
-        testResult.value = await settingsApi.testAi({
+        const r = await settingsApi.testAi({
           baseUrl: aiBase.value.trim(),
           apiKey: aiKey.value.trim(),
           model: aiModelName.value.trim(),
         })
+        if (gen === testGen) testResult.value = r
       } catch (e) {
-        testResult.value = { ok: false, message: apiErrorMessage(e) }
+        if (gen === testGen) testResult.value = { ok: false, message: apiErrorMessage(e) }
       } finally {
         testing.value = false
       }
     }
     // 输入一改旧结果即失效——避免「连接成功」挂在已改的配置下误导
-    watch([aiBase, aiKey, aiModelName], () => { testResult.value = null })
+    watch([aiBase, aiKey, aiModelName], () => { testGen++; testResult.value = null })
     const testResultText = computed(() => {
       const r = testResult.value
       if (!r) return ''
@@ -322,7 +326,8 @@ export default {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  overscroll-contain: contain;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 20px 16px 40px;
 }
 .settings-col { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
@@ -377,6 +382,11 @@ export default {
 }
 .settings-textarea:focus { outline: 2px solid currentColor; outline-offset: -1px; }
 .settings-textarea::placeholder { color: var(--ink-64); }
+/* iOS 聚焦防缩放要 16px——scoped 自带媒体块：全局 pointer:coarse 规则
+   优先级低于 [data-v] 属性选择器，压不住本组件的 12px */
+@media (pointer: coarse) {
+  .settings-textarea { font-size: 16px; }
+}
 
 .settings-themes, .settings-stepper { display: flex; gap: 6px; align-items: center; }
 .settings-stepper-val { font-family: var(--font-mono); font-size: 12px; min-width: 44px; text-align: center; }
