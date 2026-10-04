@@ -384,11 +384,9 @@
 
 <style scoped>
 .song-list-main {
-  padding: 20px;
-}
-/* 窄屏让利：360px 视口 40px 边距吃掉 11% 屏宽——行信息列优先 */
-@media (max-width: 640px) {
-  .song-list-main { padding: 12px; }
+  /* 全向走全站页缘档 --page-pad-x（≤640 收成 12px，见 style.css）：
+     360px 视口 40px 边距吃掉 11% 屏宽——行信息列优先 */
+  padding: var(--page-pad-x, 20px);
 }
 
 .song-rows { scrollbar-gutter: stable; }
@@ -630,7 +628,8 @@
   margin-top: 2px;
 }
 
-/* YTM 曲目行第四列：专辑名——与信息列均分剩余，窄屏让位 */
+/* YTM 曲目行第四列：专辑名——与信息列均分剩余，≤640 compact 档让位
+   （641+ 列表列宽 ≥577px，专辑列塞得下） */
 .song-album {
   flex: 1;
   min-width: 0;
@@ -641,7 +640,7 @@
   text-overflow: ellipsis;
 }
 .song-row--playing .song-album { color: var(--label-grey); }
-@media (max-width: 700px) {
+@media (max-width: 640px) {
   .song-album { display: none; }
 }
 
@@ -761,6 +760,12 @@
     gap: 12px;
   }
   .playlist-hero-cover-wrap { width: 88px; height: 88px; margin: 4px; }
+}
+
+/* 矮视口（横屏手机 ~360px 高）：固定 hero 连封面~140px 吃掉近半屏——
+   封面再收一档给行列表让位 */
+@media (max-height: 540px) {
+  .playlist-hero-cover-wrap { width: 56px; height: 56px; }
 }
 
 /* ── 统计脚 ── */
@@ -1053,7 +1058,8 @@ export default {
     }
 
 
-    // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌；Escape 同关
+    // fixed 菜单不随滚动移动——滚动/翻页时直接关，避免菜单悬空指错歌；
+    // resize 同理（菜单位置点击时算死，视口变了即过期）；Escape 同关
     if (typeof window !== 'undefined') {
       const closeOnScroll = () => { closeDownloadMenu() }
       const closeOnEscape = (e) => {
@@ -1063,9 +1069,11 @@ export default {
         if (reorderMode.value) exitReorderMode()
       }
       window.addEventListener('scroll', closeOnScroll, true)
+      window.addEventListener('resize', closeOnScroll)
       window.addEventListener('keydown', closeOnEscape)
       onBeforeUnmount(() => {
         window.removeEventListener('scroll', closeOnScroll, true)
+        window.removeEventListener('resize', closeOnScroll)
         window.removeEventListener('keydown', closeOnEscape)
       })
     }

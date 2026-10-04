@@ -16,7 +16,8 @@
       </span>
     </div>
 
-    <div v-if="selectedQueue" class="dtl-stats grid grid-cols-2 xl:grid-cols-4 gap-2">
+    <!-- 统计格列数跟面板宽而非布局断点：<xl 本列已是全宽 ~700px+，4 格塞得下（md=768 是最近档位） -->
+    <div v-if="selectedQueue" class="dtl-stats grid grid-cols-2 md:grid-cols-4 gap-2">
       <div class="dtl-stat">
         <p class="pg-label pg-label--dim">总任务</p>
         <p class="dtl-stat-num">{{ taskStats.total }}</p>
@@ -333,6 +334,10 @@ const taskGroups = [
   overflow-y: auto;
   border-top: var(--hairline-soft);
   padding: 12px 16px;
+}
+/* ≤640 容器内收减半——给任务卡让回 ~16px 横向 */
+@media (max-width: 640px) {
+  .dtl-scroll { padding: 8px; }
 }
 /* 同 .dql-scroll：<xl 滚动器在外层网格，本列不内滚——车道只在 ≥xl 常驻 */
 @media (min-width: 1280px) {

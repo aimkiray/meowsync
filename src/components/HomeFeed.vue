@@ -169,8 +169,9 @@ export default {
 <style scoped>
 .home-feed {
   /* 滚动条车道上下内缩：透明 border 把轨道抬离页缘 20px，
-     与内容首行轴齐平；padding-block 让位同量，内容几何不动 */
-  padding: 0 20px;
+     与内容首行轴齐平；padding-block 让位同量，内容几何不动。
+     横向页缘走 --page-pad-x 全站档（≤640 收 12px） */
+  padding: 0 var(--page-pad-x, 20px);
   border-block: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
@@ -248,6 +249,8 @@ export default {
   overflow-x: auto;
   padding-bottom: 8px;
 }
+/* ≥641 货架卡 160→180（YTM carousel ≤615=160/mid=180 阶梯） */
+@media (min-width: 641px) { .home-shelf { grid-auto-columns: 180px; gap: 24px; } }
 
 /* 卡片外壳已上收全局 style.css——这里只留「整卡可点」语义 */
 .grid-card { cursor: pointer; }

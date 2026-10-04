@@ -349,8 +349,9 @@ export default {
 
 <style scoped>
 .playlist-grid-wrap {
-  /* 同 .home-feed：透明 border 抬滚动条车道离页缘，内容轴不动 */
-  padding: 0 20px;
+  /* 同 .home-feed：透明 border 抬滚动条车道离页缘，内容轴不动；
+     横向页缘走 --page-pad-x 全站档（≤640 收 12px） */
+  padding: 0 var(--page-pad-x, 20px);
   border-block: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
@@ -529,6 +530,13 @@ export default {
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 16px;
 }
+/* ≥641 卡片地板向 YTM 180 档半收：≥140 保 360px 双列；160 是 641+
+   的更宽呼吸位（YTM new_releases 160/180 阶梯同构） */
+@media (min-width: 641px) {
+  .playlist-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+}
+/* ≥901 向 YTM gap 24 档（16→24 @936 同型） */
+@media (min-width: 901px) { .playlist-grid { gap: 24px; } }
 
 /* 卡片外壳/cover/-name/-meta 均已上收全局 style.css。
    .grid-card-main 是 role=button 点击区——动作键是它兄弟节点，消灭嵌套可交互 */
