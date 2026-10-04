@@ -1,7 +1,7 @@
 <template>
   <!-- YTM /watch 播放页：顶行 返回+操作，左栏 媒体本体，右栏 待播/歌词/相关
        tab。走带/进度/音量/歌曲 meta 不重复渲染——底部播放条已覆盖 -->
-  <div ref="viewEl" class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
+  <div ref="viewEl" class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" :class="{ 'watch-view--video': mediaVideoActive }" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
     <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
@@ -258,8 +258,9 @@
         </div>
 
         <!-- 队列页脚钉在面板底缘（YTM UP NEXT 同构）——不挂进滚动体，
-             千行队列时不必滚到底才够得着；空队列时只剩居中开关；
-             移动单列态随页流、视觉位置与嵌在列表尾部相同 -->
+             千行队列时不必滚到底才够得着；空队列时只剩居中开关。
+             移动单列态随页流、视觉位置与嵌在列表尾部相同；视频分屏态
+             侧栏是有界 flex 列，flex 序把它钉在栏底（同宽屏/歌词工具条） -->
         <div v-show="tab === 'queue'" class="watch-queue-foot" :class="{ 'watch-queue-foot--empty': !queue.length }">
           <template v-if="queue.length">
             <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('save-queue')" title="把当前队列存成新歌单">
@@ -282,36 +283,6 @@
             />
             <span>自动播放</span>
           </label>
-        </div>
-
-        <!-- 歌词工具条：字号调节（本机偏好）+ 时间校准（按词源入库）。
-             宽屏不挂进侧栏滚动体——面板内滚时恒可见；单列整页滚态随页流
-             （钉顶空间留给 tabs——工具条是低频校准件） -->
-        <div v-if="tab === 'lyrics' && currentSong" class="lyric-tools">
-          <div class="lyric-tools-group" role="group" aria-label="歌词字号">
-            <button type="button" class="lyric-tool" :disabled="lyricFontSize <= LYRIC_FS_MIN"
-              @click="lyricFontSize--" title="歌词字号减小" aria-label="减小字号">A−</button>
-            <span class="lyric-tool-val" aria-live="polite" aria-label="当前字号">{{ lyricFontSize }}px</span>
-            <button type="button" class="lyric-tool" :disabled="lyricFontSize >= LYRIC_FS_MAX"
-              @click="lyricFontSize++" title="歌词字号增大" aria-label="增大字号">A+</button>
-          </div>
-          <div class="lyric-tools-group" role="group" aria-label="歌词时间校准">
-            <!-- 切歌/歌词在途期间禁调——此时显示的还是旧曲的词与校准值 -->
-            <button type="button" class="lyric-tool"
-              :disabled="!lyrics.length || songSwitching || loadingLyrics"
-              @click="$emit('lyric-offset-adjust', -500)"
-              title="歌词延后 0.5 秒" aria-label="歌词延后 0.5 秒">−0.5s</button>
-            <button type="button" class="lyric-tool lyric-tool-val lyric-tool-reset"
-              :disabled="!lyrics.length || lyricOffsetMs === 0 || songSwitching || loadingLyrics"
-              @click="$emit('lyric-offset-reset')"
-              :aria-label="`复位时间校准，当前 ${lyricOffsetLabel}`"
-              :title="`当前校准 ${lyricOffsetLabel}，点击复位`"
-            ><span aria-live="polite">{{ lyricOffsetLabel }}</span><template v-if="lyricOffsetMs !== 0"> ↺</template></button>
-            <button type="button" class="lyric-tool"
-              :disabled="!lyrics.length || songSwitching || loadingLyrics"
-              @click="$emit('lyric-offset-adjust', 500)"
-              title="歌词提前 0.5 秒" aria-label="歌词提前 0.5 秒">+0.5s</button>
-          </div>
         </div>
 
         <!-- 歌词 -->
@@ -347,6 +318,38 @@
               </div>
             </div>
           </template>
+        </div>
+
+        <!-- 歌词工具条：字号调节（本机偏好）+ 时间校准（按词源入库）。
+             DOM 序钉在歌词面板之后——宽屏/视频分屏态由 flex 序收在侧栏
+             底缘（队列页脚同款钉底约定，滚动体之外恒可见）；单列整页滚
+             态靠 sticky bottom 吸附在滚动口下沿——滚词恒可够到，不必
+             翻到全表末尾（低频校准件不抢钉顶，钉顶空间留给 tabs） -->
+        <div v-if="tab === 'lyrics' && currentSong" class="lyric-tools">
+          <div class="lyric-tools-group" role="group" aria-label="歌词字号">
+            <button type="button" class="lyric-tool" :disabled="lyricFontSize <= LYRIC_FS_MIN"
+              @click="lyricFontSize--" title="歌词字号减小" aria-label="减小字号">A−</button>
+            <span class="lyric-tool-val" aria-live="polite" aria-label="当前字号">{{ lyricFontSize }}px</span>
+            <button type="button" class="lyric-tool" :disabled="lyricFontSize >= LYRIC_FS_MAX"
+              @click="lyricFontSize++" title="歌词字号增大" aria-label="增大字号">A+</button>
+          </div>
+          <div class="lyric-tools-group" role="group" aria-label="歌词时间校准">
+            <!-- 切歌/歌词在途期间禁调——此时显示的还是旧曲的词与校准值 -->
+            <button type="button" class="lyric-tool"
+              :disabled="!lyrics.length || songSwitching || loadingLyrics"
+              @click="$emit('lyric-offset-adjust', -500)"
+              title="歌词延后 0.5 秒" aria-label="歌词延后 0.5 秒">−0.5s</button>
+            <button type="button" class="lyric-tool lyric-tool-val lyric-tool-reset"
+              :disabled="!lyrics.length || lyricOffsetMs === 0 || songSwitching || loadingLyrics"
+              @click="$emit('lyric-offset-reset')"
+              :aria-label="`复位时间校准，当前 ${lyricOffsetLabel}`"
+              :title="`当前校准 ${lyricOffsetLabel}，点击复位`"
+            ><span aria-live="polite">{{ lyricOffsetLabel }}</span><template v-if="lyricOffsetMs !== 0"> ↺</template></button>
+            <button type="button" class="lyric-tool"
+              :disabled="!lyrics.length || songSwitching || loadingLyrics"
+              @click="$emit('lyric-offset-adjust', 500)"
+              title="歌词提前 0.5 秒" aria-label="歌词提前 0.5 秒">+0.5s</button>
+          </div>
         </div>
 
         <!-- 相关（按当前艺人拉取，点击即播） -->
@@ -479,15 +482,17 @@ export default {
     const relatedEl = ref(null)
 
     // 离场滚动记忆：换页即整卸——单列页滚 .watch-view、宽屏左栏 .watch-main、
-    // 相关栏各自还位。队列/歌词两栏不存：重挂即按当前行重居中（与切 tab
+    // 相关栏各自还位（移动视频分屏态 view 页滚恒为 0，related 栏体自滚、
+    // 照旧按键还位）。队列/歌词两栏不存：重挂即按当前行重居中（与切 tab
     // 同律的 centerCurrentRow），存了也会被居中盖掉；view 页滚同理——
     // queue/lyrics tab 下单列态 scrollIntoView 连滚整页，还位只留 related
     const scrollRestoreCancels = []
     onMounted(() => nextTick(() => {
       for (const [key, el] of [
-        ...(props.tab === 'related' ? [['watch:view', viewEl.value]] : []),
+        ...(props.tab === 'related'
+          ? [['watch:view', viewEl.value], ['watch:related', relatedEl.value]]
+          : []),
         ['watch:main', mainColEl.value],
-        ['watch:related', relatedEl.value],
       ]) {
         const m = readScrollMem(key)
         if (m && el) scrollRestoreCancels.push(restoreScrollTop(el, m.top))
@@ -504,8 +509,10 @@ export default {
     // filteredSongs），前缀窗滚到底全量同构。行高 55.5px 均匀（首行
     // 少 1px 发丝边/中途 queue-sec ~28px 是常量误差，overscan 吸收）。
     // 快照语义不挂 resetWhen——队列替换/增删不回卷。双滚动根候选：
-    // ≥901px 内滚 queueContainer、<901px 整页 viewEl——每帧挑「此刻
-    // 真会滚的」，breakpoint 翻转不用 matchMedia。
+    // ≥901px 栏内滚或移动视频分屏态（面板体 overflow-y:auto）的
+    // queueContainer 在前、<901px 整页滚的 viewEl 殿后——每帧按
+    // computed overflow 挑「此刻真会滚的」，breakpoint/分屏翻转
+    // 不用 matchMedia。
     // pinIndex=拖拽行：拖到窗外时行仍留 DOM（--dragging 与几何基准不丢）
     // dragIndex 上移：pinIndex 传 ref 对象本体，setup 时引用不能 TDZ
     const dragIndex = ref(-1)
@@ -715,13 +722,22 @@ export default {
       nextTick(() => centerCurrentRow())
     })
 
-    // 单列态（<901px，与模板 wide: 断点同源）滚动器是 .watch-view 整页——
-    // 容器不限高不内滚、scrollTop 恒 0，rect 法空转；此时 scrollIntoView
-    // 只移动真滚动祖先，恰是整页居中所需。宽屏态用 rect 法只滚指定容器
-    // ——scrollIntoView 会连滚所有祖先，双栏态拽动整页。
+    // 「容器自身即真滚动口」判定：computed overflow-y 为 auto/scroll
+    // （与 useVirtualList.pickScroller 同口径）。命中面=宽屏栏内滚的
+    // 侧栏体 + 移动视频分屏态（≤900.98 ∧ ≥480h 媒体块）的侧栏体——
+    // 比 matchMedia 宽判多覆盖分屏一种情况；单列整页滚态侧栏体不限高
+    // （overflow visible 哑盒、scrollTop 恒 0）不命中
+    const isScrollport = (el) => {
+      if (!el || !el.getClientRects().length) return false
+      const oy = getComputedStyle(el).overflowY
+      return oy === 'auto' || oy === 'scroll'
+    }
+    // 内滚容器走 rect 法只滚容器——scrollIntoView 会连滚所有祖先、拽动
+    // 整页/邻栏；整页滚态容器是哑盒、rect 法空转，此时 scrollIntoView
+    // 只移动真滚动祖先 .watch-view，恰是单列居中所需
     const scrollRowIntoCenter = (container, el, smooth) => {
       if (!container || !el) return
-      if (!window.matchMedia('(min-width: 901px)').matches) {
+      if (!isScrollport(container)) {
         el.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' })
         return
       }
@@ -734,13 +750,15 @@ export default {
       scrollRowIntoCenter(lyricContainer.value,
         lyricContainer.value?.querySelector(`[data-lyric-index="${i}"]`), smooth)
     }
-    // 单列态整页滚：自动跟随只在歌词区覆盖视口中线时进行——用户还停在
-    // 封面/操作区，或歌词区偏离正中时，不把整页拽过去。宽屏歌词栏自滚、
-    // 不动整页，恒跟随。切 tab 是显式请求，centerCurrentRow 不走此闸
+    // 歌词自动跟随闸：歌词容器自身是滚动口（宽屏栏内滚/移动视频分屏的
+    // 侧栏体）时跟随只滚容器内部、不动整页——恒放行。单列整页滚才需要
+    // 几何闸：歌词区没压到视口中线（用户还停在封面/操作区，或词区偏离
+    // 正中）时不把整页拽过去。切 tab 是显式请求，centerCurrentRow 不走此闸
     const lyricsFollowable = () => {
-      if (window.matchMedia('(min-width: 901px)').matches) return true
-      const view = lyricContainer.value?.closest('.watch-view')
-      const list = lyricContainer.value?.querySelector('.watch-lyric-list')
+      const c = lyricContainer.value
+      if (isScrollport(c)) return true
+      const view = c?.closest('.watch-view')
+      const list = c?.querySelector('.watch-lyric-list')
       if (!view || !list) return false
       const v = view.getBoundingClientRect()
       const r = list.getBoundingClientRect()
@@ -748,8 +766,10 @@ export default {
       return r.top <= mid && r.bottom >= mid
     }
     // 手动滑动后暂停自动跟随：手指滑动/滚轮期间及之后 4s 内不抢滚动——
-    // 用户往回翻或往后看歌词时不被下一行拽回。单列态整页都是歌词的滚动器，
-    // 页内任意处滑动都算；宽屏只认歌词栏内的滑动（左栏/队列滚动不影响歌词）。
+    // 用户往回翻或往后看歌词时不被下一行拽回。判定走 isScrollport 而非
+    // 断点：歌词容器是自有滚动口时（宽屏栏内滚/移动视频分屏）只认栏内
+    // 滑动——分屏下在视频区滑不算碰词、不暂停；单列整页滚态整页都是
+    // 滚动器，任意处滑动都算（此判据兼容并取代原 wideMq 断点）。
     // 竖向位移 <10px 的 touchmove 视为轻点微漂、不暂停（真机点 A+/播放键常带
     // 1–2 个）；切到歌词 tab 是显式请求，清掉暂停。targetTouches 只读本页内
     // 触点——另根手指搭在页外（如底部播放条）时基线/探测仍配对同一根手指
@@ -757,10 +777,9 @@ export default {
     const SWIPE_SLOP_PX = 10
     // lyricFollowPausedUntil 上移到 props.tab watcher 前（immediate 序要）
     let touchStartY = 0
-    const wideMq = window.matchMedia('(min-width: 901px)')
     const onWatchTouchStart = (e) => { touchStartY = e.targetTouches?.[0]?.clientY ?? 0 }
     const pauseLyricFollow = (e) => {
-      if (wideMq.matches && !lyricContainer.value?.contains(e.target)) return
+      if (isScrollport(lyricContainer.value) && !lyricContainer.value.contains(e.target)) return
       if (e.type === 'touchmove'
         && Math.abs((e.targetTouches?.[0]?.clientY ?? touchStartY) - touchStartY) < SWIPE_SLOP_PX) return
       lyricFollowPausedUntil = Date.now() + LYRIC_FOLLOW_PAUSE_MS
@@ -773,7 +792,7 @@ export default {
         scrollLyricIntoCenter(props.currentLyricIndex, false)
       } else {
         // 当前行可能在滑窗外——直接按全局下标滚到位（scrollToIndex 自动
-        // 挑当前真滚动根：宽屏 queueContainer、单列 viewEl；越界 -1 内部已挡）
+        // 挑当前真滚动根：宽屏/分屏 queueContainer、单列 viewEl；越界 -1 内部已挡）
         queueScrollToIndex(currentQueueIndex.value, { align: 'center' })
       }
     }
@@ -972,6 +991,13 @@ export default {
     watch(() => props.fullscreenPlayerOpen, (open) => {
       if (!open) mediaVideoFailed.value = false
     })
+    // 音画开关翻转 = ≤900 分屏↔整页滚换轨：面板体从哑盒变滚动口（或反之），
+    // 词窗骤变但 scrollTop 不动——停在词表顶部等下一个 currentLyricIndex
+    // 才回正，间奏空窗可达几十秒；按当前行重居中（centerCurrentRow 内部
+    // 自动挑换轨后的真滚动根）
+    watch(mediaVideoActive, () => nextTick(() => {
+      if (props.tab === 'queue' || props.tab === 'lyrics') centerCurrentRow()
+    }))
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
     // 的视频下载此前是纯只写功能（App 内无处可播）。探测跨歌单寻址——
     // 任务行按 (playlist,song) 登记，暂存/搜索队列或别单借源的播放没有
@@ -1611,8 +1637,9 @@ export default {
 .watch-tabs {
   flex-shrink: 0;
   /* 单列整页滚下 tabs 随页流走会迫使深滚用户滚回顶——钉在顶条之下
-     （top 与 --watch-top-h 同源；宽屏块内复位 static——sticky 的 inset
-     约束在非滚动 scrollport 上仍生效，不复位会被强压 32px） */
+     （top 与 --watch-top-h 同源；宽屏块与移动视频分屏块内复位
+     static——有界/非滚动 scrollport 上 sticky 的 inset 约束仍生效，
+     不复位会被强压 32px） */
   position: sticky;
   top: var(--watch-top-h, 52px);
   z-index: 4;
@@ -1621,7 +1648,9 @@ export default {
 }
 
 /* 移动基态：不限高不内滚（YTM 整页滚动语义——队列/歌词随页流）；
-   ≥901px 回栏内滚（flex:1+min-height:0+overflow，见 min-width 块） */
+   ≥901px 回栏内滚（flex:1+min-height:0+overflow，见 min-width 块）。
+   例外：移动视频分屏态侧栏体也内滚（max-width:900.98 ∧ min-height:480
+   媒体块——上行视频钉住、下行面板体自滚） */
 .watch-side-body {
   padding-top: 8px;
   /* 滚动影叠尺：基座发丝线之外，内容压到 tab 下时再叠一道 scroll 影——
@@ -1807,7 +1836,8 @@ export default {
   opacity: .9;
 }
 
-/* 歌词工具条：字号 / 时间校准两组，顶在歌词面板上方。
+/* 歌词工具条：字号 / 时间校准两组，钉在歌词面板下缘（DOM 序在面板
+   之后——钉底与 watch-queue-foot 同约定：滚动体之外的常驻件）。
    不设分隔线——watch 侧栏约定「静止零装饰，边界交给滚动影」 */
 .lyric-tools {
   display: flex;
@@ -1841,6 +1871,68 @@ export default {
 }
 /* 校准值键兼复位：按最大刻度 ±300.0s 预留宽，避免值跳变时整组位移 */
 .lyric-tool-reset { min-width: 56px; }
+
+/* ≤900 单列整页滚态：工具条在 DOM 序上钉于词表末尾，随页流会被整张
+   词表压到滚不可及——sticky 吸在滚动口（.watch-view）下沿随手可够，
+   滚到真末尾归位（与 watch-tabs 钉顶同一招的镜像）；画布衬底防滚过的
+   词行透字。分屏/宽屏态它由 flex 序钉在栏底、天然已在视野内——
+   sticky 无事可干（惰性的，不必关） */
+@media (max-width: 900.98px) {
+  .lyric-tools {
+    position: sticky;
+    bottom: 0;
+    z-index: 3; /* 词行之上、tabs(4)/顶行(5) 之下 */
+    background: var(--view-canvas, var(--paper));
+  }
+}
+
+/* ── 移动视频态分屏（≤900 ∧ 高度 ≥600）：单列整页滚下，读词把画面顶出
+   屏、看画面又读不到词——改两行合成：上行 顶行+视频 钉住不动，下行
+   侧栏收成有界区（tabs 固定头 / 可见面板体自滚 / 队列页脚与歌词工具条
+   钉栏底），与 ≥901 栏内滚同构。高度门槛定 600 而非 480：视频有 300px
+   地板保护，480-600 带里词窗只剩 ~0-50px（空壳分屏不如退守）——600
+   起词窗 ≥~80px（2-3 行）分屏才真赢整页滚。watch-view 仍
+   overflow-y:auto：装不下的边角（横幅/极短窗）内容溢出后整页照旧能滚，
+   分屏是「理想态」不是「封死态」 */
+@media (max-width: 900.98px) and (min-height: 600px) {
+  /* 布局吃满顶行外的滚动口：watch-view 是定高列向滚动口（壳链
+     100dvh−顶栏−底栏，watch-top 占 52px），flex:1 让本项恒得
+     「滚动口−52px」——与手算 calc(100dvh−topnav−bar−52) 等价但随
+     chrome 令牌自动校准、不用挂 vh/dvh 双行兜底。min-height:0 允许
+     压到内容高之下，溢出走 watch-view 页滚兜底而非撑破布局 */
+  .watch-view--video .watch-layout { flex: 1; min-height: 0; }
+  /* 侧栏收上行余量成定高列——没有 flex:1 则栏高随词表内容走，
+     面板体的 flex:1 失去参照，内滚无从谈起 */
+  .watch-view--video .watch-side { flex: 1; min-height: 0; }
+  /* 三块面板体共一条内滚律：v-show 单显，可见的那块即歌词/队列/
+     相关的滚动口；tabs/工具条/页脚都在滚动体外由 flex 序钉住
+     （min-width:901 块同款结构）。overscroll chaining 截断已在
+     style.css 全局白名单（.watch-side-body 在列） */
+  .watch-view--video .watch-side-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  /* sticky 钉点是为整页滚设计的——有界栏内栏顶已是固定处，top:52
+     的 inset 约束反把 tabs 压出侧栏天然位；归 static 当固定头 */
+  .watch-view--video .watch-tabs { position: static; }
+  /* 横幅与视频同宽——默认 min(64vw,320px) 吊在全宽播放器下读作孤儿条
+     （≥901 块内同一条 width:100% 的 ≤900 镜像） */
+  .watch-view--video .watch-main--video .watch-banner { width: 100%; }
+  /* 视频不饿死下行：在 124dvh 上限上再叠「视口高−非视频区预算」的
+     宽换算项——预算≈chrome（顶栏+底栏+顶行 178-215 + tabs ~38 +
+     工具条 ~32 ≈ 248-280）+ 槽距合计 ~66（layout pt/pb + gap +
+     侧栏顶补）+ 歌词窗地板 ~130 ≈ 480px；预算项绑定时词窗恒 ~130
+     （649-740 带），以下由 100% 栏宽绑定词窗随行高放大。max() 300px
+     地板兜住 600h 闸口边缘——地板与预算冲突时保视频（词窗缩到 ~80
+     仍可用），再矮门槛外本块不挂、整页滚接管。vh 行兜 dvh 不识的
+     老内核（同基态三档递进约定）。注：队列 tab 的页脚 ~55px 比工具条
+     ~32 厚——队列面板提前 ~23px 触底，同样随槽退化不破 */
+  .watch-view--video .watch-cover-wrap--video {
+    width: min(100%, 124vh, max(300px, calc((100vh - 480px) * 16 / 9)));
+    width: min(100%, 124dvh, max(300px, calc((100dvh - 480px) * 16 / 9)));
+  }
+}
 
 /* ── 宽屏增强（mobile-first 反转点 ≥901px，与模板 wide: 断点同源）──
    双栏内滚态：本层不滚、左右栏各自管车道；此前移动基态曾在此犯
