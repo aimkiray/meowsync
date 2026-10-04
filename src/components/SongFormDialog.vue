@@ -9,6 +9,7 @@
         aria-modal="true"
         :aria-label="isEdit ? '编辑歌曲' : '新建歌曲'"
         @click.stop
+        @keydown="onDialogKeydown"
       >
         <div class="pg-menu-head">{{ isEdit ? '编辑歌曲' : '新建歌曲' }}</div>
 
@@ -266,10 +267,40 @@ export default {
     // busy 期左键=中止上传（emit abort 给父侧 xhr.abort），非 busy=取消
     const onLeftBtn = () => { props.busy ? emit('abort') : onCancel() }
 
+    // aria-modal 契约补课：Tab/Shift+Tab 把焦点钳在窗内（可聚焦集首尾互跳），
+    // Esc 走 onLeftBtn（与左键/全局热键同口径：闲=取消、busy=中止上传）。
+    // getClientRects 滤掉 display:none 的 file input——它们能匹配选择器但不可聚焦，
+    // 不滤会让首尾判定落空、Tab 从缝里逃出遮罩
+    const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const onDialogKeydown = (e) => {
+      if (e.key === 'Escape') {
+        // 与 App 全局 Esc 同映射（busy→中止上传、闲→关窗）：走 onLeftBtn 复用
+        // 口径而不是裸 onCancel——后者 busy 期静默会让中止通道在窗内失灵；
+        // stopPropagation 防事件再到 window 被全局热键二次消费
+        e.stopPropagation()
+        onLeftBtn()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const focusables = [...e.currentTarget.querySelectorAll(FOCUSABLE_SEL)]
+        .filter(el => el.getClientRects().length > 0)
+      if (!focusables.length) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+
     return {
       isEdit, canEditFiles, form, picked, progress, error,
       nameInput, fileRefs, fileSlots, hasExisting, existingHint,
       onPick, submit, onCancel, onLeftBtn, onOverlayDown, onOverlayUp, onOverlayClick,
+      onDialogKeydown,
     }
   },
 }

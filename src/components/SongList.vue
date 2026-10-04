@@ -875,7 +875,23 @@ export default {
     onMounted(() => {
       const m = readScrollMem(scrollMemKey())
       if (!m) return
-      nextTick(() => { cancelScrollRestore = restoreScrollTop(rowsEl.value, m.top) })
+      // 挂载期 loading/空态下 rowsEl 尚未渲出（v-else 分支）——只试一次会
+      // 把还位永久丢弃；挂一次性 watcher 等滚动器首渲后再还位。
+      // isConnected 挡 nextTick 间隙里整卸后对游离节点空转。
+      // （不能 watch+immediate 里自闭 stop：immediate 回调同步跑在 watch()
+      // 返回之前，句柄还在 TDZ——已渲路径只能手动分流）
+      const restore = (el) => nextTick(() => {
+        if (el.isConnected) cancelScrollRestore = restoreScrollTop(el, m.top)
+      })
+      if (rowsEl.value) {
+        restore(rowsEl.value)
+      } else {
+        const stop = watch(rowsEl, (el) => {
+          if (!el) return
+          stop()
+          restore(el)
+        })
+      }
     })
     onBeforeUnmount(() => {
       cancelScrollRestore?.() // 等待窗内卸载即停轮询
@@ -1078,7 +1094,9 @@ export default {
     // 行号：排序态 index 即全局序；滑窗态补 startIndex 偏移
     const rowNumber = (i) => (reorderMode.value ? i : vStartIndex.value + i) + 1
 
-    // 焦点归还锚：退出排序态（完成/Esc）把焦点还给入口键——键盘用户不落 body
+    // 焦点归还锚：退出排序态（完成/Esc）把焦点还给入口键——键盘用户不落 body。
+    // 入口键在排序态被 v-if 卸载、退出后才重挂载：当下 sortBtn 恒 null（旧代码
+    // 因此是死路径），须等重渲一帧再聚焦；canReorder 同帧翻 false 时无锚可还
     const sortBtn = ref(null)
 
     const exitReorderMode = () => {
@@ -1087,8 +1105,8 @@ export default {
       dragIndex.value = -1
       dragOverIndex.value = -1
       dragSong = null // 程序化退出无 dragend 兜底，拖中快照一并清
-      if (wasActive && sortBtn.value?.isConnected) {
-        sortBtn.value.focus({ preventScroll: true })
+      if (wasActive) {
+        nextTick(() => sortBtn.value?.focus({ preventScroll: true }))
       }
     }
     // 切单/曲数塌缩自动收态：滞留排序态会让新单继承错位的 displayRows 口径
