@@ -282,7 +282,8 @@ function handleWindowKeydown(event) {
 // 成员/次序真的变了才关（只 watch 数组引用则每次 selectedQueue 刷新都误关）
 watch(() => props.queues.map(queue => queue.id).join(','), () => closeMenu())
 
-// 任何滚动（含嵌套滚动容器）都会让 fixed 菜单与触发按钮脱节——捕获阶段监听直接关
+// 任何滚动（含嵌套滚动容器）都会让 fixed 菜单与触发按钮脱节——捕获阶段监听直接关；
+// resize 同理（位置点击时按 innerWidth/Height 算死，视口变即过期）
 function handleScroll() {
   closeMenu()
 }
@@ -291,6 +292,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pointerdown', handleWindowPointerDown)
   window.addEventListener('keydown', handleWindowKeydown)
   window.addEventListener('scroll', handleScroll, true)
+  window.addEventListener('resize', handleScroll)
 }
 
 onBeforeUnmount(() => {
@@ -298,6 +300,7 @@ onBeforeUnmount(() => {
     window.removeEventListener('pointerdown', handleWindowPointerDown)
     window.removeEventListener('keydown', handleWindowKeydown)
     window.removeEventListener('scroll', handleScroll, true)
+    window.removeEventListener('resize', handleScroll)
   }
 })
 

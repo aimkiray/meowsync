@@ -309,7 +309,12 @@ export default {
 <style scoped>
 /* sfd-*：atp 模态皮的表单变体。弹层是 teleport 出去的 body 子级——
    但 scoped 样式对 teleport 内容照常生效（scoped 按模板归属打 data 属性） */
-.sfd-dialog { width: min(340px, 92vw); }
+/* vw-24 取代 92vw：钉死 24px 缘距下限——92vw 在 <300px 口的余量跌破 24px */
+.sfd-dialog { width: min(340px, calc(100vw - 24px)); }
+/* ≥641 平板档加呼吸位（YTM 对话框 480 带） */
+@media (min-width: 641px) {
+  .sfd-dialog { width: min(480px, calc(100vw - 24px)); }
+}
 .sfd-body {
   padding: 10px;
   display: flex;

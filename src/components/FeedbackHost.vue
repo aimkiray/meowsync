@@ -212,7 +212,7 @@ export default {
 
 /* 纸面盒 + 角部裁切标记（pg-panel/pg-corners 提供盒与 tick） */
 .fb-dialog {
-  width: min(340px, calc(100vw - 48px));
+  width: min(340px, calc(100vw - 24px));
 }
 
 .fb-dialog-body {

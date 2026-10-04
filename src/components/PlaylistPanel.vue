@@ -207,14 +207,17 @@ export default {
 
     onMounted(() => {
       document.addEventListener('pointerdown', handleClickOutside)
-      // 菜单是 fixed 定位，面板滚动后位置脱节——滚动时直接关闭
+      // 菜单是 fixed 定位，面板滚动后位置脱节——滚动时直接关闭；
+      // resize 同理（位置点击时按 innerWidth/Height 算死，视口变即过期）
       window.addEventListener('scroll', closeOnScroll, true)
+      window.addEventListener('resize', closeOnScroll)
       window.addEventListener('keydown', closeOnEscape)
     })
 
     onUnmounted(() => {
       document.removeEventListener('pointerdown', handleClickOutside)
       window.removeEventListener('scroll', closeOnScroll, true)
+      window.removeEventListener('resize', closeOnScroll)
       window.removeEventListener('keydown', closeOnEscape)
     })
 
