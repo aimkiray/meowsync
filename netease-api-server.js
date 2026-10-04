@@ -33,6 +33,22 @@ const HOST = process.env.HOST || '0.0.0.0';
 // CORS 白名单收敛进 lib/env.js（HTTP cors / WS Origin / auth CSRF 三处共用）
 const { corsOrigins: corsOriginsFn } = require('./src/server/lib/env');
 const corsOrigins = corsOriginsFn();
+// 「这是 API 请求吗」唯一判定源——serveStatic Range 剥离与 SPA 兜底共用
+const { isApiPath } = require('./src/server/lib/api-path');
+
+// 子路径部署支持（VITE_BASE_PATH=/music/ 构建后所有资源/API 都在前缀下）。
+// 实测：app.basePath() 下 c.req.path 仍返回带前缀的全路径——会让 authGate 的
+// isApiPath 公开判定、protectedWrite、SPA 兜底全部失真（API GET 被误判为静态
+// 资源 → 鉴权绕过）。故不用 basePath，改在 serve() fetch 入口剥前缀：
+// app 内所有中间件/路由/兜底看到的都是根相对路径，零改动兼容。
+// 归一化为 '/x' 形式（无尾斜杠，'/' 表根）
+const normalizeBasePath = (v) => {
+  const s = String(v || '').trim();
+  if (!s || s === '/') return '/';
+  const withSlash = s.startsWith('/') ? s : `/${s}`;
+  return withSlash.replace(/\/+$/, '') || '/';
+};
+const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || process.env.VITE_BASE_PATH);
 
 // 中间件
 app.use('*', cors({
@@ -113,24 +129,29 @@ if (hasDist) {
     }
   });
   // 仅 GET/HEAD 走静态文件（Express serve-static 语义），其余方法放行给 API/404。
-  // Range 头在进 serveStatic 前剥掉：precompressed 对 Range 会按 .br/.gz 档
-  // 切字节段再报 206（Content-Range 对着压缩流——解码必废，hono/node-server
-  // 上游缺陷）；剥头回 200 全量，前端本就不对静态资源发 Range
+  // 仅静态档剥 Range——precompressed 对 Range 会按 .br/.gz 切段报 206，解码必废
+  // （hono/node-server 上游缺陷）。API 路径不剥：/downloads 文件路由与
+  // /audio-proxy 的 206/If-Range 是活逻辑，媒体 seek 依赖 Range 透传
   app.use('/*', (c, next) => {
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next();
-    c.req.raw.headers.delete('range');
+    if (!isApiPath(c.req.path)) c.req.raw.headers.delete('range');
     return staticMiddleware(c, next);
   });
 }
 
-// 可选写操作鉴权：DOWNLOAD_TOKEN 设置后，/downloads 与 /playlists 的非 GET 请求
-// 必须携带匹配的 x-download-token 头——局域网部署时防止任意主机触发下载把磁盘写满。
-// 登录态（session cookie）视为等效凭据：启用登录后浏览器不再构建期注入 token
-const downloadToken = process.env.DOWNLOAD_TOKEN || '';
-if (downloadToken) {
+// 可选写操作鉴权：DOWNLOAD_TOKEN 设置后，/downloads 与 /playlists 等的非 GET
+// 请求必须携带匹配的 x-download-token 头——局域网部署时防止任意主机触发下载
+// 把磁盘写满。同一 token 在 authGate 里是服务对服务/脚本的全量 API 旁路凭据
+// （含 GET）；浏览器登录态（session cookie）视为等效凭据：启用登录后浏览器
+// 不再构建期注入 token。
+// 懒读 env（中间件内每次取）而非启动快照——启动时未设、运行后注入
+// DOWNLOAD_TOKEN 也必须生效，与 authGate 的口径一致
+{
   const { sessionFromCookieHeader } = require('./src/server/lib/auth-gate');
   const { tokenMatches } = require('./src/server/lib/token-eq');
   app.use('*', async (c, next) => {
+    const downloadToken = process.env.DOWNLOAD_TOKEN || '';
+    if (!downloadToken) return next();
     const p = c.req.path;
     const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
       || p === '/playlists' || p.startsWith('/playlists/')
@@ -173,8 +194,6 @@ app.route('/', musicRoutes);
 // 多段路径（/song_url/123）也要兜：首段命中白名单 API 名同样是 API 请求
 if (hasDist) {
   const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
-  // API 判定与 authGate 同一份分类（lib/api-path.js）——两处口径漂移会互相拆台
-  const { isApiPath } = require('./src/server/lib/api-path');
   app.get('*', (c) => {
     const p = c.req.path;
     // apiFirstSegments = ALLOWED_APIS ∪ apiModules（自研端点表 17 名），
@@ -239,15 +258,41 @@ try {
 // autoCleanupIncoming 显式声明：多条路由故意不读 body（401/400 早退、纯触发型 POST
 // /downloads/queues/:id/start 等），未读完的 body 靠它自动 drain——若按性能建议
 // 关掉，所有不读 body 的请求都会泄漏 keep-alive socket
+// fetch 入口剥 BASE_PATH 前缀（见上方 normalizeBasePath 注释——不能用
+// app.basePath()）：前缀内请求重写为根相对路径再交 app；'/' 302 进 base；
+// /ping、/healthz 根级豁免（Docker HEALTHCHECK 与负载探针不认子路径）；
+// 其余 base 外路径一律 JSON 404——不用 HTML 兜底，探测方拿不到歧义 200
+const entryFetch = BASE_PATH === '/'
+  ? app.fetch
+  : (req, ctx) => {
+      const url = new URL(req.url);
+      const p = url.pathname;
+      if (p === '/ping' || p === '/healthz') return app.fetch(req, ctx);
+      if (p === '/') {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: `${BASE_PATH}/` }
+        });
+      }
+      if (p === BASE_PATH || p.startsWith(`${BASE_PATH}/`)) {
+        url.pathname = p.slice(BASE_PATH.length) || '/';
+        return app.fetch(new Request(url, req), ctx);
+      }
+      return new Response(
+        JSON.stringify({ code: 404, message: 'Not Found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      );
+    };
 const server = serve({
-  fetch: app.fetch,
+  fetch: entryFetch,
   port: PORT,
   hostname: HOST,
   autoCleanupIncoming: true
 }, (info) => {
+  const wsPath = (BASE_PATH === '/' ? '' : BASE_PATH) + '/remote';
   console.log(`\n🎵 MeowSync Server is running!`);
-  console.log(`📍 Server: http://${HOST}:${info.port}`);
-  console.log(`🎮 Remote WS: ws://${HOST}:${info.port}/remote`);
+  console.log(`📍 Server: http://${HOST}:${info.port}${BASE_PATH === '/' ? '' : BASE_PATH}/`);
+  console.log(`🎮 Remote WS: ws://${HOST}:${info.port}${wsPath}`);
   console.log(`\n✨ Ready to serve music data!\n`);
 });
 
@@ -260,7 +305,9 @@ server.on('error', (err) => {
 const { attachRemoteControl } = require('./src/server/ws/remote');
 const remote = attachRemoteControl(server, {
   allowedOrigins: corsOrigins,
-  token: process.env.REMOTE_TOKEN || ''
+  token: process.env.REMOTE_TOKEN || '',
+  // WS upgrade 不经 fetch 管道——BASE_PATH 前缀在这里单独对齐
+  basePath: BASE_PATH
 });
 // 开放监听 + 无遥控令牌：同网段任意主机都能接管 host 角色/操控播放——
 // 局域网自用可忽略，公网/共享网络部署必须设 REMOTE_TOKEN。
@@ -272,10 +319,12 @@ const onAllInterfaces = ['0.0.0.0', '::', '::0', '[::]', '0'].includes(HOST.trim
 if (!process.env.REMOTE_TOKEN && !authReady && onAllInterfaces) {
   console.warn('[remote] REMOTE_TOKEN 未设置且登录未启用：任何可达客户端都能控制播放。公网部署请配置 REMOTE_TOKEN 或完成 /auth/setup');
 }
-// 空 users 表 = 登录未启用 = 公网裸奔窗口：任何先到者都能 POST /auth/setup
-// 接管管理员。启动时大声提示，文档中要求先完成 setup 再对外开放端口
+// 空 users 表 = 登录未启用 = 公网裸奔窗口：/auth/setup 在无登录态时保持开放
+// （首启建号是设计行为），任何先到者都能接管管理员。启动时大声提示——
+// 公网部署的正确姿势是先本机完成 setup 再开放监听
 if (!authReady && onAllInterfaces) {
-  console.warn('[auth] 登录体系未初始化：对外监听时任何人都能执行 /auth/setup 建号。请先完成初始化再开放端口');
+  console.warn('[auth] 登录体系未初始化：对外监听时任何人都能执行 /auth/setup 抢建管理员。'
+    + '公网部署请先以 HOST=127.0.0.1 启动 → 本机浏览器完成 /auth/setup → 再改回开放端口重启');
 }
 
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，

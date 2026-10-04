@@ -16,8 +16,11 @@ const keyBuckets = new Map();
 // 新鲜 key 先被逐——洪泛反而成了洗限流计数的工具
 const MAX_BUCKETS = 5000;
 
-function rateLimit(c, key, limit) {
-  const bucketKey = `${key}:${clientIp(c)}`;
+// 纯函数核心（key+IP → 滑动窗判定）：HTTP 经 rateLimit 包装走 Hono ctx；
+// WS upgrade 没有 ctx，remote.js 用 clientIpFromHeaders 取 IP 后直调本函数——
+// 两侧桶表/满容策略/TRUST_PROXY 取 IP 语义完全同源
+function rateLimitForIp(key, ip, limit) {
+  const bucketKey = `${key}:${ip}`;
   const now = Date.now();
   const hits = (rateBuckets.get(bucketKey) || []).filter(t => now - t < 60000);
   if (hits.length >= limit) return false;
@@ -30,6 +33,10 @@ function rateLimit(c, key, limit) {
   }
   rateBuckets.set(bucketKey, hits);
   return true;
+}
+
+function rateLimit(c, key, limit) {
+  return rateLimitForIp(key, clientIp(c), limit);
 }
 
 // 不带 IP 的按键限流：登录接口的 per-account 桶——防「换 IP 轮喷同一账号」
@@ -60,4 +67,4 @@ function refundByKey(key) {
   entry.hits.pop();
 }
 
-module.exports = { rateLimit, rateLimitByKey, refundByKey };
+module.exports = { rateLimit, rateLimitForIp, rateLimitByKey, refundByKey };

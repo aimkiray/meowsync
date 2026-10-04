@@ -56,7 +56,10 @@ function pipeLines(stream, prefix, paint) {
 }
 
 function stopChild(child, signal) {
-  if (!child || child.exitCode !== null || child.killed) return;
+  // 存活判定看 exitCode/signalCode（双 null = 仍在跑）。child.killed 只表示
+  // 「信号已发出」非「进程已退」——SIGINT 后 killed 恒 true，SIGKILL 兜底
+  // 会因此对赖着不退的子进程空操作
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   try {
     child.kill(signal);
   } catch { /* 进程已退出 */ }

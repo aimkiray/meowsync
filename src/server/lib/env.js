@@ -20,23 +20,44 @@ function trustProxyEnabled() {
 // 右起第 N 个 = 最内层可信反代的直连对端——TCP 层事实，客户端伪造不了；
 // 左起第一跳永远是客户端自填值，TRUST_PROXY 下取 [0] 等于把限流桶交给
 // 攻击者命名。链短于跳数（直连/链路异常）回落 socket 对端——共享桶退化
-// 但 fail-closed，不会把伪造值当身份
-function clientIp(c) {
+// 但 fail-closed，不会把伪造值当身份。
+// headers 为 http.IncomingMessage.headers 形态（小写键 plain object）——
+// HTTP（clientIp 包装）与 WS upgrade（remote.js 限流）共用同一实现，
+// TRUST_PROXY 语义两侧同源不漂移
+function clientIpFromHeaders(headers, remoteAddress) {
   const hops = trustProxyHops();
   if (hops > 0) {
-    const xff = c.req.header('x-forwarded-for');
+    const xff = headers?.['x-forwarded-for'];
     if (xff) {
-      const ips = xff.split(',').map(s => s.trim()).filter(Boolean);
+      const ips = String(xff).split(',').map(s => s.trim()).filter(Boolean);
       if (ips.length >= hops) return ips[ips.length - hops];
     }
   }
-  return c.env?.incoming?.socket?.remoteAddress || 'local';
+  return remoteAddress || 'local';
+}
+
+function clientIp(c) {
+  return clientIpFromHeaders(
+    { 'x-forwarded-for': c.req.header('x-forwarded-for') },
+    c.env?.incoming?.socket?.remoteAddress
+  );
 }
 
 // CORS 白名单（origin 归一化）：HTTP cors 中间件、WS Origin 校验、
 // /auth/* 的 CSRF Origin 纵深三处共用——三处口径漂移会互相拆台。
 // 默认只留 localhost——credentials:true 下白名单里的任何公网域名都能跨站
 // 读写本实例；局域网/公网部署必须显式配 CORS_ORIGINS
+// 非法项告警按值去重：corsOrigins() 每请求重解析（csrfOriginOk 对每个写请求
+// 都调），不去重会把同一个错配项随流量刷进日志。env 运行期可变，改值后
+// 新值仍会各告警一次
+const warnedCorsItems = new Set();
+function warnCorsItemOnce(item, reason) {
+  const key = `${item}${reason}`;
+  if (warnedCorsItems.has(key)) return;
+  warnedCorsItems.add(key);
+  console.warn(`[config] CORS_ORIGINS 项 '${item}' ${reason}，已忽略`);
+}
+
 function corsOrigins() {
   // 不缓存：单请求解析成本 µs 级，换来测试内改 env 即时生效（与头注释
   // 「懒读不拿陈值」的承诺一致）
@@ -51,15 +72,15 @@ function corsOrigins() {
       try {
         const u = new URL(o);
         if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-          console.warn(`[config] CORS_ORIGINS 项 '${o}' 不是 http(s) origin（也不支持通配符），已忽略`);
+          warnCorsItemOnce(o, '不是 http(s) origin（也不支持通配符）');
           return null;
         }
         return u.origin;
       } catch {
-        console.warn(`[config] CORS_ORIGINS 项 '${o}' 不是合法 URL，已忽略`);
+        warnCorsItemOnce(o, '不是合法 URL');
         return null;
       }
     }).filter(Boolean);
 }
 
-module.exports = { trustProxyEnabled, trustProxyHops, clientIp, corsOrigins };
+module.exports = { trustProxyEnabled, trustProxyHops, clientIp, clientIpFromHeaders, corsOrigins };

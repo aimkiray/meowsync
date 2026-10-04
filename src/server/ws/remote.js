@@ -1,5 +1,6 @@
 const { tokenMatches } = require('../lib/token-eq');
-const { trustProxyEnabled } = require('../lib/env');
+const { trustProxyEnabled, clientIpFromHeaders } = require('../lib/env');
+const { rateLimitForIp } = require('../lib/rate-limit');
 const { WebSocketServer } = require('ws');
 // 控制面契约与共享表对齐（src/shared/protocol.js）——controller/host 三端同源
 const { CONTROL_TYPES, CONTROL_PAYLOAD_GUARDS, REMOTE_LIMITS, MSG_TYPES } = require('../../shared/protocol.js');
@@ -9,6 +10,14 @@ const { sessionFromCookieHeader, authEnabled } = require('../lib/auth-gate');
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_PAYLOAD_BYTES = REMOTE_LIMITS.MAX_PAYLOAD_BYTES;
 const MAX_CONTROLLERS = REMOTE_LIMITS.MAX_CONTROLLERS;
+// 广播背压：单个 controller 的 socket 发送缓冲超 1MB 说明对端消费跟不上
+// （弱网/挂起标签页）。state_update 是全量快照——跳帧安全，靠下次快照追平
+const SLOW_CONSUMER_BYTES = 1024 * 1024;
+// 连续超限帧数阈值：瞬态卡顿（GC/突发大快照）不误杀，持续积压才掐断
+const SLOW_CONSUMER_FRAMES = 3;
+// 未认证 WS 升级的滑动窗限流（/min/IP）——握手成本（DB 会话查询/写密钥交换）
+// 不该被探测脚本无限白嫖
+const UPGRADE_LIMIT_PER_MIN = 20;
 // 每连接消息限流：controller 只在点按时发消息；host 峰值在音量拖动——
 // watch 逐帧推 state_update，高刷屏下可达 ~144/s，host 桶取 200 留足余量
 const HOST_MSG_PER_SEC = 200;
@@ -28,14 +37,24 @@ function send(ws, msg) {
 }
 
 function broadcastToControllers(msg) {
+  // 一次序列化全员复用——原先每连接各 JSON.stringify 一遍纯属浪费
+  const str = JSON.stringify(msg);
   for (const ctrl of controllers) {
-    send(ctrl, msg);
-  }
-}
-
-function notifyControllerCount() {
-  if (hostSocket && hostSocket.readyState === hostSocket.OPEN) {
-    send(hostSocket, { type: MSG_TYPES.INFO, payload: { controllers: controllers.size } });
+    if (ctrl.readyState !== ctrl.OPEN) continue;
+    // 背压：缓冲超限就跳帧（state_update 快照可丢，下帧自然追平）；
+    // 连续 SLOW_CONSUMER_FRAMES 帧都超限才 close——瞬态毛刺不误踢
+    if (ctrl.bufferedAmount > SLOW_CONSUMER_BYTES) {
+      ctrl.overBudgetFrames = (ctrl.overBudgetFrames || 0) + 1;
+      if (ctrl.overBudgetFrames >= SLOW_CONSUMER_FRAMES) {
+        ctrl.overBudgetFrames = 0;
+        ctrl.close(1013, 'slow consumer');
+      }
+      continue;
+    }
+    ctrl.overBudgetFrames = 0;
+    try {
+      ctrl.send(str);
+    } catch { /* 该客户端的失败由 close/error 事件接管清理 */ }
   }
 }
 
@@ -178,12 +197,16 @@ function tokenFromProtocols(req) {
 /**
  * Attach WebSocket remote control to an existing HTTP server.
  * @param {import('http').Server} server
- * @param {{ allowedOrigins?: string[], token?: string }} options
+ * @param {{ allowedOrigins?: string[], token?: string, basePath?: string }} options
  *   allowedOrigins: Origin 白名单（浏览器跨站劫持防护；非浏览器客户端无 Origin 头则放行）
  *   token: 设置后客户端必须通过 ?token= 或 Sec-WebSocket-Protocol: remote.<token> 提供相同令牌
+ *   basePath: 部署子路径（归一化 '/x' 形式，'/' 为根）——WS 端点随之为 ${basePath}/remote
  */
 function attachRemoteControl(server, options = {}) {
-  const { allowedOrigins = [], token = '' } = options;
+  const { allowedOrigins = [], token = '', basePath = '/' } = options;
+  // 与 serve() 入口的 BASE_PATH 剥前缀同口径：WS upgrade 不走 fetch 管道，
+  // 握手路径在这里单独对齐（base '/' → '/remote'；'/music' → '/music/remote'）
+  const remotePath = (basePath === '/' ? '' : basePath) + '/remote';
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
@@ -211,8 +234,8 @@ function attachRemoteControl(server, options = {}) {
       return;
     }
 
-    // 精确匹配 /remote，避免 /remotexxx 误命中
-    if (url.pathname !== '/remote') {
+    // 精确匹配 remotePath，避免 /remotexxx 误命中
+    if (url.pathname !== remotePath) {
       socket.destroy();
       return;
     }
@@ -237,32 +260,55 @@ function attachRemoteControl(server, options = {}) {
       return;
     }
 
-    // 鉴权级联：session cookie（浏览器登录态，同源握手天然携带）→
-    // REMOTE_TOKEN 子协议/?token=（非浏览器客户端旁路，不落 URL 日志优先）。
-    // 先于容量检查——未认证客户端不应能经 401/503 差异探测连接数状态。
-    // 两者皆未配置时保持开放（局域网自用兼容；公网部署必须启用登录或配 token）
-    const sess = sessionFromCookieHeader(req.headers.cookie || '');
-    if (!sess) {
-      const provided = tokenFromProtocols(req) ?? url.searchParams.get('token');
-      // 启用登录后 REMOTE_TOKEN 未配也必须拒——否则「登录开着、WS 裸奔」
-      // 形成旁路洞（旧逻辑只在 token 非空时才校验）
-      if (token ? !tokenMatches(provided, token) : authEnabled()) {
-        rejectUpgrade(socket, 401, 'Unauthorized');
+    // 'upgrade' 事件监听器抛错直达 uncaughtException 杀进程——鉴权级联
+    // （session 解析走 DB）起所有异常必须就地收敛成 HTTP 拒绝
+    try {
+      // 鉴权级联：session cookie（浏览器登录态，同源握手天然携带）→
+      // REMOTE_TOKEN 子协议/?token=（非浏览器客户端旁路，不落 URL 日志优先）。
+      // 先于容量检查——未认证客户端不应能经 401/503 差异探测连接数状态。
+      // 两者皆未配置时保持开放（局域网自用兼容；公网部署必须启用登录或配 token）
+      const sess = sessionFromCookieHeader(req.headers.cookie || '');
+      if (!sess) {
+        const provided = tokenFromProtocols(req) ?? url.searchParams.get('token');
+        // 启用登录后 REMOTE_TOKEN 未配也必须拒——否则「登录开着、WS 裸奔」
+        // 形成旁路洞（旧逻辑只在 token 非空时才校验）
+        if (token ? !tokenMatches(provided, token) : authEnabled()) {
+          // 未认证升级的滑动窗限流：与 HTTP 侧同一 TRUST_PROXY 取 IP 实现 +
+          // 同一桶表核心——伪造 XFF 在这里同样无效
+          const ip = clientIpFromHeaders(req.headers, req.socket?.remoteAddress);
+          if (!rateLimitForIp('remote-upgrade', ip, UPGRADE_LIMIT_PER_MIN)) {
+            rejectUpgrade(socket, 429, 'Too Many Requests');
+            return;
+          }
+          rejectUpgrade(socket, 401, 'Unauthorized');
+          return;
+        }
+      }
+
+      // controller 容量上限在升级阶段拒——handleUpgrade 后再踢仍会完成握手，
+      // 观感是"连上即断"，提前拒语义更准确。注意判定必须与 connection 阶段
+      // 一致：非 'host' 一律计入 controller 容量（role=x 不得绕过上限）
+      if (url.searchParams.get('role') !== 'host'
+        && controllers.size >= MAX_CONTROLLERS) {
+        rejectUpgrade(socket, 503, 'Service Unavailable');
         return;
       }
-    }
-
-    // controller 容量上限在升级阶段拒——handleUpgrade 后再踢仍会完成握手，
-    // 观感是"连上即断"，提前拒语义更准确。注意判定必须与 connection 阶段
-    // 一致：非 'host' 一律计入 controller 容量（role=x 不得绕过上限）
-    if (url.searchParams.get('role') !== 'host'
-      && controllers.size >= MAX_CONTROLLERS) {
-      rejectUpgrade(socket, 503, 'Service Unavailable');
+    } catch (err) {
+      console.error('[remote] upgrade 鉴权阶段异常:', err?.message || err);
+      try {
+        rejectUpgrade(socket, 500, 'Internal Server Error');
+      } catch { socket.destroy(); }
       return;
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req, url);
+      // 握手完成后连接回调的异常无法再回 HTTP 拒绝——就地 terminate
+      try {
+        wss.emit('connection', ws, req, url);
+      } catch (err) {
+        console.error('[remote] connection 处理异常:', err?.message || err);
+        try { ws.terminate(); } catch { /* 已在关闭中 */ }
+      }
     });
   };
   server.on('upgrade', onUpgrade);
@@ -321,6 +367,14 @@ function attachRemoteControl(server, options = {}) {
       // 把新 host 反踢，形成踢皮球循环
       if (hostSocket && hostSocket !== ws && hostSocket.readyState !== hostSocket.CLOSED) {
         hostSocket.close(4000, 'replaced by new host');
+        // 优雅 close 依赖对端配合：旧 host 若不按约定断开（恶意/卡死客户端），
+        // 连接会堆在 CLOSING 态绕过 controller 上限——5s 兜底强拆
+        const stale = hostSocket;
+        setTimeout(() => {
+          if (stale.readyState !== stale.CLOSED) {
+            try { stale.terminate(); } catch { /* 已断 */ }
+          }
+        }, 5000).unref();
       }
       hostSocket = ws;
       console.log('[remote] host connected');
@@ -328,8 +382,6 @@ function attachRemoteControl(server, options = {}) {
       broadcastToControllers({ type: MSG_TYPES.HOST_JOINED });
       // 新 host 可能刚接管：主动要一次状态，controller 立即拿到当前曲目
       send(ws, { type: MSG_TYPES.REQUEST_STATE });
-
-      send(ws, { type: MSG_TYPES.INFO, payload: { controllers: controllers.size } });
 
       ws.on('message', (data) => {
         if (!allowMessage(ws, HOST_MSG_PER_SEC)) {
@@ -361,7 +413,6 @@ function attachRemoteControl(server, options = {}) {
       // controller
       controllers.add(ws);
       console.log(`[remote] controller connected (total: ${controllers.size})`);
-      notifyControllerCount();
 
       // If host is connected, ask it to send current state；无 host 时明示空态
       // （controller UI 靠 host_disconnected/host_absent 区分"断了"与"从未有过"）
@@ -387,13 +438,12 @@ function attachRemoteControl(server, options = {}) {
 
       ws.on('close', () => {
         controllers.delete(ws);
-        notifyControllerCount();
         console.log(`[remote] controller disconnected (total: ${controllers.size})`);
       });
     }
   });
 
-  console.log('[remote] WebSocket remote control ready at ws://.../remote');
+  console.log(`[remote] WebSocket remote control ready at ws://...${remotePath}`);
 
   // 停机流程须在 server.close() 后调用 close() 主动 terminate WS 客户端，
   // 否则升级 socket 卡住 _connections，'close' 事件不触发

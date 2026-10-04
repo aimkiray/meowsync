@@ -24,7 +24,8 @@ export const CONTROL_PAYLOAD_GUARDS = {
 
 // 线协议消息形态（remote.js 实现为准）：
 //   controller→server: {type: <CONTROL_TYPES 其一>, payload} —— 双层白名单校验
-//   server→host:       {type: <控制指令原样转发>} | {type:'request_state'} | {type:'info', payload:{controllers}}
+//   server→host:       {type: <控制指令原样转发>} | {type:'request_state'}
+//   （'info' 消息型常量保留于下方 MSG_TYPES，服务端已停发——无消费端）
 //   host→server:       {type:'state_update', payload} —— 经 sanitizeStatePayload 白名单投影
 //   server→controller: {type:'state_update', payload} | 'host_joined' | 'host_disconnected' | 'host_absent'
 export const MSG_TYPES = {
