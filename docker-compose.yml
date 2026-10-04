@@ -9,9 +9,10 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
         VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
         VITE_REMOTE_TOKEN: ${VITE_REMOTE_TOKEN:-}
-        # 前端令牌来自 DOWNLOAD_TOKEN（compose 下单变量即可，服务端同源）；
-        # 也兼容显式设 VITE_DOWNLOAD_TOKEN 的写法，显式值优先
-        VITE_DOWNLOAD_TOKEN: ${VITE_DOWNLOAD_TOKEN:-${DOWNLOAD_TOKEN:-}}
+        # 显式 opt-in——build arg 不自动回落 DOWNLOAD_TOKEN；
+        # 启用登录的部署绝不设此值（bundle 内嵌令牌=向全体访客发口令）。
+        # 无登录 LAN 部署需要前端写权限时才显式设置，且接受它对页面访客可见
+        VITE_DOWNLOAD_TOKEN: ${VITE_DOWNLOAD_TOKEN:-}
     container_name: meowsync-app
     restart: unless-stopped
     ports:
@@ -27,7 +28,9 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3101}
       # 可选：远程遥控令牌（设置后 ?token= 必填；前端构建需同步设 VITE_REMOTE_TOKEN）
       - REMOTE_TOKEN=${REMOTE_TOKEN:-}
-      # 公网/局域网暴露时必需：/downloads、/playlists、/song-meta、/ai、/uploads 写接口鉴权令牌
+      # 子目录部署：与构建期 VITE_BASE_PATH 同值——服务端入口剥前缀后路由仍按根路径
+      - BASE_PATH=${VITE_BASE_PATH:-/}
+      # 公网/局域网暴露时必需：/downloads、/playlists、/song-meta、/ai、/uploads、/settings 写接口鉴权令牌
       - DOWNLOAD_TOKEN=${DOWNLOAD_TOKEN:-}
       # 在会改写 Host 的反向代理后部署时才需要设为 1
       - TRUST_PROXY=${TRUST_PROXY:-}

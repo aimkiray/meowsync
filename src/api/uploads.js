@@ -9,8 +9,8 @@ import { UPLOADS_PLAYLIST_ID, fileArtifactUrl } from '../lib/song.js'
 
 export { UPLOADS_PLAYLIST_ID, fileArtifactUrl }
 
-// 与 http.js 拦截器同口径：DOWNLOAD_TOKEN（无登录写鉴权）部署下裸 XHR/fetch
-// 也要带令牌——uploads 是 protectedWrite，session cookie 缺位时没它全 401
+// 与 http.js 拦截器同口径：服务对服务/脚本旁路凭据（全量 API）部署下裸
+// XHR/fetch 也要带令牌——uploads 是 protectedWrite，会话 cookie 缺位时没它全 401
 const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
 const tokenHeaders = () => DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
 

@@ -26,9 +26,9 @@ cp .env.example .env
 | VITE_API_BASE_URL | - | API 地址；生产单进程部署**留空**即自动同源 |
 | VITE_API_TIMEOUT | 10000 | API 请求超时（毫秒） |
 | VITE_API_PORT | 3101 | 开发模式下的后端端口 |
-| VITE_BASE_PATH | / | 应用基础路径 |
+| VITE_BASE_PATH | / | 应用基础路径（子目录部署；服务端会剥离前缀，compose 自动透传——裸机部署需同时设运行时 `BASE_PATH`） |
 | VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌 |
-| VITE_DOWNLOAD_TOKEN | - | 与后端 `DOWNLOAD_TOKEN` 配对的下载接口令牌（npm/vite 构建路径用；docker compose 只需设 `DOWNLOAD_TOKEN`，构建 arg 会自动取它） |
+| VITE_DOWNLOAD_TOKEN | - | 与后端 `DOWNLOAD_TOKEN` 配对的前端内嵌令牌——构建期烘进 bundle = 对全体页面访客可见。**启用登录的部署不要设**；仅无登录 LAN 部署需要浏览器写权限时才显式配置（compose build arg 不自动回落 `DOWNLOAD_TOKEN`） |
 | VITE_PORT | 3100 | 开发服务器端口 |
 | VITE_OPEN_BROWSER | true（Linux 下恒不打开） | 启动时自动打开浏览器，设为 `false` 关闭 |
 | VITE_ALLOWED_HOSTS | - | dev 服务器允许的 Host 列表 |
@@ -44,7 +44,7 @@ cp .env.example .env
 | HOST | 0.0.0.0 | 绑定地址 |
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
 | REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 须带令牌（子协议 `remote.<token>` 优先，`?token=` 兼容兜底）。公网/共享网络部署务必配置——未设且未启用登录时任何可达客户端都能接管主机端（启用登录后由会话 cookie 鉴权兜底） |
-| DOWNLOAD_TOKEN | - | 可选：非 GET 的 `/downloads`、`/playlists`、`/song-meta`、`/ai`、`/uploads` 请求须带 `x-download-token`（脚本/服务对服务旁路凭据）。**启用登录后浏览器不再需要它**——会话 cookie 等效放行；`VITE_DOWNLOAD_TOKEN` 仅保留给无登录老部署 |
+| DOWNLOAD_TOKEN | - | 可选：非 GET 的 `/downloads`、`/playlists`、`/song-meta`、`/ai`、`/uploads`、`/settings` 请求须带 `x-download-token`（脚本/服务对服务旁路凭据）。**启用登录后浏览器不再需要它**——会话 cookie 等效放行；`VITE_DOWNLOAD_TOKEN` 仅保留给无登录老部署 |
 | TRUST_PROXY | - | 可信反代跳数：`1`/`true` = 单层反代；多级链（CDN→nginx→应用）填实际跳数。采信 `X-Forwarded-Proto/Host`，并按跳数从 XFF 右起取真实客户端 IP 做限流分桶 |
 | AI_BASE_URL | - | 可选：OpenAI 兼容接口根地址（如本地 CLIProxyAPI `http://127.0.0.1:8317/v1`）。与 `AI_API_KEY`、`AI_MODEL` 三项全配才启用 AI 辅助 |
 | AI_API_KEY | - | 可选：OpenAI 兼容接口的 Bearer key |
@@ -52,7 +52,7 @@ cp .env.example .env
 | AI_TIMEOUT_MS | 30000 | AI 单次请求超时（毫秒） |
 | BILI_COOKIE | - | 可选：B 站登录 Cookie（`SESSDATA=…; bili_jct=…`）。杜比/Hi-Res 音轨只对登录账号下发（Hi-Res 通常需大会员）；不配则 B 站下载回落最高码率 AAC |
 | QQ_COOKIE | - | 可选：QQ 音乐登录 Cookie（`uin=…; qm_keyst=…`）。无损/Hi-Res 与 VIP 档只对登录账号下发，不配则匿名态仅常规档。同时充当网易云灰曲的解锁兜底源（cookie 带 refresh_token（QQ 态常为 `psrf_qqrefresh_token`）时临期自动续期，新凭据写运行时变量 `NEW_QQ_COOKIE`，重启后回落 `QQ_COOKIE`——长期运行建议落回 .env）。**务必用小号**（账号风控有先例）；QQ 源对服务器 IP 有地域风控，海外机房部署基本不可用 |
-| NODE_ENV | development | 环境标识（约定变量，服务代码不直接读取；镜像与 compose 已内置 `production`） |
+| NODE_ENV | development | 环境标识（服务代码不直读，但 **Vite 构建期会读 `.env` 里的它**——`development` 会把生产 bundle 烘成开发态，故 `.env` 不要放此变量；镜像与 compose 已内置 `production`） |
 
 > 上表 `AI_*`/`BILI_COOKIE`/`QQ_COOKIE` 均可在前端「顶部 ⋯ → 设置」运行时覆盖：
 > `app_settings` 表存覆盖值，DB 优先于 env，留空回落 env，改动即刻生效无需重启。
@@ -114,12 +114,12 @@ docker run -d -p 3101:3002 -v meowsync-data:/app/data --name meowsync meowsync
 
 构建期前端变量（打包进 bundle，运行时不可改）可用 `--build-arg` 注入，
 如启用遥控令牌：`docker build --build-arg VITE_REMOTE_TOKEN=xxx -t meowsync .`；
-启用下载写鉴权时须双管齐下：
-`docker build --build-arg VITE_DOWNLOAD_TOKEN=xxx -t meowsync .` +
-`docker run -e DOWNLOAD_TOKEN=xxx`。
+`VITE_DOWNLOAD_TOKEN` 同理需 build arg + 运行时 `DOWNLOAD_TOKEN` 双管齐下，
+但它会烘进 bundle 对全体页面访客可见——**启用登录的部署不要设**
+（浏览器走会话 cookie），仅无登录 LAN 部署需要浏览器写权限时才用。
 Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_BASE_PATH`/
-`VITE_REMOTE_TOKEN`/`VITE_DOWNLOAD_TOKEN`（缺省回落到 `DOWNLOAD_TOKEN`，即
-compose 下单设 `DOWNLOAD_TOKEN` 即可），并从同一 `.env` 读取 `CORS_ORIGINS`/
+`VITE_REMOTE_TOKEN`/`VITE_DOWNLOAD_TOKEN`（显式 opt-in，不回落
+`DOWNLOAD_TOKEN`），并从同一 `.env` 读取 `CORS_ORIGINS`/
 `REMOTE_TOKEN`/`DOWNLOAD_TOKEN`/`TRUST_PROXY`/`AI_*`/`BILI_COOKIE` 注入容器运行环境。
 
 > `BILI_COOKIE`/`QQ_COOKIE` + 公网暴露 = 任何访客都能用你的大会员/VIP 轨
@@ -154,7 +154,7 @@ server {
     listen 80;
     server_name your-domain.com;
 
-    client_max_body_size 10m;                           # 镜像导入/封面 blob 上传
+    client_max_body_size 2g;                            # 对齐 /uploads 上限（audio 512MB / video 2GB / cover·lyrics 32MB）
 
     location / {
         proxy_pass http://localhost:3101;  # 宿主机部署的监听端口（容器内才是 3002）
@@ -245,7 +245,7 @@ compose 用户等价做法：先把 `ports` 改成 `"127.0.0.1:3101:3002"` 起�
 
 - 浏览器：`fetch`/axios `withCredentials` 已内置，媒体元素同源自动带 cookie
 - 脚本/CLI：继续可用 `x-download-token`（`DOWNLOAD_TOKEN` 未失效，降级为
-  服务对服务凭据）；不建议再往前端 bundle 注入 `VITE_DOWNLOAD_TOKEN`
+  服务对服务凭据）；启用登录的部署不要往前端 bundle 注入 `VITE_DOWNLOAD_TOKEN`
 - `/remote` WebSocket：浏览器握手自动带 cookie；非浏览器客户端仍可用
   `REMOTE_TOKEN` 子协议。登录启用后两者皆无的连接一律 401
 
@@ -304,9 +304,11 @@ docker compose exec meowsync node -e "const D=require('better-sqlite3');new D('/
 4. **with-nginx 反代突然 502** — nginx 仅在启动时解析一次 `meowsync` 服务名；
    单独重建后端容器后 IP 可能变化，执行 `docker compose restart nginx` 即可
 5. **端口被占用** — `API_PORT` 修改监听端口；Windows 下确认无残留 node 进程
-6. **下载/歌单写接口全 401** — 服务端设了 `DOWNLOAD_TOKEN` 但前端 bundle 没带
-   `VITE_DOWNLOAD_TOKEN`（compose 下只需设 `DOWNLOAD_TOKEN` 并用 `--build` 重建）；
-   或反之——只设前端变量没设后端变量等于没开鉴权
+6. **下载/歌单写接口全 401** — 服务端设了 `DOWNLOAD_TOKEN` 但请求没带令牌。
+   **启用登录的部署不要设 `VITE_DOWNLOAD_TOKEN`**（烘进 bundle = 对全体访客
+   发口令；浏览器由会话 cookie 等效放行，401 说明是未登录而非缺令牌）。
+   无登录部署确需浏览器写权限时才显式 `VITE_DOWNLOAD_TOKEN=xxx` 并
+   `--build` 重建；或反之——只设前端变量没设后端变量等于没开鉴权
 
 ## 更新部署
 

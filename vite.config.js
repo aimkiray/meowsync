@@ -58,7 +58,14 @@ export default defineConfig(({ command, mode }) => {
     // 环境变量配置
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
-      __BUILD_TIME__: JSON.stringify(new Date().toISOString())
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+      // .env 里的 NODE_ENV=development 会被 Vite 构建期读取并把产物烘成
+      // 开发态（PROD=false 关不掉 dev 警告/失压缩）——build 命令强制钉死，
+      // 只对 build 生效，dev server 不受影响
+      ...(command === 'build' ? {
+        'import.meta.env.PROD': 'true',
+        'import.meta.env.DEV': 'false'
+      } : {})
     }
   }
 })

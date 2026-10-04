@@ -102,7 +102,10 @@ export function resolveApiBaseUrl() {
   // 用 import.meta.env?.PROD 区分（构建产物恒为 PROD）。vite dev 没有任何 API
   // 代理，DEV 下同源只会把请求打到 dev server——开发环境永远走独立 API 端口
   if (pageIsHttp && !isVitePreview && import.meta.env?.PROD) {
-    return window.location.origin
+    // 子目录部署（VITE_BASE_PATH=/music/ → BASE_URL）：API/WS 与页面同前缀，
+    // 服务端负责剥离。BASE_URL 去尾斜杠再拼，根部署 '' 退化为裸 origin
+    const basePath = (import.meta.env?.BASE_URL || '/').replace(/\/+$/, '')
+    return window.location.origin + basePath
   }
   // 开发环境：vite 端口 + 独立 API 端口（默认 3101）
   return devFallback()
