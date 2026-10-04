@@ -106,18 +106,23 @@ const MAX_UNLOCK_ITEMS = 20;
 // match() 链会耗尽 socket，且各源站对突发并发的容忍度低
 const UNLOCK_CONCURRENCY = 4;
 // 解锁结果短缓存：60s 窗口吸收"点歌→超时→重试→换码率重试"的重复链
-// （签名 URL 有效期以小时计，60s 不失效）；Key 含 purpose 保留源序差异
+// （签名 URL 有效期以小时计，60s 不失效）；Key 含 purpose 保留源序差异，
+// 还要含「有/无代理」语境——带 proxyOrigin 的链路选源期过代理白名单预筛，
+// 两语境共享同一键会让带代理的读消费直连写入的集合（绕过预筛产死链），
+// 或让直连的读消费被白名单筛过的集合（平白丢可用镜像）
 const UNLOCK_CACHE_TTL_MS = 60000;
-const unlockCache = new Map(); // `${purpose}|${id}` -> {url, br, source, at}
-const unlockCacheGet = (purpose, id) => {
-  const hit = unlockCache.get(`${purpose}|${id}`);
+const unlockCache = new Map(); // `${purpose}|${'px'|'direct'}|${id}` -> {url, br, source, at}
+const unlockCacheKey = (purpose, id, proxied) => `${purpose}|${proxied ? 'px' : 'direct'}|${id}`;
+const unlockCacheGet = (purpose, id, proxied) => {
+  const key = unlockCacheKey(purpose, id, proxied);
+  const hit = unlockCache.get(key);
   if (hit && Date.now() - hit.at < UNLOCK_CACHE_TTL_MS) return hit;
-  if (hit) unlockCache.delete(`${purpose}|${id}`);
+  if (hit) unlockCache.delete(key);
   return null;
 };
-const unlockCacheSet = (purpose, id, value) => {
+const unlockCacheSet = (purpose, id, proxied, value) => {
   if (unlockCache.size > 256) unlockCache.clear();
-  unlockCache.set(`${purpose}|${id}`, { ...value, at: Date.now() });
+  unlockCache.set(unlockCacheKey(purpose, id, proxied), { ...value, at: Date.now() });
 };
 
 // ── AI 解锁辅助 ────────────────────────────────────────────────
@@ -282,7 +287,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
     if (item.id) {
       // song_url 返回项无 dt 字段——基准时长只可能来自 song_detail
       const originalDt = originalDurations[item.id] || null;
-      let resolved = unlockCacheGet(purpose, item.id);
+      let resolved = unlockCacheGet(purpose, item.id, !!proxyOrigin);
       const wasCached = Boolean(resolved);
       if (!resolved) {
         // AI 规整检索元数据：一次提取全源复用（provider 拿 keyword 去外站
@@ -405,7 +410,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
                 || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),
               timeMs: estMs || originalDt || null,
             };
-            unlockCacheSet(purpose, item.id, resolved);
+            unlockCacheSet(purpose, item.id, !!proxyOrigin, resolved);
             break;
           } catch (e) {
             if (signal?.aborted) throw e;

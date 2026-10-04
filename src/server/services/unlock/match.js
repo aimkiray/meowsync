@@ -5,8 +5,9 @@
 const DURATION_MATCH_TOLERANCE_SEC = 5;
 
 /**
- * 候选按目标时长过滤（≤5s 差），全部不命中时若 durationMs 缺失才放行
- * 原序首条——未知基准下的「拿不到对账依据」比「随便选一条」更有信息量
+ * 候选按目标时长过滤（≤5s 差），durationMs 缺失（无对账基准）时放行
+ * 原序前 3 条——多候选交由下游时长对账/逐源试错兜底；基准存在但全部
+ * 不命中则返回空（不回退首条——unm 的 list[0] 兜底是错配主源）
  * @param {Array} cands
  * @param {number|null|undefined} durationMs 网易原始曲目时长（毫秒）
  * @param {(cand: any) => number|null|undefined} getSec 取候选秒数

@@ -157,7 +157,9 @@ export function extractYouTubePlaylistId(input) {
   // 'tldr-weekly-01' 型 ≥13 位搜索词劫进歌单导入
   if (/^(?:PL|UU|RD|LL|FL|TL|OLAK5uy_)[A-Za-z0-9_-]{11,60}$/.test(s)) return s;
   if (!/(?:youtube(?:-nocookie)?\.com|youtu\.be|music\.youtube\.com)/i.test(s)) return null;
-  return s.match(/[?&]list=([A-Za-z0-9_-]{2,80})/i)?.[1] || null;
+  // URL 分支同样要求 ≥13 位——与路由 /youtube/playlist 的 {13,80} 闸对齐，
+  // 短 list 值（如 watch?v=x&list=RD 残参）解出来也会被路由拒，不如不抢
+  return s.match(/[?&]list=([A-Za-z0-9_-]{13,80})/i)?.[1] || null;
 }
 
 // YouTube 视频 id 提取：URL 形态 + 裸 11 位 id（须含非数字，纯数字与网易云 id 撞型）

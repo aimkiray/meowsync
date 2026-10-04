@@ -131,18 +131,26 @@ async function askAiJson({ system, user, maxTokens = 1024, timeoutMs, signal = n
       return null;
     }
     let data = await res.json();
+    let content = data?.choices?.[0]?.message?.content;
     // 聚合网关会把上游失败包成 200 + {error:{...}}（one-api/new-api 常见）——
-    // 若首次带 response_format 且疑似参数不兼容，按裸请求再试一次
-    if ((data?.error || !Array.isArray(data?.choices)) && !bare) {
-      res = await retryBare();
-      if (!res.ok) {
-        console.warn(`[ai] chat 重试失败 HTTP ${res.status}`);
-        await res.arrayBuffer().catch(() => {});
-        return null;
+    // 但 error 与有效 choices 可共存，拿到内容就不重试；只在 content 为空
+    // 且疑似参数不兼容时按裸请求再试一次
+    if ((content == null || content === '') && !bare) {
+      const res2 = await retryBare();
+      if (!res2.ok) {
+        console.warn(`[ai] chat 重试失败 HTTP ${res2.status}`);
+        await res2.arrayBuffer().catch(() => {});
+      } else {
+        const data2 = await res2.json();
+        const content2 = data2?.choices?.[0]?.message?.content;
+        // 重试只在其确实更优时替换——拿不到内容就回落首份 data，
+        // 不把首个有效回包被裸重试的失败丢弃
+        if (content2 != null && content2 !== '') {
+          data = data2;
+          content = content2;
+        }
       }
-      data = await res.json();
     }
-    const content = data?.choices?.[0]?.message?.content;
     // error 与有效 choices 共存的网关回包以内容为准——只在拿不到内容时才算失败
     if (data?.error && (content == null || content === '')) {
       console.warn('[ai] 上游返回错误:', data.error?.message || data.error);

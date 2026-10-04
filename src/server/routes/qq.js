@@ -168,6 +168,8 @@ app.get('/qq/playlist', async (c) => {
       code: 200,
       ...pl,
       tracks: pl.tracks.map(trackJson),
+      // 与 bili/yt 歌单同型契约——超上限截断必须透出，不然前端按完整列表渲染
+      truncated: pl.truncated === true,
     });
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);

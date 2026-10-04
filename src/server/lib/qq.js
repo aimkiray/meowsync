@@ -410,6 +410,7 @@ async function getPlaylist(disstid, extraSignal, maxTracks = 1000) {
   const PAGE = 200;
   const tracks = [];
   let meta = null;
+  let exhausted = false; // 上游已见底——truncated 的权威判据（与 bili/yt 路由同型）
   for (let begin = 0; begin < maxTracks; begin += PAGE) {
     if (extraSignal?.aborted) {
       const e = new Error('已取消');
@@ -437,11 +438,11 @@ async function getPlaylist(disstid, extraSignal, maxTracks = 1000) {
     // 按过滤后长度判末页会在满页中间误截断
     const rawLen = Array.isArray(cd.songlist) ? cd.songlist.length : 0;
     tracks.push(...(rawLen ? cd.songlist.map(normalizeTrack).filter(Boolean) : []));
-    if (rawLen < Math.min(PAGE, maxTracks - begin)) break;
+    if (rawLen < Math.min(PAGE, maxTracks - begin)) { exhausted = true; break; }
     // songnum 缺省/非法时不得参与判定（>=0 恒真会退化成单页）
-    if (cd.songnum > 0 && tracks.length >= cd.songnum) break;
+    if (cd.songnum > 0 && tracks.length >= cd.songnum) { exhausted = true; break; }
   }
-  return meta ? { ...meta, tracks } : null;
+  return meta ? { ...meta, tracks, truncated: !exhausted } : null;
 }
 
 // 歌词：base64 LRC + base64 翻译；纯音乐占位词按无词处理
@@ -500,9 +501,10 @@ async function resolveQqInput(input, extraSignal) {
   const s = String(input || '').trim();
   if (!s) return null;
   if (/^\d{1,12}$/.test(s)) return { songid: s };
-  // qq:<mid> 显式前缀（前端 qq: 输入法直接透传到 resolve）
-  const prefMid = s.match(/^qq:([0-9A-Za-z]{10,20})$/i)?.[1];
-  if (prefMid) return { mid: prefMid };
+  // qq:<mid> 显式前缀（前端 qq: 输入法直接透传到 resolve）——形态判定
+  // 复用共享 SONGMID_RE 而非手写第二份正则（唯一真相源见顶部 require）
+  const prefMid = s.match(/^qq:(.+)$/i)?.[1];
+  if (prefMid && SONGMID_RE.test(prefMid)) return { mid: prefMid };
   if (SONGMID_RE.test(s)) return { mid: s };
   const direct = pickQqFromUrl(s);
   if (direct) return direct;
