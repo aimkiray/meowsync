@@ -93,7 +93,9 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
     // findExistingPlaylistId 自然解析——无需前置镜像
     if (!playlistId || !props.songs.length || isShareShell.value) {
       serverDownloadedStates.value = {}
-      serverDownloadingStates.value = {} // 在途标记同属旧歌单，一并清
+      // 在途标记不清：下载任务按 songId 键控且服务端仍在跑，标记要活到
+      // 任务终态（轮询 finally 复位），不随视图清空——否则切回会露出
+      // 重复下载入口撞出假失败 toast
       return
     }
 
@@ -169,9 +171,9 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
         console.error('删除失败:', error)
         toast('删除失败: ' + apiErrorMessage(error), 'error')
       } finally {
-        if (stillCurrent()) {
-          serverDownloadingStates.value[song.id] = false
-        }
+        // 在途标记无条件复位：它按 songId 记到请求结算为止——切走歌单
+        // 也要清，否则残留成永久「下载中」
+        serverDownloadingStates.value[song.id] = false
         closeDownloadMenu()
       }
     } else {
@@ -198,7 +200,9 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
           // 单次轮询失败（网络抖动/超时）不该判死下载——容忍连续 3 次再放弃，
           // 服务端任务不受影响
           let pollErrors = 0
-          while (stillCurrent() && Date.now() < deadline) {
+          // 不随切单中断（viewDisposed 只挡组件卸载）：在途标记要活到任务
+          // 终态，切回仍「下载中」；状态写/toast 仍由 stillCurrent 单独把守
+          while (!viewDisposed && Date.now() < deadline) {
             await new Promise(resolve => setTimeout(resolve, 1500))
             let stData
             try {
@@ -245,9 +249,8 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
               : '下载失败: ' + message, 'error')
         }
       } finally {
-        if (stillCurrent()) {
-          serverDownloadingStates.value[song.id] = false
-        }
+        // 在途标记无条件复位（与删除分支同口径）——按 songId 记到结算为止
+        serverDownloadingStates.value[song.id] = false
         closeDownloadMenu()
       }
     }
@@ -259,7 +262,8 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
   // 监听歌曲列表/歌单变化，自动查询状态；切歌单先清旧状态防止串标
   watch(() => props.selectedPlaylist?.id, () => {
     serverDownloadedStates.value = {}
-    serverDownloadingStates.value = {} // 处理中标记同样属于旧歌单，一并清
+    // 在途标记不清：按 songId 跟随任务到终态——切回仍显「下载中」，
+    // 重复下载入口被在途守卫挡住（轮询跨切单续跑，finally 负责复位）
     closeDownloadMenu() // 菜单目标已随歌单失效，不留悬空菜单
     checkAllSongsDownloadStatus()
   })

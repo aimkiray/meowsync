@@ -81,7 +81,10 @@ export function useRemoteControl(deps) {
           if (currentSong.value && !songSwitching.value) {
             playSong(currentSong.value, { preserveContext: true, seekTime: currentTime.value })
           }
-        } else if (!isPlaying.value) {
+        // 与 togglePlay 同款加载窗闸：state==='loading' 时 play() 只进 Howler
+        // _queue，onload 的 autoplay 分支再 play 一次——两条 _inactiveSound
+        // 各起一个轨道叠成双音轨；加载中吞掉这次指令是唯一不叠轨的口径
+        } else if (!isPlaying.value && howl.state?.() !== 'loading') {
           howl.play()
         }
         break

@@ -1,7 +1,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { apiErrorMessage } from '../api/http.js'
-import { toast } from '../lib/feedback.js'
+import { toast, toastDismiss } from '../lib/feedback.js'
 import { isSingleSongShellId, songCoverUrl } from '../lib/song.js'
 import {
   extractBiliFavlistId, isBilibiliInput, extractYouTubePlaylistId,
@@ -248,9 +248,11 @@ export function useAddToPlaylist({
           }
         }
         // B 站输入是单一目标——解析完直接入单，不经结果列表中转
-        toast('正在解析 B 站视频…', 'info', 30000) // 覆盖 resolve 最坏耗时
+        // 长驻 toast 必须终态回收——成功/失败/中止都不能让「正在解析…」挂满 30s
+        const resolving = toast('正在解析 B 站视频…', 'info', 30000) // 覆盖 resolve 最坏耗时
         pickerAbort = new AbortController()
         const data = await musicApi.resolveBilibili(q, pickerAbort.signal)
+          .finally(() => toastDismiss(resolving))
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
         await resolveToPickedSong(buildBilibiliSong(data))
         return
@@ -271,9 +273,11 @@ export function useAddToPlaylist({
           songPickerQuery.value = ''
           return
         }
-        toast('正在解析 YouTube 视频…', 'info', 30000)
+        // 同 B 站：长驻 toast 终态回收
+        const resolving = toast('正在解析 YouTube 视频…', 'info', 30000)
         pickerAbort = new AbortController()
         const data = await musicApi.resolveYouTube(q, pickerAbort.signal)
+          .finally(() => toastDismiss(resolving))
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
         await resolveToPickedSong(buildYouTubeSong(data))
         return
@@ -285,9 +289,11 @@ export function useAddToPlaylist({
       }
       if (isQQInput(q)) {
         action = '解析'
-        toast('正在解析 QQ 音乐…', 'info', 30000)
+        // 同 B 站：长驻 toast 终态回收
+        const resolving = toast('正在解析 QQ 音乐…', 'info', 30000)
         pickerAbort = new AbortController()
         const data = await musicApi.resolveQQ(q, pickerAbort.signal)
+          .finally(() => toastDismiss(resolving))
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
         await resolveToPickedSong(buildQQSong(data))
         return
@@ -307,8 +313,15 @@ export function useAddToPlaylist({
             if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
             await resolveToPickedSong(buildQQSong(data))
             return
-          } catch { /* mid 形态的关键词——resolve 失败按搜索处理 */ }
+          } catch (e) {
+            // 主动中止（关窗/新搜索认领顶掉）不是「resolve 失败」——静默退出，
+            // 不回落搜索：窗已关还发新上游请求是纯浪费
+            if (e?.name === 'AbortError' || e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return
+            /* mid 形态的关键词——resolve 失败按搜索处理 */
+          }
         }
+        // resolve 失败回落搜索前复查闸——在途间隙窗可能已关/新意图已认领
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
         if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
         const list = await musicApi.searchQQSongs(kw, pickerAbort.signal)
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return

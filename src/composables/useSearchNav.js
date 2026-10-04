@@ -310,6 +310,14 @@ export function useSearchNav({
         musicApi.searchSongsPage(query, { limit: 20 })
       ])
       if (!gates.search.isCurrent(myReq)) return
+      // 两腿全败 = 搜索不可用而非「零结果」——必须报出，否则失败被吞成
+      // 「没有找到相关内容」假空态；单腿败留 console 痕迹，半幅结果仍有效
+      if (plRes.status === 'rejected' && songRes.status === 'rejected') {
+        toast('搜索失败: ' + apiErrorMessage(plRes.reason || songRes.reason), 'error')
+      } else {
+        if (plRes.status === 'rejected') console.warn('[search] 歌单搜索失败:', plRes.reason)
+        if (songRes.status === 'rejected') console.warn('[search] 单曲搜索失败:', songRes.reason)
+      }
       searchResults.value = plRes.status === 'fulfilled' ? (plRes.value.playlists || []) : []
       searchSongResults.value = songRes.status === 'fulfilled' ? (songRes.value?.songs || []) : []
       searchSongQuery.value = query
@@ -364,6 +372,10 @@ export function useSearchNav({
       const list = await musicApi.searchQQSongs(kw)
       if (!gates.search.isCurrent(myReq)) return
       searchSongResults.value = (list || []).map(buildQQSong)
+    } catch (e) {
+      // 先查闸再弹——旧请求的落地错误不应覆盖正在进行的新搜索
+      if (!gates.search.isCurrent(myReq)) return
+      toast('QQ 音乐搜索失败: ' + apiErrorMessage(e), 'error')
     } finally {
       if (gates.search.isCurrent(myReq)) searching.value = false
     }
