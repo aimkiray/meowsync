@@ -1,7 +1,7 @@
 // 运行时配置覆盖层（app_settings + lib/settings + routes/settings）：
 // 覆盖优先/env 回落/掩码回显/整形校验/写面限流 全链钉住。
 // DATA_DIR 隔离 + 直接 require 持久层——DB 行为用真库（seed stub 测不出 upsert 语义）
-import { test, before, after } from 'node:test';
+import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { rmSync } from 'node:fs';
@@ -25,6 +25,13 @@ const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_TIMEOUT_MS',
 const envBackup = {};
 before(() => { for (const k of ENV_KEYS) { envBackup[k] = process.env[k]; delete process.env[k]; } });
 after(() => { for (const k of ENV_KEYS) {
+  if (envBackup[k] === undefined) delete process.env[k];
+  else process.env[k] = envBackup[k];
+} });
+// 每用例显式隔离：此前靠用例间「恰好没删干净」的顺序耦合传 env
+// （T_aiConfig → T_aiEnabled → describeSettings 链式依赖）。用例自己声明
+// 需要的 env 即可读性更好，afterEach 一律回到文件级基线
+afterEach(() => { for (const k of ENV_KEYS) {
   if (envBackup[k] === undefined) delete process.env[k];
   else process.env[k] = envBackup[k];
 } });
@@ -61,23 +68,26 @@ test('settings.aiConfig：聚合读取 + timeout 夹取沿用 ai.js 口径', () 
 });
 
 test('settings：aiEnabled 经 settings 层生效——覆盖写库即启用无需重启', () => {
-  assert.equal(aiLib.aiEnabled(), true); // 上例 env 三件套仍在
+  process.env.AI_BASE_URL = 'http://127.0.0.1:8317/v1';
+  process.env.AI_API_KEY = 'sk-x';
+  process.env.AI_MODEL = 'm1';
+  assert.equal(aiLib.aiEnabled(), true); // env 三件套齐
   repo.set('ai_api_key', 'db-key');
   assert.equal(aiLib.aiEnabled(), true);
   delete process.env.AI_API_KEY;
   assert.equal(aiLib.aiEnabled(), true); // DB 覆盖顶上
   repo.del('ai_api_key');
   assert.equal(aiLib.aiEnabled(), false); // 两端都没了
-  process.env.AI_API_KEY = 'sk-x';
 });
 
 // ── 掩码回显：密值不出进程 ──
 
 test('settings.describeSettings：非密值回显/密值只出 set+hint', () => {
+  process.env.AI_MODEL = 'm1'; // 非密字段的 env 回显基准
   repo.set('bili_cookie', 'SESSDATA=abcdef123456');
   const d = settings.describeSettings();
   assert.equal(d.ai_model.source, 'env');
-  assert.equal(d.ai_model.value, process.env.AI_MODEL); // 'm1'（前测试留存）
+  assert.equal(d.ai_model.value, 'm1');
   const b = d.bili_cookie;
   assert.equal(b.set, true);
   assert.equal(b.source, 'override');
@@ -203,6 +213,9 @@ test('settings.describeSettings：qq_cookie 认 NEW_QQ_COOKIE 续期链首命中
 // ── 路由层：GET/PUT 全链 ──
 
 test('GET /settings：字段投影 + ai 汇总', async () => {
+  process.env.AI_BASE_URL = 'http://gw-a:8317/v1';
+  process.env.AI_API_KEY = 'sk-env';
+  process.env.AI_MODEL = 'm1';
   const res = await settingsRoute.request('http://t/settings');
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -212,6 +225,7 @@ test('GET /settings：字段投影 + ai 汇总', async () => {
 });
 
 test('PUT /settings：写覆盖 → 清空回落 env → 整单生效', async () => {
+  process.env.AI_MODEL = 'm1'; // 清空后要回落到的 env 基准
   let res = await settingsRoute.request('http://t/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -360,6 +374,28 @@ test('PUT /settings：空 body/纯未知键 → 400 无可写项', async () => {
     body: JSON.stringify({ unknown_only: 'x' }),
   });
   assert.equal(res.status, 400);
+});
+
+test('PUT /settings 写面限流：同 IP 第 21 次写 → 429', async (t) => {
+  // TRUST_PROXY + 独用 XFF 隔离桶——本文件其它 PUT 打的是 'local' 共享桶，
+  // 不复用存量计数也不污染后续用例
+  const savedTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  t.after(() => {
+    if (savedTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = savedTp;
+    repo.del('ai_model');
+  });
+  const put = () => settingsRoute.request('http://t/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.77' },
+    body: JSON.stringify({ ai_model: 'rate-probe' }),
+  });
+  for (let i = 0; i < 20; i++) {
+    assert.equal((await put()).status, 200, `第 ${i + 1} 写应在配额内`);
+  }
+  const res = await put();
+  assert.equal(res.status, 429);
 });
 
 test('PUT /settings：原型链继承成员名过不了键白名单', async () => {

@@ -33,6 +33,15 @@ export const tmpDataDir = (prefix = 'meowsync-test-') => {
 // netease-match 模块的完整 stub 面：路由消费 matchWithBudget/matchTracksPool/
 // toMatchedJson——三者都委托回 matchNeteaseSong 录制桩，调用记录与 per-call
 // impl 语义保持可观测。getImpl 惰性取实现（测试用例内重赋 matchImpl 生效）
+//
+// 与真实现的语义差（已知且有意收窄，勿静默"修复"）：
+//   - 真 matchWithBudget = race(match, 预算 abort)；stub 直接转调，无预算窗
+//   - 真 matchTracksPool = worker 并发池 + 共享 budget abort（掐断在途按无
+//     匹配回落）；stub 串行逐条，无并发/预算语义，throw 只吞成 song:null
+//   - toMatchedJson 两侧同形（id/name/ar/al 投影）
+// 真函数的预算/并发/abort 接线由 tests/netease-match.test.mjs 尾部用例
+// 直测（那里 seed 的是云搜/AI 上游而非本模块）——路由侧 stub 只钉 HTTP
+// 语义与组装逻辑，不复刻匹配引擎内部调度
 export const seedMatchModule = (matchCalls, getImpl) => {
   const call = (...args) => { matchCalls.push(args); return getImpl()(...args); };
   seed('../src/server/services/netease-match.js', {

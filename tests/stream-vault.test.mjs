@@ -42,3 +42,42 @@ test('TTL：过期 token 惰性清除；滑动续期生效', () => {
   const live = mint('https://y', { ttlMs: 60_000 });
   assert.deepEqual(resolve(live).urls, ['https://y']);
 });
+
+test('绝对上限 24h：notAfter 越过即死，滑动窗还活着也救不回', () => {
+  const realNow = Date.now;
+  try {
+    // 铸造时刻回拨 25h；ttlMs 26h 让 expiresAt 尚在 +1h——死掉只能
+    // 是 notAfter（mint+24h = -1h）独立生效，不是滑动窗到期
+    Date.now = () => realNow() - 25 * 3600e3;
+    const dead = mint('https://vault-25h', { ttlMs: 26 * 3600e3 });
+    Date.now = realNow;
+    assert.equal(resolve(dead), null);
+
+    // 23h 前铸造（ttlMs 24h → expiresAt=+1h）仍在硬顶窗内 → 活
+    Date.now = () => realNow() - 23 * 3600e3;
+    const alive = mint('https://vault-23h', { ttlMs: 24 * 3600e3 });
+    Date.now = realNow;
+    assert.deepEqual(resolve(alive).urls, ['https://vault-23h']);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('LRU：满容 2048 逐最旧；resolve touch 把活跃 token 挪出淘汰线', () => {
+  const old = mint('https://vault-old');            // 注定最早被淘汰
+  const fill = [];
+  for (let i = 0; i < 2050; i++) fill.push(mint(`https://vault-f${i}`));
+  // 2048 封顶：存量+2050 溢出，插入序最前的依次出局——old 与 fill[0..1]
+  // 已被逐（老条目先垫背），fill[2] 起为现存最旧
+  assert.equal(resolve(old), null);
+  assert.equal(resolve(fill[0]), null);
+  assert.equal(resolve(fill[1]), null);
+
+  const oldest = fill[2];
+  assert.ok(resolve(oldest));                        // touch → 移到插入序尾
+  const victim = fill[3];                            // 现存最旧让位给 oldest
+  const late = mint('https://vault-late');           // 满容再 mint：逐最旧
+  assert.equal(resolve(victim), null);               // 被淘汰的是 victim
+  assert.ok(resolve(oldest));                        // touch 过的活着
+  assert.ok(resolve(late));
+});

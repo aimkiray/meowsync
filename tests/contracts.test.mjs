@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   downloadTaskBody, quickDownloadBody, mirrorBody,
-  importPlaylistBody, songMetaBody, aiLyricBody
+  importPlaylistBody, songMetaBody, aiLyricBody,
+  settingsBody, aiTestBody
 } from '../src/shared/contracts.js';
 
 test('downloadTaskBody：playlistId 必填、选项量纲硬边界', () => {
@@ -20,6 +21,10 @@ test('downloadTaskBody：playlistId 必填、选项量纲硬边界', () => {
 
 test('mirrorBody：localId 必填、tracks 体量封顶', () => {
   assert.ok(mirrorBody.safeParse({ localId: 'local_pl_a', tracks: [] }).success);
+  // 5000 是硬上限：上游单页 1000 曲夹×5 的极端体量，防单次 POST 灌爆内存
+  assert.ok(mirrorBody.safeParse({ localId: 'local_pl_a', tracks: Array(5000).fill({}) }).success);
+  assert.ok(!mirrorBody.safeParse({ localId: 'local_pl_a', tracks: Array(5001).fill({}) }).success);
+  assert.ok(mirrorBody.safeParse({ localId: 'local_pl_a' }).success); // tracks 可缺省
   assert.ok(!mirrorBody.safeParse({ localId: 123 }).success);
   assert.ok(!mirrorBody.safeParse({ localId: 'x'.repeat(81) }).success);
   assert.ok(!mirrorBody.safeParse({ localId: 'local_pl_a', tracks: {} }).success);
@@ -56,4 +61,35 @@ test('authCredentialsBody：用户名白名单字符集 + 密码 8-128 硬边界
   // 缺字段/空串
   assert.ok(!authCredentialsBody.safeParse({ username: 'a' }).success);
   assert.ok(!authCredentialsBody.safeParse({ username: '', password: 'password-one' }).success);
+});
+
+test('settingsBody：六键全部可选、null=清覆盖语义、类型与量纲硬边界', () => {
+  assert.ok(settingsBody.safeParse({}).success); // 全可缺省（「无可写键」在路由层判 400）
+  // null 是「清覆盖回落 env」合法值——不是空值校验错
+  assert.ok(settingsBody.safeParse({ ai_model: null, bili_cookie: null }).success);
+  assert.ok(settingsBody.safeParse({ ai_timeout_ms: 60000 }).success); // int 直收
+  assert.ok(settingsBody.safeParse({ ai_timeout_ms: '60000' }).success); // 字符串也收（归一化在 lib）
+  // 类型边界：布尔/对象不收
+  assert.ok(!settingsBody.safeParse({ ai_base_url: true }).success);
+  assert.ok(!settingsBody.safeParse({ ai_api_key: {} }).success);
+  assert.ok(!settingsBody.safeParse({ ai_timeout_ms: false }).success);
+  // 长度硬上限：cookie 8000、url/key 1000、model 500、timeout 串 20
+  assert.ok(!settingsBody.safeParse({ bili_cookie: 'x'.repeat(8001) }).success);
+  assert.ok(settingsBody.safeParse({ bili_cookie: 'x'.repeat(8000) }).success);
+  assert.ok(!settingsBody.safeParse({ ai_base_url: 'x'.repeat(1001) }).success);
+  assert.ok(!settingsBody.safeParse({ ai_model: 'x'.repeat(501) }).success);
+  assert.ok(!settingsBody.safeParse({ ai_timeout_ms: '1'.repeat(21) }).success);
+  // looseObject：未知键放行（路由层白名单再过滤）
+  assert.ok(settingsBody.safeParse({ hacker_key: 'x' }).success);
+});
+
+test('aiTestBody：三段全可选（留空用生效配置补位）、纯字符串量纲', () => {
+  assert.ok(aiTestBody.safeParse({}).success);
+  assert.ok(aiTestBody.safeParse({ baseUrl: 'http://x/v1', apiKey: 'sk-1', model: 'm' }).success);
+  // 与 settingsBody 不同——草稿三段不收 null（留空=不写字段而非显式 null）
+  assert.ok(!aiTestBody.safeParse({ baseUrl: null }).success);
+  assert.ok(!aiTestBody.safeParse({ apiKey: 42 }).success);
+  assert.ok(!aiTestBody.safeParse({ baseUrl: 'x'.repeat(1001) }).success);
+  assert.ok(!aiTestBody.safeParse({ model: 'x'.repeat(501) }).success);
+  assert.ok(aiTestBody.safeParse({ whatever: true }).success); // looseObject
 });
