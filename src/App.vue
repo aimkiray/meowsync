@@ -113,7 +113,6 @@
           v-else-if="centerView === 'watch'"
           :current-song="currentSong"
           :is-playing="isPlaying"
-          :duration="duration"
           :song-switching="songSwitching"
           :queue="playingSongs"
           :queue-title="queueTitle"

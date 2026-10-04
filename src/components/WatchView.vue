@@ -71,11 +71,8 @@
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
         </div>
 
-        <h2 class="watch-title" data-nosnippet><GlitchText :text="currentSong?.name || '未播放'" /></h2>
-        <p class="watch-meta">
-          {{ artistText }}<template v-if="albumText"> · {{ albumText }}</template>
-          <template v-if="duration"> · {{ formatTime(duration) }}</template>
-        </p>
+        <!-- 歌名/歌手·专辑·时长不画——与底栏播放器信息完全重复（YTM mweb
+             同款取舍：底栏已承载 meta，watch 页只留媒体+操作） -->
 
         <div class="watch-actions">
           <button class="ink-btn ink-btn--ghost watch-action" @click="$emit('open-fullscreen')" title="全屏歌词模式">
@@ -394,7 +391,6 @@ import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-m
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
 import PixelIcon from './PixelIcon.vue'
-import GlitchText from './GlitchText.vue'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
@@ -415,11 +411,10 @@ const dlCacheSet = (k, v) => {
 
 export default {
   name: 'WatchView',
-  components: { PixelIcon, GlitchText },
+  components: { PixelIcon },
   props: {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },
-    duration: { type: Number, default: 0 },
     // 音频时钟（秒，RAF 更新）——外部导入曲视频模式的画面以此锚定做漂移校正
     currentTime: { type: Number, default: 0 },
     songSwitching: { type: Boolean, default: false },
@@ -508,9 +503,6 @@ export default {
     const artistText = computed(() =>
       (props.currentSong?.ar || props.currentSong?.artists || [])
         .map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
-    )
-    const albumText = computed(() =>
-      props.currentSong?.al?.name || props.currentSong?.album?.name || ''
     )
 
     // 队列抬头元信息：总时长未知字段（dt/duration 皆缺）的歌按 0 计，
@@ -1206,7 +1198,6 @@ export default {
       dragIndex,
       coverUrl,
       artistText,
-      albumText,
       songArtist,
       formatDuration,
       formatTime,
@@ -1451,8 +1442,8 @@ export default {
 }
 
 /* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
-   与 .watch-top 返回键的 padding 同源对齐；居中态下的标题/操作在
-   左对齐大播放器下面会失调，一并转左（YTM watch 视频页同款排法） */
+   与 .watch-top 返回键的 padding 同源对齐；居中态的操作行在左对齐大
+   播放器下面会失调，一并转左（YTM watch 视频页同款排法） */
 .watch-main--video {
   padding-left: 0;
   padding-right: 0;
@@ -1465,23 +1456,6 @@ export default {
 .watch-action--on {
   background: var(--ink);
   color: var(--paper);
-}
-
-.watch-title {
-  margin-top: 20px;
-  font-family: var(--font-display);
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.15;
-  color: var(--ink);
-  max-width: 34ch;
-  overflow-wrap: anywhere;
-}
-
-.watch-meta {
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--ink-64);
 }
 
 .watch-actions {
@@ -1785,17 +1759,17 @@ export default {
   /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
      inset:0 才贴画面（wrap 恒 100% 栏宽时，高度约束生效、视频收窄，中央播放
      键/右下全屏键会对到栏而非画面）。尺寸策略对齐 YTM watch 页：按视口高
-     预算收窄（356px ≈ 顶栏 57.2 + 底条 69.2 + layout 纵 pad 40 + 栏顶补距
-     56 + 标题/元/操作行 ~131；YTM 同款 --player-page-total-height-exclude-
-     player 为 408px），但守 300px 最小高度（300×16/9≈533 宽；YTM 300 /
-     ytd 240）——预算低于地板时停止压缩、左栏滚动补差（顶补距已让开返回键
-     浮层），视频不再塌成小窗。实际上限即左栏宽（1440 壳-边距-右栏≈976，
-     不设额外封顶）；栏宽本身 <533 的窄断点带（901–1023 开栏）由 100%
-     先绑定、地板让位——宽度饥荒时无法同时保高。vh 行是 dvh 不识别的
-     老内核兜底 */
+     预算收窄（275px ≈ 顶栏 57.2 + 底条 69.2 + layout 纵 pad 40 + 栏顶补距
+     56 + 操作行 ~52；标题/元已删——底栏播放器承载同款信息。YTM 同款
+     --player-page-total-height-exclude-player 为 408px），但守 300px 最小
+     高度（300×16/9≈533 宽；YTM 300 / ytd 240）——预算低于地板时停止
+     压缩、左栏滚动补差（顶补距已让开返回键浮层），视频不再塌成小窗。
+     实际上限即左栏宽（1440 壳-边距-右栏≈976，不设额外封顶）；栏宽本身
+     <533 的窄断点带（901–1023 开栏）由 100% 先绑定、地板让位——宽度
+     饥荒时无法同时保高。vh 行是 dvh 不识别的老内核兜底 */
   .watch-cover-wrap--video {
-    width: min(100%, max(533px, calc((100vh - 356px) * 16 / 9)));
-    width: min(100%, max(533px, calc((100dvh - 356px) * 16 / 9)));
+    width: min(100%, max(533px, calc((100vh - 275px) * 16 / 9)));
+    width: min(100%, max(533px, calc((100dvh - 275px) * 16 / 9)));
   }
   .watch-banner { width: min(46vh, 420px); }
 
