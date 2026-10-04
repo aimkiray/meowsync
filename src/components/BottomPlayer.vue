@@ -350,6 +350,11 @@ export default {
   right: 0;
   height: 20px;
 }
+/* 触屏半幅命中带：上探 16→8px（带 20→12，底沿仍钉 y=3 不窃控件点击）——
+   胖指精度不吃鼠标档的加深命中带，末行曲目点击被抢的侵入面减半 */
+@media (hover: none) {
+  .bp-progress::before { top: -8px; height: 12px; }
+}
 .bp-progress-fill { background: var(--accent-magenta); } /* 已播部分=accent 本色（retro 火烈鸟粉 / glitch teal 同覆写） */
 
 .player-content { position: relative; }
@@ -358,10 +363,13 @@ export default {
   display: flex;
   align-items: center;
   gap: 16px;
-  /* 竖向 padding 4 + 播放键 60 = 总高 68 不变——放大键而不撑高条；
-     左右缘横屏让出刘海/圆角死区（safe-area 与底值取大） */
-  padding: 4px max(16px, env(safe-area-inset-right, 0px)) 4px max(16px, env(safe-area-inset-left, 0px));
-  max-width: 1440px;
+  /* 横槽移到外层 .bottom-player（style.css 同款 max(16px,env)，全档生效）——
+     内列居中到 --content-max 后，≥1472 与顶栏/侧栏内容同轴（原为内槽 16px
+     错位：内列盒含槽，对齐基准偏半槽）。竖向 padding 4 + 播放键 60/56/52
+     （桌面/phone/compact 三档）+ 发丝线 1.2 = 栏高 69.2/65.2/61.2——与
+     style.css :root 的 --player-bar-h 令牌梯成对维护（watch 视频预算消费） */
+  padding: 4px 0;
+  max-width: var(--content-max, 1440px);
   margin: 0 auto;
 }
 
@@ -477,8 +485,8 @@ export default {
   display: flex;
   align-items: center;
   gap: 4px;
-  /* 音量组与视图入口三键组的组间分隔抬到 16px——与 player-inner 右缘
-     内距同档（三键组左边 8px 档距 vs 页缘 16px 曾是不对称书挡） */
+  /* 音量组与视图入口三键组的组间分隔抬到 16px——与栏右缘页距同档
+     （三键组左边 8px 档距 vs 页缘 16px 曾是不对称书挡；槽在外层） */
   margin-right: 8px;
 }
 .vol-range { width: 76px; }
@@ -496,40 +504,28 @@ export default {
   color: var(--accent-magenta-on-ink);
 }
 
-/* ≤735px 只收滑条（保留静音键）：右簇含整组 240px 在 ≤735 触底会顶推
-   控件簇左移（播放键偏中心最多 ~48px @641）——藏 76px 滑条降到 160px，
-   641–735 半幅 ≥192.5px 足够，居中承诺保住且静音不丢 */
-@media (max-width: 735px) {
-  .vol-range { display: none; }
-}
-
-@media (max-width: 640px) {
-  /* 本档总高保持 64（4+56+4）——padding 再让利让播放键跟上桌面档 */
-  .player-inner { gap: 10px; padding: 4px 10px; }
+/* ≤768 首轮减负：右簇只留静音键——滑条（76）与沉浸入口同档收掉；
+   分权拓扑未启，走带仍居中（YTM ≤1149 收 shuffle/repeat/volume 同档）。
+   横槽由外层 .bottom-player 全档供给（16px 地板），内列只调 gap */
+@media (max-width: 768px) {
+  .vol-range, .bp-xtra { display: none; }
+  /* bp-xtra 隐后静音键已是右簇尾件——组间分隔垫转成贴缘死缝，收掉 */
+  .vol-wrap { margin-right: 0; }
+  .player-inner { gap: 10px; }
   .transport--play { width: 56px; height: 56px; }
 }
 
-/* ≤551px 连静音键也收：mute+沉浸键 72px 需半幅 ≥72（vw≥552）从容，
-   501–551 会顶偏播放键——该档只留沉浸键 32px，456 处恰好满配 */
-@media (max-width: 551px) {
-  .vol-wrap { display: none; }
-}
-
-/* ≤455px：沉浸键也收——421–455 档半幅见底，与 ≤420 的 YTM 稀疏化
-   合并收口；此时右簇全空（时间戳本就 lg:inline 不显示），
-   剩余空间让给标题区 */
-@media (max-width: 455px) {
-  .bp-xtra { display: none; }
-}
-
-@media (max-width: 420px) {
-  /* 类选择器标边键——免疫簇内加键/挪位导致的序号漂移（nth-of-type 脆弱） */
-  .player-controls .transport--edge { display: none; }
-  .transport { width: 36px; height: 36px; }
-  .transport--play { width: 48px; height: 48px; }
-  .pg-icobtn--on-ink { width: 36px; height: 36px; } /* 与 transport 同收——否则倒挂 */
-  .player-controls { gap: 2px; }
-  .player-inner { gap: 6px; padding: 4px; } /* 4+48+4=56 总高不变 */
-  .track-text { max-width: 34vw; }
+/* ≤640 分权拓扑（YTM mweb 底栏）：meta 左 / prev·play·next 右，
+   不再守对称半幅——右簇与边键（shuffle/模式）整簇让位给标题区。
+   走带 44/52 触控地板（原 ≤420 的 36 低于 WCAG/YTM 48 地板线）。
+   shuffle/模式功能落点在 watch 页队列头（≤640 同档挂出）。
+   类选择器标边键——免疫簇内加键/挪位导致的序号漂移（nth-of-type 脆弱） */
+@media (max-width: 640px) {
+  .player-inner { gap: 8px; }
+  .player-controls { margin-left: auto; }
+  .player-right, .player-controls .transport--edge { display: none; }
+  .transport { width: 44px; height: 44px; }
+  .transport--play { width: 52px; height: 52px; }
+  .track-text { max-width: none; } /* 34vw 帽退役：flex:1+min-width:0 自裁 */
 }
 </style>
