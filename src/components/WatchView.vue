@@ -1292,8 +1292,8 @@ export default {
      .watch-layout——--watch-vpad 有两个兄弟消费端（.watch-layout 的
      padding + .watch-top 的浮层槽距：返回键/操作键行的左缘就是视频左缘
      对齐轴），挂子元素会让兄弟够不着。--watch-reserved-h 与其同域：
-     var() 在声明元素的计算时刻解析（非消费端惰性代入），同元素才能
-     吃到分档重声明 */
+     自定义属性按已解析计算值向下继承，声明在共同祖先上后代看到的
+     都是分档后的值——同域声明为与消费端同源可读，预算只此一处 */
   --watch-vpad: 20px;
   /* 视频高度预算的「非媒体区」构成：顶栏 + 底栏 + 布局纵槽×2 + 视频顶补距
      56。四个分量全走令牌——此前 223 是手算硬编码，任一分量漂移即失真 */
@@ -1543,14 +1543,17 @@ export default {
   text-align: left;
 }
 
-/* 音画切换的开启态：实心反色——与 pg-tab--active 同一语义 */
-.watch-action--on {
+/* 音画切换的开启态：实心反色——与 pg-tab--active 同一语义。
+   双类升特：glitch 主题有 :root[data-theme] .ink-btn--ghost 全局重写
+   (0,3,0)，单类 scoped (0,2,0) 会被压——按下态在 glitch 下曾完全
+   不可见；双类 (0,3,0) 追平后 scoped 样式加载在后胜出 */
+.watch-action.watch-action--on {
   background: var(--ink);
   color: var(--paper);
 }
 /* 开启态 hover：ghost hover 只给 accent-ink 字色（纸面档）——墨底上
    那是低对比泥色；按 pg-chip--on 法则保墨底、换 on-ink 亮 accent */
-.watch-action--on:hover:not(:disabled) {
+.watch-action.watch-action--on:hover:not(:disabled) {
   color: var(--accent-magenta-on-ink);
 }
 
