@@ -1306,8 +1306,8 @@ export default {
 
 /* 外部导入曲视频模式：16:9 信箱（外部视频多为横屏，方形裁切会砍画面）；
    image-rendering 像素化是封面的印刷效果，视频不该继承。
-   移动基态占满栏宽（整页滚动，高度不占视口预算）；宽屏上限 70vh 反推宽
-   （封面 min(46vh,420px) 面积约 17.6万px²；1152×648 ≈ 74.7万，~4×） */
+   宽恒 100% 贴 wrap——视频盒的实际尺寸由 wrap 承担（移动基态 wrap=栏宽；
+   宽屏 wrap 按视口高换算公式，见 min-width 块） */
 .watch-cover--video {
   width: min(100%, 1280px);
   aspect-ratio: 16 / 9;
@@ -1318,9 +1318,10 @@ export default {
   touch-action: manipulation;
 }
 
-/* 视频态 wrap 必须占满栏宽：wrap 在 align-items:center 的 flex 栏里是
-   shrink-to-fit，否则视频 width:% 与 wrap 构成循环约束、退回片源内建宽。
-   relative 是悬停控制层（.watch-video-controls）的定位锚 */
+/* 视频态 wrap 移动基态占满栏宽：wrap 是 shrink-to-fit 的 flex 项，不给宽
+   则视频 width:% 与 wrap 构成循环约束、退回片源内建宽；宽屏改由 min()
+   公式贴视频盒（见 min-width 块——控制层 inset:0 锚 wrap，wrap 必须
+   精确包住画面）。relative 是悬停控制层（.watch-video-controls）的定位锚 */
 .watch-cover-wrap--video { width: 100%; position: relative; }
 
 /* 视频悬停控制层：默认隐，JS --on 驱动露出（戳醒 2.6s 自隐，暂停常显；
@@ -1415,6 +1416,11 @@ export default {
    :-webkit-full-screen 是 Safari≤16.3 的旧伪类——不能并进 :fullscreen
    选择器组（不识别的伪类会让整条规则作废），单列一份 */
 .watch-cover-wrap:fullscreen {
+  /* 宽高显式钉满屏：UA 全屏表（width:100%!important）在现代引擎已兜住，
+     显式声明是给没有这条 UA 规则的旧 WebKit 兜底——否则 wrap 的 min()
+     宽公式会把全屏画面卡在小屏预算里 */
+  width: 100%;
+  height: 100%;
   background: #000;
   display: flex;
   align-items: center;
@@ -1426,6 +1432,8 @@ export default {
   border: 0; /* .watch-cover 的墨发丝框在纯黑场里只剩噪点 */
 }
 .watch-cover-wrap:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
   background: #000;
   display: flex;
   align-items: center;
@@ -1747,12 +1755,23 @@ export default {
     justify-content: safe center;
     scrollbar-gutter: stable;
     scrollbar-gutter: stable both-edges;
+    /* 顶行是 absolute 浮层（返回键占 y≈20–52）：内容超高时 safe center 回退
+       start，栏内滚动的首行会钻到返回键下——顶补距把可滚顶缘让到浮层下方 */
+    padding-top: 56px;
   }
   .watch-main--video { scrollbar-gutter: stable; }
 
   .watch-cover { width: min(46vh, 420px); }
-  /* 视频是主内容、须明显大于方形封面 */
-  .watch-cover--video { width: min(100%, 1280px, calc(70vh * 16 / 9)); }
+  /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
+     inset:0 才贴画面（wrap 恒 100% 栏宽时，高度约束生效、视频收窄，中央播放
+     键/右下全屏键会对到栏而非画面）。高度预算 356px ≈ 顶栏 57.2 + 底条 69.2 +
+     layout 纵向 padding 40 + 栏顶补距 56 + 标题/元/操作行 ~131——视口变矮时
+     视频等比收窄不溢出；280px 地板防极端矮窗塌缩，2 行标题/横幅超出走栏内
+     滚动（顶补距已让开返回键）。vh 行是 dvh 不识别的老内核兜底 */
+  .watch-cover-wrap--video {
+    width: min(100%, 1280px, max(280px, calc((100vh - 356px) * 16 / 9)));
+    width: min(100%, 1280px, max(280px, calc((100dvh - 356px) * 16 / 9)));
+  }
   .watch-banner { width: min(46vh, 420px); }
 
   /* 栏界标尺回竖版（gap 24 → 栏内 padding-left 24：标尺两侧留白对称） */
