@@ -6,16 +6,21 @@ import { musicApi } from '../api/music.js'
 export const serverCaps = ref({ qq: { loggedIn: false } })
 
 let loaded = false
+// 世代戳：初载与 refresh 并发时旧响应后着陆会把新凭据态盖回陈值
+let capsSeq = 0
 export async function loadServerCaps() {
   if (loaded) return
   loaded = true
+  const seq = capsSeq
   try {
-    serverCaps.value = { qq: await musicApi.getQqStatus() }
+    const caps = { qq: await musicApi.getQqStatus() }
+    if (seq === capsSeq) serverCaps.value = caps
   } catch { /* 保守默认 */ }
 }
 
 // 设置页改完 cookie 类凭据后重取——loaded 闩防的是重复拉，不是终身一次
 export function refreshServerCaps() {
   loaded = false
+  capsSeq++
   return loadServerCaps()
 }

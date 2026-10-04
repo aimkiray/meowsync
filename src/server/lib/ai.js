@@ -68,10 +68,16 @@ function parseJsonContent(content) {
 
 async function postChat(body, timeoutMs, signal) {
   const { baseUrl, apiKey } = aiConfig();
+  // 并发热改可能恰好抽空绑定（env 密钥对新址拒发）——Bearer null 裸字面
+  // 发出去不如直接按 AI 不可用抛给上层降级
+  if (!baseUrl || !apiKey) throw new Error('AI 配置不完整');
+  // origin+pathname 拼接（与 ai-test 同口径）——env 直配的 URL 可能带
+  // query/尾斜杠，裸字符串拼接会把路径吞进查询串
+  const u = new URL(baseUrl);
   // AbortSignal.any：业务超时与客户端断连任一触发即中止
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (signal) signals.push(signal);
-  const res = await fetch(`${baseUrl}/chat/completions`, {
+  const res = await fetch(`${u.origin}${u.pathname.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

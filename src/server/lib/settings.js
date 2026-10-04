@@ -52,6 +52,9 @@ function normalizeOverride(key, raw) {
       if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('scheme');
       // userinfo 内嵌凭据会被 GET 原文回显——Bearer 已是认证通道，URL 不许带密
       if (u.username || u.password) throw new Error('userinfo');
+      // query/fragment 会被 postChat 裸拼接吞掉路径（?q=/chat/completions）——
+      // 写时拒掉，否则 ai-test 绿而真实调用全 404
+      if (u.search || u.hash) throw new Error('query');
     } catch {
       return { error: 'ai_base_url 须为不含凭据的合法 http(s) 地址' };
     }
@@ -79,6 +82,9 @@ const sameOrigin = (a, b) => {
   try { return new URL(a).origin === new URL(b).origin } catch { return false }
 };
 
+// 按值去重——坏值热改换新要重新告警，同一坏值不重复刷日志（值不落日志）
+let warnedUnsafeKey = '';
+
 // 密钥↔网关绑定：env AI_API_KEY 只发往 env AI_BASE_URL 的同源地址——
 // 覆盖层（会话可写）把 base_url 指到别站时 env 密钥不随行，否则
 // PUT 一次改址即把 Bearer 泄到陌生主机。override 层密钥是管理员
@@ -87,6 +93,15 @@ function aiKeyBoundTo(url) {
   if (!url) return null;
   const k = effective('ai_api_key');
   if (!k.value) return null;
+  // header 负载要求 latin1：env 直配未过写入校验——带控制字符/非 ASCII
+  // 的密钥会在 undici 头校验异常里被原文回显，按未配置处理
+  if (/[^\x20-\x7e]/.test(k.value)) {
+    if (warnedUnsafeKey !== k.value) {
+      warnedUnsafeKey = k.value;
+      console.warn('[settings] AI_API_KEY 含非法字符（header 只允许 latin1）——按未配置处理');
+    }
+    return null;
+  }
   if (k.source === 'override') return k.value;
   return sameOrigin((process.env.AI_BASE_URL || '').trim(), url) ? k.value : null;
 }
@@ -104,22 +119,28 @@ function aiConfig() {
   };
 }
 
-// QQ cookie 的 DB 覆盖层：env 链（NEW_QQ_COOKIE 续期值 > QQ_COOKIE）由
-// qq.js 自己编排——本函数只答「DB 有没有覆盖」，effective() 的 env 回落
-// 会把 NEW_QQ_COOKIE 层整个漏掉，不能复用
+// QQ cookie 的 DB 覆盖判定：只答「DB 有没有覆盖行」。env 链编排
+// （override > NEW_QQ_COOKIE > QQ_COOKIE）在 qq.js qqCookie() 里——
+// 与 effective() 的回落语义等价，但本函数还要区分「覆盖存在性」给续期写回用
 function qqCookieOverride() {
   const v = repo.get('qq_cookie');
   return v != null && v !== '' ? v : null;
 }
 
-// 续期写回：覆盖态 → DB（下次读的就是新串）；同时仍刷 NEW_QQ_COOKIE——
-// 覆盖被清除后回落到的是续期后的 env 而非最初的死串。
-// expectedCookie=发起续期时读到的串：在飞期间管理员改了 override 就不许
-// 旧凭据的续期值盖掉新覆盖（refresh_token 会把旧账号链一路续下去）
+// 续期写回按来源归位：被续的是 override 串 → 回 DB；是 env 链串 → 回
+// NEW_QQ_COOKIE。两层混写会让覆盖账号的凭据渗进 env 回落位——清掉
+// override 后静默换成另一个账号在线（有效凭据、错误主体）。
+// expectedCookie=发起续期时读到的串：在飞期间 override/env 任一被改
+// 就不许旧凭据的续期值盖掉新值（refresh_token 会把旧账号链一路续下去）
 function persistRenewedQqCookie(value, expectedCookie) {
+  const strip = (s) => (s || '').trim().replace(/[^\x20-\x7e]/g, '');
   const cur = repo.get('qq_cookie');
-  if (cur != null && cur === expectedCookie) repo.set('qq_cookie', value);
-  process.env.NEW_QQ_COOKIE = value;
+  if (cur != null && strip(cur) === expectedCookie) {
+    repo.set('qq_cookie', value);
+    return;
+  }
+  const envCur = strip(process.env.NEW_QQ_COOKIE || process.env.QQ_COOKIE);
+  if (envCur === expectedCookie) process.env.NEW_QQ_COOKIE = value;
 }
 
 // GET /settings 响应投影：非密值全量回显（输入框可当占位符），

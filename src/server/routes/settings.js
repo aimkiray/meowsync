@@ -62,10 +62,22 @@ app.post('/settings/ai-test', async (c) => {
   const cfg = settingsLib.aiConfig();
   const baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '') || cfg.baseUrl;
   // 密钥回落也过 origin 绑定——草稿 URL 指到别站时不能拿存着的密钥去测
-  const apiKey = String(body.apiKey || '').trim() || settingsLib.aiKeyBoundTo(baseUrl);
+  const draftKey = String(body.apiKey || '').trim();
+  const apiKey = draftKey || settingsLib.aiKeyBoundTo(baseUrl);
   const model = String(body.model || '').trim() || cfg.model;
+  // 已存密钥被 origin 绑定扣下 ≠「未配置」——分开报用户才知道要重填
+  const keyWithheld = !draftKey && !apiKey && settingsLib.effective('ai_api_key').value != null;
   if (!baseUrl || !apiKey) {
-    return c.json({ code: 200, ok: false, reason: 'incomplete', message: 'base_url 与 api_key 必填' });
+    return c.json({
+      code: 200, ok: false,
+      reason: keyWithheld ? 'key-bound' : 'incomplete',
+      message: keyWithheld ? '已存密钥只发往原配置网关——换地址请重新填 Key' : 'base_url 与 api_key 必填',
+    });
+  }
+  // header 只允许 latin1——非法字符的 key 会让 undici 异常消息原样
+  // 吐出密钥值；草稿值是调用方自持也一律挡（报错文案干净）
+  if (/[^\x20-\x7e]/.test(apiKey)) {
+    return c.json({ code: 200, ok: false, reason: 'bad-key', message: 'api_key 含非法字符' });
   }
   let u;
   try {
@@ -89,7 +101,10 @@ app.post('/settings/ai-test', async (c) => {
     const chunks = []; let bytes = 0;
     for await (const ch of (res.body ? Readable.fromWeb(res.body) : [])) {
       bytes += ch.length;
-      if (bytes > 256 * 1024) throw new Error('上游响应超限');
+      if (bytes > 256 * 1024) {
+        await res.body.cancel().catch(() => {}); // 断流释 socket——半消费体会占住 keep-alive
+        throw new Error('上游响应超限');
+      }
       chunks.push(ch);
     }
     const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));

@@ -965,7 +965,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* iOS/iPadOS 防缩放：<16px 的 input/select 聚焦触发整页 zoom；
    pointer:coarse 覆盖平板触屏（旧 700px 断点漏 iPad 竖屏 768–834） */
 @media (pointer: coarse) {
-  .pg-field input, .pg-field select, .atp-new input, .asp-search input, .settings-textarea { font-size: 16px; }
+  .pg-field input, .pg-field select, .atp-new input, .asp-search input { font-size: 16px; }
 }
 
 /* 浮动菜单（teleport 到 body 脱离组件作用域——必须全局类） */
