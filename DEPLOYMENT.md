@@ -54,6 +54,11 @@ cp .env.example .env
 | QQ_COOKIE | - | 可选：QQ 音乐登录 Cookie（`uin=…; qm_keyst=…`）。无损/Hi-Res 与 VIP 档只对登录账号下发，不配则匿名态仅常规档。同时充当网易云灰曲的解锁兜底源（cookie 带 refresh_token（QQ 态常为 `psrf_qqrefresh_token`）时临期自动续期，新凭据写运行时变量 `NEW_QQ_COOKIE`，重启后回落 `QQ_COOKIE`——长期运行建议落回 .env）。**务必用小号**（账号风控有先例）；QQ 源对服务器 IP 有地域风控，海外机房部署基本不可用 |
 | NODE_ENV | development | 环境标识（约定变量，服务代码不直接读取；镜像与 compose 已内置 `production`） |
 
+> 上表 `AI_*`/`BILI_COOKIE`/`QQ_COOKIE` 均可在前端「顶部 ⋯ → 设置」运行时覆盖：
+> `app_settings` 表存覆盖值，DB 优先于 env，留空回落 env，改动即刻生效无需重启。
+> 密钥类字段只回显存在性与尾标；env 的 `AI_API_KEY` 只发往 `AI_BASE_URL` 同源
+> 地址——改 Base URL 需同时填覆盖 Key。
+
 ## 部署步骤
 
 ### 本地开发

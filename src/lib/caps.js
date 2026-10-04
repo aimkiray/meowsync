@@ -13,3 +13,9 @@ export async function loadServerCaps() {
     serverCaps.value = { qq: await musicApi.getQqStatus() }
   } catch { /* 保守默认 */ }
 }
+
+// 设置页改完 cookie 类凭据后重取——loaded 闩防的是重复拉，不是终身一次
+export function refreshServerCaps() {
+  loaded = false
+  return loadServerCaps()
+}

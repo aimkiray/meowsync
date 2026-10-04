@@ -28,7 +28,7 @@ seed('../src/server/services/youtube-resolve.js', {
 seed('../src/server/lib/ai.js', {
   aiEnabled: () => aiOn,
   askAiJson: async () => { askCalls += 1; return aiScript.length ? aiScript.shift() : null; },
-  AI_MODEL: 'stub-model',
+  aiModel: () => 'stub-model',
 });
 seed('../src/server/repositories/lyricAi.js', {
   getVerdict: (vkey) => verdictRows[vkey],

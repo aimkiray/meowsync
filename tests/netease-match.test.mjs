@@ -27,7 +27,7 @@ require.cache[apiPath] = { id: apiPath, filename: apiPath, loaded: true, exports
 require.cache[aiPath] = { id: aiPath, filename: aiPath, loaded: true, exports: {
   aiEnabled: () => aiOn,
   askAiJson: async () => { aiCalls.push(1); return aiScript.length ? aiScript.shift() : null; },
-  AI_MODEL: 'stub',
+  aiModel: () => 'stub',
 } };
 const { matchNeteaseSong, nameHitNeedsConfirm } = require('../src/server/services/netease-match.js');
 

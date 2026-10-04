@@ -7,7 +7,7 @@
 const { innertubeSearch } = require('../../lib/youtube');
 const { resolveYoutubeStreams } = require('../youtube-resolve');
 const { pickByDuration } = require('./match');
-const { aiEnabled, askAiJson, AI_MODEL } = require('../../lib/ai');
+const { aiEnabled, askAiJson, aiModel } = require('../../lib/ai');
 const { getVerdict, upsertVerdict } = require('../../repositories/lyricAi');
 
 // 进 prompt 的字段剥换行/方括号/控制符——候选标题/频道名是第三方数据，
@@ -17,7 +17,7 @@ const cleanField = (s) => String(s ?? '')
 
 // 解锁判定键：(歌曲, 候选视频, 模型) 三元组——同一首歌下被批的候选重试即
 // 命中不再问模型；换模型自动失效重判
-const unlockVkey = (songId, videoId) => `${songId}@yt_${videoId}@${AI_MODEL}`;
+const unlockVkey = (songId, videoId) => `${songId}@yt_${videoId}@${aiModel()}`;
 
 // 进程内冷却（非持久 verdict——瞬时态不该进库）：
 // - deadCands：取流失败的候选进死簿 30min 押尾——死视频每次 resolve 都被

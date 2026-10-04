@@ -3,7 +3,8 @@
 // 歌词自动翻译。任何一环 AI 不可用都只返回 null，绝不抛错——AI 是增强
 // 路径而非关键路径，所有调用点必须有无 AI 的降级行为。
 //
-// 配置（全部必填才启用）：
+// 配置（全部必填才启用，优先级：app_settings 覆盖 > 环境变量——设置页
+// 「留空读服务端配置」的回落链在 lib/settings.js）：
 //   AI_BASE_URL   OpenAI 兼容根地址，如 http://127.0.0.1:8317/v1（本地
 //                 聚合网关 CLIProxyAPI/new-api/ollama 均可；刻意不做公网
 //                 IP 校验——本机/内网代理正是主要部署形态，属于管理员配置
@@ -11,28 +12,28 @@
 //   AI_API_KEY    Bearer key
 //   AI_MODEL      模型名（本地实测 deepseek-v4.1-flash）
 //   AI_TIMEOUT_MS 单次请求超时，默认 30000
+const { aiConfig } = require('./settings');
 
-const AI_BASE_URL = (process.env.AI_BASE_URL || '').replace(/\/+$/, '');
-const AI_API_KEY = process.env.AI_API_KEY || '';
-const AI_MODEL = process.env.AI_MODEL || '';
-const AI_TIMEOUT_MS = Math.min(Math.max(parseInt(process.env.AI_TIMEOUT_MS, 10) || 30000, 1000), 300000);
-
-let warnedInvalidBase = false;
+// 非法 base 的告警按值去重：覆盖热改后新值要重新判，但同一坏值不重复刷日志
+let warnedInvalidBase = null;
 
 function aiEnabled() {
-  if (!AI_BASE_URL || !AI_API_KEY || !AI_MODEL) return false;
+  const { baseUrl, apiKey, model } = aiConfig();
+  if (!baseUrl || !apiKey || !model) return false;
   try {
-    const u = new URL(AI_BASE_URL);
+    const u = new URL(baseUrl);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad scheme');
     return true;
   } catch {
-    if (!warnedInvalidBase) {
-      warnedInvalidBase = true;
-      console.warn(`[ai] AI_BASE_URL='${AI_BASE_URL}' 不是合法 http(s) 地址，AI 功能已停用`);
+    if (warnedInvalidBase !== baseUrl) {
+      warnedInvalidBase = baseUrl;
+      console.warn(`[ai] AI_BASE_URL='${baseUrl}' 不是合法 http(s) 地址，AI 功能已停用`);
     }
     return false;
   }
 }
+
+const aiModel = () => aiConfig().model;
 
 // deepseek 等模型会把 JSON 包进 ```json 围栏，或前后带解释性文字——
 // 先整串 parse，失败再取首个平衡的 {...}/[...] 片段
@@ -66,14 +67,15 @@ function parseJsonContent(content) {
 }
 
 async function postChat(body, timeoutMs, signal) {
+  const { baseUrl, apiKey } = aiConfig();
   // AbortSignal.any：业务超时与客户端断连任一触发即中止
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (signal) signals.push(signal);
-  const res = await fetch(`${AI_BASE_URL}/chat/completions`, {
+  const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${AI_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
     signal: AbortSignal.any(signals),
@@ -83,14 +85,16 @@ async function postChat(body, timeoutMs, signal) {
 
 // askAiJson: 请求 chat completions 并解析 JSON 回答。任何失败（网络/
 // 非 2xx/解析失败/超时/断连）都返回 null——调用方按「AI 不在」降级
-async function askAiJson({ system, user, maxTokens = 1024, timeoutMs = AI_TIMEOUT_MS, signal = null }) {
+async function askAiJson({ system, user, maxTokens = 1024, timeoutMs, signal = null }) {
   if (!aiEnabled()) return null;
+  const { model, timeoutMs: cfgTimeout } = aiConfig();
+  const effTimeout = timeoutMs ?? cfgTimeout;
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: user },
   ];
   const baseBody = {
-    model: AI_MODEL, messages, temperature: 0.1,
+    model, messages, temperature: 0.1,
     // 推理型模型的 reasoning 与 content 共享 max_tokens 预算——调用方给的是
     // 「回答本体」预算，额外留 4096 给思维链（实测 deepseek 推理歌词类任务
     // reasoning 可达 ~4k tokens），否则推理吃掉配额后 content 为空
@@ -103,12 +107,12 @@ async function askAiJson({ system, user, maxTokens = 1024, timeoutMs = AI_TIMEOU
     // 优先请求结构化输出；不兼容 response_format 的实现回退裸文本 + 自行解析
     // （回退同时去掉 reasoning_effort——严格校验的网关可能正是被这类
     // 非标准参数 400 掉的）
-    let res = await postChat({ ...baseBody, response_format: { type: 'json_object' } }, timeoutMs, signal);
+    let res = await postChat({ ...baseBody, response_format: { type: 'json_object' } }, effTimeout, signal);
     let bare = false;
     const retryBare = async () => {
       bare = true;
       const { reasoning_effort, ...rest } = baseBody;
-      return postChat(rest, timeoutMs, signal);
+      return postChat(rest, effTimeout, signal);
     };
     if (!res.ok && (res.status === 400 || res.status === 404 || res.status === 422)) {
       // 重试前 drain 响应体——undici keep-alive 下未消费体会占住 socket 到 GC
@@ -155,4 +159,4 @@ async function askAiJson({ system, user, maxTokens = 1024, timeoutMs = AI_TIMEOU
   }
 }
 
-module.exports = { aiEnabled, askAiJson, AI_MODEL };
+module.exports = { aiEnabled, askAiJson, aiModel };

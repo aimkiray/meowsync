@@ -108,6 +108,12 @@
               class="pg-menu-item" role="menuitem"
               @click="pickCenterView"
             >{{ isDownloadsView ? '返回' : '下载' }}</button>
+            <!-- 设置页入口：AI/凭据服务端配置 + 本机偏好集中面；
+                 视图内再点变「返回」（与下载入口同型往返） -->
+            <button
+              class="pg-menu-item" role="menuitem"
+              @click="pickSettings"
+            >{{ isSettingsView ? '返回' : '设置' }}</button>
             <a
               v-if="remoteMode === 'host'"
               class="pg-menu-item" role="menuitem"
@@ -177,9 +183,13 @@ export default {
     remoteMode: {
       type: String,
       default: 'off'
+    },
+    isSettingsView: {
+      type: Boolean,
+      default: false
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
 
@@ -424,6 +434,7 @@ export default {
       if (!rect) return
       // 菜单高按可见行数估（item≈39/head≈36）：下方放不下翻到上方
       const rows = (props.remoteMode === 'off' || props.isDownloadsView ? 1 : 0)
+        + 1 // 设置项恒在
         + (props.remoteMode === 'host' || props.remoteMode === 'off' ? 1 : 0)
         + 1 + THEMES.length
         + (authState.enabled && authState.authenticated ? 1 : 0)
@@ -448,6 +459,7 @@ export default {
     }
 
     const pickCenterView = () => { emit('toggle-center-view'); closeMenu() }
+    const pickSettings = () => { emit('open-settings'); closeMenu() }
     // 主题切换没有「下一跳」接管焦点——与 Esc 同为解散语义，归还触发键
     const pickTheme = (id) => { setTheme(id); closeMenu(true) }
     const pickLogout = () => { closeMenu(); logout() }
@@ -504,6 +516,7 @@ export default {
       toggleMenu,
       closeMenu,
       pickCenterView,
+      pickSettings,
       pickTheme,
       pickLogout,
       extractPlaylistId,

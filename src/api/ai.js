@@ -18,6 +18,9 @@ export const aiApi = {
     return statusPromise
   },
 
+  // 设置页改完 AI 配置后失效会话缓存——否则 enabled 粘住旧判定直到刷新
+  invalidateStatus: () => { statusPromise = null },
+
   // 生成/取回词源的中文译文 LRC（服务端缓存命中即回；官方译文存在则直回）
   // 歌词翻译是批量 AI 调用，整首最坏几分钟——给足 300s。
   // signal 预留给后续调用方：歌词加载路径刻意不传——切歌不该打断服务端

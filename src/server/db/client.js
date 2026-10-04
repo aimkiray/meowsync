@@ -380,6 +380,14 @@ function initSchema(database) {
     -- /healthz 用写探测表：SELECT 1 是纯内存查询测不出磁盘满
     CREATE TABLE IF NOT EXISTS _healthz (ts INTEGER);
 
+    -- 运行时配置覆盖：值留空（行不存在）= 回落环境变量——「留空读服务端
+    -- 配置」语义的落点；密钥类值与歌词/任务数据同库（下载目录权限面一致）
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- 登录体系：users 空表 = 未启用登录（向后兼容局域网部署，authGate 全放行）
     -- schema 支持多用户；产品面 v1 只暴露首个管理员 setup
     CREATE TABLE IF NOT EXISTS users (

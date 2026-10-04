@@ -3,7 +3,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { tmpDataDir } from './helpers.mjs';
 
+// qqCookie/biliCookie 经 settings 层读 app_settings——不隔离 DATA_DIR 会
+// 开真实 dev 库（续期测试的 persistRenewedQqCookie 可能覆盖真凭据）
+process.env.DATA_DIR = tmpDataDir('meowsync-netlayer-');
 const require = createRequire(import.meta.url);
 const { ENDPOINTS } = require('../src/server/services/netease/endpoints.js');
 const { ALLOWED_APIS } = require('../src/server/routes/music.js');
@@ -84,8 +88,10 @@ test('isApiPath：旧上游家族判 API，SPA/静态与真端点不误伤', () 
   // 真端点与自有前缀仍在
   assert.equal(isApiPath('/song_url'), true);
   assert.equal(isApiPath('/downloads/list'), true);
-  // SPA 壳与未知前端路径仍非 API
-  for (const p of ['/', '/index.html', '/assets/index.js', '/settings']) {
+  assert.equal(isApiPath('/settings'), true);
+  assert.equal(isApiPath('/settings/ai-test'), true);
+  // SPA 壳与未知前端路径仍非 API（/settings 已是自有 API 前缀——不能作反例）
+  for (const p of ['/', '/index.html', '/assets/index.js', '/settings-page']) {
     assert.equal(isApiPath(p), false, `${p} 不应判为 API`);
   }
 });

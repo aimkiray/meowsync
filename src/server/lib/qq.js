@@ -13,17 +13,19 @@ const { Agent } = require('undici');
 const QQ_TIMEOUT_MS = 15000;
 
 // ── Cookie：可选登录态（VIP/无损档只对登录账号下发）。只发 *.qq.com 域。
-// 懒读而非启动快照：续期会把新凭据写 process.env.NEW_QQ_COOKIE
-// （qm_keyst ~3 天过期，到期前 10min 窗口内自动续）——每次请求读最新值。
+// 懒读而非启动快照：app_settings 覆盖 > NEW_QQ_COOKIE（续期回写值）>
+// QQ_COOKIE——设置页热改即刻生效，每次请求读最新值。
 // 与 BILI_COOKIE 同款 ASCII 清洗——粘贴串带进换行/中文会让 undici 头校验
 // 抛错，全部 QQ 请求静默 502
-let cookieWarned = false;
+const { qqCookieOverride, persistRenewedQqCookie } = require('./settings');
+// 按值去重——覆盖热改后新坏值要重新告警，同一坏值不重复刷日志
+let cookieWarned = '';
 function qqCookie() {
-  const raw = (process.env.NEW_QQ_COOKIE || process.env.QQ_COOKIE || '').trim();
+  const raw = (qqCookieOverride() || process.env.NEW_QQ_COOKIE || process.env.QQ_COOKIE || '').trim();
   if (!raw) return '';
   const ascii = raw.replace(/[^\x20-\x7e]/g, '');
-  if (ascii !== raw && !cookieWarned) {
-    cookieWarned = true;
+  if (ascii !== raw && cookieWarned !== raw) {
+    cookieWarned = raw;
     console.warn('[qq] QQ_COOKIE 含控制字符/非 ASCII，已剔除——cookie 值应为纯 ASCII');
   }
   maybeRenewQqCookie(ascii);
@@ -117,7 +119,7 @@ async function renewQqCookie(cookie) {
     for (const n of ['qqmusic_key', 'qm_keyst', 'musickey_createtime', 'psrf_musickey_createtime']) {
       if (!seen.has(n)) parts.push(`${n}=${renewMap[n]}`);
     }
-    process.env.NEW_QQ_COOKIE = parts.join('; ');
+    persistRenewedQqCookie(parts.join('; '), cookie);
     console.info('[qq] cookie 已自动续期（qm_keyst 刷新）');
   } catch (e) {
     console.warn('[qq] cookie 续期失败:', e.message);

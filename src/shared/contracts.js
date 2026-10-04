@@ -67,3 +67,21 @@ export const aiLyricBody = z.looseObject({
   sourceTitle: z.string().optional(),
   sourceAuthor: z.string().optional()
 });
+
+// PUT /settings：键白名单与值整形在 lib/settings.js（含 ASCII/长度/归一化）；
+// schema 只挡体量与类型——null/'' 是「清覆盖回落 env」语义而非空值校验错
+export const settingsBody = z.looseObject({
+  ai_base_url: z.union([z.string().max(1000), z.null()]).optional(),
+  ai_api_key: z.union([z.string().max(1000), z.null()]).optional(),
+  ai_model: z.union([z.string().max(500), z.null()]).optional(),
+  ai_timeout_ms: z.union([z.string().max(20), z.number().int(), z.null()]).optional(),
+  bili_cookie: z.union([z.string().max(8000), z.null()]).optional(),
+  qq_cookie: z.union([z.string().max(8000), z.null()]).optional()
+});
+
+// POST /settings/ai-test：三段均可选——留空字段用已生效配置补位
+export const aiTestBody = z.looseObject({
+  baseUrl: z.string().max(1000).optional(),
+  apiKey: z.string().max(1000).optional(),
+  model: z.string().max(500).optional()
+});
