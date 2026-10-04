@@ -617,5 +617,19 @@ export default {
    ~320px 高时封面会压住标题区、控件叠上顶栏文字 */
 @media (max-height: 500px) {
   .fullscreen-player__cover { display: none; }
+  /* 续收几何：标题钳单行+字号随视口高缩（4vw 在横屏取长边，须换 vh
+     分母），顶/底内容槽与底堆间距一并收紧——320px 高窗口顶栏
+     （eyebrow+3 行标题+artist ≈150）与底堆（按钮 52+info 行 ≈100）曾相叠 */
+  .fullscreen-player__title {
+    font-size: clamp(18px, 6vh, 28px);
+    -webkit-line-clamp: 1;
+  }
+  .fullscreen-player__artist { margin-top: 4px; }
+  .fullscreen-player__buttons { margin-top: 8px; }
+  .fullscreen-player__info-row { margin-top: 8px; }
+  .fullscreen-player__content {
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
 }
 </style>

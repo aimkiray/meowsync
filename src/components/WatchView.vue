@@ -44,7 +44,10 @@
       </div>
     </div>
 
-    <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
+    <!-- 槽距走 scoped 层令牌：横槽 --page-pad-x（≤640→12）、宽屏四边
+         --watch-vpad 阶梯（纵分量喂 --watch-reserved-h）。侧列份额改 40%
+         ——% 的分母是栏域实宽（vw 口径不扣页槽/栏缝，声明 38% 实占 ~41%） -->
+    <div class="watch-layout flex flex-col gap-4 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,40%)] wide:gap-6">
       <!-- ══ 左栏 ══ -->
       <div ref="mainColEl" class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
         <div ref="coverWrapRef" class="watch-cover-wrap"
@@ -157,6 +160,26 @@
             >{{ queueTitle }}</button>
             <span v-else class="queue-head-name queue-head-name--plain">{{ queueTitle }}</span>
             <span v-if="queue.length" class="queue-head-meta">{{ queue.length }} 首<template v-if="queueTotalLabel"> · {{ queueTotalLabel }}</template></span>
+            <!-- ≤640 底栏减负收走 shuffle/模式键后，本页语义落点即队列头
+                 （YTM UP NEXT 头即置 shuffle/repeat——队列顺序控件归队列面板） -->
+            <span class="queue-modes">
+              <button
+                type="button"
+                class="queue-mode-btn"
+                :class="{ 'queue-mode-btn--on': shuffleOn }"
+                @click="$emit('toggle-shuffle')"
+                :title="`随机播放${shuffleOn ? '（开）' : ''}`"
+                :aria-pressed="shuffleOn"
+                aria-label="随机播放"
+              ><PixelIcon name="shuffle" :size="14" /></button>
+              <button
+                type="button"
+                class="queue-mode-btn"
+                @click="$emit('toggle-play-mode')"
+                :title="`播放模式：${playModeText || '列表循环'}`"
+                :aria-label="`切换播放模式，当前：${playModeText}`"
+              ><PixelIcon :name="playModeIcon" :size="13" /></button>
+            </span>
           </div>
           <div v-if="queue.length === 0" class="watch-empty">队列为空喵~</div>
           <template v-else>
@@ -431,12 +454,18 @@ export default {
     durationWarning: { type: String, default: '' },
     tab: { type: String, default: 'queue' },
     autoplay: { type: Boolean, default: false },
+    // ≤640 队列头模式对的状态（底栏同 prop 契约——图标由 playMode 派生，
+    // 与 BottomPlayer 的 playModeIcon 同映射）
+    shuffleOn: { type: Boolean, default: false },
+    playMode: { type: String, default: 'list' },
+    playModeText: { type: String, default: '' },
     // 沉浸歌词层开着时本页仍挂载但被整体盖住——视频此时不可见，
     // mediaVideoActive 据此收掉（卸载 <video> 止流，关层经对齐链重挂续播）
     fullscreenPlayerOpen: { type: Boolean, default: false }
   },
   emits: [
     'back', 'open-fullscreen', 'toggle-play',
+    'toggle-shuffle', 'toggle-play-mode',
     'update:tab', 'update:autoplay',
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
     'play-song', 'open-source', 'add-to-playlist',
@@ -516,6 +545,12 @@ export default {
       (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/') || '未知艺人'
 
     const formatDuration = (song) => formatTime((song.dt || song.duration || 0) / 1000)
+
+    // 队列头模式键的字形映射：与 BottomPlayer.playModeIcon 同一表——
+    // prop 收原始模式串而非图标名，映射留在消费端单一事实源
+    const playModeIcon = computed(() =>
+      ({ list: 'm-list', loop: 'm-loop', single: 'm-single' })[props.playMode] || 'm-list'
+    )
 
     const TABS = [
       { key: 'queue', label: '待播' },
@@ -1204,6 +1239,7 @@ export default {
       formatTime,
       httpsCover,
       songCoverUrl, songThumbUrl, isFileTrackId,
+      playModeIcon,
       TABS,
       setTab,
       moveTab,
@@ -1247,9 +1283,11 @@ export default {
   scrollbar-gutter: stable;
   /* 顶条钉高：watch-tabs 的 sticky top 与本条 height 同源（--topnav-h 先例） */
   --watch-top-h: 52px;
+  /* pg-tab 实高（pad 10×2 + 12 字 + 1.2 底边 ≈ 38）——scroll-padding 同源 */
+  --watch-tabs-h: 38px;
   /* 焦点滚达/scrollIntoView 的让位垫：移动单列态顶上有两层 sticky
-     （watch-top 52 + watch-tabs ~36），不让位时目标行会滚到钉条底下 */
-  scroll-padding-top: calc(var(--watch-top-h, 52px) + 36px);
+     （watch-top + watch-tabs），不让位时目标行会滚到钉条底下 */
+  scroll-padding-top: calc(var(--watch-top-h, 52px) + var(--watch-tabs-h, 38px));
 }
 
 /* 浮层顶行：返回键钉左页角。
@@ -1270,7 +1308,9 @@ export default {
      tabs 钉点下漏 20px 透字缝——与 .watch-tabs 同律禁缩；宽屏 absolute 出流后无效无碍 */
   flex-shrink: 0;
   gap: 10px;
-  padding: 0 20px;
+  /* 横槽吃 --page-pad-x 令牌：≤640 时内容区降到 12——返回键若不跟档，
+     会与下方视频/封面的左缘错开 8px */
+  padding: 0 var(--page-pad-x, 20px);
   /* 窄屏装不下「返回+四操作键」时行内横滚兜底（移动端滚动条全局隐藏，
      桌面态本规则基本不触发——scrollbar-width 双保险防溢出时出轨道） */
   overflow-x: auto;
@@ -1280,6 +1320,40 @@ export default {
   pointer-events: none;
 }
 .watch-top > * { pointer-events: auto; }
+
+/* 布局槽距：移动基态横槽吃 --page-pad-x 令牌（≤640 降 12），纵槽 pt-3/pb-5
+   留模板；≥901 四边统一 --watch-vpad——其纵分量同时是 --watch-reserved-h
+   的加项（var 惰性代入消费端），垫厚一分视频预算就少一分，同源才不失真。
+   侧列份额 40% 的分母是栏域实宽；≥1150 向 YTM 36% 档升（400 帽过早泄气，
+   YTM 同带侧栏 ~500 宽——min(500,36%) 因 --content-max 1440 帽实际止于
+   ~487）。队列行六件（握把 28+序 ~14+缩略 30+信息+duration ~30+remove 24+
+   add 24，含缝 ~180 固宽）核对：vw=901 侧栏=40%×(901-40-24)=~335 放得下
+   （watch 态 ≥768 侧栏 display:none，无 64 轨可扣）；行内信息列弹性截断 */
+.watch-layout {
+  padding-inline: var(--page-pad-x, 20px);
+  /* 视频高度预算的「非媒体区」构成：顶栏 + 底栏 + 布局纵槽×2 + 视频顶补距
+     56。四个分量全走令牌——此前 223 是手算硬编码，任一分量漂移即失真。
+     声明必须与本元素的 --watch-vpad 同域：自定义属性在声明元素的计算
+     时刻解析 var()（非消费端惰性代入）——--watch-vpad 的断点档重声明
+     在本元素上，挂 .watch-view 会永远取不到分档值 */
+  --watch-reserved-h: calc(
+    var(--topnav-h, 57.2px) + var(--player-bar-h, 69.2px)
+    + 2 * var(--watch-vpad, 20px) + 56px
+  );
+}
+@media (min-width: 901px) {
+  .watch-layout { padding: var(--watch-vpad, 20px); }
+}
+/* 后声明者胜同带宽叠档：1364 必须在 1150 之后（同为 min-width 同特异性） */
+@media (min-width: 1150px) {
+  .watch-layout {
+    --watch-vpad: 24px;
+    grid-template-columns: minmax(0, 1fr) min(500px, 36%);
+  }
+}
+@media (min-width: 1364px) {
+  .watch-layout { --watch-vpad: 32px; }
+}
 
 /* ── 左栏：封面 + 信息 + 操作 ──
    盒模型走模板工具类；本规则只剩宽屏双车道（见 min-width 块） */
@@ -1323,8 +1397,18 @@ export default {
 /* 视频态 wrap 移动基态占满栏宽：wrap 是 shrink-to-fit 的 flex 项，不给宽
    则视频 width:% 与 wrap 构成循环约束、退回片源内建宽；宽屏改由 min()
    公式贴视频盒（见 min-width 块——控制层 inset:0 锚 wrap，wrap 必须
-   精确包住画面）。relative 是悬停控制层（.watch-video-controls）的定位锚 */
-.watch-cover-wrap--video { width: 100%; position: relative; }
+   精确包住画面）。relative 是悬停控制层（.watch-video-controls）的定位锚。
+   高帽 ~70dvh：横屏矮机上全宽视频（804×452）会把 tabs 顶到滚不可及——
+   封面态早有 55svh 同款帽，视频态补上；124dvh 宽 ≈ 70dvh 高（×9/16）。
+   三档递进：min() 不识的旧内核整条作废回退上行 100%（循环% 塌缩风险
+   见 .watch-cover 注释——100% 那行是兜底不是冗余）；vh 档兜识 min
+   不识 dvh 的内核（Chrome 88–107/Safari<15.4） */
+.watch-cover-wrap--video {
+  width: 100%;
+  width: min(100%, 124vh);
+  width: min(100%, 124dvh);
+  position: relative;
+}
 
 /* 视频悬停控制层：默认隐，JS --on 驱动露出（戳醒 2.6s 自隐，暂停常显；
    全屏/非全屏/触屏同律——CSS :hover 与 hover:none 都会让控件恒显压屏，
@@ -1603,6 +1687,39 @@ export default {
   background: var(--paper);
 }
 
+/* 队列头右端模式对：底栏 ≤640 减负后 shuffle/模式在本页无落点——挂队列
+   头是 YTM 语义位（队列顺序控件归队列面板；YTM 队列头即放 shuffle/
+   repeat）。≥641 由底栏承担，此处不渲染槽位 */
+.queue-modes { display: none; }
+@media (max-width: 640px) {
+  /* queue-head 是 baseline 对齐——按钮组转 flex 后须中线回正 */
+  .queue-modes { display: flex; gap: 4px; margin-left: auto; align-self: center; }
+}
+/* 盒型镜像 .lyric-tool：24px 触控地板 + 发丝框 + ink-86 图形 */
+.queue-mode-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 3px;
+  border: var(--hairline);
+  background: transparent;
+  color: var(--ink-86);
+  cursor: pointer;
+  transition: color .5s var(--ease-ink), background .5s var(--ease-ink);
+}
+.queue-mode-btn:hover { background: var(--ink-06); color: var(--ink); }
+/* 开启态实心反色——watch-action--on/pg-tab--active 同一语义（底栏
+   transport--active 用 accent 墨字，发丝盒件的 print-grid 等价是墨底纸字） */
+.queue-mode-btn--on { background: var(--ink); color: var(--paper); }
+/* 盒件内环（印刷签名——.lyric-tool 在全局内环名单，本件 scoped 补同款） */
+.queue-mode-btn:focus-visible { outline-offset: -4px; }
+/* HC 下底色态被系统色抹平——透明 outline 被强制显色，反白态不留失 */
+@media (forced-colors: active) {
+  .queue-mode-btn--on { outline: 1.2px solid transparent; }
+}
+
 /* 队列页脚：发丝顶隔把操作/偏好收成一条栏，与行列表的记账线呼应。
    顶隔贴死末行底缘（margin 悬空会让线读成「最后一卡的下边框带间隙」）；
    行间分隔靠 .queue-row + .queue-row 的 border-top 同口径 */
@@ -1766,8 +1883,8 @@ export default {
   /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
      inset:0 才贴画面（wrap 恒 100% 栏宽时，高度约束生效、视频收窄，中央播放
      键/右下全屏键会对到栏而非画面）。尺寸策略对齐 YTM watch 页：按视口高
-     预算收窄（223px ≈ 顶栏 57.2 + 底条 69.2 + layout 纵 pad 40 + 栏顶补距
-     56；栏内除媒体外零内容——标题/元已删、操作键并入顶行。YTM 同款
+     预算收窄，非媒体区预算全走 --watch-reserved-h（顶栏+底栏+纵槽×2+顶补距
+     56 四令牌合成；基档值≈旧硬编码 223，纵槽升档时自动跟进。YTM 同款
      --player-page-total-height-exclude-player 为 408px），但守 300px 最小
      高度（300×16/9≈533 宽；YTM 300 / ytd 240）——预算低于地板时停止
      压缩、左栏滚动补差（顶补距已让开返回键浮层），视频不再塌成小窗。
@@ -1775,8 +1892,8 @@ export default {
      <533 的窄断点带（901–1023 开栏）由 100% 先绑定、地板让位——宽度
      饥荒时无法同时保高。vh 行是 dvh 不识别的老内核兜底 */
   .watch-cover-wrap--video {
-    width: min(100%, max(533px, calc((100vh - 223px) * 16 / 9)));
-    width: min(100%, max(533px, calc((100dvh - 223px) * 16 / 9)));
+    width: min(100%, max(533px, calc((100vh - var(--watch-reserved-h, 223px)) * 16 / 9)));
+    width: min(100%, max(533px, calc((100dvh - var(--watch-reserved-h, 223px)) * 16 / 9)));
   }
   .watch-banner { width: min(46vh, 420px); }
 
