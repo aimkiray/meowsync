@@ -21,7 +21,7 @@ export function useSearchNav({
   userPlaylists, selectedPlaylist, loadingSongs, selectPlaylist,
   playSong, playSongFromSearch, playSongFromRelated, playPlaylist,
 }) {
-  const centerView = ref('home') // 'home' | 'songs' | 'search' | 'watch' | 'downloads'
+  const centerView = ref('home') // 'home' | 'songs' | 'search' | 'watch' | 'downloads' | 'settings'
   const sidebarOpen = ref(false) // 移动端歌单库抽屉
   const searching = ref(false)   // 仅驱动搜索结果网格的加载态（勿与歌单库 loading 混用）
   const searchResults = ref([])     // 歌单搜索结果
@@ -43,7 +43,7 @@ export function useSearchNav({
   // search 冷加载必无结果必弹回首页，不预置
   const urlParams = new URLSearchParams(window.location.search)
   const initialView = urlParams.get('view')
-  if (['songs', 'watch', 'downloads'].includes(initialView)) centerView.value = initialView
+  if (['songs', 'watch', 'downloads', 'settings'].includes(initialView)) centerView.value = initialView
 
   // downloads 深链预选意图（?view=downloads&pl=<侧栏歌单id>）：
   // 必须此刻快照捕获——normalizeNavEntry 挂载期就会重建 URL，
@@ -186,6 +186,20 @@ export function useSearchNav({
     }
     downloadsPl.value = null
     centerView.value = 'downloads'
+    pushNavState()
+  }
+
+  // 顶栏 ⋯ 菜单「设置」：与 toggleCenterView 同型往返——设置页再点「返回」
+  // 走 back 回放上一视图，无站内历史才落确定性路由
+  const toggleSettings = () => {
+    if (centerView.value === 'settings') {
+      if (window.history.state?.meowsyncNav) { navBack(); return }
+      centerView.value = selectedPlaylist.value ? 'songs' : 'home'
+      pushNavState()
+      return
+    }
+    centerView.value = 'settings'
+    sidebarOpen.value = false // 移动端抽屉下点进来也要落主区
     pushNavState()
   }
 
@@ -397,7 +411,7 @@ export function useSearchNav({
     searchSongQuery, searchSongTotal, searchSongLoadingMore,
     // 导航
     buildNavUrl, pushNavState, applyUrlNav, normalizeNavEntry,
-    navHome, closeSearchView, toggleCenterView, watchBack,
+    navHome, closeSearchView, toggleCenterView, toggleSettings, watchBack,
     downloadsPl, downloadsPlSeq, openDownloadsForPlaylist, clearDownloadsPl,
     enterWatch, openWatchPanel,
     // 打开动作

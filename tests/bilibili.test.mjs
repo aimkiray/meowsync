@@ -3,10 +3,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { tmpDataDir } from './helpers.mjs';
 
 const require = createRequire(import.meta.url);
 
-// cookie 在模块加载时快照——必须在 require 之前注入
+// biliCookie 经 settings 层读 app_settings——不隔离 DATA_DIR 会开真实 dev 库
+process.env.DATA_DIR = tmpDataDir('meowsync-bili-');
 process.env.BILI_COOKIE = 'SESSDATA=fake; bili_jct=x; CURRENT_FNVAL=16';
 const { biliFetch, resolveBiliMedia, QN_HEIGHT } = require('../src/server/lib/bilibili.js');
 

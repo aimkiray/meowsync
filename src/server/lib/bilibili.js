@@ -8,14 +8,21 @@ const { BVID_RE, BVID_IN_TEXT_RE, extractBiliFavlistId } = require('../../shared
 
 // B 站 API 统一请求头：Referer 是防盗链硬门槛（缺它 403），UA 伪造浏览器。
 // BILI_COOKIE 可选登录态——杜比/Hi-Res 音轨只对有权限的账号下发
-// （Hi-Res 通常需大会员），Cookie 只发给 api.bilibili.com 不外泄
-const BILI_COOKIE_BASE = (() => {
-  const raw = (process.env.BILI_COOKIE || '').trim();
+// （Hi-Res 通常需大会员），Cookie 只发给 api.bilibili.com 不外泄。
+// 懒读而非启动快照：app_settings 覆盖/env 经 lib/settings 解析——设置页
+// 热改即刻生效，重启不追陈值（与 qqCookie 同口径）
+const { effectiveValue } = require('./settings');
+// 按值去重——覆盖热改后新坏值要重新告警，同一坏值不重复刷日志
+let cookieWarned = '';
+function biliCookie() {
+  const raw = (effectiveValue('bili_cookie') || '').trim();
   if (!raw) return '';
   // header 值要求 latin1——粘贴串带进换行/中文会让 undici 抛头校验错，
-  // 全部 B 站请求静默 502；剔除控制字符并显式告警
+  // 全部 B 站请求静默 502；剔除控制字符并显式告警（设置页写入侧已挡
+  // 非 ASCII，这里是 env 直配与脏库行双保险）
   const ascii = raw.replace(/[^\x20-\x7e]/g, '');
-  if (ascii !== raw) {
+  if (ascii !== raw && cookieWarned !== raw) {
+    cookieWarned = raw;
     console.warn('[bilibili] BILI_COOKIE 含控制字符/非 ASCII，已剔除——cookie 值应为纯 ASCII');
   }
   // 登录态下 B 站校验 Cookie 内 CURRENT_FNVAL 与请求 fnval 一致——浏览器
@@ -24,19 +31,21 @@ const BILI_COOKIE_BASE = (() => {
   return ascii.split(';').map(s => s.trim())
     .filter(s => s && s.split('=')[0].trim().toLowerCase() !== 'current_fnval')
     .join('; ');
-})();
-// BILI_COOKIE 对外暴露「是否配了登录态」的布尔面即可——值不出进程
-const BILI_COOKIE = Boolean(BILI_COOKIE_BASE);
-const biliHeadersFor = (fnval = 4048) => ({
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  'Referer': 'https://www.bilibili.com',
-  ...(BILI_COOKIE ? { Cookie: `${BILI_COOKIE_BASE}; CURRENT_FNVAL=${fnval}` } : {}),
-});
-const BILI_HEADERS = biliHeadersFor(4048);
+}
+// hasBiliCookie 对外暴露「是否配了登录态」的布尔面即可——值不出进程
+const hasBiliCookie = () => Boolean(biliCookie());
+const biliHeadersFor = (fnval = 4048) => {
+  const cookie = biliCookie();
+  return {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Referer': 'https://www.bilibili.com',
+    ...(cookie ? { Cookie: `${cookie}; CURRENT_FNVAL=${fnval}` } : {}),
+  };
+};
 // 短链跳解只需要公共头——UA/Referer 足够拿 location，Cookie 不发 b23.tv
 const BILI_PUBLIC_HEADERS = {
-  'User-Agent': BILI_HEADERS['User-Agent'],
-  'Referer': BILI_HEADERS['Referer'],
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Referer': 'https://www.bilibili.com',
 };
 const BILI_TIMEOUT_MS = 15000;
 
@@ -307,9 +316,9 @@ async function resolveBiliMedia({ bvid, cid, page = 1, signal }) {
 }
 
 module.exports = {
-  // BILI_HEADERS 不导出——它是带完整 Cookie 的 fnval=4048 快照，外部误用于
-  // 其他 fnval/非 api 域请求会错配或泄 cookie；公共面只有 BILI_PUBLIC_HEADERS
-  BILI_COOKIE, BILI_PUBLIC_HEADERS, BILI_TIMEOUT_MS, QN_HEIGHT,
+  // 带 Cookie 的完整头不导出——外部误用于其他 fnval/非 api 域请求会错配
+  // 或泄 cookie；公共面只有 BILI_PUBLIC_HEADERS 与 hasBiliCookie 布尔面
+  hasBiliCookie, BILI_PUBLIC_HEADERS, BILI_TIMEOUT_MS, QN_HEIGHT,
   biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView,
   flatUrls,
   viewQuery, parseBvid, resolveBiliLink, isBiliLinkHost, resolveBiliAudio, resolveBiliMedia,

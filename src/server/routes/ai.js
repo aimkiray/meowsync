@@ -6,7 +6,7 @@ const { aiLyricBody } = require('../../shared/contracts.js');
 const { fail } = require('../lib/http-error');
 const { rateLimit } = require('../lib/rate-limit');
 const { callNeteaseApi } = require('../services/netease-api');
-const { aiEnabled, askAiJson, AI_MODEL } = require('../lib/ai');
+const { aiEnabled, askAiJson, aiModel } = require('../lib/ai');
 
 const app = new Hono();
 
@@ -27,7 +27,7 @@ const inflightVerify = new Map();
 
 // GET /ai/status —— 暴露启用态给前端（模型名可回显；key 绝不出口）
 app.get('/ai/status', (c) => {
-  return c.json({ code: 200, enabled: aiEnabled(), model: aiEnabled() ? AI_MODEL : null });
+  return c.json({ code: 200, enabled: aiEnabled(), model: aiEnabled() ? aiModel() : null });
 });
 
 // meta 行重建为 [tag:value]——值里的内嵌括号剥掉，源 lrc 里形如
@@ -221,7 +221,7 @@ app.post('/ai/lyric-translate', async (c) => {
       out.push(`${l.tag}${t || l.text}`);
     }
     const result = out.join('\n');
-    lyricAiRepo.upsertTranslation(id, result, AI_MODEL);
+    lyricAiRepo.upsertTranslation(id, result, aiModel());
     return c.json({ code: 200, tlyric: result, lines: translated.size, total: lines.length, source: 'ai' });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);

@@ -3,7 +3,7 @@
 // 「错歌词比没歌词更糟」；AI 是增强不是门禁——返回 null = 无法判定，
 // 调用方按相符放行且不写 verdict（一次哑火不固化）
 const { createHash } = require('crypto');
-const { aiEnabled, askAiJson, AI_MODEL } = require('../lib/ai');
+const { aiEnabled, askAiJson, aiModel } = require('../lib/ai');
 const lyricAiRepo = require('../repositories/lyricAi');
 const { BV_TRACK_ID_RE, YT_TRACK_ID_RE } = require('../../shared/predicates.js');
 
@@ -40,7 +40,7 @@ function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor) {
   const sig = createHash('sha1')
     .update(`${String(sourceTitle).slice(0, 300).toLowerCase().trim()}|${String(sourceAuthor).slice(0, 120).toLowerCase().trim()}`)
     .digest('hex').slice(0, 12);
-  return `${lyricId}@${AI_MODEL}@${sig}`;
+  return `${lyricId}@${aiModel()}@${sig}`;
 }
 
 // vkey 级单飞：路由层 inflightVerify 只管 HTTP 调用方，file-downloader 的

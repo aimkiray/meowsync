@@ -398,7 +398,7 @@ import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
-import { LS_KEYS } from '../lib/storage'
+import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
 
 // 已下载视频档的会话缓存（mediaVideoKey → 本地 URL）：离开再进 watch 时
 // 本地档即知即挂，不等探测 RTT。模块域共享——组件每次重挂 setup 全新，
@@ -494,19 +494,9 @@ export default {
       pinIndex: dragIndex,
     })
 
-    // 歌词字号：本机偏好存 localStorage（不像时间校准那样随歌曲入库）。
-    // CSS 变量 --lyric-fs 挂在列表上，当前行/译文用 calc 相对值随动
-    const LYRIC_FS_MIN = 10
-    const LYRIC_FS_MAX = 24
-    // 隐私模式/存储禁用时 localStorage 抛 SecurityError——裸读会砸整个 setup
-    const safeGetLs = (k) => { try { return localStorage.getItem(k) } catch { return null } }
-    const safeSetLs = (k, v) => { try { localStorage.setItem(k, v) } catch { /* 存不上就只用会话值 */ } }
-    const lyricFontSize = ref(
-      Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MIN,
-        parseInt(safeGetLs(LS_KEYS.LYRIC_FONT_SIZE)) || 18)))
-    watch(lyricFontSize, v => {
-      safeSetLs(LS_KEYS.LYRIC_FONT_SIZE, String(v))
-    })
+    // 歌词字号/视频模式偏好：共享态在 lib/prefs.js——设置页与本页是同组
+    // localStorage 偏好的双写面，持久化 watcher 已收敛在 prefs 层
+    const lyricFontSize = prefLyricFontSize
     const lyricOffsetLabel = computed(() => {
       const s = props.lyricOffsetMs / 1000
       return (s >= 0 ? '+' : '') + s.toFixed(1) + 's'
@@ -786,9 +776,8 @@ export default {
       if (!v) return
       try { v.pause(); v.removeAttribute('src'); v.load() } catch { /* 卸载期媒体异常无碍 */ }
     }
-    const videoOn = ref(safeGetLs(LS_KEYS.VIDEO_MODE) !== '0')
+    const videoOn = prefVideoOn // 共享偏好（见上）——设置页改动即时生效
     watch(videoOn, v => {
-      safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0')
       // 开视频就是用户最自然的重试入口——复位失败闩重新拉流；
       // 自愈预算与档重探戳同刷：手动重试后当 key 可再排一次自动重试/重探
       if (v) { mediaVideoFailed.value = false; mediaRetriedKey = null; dlReprobedKey = null }

@@ -7,7 +7,7 @@ const { tokenMatches } = require('../lib/token-eq');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
-const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, flatUrls, viewQuery, resolveBiliLink, BILI_COOKIE, QN_HEIGHT } = require('../lib/bilibili');
+const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, flatUrls, viewQuery, resolveBiliLink, hasBiliCookie, QN_HEIGHT } = require('../lib/bilibili');
 
 const app = new Hono();
 
@@ -280,7 +280,7 @@ app.get('/bilibili/stream', async (c) => {
     // 已登录会话与令牌等效（c.get('user') 由 authGate 验过）
     const wantBest = c.req.query('prefer') === 'best';
     const token = process.env.DOWNLOAD_TOKEN || '';
-    const prefer = wantBest && (!BILI_COOKIE || !token || c.get('user')
+    const prefer = wantBest && (!hasBiliCookie() || !token || c.get('user')
       || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
     const streams = pickStreamList(playurl, kind, prefer);
     // 匿名 DASH 在低热度稿封顶 480p——durl 合流档（fnval=1&qn=80）能反超到

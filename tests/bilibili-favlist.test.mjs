@@ -45,7 +45,7 @@ seed('../src/server/lib/bilibili.js', {
   pickStreamList: () => [], pickStreams: () => ({ audio: null, video: null }),
   pickPageParam: () => 1, pickCidFromView: () => null,
   viewQuery: (id) => `bvid=${id}`, parseBvid: async () => null,
-  BILI_COOKIE: false, QN_HEIGHT: {},
+  hasBiliCookie: () => false, QN_HEIGHT: {},
 });
 seedMatchModule(matchCalls, () => matchImpl);
 const app = require('../src/server/routes/bilibili.js');

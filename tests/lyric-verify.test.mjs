@@ -16,7 +16,7 @@ seed('../src/server/lib/ai.js', {
   aiEnabled: () => aiOn,
   // shift 出啥算啥——塞 Promise 可挂起在途调用验单飞
   askAiJson: async () => { askCalls += 1; return aiScript.length ? aiScript.shift() : null; },
-  AI_MODEL: 'stub-model',
+  aiModel: () => 'stub-model',
 });
 seed('../src/server/repositories/lyricAi.js', {
   getVerdict: (vkey) => verdictRows[vkey],

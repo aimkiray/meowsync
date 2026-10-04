@@ -135,6 +135,7 @@ if (downloadToken) {
     const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
       || p === '/playlists' || p.startsWith('/playlists/')
       || p === '/ai' || p.startsWith('/ai/')
+      || p === '/settings' || p.startsWith('/settings/')
       || p === '/song-meta' || p.startsWith('/song-meta/')
       || p === '/uploads' || p.startsWith('/uploads/'))
       && c.req.method !== 'GET' && c.req.method !== 'HEAD';
@@ -162,6 +163,7 @@ app.route('/', require('./src/server/routes/bilibili'));
 app.route('/', require('./src/server/routes/youtube'));
 app.route('/', require('./src/server/routes/qq'));
 app.route('/', require('./src/server/routes/ai'));
+app.route('/', require('./src/server/routes/settings'));
 const musicRoutes = require('./src/server/routes/music');
 app.route('/', musicRoutes);
 

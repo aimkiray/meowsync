@@ -20,10 +20,12 @@
     <TopNavigation
       ref="topNavRef"
       :is-downloads-view="centerView === 'downloads'"
+      :is-settings-view="centerView === 'settings'"
       v-model:search-query="searchQuery"
       :sidebar-open="sidebarOpen"
       :remote-mode="remoteMode"
       @toggle-center-view="toggleCenterView"
+      @open-settings="toggleSettings"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @nav-home="navHome"
       @search="handlePlaylistSearch"
@@ -140,6 +142,7 @@
           @open-source="openQueueSource"
           @add-to-playlist="handleOpenAddToPlaylist"
         />
+        <SettingsPanel v-else-if="centerView === 'settings'" />
         <DownloadsPanel
           v-else
           :preselect-playlist-id="downloadsPl"
@@ -435,6 +438,7 @@ const WatchView = lazyView(() => import('./components/WatchView.vue'))
 const FullscreenPlayer = lazyView(() => import('./components/FullscreenPlayer.vue'))
 const RemoteController = lazyView(() => import('./components/RemoteController.vue'))
 const DownloadsPanel = lazyView(() => import('./components/DownloadsPanel.vue'))
+const SettingsPanel = lazyView(() => import('./components/SettingsPanel.vue'))
 
 export default {
   name: 'App',
@@ -451,6 +455,7 @@ export default {
     FullscreenPlayer,
     RemoteController,
     DownloadsPanel,
+    SettingsPanel,
     AuthGate,
     PixelIcon
   },
@@ -825,7 +830,7 @@ export default {
       searchResults, searchSongResults,
       searchSongTotal, searchSongLoadingMore,
       applyUrlNav, normalizeNavEntry,
-      navHome, closeSearchView, toggleCenterView, watchBack,
+      navHome, closeSearchView, toggleCenterView, toggleSettings, watchBack,
       downloadsPl, downloadsPlSeq, openDownloadsForPlaylist, clearDownloadsPl,
       enterWatch, openWatchPanel,
       selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,
@@ -1241,6 +1246,7 @@ export default {
       openFullscreenPlayer,
       closeFullscreenPlayer,
       toggleCenterView,
+      toggleSettings,
       downloadsPl,
       downloadsPlSeq,
       openDownloadsForPlaylist,

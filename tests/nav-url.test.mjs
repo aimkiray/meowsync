@@ -51,7 +51,7 @@ test('writeNavParams：downloads 视图 pl 是预选意图——本地 id 也写
 })
 
 test('writeNavParams：songs/downloads 之外视图两域都不写 pl', () => {
-  for (const view of ['home', 'search', 'watch']) {
+  for (const view of ['home', 'search', 'watch', 'settings']) {
     const p = params('pl=777')
     writeNavParams(p, { view, songsPl: 777, downloadsPl: 'x' })
     assert.equal(p.get('pl'), null, `${view} 视图不应带 pl`)
@@ -111,6 +111,6 @@ test('writeNavParams：边界值——空串当无意图，数字 0 原样透传
   assert.equal(p3.get('pl'), '0')
 })
 
-test('NAV_VIEWS 词表：五视图锁定（增删视图先改这里）', () => {
-  assert.deepEqual([...NAV_VIEWS].sort(), ['downloads', 'home', 'search', 'songs', 'watch'])
+test('NAV_VIEWS 词表：六视图锁定（增删视图先改这里）', () => {
+  assert.deepEqual([...NAV_VIEWS].sort(), ['downloads', 'home', 'search', 'settings', 'songs', 'watch'])
 })

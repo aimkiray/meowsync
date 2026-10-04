@@ -3,7 +3,7 @@
 // downloads=深链预选意图，同一参数位按视图分账）、本地态 id 不落 URL
 import { isLocalPlaylistId } from './url.js'
 
-export const NAV_VIEWS = new Set(['home', 'songs', 'search', 'watch', 'downloads'])
+export const NAV_VIEWS = new Set(['home', 'songs', 'search', 'watch', 'downloads', 'settings'])
 
 // 在既有 query 上重写 view/pl——其余参数（mode/mix/playlist 等）原样保留。
 // songs 的 pl 只在可寻址时写：本地内存态歌单（single_song_/saved_queue_/
