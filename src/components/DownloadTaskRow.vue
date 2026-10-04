@@ -193,7 +193,7 @@ const videoFlagTitle = computed(() => {
   text-align: right;
 }
 /* ≤640 id 列让位——mono id 与歌名行争宽，队列侧 dql-meta 仍带 #id 可查 */
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .dtr-id { display: none; }
 }
 

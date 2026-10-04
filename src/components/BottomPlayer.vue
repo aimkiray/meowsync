@@ -1,33 +1,35 @@
 <template>
   <div class="bottom-player" role="region" aria-label="播放器">
+    <!-- 进度条：沉在墨条顶缘，按下即 seek + 拖拽（按 .1s 量化读数）。
+         挂 .bottom-player 直下（relative 包含块=padding box）——外槽
+         16/12px 若锚在 .player-content 会把它内缩，贴边抛掷命中丢失。
+         无 @click——pointer 链已全覆盖鼠/触/笔，click 会与 pointerup 双发 seek -->
+    <div
+      class="player-progress-bar bp-progress"
+      role="slider"
+      aria-label="播放进度"
+      :aria-valuenow="Math.round(seekProgress)"
+      :aria-valuetext="`${formatTime(currentTime)} / ${formatTime(duration)}`"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      tabindex="0"
+      @keydown.arrow-right.prevent="nudgeSeek(5)"
+      @keydown.arrow-left.prevent="nudgeSeek(-5)"
+      @keydown.home.prevent="seekToPosition(0)"
+      @keydown.end.prevent="seekToPosition(1)"
+      @keydown.enter.prevent="$emit('toggle-play')"
+      @keydown.space.prevent="$emit('toggle-play')"
+      @pointerdown="onProgressPointerDown"
+      @pointermove="onProgressPointerMove"
+      @pointerup="onProgressPointerUp"
+      @pointercancel="onProgressPointerCancel"
+      @lostpointercapture="onProgressPointerUp"
+    >
+      <div class="player-progress-fill bp-progress-fill" :style="{ '--p': seekProgress }"></div>
+    </div>
+
     <!-- 当前播放歌曲的迷你信息与走带（无歌曲时同构骨架：控件禁用、占位兜底） -->
     <div class="player-content">
-      <!-- 进度条：沉在墨条顶缘，按下即 seek + 拖拽（按 .1s 量化读数）。
-           无 @click——pointer 链已全覆盖鼠/触/笔，click 会与 pointerup 双发 seek -->
-      <div
-        class="player-progress-bar bp-progress"
-        role="slider"
-        aria-label="播放进度"
-        :aria-valuenow="Math.round(seekProgress)"
-        :aria-valuetext="`${formatTime(currentTime)} / ${formatTime(duration)}`"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        tabindex="0"
-        @keydown.arrow-right.prevent="nudgeSeek(5)"
-        @keydown.arrow-left.prevent="nudgeSeek(-5)"
-        @keydown.home.prevent="seekToPosition(0)"
-        @keydown.end.prevent="seekToPosition(1)"
-        @keydown.enter.prevent="$emit('toggle-play')"
-        @keydown.space.prevent="$emit('toggle-play')"
-        @pointerdown="onProgressPointerDown"
-        @pointermove="onProgressPointerMove"
-        @pointerup="onProgressPointerUp"
-        @pointercancel="onProgressPointerCancel"
-        @lostpointercapture="onProgressPointerUp"
-      >
-        <div class="player-progress-fill bp-progress-fill" :style="{ '--p': seekProgress }"></div>
-      </div>
-
       <div class="player-inner">
         <!-- 当前歌曲缩略信息（左列）——YTM：点击回 watch 播放页（肌肉记忆入口） -->
         <div
@@ -357,8 +359,6 @@ export default {
 }
 .bp-progress-fill { background: var(--accent-magenta); } /* 已播部分=accent 本色（retro 火烈鸟粉 / glitch teal 同覆写） */
 
-.player-content { position: relative; }
-
 .player-inner {
   display: flex;
   align-items: center;
@@ -520,12 +520,11 @@ export default {
    走带 44/52 触控地板（原 ≤420 的 36 低于 WCAG/YTM 48 地板线）。
    shuffle/模式功能落点在 watch 页队列头（≤640 同档挂出）。
    类选择器标边键——免疫簇内加键/挪位导致的序号漂移（nth-of-type 脆弱） */
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .player-inner { gap: 8px; }
   .player-controls { margin-left: auto; }
   .player-right, .player-controls .transport--edge { display: none; }
   .transport { width: 44px; height: 44px; }
   .transport--play { width: 52px; height: 52px; }
-  .track-text { max-width: none; } /* 34vw 帽退役：flex:1+min-width:0 自裁 */
 }
 </style>

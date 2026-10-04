@@ -336,7 +336,7 @@ const taskGroups = [
   padding: 12px 16px;
 }
 /* ≤640 容器内收减半——给任务卡让回 ~16px 横向 */
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .dtl-scroll { padding: 8px; }
 }
 /* 同 .dql-scroll：<xl 滚动器在外层网格，本列不内滚——车道只在 ≥xl 常驻 */

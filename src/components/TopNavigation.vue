@@ -791,7 +791,7 @@ export default {
   .topnav-search-field { flex: 1; width: auto; }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .topnav { padding: 0 12px; }
 }
 </style>

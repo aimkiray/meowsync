@@ -1288,7 +1288,23 @@ export default {
   /* 焦点滚达/scrollIntoView 的让位垫：移动单列态顶上有两层 sticky
      （watch-top + watch-tabs），不让位时目标行会滚到钉条底下 */
   scroll-padding-top: calc(var(--watch-top-h, 52px) + var(--watch-tabs-h, 38px));
+  /* 宽屏布局槽距令牌（20→24→32，分档媒体块见下）：声明在本层而非
+     .watch-layout——--watch-vpad 有两个兄弟消费端（.watch-layout 的
+     padding + .watch-top 的浮层槽距：返回键/操作键行的左缘就是视频左缘
+     对齐轴），挂子元素会让兄弟够不着。--watch-reserved-h 与其同域：
+     var() 在声明元素的计算时刻解析（非消费端惰性代入），同元素才能
+     吃到分档重声明 */
+  --watch-vpad: 20px;
+  /* 视频高度预算的「非媒体区」构成：顶栏 + 底栏 + 布局纵槽×2 + 视频顶补距
+     56。四个分量全走令牌——此前 223 是手算硬编码，任一分量漂移即失真 */
+  --watch-reserved-h: calc(
+    var(--topnav-h, 57.2px) + var(--player-bar-h, 69.2px)
+    + 2 * var(--watch-vpad, 20px) + 56px
+  );
 }
+/* 后声明者胜同带宽叠档：1364 必须在 1150 之后（同为 min-width 同特异性） */
+@media (min-width: 1150px) { .watch-view { --watch-vpad: 24px; } }
+@media (min-width: 1364px) { .watch-view { --watch-vpad: 32px; } }
 
 /* 浮层顶行：返回键钉左页角。
    移动基态入流 sticky——.watch-view 是真滚动器，absolute 会随内容滚走、
@@ -1322,37 +1338,22 @@ export default {
 .watch-top > * { pointer-events: auto; }
 
 /* 布局槽距：移动基态横槽吃 --page-pad-x 令牌（≤640 降 12），纵槽 pt-3/pb-5
-   留模板；≥901 四边统一 --watch-vpad——其纵分量同时是 --watch-reserved-h
-   的加项（var 惰性代入消费端），垫厚一分视频预算就少一分，同源才不失真。
-   侧列份额 40% 的分母是栏域实宽；≥1150 向 YTM 36% 档升（400 帽过早泄气，
-   YTM 同带侧栏 ~500 宽——min(500,36%) 因 --content-max 1440 帽实际止于
-   ~487）。队列行六件（握把 28+序 ~14+缩略 30+信息+duration ~30+remove 24+
-   add 24，含缝 ~180 固宽）核对：vw=901 侧栏=40%×(901-40-24)=~335 放得下
-   （watch 态 ≥768 侧栏 display:none，无 64 轨可扣）；行内信息列弹性截断 */
+   留模板；≥901 四边统一 --watch-vpad（声明在 .watch-view——与 .watch-top
+   的对齐轴同源；其纵分量经 --watch-reserved-h 回喂视频预算，垫厚一分
+   视频就少一分）。侧列份额 40% 的分母是栏域实宽；≥1150 向 YTM 36% 档升
+   （400 帽过早泄气，YTM 同带侧栏 ~500 宽——min(500,36%) 因 --content-max
+   1440 帽实际止于 ~487）。队列行六件（握把 28+序 ~14+缩略 30+信息+
+   duration ~30+remove 24+add 24，含缝 ~180 固宽）核对：vw=901 侧栏
+   =40%×(901-40-24)=~335 放得下（watch 态 ≥768 侧栏 display:none，
+   无 64 轨可扣）；行内信息列弹性截断 */
 .watch-layout {
   padding-inline: var(--page-pad-x, 20px);
-  /* 视频高度预算的「非媒体区」构成：顶栏 + 底栏 + 布局纵槽×2 + 视频顶补距
-     56。四个分量全走令牌——此前 223 是手算硬编码，任一分量漂移即失真。
-     声明必须与本元素的 --watch-vpad 同域：自定义属性在声明元素的计算
-     时刻解析 var()（非消费端惰性代入）——--watch-vpad 的断点档重声明
-     在本元素上，挂 .watch-view 会永远取不到分档值 */
-  --watch-reserved-h: calc(
-    var(--topnav-h, 57.2px) + var(--player-bar-h, 69.2px)
-    + 2 * var(--watch-vpad, 20px) + 56px
-  );
 }
 @media (min-width: 901px) {
   .watch-layout { padding: var(--watch-vpad, 20px); }
 }
-/* 后声明者胜同带宽叠档：1364 必须在 1150 之后（同为 min-width 同特异性） */
 @media (min-width: 1150px) {
-  .watch-layout {
-    --watch-vpad: 24px;
-    grid-template-columns: minmax(0, 1fr) min(500px, 36%);
-  }
-}
-@media (min-width: 1364px) {
-  .watch-layout { --watch-vpad: 32px; }
+  .watch-layout { grid-template-columns: minmax(0, 1fr) min(500px, 36%); }
 }
 
 /* ── 左栏：封面 + 信息 + 操作 ──
@@ -1547,6 +1548,11 @@ export default {
   background: var(--ink);
   color: var(--paper);
 }
+/* 开启态 hover：ghost hover 只给 accent-ink 字色（纸面档）——墨底上
+   那是低对比泥色；按 pg-chip--on 法则保墨底、换 on-ink 亮 accent */
+.watch-action--on:hover:not(:disabled) {
+  color: var(--accent-magenta-on-ink);
+}
 
 /* 操作键组在 .watch-top 行内（返回键后）——不再占左栏纵向空间；
    nowrap：换行会撑破 52px 定高行，溢出交给行内横滚 */
@@ -1691,7 +1697,7 @@ export default {
    头是 YTM 语义位（队列顺序控件归队列面板；YTM 队列头即放 shuffle/
    repeat）。≥641 由底栏承担，此处不渲染槽位 */
 .queue-modes { display: none; }
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   /* queue-head 是 baseline 对齐——按钮组转 flex 后须中线回正 */
   .queue-modes { display: flex; gap: 4px; margin-left: auto; align-self: center; }
 }
@@ -1713,6 +1719,8 @@ export default {
 /* 开启态实心反色——watch-action--on/pg-tab--active 同一语义（底栏
    transport--active 用 accent 墨字，发丝盒件的 print-grid 等价是墨底纸字） */
 .queue-mode-btn--on { background: var(--ink); color: var(--paper); }
+/* 开启态 hover 保墨底——基态 hover 的 ink-06 会把按下态洗回浅色（pg-chip--on 法则） */
+.queue-mode-btn--on:hover { background: var(--ink); color: var(--accent-magenta-on-ink); }
 /* 盒件内环（印刷签名——.lyric-tool 在全局内环名单，本件 scoped 补同款） */
 .queue-mode-btn:focus-visible { outline-offset: -4px; }
 /* HC 下底色态被系统色抹平——透明 outline 被强制显色，反白态不留失 */
@@ -1838,11 +1846,13 @@ export default {
 @media (min-width: 901px) {
   .watch-view { scrollbar-gutter: auto; }
 
-  /* 宽屏顶行回浮层不占流——栏内自滚，键位钉在各栏内容之上 */
+  /* 宽屏顶行回浮层不占流——栏内自滚，键位钉在各栏内容之上。
+     槽距吃 --watch-vpad 而非定值：左缘是视频/封面的对齐轴，vpad
+     升档（20→24→32）时顶行若不跟档，返回键会与媒体左缘错位 */
   .watch-top {
     position: absolute;
     height: auto;
-    padding: 20px;
+    padding: var(--watch-vpad, 20px);
     background: none;
   }
 
