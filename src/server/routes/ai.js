@@ -18,6 +18,9 @@ const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE } = require('../../shared/predicate
 // 既不经济也无必要——超量直接拒
 const MAX_LYRIC_LINES = 400;
 const TRANSLATE_CHUNK = 40;
+// 翻译循环整体单调时间闸：到点不再开新块（含块内对半拆重试的耗时）。
+// 与上游 lyric ~30s 合计收进客户端 axios 300s 包线内
+const TRANSLATE_DEADLINE_MS = 240000;
 // CJK 占比 ≥30% 视为已是中文语境歌词（含日汉混排误判方向——宁可不翻不错翻）
 const CJK_SKIP_RATIO = 0.3;
 
@@ -69,7 +72,6 @@ async function fetchLyricRaw(id, signal) {
 // 结果按词源 id 永久落库：同一首歌在任何歌单/壳里重放零成本命中。
 // 幂等：缓存命中/官方译文直回都不消耗 AI 额度
 app.post('/ai/lyric-translate', async (c) => {
-  if (!aiEnabled()) return fail(c, 503, 'AI 未配置', { enabled: false });
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 16 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
@@ -80,13 +82,16 @@ app.post('/ai/lyric-translate', async (c) => {
   // already-zh/无词曲每次重播都重打上游 lyric。但 skip 是启发式判定
   // 的结果（cjkRatio/credit 行都可能误判），给 7 天 TTL：过期按未命中
   // 重判一次，避免一次瞬时误判被永久固化；重新判为 skip 时 DO UPDATE
-  // 刷新 updated_at 续期（SQL 细节收敛在 repositories/lyricAi.js）
-  const rowOf = () => lyricAiRepo.getCachedTranslation(id);
+  // 刷新 updated_at 续期（SQL 细节收敛在 repositories/lyricAi.js）。
+  // 缓存查询先于 aiEnabled 闸：AI 关闭后已落库译文（含官方 netease/qq
+  // 译文——本来就不依赖 AI）照常下发，只是不再产新译文（verify 同口径）
+  const rowOf = () => lyricAiRepo.getCachedTranslation(id, aiModel());
   const skipInsert = (reason) => lyricAiRepo.markTranslationSkip(id, reason);
   const cached0 = rowOf();
   if (cached0) {
     return c.json({ code: 200, tlyric: cached0.tlyric || null, cached: true });
   }
+  if (!aiEnabled()) return fail(c, 503, 'AI 未配置', { enabled: false });
   // 缓存未命中才吃配额——快速切歌的重复请求不该撞上 429
   if (!rateLimit(c, 'ai-translate', 8)) return fail(c, 429, '请求过于频繁');
 
@@ -151,9 +156,11 @@ app.post('/ai/lyric-translate', async (c) => {
       return c.json({ code: 200, tlyric: null, skipped: 'no-translatable' });
     }
     const translated = new Map(); // 原文 -> 译文
-    // 最坏时长收进客户端 axios 300s 包线内：块数封顶 5（=200 个去重文本）
-    // × 55s 块超时 = 275s + 上游 lyric ≈30s < 300s。超出的尾部行显示原文
-    // （未译行回填原文，见下），不会有错译文；循环内 signal 检查保证断连即停
+    // 最坏时长由 TRANSLATE_DEADLINE_MS 单调闸收口：块数上限 10
+    // （=MAX_LYRIC_LINES 400 / TRANSLATE_CHUNK 40 的自然推导）× 55s 块
+    // 超时理论 550s 已超客户端 300s 包线——时间闸到点不再开新块。
+    // 超出的尾部行显示原文（未译行回填原文，见下），不会有错译文；
+    // 循环内 signal 检查保证断连即停
     const startedAt = Date.now();
     // 译文净化：歌词原文来自 UGC、模型输出可被 prompt 注入带偏——
     // 剥换行；成对 [..] 段整体移除（模型回显的 [mm:ss] 连数字一起剥，
@@ -203,7 +210,11 @@ app.post('/ai/lyric-translate', async (c) => {
       }
       return null;
     };
-    for (let off = 0; off < Math.min(jobs.length, TRANSLATE_CHUNK * 5); off += TRANSLATE_CHUNK) {
+    // 块数上限覆盖全部去重文本（10 块）；单调时间闸到点不再开新块，
+    // 截断部分照常回填原文透出（lines<total），只是不落库
+    const chunkLimit = Math.ceil(MAX_LYRIC_LINES / TRANSLATE_CHUNK) * TRANSLATE_CHUNK;
+    for (let off = 0; off < Math.min(jobs.length, chunkLimit)
+      && Date.now() - startedAt < TRANSLATE_DEADLINE_MS; off += TRANSLATE_CHUNK) {
       if (signal?.aborted) return c.body(null, 499);
       const res = await translateChunk(jobs.slice(off, off + TRANSLATE_CHUNK), true);
       if (res === 'aborted') return c.body(null, 499);
@@ -221,7 +232,11 @@ app.post('/ai/lyric-translate', async (c) => {
       out.push(`${l.tag}${t || l.text}`);
     }
     const result = out.join('\n');
-    lyricAiRepo.upsertTranslation(id, result, aiModel());
+    // 截断产出永不写库：缓存无完成度标记，截断译文固化成「完整缓存」
+    // 比现状更差——只在去重文本全覆盖时落库，部分覆盖照旧经响应透出
+    if (translated.size === jobs.length) {
+      lyricAiRepo.upsertTranslation(id, result, aiModel());
+    }
     return c.json({ code: 200, tlyric: result, lines: translated.size, total: lines.length, source: 'ai' });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
@@ -248,8 +263,10 @@ app.post('/ai/lyric-verify', async (c) => {
   if (!sourceTitle) return fail(c, 400, '缺少 sourceTitle');
   const signal = c.req.raw.signal;
   // 键入参用未 trim 的原串——键函数内置 slice→lower→trim，与下载链
-  // providerData 截断值产同键；先 trim 再传会让截断窗口错位
-  const vkey = lyricVerdictKey(id, body.sourceTitle, body.sourceAuthor);
+  // providerData 截断值产同键；先 trim 再传会让截断窗口错位。
+  // sourceAuthor 缺省传 '' 而非 undefined——String(undefined) 会把字面量
+  // 'undefined' 写进 vkey 签名，与下载链的空串签名产不同键
+  const vkey = lyricVerdictKey(id, body.sourceTitle, body.sourceAuthor || '');
 
   // 已落库判定先查再闸：AI 关掉后缓存 verdict 照常生效（记忆不随开关
   // 旁路），只是不能再产新判定——未命中才 503

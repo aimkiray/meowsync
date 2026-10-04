@@ -286,15 +286,18 @@ app.get('/bilibili/stream', async (c) => {
     // 匿名 DASH 在低热度稿封顶 480p——durl 合流档（fnval=1&qn=80）能反超到
     // 720p，且它是恒 avc1 的完整 mp4（dash 无 avc1 的稿件也由它救活——
     // 所以探测排在「无 avc1 判死」之前，判死交给最终 usable 为空）。
-    // 只在自适应最优低于 1080p 时多打这一跳；反超则只用合流组。
+    // 只在 avc1 最优低于 1080p 时多打这一跳；反超则只用合流组。
+    // 门挡必须按 avc1 档算而非列表首项——无 avc1 时 lib 兜底回全编码
+    // 列表，首项可能是 2160p hev1/av01，会挡住 durl 探测把纯非 avc1
+    // 稿件直接 404（avcBestH=0 时必然去探）
     // durl 是分段数组——length>1 时各段是顺序拼接而非镜像，不能用
-    const dashBestH = streams[0]?.height || 0;
+    const avcBestH = streams.find(s => (s?.codecs || '').startsWith('avc1'))?.height || 0;
     let durlUrls = [];
-    if (kind === 'video' && dashBestH < 1080) {
+    if (kind === 'video' && avcBestH < 1080) {
       try {
         const pd = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=1&qn=80&fourk=1`, c.req.raw.signal);
         const durl = Array.isArray(pd.durl) ? pd.durl : [];
-        if (durl.length === 1 && (QN_HEIGHT[pd.quality] || 0) > dashBestH) {
+        if (durl.length === 1 && (QN_HEIGHT[pd.quality] || 0) > avcBestH) {
           // durl 的主链字段是 .url 而非 baseUrl——与 flatUrls 形态不同，不复用
           durlUrls = [durl[0]?.url, ...(Array.isArray(durl[0]?.backup_url) ? durl[0].backup_url : [])]
             .filter(u => typeof u === 'string' && u);

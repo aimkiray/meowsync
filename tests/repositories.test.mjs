@@ -30,8 +30,13 @@ test('songLyricMeta：0/缺省行语义一致、upsert 覆盖、delete 归零', 
 test('lyricAi 翻译缓存：upsert 命中、skip 哨兵行存在', () => {
   assert.equal(lyricAiRepo.getCachedTranslation('no-such'), undefined); // better-sqlite3 无行回 undefined
   lyricAiRepo.upsertTranslation('song-a', '[00:01.00]译词', 'm-test');
-  const hit = lyricAiRepo.getCachedTranslation('song-a');
+  // AI 译文按模型键控——模型不符不命中（换模型后旧译文不失效是 D6 要修的洞）
+  assert.equal(lyricAiRepo.getCachedTranslation('song-a', 'other-model'), undefined);
+  const hit = lyricAiRepo.getCachedTranslation('song-a', 'm-test');
   assert.equal(hit.tlyric, '[00:01.00]译词');
+  // 官方译文行（netease/qq）永命中——不随模型键漂移
+  lyricAiRepo.upsertTranslation('song-o', '[00:01.00]官方', 'netease');
+  assert.equal(lyricAiRepo.getCachedTranslation('song-o', 'whatever').tlyric, '[00:01.00]官方');
   // skip 哨兵：tlyric 空串——行在但词空（防重复打上游），TTL 语义在路由层
   lyricAiRepo.markTranslationSkip('song-b', 'already-zh');
   const skip = lyricAiRepo.getCachedTranslation('song-b');

@@ -198,10 +198,11 @@ test('页数上限：8 页扫满而上游仍有货 → truncated', async () => {
 
 test('resolve 遇歌单链 → 400 带 playlist 字段（前端自动转歌单导入）', async () => {
   reset();
+  // list id ≥13 位——共享谓词与路由闸同口径（短 id 不判歌单链）
   let { status, body } = await getJson(app, '/youtube/resolve?input=' +
-    encodeURIComponent('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLredirect'));
+    encodeURIComponent('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLredirect123'));
   assert.equal(status, 400);
-  assert.equal(body.playlist, 'PLredirect');
+  assert.equal(body.playlist, 'PLredirect123');
   // 纯视频链不受影响——走 video 分支正常返回（未被歌单判定劫持）
   ({ status, body } = await getJson(app, '/youtube/resolve?input=' +
     encodeURIComponent('https://youtu.be/dQw4w9WgXcQ')));

@@ -4,6 +4,7 @@ const { apiModules, callNeteaseApi, resolveSongUrls, needsUnlock, MAX_UNLOCK_ITE
 const { readParamsBody } = require('../lib/http-body');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const { trustProxyEnabled } = require('../lib/env');
+const { rateLimit } = require('../lib/rate-limit');
 
 const app = new Hono();
 
@@ -140,10 +141,21 @@ app.get('/', (c) => {
 });
 
 app.all('/:apiName', async (c) => {
+  // 全家族未鉴权直连上游——通用桶与 qq/bilibili 路由同规格，防循环刷量
+  // 把服务端 IP 送进上游风控
+  if (!rateLimit(c, 'music', 60)) {
+    return c.json({ code: 429, message: '请求太频繁' }, 429);
+  }
   const apiName = c.req.param('apiName');
 
   if (!ALLOWED_APIS.has(apiName) || !apiModules[apiName]) {
     return c.json({ code: 404, message: `API '${apiName}' not found` }, 404);
+  }
+
+  // song_url 系一次入站可扇出 ≤20 首 × 4 源试错 + AI 规整——另设更严桶
+  if (['song_url', 'song_url_v1'].includes(apiName)
+    && !rateLimit(c, 'music:unlock', 10)) {
+    return c.json({ code: 429, message: '请求太频繁' }, 429);
   }
 
   // 合并 query 与 body 参数

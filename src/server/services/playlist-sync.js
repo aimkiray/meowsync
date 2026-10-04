@@ -48,16 +48,24 @@ async function fetchRemotePlaylist(neteasePlaylistId) {
   // offset, offset+limit) 后单次 song/detail——limit 传大值会把上千 id 塞进
   // 一个请求被上游 400 拒掉，传 trackCount 又会在漂移时截断尾部。
   // 因此这里直接用 trackIds 自己按 500/批走 song_detail：长度无上限、
-  // 顺序权威、天然无缺失
-  const trackIds = Array.isArray(playlist.trackIds)
-    ? playlist.trackIds.map(t => t?.id).filter(id => Number.isInteger(id))
+  // 顺序权威、天然无缺失。
+  // 空歌单快路径判空必须用过滤前的 rawTrackIds——上游元素 id 非整数/
+  // 畸形被全滤掉时按「过滤后为空」处理会让 refresh 清空全部已导入曲目
+  const rawTrackIds = Array.isArray(playlist.trackIds) ? playlist.trackIds : null;
+  const trackIds = rawTrackIds
+    ? rawTrackIds.map(t => t?.id).filter(id => Number.isInteger(id))
     : null;
 
   let songs;
-  if (trackIds && trackIds.length === 0) {
+  if (rawTrackIds && rawTrackIds.length === 0) {
     // 空歌单：trackIds 权威为空就不必再跑 track_all 的上游往返
     songs = [];
   } else if (trackIds) {
+    // 原始 trackIds 非空但元素全部畸形——与「全空判失败」同口径
+    // （~80 行护栏），按上游故障 502 而非清库
+    if (trackIds.length === 0) {
+      throw httpError(502, '网易云歌单 trackIds 全部畸形（疑似上游故障）');
+    }
     const byId = new Map();
     for (let i = 0; i < trackIds.length; i += 500) {
       const chunkResp = await callUpstream('song_detail', {

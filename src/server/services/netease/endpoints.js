@@ -1,6 +1,9 @@
 // NetEase 端点描述表——替代 NeteaseCloudMusicApi/module/ 目录的 356 个动态装载
 // 模块。每个条目复刻对应上游模块的 uri/加密通道/data 构造/transform。
 // crypto 默认 'eapi'（上游 APP_CONF.encrypt=true 的默认通道），weapi 为显式标注。
+// 注意 crypto 字段是死元数据：运行时通道只由 handler 内经 opts() 显式传
+// 'weapi' 决定（缺省 eapi），本字段仅作上游通道分布的文档留档（
+// netease-layer.test.mjs 按它对拍分布）——改字段值不改行为
 const { request } = require('./request');
 
 const ENDPOINTS = {

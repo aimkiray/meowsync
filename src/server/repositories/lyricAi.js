@@ -1,15 +1,21 @@
 // AI 歌词两张表的持久层：song_lyric_translation（译文/哨兵缓存，按词源 id）
 // 与 song_ai_verdict（核验判定缓存，song_id 列存 vkey=<词源id>@<模型>@<源签名>）
 const { getDb } = require('../db/client');
+const { aiModel } = require('../lib/ai');
 
-// 行存在即命中——skip 哨兵（tlyric=''）也是有效缓存项，防止 already-zh/
-// 无词曲每次重播都重打上游 lyric。但 skip 是启发式判定的结果，给 7 天 TTL：
-// 过期按未命中重判一次，避免一次瞬时误判被永久固化
-function getCachedTranslation(songId) {
+// AI 产译文按模型键控——换模型后旧译文永不命中（不然模型升级后仍发旧译）。
+// 但两类行必须永命中：skip:* 哨兵（TTL 内）与官方译文（model='netease'/
+// 'qq'，词源事实与 AI 模型无关）。currentModel 缺省取当前配置模型——
+// file-downloader 等单参调用点同口径受益
+function getCachedTranslation(songId, currentModel = aiModel()) {
   return getDb().prepare(
     `SELECT tlyric FROM song_lyric_translation WHERE song_id = ?
-     AND NOT (model LIKE 'skip:%' AND updated_at < datetime('now', '-7 days'))`
-  ).get(songId);
+     AND (
+       (model LIKE 'skip:%' AND updated_at >= datetime('now', '-7 days'))
+       OR model IN ('netease', 'qq')
+       OR model = ?
+     )`
+  ).get(songId, currentModel || '');
 }
 
 function upsertTranslation(songId, tlyric, model) {

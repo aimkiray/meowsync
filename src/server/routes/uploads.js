@@ -33,14 +33,16 @@ const app = new Hono();
 // 永久孤儿。懒建自愈只保证锚行存在，救不回失联登记
 const UPLOADS_PLAYLIST_ID = 'local_uploads';
 
-// 扩展名白名单——文件名可伪造，白名单决定落盘形态与 file 端点的 MIME
-const KIND_DEFS = {
+// 扩展名白名单——文件名可伪造，白名单决定落盘形态与 file 端点的 MIME。
+// 无原型表：?kind=__proto__/constructor/toString 这类原型链键不能查表
+// 命中（命中后 def.exts undefined → [...def.exts] TypeError 500）
+const KIND_DEFS = Object.assign(Object.create(null), {
   audio: { exts: new Set(['mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'webm']), maxBytes: 512 * 1024 * 1024, dir: 'audio' },
   video: { exts: new Set(['mp4', 'webm', 'mkv', 'mov']), maxBytes: 2 * 1024 * 1024 * 1024, dir: 'video' },
   cover: { exts: new Set(['jpg', 'jpeg', 'png', 'webp']), maxBytes: 32 * 1024 * 1024, dir: 'cover' },
   // 歌词小文件——内嵌 track 会让 raw_json 在每份歌单镜像里重复携带，走文件列
   lyrics: { exts: new Set(['lrc', 'txt']), maxBytes: 4 * 1024 * 1024, dir: 'lyrics' },
-};
+});
 const KIND_PATH_COL = { audio: 'audioPath', video: 'videoPath', cover: 'coverPath', lyrics: 'lyricsPath' };
 // 对应的 download_* 就位标记列——filesIntact 的 audio 完整性检查是 flag 门控，
 // 补传/换源不置位会留「path 有值但 flag=0」的幻影已下载态
@@ -154,6 +156,14 @@ async function streamRequestBody(c, outputPath, maxBytes) {
       if (!ws.write(Buffer.from(value))) {
         await Promise.race([new Promise(r => ws.once('drain', r)), errP]);
       }
+    }
+    // content-length 与实写字节对账（与 download-io 同口径）：
+    // 实写 < 声明 = 请求体被截断，登记成完整工件会落半截文件；
+    // 实写 > 声明 = 虚报长度，同为确定性违规。chunked 无声明长时无
+    // 基准可对，跳过本步
+    if (declared > 0 && total !== declared) {
+      try { await reader.cancel(); } catch { /* 忽略 */ }
+      throw httpError(400, `请求体不完整（${total}/${declared} 字节）`);
     }
     // end 也要竞速——finish/error 都可能先到
     await Promise.race([
