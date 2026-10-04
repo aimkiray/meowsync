@@ -742,7 +742,8 @@ export default {
 
     const handleRemoveSongFromPlaylist = async (song) => {
       const wasFile = isFileTrackId(song?.id)
-      removeSongFromPlaylist(song)
+      // 未入库预览单/无效输入被拒（false）——曲还在单里，不追问删资产
+      if (removeSongFromPlaylist(song) === false) return
       // 移除后全库零引用才追问删资产——登记行按 songId，一删所有歌单都断源
       if (!wasFile || fileTrackRefCount(song.id) > 0) return
       if (!await pixelConfirm(`「${song.name}」已不再被任何歌单引用。连服务器上的文件（音频/视频/歌词/封面）一起删掉吗？`, { confirmText: '删除文件', danger: true })) return
@@ -965,6 +966,7 @@ export default {
           // 焦点在原生按钮/role=button/链接上时空格属于它自己的激活语义，不抢
           if (el?.tagName === 'BUTTON' || el?.closest?.('[role="button"], [role="tab"], [role="menuitem"], [role="option"], a[href]')) return
           e.preventDefault() // 阻止页面滚动
+          if (e.repeat) return // 长按连打会以 repeat 速率反复 toggle（f/q 同款闸）
           togglePlay()
           break
         case 'ArrowLeft':
@@ -983,6 +985,7 @@ export default {
           break
         case 'k': case 'K':
           // YTM 键序：k=播放/暂停（k 无原生激活语义，不必像空格那样让位按钮焦点）
+          if (e.repeat) return // 与空格同律：长按不反复 toggle
           togglePlay()
           break
         case 'j': case 'J':
@@ -992,6 +995,7 @@ export default {
           seekBy(10)
           break
         case 'm': case 'M':
+          if (e.repeat) return // 同 toggle 类键：长按反复静音/取消爆音
           toggleMute()
           break
         case 'f': case 'F':

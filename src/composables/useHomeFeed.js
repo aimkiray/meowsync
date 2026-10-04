@@ -20,7 +20,10 @@ export function useHomeFeed({ userPlaylists, selectedPlaylist, playingPlaylistId
     // 接口原对象（alia/嵌套 privilege）20 条就是 ~40-80KB 死重
     const entry = slimTrack(song)
     playHistory.value = [entry, ...playHistory.value.filter(s => String(s.id) !== String(song.id))].slice(0, 20)
-    writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)
+    // 写盘失败（配额满等）= 刷新后货架静默为空——留痕不打扰（不弹 toast）
+    if (!writeJSON(PLAY_HISTORY_STORAGE_KEY, playHistory.value)) {
+      console.warn('[home-feed] 最近播放历史持久化失败，刷新后本次记录将丢失')
+    }
   }
 
   // 最近播放的歌单：记播放上下文的归属歌单（playingPlaylistId，已在快照时锁死）。
@@ -38,7 +41,10 @@ export function useHomeFeed({ userPlaylists, selectedPlaylist, playingPlaylistId
       trackCount: pl.trackCount ?? pl.tracks?.length
     }
     playlistHistory.value = [entry, ...playlistHistory.value.filter(p => String(p.id) !== String(pid))].slice(0, 20)
-    writeJSON(PLAYLIST_HISTORY_STORAGE_KEY, playlistHistory.value)
+    // 同 recordPlayHistory：写盘失败留痕不弹窗
+    if (!writeJSON(PLAYLIST_HISTORY_STORAGE_KEY, playlistHistory.value)) {
+      console.warn('[home-feed] 最近歌单历史持久化失败，刷新后本次记录将丢失')
+    }
   }
 
   // init 恢复：脏条目（无 id）滤掉

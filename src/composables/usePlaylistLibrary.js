@@ -473,9 +473,14 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
   // 纯库视图编辑：不动播放队列/当前曲（队列是快照语义）
   const removeSongFromPlaylist = (song) => {
     const pl = selectedPlaylist.value
-    if (!song || song.id == null || !pl || pl.id == null) return
-    // 读写都落库对象——selectedPlaylist 是 merge 快照，写它会丢持久化
-    const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id)) || pl
+    if (!song || song.id == null || !pl || pl.id == null) return false
+    // 未入库预览单没有持久化落点——墓碑/追加写进 merge 快照会报假成功、
+    // 重开即复活（与 applyTrackEdit/applySongsOrder 的入库闸同口径）
+    const libPl = userPlaylists.value.find(p => String(p.id) === String(pl.id))
+    if (!libPl) {
+      toast('歌单未入库，移除无法持久保存——请先收藏该歌单', 'error')
+      return false
+    }
     const sid = String(song.id)
     if (isLocalPlaylistId(libPl.id)) {
       libPl.tracks = (libPl.tracks || []).filter(t => String(t.id) !== sid)
@@ -496,6 +501,7 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
     savePlaylistsToStorage()
     toast(`已从《${libPl.name}》移除「${song.name}」`, 'success')
+    return true
   }
 
   // ── 曲序 ──

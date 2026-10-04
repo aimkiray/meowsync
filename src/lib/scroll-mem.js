@@ -18,13 +18,17 @@ export const readScrollMem = (key) => mem.get(key) ?? null
 // 用户先动滚轮/手指 = 显式意图，放弃还位不抢滚动。返回取消函数——调用方
 // 在 onBeforeUnmount 调用，避免等待窗内卸载后 interval 对游离节点空转
 export const restoreScrollTop = (el, top, { timeoutMs = 2500 } = {}) => {
+  let iv = null
+  let fallbackTimer = null
   const done = () => {
     if (iv) clearInterval(iv)
     iv = null
+    // 兜底超时也要随取消清掉——否则卸载后 timer 仍持有游离元素直到自燃
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    fallbackTimer = null
     el?.removeEventListener('wheel', done)
     el?.removeEventListener('touchstart', done)
   }
-  let iv = null
   if (!el || !(top > 0)) return done
   const enough = () => el.scrollHeight >= top + el.clientHeight - 4
   if (enough()) { el.scrollTop = top; return done }
@@ -33,6 +37,6 @@ export const restoreScrollTop = (el, top, { timeoutMs = 2500 } = {}) => {
   iv = setInterval(() => {
     if (enough()) { el.scrollTop = top; done() }
   }, 120)
-  setTimeout(done, timeoutMs)
+  fallbackTimer = setTimeout(done, timeoutMs)
   return done
 }

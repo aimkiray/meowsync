@@ -83,6 +83,9 @@ export function usePlayer({
     let currentPlayingId = null // 当前正在播放的歌曲ID，用于防止竞态条件
 
     let volumeSaveTimer = null
+    // 待落地 seek 挂账：playSong 先把 currentTime 清 0，恢复用的 seekTime 要等
+    // onload 才写回——挂账期内一切落盘仍写挂账值，否则存档续播点被 0 覆盖
+    let pendingSeekTime = null
 
     const savePlayerStateToStorage = () => {
       const state = {
@@ -91,7 +94,7 @@ export function usePlayer({
         // 存浏览态 id 会让恢复在 B 里找不到这首歌而静默放弃
         playingPlaylistId: playingPlaylistId.value ?? selectedPlaylist.value?.id ?? null,
         currentSongId: currentSong.value?.id ?? null,
-        currentTime: Number.isFinite(currentTime.value) ? currentTime.value : 0,
+        currentTime: pendingSeekTime ?? (Number.isFinite(currentTime.value) ? currentTime.value : 0),
         volume: Number.isFinite(volume.value) ? volume.value : 80,
         playMode: playMode.value,
         shuffleOn: shuffleOn.value,
@@ -233,6 +236,14 @@ export function usePlayer({
         }
       } else if (queueOriginalOrder?.length) {
         playingSongs.value = queueOriginalOrder.slice()
+        // 当前曲不在备份里（队列外来源等）——按 setQueue 锚定语义插回队首，
+        // 两表同步维持同 id 集；丢了它 currentPlayingIndex=-1，
+        // 高亮/上下首/播完接续全失据
+        const cur = currentSong.value
+        if (cur && !playingSongs.value.some(s => String(s.id) === String(cur.id))) {
+          playingSongs.value.unshift(cur)
+          queueOriginalOrder.unshift(cur)
+        }
       }
       savePlayerStateToStorage()
     }
@@ -407,6 +418,13 @@ export function usePlayer({
       playSong(song, { preserveContext: true })
     }
 
+    // 队尾追加的统一写点：playingSongs 与 shuffle 原序备份同步追加——
+    // 只写一边的话，关随机时旧备份整体替换会把追加曲（含正在播放的）抹掉
+    const pushTail = (list) => {
+      playingSongs.value = [...playingSongs.value, ...list]
+      if (queueOriginalOrder) queueOriginalOrder.push(...list)
+    }
+
     // autoplay：自然播完且队列耗尽时，拉当前艺人相关歌接进队列继续播
     const continueWithRelated = async () => {
       const artist = (currentSong.value?.ar || currentSong.value?.artists || [])[0]?.name
@@ -416,7 +434,7 @@ export function usePlayer({
         const exist = new Set(playingSongs.value.map(s => String(s.id)))
         const fresh = (list || []).filter(s => s?.id != null && !exist.has(String(s.id)))
         if (!fresh.length) return false
-        playingSongs.value = [...playingSongs.value, ...fresh]
+        pushTail(fresh)
         playSong(fresh[0], { preserveContext: true })
         return true
       } catch {
@@ -512,6 +530,10 @@ export function usePlayer({
         isPlaying.value = false
         currentTime.value = 0
         duration.value = 0
+        // 恢复续播挂账：本次带 seekTime 时（刷新恢复/重建路径）在 onload 落地
+        // 前，持久化层写挂账值而非刚清零的 currentTime——正常切歌 seekTime=0
+        // 即 null，currentTime 清零持久化不受影响
+        pendingSeekTime = Number.isFinite(seekTime) && seekTime > 0 ? seekTime : null
 
         currentSong.value = song
 
@@ -612,6 +634,8 @@ export function usePlayer({
               newHowl.seek(safeSeekTime)
               currentTime.value = safeSeekTime
             }
+            // 续播点已落地（或本就没有）——结清挂账，持久化交还实时 currentTime
+            pendingSeekTime = null
 
             if (autoplay) {
               newHowl.play()
@@ -732,14 +756,19 @@ export function usePlayer({
           howlWatchdog = null
           if (isStale()) return
           // 移动端首次访问：在用户手势之前 node.load() 根本不会真正发起——
-          // 这不是挂死。保留实例+松开切换锁，用户点播放键即可完成手势加载。
-          // 注意绝不能 abort myController：signal.aborted 会让后续 onload 被判
-          // 过期而销毁实例，手势白等
+          // 这不是挂死。松开切换锁让用户点播放键完成手势加载。
+          // 注意绝不能 abort myController：signal.aborted 会杀掉本曲尾随的
+          // 歌词请求（词属本曲，不该陪葬）
           if (navigator.userActivation && !navigator.userActivation.hasBeenActive) {
             console.log('⏸️ 等待用户手势后再加载音频（移动端自动播放限制）')
             songSwitching.value = false
             isPlaying.value = false
             playbackError.value = '点击播放键开始播放'
+            // 实例必须回收：留着它 state 停 'loading'，togglePlay 的加载窗闸
+            // 会把后续点击全吞掉——播放键成死键。置空后 !howl 分支接管，
+            // 用户点播放键走 playSong 重建（手势内 node.load() 才真正发起）
+            newHowl.unload()
+            if (howl === newHowl) howl = null
             if (currentAbortController === myController) currentAbortController = null
             return
           }
@@ -1146,7 +1175,9 @@ export function usePlayer({
         if (currentSong.value && !songSwitching.value) {
           playSong(currentSong.value, {
             preserveContext: true,
-            seekTime: currentTime.value
+            // 续播 seek 未落地实例就死了（加载失败/等手势回收）：重试仍从
+            // 挂账续播点起，而不是被清零的 currentTime
+            seekTime: pendingSeekTime ?? currentTime.value
           })
         }
         return
@@ -1171,12 +1202,15 @@ export function usePlayer({
       }
     }
 
-    // 以歌曲ID在播放快照中实时定位，避免 VIP 过滤/浏览切单导致索引漂移
-    const currentPlayingIndex = () => {
+    // 以歌曲ID在播放快照中实时定位，避免 VIP 过滤/浏览切单导致索引漂移。
+    // computed 记忆化：底栏 :current-index 与远端广播每帧调用不再线性扫全队列，
+    // 仅 currentSong/playingSongs/filteredSongs 变化时才重算
+    const currentPlayingIndexMemo = computed(() => {
       if (!currentSong.value) return -1
       // 与 playSong 一致用 String 比较：不同接口返回的 id 可能是 number 或 string
       return playbackList().findIndex(s => String(s.id) === String(currentSong.value.id))
-    }
+    })
+    const currentPlayingIndex = () => currentPlayingIndexMemo.value
 
     const previousSong = () => {
       const list = playbackList()

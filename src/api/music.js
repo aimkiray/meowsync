@@ -10,6 +10,12 @@ function isAbortError(error) {
 
 // 4xx 客户端错误（含参数错误、未找到的 API）重试无意义
 function isRetryable(error) {
+  // 超时不重试：90s/120s 端点 ×3 重试是十几分钟假死，且每次重发都让
+  // 服务端重跑一条僵尸上游链。axios 超时错误码 ECONNABORTED；fetch 语义
+  // 超时是 TimeoutError（AbortSignal.timeout）——name/message 双兜底
+  // （AbortError/CanceledError 由 isAbortError 管，不冲突）
+  if (error?.code === 'ECONNABORTED' || error?.name === 'TimeoutError'
+      || /timeout/i.test(error?.message || '')) return false
   const status = error?.response?.status
   return !(status >= 400 && status < 500)
 }
