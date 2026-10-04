@@ -53,9 +53,9 @@ async function authGate(c, next) {
     if (!c.res.headers.has('Cache-Control')) c.res.headers.set('Cache-Control', 'no-store');
     return;
   }
-  // x-download-token 降级为「服务对服务/脚本」旁路凭据——浏览器不再需要
-  // 构建期注入 VITE_DOWNLOAD_TOKEN（bundle 内嵌等于向全体访客发口令）。
-  // 懒读 env 而非启动快照——与 env.js 「不拿陈值」承诺同口径
+  // DOWNLOAD_TOKEN = 服务对服务/脚本的全量 API 旁路凭据（含 GET）——命中即过门。
+  // 浏览器不再需要构建期注入 VITE_DOWNLOAD_TOKEN（bundle 内嵌等于向全体访客
+  // 发口令）。懒读 env 而非启动快照——与 env.js 「不拿陈值」承诺同口径
   if (tokenMatches(c.req.header('x-download-token'), process.env.DOWNLOAD_TOKEN)) {
     return next();
   }

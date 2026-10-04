@@ -15,7 +15,7 @@ const { trustProxyEnabled, clientIp } = require('../lib/env');
 const { csrfOriginOk, COOKIE_NAME } = require('../lib/auth-gate');
 const usersRepo = require('../repositories/users');
 const sessionsRepo = require('../repositories/sessions');
-const { hashPassword, verifyPassword, needsRehash, getDummyHash } = require('../lib/password');
+const { hashPassword, verifyPassword, needsRehash, getDummyHash, argon2Available } = require('../lib/password');
 
 const app = new Hono();
 const SESSION_COOKIE_AGE_S = Math.floor(sessionsRepo.ABSOLUTE_TTL_MS / 1000);
@@ -107,6 +107,14 @@ app.post('/auth/login', async (c) => {
   }
   const acctKey = `auth-login:acct:${body.username.trim().toLowerCase()}`;
   const user = usersRepo.findAuthByUsername(body.username.trim());
+  // a2id 哈希在无 crypto.argon2 的运行时（<24.7）根本无法验证——如实回 503
+  // 给可操作的指引，而不是报「密码错误」让用户反复重试。
+  // 仍先跑一趟 dummy verify：「账号存在但 KDF 缺失」与「密码错误」的时序
+  // 不能拉开，否则此分支本身就成了账号存在性探针
+  if (user && user.passwordHash.startsWith('a2id$') && !argon2Available) {
+    await verifyPassword(body.password, await getDummyHash());
+    return fail(c, 503, '当前运行时不支持 argon2（需 Node>=24.7）——请联系管理员重置密码');
+  }
   // 用户不存在也对 dummy hash 跑完整校验——「用户不存在」与「密码错误」
   // 在响应文案和时序上都必须不可区分
   const stored = user ? user.passwordHash : await getDummyHash();

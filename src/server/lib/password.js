@@ -5,7 +5,10 @@
 const { argon2, scrypt, randomBytes, timingSafeEqual } = require('crypto');
 const { promisify } = require('util');
 
-const argon2p = typeof argon2 === 'function' ? promisify(argon2) : null;
+// argon2 可用性导出给路由层——a2id 哈希在无 crypto.argon2 的运行时（<24.7）
+// 无法验证，login 需要区分「密码错误」与「运行时缺 KDF」给出可操作的 503
+const argon2Available = typeof argon2 === 'function';
+const argon2p = argon2Available ? promisify(argon2) : null;
 const scryptp = promisify(scrypt);
 
 // OWASP：argon2id m=19MiB t=2 p=1
@@ -121,4 +124,4 @@ function getDummyHash() {
   return dummyHashPromise;
 }
 
-module.exports = { hashPassword, verifyPassword, needsRehash, getDummyHash };
+module.exports = { hashPassword, verifyPassword, needsRehash, getDummyHash, argon2Available };
