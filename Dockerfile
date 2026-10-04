@@ -10,6 +10,8 @@ RUN npm ci --ignore-scripts
 COPY index.html vite.config.js postcss.config.js tailwind.config.js ./
 COPY public ./public
 COPY src ./src
+# postbuild 会跑 scripts/compress-dist.mjs 生成 .br/.gz 伴生档——漏拷必挂
+COPY scripts ./scripts
 
 # 构建期变量（VITE_* 会打包进前端产物）：
 # 通过 docker build --build-arg 或 compose build.args 注入；留空走同源自动推断

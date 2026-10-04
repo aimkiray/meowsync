@@ -4,7 +4,8 @@ import { authState } from '../lib/auth-state.js'
 
 export const API_BASE_URL = resolveApiBaseUrl()
 
-// DOWNLOAD_TOKEN（构建期注入）：服务端开写鉴权时所有请求自动带令牌。
+// VITE_DOWNLOAD_TOKEN（构建期注入）：服务对服务/脚本旁路凭据（全量 API）——
+// 服务端开 DOWNLOAD_TOKEN 鉴权时所有请求自动带令牌。
 // 令牌只发自己的 API host（baseURL 同源/配置域），不会外泄给上游
 const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
 

@@ -66,10 +66,10 @@ npm run start:api
 
 ### 构建生产版本
 ```bash
-# 开发环境构建
+# 生产构建（vite build 默认即 production mode）
 npm run build
 
-# 生产环境构建
+# 显式 --mode production，与上等价
 npm run build:prod
 ```
 
@@ -219,6 +219,10 @@ TRUST_PROXY=                              # 可选：设为 1 时采信 X-Forwar
 # DATA_DIR=                               # 可选：SQLite/下载文件根目录（默认 ./data，容器内 /app/data）
 # DOWNLOAD_DIR=                           # 可选：下载文件目录（默认 <DATA_DIR>/downloads）
 ```
+
+> 注意：不要把 `NODE_ENV` 写进 `.env`——Vite 构建期会读它，`development`
+> 值会把生产 bundle 烘成开发态；服务进程请用启动命令/PM2/Docker 注入
+>（`npm run build` 已对 `import.meta.env.PROD`/`DEV` 做了 build 态钉死兜底）。
 
 ## 配置说明
 

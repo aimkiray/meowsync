@@ -1,5 +1,10 @@
 import { isLocalPlaylistId, isResolvableTrackId, parseProviderShellId } from './url.js'
 
+// 子目录部署（VITE_BASE_PATH=/music/ → BASE_URL）：分享链与页面同前缀，
+// 服务端负责剥离。BASE_URL 恒以 / 收尾——/music/ 拼成 origin/music/?song=
+// ?. 链到末位：node --test 等无 Vite 环境 import.meta.env 为 undefined
+const BASE = import.meta.env?.BASE_URL || '/'
+
 /** 复制文本到剪贴板：Clipboard API → textarea+execCommand 降级。返回是否成功。 */
 export async function copyText(text) {
   try {
@@ -36,11 +41,11 @@ export async function copyText(text) {
 export function songShareUrl(song) {
   const origin = window.location.origin
   if (song?.bilibili?.bvid) {
-    return `${origin}/?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
+    return `${origin}${BASE}?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
   }
-  if (song?.youtube?.videoId) return `${origin}/?yt=${song.youtube.videoId}&view=watch`
-  if (song?.qq?.mid) return `${origin}/?qq=${song.qq.mid}&view=watch`
-  return `${origin}/?song=${song?.id}&view=watch`
+  if (song?.youtube?.videoId) return `${origin}${BASE}?yt=${song.youtube.videoId}&view=watch`
+  if (song?.qq?.mid) return `${origin}${BASE}?qq=${song.qq.mid}&view=watch`
+  return `${origin}${BASE}?song=${song?.id}&view=watch`
 }
 
 // 本地单无远端 id——?mix=<name>~<ids> 内容携带链，接收端按 id 重解析。
@@ -69,17 +74,17 @@ export function mixShareIds(playlist) {
 export function playlistShareUrl(playlist) {
   const origin = window.location.origin
   if (!isLocalPlaylistId(playlist?.id)) {
-    return `${origin}/?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
+    return `${origin}${BASE}?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
   }
   const shell = parseProviderShellId(playlist.id)
   if (shell?.source === 'yt') {
-    return `${origin}/?yt=${encodeURIComponent(`https://www.youtube.com/playlist?list=${shell.key}`)}`
+    return `${origin}${BASE}?yt=${encodeURIComponent(`https://www.youtube.com/playlist?list=${shell.key}`)}`
   }
   if (shell?.source === 'bili') {
-    return `${origin}/?bili=${encodeURIComponent(`https://www.bilibili.com/list/ml${shell.key}`)}`
+    return `${origin}${BASE}?bili=${encodeURIComponent(`https://www.bilibili.com/list/ml${shell.key}`)}`
   }
-  if (shell?.source === 'qq') return `${origin}/?qqpl=${shell.key}`
-  return `${origin}/?mix=${encodeURIComponent(String(playlist.name || '歌单'))}~${mixShareIds(playlist).join(',')}`
+  if (shell?.source === 'qq') return `${origin}${BASE}?qqpl=${shell.key}`
+  return `${origin}${BASE}?mix=${encodeURIComponent(String(playlist.name || '歌单'))}~${mixShareIds(playlist).join(',')}`
 }
 
 // ?mix= 链空载荷判定：ids 全部不可解析时 URL 以 ~ 收尾——分享侧据此拦截提示
