@@ -132,10 +132,15 @@ async function downloadExternalAudio(bvM, ytM, outputPath, onProgress, signal, p
           continue;
         }
         // 扩展名按真实容器判：响应 Content-Type（最诚实）→ 流表 mimeType → URL
-        // mime=/path——B 站 flac 轨 url 无后缀，靠 content-type 落 .flac
+        // mime=/path——B 站 flac 轨 url 无后缀，靠 content-type 落 .flac。
+        // MIME_EXT 推导结果仍要过音频白名单：image/* 响应会把音频工件落成
+        // .png/.jpg（上游错标/投毒），白名单外一律走 URL 推导/默认档
         const mime = (String(resp.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
           || String(cand.mimeType || '').split(';')[0].trim().toLowerCase());
-        const ext = MIME_EXT[mime] || extFromUrl(cand.url, AUDIO_EXTS, 'm4a');
+        const mimeExt = MIME_EXT[mime];
+        const ext = (mimeExt && AUDIO_EXTS.has(mimeExt))
+          ? mimeExt
+          : extFromUrl(cand.url, AUDIO_EXTS, 'm4a');
         const finalPath = pathWithExt(outputPath, ext);
         const saved = await streamToFile(resp, finalPath, {
           maxBytes: MAX_AUDIO_BYTES, onProgress, maxTotalMs: 300000

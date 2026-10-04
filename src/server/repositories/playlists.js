@@ -81,10 +81,19 @@ function upsertPlaylist(input) {
 
 function deletePlaylist(id) {
   const db = getDb();
-  // 显式删 playlist_tracks：FK 级联依赖建表期声明，老库可能没带 REFERENCES——
-  // 不能把行删除押在 schema 史上（AUTOINCREMENT 不复用 id，孤儿行永久残留）。
-  // 两条 DELETE 同事务：半途失败回滚，不留"曲目已删歌单还在"的不一致
+  // 三张引用子表全部显式删：FK 级联依赖建表期声明，老库是 ALTER 补的列、
+  // 可能没带 REFERENCES/ON DELETE CASCADE——不能把行删除押在 schema 史上
+  // （AUTOINCREMENT 不复用 id，孤儿行永久残留成幻影 completed/幽灵队列）。
+  // download_tasks 同时引用 playlists 与 queues——孙行先删（两条 DELETE：
+  // playlist_id 直挂的与经 queue_id 间接挂的）再删子行，最后删父行；
+  // 全部同事务：半途失败回滚，不留"子表已删父表还在"的不一致。
+  // 注意本函数只收敛行删除——文件清理由调用方（download-manager 级联）负责
   return db.transaction(() => {
+    db.prepare('DELETE FROM download_tasks WHERE playlist_id = ?').run(id);
+    db.prepare(`DELETE FROM download_tasks WHERE queue_id IN (
+      SELECT id FROM download_queues WHERE playlist_id = ?
+    )`).run(id);
+    db.prepare('DELETE FROM download_queues WHERE playlist_id = ?').run(id);
     db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(id);
     const result = db.prepare('DELETE FROM playlists WHERE id = ?').run(id);
     return result.changes > 0;

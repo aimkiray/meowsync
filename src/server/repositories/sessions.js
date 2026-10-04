@@ -20,17 +20,20 @@ function createSession(userId, { ip = '', userAgent = '' } = {}) {
   const db = getDb();
   const now = Date.now();
   const raw = crypto.randomBytes(32).toString('base64url');
-  db.prepare(`
-    DELETE FROM sessions WHERE id IN (
-      SELECT id FROM sessions WHERE user_id = ?
-      ORDER BY created_at DESC LIMIT -1 OFFSET ?
-    )
-  `).run(userId, MAX_SESSIONS_PER_USER - 1);
-  db.prepare(`
-    INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, not_after, ip, user_agent)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(tokenId(raw), userId, now, now, now + IDLE_TTL_MS, now + ABSOLUTE_TTL_MS,
-    String(ip).slice(0, 64), String(userAgent).slice(0, 256));
+  // 驱逐+插入同事务：半途失败不留"旧会话被逐、新会话没建上"的窗口
+  db.transaction(() => {
+    db.prepare(`
+      DELETE FROM sessions WHERE id IN (
+        SELECT id FROM sessions WHERE user_id = ?
+        ORDER BY created_at DESC LIMIT -1 OFFSET ?
+      )
+    `).run(userId, MAX_SESSIONS_PER_USER - 1);
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, not_after, ip, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(tokenId(raw), userId, now, now, now + IDLE_TTL_MS, now + ABSOLUTE_TTL_MS,
+      String(ip).slice(0, 64), String(userAgent).slice(0, 256));
+  })();
   return raw;
 }
 

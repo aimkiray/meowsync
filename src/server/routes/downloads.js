@@ -356,6 +356,13 @@ app.get('/downloads/songs/:songId/file', async (c) => {
         closeFd();
         return c.body(null, 200, headers);
       }
+      // HEAD 走 GET 处理器拿到完整响应头（Content-Length/ETag/Range 语义都成立），
+      // 但 body 会被丢弃——createReadStream 建了没人消费/销毁，fd 永开到 EMFILE。
+      // fd 预开（inode 锁）语义保留：HEAD 同样验证"此刻该 inode 可供"
+      if (c.req.method === 'HEAD') {
+        closeFd();
+        return c.body(null, status, headers);
+      }
       // fd 交给 stream 持有（autoClose）——createReadStream 自身抛错时回收兜底
       stream = fs.createReadStream(filePath, { fd, start, end, autoClose: true });
     } catch (e) {
@@ -407,9 +414,18 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
     try {
       await downloadManager.startQueue(queue.id);
     } catch (error) {
-      // create→start 窗口被并发抢先启动：409"已在运行中"其实就是目标态——
-      // 照常返回 progress 而非误报失败
+      // create→start 窗口被并发抢先启动：409 且队列真的在跑（running/paused）
+      // 才是幂等目标态——照常返回 progress 而非误报失败。
+      // 「正在收尾/删除中/停机」类 409 下队列停在 pending 且没有任何协程会
+      // 消费它，回 200 等于谎报已启动——透传给前端如实报错
       if (error.status !== 409) throw error;
+      let status;
+      try {
+        status = downloadManager.getQueueProgress(queue.id).queue.status;
+      } catch {
+        throw error; // 探针失败（如同窗被删）按原始 409 如实上报，不覆盖语义
+      }
+      if (status !== 'running' && status !== 'paused') throw error;
     }
 
     // startQueue 已把 status 推进到 running——回传创建时快照的 'pending' 是脏响应；

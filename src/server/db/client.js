@@ -56,7 +56,12 @@ const DOWNLOAD_TASK_COLUMNS = {
   cover_url: 'TEXT',
   status: "TEXT NOT NULL DEFAULT 'pending'",
   progress: 'INTEGER DEFAULT 0',
-  // ALTER ADD COLUMN 支持 REFERENCES（SQLite ≥3.6.19），不加则删队列时任务行不级联
+  // ALTER ADD COLUMN 可以携带 REFERENCES（SQLite ≥3.6.19、缺省值须为 NULL）——
+  // 但只对「列尚不存在」的库装得上：queue_id/playlist_id 早年曾以无 REFERENCES
+  // 的裸 INTEGER 补过的老库，SQLite 不能改既有列的 FK，ON DELETE CASCADE 在
+  // 它们身上永远缺席（重建表才能补，风险太大不做）。因此所有删除路径一律
+  // 显式删子行（playlists.deletePlaylist / download-manager 级联），不押
+  // schema 史上的级联声明；这里的 REFERENCES 只给新建库与新补列的库兜底
   queue_id: 'INTEGER REFERENCES download_queues(id) ON DELETE CASCADE',
   error_message: 'TEXT',
   retry_count: 'INTEGER DEFAULT 0',
@@ -419,6 +424,10 @@ function initSchema(database) {
   const INDEX_COLUMNS = [
     ['idx_playlist_tracks_playlist_id', 'playlist_tracks', 'playlist_id'],
     ['idx_playlist_tracks_song_id', 'playlist_tracks', 'song_id'],
+    // findTrackBySongId(playlist_id, song_id) 的两列等值查询：两个单列索引
+    // 只能命中其一（按 playlist_id 扫全单曲目，大歌单 O(N)）——复合索引
+    // 才是这条热路径的正确形态
+    ['idx_playlist_tracks_playlist_song', 'playlist_tracks', ['playlist_id', 'song_id']],
     ['idx_download_tasks_playlist', 'download_tasks', 'playlist_id'],
     // 跨歌单按曲寻址（videoReady 工件查找）走 song_id——(playlist,song)
     // 唯一索引的最左列是 playlist_id 用不上
@@ -432,8 +441,10 @@ function initSchema(database) {
   for (const [name, table, column] of INDEX_COLUMNS) {
     // hasColumn 缺列场景不建（索引缺失可继续跑，比启动即崩可恢复）；
     // IF NOT EXISTS 兜底多进程首启竞态（负者不该因 "index exists" 崩退出）
-    if (!hasIndex(database, name) && hasColumn(database, table, column)) {
-      database.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${column})`);
+    const columns = Array.isArray(column) ? column : [column];
+    if (!hasIndex(database, name)
+        && columns.every(col => hasColumn(database, table, col))) {
+      database.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${columns.join(', ')})`);
     }
   }
 }

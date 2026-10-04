@@ -67,6 +67,20 @@ function markNeteasePlaylistDeleted(neteaseId) {
   deletingNeteasePlaylists.set(key, Date.now() + NETEASE_TOMBSTONE_TTL_MS);
 }
 
+// 定期清扫：过期墓碑此前只在被 isNeteasePlaylistDeleting 读到时才摘——
+// 删过即忘的歌单 id 会随进程寿命无限堆积。unref 计时器不拖进程退出；
+// Infinity（级联在途/导入未归零）不摘，它由级联 finally/endNeteasePlaylistImport
+// 转 TTL 后走同一清扫路径
+const tombstoneSweeper = setInterval(() => {
+  const now = Date.now();
+  for (const [key, expiresAt] of deletingNeteasePlaylists) {
+    if (expiresAt !== Infinity && expiresAt <= now) {
+      deletingNeteasePlaylists.delete(key);
+    }
+  }
+}, NETEASE_TOMBSTONE_TTL_MS);
+tombstoneSweeper.unref?.();
+
 module.exports = {
   deletingPlaylists,
   deletingQueues,
