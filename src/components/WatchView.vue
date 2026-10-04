@@ -234,31 +234,33 @@
             <!-- 虚拟滚动下沿 spacer -->
             <div :style="{ height: queueBottomPad + 'px' }" aria-hidden="true"></div>
           </template>
+        </div>
 
-          <!-- 队列页脚：操作与偏好收成一条发丝顶隔的栏；空队列时只剩居中开关 -->
-          <div class="watch-queue-foot" :class="{ 'watch-queue-foot--empty': !queue.length }">
-            <template v-if="queue.length">
-              <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('save-queue')" title="把当前队列存成新歌单">
-                <PixelIcon name="save" :size="12" /> 存为歌单
-              </button>
-              <button
-                class="ink-btn ink-btn--ghost ink-btn--sm"
-                :disabled="queue.length < 2"
-                @click="$emit('clear-queue')"
-                title="清空队列（保留当前播放）"
-              >清空队列</button>
-            </template>
-            <!-- YTM UP NEXT 底部：自动播放开关（语义全文进 title，label 保持短） -->
-            <label class="watch-autoplay" title="队列播完接续相关歌曲">
-              <input
-                type="checkbox"
-                class="pg-check"
-                :checked="autoplay"
-                @change="$emit('update:autoplay', $event.target.checked)"
-              />
-              <span>自动播放</span>
-            </label>
-          </div>
+        <!-- 队列页脚钉在面板底缘（YTM UP NEXT 同构）——不挂进滚动体，
+             千行队列时不必滚到底才够得着；空队列时只剩居中开关；
+             移动单列态随页流、视觉位置与嵌在列表尾部相同 -->
+        <div v-show="tab === 'queue'" class="watch-queue-foot" :class="{ 'watch-queue-foot--empty': !queue.length }">
+          <template v-if="queue.length">
+            <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('save-queue')" title="把当前队列存成新歌单">
+              <PixelIcon name="save" :size="12" /> 存为歌单
+            </button>
+            <button
+              class="ink-btn ink-btn--ghost ink-btn--sm"
+              :disabled="queue.length < 2"
+              @click="$emit('clear-queue')"
+              title="清空队列（保留当前播放）"
+            >清空队列</button>
+          </template>
+          <!-- YTM UP NEXT 底部：自动播放开关（语义全文进 title，label 保持短） -->
+          <label class="watch-autoplay" title="队列播完接续相关歌曲">
+            <input
+              type="checkbox"
+              class="pg-check"
+              :checked="autoplay"
+              @change="$emit('update:autoplay', $event.target.checked)"
+            />
+            <span>自动播放</span>
+          </label>
         </div>
 
         <!-- 歌词工具条：字号调节（本机偏好）+ 时间校准（按词源入库）。
@@ -1253,6 +1255,9 @@ export default {
   scrollbar-gutter: stable;
   /* 顶条钉高：watch-tabs 的 sticky top 与本条 height 同源（--topnav-h 先例） */
   --watch-top-h: 52px;
+  /* 焦点滚达/scrollIntoView 的让位垫：移动单列态顶上有两层 sticky
+     （watch-top 52 + watch-tabs ~36），不让位时目标行会滚到钉条底下 */
+  scroll-padding-top: calc(var(--watch-top-h, 52px) + 36px);
 }
 
 /* 浮层顶行：返回键钉左页角。
@@ -1626,6 +1631,8 @@ export default {
   gap: 8px;
   /* 窄屏三件套（存为/清空/自动播放 label）放不下时换行，不硬裁 */
   flex-wrap: wrap;
+  /* 宽屏钉在面板底缘（挂出滚动体后 flex 列默认 shrink 会把它压扁） */
+  flex-shrink: 0;
   padding: 10px 4px 12px;
   border-top: var(--hairline-soft);
 }
@@ -1750,16 +1757,29 @@ export default {
      视频态是左缘构图：左车道反把播放器推离返回键左缘（经典滚动条 11px）——
      只留右车道，播放器向左吃满到返回键轴（栏宽绑定时增宽 11px、右缘不动）。
      safe center：内容超高时向上对称溢出，顶部封面被裁且无法滚达——
-     safe 让溢出改走底部（不支持 safe 的浏览器回退原 center 行为） */
+     safe 让溢出改走底部（不支持 safe 的浏览器回退到上行 flex-start） */
   .watch-main {
+    /* safe 不识别的老内核（<Safari 17.6/<Chrome 115）：整条 safe 声明作废后
+       不能落回不安全 center——溢出时顶部会被裁且滚不到。先声明 flex-start
+       兜底：老内核退化为顶对齐+滚动，功能无损只是不居中 */
+    justify-content: flex-start;
     justify-content: safe center;
     scrollbar-gutter: stable;
     scrollbar-gutter: stable both-edges;
-    /* 顶行是 absolute 浮层（返回键占 y≈20–52）：内容超高时 safe center 回退
-       start，栏内滚动的首行会钻到返回键下——顶补距把可滚顶缘让到浮层下方 */
+    /* 顶行是 absolute 浮层（返回键占 y≈20–52）：UA 焦点滚达/scrollIntoView
+       会把目标贴到滚动口顶缘——scroll-padding 给同款让位垫 */
+    scroll-padding-top: 56px;
+  }
+  .watch-main--video {
+    scrollbar-gutter: stable;
+    /* 顶补距只付给视频态：左缘构图的内容从 x=20 起、safe 退化 start 时
+       可滚顶缘会钻到返回键浮层下；封面态居中排布够不着左页角浮层，
+       白付 56px 还新增滚动回归带 */
     padding-top: 56px;
   }
-  .watch-main--video { scrollbar-gutter: stable; }
+  /* 横幅在视频态拉满栏宽——封面宽（min(46vh,420px)）吊在 ~976px
+     播放器下读作孤儿条；与视频左缘同轴对齐 */
+  .watch-main--video .watch-banner { width: 100%; }
 
   .watch-cover { width: min(46vh, 420px); }
   /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
@@ -1769,10 +1789,13 @@ export default {
      56 + 标题/元/操作行 ~131；YTM 同款 --player-page-total-height-exclude-
      player 为 408px），但守 300px 最小高度（300×16/9≈533 宽；YTM 300 /
      ytd 240）——预算低于地板时停止压缩、左栏滚动补差（顶补距已让开返回键
-     浮层），视频不再塌成小窗。vh 行是 dvh 不识别的老内核兜底 */
+     浮层），视频不再塌成小窗。实际上限即左栏宽（1440 壳-边距-右栏≈976，
+     不设额外封顶）；栏宽本身 <533 的窄断点带（901–1023 开栏）由 100%
+     先绑定、地板让位——宽度饥荒时无法同时保高。vh 行是 dvh 不识别的
+     老内核兜底 */
   .watch-cover-wrap--video {
-    width: min(100%, 1280px, max(533px, calc((100vh - 356px) * 16 / 9)));
-    width: min(100%, 1280px, max(533px, calc((100dvh - 356px) * 16 / 9)));
+    width: min(100%, max(533px, calc((100vh - 356px) * 16 / 9)));
+    width: min(100%, max(533px, calc((100dvh - 356px) * 16 / 9)));
   }
   .watch-banner { width: min(46vh, 420px); }
 
