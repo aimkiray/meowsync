@@ -391,7 +391,7 @@ export default {
 .settings-themes, .settings-stepper { display: flex; gap: 6px; align-items: center; }
 .settings-stepper-val { font-family: var(--font-mono); font-size: 12px; min-width: 44px; text-align: center; }
 
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .settings-panel { padding: 14px 10px 32px; }
   .settings-card { padding: 12px; }
 }

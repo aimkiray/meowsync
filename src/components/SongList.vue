@@ -640,7 +640,7 @@
   text-overflow: ellipsis;
 }
 .song-row--playing .song-album { color: var(--label-grey); }
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .song-album { display: none; }
 }
 
@@ -753,7 +753,7 @@
 .song-row--reorder.song-row--playing .song-move-btn { color: var(--label-grey); }
 
 /* 窄屏 hero 单列化：与 watch 页同向（YTM 歌单头双栏→单列折叠） */
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .playlist-hero {
     flex-direction: column;
     align-items: flex-start;

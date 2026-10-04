@@ -680,13 +680,13 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 
 /* ── 响应式阶梯（全站唯一事实源注释，媒体查询仍写字面 px）──
-   compact ≤640：密度档（页缘 pad 12、底栏分权拓扑、对话框贴边、专辑列收）
+   compact ≤640：密度档（页缘 pad 12、底栏分权拓扑、对话框贴边、专辑列收；
+     写法 max-width:640.98px 配 min-width:641px——.98 防亚像素死带同 900.98）
    phone   ≤768：结构档（顶栏两行、侧栏抽屉、底栏首轮减负、沉浸页纵排）
    wide    ≥901：内容双栏（watch 左右分栏；配对的 <901 写法是 max-width:900.98px）
    dock    ≥1024：chrome 全量（侧栏定驻 280、汉堡消隐、搜索钉列、底栏时刻）
    xl      ≥1280：主从分栏（下载页队列/任务双列、内滚 gutter 车道）
    max     ≥1472：派生边（=1440 内容帽 + 2×16 chrome 槽，顶栏内列对轴）
-   组件贴合断点（底栏 735/551 等已并档；残留 420/455 等见各组件注释）与
    高度轴（max-height:500/540）、能力轴（hover:none/pointer:coarse/reduced-
    motion/forced-colors/print）不入宽度阶梯——正交通道 */
 
@@ -704,7 +704,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    playlist-grid/watch-layout 消费；≤640 降 12——此前仅 song-list 降，
    home/grid/watch 滞留 20） */
 :root { --page-pad-x: 20px; }
-@media (max-width: 640px) { :root { --page-pad-x: 12px; } }
+@media (max-width: 640.98px) { :root { --page-pad-x: 12px; } }
 
 /* 内容帽令牌：app-body 限宽值（顶栏内列/底栏内列同轴消费） */
 :root { --content-max: 1440px; }
@@ -714,7 +714,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    此值与 BottomPlayer 媒体块成对维护 */
 :root { --player-bar-h: 69.2px; }
 @media (max-width: 768px) { :root { --player-bar-h: 65.2px; } }
-@media (max-width: 640px) { :root { --player-bar-h: 61.2px; } }
+@media (max-width: 640.98px) { :root { --player-bar-h: 61.2px; } }
 
 /* YTM watch 页是整页 surface：≥768 即藏歌单栏（768-1023 流内窄轨白吃 64px
    格宽——chrome-clean 自 phone 档起，YTM [is-hidden-guide-page] 同型）；
@@ -1648,7 +1648,7 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
 }
 /* ≤640 与顶栏同档收 12（TopNavigation ≤640 同 12——双 chrome 边距不齐会
    上下错轴；分权拓扑下 meta 区每 1px 都珍贵） */
-@media (max-width: 640px) {
+@media (max-width: 640.98px) {
   .bottom-player {
     padding-left: 12px;
     padding-right: 12px;
