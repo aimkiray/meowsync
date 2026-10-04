@@ -554,7 +554,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 
 /* 移动端（单列 <901 或触屏主指针）滚动条全隐、照常可滚：经典滚动条平台上
    10px 车道（叠加各滚动器 scrollbar-gutter:stable 的常驻预留）会把居中内容
-   左推半条。scrollbar-width:none 时车道随之归零；-webkit 行兜底不认标准属性的旧内核 */
+   左推半条。scrollbar-width:none 时车道随之归零；-webkit 行兜底不认标准属性的旧内核。
+   （900.98 ≡ <901——wide 档的亚像素配对写法，与 1023.98↔1024 同律） */
 @media (max-width: 900.98px), (hover: none) and (pointer: coarse) {
   * { scrollbar-width: none; }
   ::-webkit-scrollbar { display: none; }
@@ -587,7 +588,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   min-height: 0;
   display: flex;
   width: 100%;
-  max-width: 1440px;
+  max-width: var(--content-max);
   margin: 0 auto;
 }
 
@@ -678,6 +679,17 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   border-right: var(--hairline);
 }
 
+/* ── 响应式阶梯（全站唯一事实源注释，媒体查询仍写字面 px）──
+   compact ≤640：密度档（页缘 pad 12、底栏分权拓扑、对话框贴边、专辑列收）
+   phone   ≤768：结构档（顶栏两行、侧栏抽屉、底栏首轮减负、沉浸页纵排）
+   wide    ≥901：内容双栏（watch 左右分栏；配对的 <901 写法是 max-width:900.98px）
+   dock    ≥1024：chrome 全量（侧栏定驻 280、汉堡消隐、搜索钉列、底栏时刻）
+   xl      ≥1280：主从分栏（下载页队列/任务双列、内滚 gutter 车道）
+   max     ≥1472：派生边（=1440 内容帽 + 2×16 chrome 槽，顶栏内列对轴）
+   组件贴合断点（底栏 735/551 等已并档；残留 420/455 等见各组件注释）与
+   高度轴（max-height:500/540）、能力轴（hover:none/pointer:coarse/reduced-
+   motion/forced-colors/print）不入宽度阶梯——正交通道 */
+
 /* 顶栏高度令牌：抽屉/遮罩顶缘锚定顶栏底（不盖住，☰ 才是关闭入口）。
    ≤768 顶栏改两行（8+32 行1 + 8+36 行2 + 8 + 1.2 发丝线 = 93.2），
    此值与 TopNavigation.vue 断点及右簇最高件（pg-icobtn 32px）成对维护 */
@@ -688,9 +700,31 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 :root { --ctrl-h: 36px; --ctrl-h-sm: 32px; }
 @media (max-width: 768px) { :root { --topnav-h: 93.2px; } }
 
-/* YTM watch 页是整页 surface：≥1024 藏歌单栏，两栏吃满 .app-body */
-@media (min-width: 1024px){
+/* 页缘横槽令牌：内容视图统一 padding-inline 源（song-list/home-feed/
+   playlist-grid/watch-layout 消费；≤640 降 12——此前仅 song-list 降，
+   home/grid/watch 滞留 20） */
+:root { --page-pad-x: 20px; }
+@media (max-width: 640px) { :root { --page-pad-x: 12px; } }
+
+/* 内容帽令牌：app-body 限宽值（顶栏内列/底栏内列同轴消费） */
+:root { --content-max: 1440px; }
+
+/* 底栏总高令牌：三段阶梯 69.2/65.2/61.2（= 内列 pad4+件高+pad4 + 1.2
+   发丝线 + 进度溢位不增高）。watch 左栏视频高度预算消费——栏高变动时
+   此值与 BottomPlayer 媒体块成对维护 */
+:root { --player-bar-h: 69.2px; }
+@media (max-width: 768px) { :root { --player-bar-h: 65.2px; } }
+@media (max-width: 640px) { :root { --player-bar-h: 61.2px; } }
+
+/* YTM watch 页是整页 surface：≥768 即藏歌单栏（768-1023 流内窄轨白吃 64px
+   格宽——chrome-clean 自 phone 档起，YTM [is-hidden-guide-page] 同型）；
+   ≥1024 原行为不变，<768 抽屉是 fixed overlay 不受影响 */
+@media (min-width: 768px){
   .app-shell[data-view="watch"] .app-sidebar { display: none; }
+}
+/* 768-1023 watch 态侧栏已隐——汉堡是死键（≥1024 本就被组件侧媒体块收） */
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  .app-shell[data-view="watch"] .topnav-hamburger { display: none; }
 }
 
 /* 窄轨展开是流内占位而非 overlay——遮罩只在真抽屉态(<768)出现 */
@@ -976,8 +1010,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   z-index: var(--z-menu);
   min-width: 160px;
   /* JS 估宽(menuWidth≈160)按短项算——「回源·源名」「获取源文件」实测 ~190px，
-     窄屏右缘会出视口；硬顶到视口内，超出走 item 截断 */
-  max-width: calc(100vw - 16px);
+     窄屏右缘会出视口；硬顶到视口内，超出走 item 截断。
+     100vw-24px 是全站移动端对话框/菜单统一页缘距（12 双缘 = compact 档
+     --page-pad-x），取代 86vw/92vw/vw-48/vw-16 散档 */
+  max-width: calc(100vw - 24px);
   overflow-y: auto;
   /* 矮视口防截底：6 项菜单 ~278px，vh < ~290 时翻上后仍会出底缘——可滚兜底。
      dvh 跟可视高（iOS 工具栏展开态 vh 会高估）。
@@ -1048,7 +1084,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   overflow: hidden;
 }
 .atp-dialog {
-  width: min(300px, 86vw);
+  /* 页缘距并档 100vw-24px（canonical 移动端对话框缘，见 pg-menu 注），原 86vw */
+  width: min(300px, calc(100vw - 24px));
   /* dvh 随可视高收缩——Android resizes-content 键盘弹出时弹窗仍留在可视区；
      矮屏（手机横屏/键盘态）再给一档净空 */
   max-height: 60vh;
@@ -1109,7 +1146,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .auth-input::placeholder { color: var(--ink-64); }
 
 /* ── 点歌台（asp-*）：atp 模态皮的加宽变体，行式结果列表 ── */
-.asp-dialog { width: min(380px, 92vw); }
+.asp-dialog { width: min(380px, calc(100vw - 24px)); } /* 页缘距并档 100vw-24px，原 92vw */
+/* ≥641 平板带宽给表单换气（YTM 对话框 480 档） */
+@media (min-width: 641px) { .asp-dialog { width: min(480px, calc(100vw - 24px)); } }
 .asp-search { border-top: none; border-bottom: var(--hairline-soft); }
 /* atp-new 直接贴 pg-menu-head 时（无列表的裸弹窗）：头部底边已分头，
    再留顶线会叠成 2.4px 缝——与 asp-search 同型的去顶线变体 */
@@ -1593,13 +1632,28 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   text-align: center;
 }
 
-/* 装饰件断点门槛：密集页面 ≤810px 藏起裁切标线（typesafe 的 ornament cutoff） */
-@media (max-width: 810px) {
+/* 装饰件断点门槛：密集页面 ≤768 藏起裁切标线（typesafe 的 ornament cutoff；
+   原 810 散点并入 phone 档） */
+@media (max-width: 768px) {
   .pg-hash { display: none; }
 }
 
-/* iOS 安全区：避开 Home 指示条 */
-.bottom-player { padding-bottom: env(safe-area-inset-bottom); }
+/* iOS 安全区：避开 Home 指示条；横槽与顶栏外层同款 max(16px,env) 同轴——
+   内列（player-inner 限宽 --content-max 居中）在 ≥1472 与侧栏/顶栏内容齐轴，
+   <1472 等效原内槽 */
+.bottom-player {
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+/* ≤640 与顶栏同档收 12（TopNavigation ≤640 同 12——双 chrome 边距不齐会
+   上下错轴；分权拓扑下 meta 区每 1px 都珍贵） */
+@media (max-width: 640px) {
+  .bottom-player {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
 
 /* 印刷稿致敬：打印时保留画布色与发丝线（这套美学本来就该上纸） */
 @media print {
