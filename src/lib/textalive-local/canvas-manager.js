@@ -365,11 +365,13 @@ export class CanvasManager {
     // 前序块偷占后序块的格——受害者被顶掉且 persist 期不可恢复。
     // claimed 语义 = 认领即占，与绘制顺序解耦。Map 记持有者下标：
     // 用纯 Set 的话已排块每帧撞上自己的格被误判偷占（隔帧灭灯式闪烁）；
-    // 先登记者持有，同格被两块声称时序号靠前者保留所有权
+    // 先登记者持有，同格被两块声称时序号靠前者保留所有权。
+    // 可见性闸与下方绘制分支（isVisible）同口径：已过 persist 期的块本帧
+    // 就不画了，无差别认领会让它持续霸格、逼应显块走螺旋/兜底路径
     const slotOwner = new Map()
     for (let i = start; i < end; i += 1) {
       const l = this._lyrics[i]
-      if (l.isDraw && l.slotKeys?.length) {
+      if (l.isDraw && l.slotKeys?.length && position <= l.endTime + LYRIC_PERSIST_MS) {
         for (const key of l.slotKeys) {
           if (!slotOwner.has(key)) slotOwner.set(key, i)
         }

@@ -233,8 +233,10 @@ export default {
       }, 10000))
     }
 
-    watch(() => props.userPlaylists, (list) => {
-      const ids = new Set(list.map(p => String(p.id)))
+    // 回调只读成员 id——深监听整个歌单库（含所有 tracks）太重；
+    // 收窄到与 PlaylistPanel 同款的 id 串口径，成员/次序变了才跑
+    watch(() => props.userPlaylists.map(p => p.id).join(','), () => {
+      const ids = new Set(props.userPlaylists.map(p => String(p.id)))
       for (const id of [...adding.value]) {
         if (ids.has(String(id))) {
           adding.value.delete(id)
@@ -242,7 +244,7 @@ export default {
           addingTimeouts.delete(id)
         }
       }
-    }, { deep: true })
+    })
 
     onBeforeUnmount(() => {
       addingTimeouts.forEach(clearTimeout)

@@ -46,7 +46,9 @@
       <p class="dtl-state-text">加载任务中喵...</p>
     </div>
 
-    <div v-else-if="tasks.length === 0 && standaloneTasks.length === 0" class="dtl-empty">
+    <!-- 错误态优先于 standalone 非空短路：队列任务首载失败时 standalone
+         分节照常能加载，双空判定会把失败吞成正常列表误导用户 -->
+    <div v-else-if="emptyError || (tasks.length === 0 && standaloneTasks.length === 0)" class="dtl-empty">
       <p class="dtl-empty-title">{{ emptyError || '这条队列里还没有任务喵~' }}</p>
       <p v-if="!emptyError" class="dtl-empty-sub">如果这是新建队列，稍等一下就会开始填充任务列表。</p>
     </div>

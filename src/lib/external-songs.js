@@ -83,8 +83,11 @@ export const buildQQSong = (data) => ({
   al: {
     id: data.matched?.al?.id ?? null,
     name: data.album || data.matched?.al?.name || '',
-    // QQ 封面（gtimg 无防盗链）优先于匹配封面——错配时脏封面的观感损失更大
-    picUrl: httpsCover(data.cover || '') || data.matched?.al?.picUrl || ''
+    // QQ 封面（gtimg 无防盗链）优先于匹配封面——错配时脏封面的观感损失更大；
+    // 协议闸与 bv_/yt_ 构造器同口径：非 http(s) 的 cover 串不入库
+    picUrl: /^https?:\/\//i.test(String(data.cover || ''))
+      ? (httpsCover(data.cover) || data.matched?.al?.picUrl || '')
+      : (data.matched?.al?.picUrl || '')
   },
   dt: (data.duration || 0) * 1000,
   qq: {

@@ -51,6 +51,15 @@ const pageMem = {
   hasLoadedQueues: false, hasLoadedTasks: false,
   queueSearch: '', queueStatusFilter: 'all',
 }
+
+// 深链预选（?view=downloads&pl=）已结算账本：消费键是 pl::seq 对，用 Set
+// 记账——历史回放会把 seq 倒带到旧值，单键记账会让"已结算的旧意图"漏过
+// 判重重新抢手选；seq bump（再点查看进度）产生新键，正常重发。
+// 与 pageMem 同理由提为模块级：账本随实例销毁会让已结算意图在重挂载后
+// 重放——除重复 toast 外还会再清一遍 pageMem 保留的搜索/状态过滤器。
+// 焚毁先于匹配是真缺席防刷屏闸——但调用方必须喂"当时最新快照"
+// （watcher 路径走 loadQueues 现拉，不在陈旧 queues 上空判）
+const preselectConsumed = new Set()
 </script>
 
 <script setup>
@@ -104,7 +113,11 @@ const gridEl = ref(null)
 // 顺带记外层滚动位（<xl 单列时唯一滚动器）。必须 onBeforeUnmount——
 // 模板 ref 在子树拆除时已 detach，onUnmounted 里 gridEl.value 恒 null
 let cancelScrollRestore = null
+// onMounted 的 await 窗口内被整卸（切视图）时，续体不得再注册轮询/监听——
+// onUnmounted 已跑过，注册上的 interval+visibilitychange 会活到页面刷新
+let disposed = false
 onBeforeUnmount(() => {
+  disposed = true
   cancelScrollRestore?.() // 等待窗内卸载即停轮询
   Object.assign(pageMem, {
     queues: queues.value, tasks: tasks.value, standaloneTasks: standaloneTasks.value,
@@ -176,7 +189,10 @@ const displayQueues = computed(() => {
 const loadError = ref('')
 const tasksError = ref('')
 const queueEmptyText = computed(() => {
-  return loadError.value || '还没有下载队列喵~'
+  if (loadError.value) return loadError.value
+  // 空态分因：子组件收到的是过滤后的 displayQueues——过滤器清空结果集与
+  // 真没有队列两条文案（全集为空时过滤器不是因，仍报"还没有队列"）
+  return queues.value.length ? '没有匹配过滤条件的队列喵~' : '还没有下载队列喵~'
 })
 
 // diff 收窄前提（不变量）：download_queues/download_tasks 的一切运行期写都收口在
@@ -247,13 +263,7 @@ const queuesGate = createReqGate()
 const tasksGate = createReqGate()
 const standaloneGate = createReqGate()
 
-// 深链预选（?view=downloads&pl=）：消费键是 pl::seq 对，用 Set 记账——
-// 历史回放会把 seq 倒带到旧值，单键记账会让"已结算的旧意图"漏过判重
-// 重新抢手选；seq bump（再点查看进度）产生新键，正常重发。
-// 焚毁先于匹配是真缺席防刷屏闸——但调用方必须喂"当时最新快照"
-// （watcher 路径走 loadQueues 现拉，不在陈旧 queues 上空判）
-const preselectConsumed = new Set()
-
+// 消费账本在模块域（见文件顶部）——语义与寿命说明随声明走
 function applyPreselect(list) {
   const pl = props.preselectPlaylistId
   if (pl == null) return
@@ -619,6 +629,7 @@ onMounted(async () => {
     if (m) cancelScrollRestore = restoreScrollTop(gridEl.value, m.top)
   })
   await loadQueues()
+  if (disposed) return // await 窗口内已卸载——续体不再补拉/注册任何活动件
   // 快照恢复的选中态下 tasks/standaloneTasks 也是旧值——立即静默重拉，
   // 不等首个 pollTick（2s 节拍）才刷新
   if (selectedQueue.value?.id != null) {
