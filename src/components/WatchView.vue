@@ -1,10 +1,47 @@
 <template>
-  <!-- YTM /watch 播放页：左栏 封面+信息+分享，右栏 待播/歌词/相关 tab。
-       走带/进度/音量不重复渲染——底部播放条已覆盖 -->
+  <!-- YTM /watch 播放页：顶行 返回+操作，左栏 媒体本体，右栏 待播/歌词/相关
+       tab。走带/进度/音量/歌曲 meta 不重复渲染——底部播放条已覆盖 -->
   <div ref="viewEl" class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
     <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
+      <!-- 操作键与返回键同排：顶行即页工具栏，左栏只留媒体本体（YTM mweb
+           播放器页同款——顶条收 collapse+操作，画面区零干扰） -->
+      <div class="watch-actions">
+        <button class="ink-btn ink-btn--ghost ink-btn--sm watch-action" @click="$emit('open-fullscreen')" title="全屏歌词模式">
+          <PixelIcon name="expand" :size="14" /> 沉浸
+        </button>
+        <!-- file_ 上传曲没有源站可分享链接（?song= 只收数字 id）——死链不亮 -->
+        <button v-if="!isFileTrackId(currentSong?.id)" class="ink-btn ink-btn--ghost ink-btn--sm watch-action" @click="shareSong" :disabled="!currentSong">
+          <PixelIcon name="share" :size="14" /> 分享歌曲
+        </button>
+        <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）；
+             noreferrer 不给源站带去本站 Referer -->
+        <a
+          v-if="sourceUrl"
+          class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
+          :href="sourceUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          :title="`回源：在${sourceName}打开原页`"
+        ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
+        <!-- 音画切换对「可能有视频」的曲出现；关闭即只拉音频流省流量。
+             bv/yt 按 provider 存在性出键（与 mediaVideoKey 同律）——导入标记
+             可能被裁/老数据缺标，盘上躺着档的曲也要能切回音频、VIDEO_MODE=0
+             的用户也要有入口开视频重探；file_ 仍按 hasVideo（上传曲的标记
+             即工件真相，探测链对它关闭）。无可放源时靠 title 提示降级
+             （探测无果视觉不变） -->
+        <button
+          v-if="currentSong?.bilibili?.bvid || currentSong?.youtube?.videoId
+            || currentSong?.file?.hasVideo"
+          class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
+          :class="{ 'watch-action--on': videoOn }"
+          @click="videoOn = !videoOn"
+          :title="videoOn ? '切到纯音频（省流量）'
+            : (hasPlayableVideo ? '切到视频模式' : '切到视频模式（需已下载视频档）')"
+          :aria-pressed="videoOn"
+        ><PixelIcon name="play" :size="14" /> {{ videoOn ? '视频' : '音频' }}</button>
+      </div>
     </div>
 
     <div class="watch-layout flex flex-col gap-4 px-5 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,38vw)] wide:gap-6 wide:p-5">
@@ -71,46 +108,10 @@
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
         </div>
 
-        <!-- 歌名/歌手·专辑·时长不画——与底栏播放器信息完全重复（YTM mweb
-             同款取舍：底栏已承载 meta，watch 页只留媒体+操作） -->
+        <!-- 歌名/歌手·专辑·时长/操作键都不在本栏——meta 与底栏播放器重复、
+             操作键已并入顶行；左栏只剩媒体本体 + 横幅（YTM mweb 同款取舍） -->
 
-        <div class="watch-actions">
-          <button class="ink-btn ink-btn--ghost watch-action" @click="$emit('open-fullscreen')" title="全屏歌词模式">
-            <PixelIcon name="expand" :size="14" /> 沉浸
-          </button>
-          <!-- file_ 上传曲没有源站可分享链接（?song= 只收数字 id）——死链不亮 -->
-          <button v-if="!isFileTrackId(currentSong?.id)" class="ink-btn ink-btn--ghost watch-action" @click="shareSong" :disabled="!currentSong">
-            <PixelIcon name="share" :size="14" /> 分享歌曲
-          </button>
-          <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）；
-               noreferrer 不给源站带去本站 Referer -->
-          <a
-            v-if="sourceUrl"
-            class="ink-btn ink-btn--ghost watch-action"
-            :href="sourceUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            :title="`回源：在${sourceName}打开原页`"
-          ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
-          <!-- 音画切换对「可能有视频」的曲出现；关闭即只拉音频流省流量。
-               bv/yt 按 provider 存在性出键（与 mediaVideoKey 同律）——导入标记
-               可能被裁/老数据缺标，盘上躺着档的曲也要能切回音频、VIDEO_MODE=0
-               的用户也要有入口开视频重探；file_ 仍按 hasVideo（上传曲的标记
-               即工件真相，探测链对它关闭）。无可放源时靠 title 提示降级
-               （探测无果视觉不变） -->
-          <button
-            v-if="currentSong?.bilibili?.bvid || currentSong?.youtube?.videoId
-              || currentSong?.file?.hasVideo"
-            class="ink-btn ink-btn--ghost watch-action"
-            :class="{ 'watch-action--on': videoOn }"
-            @click="videoOn = !videoOn"
-            :title="videoOn ? '切到纯音频（省流量）'
-              : (hasPlayableVideo ? '切到视频模式' : '切到视频模式（需已下载视频档）')"
-            :aria-pressed="videoOn"
-          ><PixelIcon name="play" :size="14" /> {{ videoOn ? '视频' : '音频' }}</button>
-        </div>
-
-        <!-- 播放错误/警告在操作行下方——归属左栏信息区，不占右栏 tab 顶部 -->
+        <!-- 播放错误/警告在媒体下方——归属左栏信息区，不占右栏 tab 顶部 -->
         <div v-if="durationWarning" class="watch-banner" role="status"><span class="watch-banner-tag">warn:</span> {{ durationWarning }}</div>
         <div v-if="playbackError" class="watch-banner" role="alert"><span class="watch-banner-tag">error:</span> {{ playbackError }}</div>
       </div>
@@ -1268,7 +1269,12 @@ export default {
   /* 列向 flex 滚动器里内容一溢出，收缩全落到本项（min-content 仅 32px 键高），
      tabs 钉点下漏 20px 透字缝——与 .watch-tabs 同律禁缩；宽屏 absolute 出流后无效无碍 */
   flex-shrink: 0;
+  gap: 10px;
   padding: 0 20px;
+  /* 窄屏装不下「返回+四操作键」时行内横滚兜底（移动端滚动条全局隐藏，
+     桌面态本规则基本不触发——scrollbar-width 双保险防溢出时出轨道） */
+  overflow-x: auto;
+  scrollbar-width: none;
   /* sticky 钉顶时衬画布色——滚过的歌词/队列行不透字 */
   background: var(--view-canvas, var(--paper));
   pointer-events: none;
@@ -1442,15 +1448,15 @@ export default {
 }
 
 /* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
-   与 .watch-top 返回键的 padding 同源对齐；居中态的操作行在左对齐大
-   播放器下面会失调，一并转左（YTM watch 视频页同款排法） */
+   与 .watch-top 返回键/操作键行的 padding 同源对齐（YTM watch 视频页
+   同款排法）。垂直方向仍走父级 safe center——栏内只剩媒体本体，
+   居中语义不变 */
 .watch-main--video {
   padding-left: 0;
   padding-right: 0;
   align-items: flex-start;
   text-align: left;
 }
-.watch-main--video .watch-actions { justify-content: flex-start; }
 
 /* 音画切换的开启态：实心反色——与 pg-tab--active 同一语义 */
 .watch-action--on {
@@ -1458,12 +1464,13 @@ export default {
   color: var(--paper);
 }
 
+/* 操作键组在 .watch-top 行内（返回键后）——不再占左栏纵向空间；
+   nowrap：换行会撑破 52px 定高行，溢出交给行内横滚 */
 .watch-actions {
-  margin-top: 16px;
   display: flex;
   gap: 10px;
-  justify-content: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .watch-action { font-size: 12px; }
@@ -1759,8 +1766,8 @@ export default {
   /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
      inset:0 才贴画面（wrap 恒 100% 栏宽时，高度约束生效、视频收窄，中央播放
      键/右下全屏键会对到栏而非画面）。尺寸策略对齐 YTM watch 页：按视口高
-     预算收窄（275px ≈ 顶栏 57.2 + 底条 69.2 + layout 纵 pad 40 + 栏顶补距
-     56 + 操作行 ~52；标题/元已删——底栏播放器承载同款信息。YTM 同款
+     预算收窄（223px ≈ 顶栏 57.2 + 底条 69.2 + layout 纵 pad 40 + 栏顶补距
+     56；栏内除媒体外零内容——标题/元已删、操作键并入顶行。YTM 同款
      --player-page-total-height-exclude-player 为 408px），但守 300px 最小
      高度（300×16/9≈533 宽；YTM 300 / ytd 240）——预算低于地板时停止
      压缩、左栏滚动补差（顶补距已让开返回键浮层），视频不再塌成小窗。
@@ -1768,8 +1775,8 @@ export default {
      <533 的窄断点带（901–1023 开栏）由 100% 先绑定、地板让位——宽度
      饥荒时无法同时保高。vh 行是 dvh 不识别的老内核兜底 */
   .watch-cover-wrap--video {
-    width: min(100%, max(533px, calc((100vh - 275px) * 16 / 9)));
-    width: min(100%, max(533px, calc((100dvh - 275px) * 16 / 9)));
+    width: min(100%, max(533px, calc((100vh - 223px) * 16 / 9)));
+    width: min(100%, max(533px, calc((100dvh - 223px) * 16 / 9)));
   }
   .watch-banner { width: min(46vh, 420px); }
 
