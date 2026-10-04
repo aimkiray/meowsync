@@ -804,7 +804,7 @@ export default {
       previousSong, nextSong, seekTo, seekBy, updateVolume, toggleMute,
       openFullscreenPlayer, closeFullscreenPlayer,
       savePlayerStateToStorage, loadPlayerStateFromStorage,
-      restoreUiState, restorePlaybackState,
+      restoreUiState, restorePlaybackState, setPlayerPersistSuspended,
       setupMediaSessionHandlers, getHowl,
     } = usePlayer({
       gates,
@@ -1079,36 +1079,43 @@ export default {
       loadPlaylistsFromStorage()
       restoreHistory()
       restorePlayerState = loadPlayerStateFromStorage()
-      restoreUiState(restorePlayerState)
+      // 恢复窗口内禁持久化——restoreUiState/分享导入会触发 prefs watcher
+      // 冲刷写盘，此刻 currentSong 还是 null，会把存档续播点抹成 0
+      setPlayerPersistSuspended(true)
+      try {
+        restoreUiState(restorePlayerState)
 
-      // 分享参数一趟读完再消费掉——不消费的话每次刷新都会重新劫持
-      // 恢复逻辑（?song= 会永久抢占 restorePlaybackState）
-      const share = readShareParams()
-      consumeUrlShareParams()
+        // 分享参数一趟读完再消费掉——不消费的话每次刷新都会重新劫持
+        // 恢复逻辑（?song= 会永久抢占 restorePlaybackState）
+        const share = readShareParams()
+        consumeUrlShareParams()
 
-      // 加载默认歌单
-      await loadDefaultPlaylists(share.playlistIds)
+        // 加载默认歌单
+        await loadDefaultPlaylists(share.playlistIds)
 
-      if (share.bili) {
-        // ?bili= 分享链：走与搜索框导入同一条路（收藏夹链也经此转 favlist 导入）
-        await importBilibiliOrFav(share.bili)
-      } else if (share.yt) {
-        // ?yt= 分享链同理（歌单链也经此转 playlist 导入）
-        await importYouTubeOrPlaylist(share.yt)
-      } else if (share.qq) {
-        // ?qq= 分享链同理
-        await importQQ(share.qq)
-      } else if (share.qqpl) {
-        // ?qqpl= 歌单按引用分享链——整单重拉
-        await importQQPlaylist(share.qqpl)
-      } else if (share.mix) {
-        // ?mix= 本地歌单内容链：重建 local_pl_mix_ 壳
-        await importMixPlaylist(share.mix)
-      } else if (share.songId) {
-        console.log('🎵 检测到单首歌曲分享，歌曲ID:', share.songId)
-        await importNeteaseSongById(share.songId)
-      } else if (restorePlayerState) {
-        await restorePlaybackState(restorePlayerState)
+        if (share.bili) {
+          // ?bili= 分享链：走与搜索框导入同一条路（收藏夹链也经此转 favlist 导入）
+          await importBilibiliOrFav(share.bili)
+        } else if (share.yt) {
+          // ?yt= 分享链同理（歌单链也经此转 playlist 导入）
+          await importYouTubeOrPlaylist(share.yt)
+        } else if (share.qq) {
+          // ?qq= 分享链同理
+          await importQQ(share.qq)
+        } else if (share.qqpl) {
+          // ?qqpl= 歌单按引用分享链——整单重拉
+          await importQQPlaylist(share.qqpl)
+        } else if (share.mix) {
+          // ?mix= 本地歌单内容链：重建 local_pl_mix_ 壳
+          await importMixPlaylist(share.mix)
+        } else if (share.songId) {
+          console.log('🎵 检测到单首歌曲分享，歌曲ID:', share.songId)
+          await importNeteaseSongById(share.songId)
+        } else if (restorePlayerState) {
+          await restorePlaybackState(restorePlayerState)
+        }
+      } finally {
+        setPlayerPersistSuspended(false)
       }
 
       // 恢复路径失败（歌单被删/网络抖动）时不落盘：否则会拿全空状态覆盖掉

@@ -26,7 +26,13 @@ seed('../src/server/lib/qq.js', {
   getSongDetail: async (id) => ({ ...TRACK, mid: String(id) }),
   pickStreamUrl: async () => pickStreamHit,
   getLyric: async () => ({ lyric: '[00:01.00]词', trans: '[00:01.00]译' }),
-  getPlaylist: async () => ({ dissid: '777', name: 'QQ歌单', trackCount: 1, tracks: [TRACK] }),
+  // 与 lib/qq.js getPlaylist 真身同形（id/name/creator/cover/desc/songCount/
+  // tracks/truncated）——路由显式透 truncated 契约字段，桩缺它会让该字段
+  // 恒 false 且无断言兜住
+  getPlaylist: async () => ({
+    id: '777', name: 'QQ歌单', creator: 'tester', cover: '', desc: '',
+    songCount: 1, tracks: [TRACK], truncated: false,
+  }),
   searchSongs: async () => [TRACK],
   resolveQqInput: async () => resolvedInput,
 });
@@ -103,10 +109,11 @@ test('qq：search 空 query 400；命中回 trackJson 列表', async () => {
   assert.equal(r.body.list[0].mid, TRACK.mid);
 });
 
-test('qq：playlist 非法 disstid 400；命中回歌单+归一曲目', async () => {
+test('qq：playlist 非法 disstid 400；命中回歌单+归一曲目+truncated 契约', async () => {
   assert.equal((await get('/qq/playlist?id=abc')).status, 400);
   const r = await json(await get('/qq/playlist?id=777'));
   assert.equal(r.status, 200);
   assert.equal(r.body.name, 'QQ歌单');
   assert.equal(r.body.tracks[0].mid, TRACK.mid);
+  assert.equal(r.body.truncated, false); // 与 bili/yt 路由同型的契约字段
 });

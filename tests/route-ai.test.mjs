@@ -103,6 +103,25 @@ test('ai：官方译文直回（tlyric 存在）→ source=词源、零模型调
   assert.equal(aiCalls.length, before); // 未问模型
 });
 
+test('ai：截断译文（模型缺键）透出但不落库——重播须重打 AI', async () => {
+  lyricPayload = {
+    lrc: { lyric: '[00:01.00]line one\n[00:02.00]line two\n[00:03.00]line three' },
+    tlyric: { lyric: '' },
+  };
+  // 模型合法省略一个键（prompt 明示可省）→ translated.size<jobs → 截断
+  aiAnswer = { t: { '0': '第一行', '2': '第三行' } };
+  const before = aiCalls.length;
+  const r = await json(await post('/ai/lyric-translate', { id: '880010' }));
+  assert.equal(r.status, 200);
+  assert.ok(r.body.lines < r.body.total, '截断应透出 lines<total');
+  // 不落库：缓存行查询应空——否则残缺译文被固化成"完整缓存"永不再补
+  assert.equal(lyricAiRepo.getCachedTranslation('880010', 'test-model'), undefined);
+  // 重播无缓存可吃 → 又打一次 AI（配额代价换取正确性）
+  const r2 = await json(await post('/ai/lyric-translate', { id: '880010' }));
+  assert.equal(r2.status, 200);
+  assert.ok(aiCalls.length > before + 1, '截断未落库时重播应重打上游');
+});
+
 test('ai：无歌词源 → 404 + skip 落库（重放不再打上游）', async () => {
   lyricPayload = { lrc: { lyric: '' }, tlyric: { lyric: '' } };
   const r = await post('/ai/lyric-translate', { id: '880003' });
