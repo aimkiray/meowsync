@@ -118,8 +118,13 @@ test('QQ 续期：psrf_qqrefresh_token 命中 + 按名重写 NEW_QQ_COOKIE', asy
   };
   try {
     assert.equal(hasQqCookie(), true); // 惰性触发续期
-    // 等 microtask+inflight 完成（finally 清 inflight）
-    await new Promise(r => setTimeout(r, 50));
+    // 等 microtask+inflight 完成：轮询落证而非定长 sleep——慢机上 50ms
+    // 偶发不够（续期写回在 fetch resolve 后的 microtask 里）
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline &&
+           !(seen.length === 1 && process.env.NEW_QQ_COOKIE)) {
+      await new Promise(r => setTimeout(r, 10));
+    }
     assert.equal(seen.length, 1, '应恰好一次 LoginServer 外呼');
     assert.match(seen[0].url, /u\.y\.qq\.com/);
     const sent = JSON.parse(seen[0].body);

@@ -41,6 +41,15 @@ seed('../src/server/lib/bilibili.js', {
     const bv = s.match(/BV1[0-9A-Za-z]{9}/i);
     return bv ? { kind: 'video', id: bv[0] } : null;
   },
+  // flatUrls 是纯函数（主链+备份链摊平去重）——seed 整模块置换拿不到真
+  // 函数，复制同形实现；其本身已由 tests/bilibili.test.mjs 对真实现钉过
+  flatUrls: (s, extra = {}) =>
+    [...new Set(
+      [s?.baseUrl, s?.base_url,
+        ...(Array.isArray(s?.backupUrl) ? s.backupUrl
+          : (Array.isArray(s?.backup_url) ? s.backup_url : []))]
+        .filter(u => typeof u === 'string' && u)
+    )].map(url => ({ url, ...extra })),
   // 单曲 resolve/stream 路径的解构面占位（本文件不测它们）
   pickStreamList: () => [], pickStreams: () => ({ audio: null, video: null }),
   pickPageParam: () => 1, pickCidFromView: () => null,

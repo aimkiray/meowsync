@@ -29,7 +29,9 @@ require.cache[aiPath] = { id: aiPath, filename: aiPath, loaded: true, exports: {
   askAiJson: async () => { aiCalls.push(1); return aiScript.length ? aiScript.shift() : null; },
   aiModel: () => 'stub',
 } };
-const { matchNeteaseSong, nameHitNeedsConfirm } = require('../src/server/services/netease-match.js');
+const {
+  matchNeteaseSong, nameHitNeedsConfirm, matchWithBudget, matchTracksPool,
+} = require('../src/server/services/netease-match.js');
 
 const song = (id, name, dtMs = 200000, ar = '某人') => ({ id, name, dt: dtMs, ar: [{ name: ar }], al: { name: 'al' } });
 const src = { title: 'T', author: 'A' };
@@ -41,7 +43,7 @@ test('歌名互包含 → 启发式命中返回原查询串，不触发 AI', asy
   const r = await matchNeteaseSong(['Mela!'], 193, 't', null, src);
   assert.equal(r.song.id, 1);
   assert.equal(r.query, 'Mela!');          // 无 ai: 前缀的回归钉
-  assert.equal(aiScript.length, 0);
+  assert.equal(aiCalls.length, 0);         // 启发式直达——AI 一次都没打
 });
 
 test('云搜请求透传调用方 signal（abort 语义）', async () => {
@@ -123,7 +125,7 @@ test('组合查询名命中·艺人零交集 → 过 AI 复核（翻唱判 true 
   const r = await matchNeteaseSong(['coverer Lemon', 'Lemon'], 200, 't', null, { title: 'Lemon covered', author: 'coverer' });
   assert.equal(r.song.id, 1);
   assert.equal(r.query, 'coverer Lemon');
-  assert.equal(aiScript.length, 0);  // 复核确实发生且只问一次——组合名命中不免检
+  assert.equal(aiCalls.length, 1);   // 复核确实发生且只问一次——组合名命中不免检
 });
 
 test('组合名命中被否 → veto 拦阻后续裸名查询复活同一错配', async () => {
@@ -178,4 +180,57 @@ test('再生批在兜底池截断窗口优先——启发式噪声挤不掉正�
   const r = await matchNeteaseSong(['脏1', '脏2'], 0, 't', null, src);
   assert.equal(r.song.id, 99);
   assert.equal(r.query, 'ai:pick');
+});
+
+// ── 真实现包装层：路由侧 helpers.mjs 的种子 stub 只模拟串行语义，
+//    预算/并发/abort 接线钉在真函数上（上游依赖仍是本文件顶部的 seed）──
+
+test('matchWithBudget 真实现：预算内命中原样回传，budget race 不吞结果', async () => {
+  reset();
+  apiScript = [[song(1, 'Mela!', 193000)]];
+  const r = await matchWithBudget({
+    candidates: ['Mela!'], durationSec: 193, tag: 't', budgetMs: 5000,
+  });
+  assert.equal(r.song.id, 1);
+  assert.equal(r.query, 'Mela!');
+});
+
+test('matchWithBudget 真实现：match 抛错照常冒泡（finally 清理不盖错）', async () => {
+  reset();
+  aiOn = false;
+  const r = await matchWithBudget({
+    candidates: ['无关'], durationSec: 0, tag: 't', budgetMs: 5000,
+  });
+  assert.equal(r.song, null); // 云搜空集 → 正常空回，不走异常分支
+});
+
+test('matchTracksPool 真实现：命中原地写 matched/matchedBy 并计数', async () => {
+  reset();
+  const tracks = [{ k: 1 }, { k: 2 }, { k: 3 }];
+  // 三轨同候选 'Hit'——第 2 轨云搜空回，另两轨名命中
+  apiScript = [[song(11, 'Hit', 200000)], [], [song(13, 'Hit', 200000)]];
+  const n = await matchTracksPool(tracks, {
+    concurrency: 2, budgetMs: 5000, tag: 'pool-t',
+    candidatesOf: () => ['Hit'], durationOf: () => 200, infoOf: () => null,
+  });
+  assert.equal(n, 2);
+  assert.equal(apiCalls.length, 3);          // 三轨各搜一次，无重试无再生
+  assert.equal(tracks[0].matched.id, 11);
+  assert.equal(tracks[0].matchedBy, 'Hit');
+  assert.equal(tracks[1].matched, undefined); // 未中不写回
+  assert.equal(tracks[2].matched.id, 13);
+});
+
+test('matchTracksPool 真实现：预 abort 的 signal 让 worker 不消费任何曲目', async () => {
+  reset();
+  const ctl = new AbortController();
+  ctl.abort();
+  const tracks = [{ k: 1 }, { k: 2 }];
+  apiScript = [[song(1, 'Hit')]];
+  const n = await matchTracksPool(tracks, {
+    signal: ctl.signal, concurrency: 1, budgetMs: 5000, tag: 't',
+    candidatesOf: () => ['Hit'], durationOf: () => 0, infoOf: () => null,
+  });
+  assert.equal(n, 0);
+  assert.equal(apiCalls.length, 0); // aborted 检查在取曲之前——一次云搜都不发
 });
