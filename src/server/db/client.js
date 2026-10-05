@@ -201,6 +201,13 @@ function migrateLegacyTables(database) {
   addColumnIfMissing(database, 'song_lyric_meta', 'offset_ms', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing(database, 'song_lyric_meta', 'updated_at', "TEXT NOT NULL DEFAULT ''");
 
+  // song_match 同款预发布兜底（initSchema 的 CREATE 已先于本函数跑过，表必在）
+  addColumnIfMissing(database, 'song_match', 'netease_id', 'TEXT');
+  addColumnIfMissing(database, 'song_match', 'matched_by', 'TEXT');
+  addColumnIfMissing(database, 'song_match', 'score', 'INTEGER');
+  addColumnIfMissing(database, 'song_match', 'model', "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(database, 'song_match', 'updated_at', "TEXT NOT NULL DEFAULT ''");
+
   // upsertPlaylist 依赖 ON CONFLICT(netease_playlist_id)——老库若没有该唯一
   // 约束，导入/刷新会永久报 "ON CONFLICT clause does not match"。约束缺失时
   // 先去重再补索引（保留最小 id，脏行引用由后续逻辑兜底）
@@ -369,6 +376,19 @@ function initSchema(database) {
       tlyric TEXT NOT NULL,
       model TEXT,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 外部源→网易云匹配缓存：track_id 是 bv_/yt_/qq_ 客户端曲目 id。
+    -- netease_id NULL=负缓存（读查询判 7d TTL）；model 键控 AI 参与结果
+    -- （''=纯启发式永命中，AI 结果只在同模型下复用）。正向行只存 id——
+    -- 命中时经 song_detail 回水化出完整投影
+    CREATE TABLE IF NOT EXISTS song_match (
+      track_id TEXT PRIMARY KEY,
+      netease_id TEXT,
+      matched_by TEXT,
+      score INTEGER,
+      model TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
     );
 
     -- AI 判定结果缓存（歌词归属核验等）：ok=0/1，kind 区分判定类型。

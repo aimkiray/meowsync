@@ -97,10 +97,16 @@ app.get('/youtube/resolve', async (c) => {
 
     // 匹配预算收敛进 services/netease-match.js:matchWithBudget——
     // 整条链超时当无匹配，不阻塞解析返回
-    const { song: matched, query: matchedBy } = await matchWithBudget({
+    const { song: matched, query: matchedBy, score: matchScore } = await matchWithBudget({
       candidates, durationSec: duration, tag: 'youtube',
       reqSignal: c.req.raw.signal,
-      sourceInfo: { title: vd.title || '', author },
+      // artists 喂打分器（频道名 + 剥皮后净名两参照）；trackId 与客户端
+      // buildYouTubeSong 的 id 同构（yt_<videoId>）接 song_match 缓存键
+      sourceInfo: {
+        title: vd.title || '', author,
+        artists: [...new Set([author, artistFromAuthor].filter(Boolean))],
+        trackId: `yt_${videoId}`,
+      },
     });
     // matchNeteaseSong 因断连早退后，继续构造响应只是写给死 socket
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
@@ -129,6 +135,7 @@ app.get('/youtube/resolve', async (c) => {
       songName,
       matched: toMatchedJson(matched),
       matchedBy,
+      matchScore: matchScore ?? null,
       hasVideo,
       hasDownloadableVideo,
       audioQuality: audio ? { itag: audio.itag, bitrate: audio.bitrate, mimeType: audio.mimeType } : null,
@@ -203,6 +210,7 @@ app.get('/youtube/playlist', async (c) => {
           hasDownloadableVideo: true, // 同口径乐观值——纯 webm/非 avc1 稿件也亮下载入口
           matched: null,
           matchedBy: null,
+          matchScore: null,
         });
       }
       continuation = data.continuation;
@@ -220,7 +228,11 @@ app.get('/youtube/playlist', async (c) => {
       tag: 'youtube-pl',
       candidatesOf: (t) => t.candidates,
       durationOf: (t) => t.duration,
-      infoOf: (t) => ({ title: t.title, author: t.author }),
+      infoOf: (t) => ({
+        title: t.title, author: t.author,
+        artists: [...new Set([t.author, t.authorClean].filter(Boolean))],
+        trackId: `yt_${t.videoId}`,
+      }),
     });
     if (signal?.aborted) return c.body(null, 499);
 

@@ -1,38 +1,29 @@
 const { callNeteaseApi } = require('./netease-api');
-const { aiEnabled, askAiJson } = require('../lib/ai');
+const { aiEnabled, askAiJson, aiModel } = require('../lib/ai');
+const {
+  scoreCandidate, normToken, noiseKey, QUERY_NOISE,
+  ACCEPT_SCORE, GRAY_SCORE, DUR_HARD_GATE_SEC,
+} = require('./netease-score');
+const songMatchRepo = require('../repositories/songMatch');
 
-// 外部导入曲（B 站/YouTube）匹配网易云词源：候选串逐个搜，第一条通过
-// sanity 校验的为准。sanity = 歌名互相包含 或 时长差 ≤45s——纯「有结果就取」
-// 会把噪声标题的错配永久固化进壳与历史（错歌词比没歌词更糟），校验不过就
-// 放弃匹配用源站元数据
-const MATCH_DUR_TOLERANCE_SEC = 45;
+// 外部导入曲（B 站/YouTube/QQ）匹配网易云词源：每个候选串云搜 limit:10，
+// 全候选过 netease-score 打分池（reject 滤掉，按分降序）——
+//   ≥75 确定性收；50-74 灰区有 AI 按分降序复核（否决记 vetoedIds 取下一个，
+//   同串连否两个判空转下一串），无 AI 保持宽松语义灰区 top 直接收；<50 丢弃。
+// 硬闸/封顶在打分器内：源有时长且差>45s reject、源无伴奏标候选带伴奏标
+// reject、title<15 总分不过灰区、中立艺人分配非精确 title 压到灰区下——
+// 纯时长命中永不确定性收（错词源比没词源更糟的哲学不变，只是把单维判据
+// 换成证据总分）。标类硬拒连 AI 兜底池都开除；时长类硬拒留池等 120s 粗闸
+const MATCH_DUR_TOLERANCE_SEC = DUR_HARD_GATE_SEC;
 
-// 规范化成「艺人/歌名互比」口径——与 shareName 同款剥法
-const normToken = (s) => String(s || '')
-  .toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
+// 每首曲目的 AI 调用硬上界（confirm + extract + pick 合计）——超预算后
+// 按 verdict-null 同语义收下当前候选（AI 是增强不是门禁）
+const AI_CALL_BUDGET = 4;
 
 // 名命中是否需要 AI 复核：查询是多 token 组合（「艺人 歌名」形态）且候选
 // 艺人与（源作者 ∪ 查询内 token）零交集 → 同名错配风险真实存在。
-// 单 token 纯歌名查询的名互包含是强证据，不为它多花一次模型调用；
-// 候选艺人字段缺失同样判不出交集——按「需要复核」处理
-// 查询串里的修饰 token 不算艺人引用——'recovery' 含 'cover'、'olive' 含
-// 'live' 这类子串碰撞会制造假 overlap 跳过本应触发的复核。成员判定用
-// 剥离全部非标点/字母/数字的严归一（normToken 不剥 ASCII 标点，'cover.'
-// /'[mv]' 会绕过精确匹配集合）
-const QUERY_NOISE = new Set([
-  'cover', 'covers', 'covered', 'coverver', '커버', '翻唱', '翻弹', '演奏',
-  'live', 'official', 'mv', 'audio', 'video', 'lyric', 'lyrics',
-  'hd', '4k', '8k', 'remix', 'full', '完整版', '完整',
-  // 高频碰撞面：短词 token 极易被艺人名吸收成假交集（'ep'⊂'deeppurple'、
-  // 'ost'⊂'ghost'、'op'⊂'hope'、'ed'⊂'edsheeran'、'by'⊂'baby'）
-  'feat', 'ft', 'by', 'ver', 'version', 'ep', 'op', 'ed', 'ost',
-  'mix', 'edit', 'demo', 'pv', 'inst', 'instrumental', 'acoustic',
-  'karaoke', '8d', 'slowed', 'sped', 'remaster', 'remastered',
-  'single', 'album', 'topic',
-  '现场', '伴奏', '演唱会', '单曲', '专辑', '中字', '字幕', '合集',
-  '试听', '自制', '搬运', '转载',
-]);
-const noiseKey = (t) => String(t ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+// 打分池化后该判定已被吸收（零交集 → artist 0 分 → 进不了 ACCEPT 线自动
+// 落灰区复核），保留导出作契约工具。
 const nameHitNeedsConfirm = (song, q, sourceInfo) => {
   const tokens = String(q).trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) return false;
@@ -49,12 +40,6 @@ const nameHitNeedsConfirm = (song, q, sourceInfo) => {
     || (a.length >= 3 && !QUERY_NOISE.has(noiseKey(a)) && r.includes(a))));
 };
 
-const shareName = (a, b) => {
-  const na = String(a || '').toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
-  const nb = String(b || '').toLowerCase().replace(/[\s《》【】（）()\-—–_~～·]/g, '');
-  return na.length >= 2 && nb.length >= 2 && (na.includes(nb) || nb.includes(na));
-};
-
 // 进 prompt 的字段统一净化：来源标题/频道名是 UGC、上游歌名/歌手/专辑
 // 是第三方数据——剥换行与方括号，至少让注入无法伪造消息边界/候选行
 const cleanPrompt = (s) => String(s ?? '')
@@ -68,8 +53,8 @@ const songDesc = (s) => {
   return `${cleanPrompt(s?.name)} — ${cleanPrompt(artists)}（${dur}s，专辑《${cleanPrompt(album)}》）`;
 };
 
-// AI 确认：时长-only 命中是错配高发场景（歌名不互包含只靠时长窗）——
-// 有能力时让模型复核；模型拒答/超时返回 null 按原启发式放行（AI 是增强不是门禁）
+// AI 复核：灰区候选是错配高发场景——有能力时让模型复核；模型拒答/超时
+// 返回 null 按原启发式放行（AI 是增强不是门禁）
 async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
   const ans = await askAiJson({
     // match 路径嵌在 25s resolve 预算内——AI 单次调用收窄到 10s，
@@ -87,7 +72,7 @@ async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
 
 // AI 再生查询：启发式候选串全是脏标题时（韩翻「歌名┃频道 COVER」、搬运号
 // 塞梗词等），云搜只回噪声、池子里根本没有正主——让模型从标题/作者抽出
-// 干净查询词再搜一轮，把正主装进候选池。产出串同样要过下方的 sanity 闸
+// 干净查询词再搜一轮，把正主装进候选池。产出串同样要过打分池闸门
 async function aiExtractQueries(sourceInfo, signal) {
   const ans = await askAiJson({
     system: '你是音乐识别助手。从音/视频标题与作者名提取用于音乐平台搜索的查询词。'
@@ -111,14 +96,19 @@ async function aiExtractQueries(sourceInfo, signal) {
 
 // AI 兜底：启发式全失败时，把所有查询见过的候选整批给模型挑——
 // 一次调用覆盖 ≤10 候选，比逐候选问省额度且上下文更全
-async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds = null, preferIds = null) {
-  // 已被 aiConfirmMatch 否决的候选不进池——否决后再被兜底挑回是语义矛盾。
-  // preferIds（再生轮新装入的候选）排在截断窗口前部——seenSongs 是插入序
-  // Map，启发式批先填 ≥10 时再生批会被 slice 挤掉，而那恰是正主在的批
-  const all = [...seenSongs.values()].filter(s => !vetoedIds?.has(s.id));
+async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds = null, preferIds = null, scoreById = null, rejectedIds = null) {
+  // 已被否决的候选不进池——否决后再被兜底挑回是语义矛盾；打分器标类硬拒
+  // （伴奏/inst/karaoke——与源不是同类内容）同样开除出池，时长类硬拒留池：
+  // 45s<diff≤120s 的「长片头视频真匹配」只能靠尾部 120s 粗闸救济。
+  // preferIds（再生轮新装入的候选）排在截断窗口前部——启发式批先填 ≥10 时
+  // 再生批会被 slice 挤掉，而那恰是正主在的批；同侧内按打分降序
+  const scoreOf = (s) => scoreById?.get(s.id) ?? 0;
+  const all = [...seenSongs.values()].filter(s =>
+    !vetoedIds?.has(String(s.id)) && !rejectedIds?.has(String(s.id)));
   const list = (preferIds?.size
-    ? [...all.filter(s => preferIds.has(s.id)), ...all.filter(s => !preferIds.has(s.id))]
-    : all).slice(0, 10);
+    ? [...all.filter(s => preferIds.has(s.id)).sort((a, b) => scoreOf(b) - scoreOf(a)),
+      ...all.filter(s => !preferIds.has(s.id)).sort((a, b) => scoreOf(b) - scoreOf(a))]
+    : all.sort((a, b) => scoreOf(b) - scoreOf(a))).slice(0, 10);
   if (!list.length) return null;
   const desc = list.map((s, i) => `${i + 1}. ${songDesc(s)}`).join('\n');
   const ans = await askAiJson({
@@ -146,72 +136,145 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
   return pick;
 }
 
-// candidates 按优先级排（提取名/频道歌手组合 → 清洗标题），逐个云搜；
-// 每个候选内两遍优选：歌名包含是最强信号（跨语翻唱同名必中），时长命中
-// 取差最小者——顺序「首个过线」会让时长恰好在窗内的噪声压过排后的正主。
-// signal：客户端断连/调用方主动作废时早退，不刷无意义的上游云搜。
-// sourceInfo={title,author}：AI 增强用——时长-only 命中复核 + 启发式全灭时
-// 从已见候选整批挑一个。AI 未配置时语义与之前完全一致
-async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal = null, sourceInfo = null) {
-  const seenSongs = new Map();
-  const vetoedIds = new Set();
-  const useAi = aiEnabled() && !!sourceInfo?.title;
+// ── song_match 缓存（repositories/songMatch.js）──────────────────────
+// trackId 即客户端曲目 id（bv_<bvid>[_pN]/yt_<videoId>/qq_<mid>）——经
+// sourceInfo.trackId 传入，不传则不读不写（测试/游离调用方零 DB 依赖）。
+// 正向行只存 netease_id：命中后经 song_detail 单跳回水化出完整 matched
+// 投影，回水化失败退成裸 {id} 壳（name/ar/al 缺失 → 前端走提取名兜底，
+// 词源 neteaseId 不失）。负缓存（netease_id NULL）记「搜过但没中」，
+// 7d TTL 在读查询判，模型键控不对称：正行 model=''（纯启发式）永命中、
+// AI 参与结果只在同模型下复用；负行必须 model 精确同模——无 AI 期攒的
+// 「搜不到」不能挡住配上 AI 后本可救回的匹配。另：全串传输失败的结果
+// 不落负缓存（searchedAny=false → writeMatchCache 跳过）——风控/断网
+// 期跑一次批量导入不该把整批 trackId 固化成一周无词源
+const trackIdOf = (sourceInfo) => {
+  const t = sourceInfo?.trackId;
+  return (typeof t === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(t)) ? t : null;
+};
 
-  // 单条查询的云搜 + 启发式命中：命中即返回，未命中也把结果记入 seenSongs
-  // 供 AI 再生/兜底复用。AI 否决的时长候选进 vetoedIds 不再复活。
-  // collect：本轮新装入的候选 id（再生轮优先池用）。nameHit 标记供
-  // 再生轮区分「确定性互包含」与「时长命中」（前者要补一次 AI 复核——
-  // 模型产出的查询串比启发式候选离 ground truth 远一跳，不能免检）
+async function cachedMatch(trackId, signal) {
+  // 当前生效模型与写侧同口径：AI 此刻不可用 → 本次运行等价纯启发式
+  // （model=''），只认 '' 键控的行——否则「配了模型名但 AI 关着」的部署里
+  // 启发式负行永远读不回来，负缓存形同虚设
+  const row = songMatchRepo.getMatch(trackId, aiEnabled() ? (aiModel() || '') : '');
+  if (!row) return null;
+  if (row.netease_id == null) {
+    return { song: null, query: row.matched_by || null, score: row.score ?? null, cached: true };
+  }
+  const rawId = String(row.netease_id);
+  const bare = { id: /^\d+$/.test(rawId) ? Number(rawId) : rawId };
+  let song = bare;
+  try {
+    const res = await callNeteaseApi('song_detail', { ids: rawId }, { signal });
+    const s = res.body?.songs?.[0];
+    if (s && typeof s === 'object') song = s;
+  } catch { /* 回水化失败——裸 id 壳仍保住词源 */ }
+  return { song, query: row.matched_by || null, score: row.score ?? null, cached: true };
+}
+
+function writeMatchCache(trackId, r) {
+  // 全灭=传输故障而非「搜过没中」——负缓存会把 7d 内的重试全部短路成
+  // 无词源；任一云搜 resolve（含空集）才算真搜过，可落负行。正命中永远写
+  if (!r?.song && !r?.searchedAny) return;
+  try {
+    songMatchRepo.upsertMatch(trackId,
+      r?.song?.id != null ? String(r.song.id) : null,
+      r?.query || '', Number.isFinite(r?.score) ? Math.round(r.score) : null,
+      r?.ai ? (aiModel() || '') : '');
+  } catch (e) {
+    // 缓存是增强不是关键路径——DB 不可写不该炸掉匹配
+    console.warn('[match] song_match 缓存写入失败:', e?.message || e);
+  }
+}
+
+// candidates 按优先级排（提取名/频道歌手组合 → 清洗标题），逐个云搜打分；
+// 首个产出可收命中的串即返回（确定性 ≥75 或灰区收下）。signal：客户端断连/
+// 调用方主动作废时早退，不刷无意义的上游云搜。
+// sourceInfo={title,author,artists[],titles[],trackId,durationSec?}：
+//   AI 增强用——灰区复核 + 启发式全灭时再生/兜底挑；artists/titles 喂打分器，
+//   trackId 接 song_match 缓存键。AI 未配置时语义与宽松启发式一致
+// opts={excludeIds}：请求级预置否决集（/match/retry 纠错口）——并入
+//   vetoedIds，与 AI 否决同规则永不复活
+async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal = null, sourceInfo = null, opts = null) {
+  const seenSongs = new Map();
+  const scoreById = new Map();
+  const vetoedIds = new Set();
+  const rejectedMarkerIds = new Set(); // 标类硬拒——连 AI 兜底池都开除
+  let searchedAny = false; // 任一云搜 resolve（空集也算搜过）——全灭=传输故障
+  for (const id of (Array.isArray(opts?.excludeIds) ? opts.excludeIds : [])) {
+    if (id != null) vetoedIds.add(String(id));
+  }
+  const useAi = aiEnabled() && !!sourceInfo?.title;
+  let aiLeft = AI_CALL_BUDGET;
+  let aiTouched = false;
+
+  // 打分参照源：titles = 查询串 ∪ 候选串 ∪ 源标题（候选串本身是「我们认为
+  // 歌名长这样」的提取产物，是最强比对面）；artists = artists[] ∪ author
+  const srcArtists = [...new Set(
+    [...(Array.isArray(sourceInfo?.artists) ? sourceInfo.artists : []),
+      sourceInfo?.author]
+      .map(x => String(x || '').trim()).filter(Boolean))];
+  const srcBaseTitles = [
+    ...(Array.isArray(sourceInfo?.titles) ? sourceInfo.titles : []),
+    ...(Array.isArray(candidates) ? candidates : []),
+    sourceInfo?.title];
+  const srcFor = (q) => ({
+    titles: [...new Set([q, ...srcBaseTitles]
+      .map(x => String(x || '').trim()).filter(Boolean))],
+    artists: srcArtists,
+    durationSec: Number.isFinite(durationSec) ? durationSec : 0,
+  });
+
+  // 单条查询的云搜 + 打分池：reject 滤掉、按分降序——≥ACCEPT 确定性收；
+  // 灰区有 AI 按分降序复核（≤2 次/串且受每首 AI_CALL_BUDGET 总闸），否决
+  // 进 vetoedIds 取下一个；无 AI 宽松收 top。未命中也把全量结果记入
+  // seenSongs/scoreById 供再生/兜底复用
   const searchOnce = async (q, collect = null) => {
-    const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '5' }, { signal });
+    const res = await callNeteaseApi('cloudsearch', { keywords: q, type: '1', limit: '10' }, { signal });
+    searchedAny = true; // resolve 即算搜过——空集也是上游给的真实回答
     if (signal?.aborted) return null;
-    // 上游数组混入 null 元素会让下游 .find/.map 裸取字段 TypeError——先净化
+    // 上游数组混入 null 元素会让下游裸取字段 TypeError——先净化
     const songs = (res.body?.result?.songs || []).filter(s => s && typeof s === 'object');
     if (!songs.length) return null;
     for (const s of songs) if (s.id != null) { seenSongs.set(s.id, s); collect?.add(s.id); }
-    const byName = songs.find(s => !vetoedIds.has(s.id) && shareName(s.name, q));
-    // veto 是「(源,候选)对」级判定与证据类型无关——被否的 id 不经任何
-    // 路径复活（含后续串的名命中），否则同一错配换个查询串就钻回来。
-    // 接受的代价：模型误否的正主在本请求内不再被名命中救回——
-    // 漏配（退回源站元数据）优于错配（固化错词源），与文件头哲学一致
-    if (byName) {
-      // 「艺人 歌名」组合查询的名命中是同名错配高发口：查询串含艺人成分时
-      // 任何同名曲都满足双向包含（'coverer Lemon' 搜出 米津玄師 的 Lemon）。
-      // 候选艺人与（源作者 ∪ 查询 token）零交集则过一次 AI 复核——翻唱场景
-      // 必然零交集（AI 判同一首歌的翻唱为 true 放行，真同名异曲被否）
-      if (useAi && nameHitNeedsConfirm(byName, q, sourceInfo)) {
-        const verdict = await aiConfirmMatch(byName, sourceInfo, durationSec, signal);
-        if (verdict === false) {
-          vetoedIds.add(byName.id);
-          console.info(`[${tag}] AI 否决组合名命中: ${songDesc(byName)} ← ${q}`);
-          return null;
-        }
-        return { song: byName, query: q, nameHit: true, aiChecked: true };
+    const src = srcFor(q);
+    const scored = [];
+    for (const s of songs) {
+      // veto 是「(源,候选)对」级判定与证据类型无关——被否的 id 不经任何
+      // 路径复活（含后续串），否则同一错配换个查询串就钻回来
+      if (s.id == null || vetoedIds.has(String(s.id))) continue;
+      const sc = scoreCandidate(s, src);
+      if (sc.reject) {
+        if (sc.rejectKind === 'marker') rejectedMarkerIds.add(String(s.id));
+        continue;
       }
-      return { song: byName, query: q, nameHit: true };
+      scoreById.set(s.id, Math.max(scoreById.get(s.id) ?? 0, sc.score));
+      if (sc.score >= GRAY_SCORE) scored.push({ s, score: sc.score });
     }
-    // 时长 sanity 只在有真实时长时启用——源时长 0（live/首映/字段缺失）会把
-    // ≤45s 的短曲错配（|x-0|≤45 窗口对 0 恒成立的方向性失真）
-    if (Number.isFinite(durationSec) && durationSec > 0) {
-      // 被 AI 否决过的歌直接从时长候选池剔除——本串及后续串都不再重问
-      // （省额度的一票否决）；本串否决即记 veto 不算命中，次优只能在
-      // 后续串的搜索结果里因正主被过滤而胜出时才获得复核机会
-      const byDur = songs
-        .map(s => ({ s, diff: Math.abs((s.dt || s.duration || 0) / 1000 - durationSec) }))
-        .filter(x => x.diff <= MATCH_DUR_TOLERANCE_SEC && !vetoedIds.has(x.s.id))
-        .sort((a, b) => a.diff - b.diff)[0];
-      if (byDur) {
-        // 纯时长命中（歌名不含）是错配高发位——AI 复核，明确否决才弃票
-        if (useAi) {
-          const verdict = await aiConfirmMatch(byDur.s, sourceInfo, durationSec, signal);
-          if (verdict === false) {
-            vetoedIds.add(byDur.s.id);
-            console.info(`[${tag}] AI 否决时长匹配: ${songDesc(byDur.s)} ← ${sourceInfo.title}`);
-            return null;
-          }
+    scored.sort((a, b) => b.score - a.score);
+    if (!scored.length) return null;
+    if (scored[0].score >= ACCEPT_SCORE) {
+      return { song: scored[0].s, query: q, score: scored[0].score };
+    }
+    // 灰区：无 AI 保持宽松语义（top 直接收）；有 AI 逐候选复核——复核通过/
+    // 哑火/预算耗尽都收下当前候选（增强不是门禁），明确否决才取下一个；
+    // 同串连否两个=这串候选池本身可疑，余下候选不免检收下——判空转下一串
+    if (!useAi) return { song: scored[0].s, query: q, score: scored[0].score };
+    let confirms = 0, vetoes = 0;
+    for (const g of scored) {
+      if (signal?.aborted) return null;
+      if (confirms < 2 && aiLeft > 0) {
+        confirms++; aiLeft--; aiTouched = true;
+        const verdict = await aiConfirmMatch(g.s, sourceInfo, durationSec, signal);
+        if (verdict === false) {
+          vetoedIds.add(String(g.s.id));
+          console.info(`[${tag}] AI 否决灰区候选: ${songDesc(g.s)} ← ${q}`);
+          if (++vetoes >= 2) return null;
+          continue;
         }
-        return { song: byDur.s, query: q };
+        return { song: g.s, query: q, score: g.score, aiChecked: true };
       }
+      return { song: g.s, query: q, score: g.score };
     }
     return null;
   };
@@ -227,20 +290,21 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     if (!q) continue;
     try {
       const hit = await searchOnce(q);
-      if (hit) return hit;
+      if (hit) return { ...hit, ai: aiTouched, searchedAny };
     } catch (e) {
       warnFail(q, e);
     }
   }
   // 启发式链全灭 → ①AI 再生干净查询词补一轮（脏标题串搜不到正主时
-  // 唯一把正主装进候选池的路），产出仍过 shareName/时长/否决闸——且
-  // 再生轮 name 命中额外过一次 AI 复核（模型产出的查询串离 ground truth
-  // 远一跳，臆造真实歌名会被 shareName 确定性放行，不能免检）；
+  // 唯一把正主装进候选池的路），产出仍过打分池/否决闸——且再生轮命中
+  // 额外过一次 AI 复核（模型产出的查询串离 ground truth 远一跳，臆造
+  // 真实歌名会被确定性放行，不能免检）；
   // ②AI 兜底从全量已见候选里挑（如『短视频标题串了梗词导致
   // 所有搜索串都搜不到正主』的场景——直接看整批候选比再搜一轮更有效）
   // query/matchedBy 值域：'<搜索串>'（启发式）/ 'ai:regen:<串>' / 'ai:pick'
   const regenIds = new Set();
-  if (useAi && !signal?.aborted) {
+  if (useAi && !signal?.aborted && aiLeft > 0) {
+    aiLeft--; aiTouched = true;
     const candSet = new Set(candidates.map(q => String(q || '').trim().toLowerCase()));
     const regen = (await aiExtractQueries(sourceInfo, signal).catch(() => []))
       .filter(q => !candSet.has(q.toLowerCase())); // 与已试过的串去重，不白烧上游
@@ -249,36 +313,35 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       try {
         const hit = await searchOnce(q, regenIds);
         if (!hit) continue;
-        // 再生轮的名命中必过一次复核（模型产出的查询串离 ground truth 远
-        // 一跳，臆造真实歌名会被 shareName 确定性放行）；searchOnce 内已
-        // 问过的同对（aiChecked——verdict 为 null 的哑火也标，同请求内
-        // AI 哑是粘性的重问白烧）不重复问
-        if (hit.nameHit && !hit.aiChecked) {
+        // searchOnce 内已问过的同对（aiChecked）不重复问——AI 哑是粘性的
+        if (!hit.aiChecked && aiLeft > 0) {
+          aiLeft--; aiTouched = true;
           const verdict = await aiConfirmMatch(hit.song, sourceInfo, durationSec, signal);
           if (verdict === false) {
-            vetoedIds.add(hit.song.id);
-            console.info(`[${tag}] AI 否决再生名命中: ${songDesc(hit.song)} ← ${q}`);
+            vetoedIds.add(String(hit.song.id));
+            console.info(`[${tag}] AI 否决再生命中: ${songDesc(hit.song)} ← ${q}`);
             continue;
           }
         }
         console.info(`[${tag}] AI 再生查询命中「${q}」: ${songDesc(hit.song)} ← ${sourceInfo.title}`);
-        return { song: hit.song, query: `ai:regen:${q}` };
+        return { song: hit.song, query: `ai:regen:${q}`, score: hit.score, ai: aiTouched, searchedAny };
       } catch (e) {
         warnFail(q, e);
       }
     }
   }
-  if (useAi && seenSongs.size && !signal?.aborted) {
+  if (useAi && seenSongs.size && !signal?.aborted && aiLeft > 0) {
+    aiLeft--; aiTouched = true;
     // 畸形上游数据（ar 非数组等）在 desc 构建处可能 TypeError——
     // 兜底是增强路径，异常按「无兜底」降级而非 502；再生批优先入池
-    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds, regenIds)
+    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds, regenIds, scoreById, rejectedMarkerIds)
       .catch(() => null);
     if (pick) {
       console.info(`[${tag}] AI 兜底命中: ${songDesc(pick)} ← ${sourceInfo.title}`);
-      return { song: pick, query: 'ai:pick' };
+      return { song: pick, query: 'ai:pick', score: scoreById.get(pick.id) ?? null, ai: aiTouched, searchedAny };
     }
   }
-  return { song: null, query: null };
+  return { song: null, query: null, score: null, ai: aiTouched, searchedAny };
 }
 
 // 归一 matched 投影：三路由 resolve/批量导入共用同一下发形态
@@ -294,29 +357,42 @@ function toMatchedJson(song) {
 // 单条匹配带总预算：race(match, 预算)——预算耗尽不只让 race 判负，
 // abort 停掉在途云搜/AI 复核，否则孤儿流程继续烧上游请求与 AI 额度。
 // reqSignal 级联客户端断连（Hono c.req.raw.signal）
-async function matchWithBudget({ candidates, durationSec, tag, reqSignal, sourceInfo, budgetMs = 25000 }) {
+// sourceInfo.trackId 存在时走 song_match 缓存：命中直接回（含负缓存），
+// 未命中跑完把结果（含未中）写回——abort/预算掐断的结果不写，半截判定
+// 不配进缓存。skipCache=/match/retry 纠错口专用：跳过读但仍覆写
+async function matchWithBudget({ candidates, durationSec, tag, reqSignal, sourceInfo, budgetMs = 25000, skipCache = false, excludeIds = null }) {
+  const trackId = trackIdOf(sourceInfo);
+  if (trackId && !skipCache) {
+    const hit = await cachedMatch(trackId, reqSignal).catch(() => null);
+    if (hit) return hit;
+  }
   const budgetCtrl = new AbortController();
   let budgetTimer;
   const budget = new Promise(resolve => {
     budgetTimer = setTimeout(() => {
       budgetCtrl.abort();
-      resolve({ song: null, query: null });
+      resolve({ song: null, query: null, score: null });
     }, budgetMs);
     budgetTimer.unref?.();
   });
   try {
-    return await Promise.race([
+    const r = await Promise.race([
       matchNeteaseSong(candidates, durationSec, tag,
-        AbortSignal.any([reqSignal, budgetCtrl.signal].filter(Boolean)), sourceInfo),
+        AbortSignal.any([reqSignal, budgetCtrl.signal].filter(Boolean)), sourceInfo,
+        { excludeIds }),
       budget,
     ]);
+    // 预算/断连掐断的半截判定不缓存；全灭=传输故障的「空结果」由
+    // writeMatchCache 内 searchedAny 闸再拦一道——负缓存尤其毒，一次抖动固化 7 天
+    if (trackId && !budgetCtrl.signal.aborted && !reqSignal?.aborted) writeMatchCache(trackId, r);
+    return r;
   } finally {
     clearTimeout(budgetTimer); // match 抛错也收——unref 兜底不保险，泄漏的 timer 会空 abort
   }
 }
 
 // 批量匹配并发池：worker 模型，总预算到点 abort——在途判定被掐断的曲目按
-// 无匹配回落。命中原地写 t.matched/t.matchedBy 并返回命中数
+// 无匹配回落。命中原地写 t.matched/t.matchedBy/t.matchScore 并返回命中数
 async function matchTracksPool(tracks, { signal, budgetMs, concurrency, tag, candidatesOf, durationOf, infoOf }) {
   const budgetCtrl = new AbortController();
   const matchSignal = AbortSignal.any([signal, budgetCtrl.signal].filter(Boolean));
@@ -327,12 +403,20 @@ async function matchTracksPool(tracks, { signal, budgetMs, concurrency, tag, can
   const worker = async () => {
     while (cursor < tracks.length && !matchSignal.aborted) {
       const t = tracks[cursor++];
-      const { song: matched, query } = await matchNeteaseSong(
-        candidatesOf(t), durationOf(t), tag, matchSignal, infoOf(t))
-        .catch(() => ({ song: null }));
+      const info = infoOf(t);
+      const trackId = trackIdOf(info);
+      let r = trackId ? await cachedMatch(trackId, matchSignal).catch(() => null) : null;
+      if (!r) {
+        r = await matchNeteaseSong(
+          candidatesOf(t), durationOf(t), tag, matchSignal, info)
+          .catch(() => ({ song: null }));
+        if (trackId && !matchSignal.aborted) writeMatchCache(trackId, r);
+      }
+      const matched = r?.song;
       if (matched && !matchSignal.aborted) {
         t.matched = toMatchedJson(matched);
-        t.matchedBy = query;
+        t.matchedBy = r.query ?? null;
+        t.matchScore = Number.isFinite(r?.score) ? r.score : null;
         matchedCount++;
       }
     }
@@ -345,4 +429,4 @@ async function matchTracksPool(tracks, { signal, budgetMs, concurrency, tag, can
   return matchedCount;
 }
 
-module.exports = { matchNeteaseSong, matchWithBudget, matchTracksPool, toMatchedJson, shareName, nameHitNeedsConfirm, MATCH_DUR_TOLERANCE_SEC };
+module.exports = { matchNeteaseSong, matchWithBudget, matchTracksPool, toMatchedJson, nameHitNeedsConfirm, MATCH_DUR_TOLERANCE_SEC };
