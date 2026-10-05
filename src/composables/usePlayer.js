@@ -541,22 +541,35 @@ export function usePlayer({
           if (pl && isLocalPlaylistId(pl.id)) await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
           // mirror RTT 窗内播放可能已换代——旧代不替没人等的歌提交孤儿下载任务
           if (seq !== playSeq) return
-          const submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, {
-            bitrate: 320000,
-            // yt 可视曲连视频档一起下——WatchView 视频档的唯一来源（YT
-            // 在线流两端都已不消费）。谓词与 useServerDownloads.canServerVideo
-            // 的 yt 支同口径：hasDownloadableVideo 兜住 vp9/av01 独占稿
-            // （服务端下载链能合流 mp4），hasVideo 兼容无新字段的旧数据；
-            // song.youtube?. 天然限定 YT 域，bv_/qq_ 曲该位恒 false，行为不变
-            downloadVideo: song.youtube?.hasDownloadableVideo === true
-              || song.youtube?.hasVideo === true
-          })
+          let submitted = null
+          try {
+            submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, {
+              bitrate: 320000,
+              // yt 可视曲连视频档一起下——WatchView 视频档的唯一来源（YT
+              // 在线流两端都已不消费）。谓词与 useServerDownloads.canServerVideo
+              // 的 yt 支同口径：hasDownloadableVideo 兜住 vp9/av01 独占稿
+              // （服务端下载链能合流 mp4），hasVideo 兼容无新字段的旧数据；
+              // song.youtube?. 天然限定 YT 域，bv_/qq_ 曲该位恒 false，行为不变
+              downloadVideo: song.youtube?.hasDownloadableVideo === true
+                || song.youtube?.hasVideo === true
+            })
+          } catch (e) {
+            // 409 = 该曲任务已在跑（含队列挡牌/歌单删除窗）——不是失败：
+            // 既有任务继续下，直接进下方轮询等档落；轮询里 task===null 会
+            // 自然 break 到「服务器下载仍在进行」文案。其余错误照常穿透
+            if (e?.response?.status !== 409) throw e
+          }
           audioPlId = submitted?.data?.status === 'completed' ? playlistId : null
           // 提交即返回——终态轮询确认（音频档秒级完事，封顶 3min 防无限挂起）
           const deadline = Date.now() + 3 * 60 * 1000
+          // 连续失联按停机收束、单抖不判死：探测抛错（停机/断网）只得 null，
+          // 攒满 4 次（≈6s）即 break 落「仍在进行」文案，不硬撑到 deadline
+          let nullPolls = 0
           while (audioPlId === null && Date.now() < deadline && seq === playSeq) {
             await new Promise(r => setTimeout(r, 1500))
             const st2 = await downloadsApi.getSongDownloadStatus(playlistId, song.id).catch(() => null)
+            if (st2 === null) { if (++nullPolls >= 4) break; continue }
+            nullPolls = 0
             if (st2?.data?.audioReady === true) { audioPlId = st2.data.audioPlaylistId ?? playlistId; break }
             const ts = st2?.data?.task?.status
             if (ts === 'failed' || (st2?.data && st2.data.task === null)) break
