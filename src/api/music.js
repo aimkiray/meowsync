@@ -267,6 +267,52 @@ export const musicApi = {
     }
   },
 
+  // 无 neteaseId 外源曲（bv_/yt_）的歌词兜底：服务端 YTM→LRCLIB→酷狗
+  // 三级级联（routes/lyric-external）。命中回 {lrc, source, extId, synced,
+  // plain?}——extId（ytm_/lrclib_/kugou_ 前缀词源命名空间 id）即词属主键，
+  // 校准 meta/verify/translate 白名单均已对它放开；synced=false 时 lrc
+  // 是纯文本。级联全灭服务端回 404——「外面确实没词」是常态结局，归一成
+  // null 不进错误通道；其余错误（网络/超时）照常抛。三源串行 + AI 归属
+  // 核验最坏 ~70s，超时给 80s
+  getExternalLyric: async ({ id, title, artist, durationSec }, abortSignal = null) => {
+    const response = await api.get('/lyric/external', {
+      params: { id, title, artist, duration: durationSec },
+      signal: abortSignal,
+      timeout: 80000
+    }).catch(err => {
+      if (err?.response?.status === 404) return null
+      throw err
+    })
+    if (response === null) return null
+    const data = unwrapBody(response)
+    // 契约平铺 {code,lrc,...}；data 嵌套形态兼容性地看一眼
+    const hit = data.data && typeof data.data === 'object' ? data.data : data
+    if (typeof hit.lrc !== 'string' || !hit.lrc.trim()) return null
+    return {
+      lrc: hit.lrc,
+      plain: typeof hit.plain === 'string' ? hit.plain : null,
+      source: hit.source ?? null,
+      extId: hit.extId ?? null,
+      synced: hit.synced !== false
+    }
+  },
+
+  // 错配纠正口：POST /match/retry——前端拿持久化 provider 字段组匹配材料，
+  // excludeIds 把当前判否的词源 id 并进请求级否决集重跑云搜+AI 复核链，
+  // 命中即服务端覆写 song_match 行。回命中对象 {id,name,ar,al}，未中回
+  // null；错误（429/502 等）照常抛给调用方。最坏 ~55s，超时放宽到 60s
+  retryMatch: async ({ trackId, title, author, artists, durationSec, candidates, excludeIds },
+    abortSignal = null) => {
+    const response = await api.post('/match/retry', {
+      trackId, title, author, artists, durationSec, candidates, excludeIds
+    }, { signal: abortSignal, timeout: 60000 })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || '重匹配失败')
+    const payload = data.data && typeof data.data === 'object' ? data.data : data
+    return payload.matched && typeof payload.matched === 'object' && payload.matched.id != null
+      ? payload.matched : null
+  },
+
   getSongDetail: async (id, abortSignal = null) => {
     const response = await withRetry(() =>
       api.get('/song_detail', { params: { ids: id }, signal: abortSignal })
