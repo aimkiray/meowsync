@@ -1,9 +1,5 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { Howl, Howler } from 'howler'
-// html5 池是全局常驻的 <audio> 元素组，每节点持有媒体缓冲区——单流播放
-// 没有并发需求，但失败重试/快速切歌期在途 fetch 节点来不及释放会被判
-// locked（「Audio pool exhausted」伪错误），故留 8 位缓冲不砍到 1~2
-Howler.html5PoolSize = 8
 import { musicApi, parseLyrics, mergeTranslations } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { aiApi } from '../api/ai.js'
@@ -14,6 +10,30 @@ import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId } from '../lib/url.js'
 import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song.js'
 import { SAVED_QUEUE_TRACK_CAP } from './usePlaylistLibrary.js'
+
+// html5 池是全局常驻的 <audio> 元素组——预垫节点未置 src 不占媒体缓冲区，
+// 成本仅 DOM 桩；单流播放没有并发需求，8 位余量只兜失败重试/快速切歌期
+// 的在途节点
+Howler.html5PoolSize = 8
+// 池只在首个文档手势里由 howler 的 unlock 监听填充，且 _releaseHtml5Audio
+// 只回收标了 _unlocked 的节点——存档恢复（autoplay:false 冷启即建 Howl）与
+// ?mode=host 远端遥控都是零手势取流：空池 checkout 每次必打
+// 「HTML5 Audio pool exhausted」伪警告，回退节点 unload 时又被弃置、池永远
+// 填不上。照 unlock() 同构手法预垫满池：_unlocked 仅是「可回池」记账位，
+// 播放可行性仍由 node.play() 现场判定（移动端真锁照旧走 onplayerror→手势
+// 重试路径），垫池不改变解锁语义，只消伪警告噪音。
+// 守卫即升级熔断：howler 私有面改名则静默退回现状
+if (typeof Audio !== 'undefined' && typeof Howler._releaseHtml5Audio === 'function') {
+  for (let i = Howler._html5AudioPool?.length ?? 0; i < Howler.html5PoolSize; i++) {
+    // unlock() 填池同款防御：畸形 webview 的 new Audio() 构造抛错中止垫池
+    // ——不该穿透模块 eval 杀 app
+    try {
+      const node = new Audio()
+      node._unlocked = true
+      Howler._releaseHtml5Audio(node)
+    } catch { break }
+  }
+}
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
