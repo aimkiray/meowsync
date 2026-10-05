@@ -39,7 +39,9 @@ export const buildBilibiliSong = (data) => ({
     // 封面持久化进 providerData——bv_ 封面不能由 bvid 推导（yt_ 可以），
     // 存量加载自愈/口径偏离修正都要靠它
     cover: data.cover || '',
-    author: data.owner || '', matchedBy: data.matchedBy || null
+    author: data.owner || '', matchedBy: data.matchedBy || null,
+    // 匹配分透传（诊断用——/match/retry 纠错与排查错配时要看证据强弱）
+    matchScore: data.matchScore ?? null
   },
   neteaseId: data.matched?.id || null
 })
@@ -66,7 +68,8 @@ export const buildYouTubeSong = (data) => ({
     hasDownloadableVideo: !!data.hasDownloadableVideo,
     // authorClean 持久化：存量自愈/行内展示不必再剥 ' - Topic'/'VEVO'
     title: data.title, author: data.author, authorClean: data.authorClean || null,
-    matchedBy: data.matchedBy || null
+    matchedBy: data.matchedBy || null,
+    matchScore: data.matchScore ?? null
   },
   neteaseId: data.matched?.id || null
 })
@@ -94,7 +97,8 @@ export const buildQQSong = (data) => ({
     mid: data.mid, mediaMid: data.mediaMid || data.mid,
     songId: data.songId, albummid: data.albummid || '',
     payPlay: !!data.payPlay, vipOnly: !!data.vipOnly,
-    matchedBy: data.matchedBy || null
+    matchedBy: data.matchedBy || null,
+    matchScore: data.matchScore ?? null
   },
   neteaseId: data.matched?.id || null
 })

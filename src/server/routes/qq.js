@@ -67,10 +67,15 @@ app.get('/qq/resolve', async (c) => {
       `${t.artists.join(' ')} ${t.name}`.trim(), t.name,
     ].filter(Boolean))].slice(0, 3);
     // 匹配预算收敛进 services/netease-match.js:matchWithBudget
-    const { song: matched, query: matchedBy } = await matchWithBudget({
+    const { song: matched, query: matchedBy, score: matchScore } = await matchWithBudget({
       candidates, durationSec: t.intervalSec, tag: 'qq',
       reqSignal: c.req.raw.signal,
-      sourceInfo: { title: t.name, author: t.artists.join(' ') },
+      // QQ 自带真实元数据——artists 数组直接喂打分器（比 join 的作者串更准）；
+      // trackId 与客户端 buildQQSong 的 id 同构（qq_<mid>）接 song_match 缓存键
+      sourceInfo: {
+        title: t.name, author: t.artists.join(' '),
+        artists: t.artists, trackId: `qq_${t.mid}`,
+      },
     });
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     return c.json({
@@ -78,6 +83,7 @@ app.get('/qq/resolve', async (c) => {
       ...trackJson(t),
       matched: toMatchedJson(matched),
       matchedBy,
+      matchScore: matchScore ?? null,
     });
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);

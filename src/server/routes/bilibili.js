@@ -73,10 +73,16 @@ app.get('/bilibili/resolve', async (c) => {
       .map(c => (c || '').trim()).filter(Boolean))].slice(0, 3);
     // 匹配预算收敛进 services/netease-match.js:matchWithBudget——
     // 整条链超时当无匹配不阻塞解析；预算耗尽 abort 在途云搜/AI 复核
-    const { song: matched, query: matchedBy } = await matchWithBudget({
+    const { song: matched, query: matchedBy, score: matchScore } = await matchWithBudget({
       candidates, durationSec: duration, tag: 'bilibili',
       reqSignal: c.req.raw.signal,
-      sourceInfo: { title: view.title || '', author: view.owner?.name || '' },
+      // artists/trackId 喂打分器与 song_match 缓存键——trackId 与客户端
+      // buildBilibiliSong 的 id 同构（bv_<bvid>[_pN]）
+      sourceInfo: {
+        title: view.title || '', author: view.owner?.name || '',
+        artists: view.owner?.name ? [view.owner.name] : [],
+        trackId: `bv_${view.bvid}${pageIdx + 1 > 1 ? `_p${pageIdx + 1}` : ''}`,
+      },
     });
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     const { audio, video } = pickStreams(playurl);
@@ -111,6 +117,7 @@ app.get('/bilibili/resolve', async (c) => {
       tags: tagNames,
       matched: toMatchedJson(matched),
       matchedBy,
+      matchScore: matchScore ?? null,
       hasVideo: avcStreams.length > 0,
       // 含 URL 的条目才算可下载——null/无地址脏条目不亮假入口
       hasDownloadableVideo: allVideo.some(v => v && (v.baseUrl || v.base_url)),
@@ -189,6 +196,7 @@ app.get('/bilibili/favlist', async (c) => {
           hasDownloadableVideo: true,   // 同口径乐观值——纯非 avc1 稿件也能亮下载入口
           matched: null,
           matchedBy: null,
+          matchScore: null,
         });
       }
       // has_more 是上游权威翻页信号；缺省回落「短页即底 + 计数已扫满」
@@ -211,7 +219,10 @@ app.get('/bilibili/favlist', async (c) => {
       candidatesOf: (t) => [...new Set([t.songName, t.title]
         .map(x => (x || '').trim()).filter(Boolean))].slice(0, 3),
       durationOf: (t) => t.duration,
-      infoOf: (t) => ({ title: t.title, author: t.owner }),
+      infoOf: (t) => ({
+        title: t.title, author: t.owner,
+        artists: t.owner ? [t.owner] : [], trackId: `bv_${t.bvid}`,
+      }),
     });
     if (signal?.aborted) return c.body(null, 499);
 
