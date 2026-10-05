@@ -30,8 +30,11 @@ vi.mock('../../src/api/music.js', () => ({
     bilibiliStreamUrl: vi.fn(() => 'https://x/bili'),
     youtubeStreamUrl: vi.fn(() => 'https://x/yt'),
     qqStreamUrl: vi.fn(() => 'https://x/qq'),
-    getLyrics: vi.fn(async () => ({ lrc: '', tlyric: '' })),
+    // 返回形与生产一致：http.js 拦截器已剥 axios 壳，getLyrics 回 {lyrics}
+    getLyrics: vi.fn(async () => ({ lyrics: [] })),
     getQQLyric: vi.fn(async () => ({ lyrics: [] })),
+    getExternalLyric: vi.fn(async () => null),
+    retryMatch: vi.fn(async () => null),
   },
   parseLyrics: vi.fn(() => []),
   mergeTranslations: vi.fn((l) => l),
@@ -40,7 +43,8 @@ vi.mock('../../src/api/downloads.js', () => ({
   downloadsApi: {
     getSongDownloadStatus: vi.fn(async () => null),
     songFileUrl: vi.fn((plId, songId) => `http://api/dl/${plId}/${songId}`),
-    getSongMeta: vi.fn(async () => ({ data: { offsetMs: 0 } })),
+    // /song-meta/:id 回平铺 {code,songId,offsetMs}——生产读 meta?.offsetMs
+    getSongMeta: vi.fn(async () => ({ offsetMs: 0 })),
     saveLyricOffset: vi.fn(async () => ({})),
     mirrorLocalPlaylist: vi.fn(async () => ({})),
     downloadSongToServer: vi.fn(async () => ({ data: { status: 'completed' } })),
@@ -48,16 +52,18 @@ vi.mock('../../src/api/downloads.js', () => ({
 }))
 vi.mock('../../src/api/ai.js', () => ({
   aiApi: {
-    getStatus: vi.fn(async () => ({ enabled: false })),
-    lyricTranslate: vi.fn(async () => null),
-    lyricVerify: vi.fn(async () => ({ ok: true })),
+    status: vi.fn(async () => ({ enabled: false })),
+    translateLyric: vi.fn(async () => null),
+    verifyLyric: vi.fn(async () => ({ ok: true })),
   },
 }))
 vi.mock('../../src/lib/feedback.js', () => ({ toast: vi.fn() }))
 vi.mock('../../src/lib/theme.js', () => ({ glitchBurst: vi.fn() }))
 
-import { musicApi } from '../../src/api/music.js'
+import { musicApi, parseLyrics } from '../../src/api/music.js'
 import { downloadsApi } from '../../src/api/downloads.js'
+import { aiApi } from '../../src/api/ai.js'
+import { toast } from '../../src/lib/feedback.js'
 import { usePlayer } from '../../src/composables/usePlayer.js'
 import { LS_KEYS } from '../../src/lib/storage.js'
 
@@ -96,6 +102,13 @@ beforeEach(() => {
   localStorage.clear()
   musicApi.getSongUrl.mockImplementation(async () => ({ url: 'https://cdn.example/online.mp3', br: 320000 }))
   downloadsApi.getSongDownloadStatus.mockImplementation(async () => null)
+  // clearAllMocks 只清调用记录不清实现——逐用例覆写的 mock 全部归位
+  parseLyrics.mockImplementation(() => [])
+  musicApi.getLyrics.mockResolvedValue({ lyrics: [] })
+  musicApi.getExternalLyric.mockResolvedValue(null)
+  musicApi.retryMatch.mockResolvedValue(null)
+  aiApi.status.mockResolvedValue({ enabled: false })
+  aiApi.verifyLyric.mockResolvedValue({ ok: true })
 })
 
 describe('usePlayer：播放主链', () => {
@@ -400,16 +413,19 @@ describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', 
     expect(howls[0].opts.src).toEqual(['https://x/qq'])
   })
 
-  it('bv_/yt_ 裸 id 无 neteaseId：歌词早退闸按形态命中，不打 /lyric', async () => {
+  it('bv_/yt_ 裸 id 无 neteaseId：歌词走 /lyric/external 外源兜底，不打网易云 /lyric', async () => {
     const { player, deps } = makePlayer()
     const bv = song('bv_BV1xx411c7mD')
     deps.selectedPlaylist.value = localPl(bv)
-    await player.playSong(bv) // bv_ 在线链 + loadLyrics 同步早退
+    await player.playSong(bv) // bv_ 在线链 + loadLyrics 外源兜底（mock 归 null=级联全灭）
     const yt = song('yt_abcdefghijk')
     deps.selectedPlaylist.value = localPl(yt)
-    await player.playSong(yt) // yt_ 下载兜底链里 loadLyrics 同样早退
+    await player.playSong(yt) // yt_ 下载兜底链里 loadLyrics 同样走外源
     await vi.waitFor(() => expect(howls).toHaveLength(2))
     expect(musicApi.getLyrics).not.toHaveBeenCalled()
+    const ids = musicApi.getExternalLyric.mock.calls.map(c => c[0].id)
+    expect(ids).toEqual(expect.arrayContaining(['bv_BV1xx411c7mD', 'yt_abcdefghijk']))
+    expect(player.lyrics.value).toEqual([])
   })
 
   it('bv_ 裸 id 有 neteaseId：照常嫁接网易云词源', async () => {
@@ -515,5 +531,195 @@ describe('usePlayer：持久化与恢复', () => {
       playingPlaylistId: 'pl_a', selectedPlaylistId: 'pl_a', currentSongId: 404,
     })
     expect(howls).toHaveLength(0)
+  })
+})
+
+describe('usePlayer：外源歌词兜底与自动重匹配', () => {
+  const bvSong = (extra) => song('bv_BV1xx411c7mD', {
+    bilibili: { bvid: 'BV1xx411c7mD', title: '视频标题', author: 'UP主' },
+    ...extra,
+  })
+
+  it('无 neteaseId：/lyric/external 命中 → 词落 lyrics、词属主键挂 extId', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]外源词', source: 'lrclib', extId: 'lrclib_42', synced: true,
+    })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '外源词' }])
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    expect(musicApi.getExternalLyric).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'bv_BV1xx411c7mD', title: '视频标题', artist: 'UP主', durationSec: 200,
+      }), expect.anything())
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '外源词' }])
+    // extId 即词属主键：校准 meta 与归属核验都拿它，不碰网易云 /lyric
+    expect(downloadsApi.getSongMeta).toHaveBeenCalledWith('lrclib_42')
+    await vi.waitFor(() =>
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith('lrclib_42', '视频标题', 'UP主', expect.anything()))
+    expect(musicApi.getLyrics).not.toHaveBeenCalled()
+  })
+
+  it('无 neteaseId 且 synced=false：纯文本按行落静态词，不滚动（无有限时间戳）', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '第一行词\n第二行词', source: 'lrclib', extId: 'lrclib_9', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    expect(player.lyrics.value).toEqual([
+      { time: Infinity, text: '第一行词' },
+      { time: Infinity, text: '第二行词' },
+    ])
+    expect(player.currentLyricIndex.value).toBe(-1)
+  })
+
+  it('verify 判否 → /match/retry 命中换新 neteaseId 并重载词（excludeIds 含旧词源）', async () => {
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    aiApi.verifyLyric
+      .mockResolvedValueOnce({ ok: false }) // 111 词源判否
+      .mockResolvedValue({ ok: true })      // 222 新词源过审
+    musicApi.retryMatch.mockResolvedValue({ id: 222, name: '对的歌', ar: [], al: {} })
+    const { player, deps } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalled())
+    expect(musicApi.retryMatch.mock.calls[0][0]).toMatchObject({
+      trackId: 'bv_BV1xx411c7mD', title: '视频标题', author: 'UP主',
+      // provider 块无 artists 字段——发的是 [author, authorClean] 过滤产物
+      artists: ['UP主'], durationSec: 200, excludeIds: [111],
+    })
+    await vi.waitFor(() => expect(bv.neteaseId).toBe(222))
+    // 换绑结果显式落盘：savePlaylistsToStorage 是显式调用制，不写会丢
+    expect(deps.savePlaylistsToStorage).toHaveBeenCalled()
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(222, expect.anything()))
+    await vi.waitFor(() => expect(player.lyrics.value.length).toBeGreaterThan(0))
+    expect(toast).toHaveBeenCalledWith('词源已自动重匹配', 'success')
+  })
+
+  it('verify 判否但 /match/retry 未命中：维持藏词与提示，neteaseId 不动', async () => {
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    aiApi.verifyLyric.mockResolvedValue({ ok: false })
+    musicApi.retryMatch.mockResolvedValue(null)
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalled())
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.lyrics.value).toEqual([])
+    expect(bv.neteaseId).toBe(111)
+    expect(toast).toHaveBeenCalledWith('歌词与歌曲疑似不匹配，已隐藏', 'info')
+    expect(toast).not.toHaveBeenCalledWith('词源已自动重匹配', 'success')
+  })
+
+  it('换绑后的新词源仍被判否：rematchTried 每曲限一次，不再发起重匹配', async () => {
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    aiApi.verifyLyric.mockResolvedValue({ ok: false }) // 两轮词源都判否
+    musicApi.retryMatch.mockResolvedValue({ id: 222, name: '对的歌', ar: [], al: {} })
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    // 换绑 222 后新词源同样被 verify 否决——等它发生再断言无二次重试
+    await vi.waitFor(() =>
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith(222, '视频标题', 'UP主', expect.anything()))
+    await vi.waitFor(() => expect(player.lyrics.value).toEqual([]))
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.retryMatch).toHaveBeenCalledTimes(1)
+    expect(bv.neteaseId).toBe(222) // 换绑结果仍写回曲对象（持久化随曲走）
+  })
+
+  it('行菜单换绑信号：正播同曲补写 neteaseId 并重载词，异曲信号被丢弃', async () => {
+    const { notifyLyricRematch } = await import('../../src/composables/usePlayer.js')
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: 'x' }] })
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    expect(musicApi.getLyrics).toHaveBeenCalledWith(111, expect.anything())
+    musicApi.getLyrics.mockClear()
+    notifyLyricRematch('yt_abcdefghijk', 999) // 非当前曲——信号被丢弃
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.getLyrics).not.toHaveBeenCalled()
+    notifyLyricRematch('bv_BV1xx411c7mD', 333)
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(333, null))
+    expect(bv.neteaseId).toBe(333)
+  })
+
+  it('retryMatch RTT 期间切歌：写回+落盘照做，但不 toast 不重载词', async () => {
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    aiApi.verifyLyric.mockResolvedValue({ ok: false })
+    let releaseMatch
+    musicApi.retryMatch.mockImplementation(
+      () => new Promise(r => { releaseMatch = () => r({ id: 222, name: '对的歌' }) }))
+    const { player, deps } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalled())
+    // RTT 窗内切歌：signal 随之 abort，但 mock 仍按正常 resolve 走完回包路径
+    await player.playSong(song(2))
+    releaseMatch()
+    await vi.waitFor(() => expect(bv.neteaseId).toBe(222))
+    // 换绑是曲的持久属性——写回对象+显式落盘不因切歌跳过
+    expect(deps.savePlaylistsToStorage).toHaveBeenCalled()
+    // 但没人看的歌不刷词：无成功 toast、不为新词源重载
+    expect(toast).not.toHaveBeenCalledWith('词源已自动重匹配', 'success')
+    expect(musicApi.getLyrics).not.toHaveBeenCalledWith(222, expect.anything())
+  })
+
+  it('retryMatch 在途被 abort（ERR_CANCELED）：不烧 rematch 槽位，重播同曲可再试', async () => {
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    aiApi.verifyLyric.mockResolvedValue({ ok: false })
+    // signal 随切歌/看门狗 abort 时 axios 的真实表现：reject CanceledError
+    // （ERR_CANCELED）——生产上 postProcess 链路起跑晚于 playSong 收尾清
+    // controller，abort 主要由加载看门狗的 myController.abort() 触发
+    musicApi.retryMatch.mockRejectedValue(
+      Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }))
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    await new Promise(r => setTimeout(r, 0)) // 让 catch 的槽位释放跑完
+    // 重播同曲：判否缓存即刻生效（不重发 verify），闸已释放 → 二次重试
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(2))
+  })
+
+  it('retryMatch 非 abort 失败（502 等）：槽位保留，同会话不再重试', async () => {
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    aiApi.verifyLyric.mockResolvedValue({ ok: false })
+    // 服务端故障类错误：保留占位——否则每播一次同曲都刷一次 match-retry 限流桶
+    musicApi.retryMatch.mockRejectedValue(
+      Object.assign(new Error('重匹配失败'), { response: { status: 502 } }))
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    await player.playSong(song(2))
+    await player.playSong(bv)
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.retryMatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('外源（extId）词判否：藏词但不发 retryMatch——判否对象不是 neteaseId', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]外源词', source: 'lrclib', extId: 'lrclib_9', synced: true,
+    })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '外源词' }])
+    aiApi.verifyLyric.mockResolvedValue({ ok: false })
+    const { player } = makePlayer()
+    await player.playSong(bvSong()) // 无 neteaseId → 外源词路
+    await vi.waitFor(() =>
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith('lrclib_9', '视频标题', 'UP主', expect.anything()))
+    await vi.waitFor(() => expect(player.lyrics.value).toEqual([]))
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.retryMatch).not.toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledWith('歌词与歌曲疑似不匹配，已隐藏', 'info')
+  })
+
+  it('notifyLyricRematch 在无正播曲（currentSong==null）时丢弃', async () => {
+    const { notifyLyricRematch } = await import('../../src/composables/usePlayer.js')
+    const { player } = makePlayer() // 实例化即注册槽位，但没播过任何曲
+    expect(player.currentSong.value).toBeNull()
+    notifyLyricRematch('bv_BV1xx411c7mD', 333)
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.getLyrics).not.toHaveBeenCalled()
+    expect(player.currentSong.value).toBeNull()
   })
 })

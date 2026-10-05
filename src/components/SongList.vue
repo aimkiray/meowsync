@@ -382,6 +382,21 @@
             <template v-if="serverDownloadingStates[showDownloadMenu]"><span class="pixel-loading" aria-hidden="true"></span> 处理中...</template>
             <template v-else><PixelIcon name="play" :size="13" /> 下载视频到服务器</template>
           </div>
+
+          <!-- 外源曲词源纠错：自动匹配判错词（verify 否决）或没配上时重打
+               服务端匹配链，命中把新 neteaseId 写回曲对象。分享壳不开放
+               （壳对象不持久化——与「编辑歌曲」等 !isShareShell 项同口径） -->
+          <div
+            v-if="!isShareShell && (menuSong?.youtube || menuSong?.bilibili)"
+            class="pg-menu-item"
+            role="menuitem"
+            tabindex="0"
+            @click="rematchLyricFromMenu"
+            @keydown.enter="rematchLyricFromMenu"
+            @keydown.space.prevent="rematchLyricFromMenu"
+          >
+            <PixelIcon name="m-loop" :size="13" /> 重新匹配歌词
+          </div>
         </div>
       </div>
     </Teleport>
@@ -806,6 +821,8 @@ import { isVipSong, visibleSongs, isLocalPlaylistId, isSingleSongShellId, isFile
 import { serverCaps } from '../lib/caps'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
+import { musicApi } from '../api/music.js'
+import { notifyLyricRematch } from '../composables/usePlayer.js'
 
 export default {
   name: 'SongList',
@@ -955,7 +972,8 @@ export default {
         // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
         // 固定项=下一首+队尾+添歌单+源文件 4 项；可分享（非 file_）多"分享歌曲"，
         // 可回源多"回源"，有已选歌单（除分享壳）多"编辑歌曲"+"从歌单移除"两项，
-        // 可达服务端下载链多"下载到服务器"，外部有视频流的再多"下载视频到服务器"。
+        // 可达服务端下载链多"下载到服务器"，外部有视频流的再多"下载视频到服务器"，
+        // 外源曲（bv_/yt_ provider 对象在，分享壳除外）再多"重新匹配歌词"。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
         const serverOk = !isShareShell.value && props.selectedPlaylist && canServerDownload(targetSong)
@@ -965,6 +983,7 @@ export default {
           + ((props.selectedPlaylist && !isShareShell.value) ? 2 : 0)
           + (serverOk ? 1 : 0)
           + (serverOk && canServerVideo(targetSong) ? 1 : 0)
+          + ((!isShareShell.value && (targetSong?.youtube || targetSong?.bilibili)) ? 1 : 0)
         const menuHeight = 40 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -1037,6 +1056,51 @@ export default {
       const song = menuSong.value
       closeDownloadMenu()
       if (song) shareSong(song)
+    }
+
+    // 重新匹配歌词（外源曲词源纠错）：把错配的 neteaseId 否进 excludeIds
+    // 让服务端 /match/retry 换绑重跑（无匹配史则空否决集跑首配）。命中写回
+    // 曲对象——本地单里这份对象就是库 pl.tracks 的元素（slimTrack 带
+    // neteaseId，随下次 savePlaylistsToStorage 落盘；服务端 song_match 行
+    // 也已被 retry 覆写——即便本地没赶上落盘窗口，重导入/重匹配链也自洽）。
+    // 正播的曲再 notifyLyricRematch 让播放器侧补写引用+热重载词
+    const rematchInflight = new Set()
+    const rematchLyricFromMenu = async () => {
+      const song = menuSong.value
+      closeDownloadMenu()
+      if (!song || rematchInflight.has(song.id)) return
+      rematchInflight.add(song.id)
+      const ext = song.youtube || song.bilibili
+      const durationMs = song.dt || song.duration
+      // /match/retry 最坏 ~55s——关菜单后没有任何反馈会像点了死键，先落
+      // in-flight 提示；终态（命中/未命中/失败）由下方 toast 接管
+      toast('正在重新匹配歌词…', 'info')
+      try {
+        const matched = await musicApi.retryMatch({
+          trackId: song.id,
+          title: ext?.title || song.name || '',
+          author: ext?.author || '',
+          // provider 块只持久化 author/authorClean，没有 artists 字段
+          // （见 external-songs.js）——authorClean 是剥 ' - Topic'/'VEVO'
+          // 后的真艺人名，一并喂服务端 sourceInfo.artists 打分器
+          artists: [ext?.author, ext?.authorClean].filter(Boolean),
+          durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+          excludeIds: song.neteaseId != null ? [song.neteaseId] : [],
+        })
+        if (matched?.id && String(matched.id) !== String(song.neteaseId)) {
+          song.neteaseId = matched.id
+          toast(`词源已重匹配为《${matched.name || matched.id}》`, 'success')
+          // 菜单侧对象与正播对象不一定是同一引用（搜索/快照来源不同）——
+          // 通知里捎上新词源 id，播放器侧幂等补写
+          notifyLyricRematch(song.id, matched.id)
+        } else {
+          toast('没找到更准的匹配', 'info')
+        }
+      } catch (e) {
+        toast(`重新匹配失败：${e?.response?.data?.message || e?.message || '网络错误'}`, 'error')
+      } finally {
+        rematchInflight.delete(song.id)
+      }
     }
 
     // 回源：menuSong 维度的源站 URL 与来源名（菜单项显隐+文案）
@@ -1215,6 +1279,7 @@ export default {
       addToPlaylistFromMenu,
       removeFromPlaylistFromMenu,
       shareFromMenu,
+      rematchLyricFromMenu,
       menuSourceUrl,
       menuSourceName,
       openSourceFromMenu,

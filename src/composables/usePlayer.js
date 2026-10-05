@@ -37,6 +37,17 @@ if (typeof Audio !== 'undefined' && typeof Howler._releaseHtml5Audio === 'functi
   }
 }
 
+// 行菜单「重新匹配歌词」换绑通知：SongList 改写 song.neteaseId 成功后调
+// notifyLyricRematch 通知播放器（emit 接线表没有 rematch 通道且组件域不
+// 许动 App.vue——跨组件通知走模块级单槽回调）。单槽而非订阅者集：usePlayer
+// 仅 App 一处实例化，后注册覆盖旧槽即够；测试多次实例化也只有最新一只
+// 响应，跨实例不串话。载荷捎新词源 id：正播的曲对象与菜单侧写过的对象
+// 不一定是同一引用（搜索队列/快照来源不同），播放器侧那份要单独补写
+let lyricRematchHandler = null
+export const notifyLyricRematch = (trackId, neteaseId) => {
+  lyricRematchHandler?.(trackId, neteaseId)
+}
+
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
 // 歌词管线（拉取/CJK 判定/AI 校验翻译/时间校准持久化）、进度与音量、
@@ -1000,8 +1011,9 @@ export function usePlayer({
     }
 
     // 歌词加载和同步（支持取消 + 过期响应不落盘，防止旧歌歌词覆盖新歌）。
-    // 外部导入曲（B 站/YouTube）的歌词走匹配到的网易云曲 id（neteaseId），播放本体仍是 bv_*/yt_* id
-    // ——过期判定锚 song.id，不锚歌词请求的 id
+    // 外部导入曲（B 站/YouTube）的歌词源：匹配到的网易云曲 id（neteaseId）
+    // 优先，缺席时走 /lyric/external 外源级联兜底（extId 作词属主键）。
+    // 播放本体仍是 bv_*/yt_* id——过期判定锚 song.id，不锚歌词请求的 id
     // lyricLoadSeq：同曲两次并发 load 的单调闸（播放路径 fetch 在飞 + 歌词热
     // 重载再发——同 id 同 signal 域里 currentPlayingId/abort 都分不开，后到者
     // 赢；无它时旧响应晚落地会覆盖新词）
@@ -1034,16 +1046,80 @@ export function usePlayer({
         }
         return
       }
-      // 外部导入曲未匹配到网易云时无歌词源——bv_*/yt_* 打 /lyric 必死还拖三重试，直接置空；
-      // provider 对象缺失的老持久化行按 bv_/yt_ id 形态同判（对象与形态任一命中）。
+      // 外部导入曲（B 站/YouTube）无 neteaseId 时走服务端外源词兜底
+      // /lyric/external（YTM→LRCLIB→酷狗级联）。provider 对象缺失的老持久
+      // 化行按 bv_/yt_ id 形态同判（对象与形态任一命中）——服务端按 id 前缀
+      // 自解定位，title/artist 只是检索喂料，缺了降级不致死。
       // qq_ 不在此列——QQ 曲有自家权威词源（/qq/lyric），无匹配也能出词
       if ((song?.bilibili || song?.youtube
           || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id)))
           && !song.neteaseId) {
-        lyrics.value = []
-        currentLyricIndex.value = 0
-        lyricOffsetMs.value = 0
+        lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
         lyricOwnerKey.value = null
+        try {
+          loadingLyrics.value = true
+          console.log('📝 加载外源歌词:', song.id)
+          const ext = song?.youtube || song?.bilibili || null
+          const durationMs = song.dt || song.duration
+          const hit = await musicApi.getExternalLyric({
+            id: song.id,
+            title: ext?.title || song.name || '',
+            artist: ext?.author || '',
+            durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+          }, signal).catch(() => null) // 级联全灭(404)/网络错同终态：照旧空词
+          if (stale()) return
+          // 纯文本→静态行：parseLyrics 只吃带时间戳的行，synced=false 的
+          // lrc 会全空——逐行落 time:Infinity：WatchView 照常渲行、同步循环
+          // 恒不匹配（currentLyricIndex 停 -1 不滚动）、TextAlive 画布滤非
+          // 有限戳。「不滚动」正是无戳词的正确行为；synced lrc 解空时拿
+          // plain 兜底重切（先剥行首时间戳，不然戳串会进文本）
+          const plainRowsOf = (text) => (text || '').split('\n')
+            .map(l => l.replace(/^\s*(?:\[\d+:[^\]]*\]\s*)+/, '').trim())
+            // 行首 [tag:] 元行（ti/ar/offset/length…）不是词——剥完行首
+            // 时间戳后仍挂标签头的行整行滤掉；元行判定必须在剥戳之后
+            // （\w 含数字，先判会把 [0:05] 这类短戳词行误杀）
+            .filter(l => l && !/^\[[\w-]+:/.test(l))
+            .map(text => ({ time: Infinity, text }))
+          let synced = !!hit?.synced
+          let rows = synced ? parseLyrics(hit.lrc) : []
+          if (!rows.length) { synced = false; rows = plainRowsOf(hit?.plain || hit?.lrc) }
+          // 词属主键挂 extId（ytm_/lrclib_/kugou_ 前缀）——meta 校准表与
+          // verify/translate 白名单对该形态均已放开；extId 缺席降级到
+          // song.id（词仍可见，校准行挂曲 id 不写串台）
+          const extLyricId = hit?.extId || song.id
+          const meta = rows.length
+            ? await downloadsApi.getSongMeta(extLyricId).catch(() => null)
+            : null
+          if (stale()) return
+          lyricOffsetMs.value = meta?.offsetMs ?? 0
+          lyricOwnerKey.value = rows.length ? extLyricId : null
+          lyrics.value = rows
+          currentLyricIndex.value = synced ? 0 : -1
+          const seq = ++lyricProcSeq
+          if (synced && rows.length > 0) {
+            startLyricSync()
+          } else if (lyricTimer) {
+            // 防御（热重载/菜单换绑不经 playSong 的计时器清理）：旧 synced
+            // 计时器若在会把无戳词的 currentLyricIndex 恒压回 0
+            clearInterval(lyricTimer)
+            lyricTimer = null
+          }
+          // extId 缺席时词属主键已降级成轨道 id（bv_/yt_）——该形态不在
+          // /ai/lyric-verify 与 /ai/lyric-translate 白名单内，postProcess
+          // 去了必吃 400 白打两跳，整条跳过（词照常可见，只是无核验/翻译）
+          if (hit?.extId) {
+            void postProcessLyrics(song, extLyricId, seq, signal)
+              .catch(e => console.warn('AI 歌词后处理异常:', e))
+          }
+        } catch (error) {
+          if (stale() || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
+          console.error('❌ 加载外源歌词失败:', error)
+          lyrics.value = []
+          currentLyricIndex.value = 0
+          lyricOwnerKey.value = null
+        } finally {
+          if (!stale()) loadingLyrics.value = false
+        }
         return
       }
       // 词源选择：qq_ 曲首选 QQ 自带词（qq_<mid> 作词源 id——AI 翻译/校准
@@ -1137,6 +1213,87 @@ export function usePlayer({
     const aiLyricVerdicts = new Map()   // `${lyricId}|${title}|${author}` -> boolean
     const aiLyricTranslations = new Map() // lyricId -> tlyric 字符串
     let lyricProcSeq = 0 // 每次歌词落盘 +1；postProcess 捕获，ownsLyric 比对
+
+    // verify 判否后的自动换绑：判否等于「当前词源错配」的强信号，把该
+    // neteaseId 否进 excludeIds 让服务端 /match/retry 换绑重跑。每曲每
+    // 会话限一次（Map 键 trackId——有键即算 tried）——新词源若仍被判否，
+    // 不加闸会 verify→rematch→verify 无限套娃。换绑只认「判否的词源就是
+    // 当前 neteaseId」的场景：qq_ 自源词判否（lyricId 是 qq_ 键不是
+    // neteaseId）否决错了对象——去重键仍记 song.id 防环。
+    // Map 值是该曲的累积否决集：频率闸挡住的后续判否（换绑新源又被否）
+    // 仍把 lyricId 并进集合——同会话内已否词源不再复活进候选；首次发起
+    // 时 excludeIds 发当下累积全量。跨会话收敛靠服务端 song_match 行，
+    // 前端不持久化否决集
+    const rematchTried = new Map()
+    const rematchLyricSource = async (song, lyricId, signal = null) => {
+      if (!(song?.youtube || song?.bilibili) || song.neteaseId == null
+          || String(lyricId) !== String(song.neteaseId)) return
+      const key = String(song.id)
+      const vetoed = rematchTried.get(key)
+      if (vetoed) {
+        vetoed.add(lyricId) // 频率闸已锁——判否仍记账（同会话内不复活）
+        return
+      }
+      const freshVetoed = new Set([lyricId])
+      rematchTried.set(key, freshVetoed)
+      const ext = song.youtube || song.bilibili
+      const durationMs = song.dt || song.duration
+      try {
+        const matched = await musicApi.retryMatch({
+          trackId: song.id,
+          title: ext.title || song.name || '',
+          author: ext.author || '',
+          // provider 块从不存 artists 字段（external-songs.js 只落 author/
+          // authorClean）——authorClean 是剥 ' - Topic'/'VEVO' 后的真艺人名，
+          // 一并喂服务端打分器 sourceInfo.artists（YT Topic 频道场景 retry
+          // 不再比首配更瞎）
+          artists: [ext?.author, ext?.authorClean].filter(Boolean),
+          durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+          excludeIds: [...freshVetoed],
+        }, signal)
+        if (!matched?.id || String(matched.id) === String(song.neteaseId)) return
+        // 换绑写回曲对象+显式落盘：savePlaylistsToStorage 是显式调用制
+        // （非 watch），只变异要等下一次任意歌单写才经 slimTrack 落盘——
+        // 用户直接关页则下会话重走判否→藏词→rematch 循环。服务端
+        // song_match 行已被 /match/retry 覆写兜底，两端同写才算闭环
+        song.neteaseId = matched.id
+        savePlaylistsToStorage()
+        // RTT 期间歌可能已切走（signal 随切歌 abort 通常已把请求打断；
+        // 陈旧序未 abort 时靠这层再兜）：写回/落盘照做（那是曲的持久
+        // 属性），只给仍正播的曲补 toast+热重载，别替没人看的歌刷词
+        if (currentPlayingId !== song.id || signal?.aborted) return
+        toast('词源已自动重匹配', 'success')
+        await loadLyrics(song, signal)
+      } catch (e) {
+        // abort（切歌打断在途请求）不消费额度——槽位是本曲「下次播放再试」
+        // 的机会，RTT 窗内切歌不该烧掉它；其它错误保留占位防每播一次
+        // 刷 match-retry 限流桶
+        if (signal?.aborted || e?.code === 'ERR_CANCELED'
+            || e?.name === 'AbortError' || e?.name === 'CanceledError') {
+          rematchTried.delete(key)
+        }
+      }
+    }
+
+    // 行菜单换绑通知槽（模块级单槽，见 notifyLyricRematch 头注）：正播同曲
+    // 才把新词源 id 补写进本侧曲对象并重载词——非当前曲的改动留给下次播放
+    // 的 loadLyrics 自然消费
+    const onLyricRematch = (trackId, neteaseId) => {
+      if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
+      if (neteaseId != null) {
+        currentSong.value.neteaseId = neteaseId
+        // 本侧对象与菜单侧写过的对象不一定是同一引用——补写后显式落盘
+        // （同 rematchLyricSource：savePlaylistsToStorage 是显式调用制，
+        // 只变异不落盘会丢「关页前最后一次换绑」）
+        savePlaylistsToStorage()
+      }
+      void loadLyrics(currentSong.value)
+    }
+    lyricRematchHandler = onLyricRematch
+    onBeforeUnmount(() => {
+      if (lyricRematchHandler === onLyricRematch) lyricRematchHandler = null
+    })
+
     const postProcessLyrics = async (song, lyricId, seq, signal = null) => {
       if (!lyrics.value.length) return
       const st = await aiApi.status()
@@ -1182,6 +1339,10 @@ export function usePlayer({
             lyricOwnerKey.value = null
             if (fresh) toast('歌词与歌曲疑似不匹配，已隐藏', 'info')
           }
+          // 判否是词源错配信号——外源曲把当前 neteaseId 否进 excludeIds
+          // 重跑服务端匹配链，命中即换绑+热重载（每曲每会话限一次，见
+          // rematchLyricSource）。词已藏才发：不在判否原地等匹配 RTT
+          await rematchLyricSource(song, lyricId, signal)
           return // 词源错了就不必再翻译错词
         }
       }
@@ -1190,6 +1351,9 @@ export function usePlayer({
       //    AI 未配置时 503 会每首歌重发，这里直接早退省一跳
       if (!st?.enabled || !ownsLyric() || !lyrics.value.length) return
       if (lyrics.value.some(l => l.translation)) return
+      // 无时间戳的纯文本词不翻——译文靠时间戳回贴（mergeTranslations 0.5s
+      // 合并窗），无戳行没有挂载点，打了也合不进
+      if (!lyrics.value.some(l => Number.isFinite(l.time))) return
       if (lyricCjkDominant(lyrics.value)) return
       try {
         let tlyric = aiLyricTranslations.get(lyricId)
