@@ -63,10 +63,10 @@ test('authCredentialsBody：用户名白名单字符集 + 密码 8-128 硬边界
   assert.ok(!authCredentialsBody.safeParse({ username: '', password: 'password-one' }).success);
 });
 
-test('settingsBody：六键全部可选、null=清覆盖语义、类型与量纲硬边界', () => {
+test('settingsBody：七键全部可选、null=清覆盖语义、类型与量纲硬边界', () => {
   assert.ok(settingsBody.safeParse({}).success); // 全可缺省（「无可写键」在路由层判 400）
   // null 是「清覆盖回落 env」合法值——不是空值校验错
-  assert.ok(settingsBody.safeParse({ ai_model: null, bili_cookie: null }).success);
+  assert.ok(settingsBody.safeParse({ ai_model: null, bili_cookie: null, yt_cookie: null }).success);
   assert.ok(settingsBody.safeParse({ ai_timeout_ms: 60000 }).success); // int 直收
   assert.ok(settingsBody.safeParse({ ai_timeout_ms: '60000' }).success); // 字符串也收（归一化在 lib）
   // 类型边界：布尔/对象不收
@@ -76,6 +76,7 @@ test('settingsBody：六键全部可选、null=清覆盖语义、类型与量纲
   // 长度硬上限：cookie 8000、url/key 1000、model 500、timeout 串 20
   assert.ok(!settingsBody.safeParse({ bili_cookie: 'x'.repeat(8001) }).success);
   assert.ok(settingsBody.safeParse({ bili_cookie: 'x'.repeat(8000) }).success);
+  assert.ok(!settingsBody.safeParse({ yt_cookie: 'x'.repeat(8001) }).success);
   assert.ok(!settingsBody.safeParse({ ai_base_url: 'x'.repeat(1001) }).success);
   assert.ok(!settingsBody.safeParse({ ai_model: 'x'.repeat(501) }).success);
   assert.ok(!settingsBody.safeParse({ ai_timeout_ms: '1'.repeat(21) }).success);

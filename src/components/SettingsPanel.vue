@@ -69,7 +69,7 @@
           <div class="settings-card-head">
             <h3 id="st-cookies" class="settings-card-title">音乐源凭据</h3>
           </div>
-          <p class="settings-hint">登录态 Cookie 解锁 VIP/高码率档。只发往对应源站域；QQ 凭据到期前服务端自动续期。</p>
+          <p class="settings-hint">登录态 Cookie 解锁 VIP/高码率档；YouTube 侧绕匿名反机器人墙。只发往对应源站域；QQ 凭据到期前服务端自动续期。</p>
 
           <div v-for="ck in cookieDefs" :key="ck.key" class="settings-cookie">
             <div class="settings-cookie-head">
@@ -167,11 +167,12 @@ export default {
     const aiKey = ref('')
     const aiModelName = ref('')
     const aiTimeout = ref('')
-    const cookieDrafts = reactive({ bili_cookie: '', qq_cookie: '' })
+    const cookieDrafts = reactive({ bili_cookie: '', qq_cookie: '', yt_cookie: '' })
 
     const cookieDefs = [
       { key: 'bili_cookie', label: 'B 站 Cookie' },
       { key: 'qq_cookie', label: 'QQ 音乐 Cookie' },
+      { key: 'yt_cookie', label: 'YouTube Cookie' },
     ]
 
     const saving = ref(false)
@@ -190,6 +191,7 @@ export default {
       if (touched('ai_api_key')) aiKey.value = ''
       if (touched('bili_cookie')) cookieDrafts.bili_cookie = ''
       if (touched('qq_cookie')) cookieDrafts.qq_cookie = ''
+      if (touched('yt_cookie')) cookieDrafts.yt_cookie = ''
     }
 
     const load = async () => {
