@@ -682,7 +682,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* ── 响应式阶梯（全站唯一事实源注释，媒体查询仍写字面 px）──
    compact ≤640：密度档（页缘 pad 12、底栏分权拓扑、对话框贴边、专辑列收；
      写法 max-width:640.98px 配 min-width:641px——.98 防亚像素死带同 900.98）
-   phone   ≤768：结构档（顶栏两行、侧栏抽屉、底栏首轮减负、沉浸页纵排）
+   phone   ≤768：结构档（顶栏单行+搜索展开层、侧栏抽屉、底栏首轮减负、沉浸页纵排）
    wide    ≥901：内容双栏（watch 左右分栏；配对的 <901 写法是 max-width:900.98px）
    dock    ≥1024：chrome 全量（侧栏定驻 280、汉堡消隐、搜索钉列、底栏时刻）
    xl      ≥1280：主从分栏（下载页队列/任务双列、内滚 gutter 车道）
@@ -691,14 +691,14 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    motion/forced-colors/print）不入宽度阶梯——正交通道 */
 
 /* 顶栏高度令牌：抽屉/遮罩顶缘锚定顶栏底（不盖住，☰ 才是关闭入口）。
-   ≤768 顶栏改两行（8+32 行1 + 8+36 行2 + 8 + 1.2 发丝线 = 93.2），
-   此值与 TopNavigation.vue 断点及右簇最高件（pg-icobtn 32px）成对维护 */
+   全宽档恒单行（56 行 + 1.2 发丝线 = 57.2）——≤768 搜索收进 --open
+   整行展开层（TopNavigation.vue）不再两行增高；此值与 TopNavigation
+   断点及右簇最高件（pg-icobtn 32px）成对维护 */
 :root { --topnav-h: 57.2px; }
 /* 控件高双档令牌：一级 36（ink-btn/pg-field）、紧凑 32（ink-btn--sm/
    pg-icobtn/atp input/行内 CTA）——同行控件共用令牌，盒高不齐时
    改令牌比对账逐件改数更不易漂移；小件档 24（icobtn--sm/chip/行内尾件） */
 :root { --ctrl-h: 36px; --ctrl-h-sm: 32px; }
-@media (max-width: 768px) { :root { --topnav-h: 93.2px; } }
 
 /* 页缘横槽令牌：内容视图统一 padding-inline 源（song-list/home-feed/
    playlist-grid/watch-layout 消费；≤640 降 12——此前仅 song-list 降，

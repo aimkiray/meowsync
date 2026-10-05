@@ -1,7 +1,9 @@
 <template>
   <nav class="topnav">
     <div class="topnav-inner">
-      <div class="topnav-left">
+      <!-- inert：展开层罩住行内控件时被遮键仍在 Tab 序——inert 把它们整簇
+           移出焦点环（不能 inert inner：展开层是它的子节点） -->
+      <div class="topnav-left" :inert="searchOpen">
         <!-- 移动端：汉堡键呼出歌单库抽屉（lg:hidden 死声明——pg-icobtn 的
              display 在 utilities 层后同特异度胜出，隐藏须走 scoped media） -->
         <button
@@ -19,8 +21,18 @@
         </h1>
       </div>
 
-      <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议 -->
-      <div class="topnav-search">
+      <!-- 居中搜索：歌单名 / 歌单ID / 分享URL 三合一 + 输入建议。
+           ≤768 脱离 grid 收成 --open 整行展开层（盖标题栏，YTM 同型） -->
+      <div class="topnav-search" id="topnav-search" role="search" :class="{ 'topnav-search--open': searchOpen }">
+        <!-- 展开层返回键：仅展开态渲染（searchOpen 只在 ≤768 能为真，
+             双保险见 scoped CSS 默认 display:none） -->
+        <button
+          v-if="searchOpen"
+          class="pg-icobtn pg-icobtn--bare topnav-search-back"
+          aria-label="收起搜索"
+          title="收起搜索"
+          @click="closeSearch(true)"
+        ><PixelIcon name="chev-l" :size="18" /></button>
         <div class="pg-field topnav-search-field">
           <PixelIcon name="search" :size="16" class="topnav-search-icon" />
           <input
@@ -76,11 +88,23 @@
         </div>
       </div>
 
-      <div class="topnav-actions">
+      <div class="topnav-actions" :inert="searchOpen">
         <!-- 右簇全量收进单个 ⋯ 菜单：下载/控制器/主题/退出——顶栏只留
              一个触发键；菜单走 pg-menu 族（PlaylistPanel 同口径：
              pointerdown 外关、Esc 焦点归还、fixed 翻上兜底）。
              顺带解开 640px 以下主题胶囊被隐藏后无处可切的死角 -->
+        <!-- 窄屏搜索触发键：≤768 搜索行出流，点此整行展开盖标题栏；
+             仅 ≤768 可见——scoped media 显隐同汉堡注释坑 -->
+        <button
+          ref="searchBtn"
+          class="pg-icobtn pg-icobtn--bare topnav-search-btn"
+          aria-label="搜索"
+          title="搜索"
+          :aria-expanded="searchOpen"
+          aria-controls="topnav-search"
+          @click="openSearch"
+        ><PixelIcon name="search" :size="18" /></button>
+
         <button
           ref="menuBtn"
           class="pg-icobtn pg-icobtn--bare topnav-menu-btn"
@@ -379,7 +403,29 @@ export default {
       searchInput.value?.focus()
     }
 
-    const focusSearch = () => searchInput.value?.focus()
+    // ── 窄屏搜索展开层（≤768）：触发键 → --open 整行绝对定位层盖顶栏 ──
+    const searchOpen = ref(false)
+    const searchBtn = ref(null)
+
+    const openSearch = () => {
+      searchOpen.value = true
+      // 层在 v-if/class 翻转后才挂载可见——nextTick 接焦
+      nextTick(() => searchInput.value?.focus())
+    }
+
+    // Esc/返回键收层归还触发键焦点——等 nextTick：inert 随 searchOpen=false
+    // 的 DOM 更新才摘除，同步 focus 会砸在仍 inert 的 searchBtn 上被静默丢弃
+    const closeSearch = (restoreFocus = false) => {
+      const was = searchOpen.value
+      searchOpen.value = false
+      if (restoreFocus && was) nextTick(() => searchBtn.value?.focus({ preventScroll: true }))
+    }
+
+    const focusSearch = () => {
+      // ≤768 输入框收在展开层里（display:none 直 focus 静默失能）——先展开再接焦
+      if (matchMedia('(max-width: 768px)').matches) openSearch()
+      else searchInput.value?.focus()
+    }
 
     // IME 合成中（拼音选词）按 Enter 不应触发搜索
     const onSearchEnter = (e) => {
@@ -418,8 +464,14 @@ export default {
       }
       if (e.key === 'Enter') onSearchEnter(e)
       else if (e.key === 'Escape') {
-        suggestOpen.value = false
-        activeIndex.value = -1
+        if (!suggestOpen.value && searchOpen.value) {
+          // 建议已关时再按 Esc = 收整层展开态（焦点归还触发键）；
+          // 建议开着时 Esc 原位消化只关下拉——两层逐级解散
+          closeSearch(true)
+        } else {
+          suggestOpen.value = false
+          activeIndex.value = -1
+        }
       }
     }
 
@@ -482,11 +534,19 @@ export default {
     // →resize 时强拽焦点）——必须包箭头，同 PlaylistPanel closeOnScroll 注释坑
     const onResizeClose = () => closeMenu()
 
+    // 离开 ≤768 强收展开层——宽档搜索行回归常驻 grid，残留的 --open
+    // 绝对定位样式只在 ≤768 media 块内生效本无害，但 searchOpen 悬真
+    // 会让返回键挂在常驻行里、触发键 aria-expanded 失真
+    let searchMq
+    const onSearchMq = (e) => { if (!e.matches) closeSearch() }
+
     onMounted(() => {
       document.addEventListener('pointerdown', onDocPointerDown)
       document.addEventListener('keydown', onMenuKeydown)
       // ≥1472 时 inner 居中、触发键距右缘随视口漂移；resize 菜单位置即过期
       window.addEventListener('resize', onResizeClose)
+      searchMq = matchMedia('(max-width: 768px)')
+      searchMq.addEventListener('change', onSearchMq)
     })
     onBeforeUnmount(() => {
       clearTimeout(suggestTimer)
@@ -494,6 +554,7 @@ export default {
       document.removeEventListener('pointerdown', onDocPointerDown)
       document.removeEventListener('keydown', onMenuKeydown)
       window.removeEventListener('resize', onResizeClose)
+      searchMq?.removeEventListener('change', onSearchMq)
     })
 
     // 登出：作废服务端 session 后整页重载（与登录成功同一收束路径）。
@@ -531,7 +592,11 @@ export default {
       onSearchBlur,
       pickSuggestion,
       clearQuery,
-      focusSearch
+      focusSearch,
+      searchOpen,
+      searchBtn,
+      openSearch,
+      closeSearch
     }
   }
 }
@@ -541,6 +606,9 @@ export default {
 /* 纸面 masthead：一行高度 + 墨色发丝下缘 */
 .topnav {
   flex-shrink: 0;
+  /* ≤768 搜索展开层 absolute inset:0 锚此（锚 inner 会被 max-width 帽
+     缩出两侧露底） */
+  position: relative;
   /* 横屏刘海侧让位：viewport-fit=cover 下左缘 ~47px 死区 */
   padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
   border-bottom: var(--hairline);
@@ -684,7 +752,7 @@ export default {
   z-index: var(--z-menu);
   background: var(--paper);
   border: var(--hairline);
-  /* 8 条建议 ~300px + 窄屏双行顶栏 ~93px——手机横屏会顶出视口底缘，
+  /* 8 条建议 ~300px + 窄屏单行顶栏 ~57px——手机横屏会顶出视口底缘，
      限高内滚兜底 */
   max-height: calc(100vh - var(--topnav-h, 57.2px) - 8px);
   max-height: calc(100dvh - var(--topnav-h, 57.2px) - 8px);
@@ -752,6 +820,12 @@ export default {
   justify-self: end; /* grid 右列贴右缘 */
 }
 
+/* 窄屏搜索触发键 + 展开层返回键：默认藏，仅 ≤768 现身——
+   不能用 lg:hidden 类：.pg-icobtn{display:inline-flex} 在全局
+   utilities 层后同特异度后序胜出（同汉堡注释坑） */
+.topnav-search-btn,
+.topnav-search-back { display: none; }
+
 /* ⋯ 菜单：fixed 定位由 :style 给出（右缘对齐触发键）；
    remote 提示沿用 pg-menu-head 的 mono 小字档 */
 .topnav-menu-remote { cursor: default; }
@@ -773,25 +847,35 @@ export default {
   color: var(--accent-magenta-ink);
 }
 
-/* 窄屏两行布局：一行塞不下"导航+搜索+动作"——
-   row1 = 汉堡+标题(home入口) | 动作簇，row2 = 搜索占满整行 */
+/* 窄屏单行 + 搜索收展开层：一行塞不下"导航+搜索+动作"，YTM 同型——
+   默认行 = 汉堡+标题 | 搜索键+⋯；点搜索键 .topnav-search 挂 --open
+   绝对定位铺满 .topnav 盖住标题栏与动作簇。收起态 display:none 出流
+   不占位（grid areas 不给它留轨），展开即聚焦输入框 */
 @media (max-width: 768px) {
   .topnav-inner {
     grid-template-columns: 1fr auto;
-    grid-template-areas:
-      "left actions"
-      "search search";
-    height: auto;
-    padding: 8px 0;
-    row-gap: 8px;
+    grid-template-areas: "left actions";
   }
   .topnav-left { grid-area: left; }
   .topnav-actions { grid-area: actions; }
-  .topnav-search { grid-area: search; }
+  .topnav-search { display: none; }
+  .topnav-search--open {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    /* 与菜单/抽屉同层——展开层盖住的不止行内兄弟，还有行下溢出的建议下拉 */
+    z-index: var(--z-menu);
+    background: var(--paper);
+    /* 内槽镜像 .topnav 外槽——盖整行后输入行仍对轴原内容内缘（≤640.98 镜像 12 见下块） */
+    padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
+  }
   .topnav-search-field { flex: 1; width: auto; }
+  .topnav-search-btn,
+  .topnav-search-back { display: inline-flex; }
 }
 
 @media (max-width: 640.98px) {
   .topnav { padding: 0 12px; }
+  .topnav-search--open { padding: 0 12px; }
 }
 </style>
