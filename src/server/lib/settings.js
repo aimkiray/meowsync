@@ -25,6 +25,10 @@ const DEFS = Object.assign(Object.create(null), {
   // env 链首命中：NEW_QQ_COOKIE 是续期回写的最新凭据（qm_keyst ~3d 轮换），
   // QQ_COOKIE 是管理员原始配置——回显与回退都必须先认新值
   qq_cookie: { env: ['NEW_QQ_COOKIE', 'QQ_COOKIE'], secret: true, maxLen: 4000, secretAscii: true },
+  // YouTube 登录态 cookie：匿名 Innertube 全形态吃反机器人墙（「请登录，
+  // 以便我们确认你不是聊天机器人」→ /stream 502）——登录态 WEB 档绕行；
+  // SAPISID 系键供 SAPISIDHASH 签名（消费侧在 lib/youtube.js）
+  yt_cookie: { env: 'YT_COOKIE', secret: true, maxLen: 4000, secretAscii: true },
 });
 
 const KEYS = Object.keys(DEFS);

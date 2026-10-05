@@ -76,7 +76,8 @@ export const settingsBody = z.looseObject({
   ai_model: z.union([z.string().max(500), z.null()]).optional(),
   ai_timeout_ms: z.union([z.string().max(20), z.number().int(), z.null()]).optional(),
   bili_cookie: z.union([z.string().max(8000), z.null()]).optional(),
-  qq_cookie: z.union([z.string().max(8000), z.null()]).optional()
+  qq_cookie: z.union([z.string().max(8000), z.null()]).optional(),
+  yt_cookie: z.union([z.string().max(8000), z.null()]).optional()
 });
 
 // POST /settings/ai-test：三段均可选——留空字段用已生效配置补位

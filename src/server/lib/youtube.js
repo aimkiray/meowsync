@@ -6,6 +6,10 @@
 // 签名）——正是不需要 yt-dlp 的原因；ANDROID 优先，被风控/改版时退 IOS。
 // key/客户端版本号摘自 youtube.com 前端与 yt-dlp 上游（会随 YouTube 改版过期——
 // resolve 报「无流数据」率升高时对照 yt-dlp 仓库同步 clientVersion）
+const { createHash } = require('crypto');
+// 懒读而非启动快照：app_settings 覆盖/env 经 lib/settings 解析——设置页
+// 热改即刻生效，重启不追陈值（biliCookie/qqCookie 同口径）
+const { effectiveValue } = require('./settings');
 const YT_TIMEOUT_MS = 15000;
 const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 const INNERTUBE_CLIENTS = [
@@ -59,7 +63,11 @@ const DESKTOP_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/6
 // 服务的（ANDROID 优先直返可播 url），歌单页 renderer 结构按桌面端解析
 const WEB_CLIENT = {
   name: 'WEB', clientId: 1,
-  client: { clientName: 'WEB', clientVersion: '2.20250219.01.00', hl: 'zh' },
+  // clientVersion 跟随 yt-dlp INNERTUBE_CONTEXT['web'] 现值（月度日戳滚动，
+  // 认证请求审查更严——陈旧代际差会被风控当信号）。与 DESKTOP_UA 的对齐口径
+  // 是代际级：UA 钉发版时在位的 Safari 大版本代（Safari 26 覆盖
+  // 2025-09→2026-09，含本戳 2026-07；Intel Mac 停在 15_7_x 安全分支，串恒合法）
+  client: { clientName: 'WEB', clientVersion: '2.20260708.00.00', hl: 'zh' },
   headers: { 'User-Agent': DESKTOP_UA },
 };
 
@@ -108,13 +116,101 @@ async function getVisitorData(extraSignal) {
   return vd;
 }
 
+// ── 可选登录态（YT_COOKIE）─────────────────────────────────────
+// 匿名 Innertube 全形态吃反机器人墙（「请登录，以便我们确认你不是聊天
+// 机器人」→ /stream 502）——带登录态 cookie 的 WEB 形态档排轮替链最前
+// 绕行。cookie 值不出进程：只随认证档发 youtubei 端点，不落日志/错误消息
+// 按值去重——覆盖热改后新坏值要重新告警，同一坏值不重复刷日志
+let ytCookieWarned = '';
+function ytCookie() {
+  const raw = (effectiveValue('yt_cookie') || '').trim();
+  if (!raw) return '';
+  // header 负载要求 latin1——粘贴串带进换行/中文会让 undici 抛头校验错，
+  // 全部 YouTube 请求静默 502（设置页写入侧已挡非 ASCII，这里是 env
+  // 直配与脏库行双保险；biliCookie 同款消毒）
+  const ascii = raw.replace(/[^\x20-\x7e]/g, '');
+  if (ascii !== raw && ytCookieWarned !== raw) {
+    ytCookieWarned = raw;
+    console.warn('[youtube] YT_COOKIE 含控制字符/非 ASCII，已剔除——cookie 值应为纯 ASCII');
+  }
+  return ascii;
+}
+// 对外只暴露「是否配了登录态」的布尔面——cookie 值不出进程
+const hasYtCookie = () => Boolean(ytCookie());
+
+// SAPISID*HASH 是 Innertube 登录态自证头（yt-dlp _get_sid_authorization_header
+// 同款三 scheme 拼装）——签名键按桶各产各的段，不是互相顶替的备选：
+//   SAPISIDHASH   ← SAPISID（缺席时 __Secure-3PAPISID 顶位——YouTube 同款回落）
+//   SAPISID1PHASH ← __Secure-1PAPISID
+//   SAPISID3PHASH ← __Secure-3PAPISID
+//   Authorization: <scheme> <ts>_<sha1("<ts> <sid> https://www.youtube.com")> …
+// 各段 ' '.join，键缺席则该段略；全缺 → 无 Authorization 裸 Cookie 降级
+const YT_ORIGIN = 'https://www.youtube.com';
+const SID_SEGMENTS = [
+  { scheme: 'SAPISIDHASH', keys: ['SAPISID', '__Secure-3PAPISID'] },
+  { scheme: 'SAPISID1PHASH', keys: ['__Secure-1PAPISID'] },
+  { scheme: 'SAPISID3PHASH', keys: ['__Secure-3PAPISID'] },
+];
+// [^;]+ 会吃进 "SAPISID=abc ;SID=x" 的尾空格——trim 后才作签名料；
+// 抠出空值继续轮下个键（yt-dlp `or` 链同语义）
+const sidValue = (cookie, keys) => {
+  for (const name of keys) {
+    const m = cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+    const v = m?.[1]?.trim();
+    if (v) return v;
+  }
+  return '';
+};
+const sidHash = (scheme, sid, ts = Math.floor(Date.now() / 1000)) =>
+  `${scheme} ${ts}_${createHash('sha1')
+    .update(`${ts} ${sid} ${YT_ORIGIN}`).digest('hex')}`;
+
+// 认证头构造（yt-dlp generate_api_headers 的凭据面）——player/search/browse
+// 三条链共用。Origin 恒定附（真实浏览器同款伴随头）；X-Origin 仅随签名头
+// 发——它声明的是 hash 的 origin 绑定，无签名时是空指令。SAPISID 系键全缺
+// 降级裸 Cookie（按值记一次 warn）：缺签名头登录态大概率不采信，但照发比
+// 直接判死强——其余字段仍可能起访客凭据作用
+let sapisidWarnedFor = '';
+const ytAuthHeaders = () => {
+  const cookie = ytCookie();
+  if (!cookie) return null;
+  const auth = SID_SEGMENTS.map(({ scheme, keys }) => {
+    const sid = sidValue(cookie, keys);
+    return sid ? sidHash(scheme, sid) : '';
+  }).filter(Boolean).join(' ');
+  if (!auth && sapisidWarnedFor !== cookie) {
+    sapisidWarnedFor = cookie;
+    console.warn('[youtube] YT_COOKIE 缺 SAPISID/__Secure-1PAPISID/__Secure-3PAPISID 签名键——'
+      + 'Authorization 头省略，登录态可能不被采信');
+  }
+  return {
+    Origin: YT_ORIGIN,
+    Cookie: cookie,
+    ...(auth ? { Authorization: auth, 'X-Origin': YT_ORIGIN } : {}),
+  };
+};
+
+// 认证档构造：UA/context.client 复用 DESKTOP_UA/WEB_CLIENT——
+// Authorization↔UA↔context 一致性是风控校验点（VISIONOS 内嵌 UA 同款）
+const ytAuthForms = () => {
+  const headers = ytAuthHeaders();
+  if (!headers) return [];
+  return [{
+    name: 'WEB_AUTH', clientId: WEB_CLIENT.clientId,
+    client: { ...WEB_CLIENT.client, userAgent: DESKTOP_UA },
+    headers: { 'User-Agent': DESKTOP_UA, ...headers },
+  }];
+};
+
 // 指定客户端形态直解：clientName 用于「已知 ANDROID 流被闸」的升级路径——
 // 跳过无谓的前两形态白打，直接拿 VISIONOS 签名批。
 // 每形态至多两试：首试裸匿名，LOGIN_REQUIRED 后补 visitorData 原地重试
 async function fetchPlayerWith(videoId, extraSignal, clientName) {
+  // 认证档只进默认轮替链（排头）——指名形态（VISIONOS 升级路）维持
+  // 匿名口径不动；cookie 未配时链与旧版逐字节相同
   const forms = clientName
     ? INNERTUBE_CLIENTS.filter(f => f.name === clientName)
-    : INNERTUBE_CLIENTS;
+    : [...ytAuthForms(), ...INNERTUBE_CLIENTS];
   if (!forms.length) throw new Error(`未知客户端形态: ${clientName}`);
   let lastErr = null;
   for (const form of forms) {
@@ -179,7 +275,10 @@ const fetchPlayer = (videoId, extraSignal) => fetchPlayerWith(videoId, extraSign
 // 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
 // spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强。
 // 客户端表回落与 fetchPlayer 同口径：Innertube 风控按客户端形态整体生效，
-// ANDROID 被封时 search 若写死单形态会在 player 回落链之前就整源死亡
+// ANDROID 被封时 search 若写死单形态会在 player 回落链之前就整源死亡。
+// cookie 在位时认证档排头——yt-dlp 只对 SUPPORTS_COOKIES 的 web 系形态
+// 发 cookie（移动形态带 web cookie 是指纹自相矛盾），bot 墙若按端点
+// 生效则搜索同受益；失败照常轮转匿名移动档
 async function innertubeSearch(keyword, extraSignal, limit = 5) {
   // 递归扫 videoRenderer（web 客户端形态）与 compactVideoRenderer
   // （ANDROID/IOS 移动客户端形态）——twoColumnSearchResultsRenderer 的
@@ -215,7 +314,7 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
     }
   };
   let lastErr = null;
-  for (const form of INNERTUBE_CLIENTS) {
+  for (const form of [...ytAuthForms(), ...INNERTUBE_CLIENTS]) {
     if (extraSignal?.aborted) throw new Error('aborted');
     try {
       const vd = freshVisitorData();
@@ -307,36 +406,56 @@ const rendererText = (n) => (n?.runs || []).map(r => r.text).join('') || n?.simp
 // 无 videoId/sentinel 标题）计入 skipped 透出给前端
 async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   const vd = freshVisitorData();
-  const res = await fetch(`https://www.youtube.com/youtubei/v1/browse?key=${INNERTUBE_KEY}`, {
-    method: 'POST',
-    headers: clientHeaders(WEB_CLIENT, vd),
-    body: JSON.stringify({
-      context: { client: vd ? { ...WEB_CLIENT.client, visitorData: vd } : WEB_CLIENT.client },
-      // VL 前缀输入已是 browseId 形态——幂等而非二次加前缀
-      ...(continuation ? { continuation } : { browseId: /^VL/i.test(listId) ? listId : `VL${listId}` }),
-    }),
-    signal: timedSignal(extraSignal),
-  });
-  if (!res.ok) throw new Error(`innertube browse HTTP ${res.status}`);
-  const body = await res.json();
-
-  // 私有/不存在/被删的歌单：200 + alerts[].alertRenderer.type='ERROR'
-  // ——对用户是「不可访问」语义，挂 upstreamCode 供路由映射 404；
-  // 登录/风控类 alert（sign in/bot）是本机信誉问题而非歌单问题，分档 502
-  const alert = (body?.alerts || []).find(a => a?.alertRenderer?.type === 'ERROR');
-  if (alert) {
-    const text = rendererText(alert.alertRenderer.text);
-    const e = new Error(`播放列表不可用: ${text || 'ERROR'}`);
-    e.upstreamCode = /sign in|log ?in|bot|登录|登入|验证|確認/i.test(text) ? 'ALERT_AUTH' : 'ALERT_ERROR';
-    throw e;
+  // cookie 在位时认证档打头、匿名 WEB 档殿后（头构造与 player/search 共用
+  // ytAuthForms）——bot 墙若按端点生效，歌单导入同受益。认证档失败回落
+  // 匿名再试一次：过期/畸形 cookie 不该打死本来匿名就能过的歌单导入
+  const forms = [...ytAuthForms(), WEB_CLIENT];
+  let body = null;
+  let lastErr = null;
+  for (const form of forms) {
+    if (extraSignal?.aborted) throw new Error('aborted');
+    try {
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/browse?key=${INNERTUBE_KEY}`, {
+        method: 'POST',
+        headers: clientHeaders(form, vd),
+        body: JSON.stringify({
+          context: { client: vd ? { ...form.client, visitorData: vd } : form.client },
+          // VL 前缀输入已是 browseId 形态——幂等而非二次加前缀
+          ...(continuation ? { continuation } : { browseId: /^VL/i.test(listId) ? listId : `VL${listId}` }),
+        }),
+        signal: timedSignal(extraSignal),
+      });
+      if (!res.ok) throw new Error(`innertube browse HTTP ${res.status}`);
+      const parsed = await res.json();
+      // 私有/不存在/被删的歌单：200 + alerts[].alertRenderer.type='ERROR'
+      // ——对用户是「不可访问」语义，挂 upstreamCode 供路由映射 404；
+      // 登录/风控类 alert（sign in/bot）是本机信誉问题而非歌单问题，分档 502
+      const alert = (parsed?.alerts || []).find(a => a?.alertRenderer?.type === 'ERROR');
+      if (alert) {
+        const text = rendererText(alert.alertRenderer.text);
+        const e = new Error(`播放列表不可用: ${text || 'ERROR'}`);
+        e.upstreamCode = /sign in|log ?in|bot|登录|登入|验证|確認/i.test(text) ? 'ALERT_AUTH' : 'ALERT_ERROR';
+        throw e;
+      }
+      // 200 但三棵内容根与 header 全空——风控空壳/响应畸形，不是「歌单不存在」
+      if (!parsed?.header && !parsed?.contents && !parsed?.onResponseReceivedActions
+        && !parsed?.onResponseReceivedEndpoints && !parsed?.continuationContents) {
+        const e = new Error('innertube browse 空壳响应');
+        e.upstreamCode = 'EMPTY_SHELL';
+        throw e;
+      }
+      body = parsed;
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (extraSignal?.aborted) throw new Error('aborted');
+      // ALERT_ERROR 是歌单级终态（私有/不存在）——匿名重试逐字节同结果不
+      // 重复打；ALERT_AUTH/空壳/传输错是凭据级失败，匿名档还有一次机会
+      if (e.upstreamCode === 'ALERT_ERROR') throw e;
+      console.warn(`[youtube] ${form.name} 客户端歌单页抓取失败:`, e.message);
+    }
   }
-  // 200 但三棵内容根与 header 全空——风控空壳/响应畸形，不是「歌单不存在」
-  if (!body?.header && !body?.contents && !body?.onResponseReceivedActions
-    && !body?.onResponseReceivedEndpoints && !body?.continuationContents) {
-    const e = new Error('innertube browse 空壳响应');
-    e.upstreamCode = 'EMPTY_SHELL';
-    throw e;
-  }
+  if (!body) throw lastErr || new Error('innertube browse 各形态均失败');
 
   const items = [];
   const seen = new Set();
@@ -470,4 +589,4 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   };
 }
 
-module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, YT_TIMEOUT_MS };
+module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, YT_TIMEOUT_MS };

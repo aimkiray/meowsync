@@ -43,6 +43,8 @@ services:
       - BILI_COOKIE=${BILI_COOKIE:-}
       # 可选：QQ 音乐登录 Cookie（uin+qm_keyst；VIP/无损档下发前提，务必小号）
       - QQ_COOKIE=${QQ_COOKIE:-}
+      # 可选：YouTube 登录 Cookie（绕匿名 Innertube 反机器人墙；需含 SAPISID 系键才发签名头，务必小号）
+      - YT_COOKIE=${YT_COOKIE:-}
       # 数据目录（SQLite + 下载文件）；默认 /app/data，与下方挂载卷一致
       - DATA_DIR=${DATA_DIR:-}
       - DOWNLOAD_DIR=${DOWNLOAD_DIR:-}
