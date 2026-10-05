@@ -158,7 +158,9 @@ if (hasDist) {
       || p === '/ai' || p.startsWith('/ai/')
       || p === '/settings' || p.startsWith('/settings/')
       || p === '/song-meta' || p.startsWith('/song-meta/')
-      || p === '/uploads' || p.startsWith('/uploads/'))
+      || p === '/match' || p.startsWith('/match/')
+      || p === '/uploads' || p.startsWith('/uploads/')
+      || p === '/lyric-align' || p.startsWith('/lyric-align/'))
       && c.req.method !== 'GET' && c.req.method !== 'HEAD';
     if (!protectedWrite) return next();
     // 已登录会话放行（authGate 已验过并 set('user')——直接消费不二次查库）
@@ -183,8 +185,13 @@ app.route('/', require('./src/server/routes/songmeta'));
 app.route('/', require('./src/server/routes/bilibili'));
 app.route('/', require('./src/server/routes/youtube'));
 app.route('/', require('./src/server/routes/qq'));
+app.route('/', require('./src/server/routes/match'));
 app.route('/', require('./src/server/routes/ai'));
+app.route('/', require('./src/server/routes/lyric-align'));
 app.route('/', require('./src/server/routes/settings'));
+// 外部歌词兜底链（/lyric/external）——先注册不碍事：首段 'lyric' 亦在
+// ALLOWED_APIS，但 /:apiName 只匹配单段路径，多段路由不会撞车
+app.route('/', require('./src/server/routes/lyric-external'));
 const musicRoutes = require('./src/server/routes/music');
 app.route('/', musicRoutes);
 

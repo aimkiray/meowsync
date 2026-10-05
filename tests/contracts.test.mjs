@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   downloadTaskBody, quickDownloadBody, mirrorBody,
   importPlaylistBody, songMetaBody, aiLyricBody,
-  settingsBody, aiTestBody
+  settingsBody, aiTestBody, lyricAlignBody
 } from '../src/shared/contracts.js';
 
 test('downloadTaskBody：playlistId 必填、选项量纲硬边界', () => {
@@ -93,4 +93,19 @@ test('aiTestBody：三段全可选（留空用生效配置补位）、纯字符�
   assert.ok(!aiTestBody.safeParse({ baseUrl: 'x'.repeat(1001) }).success);
   assert.ok(!aiTestBody.safeParse({ model: 'x'.repeat(501) }).success);
   assert.ok(aiTestBody.safeParse({ whatever: true }).success); // looseObject
+});
+
+test('lyricAlignBody：三键全可选（组合判定在路由层）、量纲硬边界', () => {
+  assert.ok(lyricAlignBody.safeParse({}).success);
+  assert.ok(lyricAlignBody.safeParse({ songId: '12345' }).success);
+  assert.ok(lyricAlignBody.safeParse({ songId: 12345 }).success);
+  assert.ok(lyricAlignBody.safeParse({ audioPath: 'a/b.mp3', lines: ['行'] }).success);
+  // 形状边界：songId 空串/超长、lines 超 600 行/单行超 500 字都拒
+  assert.ok(!lyricAlignBody.safeParse({ songId: '' }).success);
+  assert.ok(!lyricAlignBody.safeParse({ songId: 'x'.repeat(121) }).success);
+  assert.ok(!lyricAlignBody.safeParse({ lines: Array(601).fill('a') }).success);
+  assert.ok(!lyricAlignBody.safeParse({ lines: ['a'.repeat(501)] }).success);
+  assert.ok(!lyricAlignBody.safeParse({ lines: 'not-array' }).success);
+  assert.ok(!lyricAlignBody.safeParse({ audioPath: 'x'.repeat(1001) }).success);
+  assert.ok(lyricAlignBody.safeParse({ songId: '1', extra: 1 }).success); // looseObject
 });

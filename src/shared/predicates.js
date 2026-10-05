@@ -39,6 +39,15 @@ export const YT_TRACK_ID_RE = /^yt_([A-Za-z0-9_-]{11})$/;
 // 刻意不进 isResolvableTrackId：接收端没有那份文件，mix 分享链应滤掉它；
 // 「下载到服务器」对它也无意义（文件本就在盘上）
 export const FILE_TRACK_ID_RE = /^file_[0-9a-z]{8,40}$/;
+// 外部词源 id：lyric-external 级联产出的源内 id（ytm_<videoId>/
+// lrclib_<条目id>/kugou_<行id>）——词源核验/翻译白名单与词属主键用它和
+// 网易云/QQ id 空间隔离。注意这是**词源**命名空间不是轨道 id——
+// 不进 isResolvableTrackId（接收端没有对应媒体可解）
+export const EXT_LYRIC_ID_RE = /^(ytm|lrclib|kugou)_/;
+// extId 严格整串形（fetchByExtId 反查入参校验用）：白名单闸只查前缀，
+// 进 URL path/源内查询的键必须连尾段字符集也收敛——`[ /?` 这类脏尾
+// 在宽松形下会漏到上游请求里
+export const EXT_LYRIC_ID_STRICT_RE = /^(ytm|lrclib|kugou)_([\w-]{1,120})$/;
 
 // 本地歌单 id 前缀族
 // - single_song_*：单曲分享临时壳

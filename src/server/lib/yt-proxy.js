@@ -20,11 +20,13 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const { effectiveValue } = require('./settings');
 
 // YouTube 系域名族：Innertube 端点（*.youtube.com / youtubei.googleapis.com）、
-// 媒体回链（*.googlevideo.com）、封面图床（*.ytimg.com / *.ggpht.com）。
+// YouTube Music 歌词页（music.youtube.com——'youtube.com' 后缀判定本就覆盖，
+// 显式列出是防判定口径收窄后静默丢词源代理）、媒体回链（*.googlevideo.com）、
+// 封面图床（*.ytimg.com / *.ggpht.com）。
 // 判定口径与 net-guard.isProxyAllowedHost 同款（=== 或 .endsWith('.'+h)）——
 // 挡 xgooglevideo.com / googlevideo.com.evil.com 式蹭名
-const YT_HOSTS = ['youtube.com', 'googlevideo.com', 'youtubei.googleapis.com',
-  'ytimg.com', 'ggpht.com'];
+const YT_HOSTS = ['youtube.com', 'music.youtube.com', 'googlevideo.com',
+  'youtubei.googleapis.com', 'ytimg.com', 'ggpht.com'];
 
 function isYoutubeHost(hostname) {
   return YT_HOSTS.some((h) => hostname === h || hostname.endsWith('.' + h));
