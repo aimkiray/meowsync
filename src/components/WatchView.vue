@@ -28,12 +28,14 @@
         <!-- 音画切换对「可能有视频」的曲出现；关闭即只拉音频流省流量。
              bv/yt 按 provider 存在性出键（与 mediaVideoKey 同律）——导入标记
              可能被裁/老数据缺标，盘上躺着档的曲也要能切回音频、VIDEO_MODE=0
-             的用户也要有入口开视频重探；file_ 仍按 hasVideo（上传曲的标记
-             即工件真相，探测链对它关闭）。无可放源时靠 title 提示降级
-             （探测无果视觉不变） -->
+             的用户也要有入口开视频重探；裸 bv_ id（缺对象老行）凭 id 形态
+             同出键；file_ 仍按 hasVideo（上传曲的标记即工件真相，探测链对
+             它关闭）。无可放源时靠 title 提示降级（探测无果视觉不变）；
+             yt 无在线位兜底——未下视频档的曲开着视频也只显封面，title
+             同步提示「需已下载视频档」 -->
         <button
           v-if="currentSong?.bilibili?.bvid || currentSong?.youtube?.videoId
-            || currentSong?.file?.hasVideo"
+            || currentSong?.file?.hasVideo || bvM"
           class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
           :class="{ 'watch-action--on': videoOn }"
           @click="videoOn = !videoOn"
@@ -421,7 +423,7 @@ import PixelIcon from './PixelIcon.vue'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
-import { httpsCover } from '../lib/url'
+import { httpsCover, BV_TRACK_ID_RE } from '../lib/url'
 import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
 
@@ -947,21 +949,29 @@ export default {
     const mediaVideoFailed = ref(false)
     // 瞬时断流自愈：每 mediaVideoKey 至多两次延迟复位重试——复位重挂即
     // 真重试，真死链会再 error 回闩且不再排新计时（上界=2，防重试循环）。
-    // mediaStreamRetry 喂 youtube 流 URL 的 retry 参数——重试旁路服务端
-    // 闸控判定缓存强制重探（见 onMediaVideoError）；bili/file 链用它只
-    // 作重试计数。切歌（key 换）清零，新源拿满重试预算
+    // mediaStreamRetry 原喂 youtube 流 URL 的 retry 参数（旁路服务端闸控
+    // 判定缓存，见 onMediaVideoError）——YT 在线位已摘（mediaVideoUrl yt
+    // 支只认本地档），戳留作重试序数记账；bv/file 链 URL 从不带它，
+    // 重挂本身即服务端重解。切歌（key 换）清零，新源拿满重试预算
     const mediaStreamRetry = ref(0)
     let mediaRetryTimer = null
     let mediaRetriedKey = null
     let mediaRetryN = 0
+    // 裸 bv_ 轨道 id 解形（缺 bilibili 对象的老持久化行只剩前缀 id）：与
+    // usePlayer 音频主链同一张 BV_TRACK_ID_RE——bvid/_pN 分P 全在 id 里，
+    // 视频键/探测门/在线位三处共用这一处 match；对象在场时以对象为准
+    const bvM = computed(() => String(props.currentSong?.id ?? '').match(BV_TRACK_ID_RE))
     // 视频源键：两个 provider 各取各自的定位串——换曲（哪怕同 provider）必然换键
     const mediaVideoKey = computed(() => {
       const song = props.currentSong
       // 按 provider 存在性出键而非导入期标记：标记被裁/老数据缺
       // hasDownloadableVideo 的曲盘上可能有已下载档（档在不在以
-      // videoReady 探测为准），键在才让探测-下载档链路可达
-      if (song?.bilibili?.bvid)
-        return `bv:${song.bilibili.bvid}:${song.bilibili.cid || 0}:${song.bilibili.page || 1}`
+      // videoReady 探测为准），键在才让探测-下载档链路可达；
+      // 裸 bv_ id 同键域——bvid/_pN 从 id 还原，cid 缺省按 0（服务端
+      // /bilibili/stream 走 view 自愈，与 mediaVideoUrl 同口径）
+      const bv = bvM.value
+      if (song?.bilibili?.bvid || bv)
+        return `bv:${song?.bilibili?.bvid || bv?.[1]}:${song?.bilibili?.cid || 0}:${song?.bilibili?.page || +bv?.[2] || 1}`
       if (song?.youtube?.videoId)
         return `yt:${song.youtube.videoId}`
       // videoV 版本戳随换源刷新——key 不变 <video> 不重载，旧画面继续播
@@ -980,11 +990,13 @@ export default {
     const mediaVideoActive = computed(() =>
       !!(mediaVideoKey.value && videoOn.value && !props.fullscreenPlayerOpen
         && !mediaVideoFailed.value && mediaVideoUrl.value))
-    // 有无「确定可放」的视频源：在线流（hasVideo）或探测落地的本地档——
-    // 音画切换键的 title 据此提示「需已下载视频档」而非空许诺
+    // 有无「确定可放」的视频源：bv/file 的在线流（hasVideo）或探测落地的
+    // 本地档；yt 的 hasVideo 不计入——在线位对它已不挂（见 mediaVideoUrl
+    // yt 支），可放=本地档在盘（downloadedVideoUrl 已含）。音画切换键的
+    // title 据此提示「需已下载视频档」而非空许诺
     const hasPlayableVideo = computed(() =>
-      !!(props.currentSong?.bilibili?.hasVideo || props.currentSong?.youtube?.hasVideo
-        || props.currentSong?.file?.hasVideo || downloadedVideoUrl.value))
+      !!(props.currentSong?.bilibili?.hasVideo || props.currentSong?.file?.hasVideo
+        || downloadedVideoUrl.value))
     // 关层重挂=天然重试点：failed 闩若来自限流/瞬时断流（层开关不动 URL，
     // watch(mediaVideoUrl) 不会自愈），复位让这次重挂真重试——流确实死了
     // 会再 error 回闩，代价一跳
@@ -992,7 +1004,8 @@ export default {
       if (!open) mediaVideoFailed.value = false
     })
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
-    // 的视频下载此前是纯只写功能（App 内无处可播）。探测跨歌单寻址——
+    // 的视频下载此前是纯只写功能（App 内无处可播）；yt 支它更是唯一来源
+    // （在线位已摘）。探测跨歌单寻址——
     // 任务行按 (playlist,song) 登记，暂存/搜索队列或别单借源的播放没有
     // 归属歌单上下文，服务端 videoReady 按全表找档并回带寻址键
     // videoPlaylistId。切歌竞态用序号丢弃
@@ -1020,10 +1033,11 @@ export default {
       downloadedVideoUrl.value = cached
       // 探测门按 provider 存在性而非导入期标记：标记被裁/老数据缺
       // hasDownloadableVideo 的 bv_/yt_ 曲盘上可能有档——档在不在以
-      // videoReady 为准，不拿导入时的能力声明当工件真相。
+      // videoReady 为准，不拿导入时的能力声明当工件真相。裸 bv_ id
+      // （缺对象老行）同放进——服务端按 id 查档不依赖对象。
       // 视频关着时不探——纯音频用户不该为每首视频曲白打一跳 status 请求
       const probeable = videoOn.value
-        && (song?.bilibili?.bvid || song?.youtube?.videoId)
+        && (song?.bilibili?.bvid || song?.youtube?.videoId || bvM.value)
       if (!probeable) {
         dlProbeSettled.value = true
         return
@@ -1049,22 +1063,27 @@ export default {
     const mediaVideoUrl = computed(() => {
       const song = props.currentSong
       const b = song?.bilibili
+      const bv = bvM.value
       // 与 mediaVideoKey 同口径按 provider 存在性进支：无标记曲只能靠
-      // 本地档——b.hasVideo 为假时在线流位空串，不挂载（档缺席即空）
-      if (b?.bvid) {
+      // 本地档——b.hasVideo 为假时在线流位空串，不挂载（档缺席即空）。
+      // 裸 bv_ id（缺对象老行）进同一支：bvid/_pN 从 id 还原、cid 缺省留
+      // 服务端 view 自愈（usePlayer 音频链同口径）；hasVideo 标记缺席按
+      // 乐观放行——BV 号在 id 即视频稿，真无 avc1 流由 error 闩回封面
+      // （收藏夹导入 hasVideo:true 同律），本地档仍由 videoReady 探测兜真值
+      if (b?.bvid || bv) {
         if (!dlProbeSettled.value) return ''
         return downloadedVideoUrl.value
-          || (b.hasVideo ? musicApi.bilibiliStreamUrl(b.bvid, 'video', b.cid, b.page) : '')
+          || ((b?.bvid ? b.hasVideo : bv)
+            ? musicApi.bilibiliStreamUrl(b?.bvid || bv?.[1], 'video', b?.cid, b?.page || +bv?.[2] || 1)
+            : '')
       }
       const y = song?.youtube
       if (y?.videoId) {
         if (!dlProbeSettled.value) return ''
-        // mediaStreamRetry 戳进 URL：服务端闸控判定缓存可能错——重试带
-        // &retry=1 旁路缓存读强制重探（retry>0 恒映射 retry=1，重载实际靠
-        // mediaVideoFailed 闩的拆装而非 URL 换绑）；成功后 retry 戳保留——
-        // 后续重挂继续旁路缓存读拿最新判定，比重放可能过期的缓存更安全
-        return downloadedVideoUrl.value
-          || (y.hasVideo ? musicApi.youtubeStreamUrl(y.videoId, 'video', '', mediaStreamRetry.value) : '')
+        // YT 不挂在线流：匿名 Innertube 已被反机器人墙拦死、/youtube/stream
+        // 恒 502（与 usePlayer 音频主链同口径——YT 源只播/下载本地档）。
+        // 视频位只剩已下载档：无档空串不挂 <video>，封面回落
+        return downloadedVideoUrl.value || ''
       }
       // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）；videoV 戳
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
@@ -1079,9 +1098,11 @@ export default {
     watch(mediaVideoActive, () => nextTick(() => {
       if (props.tab === 'queue' || props.tab === 'lyrics') centerCurrentRow()
     }))
-    // 本地档解码失败（hev1/av01-in-mp4 等 Safari 放不动的封装）——先回落
-    // 在线流再闩封面：清 downloadedVideoUrl 让 mediaVideoUrl 换源重载，
-    // watcher 顺带复位 mediaVideoFailed；在线源也失败才真闩
+    // 本地档解码失败（hev1/av01-in-mp4 等 Safari 放不动的封装）——bv 支先
+    // 回落在线流再闩封面：清 downloadedVideoUrl 让 mediaVideoUrl 换源重载，
+    // watcher 顺带复位 mediaVideoFailed；在线源也失败才真闩。yt 支无在线
+    // 位可落——本地档败即空串回落封面，档被搬别单靠下方 dlProbeNonce
+    // 单发重探找回
     const onMediaVideoError = (e) => {
       // 迟到的旧元素 error（换曲后 DOM 复用期）：key 换绑后旧元素的迟投
       // 事件不能打到新歌状态——按 target 身份闸
@@ -1107,10 +1128,10 @@ export default {
       // 每 key 至多两次（mediaRetriedKey 戳+计数），死链回闩后不再自愈。
       // 预算口径按挂载计：另一 key 也报过 error 才重置单槽戳——
       // A→B(error)→A 给 A 新预算，A→B(干净)→A 不重置，防重试循环。
-      // 重试戳 mediaStreamRetry：youtube URL 带 &retry=1——服务端闸控
-      // 判定缓存可能误判（SABR 探测无定论按未闸放行），重试旁路缓存读
-      // 强制重探拿新候选，不是重放同一条死链；bili/file 链无判定缓存，
-      // 计数不影响 URL，重挂本身即服务端重解
+      // 序数戳 mediaStreamRetry++：原给 youtube URL 带 &retry=1 旁路服务
+      // 端闸控判定缓存（SABR 探测无定论按未闸放行）——yt 支到不了这里
+      // （本地档 error 在上一支已清档重探 return），戳本体照留：bv/file
+      // 支仍靠这套闩复位重挂走真重试，bv 重挂本身即服务端重解 playurl
       if (mediaRetriedKey !== mediaVideoKey.value) {
         mediaRetriedKey = mediaVideoKey.value
         mediaRetryN = 0
@@ -1294,6 +1315,7 @@ export default {
       mediaVideoActive,
       mediaVideoKey,
       mediaVideoUrl,
+      bvM,
       hasPlayableVideo,
       onMediaVideoError,
       pauseLyricFollow,
