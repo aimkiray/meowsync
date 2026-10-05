@@ -69,7 +69,7 @@
           <div class="settings-card-head">
             <h3 id="st-cookies" class="settings-card-title">音乐源凭据</h3>
           </div>
-          <p class="settings-hint">登录态 Cookie 解锁 VIP/高码率档；YouTube 侧绕匿名反机器人墙。只发往对应源站域；QQ 凭据到期前服务端自动续期。</p>
+          <p class="settings-hint">登录态 Cookie 解锁 VIP/高码率档；YouTube 侧绕匿名反机器人墙。出站代理与 Cookie 正交可叠加——Cookie 给登录态、代理换出口 IP（绕 IP 级风控）。Cookie 只发往对应源站域；QQ 凭据到期前服务端自动续期。</p>
 
           <div v-for="ck in cookieDefs" :key="ck.key" class="settings-cookie">
             <div class="settings-cookie-head">
@@ -87,6 +87,7 @@
               spellcheck="false"
               autocomplete="off"
             ></textarea>
+            <p v-if="ck.tip" class="settings-hint">{{ ck.tip }}</p>
             <div class="settings-actions">
               <button
                 v-if="fields[ck.key]?.source === 'override'"
@@ -167,12 +168,16 @@ export default {
     const aiKey = ref('')
     const aiModelName = ref('')
     const aiTimeout = ref('')
-    const cookieDrafts = reactive({ bili_cookie: '', qq_cookie: '', yt_cookie: '' })
+    const cookieDrafts = reactive({ bili_cookie: '', qq_cookie: '', yt_cookie: '', yt_proxy: '' })
 
+    // secret 型字段渲染表（textarea + 掩码态 + 逐键保存）：yt_proxy 是网络
+    // 出口配置不是 cookie，但与服务端 secret 型同构——复用本路径，
+    // tip 是该键特有的格式说明（渲染在 textarea 下）
     const cookieDefs = [
       { key: 'bili_cookie', label: 'B 站 Cookie' },
       { key: 'qq_cookie', label: 'QQ 音乐 Cookie' },
       { key: 'yt_cookie', label: 'YouTube Cookie' },
+      { key: 'yt_proxy', label: 'YouTube 出站代理', tip: 'http(s) 代理地址，形如 http://127.0.0.1:12091，可内嵌 user:pass@ 凭据' },
     ]
 
     const saving = ref(false)
@@ -192,6 +197,7 @@ export default {
       if (touched('bili_cookie')) cookieDrafts.bili_cookie = ''
       if (touched('qq_cookie')) cookieDrafts.qq_cookie = ''
       if (touched('yt_cookie')) cookieDrafts.yt_cookie = ''
+      if (touched('yt_proxy')) cookieDrafts.yt_proxy = ''
     }
 
     const load = async () => {

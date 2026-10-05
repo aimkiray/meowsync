@@ -5,6 +5,9 @@ const streamVault = require('../lib/stream-vault');
 // 私网/保留段判定、DNS 解析校验与代理白名单都抽在 src/server/lib/net-guard.js，
 // 与 file-downloader/netease-api（选源预筛）共用同一份实现
 const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllowedHost } = require('../lib/net-guard');
+// YouTube 出站代理（yt_proxy）：googlevideo 转发换道 undici ProxyAgent——
+// 判定与懒建缓存在 lib/yt-proxy.js，未配时所有分支 null 短路走原样
+const { isYoutubeHost, ytDispatcher } = require('../lib/yt-proxy');
 
 const app = new Hono();
 
@@ -58,8 +61,14 @@ async function fetchCandidate(c, firstUrl) {
     if (!isAllowedHost(hostname)) {
       return { kind: 'reject', send: () => c.json({ code: 403, message: 'forbidden host' }, 403) };
     }
+    // YouTube 族目标且代理在位 → 走 ProxyAgent：代理 host 常是 127.0.0.1
+    // 私网字面量，公网钉扎会误杀操作员自配代理；且代理通道下目标域由
+    // 代理端解析，本机 DNS 答案（墙内对 googlevideo 常是污染的 fake-IP/
+    // 私网结果）无关且会拦死本就要绕道的流量——本跳公网校验随之跳过，
+    // SSRF 面收敛在上方 normalizeOutboundUrl 协议/端口 + isAllowedHost 域名单
+    const viaYtProxy = isYoutubeHost(hostname) ? ytDispatcher() : null;
     // 域名解析出的地址必须是公网 IP（SSRF/DNS-rebinding 兜底，见 resolvesToPublicIp 注释）
-    if (!(await resolvesToPublicIp(hostname))) {
+    if (!viaYtProxy && !(await resolvesToPublicIp(hostname))) {
       return { kind: 'reject', send: () => c.json({ code: 403, message: 'forbidden address' }, 403) };
     }
     targetUrl = parsed.href;
@@ -106,8 +115,10 @@ async function fetchCandidate(c, firstUrl) {
     // socket 层钉扎：URL 阶段 resolvesToPublicIp 与 undici 建连是两次独立解析
     // （TOCTOU）——dispatcher 注入 guarded lookup，本跳每次建连的解析强制全
     // 公网且复用钉住集。keepAliveTimeout 短池化：代理是一次性转发，空闲
-    // socket 1s 后自关，pin 表随 agent GC（web ReadableStream 无 close 事件）
-    const dispatcher = new Agent({
+    // socket 1s 后自关，pin 表随 agent GC（web ReadableStream 无 close 事件）。
+    // YT 代理跳用共享 ProxyAgent 顶替：它是跨请求的缓存资产而非一次性
+    // socket——错误路径不 destroy（误杀会波及并发在途转发）
+    const dispatcher = viaYtProxy || new Agent({
       connect: { lookup: makeGuardedLookup() },
       keepAliveTimeout: 1000,
     });
@@ -120,7 +131,7 @@ async function fetchCandidate(c, firstUrl) {
         dispatcher,
       });
     } catch {
-      dispatcher.destroy().catch(() => {});
+      if (!viaYtProxy) dispatcher.destroy().catch(() => {});
       clearTimeout(timeout);
       // 客户端断开触发的 abort：响应已无法送达，区分出来避免把正常断流
       // 记成上游故障语义（同样返回即可，状态码对死连接无意义）

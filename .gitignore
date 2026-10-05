@@ -7,3 +7,4 @@ data/
 *.sqlite-journal
 .agents/
 skills-lock.json
+logs/

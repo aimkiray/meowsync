@@ -29,6 +29,20 @@ const DEFS = Object.assign(Object.create(null), {
   // 以便我们确认你不是聊天机器人」→ /stream 502）——登录态 WEB 档绕行；
   // SAPISID 系键供 SAPISIDHASH 签名（消费侧在 lib/youtube.js）
   yt_cookie: { env: 'YT_COOKIE', secret: true, maxLen: 4000, secretAscii: true },
+  // YouTube 出站代理（http(s)://[user:pass@]host:port）：secret 管——
+  // URL 可内嵌代理凭据，GET 只回存在性；消费侧三面接线在 lib/yt-proxy.js
+  yt_proxy: {
+    env: 'YT_PROXY', secret: true, maxLen: 500, secretAscii: true,
+    // 尾标先剥 userinfo：短 host 值（'http://u:p@h'）的原值尾 4 会带上
+    // 密码尾——尾标只许出自 host/port/路径段；畸形值干脆无标
+    hintOf: (v) => {
+      try {
+        const u = new URL(v);
+        u.username = u.password = '';
+        return u.href;
+      } catch { return ''; }
+    },
+  },
 });
 
 const KEYS = Object.keys(DEFS);
@@ -42,7 +56,7 @@ function normalizeOverride(key, raw) {
   if (!v) return { error: '空值请传 null 或空串语义（由路由层清覆盖）' };
   if (v.length > def.maxLen) return { error: `${key} 超长（上限 ${def.maxLen}）` };
   if (def.secretAscii && /[^\x20-\x7e]/.test(v)) {
-    return { error: `${key} 含非 ASCII 字符——cookie 值只能纯 ASCII，请重新导出` };
+    return { error: `${key} 含非 ASCII 字符——本字段只能纯 ASCII` };
   }
   const normed = def.norm ? def.norm(v) : v;
   if (key === 'ai_timeout_ms' && !/^\d+$/.test(normed)) {
@@ -61,6 +75,26 @@ function normalizeOverride(key, raw) {
       if (u.search || u.hash) throw new Error('query');
     } catch {
       return { error: 'ai_base_url 须为不含凭据的合法 http(s) 地址' };
+    }
+  }
+  // 代理 URL 写时验：与 ai_base_url 相反——userinfo（u:p@）恰是代理凭据的
+  // 常规位，不挡；只验可解析 + scheme。SOCKS 不收的理由见 lib/yt-proxy.js
+  // 头注；环境变量直配的畸形值由消费侧 youtubeProxy() 按未配置降级兜底
+  if (key === 'yt_proxy') {
+    try {
+      const u = new URL(normed);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('scheme');
+      // ':0' 能过 URL parser（port 归一成 '0'）但不是可拨端口——agent
+      // 建连才炸不如写时即拒（超界端口 parser 自拒，这里只补 0）
+      if (u.port === '0') throw new Error('port');
+      // userinfo 的 percent 形态消费侧要 decodeURIComponent——'%zz' 能过
+      // URL parser 但拆凭据时炸，写时即拒（消费侧 youtubeProxy 同款兜底）
+      if (u.username || u.password) {
+        decodeURIComponent(u.username);
+        decodeURIComponent(u.password);
+      }
+    } catch {
+      return { error: 'yt_proxy 须为合法 http(s) 代理地址（可内嵌 user:pass@ 凭据）' };
     }
   }
   return { ok: true, value: normed };
@@ -158,7 +192,7 @@ function describeSettings() {
     const def = DEFS[key];
     const e = effective(key);
     out[key] = def.secret
-      ? { source: e.source, set: e.value != null, hint: e.value ? maskHint(e.value) : null }
+      ? { source: e.source, set: e.value != null, hint: e.value ? maskHint(def.hintOf ? def.hintOf(e.value) : e.value) : null }
       : { source: e.source, value: e.value };
   }
   return out;

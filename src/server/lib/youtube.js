@@ -10,6 +10,9 @@ const { createHash } = require('crypto');
 // 懒读而非启动快照：app_settings 覆盖/env 经 lib/settings 解析——设置页
 // 热改即刻生效，重启不追陈值（biliCookie/qqCookie 同口径）
 const { effectiveValue } = require('./settings');
+// YT 出站代理（YT_PROXY）：ytDispatcher() 懒建共享——配了就把
+// youtube.com/youtubei 出口全部换道，未配 {} 空展开回落直连
+const { ytDispatcher } = require('./yt-proxy');
 const YT_TIMEOUT_MS = 15000;
 const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 const INNERTUBE_CLIENTS = [
@@ -59,6 +62,15 @@ const VISITOR_TTL_MS = 30 * 60e3;
 const VISITOR_FAIL_TTL_MS = 2 * 60e3;
 const DESKTOP_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
 
+// 代理附加位：代理未配 → 空对象空展开，fetch opts 与旧版逐字节同；
+// 在位 → dispatcher 全部 youtube.com 系请求共享同一个 ProxyAgent
+// （懒建缓存见 lib/yt-proxy.js）。cookie 与代理正交可叠加——
+// 认证头是请求内容，代理是传输通道
+const ytFetchOpts = () => {
+  const d = ytDispatcher();
+  return d ? { dispatcher: d } : {};
+};
+
 // browse 端点走 WEB 形态——INNERTUBE_CLIENTS 的移动形态是为 player 选流
 // 服务的（ANDROID 优先直返可播 url），歌单页 renderer 结构按桌面端解析
 const WEB_CLIENT = {
@@ -93,6 +105,7 @@ async function getVisitorData(extraSignal) {
         const res = await fetch('https://www.youtube.com', {
           headers: { 'User-Agent': DESKTOP_UA },
           signal: AbortSignal.timeout(YT_TIMEOUT_MS),
+          ...ytFetchOpts(),
         });
         if (!res.ok) throw new Error(`visitorData 抓取 HTTP ${res.status}`);
         const html = await res.text();
@@ -238,6 +251,7 @@ async function fetchPlayerWith(videoId, extraSignal, clientName) {
             videoId
           }),
           signal: timedSignal(extraSignal),
+          ...ytFetchOpts(),
         });
         if (!res.ok) throw new Error(`innertube HTTP ${res.status}`);
         body = await res.json();
@@ -328,6 +342,7 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
           params: 'EgIQAQ==',
         }),
         signal: timedSignal(extraSignal),
+        ...ytFetchOpts(),
       });
       if (!res.ok) throw new Error(`innertube search HTTP ${res.status}`);
       const body = await res.json();
@@ -424,6 +439,7 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
           ...(continuation ? { continuation } : { browseId: /^VL/i.test(listId) ? listId : `VL${listId}` }),
         }),
         signal: timedSignal(extraSignal),
+        ...ytFetchOpts(),
       });
       if (!res.ok) throw new Error(`innertube browse HTTP ${res.status}`);
       const parsed = await res.json();
