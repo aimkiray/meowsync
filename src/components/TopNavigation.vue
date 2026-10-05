@@ -12,7 +12,7 @@
           :aria-expanded="sidebarOpen"
           aria-label="歌单库"
           title="打开歌单库"
-        ><PixelIcon name="menu" :size="18" /></button>
+        ><PixelIcon name="playlist" :size="18" /></button>
 
         <h1 class="topnav-title">
           <button class="topnav-home" @click="$emit('nav-home')" title="回到首页" aria-label="回到首页">
