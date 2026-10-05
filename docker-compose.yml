@@ -45,6 +45,8 @@ services:
       - QQ_COOKIE=${QQ_COOKIE:-}
       # 可选：YouTube 登录 Cookie（绕匿名 Innertube 反机器人墙；需含 SAPISID 系键才发签名头，务必小号）
       - YT_COOKIE=${YT_COOKIE:-}
+      # 可选：YouTube 出站代理（http(s)，可内嵌 user:pass；与 YT_COOKIE 正交——换出口 IP 绕 IP 级风控）
+      - YT_PROXY=${YT_PROXY:-}
       # 数据目录（SQLite + 下载文件）；默认 /app/data，与下方挂载卷一致
       - DATA_DIR=${DATA_DIR:-}
       - DOWNLOAD_DIR=${DOWNLOAD_DIR:-}

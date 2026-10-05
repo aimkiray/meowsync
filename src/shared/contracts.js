@@ -77,7 +77,9 @@ export const settingsBody = z.looseObject({
   ai_timeout_ms: z.union([z.string().max(20), z.number().int(), z.null()]).optional(),
   bili_cookie: z.union([z.string().max(8000), z.null()]).optional(),
   qq_cookie: z.union([z.string().max(8000), z.null()]).optional(),
-  yt_cookie: z.union([z.string().max(8000), z.null()]).optional()
+  yt_cookie: z.union([z.string().max(8000), z.null()]).optional(),
+  // 代理 URL（可内嵌 user:pass@）——上限对齐 lib/settings DEFS.maxLen
+  yt_proxy: z.union([z.string().max(500), z.null()]).optional()
 });
 
 // POST /settings/ai-test：三段均可选——留空字段用已生效配置补位

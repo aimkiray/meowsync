@@ -7,6 +7,10 @@ const https = require('https');
 const fs = require('fs');
 const { pipeline } = require('stream/promises');
 const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
+// YouTube 出站代理（yt_proxy）：googlevideo 拉流/SABR 探测/ytimg 封面命中
+// 时整跳换隧道型 agent 对——判定与隧道装配在 lib/yt-proxy.js，
+// 未配/非 YT 域一律 null 短路走原样
+const { ytAxiosProxyFor } = require('../lib/yt-proxy');
 
 // LRC 译文合并：同刻时间戳的译文行插到原文行后（标准合并格式）；
 // 译文无对应时间戳的孤儿行丢弃——贴错行比没译文更糟。
@@ -184,14 +188,22 @@ async function fetchStream(rawUrl, { timeout, signal, headers }) {
       throw fatalError(checked.reason);
     }
     const parsed = checked.url;
-    // 三态判定：'blocked'（解析到私网）是确定性拦截→fatal；'error'（DNS 瞬时故障：
-    // SERVFAIL/临时断网）保持可重试，否则一次抖动就永久剥夺重试机会
-    const hostCheck = await checkHostPublic(parsed.hostname);
-    if (hostCheck === 'blocked') {
-      throw fatalError('下载地址解析到非公网地址');
-    }
-    if (hostCheck !== 'ok') {
-      throw new Error('下载地址 DNS 解析失败');
+    // YouTube 族命中 yt_proxy 时整跳换道：本机公网校验与 socket 钉扎都只对
+    // 「本机直连」有意义——代理通道下目标 DNS 在代理端解析，本机答案（墙内
+    // 对 googlevideo 常是污染的 fake-IP/私网结果）无关且会拦死走代理的
+    // 本意，故 yp 在位时跳过 checkHostPublic。SSRF 收敛在上方
+    // normalizeOutboundUrl（协议/端口/credentials）+ yt-proxy 域族判定
+    const yp = ytAxiosProxyFor(parsed.hostname);
+    if (!yp) {
+      // 三态判定：'blocked'（解析到私网）是确定性拦截→fatal；'error'（DNS 瞬时故障：
+      // SERVFAIL/临时断网）保持可重试，否则一次抖动就永久剥夺重试机会
+      const hostCheck = await checkHostPublic(parsed.hostname);
+      if (hostCheck === 'blocked') {
+        throw fatalError('下载地址解析到非公网地址');
+      }
+      if (hostCheck !== 'ok') {
+        throw new Error('下载地址 DNS 解析失败');
+      }
     }
 
     let response;
@@ -203,9 +215,17 @@ async function fetchStream(rawUrl, { timeout, signal, headers }) {
         timeout,
         maxRedirects: 0,
         signal,
-        // socket 层强制解析钉扎：跳与跳之间的建连都经 guarded lookup
-        httpAgent: agents.httpAgent,
-        httpsAgent: agents.httpsAgent,
+        // socket 层强制解析钉扎：跳与跳之间的建连都经 guarded lookup。
+        // 代理跳换成隧道型 agent 对顶替同字段位（agent 不同而已，目标
+        // DNS 移交代理端解析）——若沿用钉扎 agent，guarded lookup 会去
+        // 解析代理 host（127.0.0.1 私网字面量必拦死）。axios proxy 选项
+        // 对 https 目标只发 absolute-form 明文，严格 CONNECT-only 代理
+        // 回 400——故走 lib/yt-proxy.js 的隧道 agent 对，proxy:false
+        // 显式挡住 env 代理变量叠加
+        ...(yp || {
+          httpAgent: agents.httpAgent,
+          httpsAgent: agents.httpsAgent,
+        }),
         // identity + decompress:false：axios 默认透明解压且删掉 content-encoding 头，
         // 落盘字节与声明 content-length 不一致会让对账确定性误判"下载不完整"。
         // 关掉解压后若上游仍回编码内容，响应头里能看到——按上游违规判 fatal
@@ -226,6 +246,17 @@ async function fetchStream(rawUrl, { timeout, signal, headers }) {
         const err = fatalError(`上游返回 ${status}`);
         err.upstreamStatus = status;
         throw err;
+      }
+      // AxiosError 的 config/request（response.config/request 是同对象
+      // 回挂）带着隧道 agent——agent.proxy.href/connectOpts 内嵌可解码
+      // 代理凭据，失败日志 console.error 整对象 inspect、AxiosError
+      // toJSON 序列化都会带出去；抛前整剥。上层只读 .message/.code/
+      // .fatal/.upstreamStatus（4xx 分支另抛新 Error），不受影响
+      delete error.config;
+      delete error.request;
+      if (error.response) {
+        delete error.response.config;
+        delete error.response.request;
       }
       throw errnoToFatal(error);
     }

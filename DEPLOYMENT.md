@@ -53,9 +53,10 @@ cp .env.example .env
 | BILI_COOKIE | - | 可选：B 站登录 Cookie（`SESSDATA=…; bili_jct=…`）。杜比/Hi-Res 音轨只对登录账号下发（Hi-Res 通常需大会员）；不配则 B 站下载回落最高码率 AAC |
 | QQ_COOKIE | - | 可选：QQ 音乐登录 Cookie（`uin=…; qm_keyst=…`）。无损/Hi-Res 与 VIP 档只对登录账号下发，不配则匿名态仅常规档。同时充当网易云灰曲的解锁兜底源（cookie 带 refresh_token（QQ 态常为 `psrf_qqrefresh_token`）时临期自动续期，新凭据写运行时变量 `NEW_QQ_COOKIE`，重启后回落 `QQ_COOKIE`——长期运行建议落回 .env）。**务必用小号**（账号风控有先例）；QQ 源对服务器 IP 有地域风控，海外机房部署基本不可用 |
 | YT_COOKIE | - | 可选：YouTube 登录 Cookie（浏览器导出整串，形如 `SID=…; SAPISID=…; __Secure-3PAPISID=…`）。匿名 Innertube 全形态会被反机器人墙拦（「请登录，以便我们确认你不是聊天机器人」→ /stream 502），配上后取流/搜索/歌单导入的 youtubei 请求改带登录态 WEB 档绕行；串里需含 `SAPISID`/`__Secure-1PAPISID`/`__Secure-3PAPISID` 之一才会附 `SAPISID*HASH` 签名头，否则只发裸 Cookie。仅用于 youtubei 请求头，不出进程。**强烈建议用小号**——cookie 即完整登录凭据 |
+| YT_PROXY | - | 可选：YouTube 出站代理（`http://[user:pass@]host:port`，仅 http/https，如 `http://127.0.0.1:12091`）。YouTube 族域（youtubei/googlevideo）请求改走指定出口绕 IP 级风控——数据中心 IP 被 googlevideo 限速/拒连时换出口；与 `YT_COOKIE` 正交可叠加（Cookie 给登录态、代理换出口 IP）。URL 内嵌凭据仅作服务端上游拨号，不出进程、不回显前端 |
 | NODE_ENV | development | 环境标识（服务代码不直读，但 **Vite 构建期会读 `.env` 里的它**——`development` 会把生产 bundle 烘成开发态，故 `.env` 不要放此变量；镜像与 compose 已内置 `production`） |
 
-> 上表 `AI_*`/`BILI_COOKIE`/`QQ_COOKIE`/`YT_COOKIE` 均可在前端「顶部 ⋯ → 设置」运行时覆盖：
+> 上表 `AI_*`/`BILI_COOKIE`/`QQ_COOKIE`/`YT_COOKIE`/`YT_PROXY` 均可在前端「顶部 ⋯ → 设置」运行时覆盖：
 > `app_settings` 表存覆盖值，DB 优先于 env，留空回落 env，改动即刻生效无需重启。
 > 密钥类字段只回显存在性与尾标；env 的 `AI_API_KEY` 只发往 `AI_BASE_URL` 同源
 > 地址——改 Base URL 需同时填覆盖 Key。
@@ -121,7 +122,7 @@ docker run -d -p 3101:3002 -v meowsync-data:/app/data --name meowsync meowsync
 Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_BASE_PATH`/
 `VITE_REMOTE_TOKEN`/`VITE_DOWNLOAD_TOKEN`（显式 opt-in，不回落
 `DOWNLOAD_TOKEN`），并从同一 `.env` 读取 `CORS_ORIGINS`/
-`REMOTE_TOKEN`/`DOWNLOAD_TOKEN`/`TRUST_PROXY`/`AI_*`/`BILI_COOKIE`/`QQ_COOKIE`/`YT_COOKIE` 注入容器运行环境。
+`REMOTE_TOKEN`/`DOWNLOAD_TOKEN`/`TRUST_PROXY`/`AI_*`/`BILI_COOKIE`/`QQ_COOKIE`/`YT_COOKIE`/`YT_PROXY` 注入容器运行环境。
 
 > `BILI_COOKIE`/`QQ_COOKIE` + 公网暴露 = 任何访客都能用你的大会员/VIP 轨
 > （`prefer=best`）。配置了 Cookie 且开启公网访问时，务必同时设
@@ -133,6 +134,8 @@ Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_B
 > `YT_COOKIE` 风险面不同且无令牌闸：公网部署下全体访客的取流/搜索/歌单
 > 导入都借用管理员登录态，滥用与高频风控直接记在该账号信誉上——公网
 > 部署务必配专用小号而非主号。
+> `YT_PROXY` 同理：URL 内嵌的 `user:pass@` 凭据属服务端机密——只用于
+> 上游拨号、不出进程，泄露面在 `.env`/compose 文件本身而非请求面。
 注意：改了令牌变量后要 `docker compose up -d --build` 重建镜像——旧 bundle
 没有令牌会在写接口上全部 401。
 
