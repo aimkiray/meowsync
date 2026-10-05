@@ -991,13 +991,6 @@ export default {
     watch(() => props.fullscreenPlayerOpen, (open) => {
       if (!open) mediaVideoFailed.value = false
     })
-    // 音画开关翻转 = ≤900 分屏↔整页滚换轨：面板体从哑盒变滚动口（或反之），
-    // 词窗骤变但 scrollTop 不动——停在词表顶部等下一个 currentLyricIndex
-    // 才回正，间奏空窗可达几十秒；按当前行重居中（centerCurrentRow 内部
-    // 自动挑换轨后的真滚动根）
-    watch(mediaVideoActive, () => nextTick(() => {
-      if (props.tab === 'queue' || props.tab === 'lyrics') centerCurrentRow()
-    }))
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
     // 的视频下载此前是纯只写功能（App 内无处可播）。探测跨歌单寻址——
     // 任务行按 (playlist,song) 登记，暂存/搜索队列或别单借源的播放没有
@@ -1077,6 +1070,15 @@ export default {
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
       return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video', song.file.videoV) : ''
     })
+    // 音画开关翻转 = ≤900 分屏↔整页滚换轨：面板体从哑盒变滚动口（或反之），
+    // 词窗骤变但 scrollTop 不动——停在词表顶部等下一个 currentLyricIndex
+    // 才回正，间奏空窗可达几十秒；按当前行重居中（centerCurrentRow 内部
+    // 自动挑换轨后的真滚动根）
+    // 【序】必须列在 mediaVideoUrl 之后——非 immediate watch 注册即 eager
+    // 求值 source 取 oldValue，mediaVideoActive 链触到 TDZ 会炸掉整个 setup
+    watch(mediaVideoActive, () => nextTick(() => {
+      if (props.tab === 'queue' || props.tab === 'lyrics') centerCurrentRow()
+    }))
     // 本地档解码失败（hev1/av01-in-mp4 等 Safari 放不动的封装）——先回落
     // 在线流再闩封面：清 downloadedVideoUrl 让 mediaVideoUrl 换源重载，
     // watcher 顺带复位 mediaVideoFailed；在线源也失败才真闩
