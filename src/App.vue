@@ -90,6 +90,7 @@
           @toggle-vip-songs="showVipSongs = !showVipSongs"
           @move-song="moveSongInPlaylist"
           @group-by-artist="groupSongsByArtist"
+          @open-downloads="openDownloadsForPlaylist(selectedPlaylist?.id)"
         />
         <PlaylistGrid
           v-else-if="centerView === 'search'"

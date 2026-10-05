@@ -69,6 +69,12 @@
             :disabled="loadingSongs || reorderMode"
             title="搜索歌曲加入本歌单（支持 B 站/YouTube 链接）"
           ><PixelIcon name="plus" :size="15" /> 添加歌曲</button>
+          <!-- 下载管理：复用顶栏 ⋯「下载」同视图；当前歌单有队列时深链预选直达 -->
+          <button
+            @click="$emit('open-downloads')"
+            class="ink-btn ink-btn--ghost"
+            title="下载队列与任务管理"
+          ><PixelIcon name="download" :size="15" /> 下载管理</button>
           <!-- 排序模式入口：本地单重排 tracks 本序，已入库远端单落 trackOrder
                覆盖层；未入库预览单无持久化落点（与 applyTrackEdit 同口径）不出入口 -->
           <button
@@ -842,7 +848,7 @@ export default {
       default: true
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'edit-song', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs', 'move-song', 'group-by-artist'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'edit-song', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs', 'move-song', 'open-downloads', 'group-by-artist'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const menuPositions = ref({})
