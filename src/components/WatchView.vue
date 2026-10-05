@@ -724,7 +724,7 @@ export default {
 
     // 「容器自身即真滚动口」判定：computed overflow-y 为 auto/scroll
     // （与 useVirtualList.pickScroller 同口径）。命中面=宽屏栏内滚的
-    // 侧栏体 + 移动视频分屏态（≤900.98 ∧ ≥480h 媒体块）的侧栏体——
+    // 侧栏体 + 移动视频分屏态（≤900.98 ∧ ≥600h 媒体块）的侧栏体——
     // 比 matchMedia 宽判多覆盖分屏一种情况；单列整页滚态侧栏体不限高
     // （overflow visible 哑盒、scrollTop 恒 0）不命中
     const isScrollport = (el) => {
@@ -1647,20 +1647,19 @@ export default {
   z-index: 4;
   /* 滚过内容不透字（同 .watch-top 的画布衬底） */
   background: var(--view-canvas, var(--paper));
+  /* 基线降灰档：全局 .pg-tabs 底线是 --hairline 实墨，本区其余分隔件
+     （queue-head 底线 / 行间分隔 / queue-sec 尾线 / queue-foot 顶隔）
+     全走 --hairline-soft——scoped (0,2,0) 压全局 (0,1,0) 局部看齐。
+     ::after 的 2px 实墨激活指示不动：墨指示骑灰基座对比反更清 */
+  border-bottom: var(--hairline-soft);
 }
 
 /* 移动基态：不限高不内滚（YTM 整页滚动语义——队列/歌词随页流）；
    ≥901px 回栏内滚（flex:1+min-height:0+overflow，见 min-width 块）。
-   例外：移动视频分屏态侧栏体也内滚（max-width:900.98 ∧ min-height:480
+   例外：移动视频分屏态侧栏体也内滚（max-width:900.98 ∧ min-height:600
    媒体块——上行视频钉住、下行面板体自滚） */
 .watch-side-body {
   padding-top: 8px;
-  /* 滚动影叠尺：基座发丝线之外，内容压到 tab 下时再叠一道 scroll 影——
-     画布色盖片 local 随内容滚走 → 钉在顶缘的影显露；回顶时盖片重新遮住。
-     盖片须跟该处实际底色 --view-canvas（watch=teal），写 --paper 会漏白缝 */
-  background:
-    linear-gradient(var(--view-canvas, var(--paper)), var(--view-canvas, var(--paper))) 0 0 / 100% 14px local no-repeat,
-    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--ink) 16%, transparent), transparent) 0 0 / 100% 10px scroll no-repeat;
 }
 
 .watch-empty {
@@ -1840,7 +1839,7 @@ export default {
 
 /* 歌词工具条：字号 / 时间校准两组，钉在歌词面板下缘（DOM 序在面板
    之后——钉底与 watch-queue-foot 同约定：滚动体之外的常驻件）。
-   不设分隔线——watch 侧栏约定「静止零装饰，边界交给滚动影」 */
+   不设分隔线——watch 侧栏约定「静止零装饰」 */
 .lyric-tools {
   display: flex;
   align-items: center;
