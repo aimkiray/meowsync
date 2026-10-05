@@ -154,11 +154,20 @@ async function createDownloadQueue(playlistId, options = {}) {
   const db = getDb();
   // 完整性 stat 预热放在事务外：txn 内跑文件 I/O 会把 SQLite 写锁摁在整个
   // stat 风暴上（挂载卷每个 stat 一个 RTT）。TTL 缓存让 txn 内同款调用全部
-  // 命中——预热与事务在同一同步段，无并发窗口使缓存过期失真
+  // 命中——预热与事务在同一同步段，无并发窗口使缓存过期失真。
+  // 补视频判定要看的 videoPath 盘上存在性同口径预热进 Map——它没有 TTL
+  // 缓存可蹭，txn 内逐行 stat 等于把风暴搬进写锁。queue.downloadVideo 此刻
+  // 未落成，但恒等于 options.downloadVideo === true，预热判据直接用它
+  const videoPathOnDisk = new Map(); // taskId -> 登记视频档的盘上存在性
   for (const track of tracks) {
+    const songId = String(track.id);
     const existing = downloadTasksRepo.findAnyTaskByPlaylistAndSongId(
-      resolvedPlaylistId, String(track.id));
+      resolvedPlaylistId, songId);
     if (existing && existing.status === 'completed') taskFilesIntact(existing);
+    if (existing && options.downloadVideo === true
+        && isExternalSongId(songId) && existing.videoPath) {
+      videoPathOnDisk.set(existing.id, pathPresent(existing.videoPath));
+    }
   }
   const oldOwnerQueueIds = new Set(); // 收养搬走任务后待回调计数的旧属主队列
   const adoptedPaths = []; // 收养重置清掉的旧文件路径——提交后才删（txn 内 unlink 会留回滚窗口）
@@ -233,10 +242,22 @@ async function createDownloadQueue(playlistId, options = {}) {
         if (!standaloneActive && (existing.queueId == null || !ownerActive)) {
           // completed 但文件已被外部删掉的行是幻影——按未完成收养重跑补回
           const keepCompleted = existing.status === 'completed' && taskFilesIntact(existing);
+          // 队列级补视频：完好完成行在 downloadVideo 队列里缺视频档时翻
+          // pending——与 standalone 补视频分支（~1516/~1618）同语义；audioPath 等
+          // 保留，相位按 existsSync 幂等跳过已落盘段，只跑视频相位。
+          // videoPath「登记位+盘上存在」双查而不只看登记位：intactCache 的
+          // TTL 快照还热着时登记档刚被外删，应按缺失判交幂等相位补回。
+          // 存在性读事务外预热表不真打盘（与事务同一同步段所填，无并发
+          // 窗口）；表意外缺键回落真 stat 保正确性，宁多一次 stat 不误判幻影
+          const needsVideoBackfill = keepCompleted
+            && queue.downloadVideo && isExternalSongId(songId)
+            && !(existing.videoPath && (videoPathOnDisk.has(existing.id)
+              ? videoPathOnDisk.get(existing.id)
+              : pathPresent(existing.videoPath)));
           // 重置重跑的任务同步新队列的下载选项——否则按旧行开关/码率跑，
           // "completed" 的歌可能实际没有音频/封面；旧路径字段一并清掉：
           // 残留的路径可能已指向别的任务的文件，后续删除会按它误删
-          downloadTasksRepo.updateTask(existing.id, keepCompleted
+          downloadTasksRepo.updateTask(existing.id, keepCompleted && !needsVideoBackfill
             ? {
               queueId: queue.id,
               status: 'completed',
@@ -244,17 +265,33 @@ async function createDownloadQueue(playlistId, options = {}) {
               errorMessage: null,
               retryCount: 0
             }
-            : resetTaskFields({
-              queueId: queue.id,
-              bitrate: queue.bitrate,
-              downloadAudio: queue.downloadAudio,
-              downloadLyrics: queue.downloadLyrics,
-              downloadCover: queue.downloadCover,
-              downloadVideo: queue.downloadVideo && isExternalSongId(songId),
-              // providerData 同步最新镜像行：title/author/neteaseId 会变
-              // （改题、词源重匹配），收养重跑不该拿建行时的旧快照
-              providerData: providerDataOf(track)
-            }));
+            : needsVideoBackfill
+              ? {
+                // 只置 downloadVideo 位：audioPath/lyricsPath/coverPath 与各
+                // 相位 flag 一律不动（standalone 同口径只设 video）——文件在
+                // 盘上，分段幂等自然只跑视频相位
+                queueId: queue.id,
+                status: 'pending',
+                progress: 0,
+                errorMessage: null,
+                completedAt: null,
+                downloadVideo: true,
+                // retryCount 相位级预算归零——老行若在音频相位打满 3 次，
+                // 补视频首个瞬态错误就直接判死（standalone 同口径）
+                retryCount: 0,
+                providerData: providerDataOf(track)
+              }
+              : resetTaskFields({
+                queueId: queue.id,
+                bitrate: queue.bitrate,
+                downloadAudio: queue.downloadAudio,
+                downloadLyrics: queue.downloadLyrics,
+                downloadCover: queue.downloadCover,
+                downloadVideo: queue.downloadVideo && isExternalSongId(songId),
+                // providerData 同步最新镜像行：title/author/neteaseId 会变
+                // （改题、词源重匹配），收养重跑不该拿建行时的旧快照
+                providerData: providerDataOf(track)
+              }));
           // 重跑前清路径同时也要清旧文件：行先清、文件后删（崩溃留孤儿文件
           // 由 reap 兜底，比幻影登记路径安全）。扩展名现已随源浮动，不删会
           // 让不同扩展名的旧文件以未登记状态无限期滞留。文件 unlink 收集后
@@ -1476,7 +1513,10 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
     // 代跑队列行会往旧队列写计数），保留完好路径字段——分段幂等自动跳过
     // 已落盘段，只补视频相位；旧队列计数回调对齐
     if (queueTask.status === 'completed' && taskFilesIntact(queueTask)) {
-      if (options.downloadVideo === true && isExternalSongId(songId) && !queueTask.videoPath) {
+      // 「缺视频工件」按登记位+盘上存在双查（队列版同口径）：登记档刚被
+      // 外删而 taskFilesIntact 的 TTL 快照还热着时是幻影行，该翻 pending 补回
+      if (options.downloadVideo === true && isExternalSongId(songId)
+          && !(queueTask.videoPath && pathPresent(queueTask.videoPath))) {
         // 摘出=改写队列成员关系——活体队列（含控制器排空/僵尸态）按非完好
         // 分支同款 ownerActive 纪律 409，等队列终结再补；否则任务会从
         // 运行中队列的详情页飞行中消失，且 standalone 绕过队列并发限额。
@@ -1572,8 +1612,11 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
 
   if (task && task.status === 'completed' && taskFilesIntact(task)) {
     // 已下载行上的「补视频」请求：翻 pending 让协程只跑缺失的视频相位——
-    // audioPath/lyricsPath/coverPath 保留，分段幂等自动跳过已落盘工件
-    if (options.downloadVideo === true && isExternalSongId(songId) && !task.videoPath) {
+    // audioPath/lyricsPath/coverPath 保留，分段幂等自动跳过已落盘工件。
+    // 「缺失」同队列版按登记位+盘上存在双查：登记档刚被外删而 intactCache
+    // TTL 快照还热着时是幻影行，裸 return 会把补视频请求吞成幂等完成
+    if (options.downloadVideo === true && isExternalSongId(songId)
+        && !(task.videoPath && pathPresent(task.videoPath))) {
       // 完成写库与 standaloneRunning 摘 entry 之间有微任务薄窗——在跑协程
       // 的行翻 pending 后 dispatch 会 409 被吞，行永卡 pending 无人消费
       if (standaloneRunning.has(task.id)) {
