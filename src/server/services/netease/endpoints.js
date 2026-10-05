@@ -104,7 +104,9 @@ const ENDPOINTS = {
   lyric_new: {
     crypto: 'eapi',
     handler: (q, ctx) => request('/api/song/lyric/v1', {
-      id: q.id, cp: false, tv: 0, lv: 0, rv: 0, kv: 0, yv: 0, ytv: 0, yrv: 0,
+      // rv:-1 放开 romalrc（罗马音滚动词）——0 是显式不回；yv/yTV 系逐字
+      // yrc 字段本轮不消费，仍保持关闭，别把响应体无谓吹大
+      id: q.id, cp: false, tv: 0, lv: 0, rv: -1, kv: 0, yv: 0, ytv: 0, yrv: 0,
     }, opts(q, ctx)),
   },
   check_music: {

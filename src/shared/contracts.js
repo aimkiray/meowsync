@@ -88,3 +88,12 @@ export const aiTestBody = z.looseObject({
   apiKey: z.string().max(1000).optional(),
   model: z.string().max(500).optional()
 });
+
+// POST /lyric-align：音频定位（audioPath 直指或 songId 查 download_tasks）
+// 与歌词行来源（lines 直传或 songId 拉词源）的组合判定在路由层——
+// schema 只收形状与上限
+export const lyricAlignBody = z.looseObject({
+  songId: z.union([z.string().min(1).max(120), z.number().int().positive()]).optional(),
+  audioPath: z.string().min(1).max(1000).optional(),
+  lines: z.array(z.string().max(500)).max(600).optional()
+});

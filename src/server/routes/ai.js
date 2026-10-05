@@ -10,10 +10,12 @@ const { aiEnabled, askAiJson, aiModel } = require('../lib/ai');
 
 const app = new Hono();
 
-// 词源相关端点只认网易云数字 id 与 qq_<songmid>（QQ 曲吃自家权威歌词做词源）——
-// bv_/yt_ 等外部 id 没有可翻译词源，放行只会空耗一次上游 lyric 调用再 404
+// 词源相关端点只认网易云数字 id、qq_<songmid>（QQ 曲吃自家权威歌词做词源）
+// 与 EXT_LYRIC_ID_RE 外源词源 id（ytm_/lrclib_/kugou_——下载链外源兜底的
+// 词键，取词走 lyric-external.fetchByExtId 反查支路）；bv_/yt_ 轨道 id
+// 仍拒——它们没有可翻译词源，放行只会空耗一次上游调用再 404
 // 20 位上限的 bounded 形与共享无界 NETEASE_ID_RE 语义不同——直接用共享名防遮蔽
-const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE } = require('../../shared/predicates.js');
+const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, EXT_LYRIC_ID_RE } = require('../../shared/predicates.js');
 // 翻译负载上限：千行级歌词多半是滚动歌词逐字拆分（字数标记），整单 AI 翻译
 // 既不经济也无必要——超量直接拒
 const MAX_LYRIC_LINES = 400;
@@ -55,6 +57,14 @@ const NON_LYRIC_RE = /^(?:(?:纯音乐|instrumental|作曲|作词|编曲|监制|
 // callNeteaseApi 第三参 options.signal 端到端透传到 request 层——
 // 客户端断连即杀上游 socket，不必等自身超时
 async function fetchLyricRaw(id, signal) {
+  // 外源词源 id（ytm_/lrclib_/kugou_）：下载链级联兜底的词键，反查取原文。
+  // 外源无官方译文概念——tlyric 恒空；kugou_ 出缓存查不回（accesskey 不
+  // 落 extId）归一成空词，与网易云无词同走 no-lyric 语义
+  if (EXT_LYRIC_ID_RE.test(id)) {
+    const { fetchByExtId } = require('../services/lyric-external');
+    const hit = await fetchByExtId(id, { signal });
+    return { lrc: String(hit?.lrc || hit?.plain || ''), tlyric: '' };
+  }
   const qqM = id.match(QQ_SONG_ID_RE);
   if (qqM) {
     const { getLyric } = require('../lib/qq');
@@ -84,7 +94,8 @@ app.post('/ai/lyric-translate', async (c) => {
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 16 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
-  if (!NETEASE_ID_BOUNDED_RE.test(id) && !QQ_SONG_ID_RE.test(id)) return fail(c, 400, '非法 songId');
+  if (!NETEASE_ID_BOUNDED_RE.test(id) && !QQ_SONG_ID_RE.test(id)
+    && !EXT_LYRIC_ID_RE.test(id)) return fail(c, 400, '非法 songId');
   const signal = c.req.raw.signal;
 
   // 行存在即命中——skip 哨兵（tlyric=''）也是有效缓存项，防止
@@ -130,7 +141,10 @@ app.post('/ai/lyric-translate', async (c) => {
     }
     const lines = parseLrcLines(lrc);
     if (!lines.length) {
-      skipInsert('no-lyric');
+      // kugou_ 前缀不写哨兵：它出缓存恒 null 的语义是「无取词通道」
+      // （accesskey 不落 extId）而非「确证无词」——写 skip:no-lyric 会把
+      // 取不到固化成没有 7 天。ytm_/lrclib_ 的 null 是真无词，照写哨兵
+      if (!id.startsWith('kugou_')) skipInsert('no-lyric');
       return fail(c, 404, '该歌曲无歌词');
     }
     if (lines.length > MAX_LYRIC_LINES) {
@@ -266,7 +280,8 @@ app.post('/ai/lyric-verify', async (c) => {
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 64 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
-  if (!NETEASE_ID_BOUNDED_RE.test(id)) return fail(c, 400, '非法 songId');
+  // 外源词源 id 同收——下载链外源词的归属核验键就是 extId（vkey 同口径）
+  if (!NETEASE_ID_BOUNDED_RE.test(id) && !EXT_LYRIC_ID_RE.test(id)) return fail(c, 400, '非法 songId');
   const sourceTitle = String(body.sourceTitle || '').trim();
   const sourceAuthor = String(body.sourceAuthor || '').trim();
   if (!sourceTitle) return fail(c, 400, '缺少 sourceTitle');

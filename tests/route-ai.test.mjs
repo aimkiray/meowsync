@@ -24,6 +24,14 @@ seed('../src/server/services/netease-api.js', {
   callNeteaseApi: async () => ({ body: lyricPayload }),
   apiModules: {},
 });
+// 外源词源反查桩：ytm_/lrclib_/kugou_ 词键的取词支路（真身在
+// lyric-external.test.mjs 钉——这里只钉路由放行+支路命中）
+let extHit = null;
+const extCalls = [];
+seed('../src/server/services/lyric-external.js', {
+  fetchExternalLyric: async () => null,
+  fetchByExtId: async (id) => { extCalls.push(id); return extHit; },
+});
 
 let app, lyricAiRepo;
 before(() => {
@@ -163,4 +171,88 @@ test('ai：lyric-verify AI 关闭但缓存命中仍回判定（记忆不随开�
   });
   assert.equal(r2.status, 503);
   aiOn = true;
+});
+
+// ── 外源词源 id（ytm_/lrclib_/kugou_ 白名单 + fetchByExtId 取词支路）──
+
+test('ai：translate 收 lrclib_ 词源 id——fetchByExtId 取词后照常 AI 翻译', async () => {
+  aiOn = true;
+  extHit = {
+    lrc: '[00:01.00]foreign line\n[00:02.00]another',
+    source: 'lrclib', extId: 'lrclib_88001', synced: true,
+  };
+  aiAnswer = { t: { '0': '外文行一', '1': '另一句' } };
+  const r = await json(await post('/ai/lyric-translate', { id: 'lrclib_88001' }));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.source, 'ai');
+  assert.match(r.body.tlyric, /\[00:01\.00\]外文行一/);
+  assert.equal(extCalls.at(-1), 'lrclib_88001');
+  // 译文按 extId 落库——重放吃缓存不再问反查/模型
+  const r2 = await json(await post('/ai/lyric-translate', { id: 'lrclib_88001' }));
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.cached, true);
+});
+
+test('ai：lyric-verify 收 ytm_ 词源 id——反查取词走判定链', async () => {
+  aiOn = true;
+  extHit = {
+    lrc: '[00:01.00]video song line\n[00:02.00]second line',
+    source: 'ytm', extId: 'ytm_extvid0001', synced: true,
+  };
+  aiAnswer = { ok: true };
+  const r = await json(await post('/ai/lyric-verify', {
+    id: 'ytm_extvid0001', sourceTitle: 'Video Song', sourceAuthor: 'chan',
+  }));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ok, true);
+  assert.equal(extCalls.at(-1), 'ytm_extvid0001');
+});
+
+test('ai：fetchByExtId 查无词 → verify 按 no-lyric 放行、translate 404', async () => {
+  aiOn = true;
+  extHit = null; // kugou_ 出缓存即无反查通道的形态
+  const rv = await json(await post('/ai/lyric-verify', {
+    id: 'kugou_gone99', sourceTitle: 'x', sourceAuthor: '',
+  }));
+  assert.equal(rv.status, 200);
+  assert.equal(rv.body.reason, 'no-lyric');
+  const rt = await post('/ai/lyric-translate', { id: 'kugou_gone99' });
+  assert.equal(rt.status, 404);
+});
+
+test('ai：kugou_ 查无词不写 skip 哨兵（null 是「无取词通道」非「确证无词」）；ytm_ 照写', async () => {
+  aiOn = true;
+  extHit = null;
+  extCalls.length = 0;
+  // ai-translate 限流按 clientIp 分桶（8/min）且只计未命中——前置用例已把
+  // 'local' 桶打近满。TRUST_PROXY=1 下 clientIp 取 XFF 末跳：给本用例每发
+  // 独立 IP，限流桶互不挤占（env 逐请求现读，用毕还原）
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  const postIp = (ip, id) => app.request('http://t/ai/lyric-translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip },
+    body: JSON.stringify({ id }),
+  });
+  try {
+    // kugou_：404 但不落哨兵——重放重查反查（每次都真打 fetchByExtId）
+    await postIp('10.9.0.1', 'kugou_sentinel01');
+    assert.equal(lyricAiRepo.getCachedTranslation('kugou_sentinel01', 'test-model'), undefined);
+    const n = extCalls.length;
+    const rt = await postIp('10.9.0.2', 'kugou_sentinel01');
+    assert.equal(rt.status, 404);
+    assert.equal(extCalls.length, n + 1); // 无哨兵可吃——重放又走反查
+    // ytm_/lrclib_ 的 null 是真无词——哨兵照写，重放吃缓存不再反查
+    await postIp('10.9.0.3', 'ytm_sentinel001');
+    const hit = lyricAiRepo.getCachedTranslation('ytm_sentinel001', 'test-model');
+    assert.ok(hit, 'ytm_ 应落 skip 哨兵');
+    const m = extCalls.length;
+    const r2 = await json(await postIp('10.9.0.4', 'ytm_sentinel001'));
+    assert.equal(r2.status, 200);
+    assert.equal(r2.body.cached, true);
+    assert.equal(extCalls.length, m); // 哨兵命中不再反查
+  } finally {
+    if (prevTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTp;
+  }
 });
