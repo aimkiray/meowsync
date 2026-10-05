@@ -106,6 +106,14 @@
             </button>
             <button
               v-if="!isShareShell(playlist)"
+              @click.stop="downloadPlaylist(playlist, { video: true })"
+              class="pg-menu-item"
+              role="menuitem"
+            >
+              下载歌单（含视频）
+            </button>
+            <button
+              v-if="!isShareShell(playlist)"
               @click.stop="viewDownloadProgress(playlist)"
               :disabled="downloadingIds.has(String(playlist.id))"
               :title="downloadingIds.has(String(playlist.id)) ? '队列创建中，稍候' : ''"
@@ -235,13 +243,13 @@ export default {
         menuTriggerEl = button
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 本菜单全是短项，实际宽恒等于 pg-menu 的 min-width
-        // 菜单高度按可见项数算：临时歌单隐藏 5 项只剩"删除歌单"，
-        // 按全量 6 项翻转会把菜单顶到按钮上方悬空。
-        // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 6 项悬空更安全
+        // 菜单高度按可见项数算：临时歌单隐藏 6 项只剩"删除歌单"，
+        // 按全量 7 项翻转会把菜单顶到按钮上方悬空。
+        // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 7 项悬空更安全
         const currentPlaylist = props.userPlaylists.find(p => p.id === playlistId)
         const itemCount = !currentPlaylist ? 1
           : isShareShell(currentPlaylist) ? 1
-          : isNeteasePlaylist(currentPlaylist) ? 6 : 5
+          : isNeteasePlaylist(currentPlaylist) ? 7 : 6
         const menuHeight = itemCount * 39 + 4 // 实测项高 ≈39（含发丝分隔）
         const vw = window.innerWidth
         const vh = window.innerHeight
@@ -343,7 +351,7 @@ export default {
     // 服务端对活跃队列本就 409，这里省掉那条注定失败的往返与错误 toast
     // reactive 壳——菜单项 :disabled 绑定要跟踪 has()，裸 Set 不触发重渲
     const downloadingIds = reactive(new Set())
-    const downloadPlaylist = async (playlist) => {
+    const downloadPlaylist = async (playlist, { video = false } = {}) => {
       const pid = String(playlist.id)
       if (downloadingIds.has(pid)) {
         toast('该歌单下载已在进行中', 'info')
@@ -381,6 +389,7 @@ export default {
           downloadAudio: true,
           downloadLyrics: true,
           downloadCover: true,
+          downloadVideo: video === true,
           concurrentLimit: 3
         })
 
@@ -389,11 +398,12 @@ export default {
         // 「查看进度」动作键补发现性闭环：toast 是后台下载的确认位，
         // 进度在哪的问题正产生于此——action toast 驻留自动翻倍
         const queue = res?.data
+        const videoNote = video ? '（含视频）' : ''
         toast(!queue?.reused
-          ? `下载队列已创建，正在后台下载${mirrorNote}`
+          ? `下载队列已创建，正在后台下载${videoNote}${mirrorNote}`
           : queue.totalTasks > 0 && queue.completedTasks === queue.totalTasks
-            ? `该歌单已全部下载${mirrorNote}`
-            : `继续下载该歌单的已有队列${mirrorNote}`,
+            ? `该歌单已全部下载${videoNote}${mirrorNote}`
+            : `继续下载该歌单的已有队列${videoNote}${mirrorNote}`,
           'success', null, {
             label: '查看进度',
             onAction: () => emit('view-download-progress', playlist.id)
