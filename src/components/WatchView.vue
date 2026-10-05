@@ -1987,6 +1987,11 @@ export default {
   .watch-main--video .watch-banner { width: 100%; }
 
   .watch-cover { width: min(46vh, 420px); }
+  /* 上条与 .watch-cover--video 基态同特异性 (0,1,0) 而源码序在后——不拦截
+     的话它会盖掉 --video 的 min(100%,1280px)、把视频元素压成封面宽；wrap
+     公式宽却仍在 → 控制层 inset:0 锚 wrap 时全屏键吊出画面盒。重声明
+     --video 基态同款值归位（实际尺寸仍由下行 wrap 公式承担） */
+  .watch-cover--video { width: min(100%, 1280px); }
   /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
      inset:0 才贴画面（wrap 恒 100% 栏宽时，高度约束生效、视频收窄，中央播放
      键/右下全屏键会对到栏而非画面）。尺寸策略对齐 YTM watch 页：按视口高
