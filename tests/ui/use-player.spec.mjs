@@ -301,6 +301,79 @@ describe('usePlayer：YT 下载兜底链', () => {
     expect(downloadsApi.downloadSongToServer).toHaveBeenCalledTimes(1)
     expect(player.playbackError.value).toBe('')
   })
+
+  it('提交撞 409（任务已在跑）：不判失败，轮询等档落后钉本地档续播', async () => {
+    const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(yt)
+    // 服务端 409 语义：该歌曲正在下载中——瞬时态不是失败，既有任务继续下
+    downloadsApi.downloadSongToServer.mockRejectedValueOnce(
+      { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
+    downloadsApi.getSongDownloadStatus
+      .mockImplementationOnce(async () => null)                                    // 主链探测无档
+      .mockImplementationOnce(async () => null)                                    // 兜底探测无档
+      .mockImplementationOnce(async () => ({ data: { audioReady: false, task: { status: 'downloading' } } })) // 轮询1：仍在下
+      .mockResolvedValue({ data: { audioReady: true, audioPlaylistId: 'local_pl_1' } })                      // 轮询2：档落
+    await player.playSong(yt)
+    // 轮询档 1500ms/轮是真实时钟——waitFor 窗放宽罩住两轮
+    await vi.waitFor(() => expect(howls).toHaveLength(1), { timeout: 8000 })
+    expect(player.playbackError.value).toBe('')
+    expect(howls[0].opts.src).toEqual(['http://api/dl/local_pl_1/yt_abcdefghijk'])
+    howls[0].fire('onload') // 切歌锁在 onload 才松——换链全程不弹失败文案
+    expect(player.songSwitching.value).toBe(false)
+  })
+
+  it('提交撞 409 且轮询见 task:null：break 落「仍在进行」文案而非崩溃', async () => {
+    const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(yt)
+    downloadsApi.downloadSongToServer.mockRejectedValueOnce(
+      { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
+    downloadsApi.getSongDownloadStatus
+      .mockImplementationOnce(async () => null)                          // 主链探测无档
+      .mockImplementationOnce(async () => null)                          // 兜底探测无档
+      .mockResolvedValue({ data: { audioReady: false, task: null } })    // 轮询见任务行空
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/仍在进行/), { timeout: 8000 })
+    expect(player.songSwitching.value).toBe(false)
+    expect(howls).toHaveLength(0)
+  })
+
+  it('提交撞非 409（500）：穿透判失败终态，不进轮询', async () => {
+    const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(yt)
+    // 只吞 409：500 走 throw → 外层 catch 落失败文案，轮询段一行不跑
+    downloadsApi.downloadSongToServer.mockRejectedValueOnce(
+      { response: { status: 500, data: { message: 'x' } } })
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
+    expect(player.songSwitching.value).toBe(false)
+    // 探测调用钉死在 2（主链 1 + 兜底 1）即证明没进轮询段——若 500 也被
+    // 误吞，calls 会随轮询轮次继续涨
+    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(2)
+    expect(howls).toHaveLength(0)
+  })
+
+  it('轮询连续 4 次探测失联：按停机收束 break，落「仍在进行」文案', async () => {
+    const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(yt)
+    // 409 进轮询 → 服务端随即停机：探测全灭（.catch → null 连攒）
+    downloadsApi.downloadSongToServer.mockRejectedValueOnce(
+      { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
+    downloadsApi.getSongDownloadStatus
+      .mockImplementationOnce(async () => null)      // 主链探测无档
+      .mockImplementationOnce(async () => null)      // 兜底探测无档
+      .mockRejectedValue(new Error('server down'))   // 轮询段全灭
+    await player.playSong(yt)
+    // 4 轮 × 1500ms 真实时钟 ≈6s 收束——waitFor 窗放宽罩住
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/仍在进行/), { timeout: 12000 })
+    expect(player.songSwitching.value).toBe(false)
+    expect(howls).toHaveLength(0)
+    // 主链+兜底 2 次探测 + 恰好 4 次失联轮询即 break——不撑满 3min deadline
+    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(6)
+  })
 })
 
 describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', () => {
