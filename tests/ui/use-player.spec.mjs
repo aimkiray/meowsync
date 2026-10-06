@@ -971,12 +971,14 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     expect(musicApi.retryMatch).not.toHaveBeenCalled()
   })
 
-  it('已绑定曲（neteaseId 在）：走常规网易词支，不触发', async () => {
+  it('已绑定曲（neteaseId 在）且网易词源有词：走常规网易词支，不触发', async () => {
     const yt = ytUnbound({ neteaseId: 777 })
+    // 词源非空——不进绑后词空的外源兜底支（该支自有用例覆盖）
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '网易词' }] })
     const { player } = makePlayer()
     await player.playSong(yt)
     await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(777, expect.anything()))
-    await new Promise(r => setTimeout(r, 0))
+    await vi.waitFor(() => expect(player.lyrics.value).toEqual([{ time: 1, text: '网易词' }]))
     expect(musicApi.getExternalLyric).not.toHaveBeenCalled()
     expect(musicApi.retryMatch).not.toHaveBeenCalled()
   })
@@ -1009,9 +1011,11 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
 
   it('非外链曲（网易云原生 id）：形闸拦在门外，不触发', async () => {
     const { player } = makePlayer()
-    await player.playSong(song(7)) // getLyrics 空词终态——但不是外链曲
+    await player.playSong(song(7)) // getLyrics 空词终态——但不是外链曲：
+    // 数字纯曲库 id 既不回首配，也不进绑后词空的外源宽检兜底（负向闸）
     await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(7, expect.anything()))
     await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.getExternalLyric).not.toHaveBeenCalled()
     expect(musicApi.retryMatch).not.toHaveBeenCalled()
   })
 
@@ -1124,6 +1128,99 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(musicApi.retryMatch).toHaveBeenCalledTimes(1)
     expect(yt.neteaseId).toBeUndefined()
+  })
+
+  // ── 纯文本命中也算「无滚动词」：触发闸口径放宽的回归 ──
+  // 病灶实证：yt_RmNWbFWykLw 外源级联命中 lrclib 纯文本词（synced:false）
+  // → 行集非空使旧闸 !lyrics.length 不满足 → rematchUnbound 永不触发，
+  // 曲永远绑不上有滚动词的网易词源。新闸看「有无限 time 行」不看行数
+  it('外源命中纯文本词（行集非空但 time 全非有限）：同算落空，触发自动首配', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行\n二行', source: 'lrclib', extId: 'lrclib_36066431', synced: false,
+    })
+    musicApi.retryMatch.mockResolvedValue(null) // 只验触发——服务端配不配到另说
+    const yt = ytUnbound()
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    // 纯文本行照常在屏（静态行不因触发首配而丢）
+    expect(player.lyrics.value).toEqual([
+      { time: Infinity, text: '一行' },
+      { time: Infinity, text: '二行' },
+    ])
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    expect(musicApi.retryMatch.mock.calls[0][0]).toMatchObject({
+      trackId: 'yt_abcdefghijk', title: 'sasayakuを歌いました',
+    })
+  })
+
+  // synced 命中的反向用例由上方「外源已命中（lyrics 非空）：不触发自动
+  // 首配」覆盖——有有限 time 行时闸不成立
+
+  // ── 绑后词空兜底：已绑定曲的词源无词时回落外源级联（绑定安全的另一半）──
+  // 曲绑上 neteaseId 后 !song.neteaseId 闸使外源支不再进——不加兜底的话
+  // 绑定词源无词时本在显示的外源词会永久消失（绑错=丢词）
+  it('已绑定 yt_ 曲网易词空：回落外源级联，hit 落屏词属主键挂 extId', async () => {
+    const yt = ytUnbound({ neteaseId: 777 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [] }) // 网易侧无词
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]外源词', source: 'lrclib', extId: 'lrclib_5', synced: true,
+    })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '外源词' }])
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(777, expect.anything()))
+    await vi.waitFor(() => expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(player.lyrics.value).toEqual([{ time: 1, text: '外源词' }]))
+    // 词属主键挂 extId：校准 meta 与归属核验都拿它（与未绑定支同口径）
+    expect(downloadsApi.getSongMeta).toHaveBeenCalledWith('lrclib_5')
+    await vi.waitFor(() =>
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith(
+        'lrclib_5', 'sasayakuを歌いました', 'rei sirose - Topic', expect.anything()))
+    // 已绑定曲不回首配——rematchUnbound 的 neteaseId==null 闸天然防环
+    expect(musicApi.retryMatch).not.toHaveBeenCalled()
+  })
+
+  it('已绑定 yt_ 曲网易词空且外源也全灭：lyrics=[] 正常终态，不回首配', async () => {
+    const yt = ytUnbound({ neteaseId: 777 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [] })
+    musicApi.getExternalLyric.mockResolvedValue(null) // 级联全灭
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(1))
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.lyrics.value).toEqual([])
+    expect(player.loadingLyrics.value).toBe(false)
+    expect(musicApi.retryMatch).not.toHaveBeenCalled()
+  })
+
+  it('端到端回归：纯文本触发首配→绑上→网易词空→外源兜底接住，纯文本词不丢', async () => {
+    // 病灶全链回放：yt_ 曲外源命中纯文本（synced:false）→ 放宽闸触发
+    // rematchUnbound → 绑上网易词源 → 热重载走常规支 → 网易侧无词 →
+    // UGC 形态回落外源 → 同一份纯文本词重新落屏（绑定不再等于丢词）
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行\n二行', source: 'lrclib', extId: 'lrclib_36066431', synced: false,
+    })
+    musicApi.retryMatch.mockResolvedValue({
+      id: 1396945969, name: 'シルバーワープ', matchedBy: 'title+artist', score: 0.9,
+      ar: [{ name: 'rei sirose' }], al: { id: 9, name: '专', picUrl: 'http://n/9.jpg' },
+    })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [] }) // 网易侧无词
+    const yt = ytUnbound()
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    // 首配命中 → 绑定 → 热重载走常规网易词支
+    await vi.waitFor(() => expect(yt.neteaseId).toBe(1396945969))
+    await vi.waitFor(() =>
+      expect(musicApi.getLyrics).toHaveBeenCalledWith(1396945969, expect.anything()))
+    // 网易词空 → 外源兜底第二跳：同一份纯文本词重新落屏
+    await vi.waitFor(() => expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(player.lyrics.value).toEqual([
+      { time: Infinity, text: '一行' },
+      { time: Infinity, text: '二行' },
+    ]))
+    expect(player.currentLyricIndex.value).toBe(-1) // 静态行不滚动
+    expect(downloadsApi.getSongMeta).toHaveBeenCalledWith('lrclib_36066431')
+    expect(toast).toHaveBeenCalledWith('词源已自动重匹配', 'success')
   })
 })
 
