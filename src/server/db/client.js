@@ -270,6 +270,28 @@ function migrateLegacyTables(database) {
   `);
 }
 
+// sync_items.seq 补列迁移：老库 ALTER 加列后存量行 seq 全 NULL——按
+// 「max(现存seq)+rowid」回填（rowid 天然随落库序递增，回填号段严格
+// 单调且不撞任何已发号）；计数器行初始化到 max(seq)。旧时钟域索引
+// 顺手退役：pull 已切 seq 域，(user_id,updated_at) 复合索引无消费者
+function migrateSyncItems(database) {
+  addColumnIfMissing(database, 'sync_items', 'seq', 'INTEGER');
+  database.transaction(() => {
+    const base = database
+      .prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM sync_items')
+      .get().m;
+    database.prepare('UPDATE sync_items SET seq = rowid + ? WHERE seq IS NULL').run(base);
+    database.exec(`
+      INSERT INTO sync_meta (k, v)
+      SELECT 'sync_seq', COALESCE((SELECT MAX(seq) FROM sync_items), 0)
+      WHERE NOT EXISTS (SELECT 1 FROM sync_meta WHERE k = 'sync_seq')
+    `);
+    if (hasIndex(database, 'idx_sync_items_user_updated')) {
+      database.exec('DROP INDEX idx_sync_items_user_updated');
+    }
+  })();
+}
+
 function initSchema(database) {
   database.pragma('journal_mode = WAL');
   database.pragma('busy_timeout = 5000');
@@ -434,12 +456,41 @@ function initSchema(database) {
       ip TEXT,
       user_agent TEXT
     );
+
+    -- 多端同步 KV（通用 LWW 面）：playlist:/doc:/lib: 三前缀共用一张表，
+    -- 服务端只校验 key 形状不解释语义。两条时序分层互不兼任：
+    --   updated_at 客户端写入时刻——LWW 判优钟，只管「这写赢不赢」
+    --   seq        服务端生成的全局单调收写序——pull 交付水位线域，
+    --              只管「变了没有、发到哪」（客户端钟慢/漂移不伤交付）
+    -- recv_at 服务端收到时刻——纯审计列（平局规则是留旧，不参与比较）。
+    -- 删除=墓碑行（deleted=1, value_json='null'）：pull 增量必须含墓碑，
+    -- 删除才能跨端传播；同 key 后写 deleted=0 即复活。user_id 第一天就
+    -- 分域（'default'=开放部署桶，登录态=users.id）——未来多用户零迁移
+    CREATE TABLE IF NOT EXISTS sync_items (
+      user_id TEXT NOT NULL,
+      item_key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      recv_at INTEGER NOT NULL,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      seq INTEGER,
+      PRIMARY KEY (user_id, item_key)
+    );
+
+    -- sync 水位线计数器（k='sync_seq' 一行）：applyChanges 事务内
+    -- 「会写才取」的条件 UPDATE 发号——被拒行不消耗 seq（跳号=空拉）。
+    -- 通用 KV 计数器表形态，后续有序列需求直接复用
+    CREATE TABLE IF NOT EXISTS sync_meta (
+      k TEXT PRIMARY KEY,
+      v INTEGER
+    );
   `);
 
   // 索引必须在列迁移之后创建——老库若缺被索引的列（如 playlist_tracks.song_id），
   // 先建索引会抛 no such column 使 initSchema 中断，migrate 永远跑不到
   migrateDownloadTasks(database);
   migrateLegacyTables(database);
+  migrateSyncItems(database);
 
   const INDEX_COLUMNS = [
     ['idx_playlist_tracks_playlist_id', 'playlist_tracks', 'playlist_id'],
@@ -456,7 +507,10 @@ function initSchema(database) {
     ['idx_download_queues_status', 'download_queues', 'status'],
     // cascade/建队列查重/属主判定都按 playlist_id 过滤——队列表全表扫
     ['idx_download_queues_playlist', 'download_queues', 'playlist_id'],
-    ['idx_sessions_expires', 'sessions', 'expires_at']
+    ['idx_sessions_expires', 'sessions', 'expires_at'],
+    // sync pull 的 since 增量扫走 seq 域（交付水位线），恒按 user 分域
+    // 过滤——复合索引最左列必须是 user_id；ORDER BY seq 顺势吃索引序
+    ['idx_sync_items_user_seq', 'sync_items', ['user_id', 'seq']]
   ];
   for (const [name, table, column] of INDEX_COLUMNS) {
     // hasColumn 缺列场景不建（索引缺失可继续跑，比启动即崩可恢复）；
