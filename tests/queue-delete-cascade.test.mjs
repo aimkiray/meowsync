@@ -28,7 +28,7 @@ seed('../src/server/services/file-downloader.js', {
   downloadCover: hangUntilAbort
 });
 
-let app, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, downloadFs;
+let app, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, downloadFs, locks;
 before(() => {
   app = require('../src/server/routes/downloads.js');
   tasksRepo = require('../src/server/repositories/downloadTasks.js');
@@ -36,6 +36,7 @@ before(() => {
   playlistsRepo = require('../src/server/repositories/playlists.js');
   playlistTracksRepo = require('../src/server/repositories/playlistTracks.js');
   downloadFs = require('../src/server/services/download-fs.js');
+  locks = require('../src/server/lib/deletion-locks.js');
 });
 
 const del = (queueId) => app.request(`http://t/downloads/queues/${queueId}`, { method: 'DELETE' });
@@ -386,4 +387,50 @@ test('kind=audio 的 videoPath 兜底仅限 file_ 曲：bv_ 仅视频行 404', a
     `http://t/downloads/songs/file_abcd1234/file?playlistId=${pl.id}&kind=audio`);
   assert.equal(fileRes.status, 200, 'file_ video-only 曲的 audio 请求应回落 videoPath');
   assert.match(fileRes.headers.get('content-type') || '', /video\/mp4/);
+});
+
+test('级联墓碑只对数字 id 立：local_pl_/saved_queue_ 镜像行跳过', async () => {
+  // 墓碑的防护面 = 在途上游导入按同 netease_playlist_id upsert 复活已删行；
+  // 上游导入准入闸（resolvePlaylistId /playlists/import）只放纯数字 id——
+  // 本地命名空间永远到不了那条路。修复前镜像行被无差别立 130s 墓碑，
+  // mirror 重放整窗 409。镜像的复活竞态由 deletingPlaylists 行锁 +
+  // 镜像事务内行 id 复查覆盖，不需要 netease 域墓碑
+  for (const mirrorId of ['local_pl_qdel1', 'saved_queue_qdel1']) {
+    const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: mirrorId, name: `pl-${mirrorId}`, source: 'local' });
+    const q = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 0 });
+    assert.equal((await del(q.id)).status, 200);
+    assert.equal(playlistsRepo.findPlaylistById(pl.id), null); // 级联本体不受影响
+    assert.equal(locks.deletingNeteasePlaylists.has(mirrorId), false);
+    assert.equal(locks.isNeteasePlaylistDeleting(mirrorId), false);
+  }
+
+  // 回归钉：数字 id 能过上游导入准入闸，墓碑必须照常立——
+  // 删了它，在途导入 fetch 返回后就会把刚删的行复活
+  const num = seedDownload('777020');
+  assert.equal((await del(num.queue.id)).status, 200);
+  assert.ok(locks.isNeteasePlaylistDeleting('777020'));
+});
+
+test('镜像端到端：本地歌单删下载足迹后立即可重镜（不再被墓碑 409 封 130s）', async () => {
+  // 修复前表象：删歌单足迹后 130s 内镜像 POST 撞墓碑 409——单曲提交的
+  // resolvePlaylistId 跟着落空，非数字 id 直接被 400「无效的歌单 ID」弹回
+  const localId = 'local_pl_qdel_e2e';
+  const postMirror = () => app.request('http://t/downloads/local/mirror', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      localId, name: '本地歌单',
+      tracks: [{ id: '777020001', name: '曲', ar: [{ name: 'a' }], al: { name: 'b' }, dt: 1000 }]
+    })
+  });
+  assert.equal((await postMirror()).status, 200);
+
+  const delRes = await app.request(`http://t/downloads/local/mirror/${localId}`, { method: 'DELETE' });
+  assert.equal(delRes.status, 200);
+  assert.equal(playlistsRepo.findPlaylistByNeteaseId(localId), null);
+
+  // 级联完成的下一拍重镜同 id——有墓碑时这里是 409
+  const remirror = await postMirror();
+  assert.equal(remirror.status, 200);
+  assert.ok((await remirror.json()).data.playlistId);
 });

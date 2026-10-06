@@ -8,7 +8,7 @@ const { importPlaylistFromNetease } = require('./playlist-sync');
 const fileDownloader = require('./file-downloader');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
-const { FILE_TRACK_ID_RE } = require('../../shared/predicates.js');
+const { FILE_TRACK_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
 const { deletingPlaylists, deletingQueues, deletingNeteasePlaylists, isNeteasePlaylistDeleting, markNeteasePlaylistDeleted } = require('../lib/deletion-locks');
 // 路径/fs/纯计算助手已抽到 download-fs.js（DOWNLOAD_BASE_DIR 唯一来源也在那）
 const {
@@ -2033,7 +2033,14 @@ async function deletePlaylistCascade(playlistId) {
     if (tombstoneRow?.neteasePlaylistId === 'local_uploads') {
       throw httpError(400, '本地上传资产库不可删除');
     }
-    if (tombstoneRow?.neteasePlaylistId) {
+    // 墓碑只兜「在途上游导入复活已删行」一条竞态——importPlaylistFromNetease
+    // 的准入闸（resolvePlaylistId 与 /playlists/import 同口径）只放纯数字 id，
+    // local_pl_/saved_queue_ 等本地命名空间永远走不到那条路：给它们立碑零防护
+    // 价值，却把镜像重放（mirror 路由前置 + local-mirror 事务内复查）封禁满
+    // TTL。镜像行的复活竞态由 deletingPlaylists 行锁（持满级联全程）+ 镜像
+    // 事务内行 id 复查覆盖——同步单事务无在途 fetch 窗，不需要 netease 域墓碑
+    if (tombstoneRow?.neteasePlaylistId
+        && NETEASE_ID_RE.test(String(tombstoneRow.neteasePlaylistId))) {
       tombstoneNeteaseId = String(tombstoneRow.neteasePlaylistId);
       // 级联进行中 = Infinity（在途墓碑），见 deletion-locks.js 生命周期说明
       deletingNeteasePlaylists.set(tombstoneNeteaseId, Infinity);
