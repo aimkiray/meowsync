@@ -8,6 +8,10 @@ const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllo
 // YouTube 出站代理（yt_proxy）：googlevideo 转发换道 undici ProxyAgent——
 // 判定与懒建缓存在 lib/yt-proxy.js，未配时所有分支 null 短路走原样
 const { isYoutubeHost, ytDispatcher } = require('../lib/yt-proxy');
+// 播放字节本地缓存：vault 条目带 cacheKey 时先查盘（完整档直喂，签名
+// 过期无所谓），未命中照常回源并 tee 旁路落盘。缓存是优化路径——
+// 任何环节失败只落空，绝不拖累响应流
+const mediaCache = require('../services/media-cache');
 
 const app = new Hono();
 
@@ -26,7 +30,8 @@ const UPSTREAM_TIMEOUT_MS = 15000;
 //   {kind:'reject', send}  该候选被拒（校验失败/上游 ≥400/请求抛错）——调度层可换档
 // send(c) 是真正写响应的闭包——推迟到「这是最终结论」时才执行，换档候选的
 // 上游 body 在返回前已 cancel，不会挂着悬空 socket
-async function fetchCandidate(c, firstUrl) {
+// cacheKey 在位时 ok 响应旁路落盘（见下方 tee 分支）
+async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta) {
   const clientRange = c.req.header('range');
   // 多段 Range（bytes=0-1,3-5）上游会回 multipart/byteranges——与透传的
   // 单段 Content-Range 语义不兼容，浏览器请求也绝不会产生它，直接拒绝。
@@ -196,7 +201,28 @@ async function fetchCandidate(c, firstUrl) {
     // injectedRange 同理：客户端未请求 Range 却收 206 属协议噪音，body
     // 是全量流，按 200 透传语义最诚实
     const status = (encoded || injectedRange) && upstream.status === 206 ? 200 : upstream.status;
-    return { kind: 'ok', send: () => c.body(upstream.body, status, resHeaders) };
+    return { kind: 'ok', send: () => {
+      let body = upstream.body;
+      // 旁路捕获：键在位 + 总量可判 + 非编码字节流才 tee——206 从
+      // Content-Range `bytes s-e/total` 取偏移与总长（injectedRange 的
+      // bytes=0- 天然落在同一条解析路），200 即 offset=0 全量；
+      // encoded 时透传字节与盘语义不符，不捕获
+      if (cacheKey && body && !encoded) {
+        const rm = /^bytes (\d+)-(\d+)\/(\d+)$/i.exec(String(contentRange || '').trim());
+        const total = upstream.status === 206
+          ? (rm ? parseInt(rm[3], 10) : 0)
+          : (contentLength ? parseInt(contentLength, 10) : 0);
+        const startOffset = upstream.status === 206 ? (rm ? parseInt(rm[1], 10) : 0) : 0;
+        const capture = total > 0 && mediaCache.beginCapture(cacheKey, {
+          contentType: resHeaders['Content-Type'],
+          size: total,
+          startOffset,
+          ...(cacheMeta || {}),
+        });
+        if (capture) body = mediaCache.teeStream(body, capture);
+      }
+      return c.body(body, status, resHeaders);
+    } };
   }
 
   return { kind: 'reject', send: () => c.json({ code: 502, message: 'too many redirects' }, 502) };
@@ -211,11 +237,21 @@ async function fetchCandidate(c, firstUrl) {
 // 可用镜像不再白探死链
 async function proxyUpstream(c, entry) {
   const urls = entry.urls;
+  // 完整字节已在盘上：连上游都不打——签名过期/被闸/离线都无所谓。
+  // 缓存层自身故障只 warn 回落原代理链，播放绝不能被优化路径挡死
+  if (entry.cacheKey) {
+    try {
+      const served = await mediaCache.serveComplete(c, entry.cacheKey);
+      if (served) return served;
+    } catch (e) {
+      console.warn(`[media-cache] 完整档供给失败（${entry.cacheKey}），回落上游:`, e?.message || e);
+    }
+  }
   const start = Math.min(entry.idx || 0, urls.length - 1);
   let lastReject = null;
   for (let n = 0; n < urls.length; n++) {
     const i = (start + n) % urls.length;
-    const r = await fetchCandidate(c, urls[i]);
+    const r = await fetchCandidate(c, urls[i], entry.cacheKey, entry.cacheMeta);
     if (r.kind === 'halt') return r.send();
     if (r.kind === 'ok') {
       entry.idx = i;
