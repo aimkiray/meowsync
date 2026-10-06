@@ -397,7 +397,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent } from 'vue'
 import { authApi } from './api/auth'
 import { authState, authRequired, dismissSetup } from './lib/auth-state'
 import AuthGate from './components/AuthGate.vue'
@@ -409,6 +409,7 @@ import { isConfirmOpen, resolveConfirm, toast, pixelConfirm } from './lib/feedba
 import { httpsCover } from './lib/url'
 import { readShareParams, consumeUrlShareParams } from './lib/share-params'
 import { LS_KEYS, readJSON, writeJSON } from './lib/storage'
+import { initSync, pullFromServer, markDirty, onRemoteApply, attachWriteHook } from './lib/sync'
 import { createReqGate } from './lib/req-gate'
 import { usePlaylistLibrary } from './composables/usePlaylistLibrary'
 import { usePlayer } from './composables/usePlayer'
@@ -465,6 +466,10 @@ export default {
     PixelIcon
   },
   setup() {
+    // 同步写钩尽早挂（src/lib/sync.js）：initSync 在 onMounted 尾才注册，
+    // 之前的白名单写（loadDefaultPlaylists/分享导入/恢复路径）会被引擎
+    // 未就绪闸接住——钩内只进 pending 集，initSync 完成时统一回放记脏
+    attachWriteHook()
     // 响应式数据
     const searchQuery = ref('')
     const loading = ref(false)
@@ -474,7 +479,28 @@ export default {
     const WATCH_TABS = ['queue', 'lyrics', 'related']
     const savedWatchTab = readJSON(LS_KEYS.WATCH_TAB)
     const watchTab = ref(WATCH_TABS.includes(savedWatchTab) ? savedWatchTab : 'queue')
-    watch(watchTab, t => writeJSON(LS_KEYS.WATCH_TAB, t))
+    // 远端应用窗（prefs.js remoteApplying 同型）：远端落盘后回填 ref 带起
+    // 的 watcher 写盘要跳过——远端非法 tab 回落 queue 是本机口径降级，写回
+    // LS 会被记脏推上去，等于本机拿新戳把远端新版数据降级；LS 原文保持，
+    // 重启读回同口径归一（与 theme.js「不回写」同口径）
+    let watchTabRemoteApplying = false
+    watch(watchTab, t => { if (!watchTabRemoteApplying) writeJSON(LS_KEYS.WATCH_TAB, t) })
+    // 多端同步：远端 doc 落 LS 后按 key 回本。watchTab 越界值回落 queue
+    // ——与初始读同口径。关窗 nextTick 必须挂在 ref 赋值**之后**：watcher 是
+    // pre-flush 任务，ref 一变才入队；若先挂 nextTick 再改 ref，关窗回调会
+    // 排在 watcher job 前面跑，窗口提前关上，降级值照样被回写推回去
+    onRemoteApply(LS_KEYS.WATCH_TAB, () => {
+      watchTabRemoteApplying = true
+      const t = readJSON(LS_KEYS.WATCH_TAB)
+      watchTab.value = WATCH_TABS.includes(t) ? t : 'queue'
+      void nextTick(() => { watchTabRemoteApplying = false })
+    })
+    // 建号略过标记跨端跟随（auth-state.js 裸写不经钩，拉取侧照常能落地）
+    onRemoteApply(LS_KEYS.SETUP_DISMISSED, () => {
+      try { authState.setupDismissed = localStorage.getItem(LS_KEYS.SETUP_DISMISSED) === '1' } catch { /* 隐私模式 */ }
+    })
+    // 对称地：运行时 dismissSetup() 的裸 setItem 也绕过写钩——补脏随下趟推出
+    watch(() => authState.setupDismissed, v => { if (v) markDirty(LS_KEYS.SETUP_DISMISSED) })
     const playingPlaylistId = ref(null) // 快照所属歌单 id——持久化恢复用它而非浏览态 id
     const fullscreenLyricMode = ref('original')
     const fullscreenInteractionMode = ref('auto')
@@ -1133,6 +1159,11 @@ export default {
       // URL 导航意图最后生效：view/pl 参数压在恢复逻辑之上（用户显式给的地址优先）
       applyUrlNav()
       normalizeNavEntry()
+
+      // 多端同步：注册写钩 + 首趟增量拉取。放在 init 尾部——composable 内
+      // 的远端应用订阅须先就位；引擎内部全静默退避，绝不阻塞本地功能
+      initSync()
+      void pullFromServer()
 
       // 热视图 chunk 闲时预取：WatchView/SongList 是点播/歌单两条主路径——
       // 浏览器空闲期把模块拉进内存表，首次导航时 defineAsyncComponent 同步

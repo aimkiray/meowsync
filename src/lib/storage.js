@@ -13,7 +13,19 @@ export const LS_KEYS = {
   VIDEO_MODE: 'meowsync-bili-video',
   LYRIC_FONT_SIZE: 'meowsync-lyric-fs',
   WATCH_TAB: 'meowsync-watch-tab',
+  // 多端同步引擎（lib/sync.js）内部簿记：seq 域交付水位线 / doc 级
+  // LWW 写戳表。只登记键名，不进同步白名单——簿记自身不产生同步内容
+  SYNC_SINCE: 'meowsync-sync-since',
+  SYNC_META: 'meowsync-sync-meta',
 }
+
+// 同步引擎写钩（src/lib/sync.js 的 initSync 注册）：默认 null 即 no-op——
+// 未 init（未登录/遥控端/单测环境）时 writeJSON 零同步开销，测试隔离干净。
+// 走模块级槽而非反向 import sync.js：storage 是依赖最底层，import 就成环
+let writeHook = null
+export function setWriteHook(fn) { writeHook = typeof fn === 'function' ? fn : null }
+// 非 JSON 写路径（prefs.js/theme.js 的裸 setItem/removeItem）共用同一脏标记口
+export function notifyStorageWrite(key) { writeHook?.(key) }
 
 // localStorage JSON 读写（全部带异常防护，脏数据不再阻断调用方）
 export function readJSON(key, fallback = null) {
@@ -27,10 +39,13 @@ export function readJSON(key, fallback = null) {
 }
 
 // 返回成败——配额满/存储禁用时调用方决定是否告知用户（此前静默 console.warn，
-// 「已保存」类 toast 会撒谎：刷新后数据消失）
-export function writeJSON(key, value) {
+// 「已保存」类 toast 会撒谎：刷新后数据消失）。
+// opts.remoteApplied：远端值回写专用——跳过脏标记，否则拉取落盘会被当成
+// 本地变更立刻回推，形成拉-推回声环
+export function writeJSON(key, value, opts = null) {
   try {
     localStorage.setItem(key, JSON.stringify(value))
+    if (!opts?.remoteApplied) notifyStorageWrite(key)
     return true
   } catch (e) {
     console.warn(`localStorage 写入 ${key} 失败:`, e.message)

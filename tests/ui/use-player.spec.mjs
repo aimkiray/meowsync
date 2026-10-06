@@ -1,6 +1,6 @@
 // usePlayer 状态机：Howl 全桩捕获回调，驱动 onload/onplay/onloaderror
 // 断言——本地档优先 / 本地档坏转在线 / 竞态切歌 / 队列快照 / 持久化恢复。
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, nextTick } from 'vue'
 
 // ── Howler 桩：实例入册，回调手动触发（模拟真实异步事件序）──
@@ -58,13 +58,21 @@ vi.mock('../../src/api/ai.js', () => ({
   },
 }))
 vi.mock('../../src/lib/feedback.js', () => ({ toast: vi.fn() }))
-vi.mock('../../src/lib/theme.js', () => ({ glitchBurst: vi.fn() }))
+// theme.js 全替桩：usePlayer 消费 glitchBurst；lib/sync.js（usePlayer 引入）
+// 还 import applyRemoteTheme——缺导出名会让整个 import 图链接失败
+vi.mock('../../src/lib/theme.js', () => ({ glitchBurst: vi.fn(), applyRemoteTheme: vi.fn() }))
+// 同步引擎的传输层桩——远端应用用例经真 pullFromServer 送达 player-state
+vi.mock('../../src/api/sync.js', () => ({
+  syncApi: { pull: vi.fn(), push: vi.fn() },
+}))
 
 import { musicApi, parseLyrics } from '../../src/api/music.js'
 import { downloadsApi } from '../../src/api/downloads.js'
 import { aiApi } from '../../src/api/ai.js'
+import { syncApi } from '../../src/api/sync.js'
 import { toast } from '../../src/lib/feedback.js'
 import { usePlayer } from '../../src/composables/usePlayer.js'
+import { initSync, pullFromServer, resetSyncState } from '../../src/lib/sync.js'
 import { LS_KEYS } from '../../src/lib/storage.js'
 
 const song = (id, extra = {}) => ({
@@ -100,6 +108,7 @@ beforeEach(() => {
   howls.length = 0
   vi.clearAllMocks()
   localStorage.clear()
+  resetSyncState() // 引擎模块级状态跨用例隔离（远端应用用例会 init）
   musicApi.getSongUrl.mockImplementation(async () => ({ url: 'https://cdn.example/online.mp3', br: 320000 }))
   downloadsApi.getSongDownloadStatus.mockImplementation(async () => null)
   // clearAllMocks 只清调用记录不清实现——逐用例覆写的 mock 全部归位
@@ -721,5 +730,40 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(musicApi.getLyrics).not.toHaveBeenCalled()
     expect(player.currentSong.value).toBeNull()
+  })
+})
+
+describe('usePlayer：远端 player-state 续播位挂账', () => {
+  afterEach(() => resetSyncState())
+
+  it('远端 state 应用后、消费前：本地整文写盘保留远端续播位不抹掉', async () => {
+    const { player } = makePlayer()
+    initSync()
+    syncApi.pull.mockResolvedValue({
+      code: 200,
+      items: [{
+        key: `doc:${LS_KEYS.PLAYER_STATE}`,
+        value: JSON.stringify({
+          selectedPlaylistId: 'pl_remote', playingPlaylistId: 'pl_remote',
+          currentSongId: 77, currentTime: 45, volume: 33,
+        }),
+        updatedAt: Date.now() + 1000, seq: 1,
+      }],
+    })
+    await pullFromServer()
+    await nextTick()
+    // 远端 UI 偏好灌进内存态；续播位挂账待消费
+    expect(player.volume.value).toBe(33)
+    // 消费前任何本地整文写盘（音量/偏好写回等）不得把续播位抹成空值
+    player.savePlayerStateToStorage()
+    const saved = JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE))
+    expect(saved).toMatchObject({
+      selectedPlaylistId: 'pl_remote', playingPlaylistId: 'pl_remote',
+      currentSongId: 77, currentTime: 45, volume: 33,
+    })
+    // 本地真起播即销账——存档回归本地播放事实
+    await player.playSong(song(9))
+    player.savePlayerStateToStorage()
+    expect(JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE)).currentSongId).toBe(9)
   })
 })

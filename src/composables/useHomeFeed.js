@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
+import { onRemoteApply } from '../lib/sync.js'
 import { isSingleSongShellId, slimTrack } from '../lib/song.js'
 
 const PLAY_HISTORY_STORAGE_KEY = LS_KEYS.PLAY_HISTORY
@@ -58,6 +59,19 @@ export function useHomeFeed({ userPlaylists, selectedPlaylist, playingPlaylistId
       playlistHistory.value = savedPlHistory.filter(p => p && p.id != null)
     }
   }
+
+  // 多端同步远端落地：引擎已把整文档写进 LS，内存货架重读同一事实源。
+  // 与 restoreHistory 不同——远端删除（键缺席）也要映成空表
+  const rereadHistory = () => {
+    const savedHistory = readJSON(PLAY_HISTORY_STORAGE_KEY)
+    playHistory.value = Array.isArray(savedHistory)
+      ? savedHistory.filter(s => s && s.id != null) : []
+    const savedPlHistory = readJSON(PLAYLIST_HISTORY_STORAGE_KEY)
+    playlistHistory.value = Array.isArray(savedPlHistory)
+      ? savedPlHistory.filter(p => p && p.id != null) : []
+  }
+  onRemoteApply(PLAY_HISTORY_STORAGE_KEY, rereadHistory)
+  onRemoteApply(PLAYLIST_HISTORY_STORAGE_KEY, rereadHistory)
 
   return {
     playHistory, playlistHistory,
