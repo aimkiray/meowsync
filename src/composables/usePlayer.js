@@ -1042,7 +1042,8 @@ export function usePlayer({
 
     // 歌词加载和同步（支持取消 + 过期响应不落盘，防止旧歌歌词覆盖新歌）。
     // 外部导入曲（B 站/YouTube）的歌词源：匹配到的网易云曲 id（neteaseId）
-    // 优先，缺席时走 /lyric/external 外源级联兜底（extId 作词属主键）。
+    // 优先，缺席或绑定词源行集为空时走 /lyric/external 外源级联兜底
+    // （extId 作词属主键）——绑错/绑了无词源不该把已在显示的外源词丢掉。
     // 播放本体仍是 bv_*/yt_* id——过期判定锚 song.id，不锚歌词请求的 id
     // lyricLoadSeq：同曲两次并发 load 的单调闸（播放路径 fetch 在飞 + 歌词热
     // 重载再发——同 id 同 signal 域里 currentPlayingId/abort 都分不开，后到者
@@ -1082,6 +1083,26 @@ export function usePlayer({
         }
         return
       }
+      // 外源级联「取词+落屏」核：未绑定支（无 neteaseId 直走外源）与绑后
+      // 词空兜底支（网易/QQ 词源终态行集为空）共用，不复制定理。含校准归
+      // 零/词属主清理/getExternalLyric 级联取词/applyExternalLyricHit 落
+      // 屏；loadingLyrics 由外层调用点的 try/finally 管。stale 谓词沿用
+      // 本代 loadLyrics 的域——两个调用点同代同 signal，不另组
+      const fetchApplyExternal = async (song, signal) => {
+        lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
+        lyricOwnerKey.value = null
+        console.log('📝 加载外源歌词:', song.id)
+        const ext = song?.youtube || song?.bilibili || null
+        const durationMs = song.dt || song.duration
+        const hit = await musicApi.getExternalLyric({
+          id: song.id,
+          title: ext?.title || song.name || '',
+          artist: ext?.author || '',
+          durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+        }, signal).catch(() => null) // 级联全灭(404)/网络错同终态：照旧空词
+        if (stale()) return
+        await applyExternalLyricHit(song, hit, { signal, stale })
+      }
       // 外部导入曲（B 站/YouTube）无 neteaseId 时走服务端外源词兜底
       // /lyric/external（YTM→LRCLIB→酷狗级联）。provider 对象缺失的老持久
       // 化行按 bv_/yt_ id 形态同判（对象与形态任一命中）——服务端按 id 前缀
@@ -1090,27 +1111,18 @@ export function usePlayer({
       if ((song?.bilibili || song?.youtube
           || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id)))
           && !song.neteaseId) {
-        lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
-        lyricOwnerKey.value = null
         try {
           loadingLyrics.value = true
-          console.log('📝 加载外源歌词:', song.id)
-          const ext = song?.youtube || song?.bilibili || null
-          const durationMs = song.dt || song.duration
-          const hit = await musicApi.getExternalLyric({
-            id: song.id,
-            title: ext?.title || song.name || '',
-            artist: ext?.author || '',
-            durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
-          }, signal).catch(() => null) // 级联全灭(404)/网络错同终态：照旧空词
-          if (stale()) return
-          await applyExternalLyricHit(song, hit, { signal, stale })
-          // 外源终态仍无词（级联全灭/hit=null/行集剥空）且曲仍未绑网易词源
-          // ——外源三源对 VOCALOID 翻唱等曲天然缺收录，而这些曲网易云本体
-          // 常有：未绑定曲自动重匹配一次兜底（每曲每会话限一次，详见
-          // rematchUnbound 头注）。neteaseId 复查防御——applyExternalLyricHit
-          // 不改它，但 RTT 窗内菜单换绑等别路可能已补绑
-          if (!stale() && !lyrics.value.length && song.neteaseId == null) {
+          await fetchApplyExternal(song, signal)
+          // 外源终态仍无滚动词（级联全灭/hit=null/行集剥空，或只命中纯文
+          // 本词——time 全非有限的静态行只算「有字」不算「有词」：绑上网
+          // 易词源换滚动词是严格升级）且曲仍未绑网易词源——外源三源对
+          // VOCALOID 翻唱等曲天然缺收录，而这些曲网易云本体常有：未绑定
+          // 曲自动重匹配一次兜底（每曲每会话限一次，详见 rematchUnbound
+          // 头注）。neteaseId 复查防御——applyExternalLyricHit 不改它，
+          // 但 RTT 窗内菜单换绑等别路可能已补绑
+          if (!stale() && !lyrics.value.some(l => Number.isFinite(l.time))
+              && song.neteaseId == null) {
             void rematchUnbound(song, signal)
           }
         } catch (error) {
@@ -1149,6 +1161,20 @@ export function usePlayer({
           lyricId = song.neteaseId
           lyricsData = await musicApi.getLyrics(lyricId, signal)
           if (stale()) return
+        }
+        // 绑后词空兜底：词源终态行集为空（含 qq→netease 回落后仍空）且曲
+        // 是 UGC 形态（provider 对象或 bv_/yt_ 裸 id——与上方未绑定支同
+        // 谓词）→ 再走一遍外源级联。曲绑上 neteaseId 后 !song.neteaseId
+        // 闸使外源支本不再进——若绑定的词源无词，本在显示的外源词（如首
+        // 配前命中的纯文本词）会永久消失：绑错=丢词。数字/qq_ 纯曲库 id
+        // 不进——外源宽检对目录曲是误导通道（既有设计口径）。外源也空
+        // 则 lyrics=[] 与现状同终态；rematchUnbound 的 neteaseId==null
+        // 闸天然防环——绑后兜底不回触首配
+        if (!lyricsData?.lyrics?.length
+            && (song?.youtube || song?.bilibili
+                || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id)))) {
+          await fetchApplyExternal(song, signal)
+          return
         }
         const meta = qqMid
           ? await downloadsApi.getSongMeta(lyricId).catch(() => null)
