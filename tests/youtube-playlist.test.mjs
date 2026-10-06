@@ -13,6 +13,7 @@ let lastListId = null; // stub 透传观测——VL 双前缀缺陷钉（不带 
 const matchCalls = [];
 let matchImpl = async () => ({ song: null, query: null });
 let rateImpl = () => true;
+let fetchPlayerImpl = async () => ({});   // /resolve 支路的 Innertube 出口
 
 // seed/getJson 公共脚手架在 tests/helpers.mjs
 import { seed, getJson, seedMatchModule } from './helpers.mjs';
@@ -27,7 +28,8 @@ seed('../src/server/lib/youtube.js', {
     if (!v) throw new Error(`unstubbed page continuation=${continuation}`);
     return { title: '', owner: '', cover: '', mediaCount: null, items: [], skipped: 0, continuation: null, ...v };
   },
-  fetchPlayer: async () => ({}), fetchPlayerWith: async () => ({}),
+  fetchPlayer: (...a) => fetchPlayerImpl(...a),
+  fetchPlayerWith: async () => ({}),
   pickStreamList: () => [],
 });
 seedMatchModule(matchCalls, () => matchImpl);
@@ -40,6 +42,7 @@ const item = (i, over = {}) => ({
 const reset = () => {
   pageScript = {}; pageCalls = 0; rateImpl = () => true;
   matchCalls.length = 0; matchImpl = async () => ({ song: null, query: null });
+  fetchPlayerImpl = async () => ({});
 };
 test('continuation 翻页 + 失效过滤 + 曲目归一', async () => {
   reset();
@@ -209,4 +212,22 @@ test('resolve 遇歌单链 → 400 带 playlist 字段（前端自动转歌单�
   assert.equal(status, 200);
   assert.equal(body.videoId, 'dQw4w9WgXcQ');
   assert.equal(body.playlist, undefined);
+});
+
+test('resolve：ver.<名> 尾缀标题给匹配器补剥缀候选（songName 诚实不动）', async () => {
+  reset();
+  // 真实病例：VTuber 翻唱标题挂 'ver.<歌姬>' 检索噪声尾——剥缀形态进
+  // candidates 喂匹配器，songName 显示层保持原样不改写
+  fetchPlayerImpl = async () => ({
+    videoDetails: { title: 'Dream Play Sick ver.EMA', author: 'EMA', lengthSeconds: '234' },
+    streamingData: {},
+  });
+  const { status, body } = await getJson(app, '/youtube/resolve?input=' +
+    encodeURIComponent('https://youtu.be/variantvid1'));
+  assert.equal(status, 200);
+  assert.equal(body.songName, 'Dream Play Sick ver.EMA');
+  const sent = matchCalls[0][0];             // matchWithBudget 首参 candidates
+  assert.ok(sent.some((c) => c.includes('ver.EMA')), '原始形态仍在候选');
+  assert.ok(sent.includes('Dream Play Sick') || sent.includes('EMA Dream Play Sick'),
+    '剥 ver. 尾缀的形态须进候选');
 });
