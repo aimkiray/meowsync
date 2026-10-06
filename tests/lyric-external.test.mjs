@@ -12,6 +12,11 @@
 //   · 进程内 LRU：同键命中/负结果缓存都不打穿上游；并发同键单飞
 //   · file-downloader：外源曲无 neteaseId 时外源词落盘；网易侧 romalrc
 //     作为独立层与译文一同按同刻行落盘
+//   · 免时长末轮 gate：常规轮传输故障全灭/durationSec 缺省时末轮不展开
+//   · 末轮收成单开放轮 + 同题候选池语境（pool 进判定 prompt、vkey v3
+//     盐与无池盲审互不命中）
+//   · deadline 短路：verify 闭包与逐候选迭代过期即停不续烧 AI/download
+//   · LYRIC_PROXY：LRCLIB/酷狗 fetch 带共享 dispatcher，缺省无 dispatcher 键
 // globalThis.fetch 按 URL 分发到各源桩——不打真网络；lib/ai 桩控
 // aiEnabled/askAiJson（核验路径开/关都要钉）；netease-api 桩供
 // file-downloader 网易词相位。
@@ -34,7 +39,12 @@ const aiArgs = [];
 seed('../src/server/lib/ai.js', {
   aiEnabled: () => aiOn,
   aiModel: () => 'test-model',
-  askAiJson: async (args) => { aiCalls++; aiArgs.push(args); return aiAnswer; },
+  // aiAnswer 可为固定判答或按入参判答的函数——逐候选核验用例要按各候选
+  // 的条目身份分别给判（同题异曲在 pool 语境下各归各的判）
+  askAiJson: async (args) => {
+    aiCalls++; aiArgs.push(args);
+    return typeof aiAnswer === 'function' ? aiAnswer(args) : aiAnswer;
+  },
 });
 
 // file-downloader 的网易云 API 桩：callNeteaseApi('lyric') 回包可控
@@ -60,6 +70,8 @@ const svc = require('../src/server/services/lyric-external.js');
 const app = require('../src/server/routes/lyric-external.js');
 const fd = require('../src/server/services/file-downloader.js');
 const { isYoutubeHost } = require('../src/server/lib/yt-proxy.js');
+const lyricProxy = require('../src/server/lib/lyric-proxy.js');
+const { ProxyAgent } = require('undici');
 const { EXT_LYRIC_ID_RE, EXT_LYRIC_ID_STRICT_RE } = await import('../src/shared/predicates.js');
 // 补轴相位的任务行寻址需要真库：任务行 audioPath/durationMs 即上下文源
 const downloadTasksRepo = require('../src/server/repositories/downloadTasks.js');
@@ -79,6 +91,9 @@ globalThis.fetch = async (input, init) => {
   return handler(url, init || {});
 };
 after(() => { globalThis.fetch = realFetch; });
+// LYRIC_PROXY 缓存 ProxyAgent 收尾：删 env 再取一次即销毁测试期建的池
+// （值变重建语义顺带 destroy 旧池——与 youtube-proxy.test.mjs 同款收尾）
+after(() => { delete process.env.LYRIC_PROXY; lyricProxy.lyricDispatcher(); });
 
 const J = (obj, status = 200, headers) => new Response(JSON.stringify(obj), {
   status, headers: { 'content-type': 'application/json', ...(headers || {}) },
@@ -989,8 +1004,10 @@ test('AI 核验：已落库判否 verdict 不随 aiEnabled 旁路——AI 关仍
   // 累积知识，AI 关只影响新判定。播种 lrclib_66 对本曲的 ok=0 判定——
   // vkey 锚 (extId, title, artist)，verifyHit 不再被 aiEnabled 短路
   aiOn = false; aiCalls = 0; aiArgs.length = 0;
+  // 级联核验带候选池语境 → v3 键（pool 非空即换盐——见 lyricVerdictKey
+  // 版本段）；预置要锚新口径的判定键
   lyricAiRepo.upsertVerdict(
-    lyricVerdictKey('lrclib_66', '曲', '艺人'), 'lyric', false, 'test');
+    lyricVerdictKey('lrclib_66', '曲', '艺人', true), 'lyric', false, 'test');
   reset([
     ['lrclib.net/api/search', () => J([
       { id: 66, trackName: '曲', artistName: '艺人', duration: 200, syncedLyrics: '[00:01.00]错配词' },
@@ -1005,4 +1022,583 @@ test('AI 核验：已落库判否 verdict 不随 aiEnabled 旁路——AI 关仍
   // 落库判定命中即返不烧 AI；幸存候选判定入 askAiJson——桩按入口计数，
   // 真身 aiEnabled false 时前置返 null（不发 HTTP）→ 判不定按相符放行
   assert.equal(aiCalls, 1);
+});
+
+// ── 免时长末轮 + fetch 层逐候选核验 ──
+// 实证病例：72s 截取版翻唱 'Flamingo／rei shirose'（author='R'）——
+// ±15s 时长闸对截取版全灭；摘掉时长后检索首顺位是英文同名异曲
+// 'Flamingo / Kero Kero Bonito'，真主 'Flamingo / 米津玄師' 紧随其后。
+// 末轮 = UGC 限定 durationSec=0 + strictTitle 恒 true 重扫，同名歧义由
+// 标题精确闸先挡、逐候选归属核验（判否换条）兜住。
+
+test('免时长末轮：时长闸全灭的截取版 UGC → durationSec=0 + strictTitle 末轮命中真主', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };
+    const kgUrls = [];
+    const lrcQueries = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => { lrcQueries.push(decodeURIComponent(url)); return J([
+        // 两条都 duration 240s——对 72s 截取版的 ±15s 闸必滤；免时长轮才收。
+        // 'Pinocchio Flamingo' 艺人名含 r 过 artistHit('R')、含 Flamingo
+        // 子串——唯有 strictTitle 精确闸拒它（闸缺席时它以 501 顺位进
+        // verify 并胜出）；末轮 strictTitle 恒 true
+        { id: 501, trackName: 'Pinocchio Flamingo', artistName: 'Kero Kero Bonito',
+          duration: 240, syncedLyrics: '[00:01.00]english song' },
+        { id: 502, trackName: 'Flamingo', artistName: '米津玄師',
+          duration: 240, syncedLyrics: '[00:01.00]真词' },
+      ]); }],
+      ['lyrics.kugou.com/search', (url) => { kgUrls.push(url); return J({ candidates: [] }); }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_o5wwDO4eDo8', title: 'Flamingo／rei shirose', artist: 'R', durationSec: 72,
+    });
+    assert.equal(res?.extId, 'lrclib_502');
+    assert.equal(aiCalls, 1);                    // 撞名者被确定性闸挡在 AI 之前
+    // meta 随末轮 hit 照常透出并进判定提示词——AI 拿候选身份才分得清同名
+    assert.deepEqual(res.meta, { title: 'Flamingo', artist: '米津玄師', album: undefined });
+    assert.match(aiArgs[0].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
+    // durationSec=0 实锤上行：常规轮酷狗检索带 duration=72000；末轮是
+    // 单次 '' 开放轮——lrclib 命中即收不再打酷狗。检索面 = 常规两轮 4 发
+    // + 末轮 2 发 = 6，具名 'R' 检索只在常规轮出现（末轮再打一遍会是 8）
+    assert.ok(kgUrls.length >= 1 && kgUrls.every((u) => u.includes('duration=72000')));
+    assert.equal(lrcQueries.length, 6);
+    assert.equal(lrcQueries.filter((q) => q.endsWith(' R')).length, 2);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('逐候选核验：首顺位同名候选判否 → 次位判过收录（vkey 挂各自 extId 不串）', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };
+    // 预置首顺位候选的判否 verdict——vkey 锚 (extId, 来源title, 来源artist)，
+    // 601 判否不影响 602 的判定行
+    lyricAiRepo.upsertVerdict(
+      lyricVerdictKey('lrclib_601', 'Flamingo', 'R', true), 'lyric', false, 'test');
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        // 同名同长：首顺位撞名英文曲、次位真主——旧「一锤定音」拿 601
+        // 判否即整源判死；逐候选核验判否换条
+        { id: 601, trackName: 'Flamingo', artistName: 'Kero Kero Bonito',
+          duration: 72, syncedLyrics: '[00:01.00]english cover words' },
+        { id: 602, trackName: 'Flamingo', artistName: '米津玄師',
+          duration: 72, syncedLyrics: '[00:01.00]本物の詞' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_percdv00001', title: 'Flamingo', artist: 'R', durationSec: 72,
+    });
+    assert.equal(res?.extId, 'lrclib_602');
+    assert.equal(res.meta.artist, '米津玄師');
+    assert.equal(aiCalls, 1);              // 601 判否吃落库 verdict 不烧 AI
+    // 进判定的是次位候选的条目身份——候选序断言（首顺位确被先试）
+    assert.match(aiArgs[0].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('逐候选核验（酷狗）：首条 download 得词判否 → 换条判过收录', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };
+    lyricAiRepo.upsertVerdict(
+      lyricVerdictKey('kugou_kc1', 'Flamingo', 'R', true), 'lyric', false, 'test');
+    const dlUrls = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net', () => J([])],
+      ['lyrics.kugou.com/search', () => J({
+        candidates: [
+          // singer 都不含 r——具名 'R' 轮被 artistHit 滤净，宽检轮才展开
+          { id: 'kc1', accesskey: 'ak1', singer: 'Koosje', song: 'Flamingo', duration: 72000, score: 99 },
+          { id: 'kc2', accesskey: 'ak2', singer: '米津玄師', song: 'Flamingo', duration: 72000, score: 50 },
+        ],
+      })],
+      ['lyrics.kugou.com/download', (url) => {
+        dlUrls.push(url);
+        return J({ content: Buffer.from('[00:03.00]狗词一\n[00:06.00]狗词二').toString('base64'), charset: 'utf8' });
+      }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_kgverify001', title: 'Flamingo', artist: 'R', durationSec: 72,
+    });
+    assert.equal(res?.extId, 'kugou_kc2');
+    assert.equal(res.meta.artist, '米津玄師');
+    // 候选序断言：score 高的 kc1 先 download 得词被判否 → continue 换 kc2
+    assert.equal(dlUrls.length, 2);
+    assert.ok(dlUrls[0].includes('id=kc1'));
+    assert.ok(dlUrls[1].includes('id=kc2'));
+    assert.equal(aiCalls, 1);              // kc1 判否吃落库；kc2 判过进 AI
+    assert.match(aiArgs[0].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('免时长末轮不波及曲库 id：qq_ 常规轮全灭即 null，免时长轮不展开', async () => {
+  const kgUrls = [];
+  const lrcQueries = [];
+  reset([
+    ['lrclib.net/api/search', (url) => {
+      lrcQueries.push(decodeURIComponent(url));
+      // 时长 240s 对 72s 必滤——若误进免时长轮它会现身收成 hit
+      return J([
+        { id: 701, trackName: 'Flamingo', artistName: 'Kero Kero Bonito',
+          duration: 240, syncedLyrics: '[00:01.00]x' },
+      ]);
+    }],
+    ['lyrics.kugou.com/search', (url) => { kgUrls.push(url); return J({ candidates: [] }); }],
+  ]);
+  const res = await svc.fetchExternalLyric({
+    songId: 'qq_noflame0001', title: 'Flamingo', artist: 'R', durationSec: 72,
+  });
+  assert.equal(res, null);
+  // 曲库 id 只跑严格轮：检索数=变体数（'Flamingo' 无剥缀 → 1 变体），
+  // 酷狗检索全部带 duration=——免时长轮一次都没展开
+  assert.equal(lrcQueries.length, 1);
+  assert.ok(kgUrls.length >= 1 && kgUrls.every((u) => u.includes('duration=72000')));
+});
+
+test('免时长末轮 strictTitle 恒 true：具名轮里撞名候选也确定性闸（先于 AI）', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };               // AI 连判 ok 也救不回——闸先于 AI
+    const kgUrls = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        // 艺人名含 r 过 artistHit('R')、标题含 Flamingo 子串——免时长轮
+        // 里若具名 'R' 轮不上 strictTitle，它会以首顺位进 verify 并胜出
+        { id: 801, trackName: 'Pinocchio Flamingo', artistName: 'Kero Kero Bonito',
+          duration: 240, syncedLyrics: '[00:01.00]little flamingo song' },
+      ])],
+      ['lyrics.kugou.com/search', (url) => { kgUrls.push(url); return J({ candidates: [] }); }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_strictgate1', title: 'Flamingo', artist: 'R', durationSec: 72,
+    });
+    assert.equal(res, null);               // 撞名候选全轮次被闸拒
+    assert.equal(aiCalls, 0);              // 候选根本没走到 AI 判定
+    // 免时长轮确已展开（酷狗检索出现不带 duration= 的形态）
+    assert.ok(kgUrls.some((u) => !u.includes('duration=')));
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+// ── 末轮收成单开放轮 + 整池单发消歧（Flamingo 钉案真实形态）──
+// 实证病例回放：72s 截取版 'Flamingo／rei shirose'（artist='R'）——旧末轮
+// 按 artist 轮次面重扫，'R' 具名轮 artistHit('R') 归一成 'r' 子串筛：放行
+// 'Earl Bostic'/'Fäaschtbänkler'、滤死真身 '米津玄師'/'Kenshi Yonezu'——
+// 真身没到 AI 眼前，撞名者被盲审判 ok 收录。pool-in-prompt 逐候选判定
+// 仍是逐题形态，对同题异曲消歧不够决断（活跑把 KKB 英文版判 ok 收录）——
+// 改成整池单发选择题（choose→judgePoolPick）：排序后全池摆给判官一发
+// 问「来源最可能翻唱哪条」，单发指中原曲本家；未选中才落回逐候选核验。
+
+test('免时长末轮整池消歧 e2e：Flamingo 钉案——choose 单发指中米津玄師', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    // AI 桩：pick 选择题回 4（排序后池序见下——synced 优先纯文本殿后）；
+    // 万一误落逐候选核验，判否全池让用例露馅而非静默放行
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 4 } : { ok: false });
+    const lrcQueries = [];
+    const kgUrls = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => {
+        lrcQueries.push(decodeURIComponent(url));
+        return J([
+          // 真实池形态：同题 'Flamingo' 一池，duration 皆 240——对 72s 截取版
+          // 的 ±15s 闸必灭，全靠免时长末轮进场。'r' 子串筛在位时 Earl/
+          // Fäaschtbänkler 放行、米津玄師 滤死；开放轮里全进 pool。
+          // 排序后面序：KKB×2、Fäascht、米津、Kenshi、Earl（纯文本殿后）
+          { id: 36018560, trackName: 'Flamingo', artistName: 'Kero Kero Bonito',
+            albumName: 'Flamingo', duration: 240,
+            syncedLyrics: '[00:01.00]kkb english words\n[00:05.00]second line' },
+          { id: 36018666, trackName: 'Flamingo', artistName: 'Kero Kero Bonito',
+            albumName: 'Flamingo (Remixes)', duration: 240,
+            syncedLyrics: '[00:01.00]kkb remix words' },
+          { id: 26801631, trackName: 'Flamingo', artistName: 'Earl Bostic',
+            albumName: 'Jazz Icons', duration: 240,
+            plainLyrics: 'flamingo jazz words\nsecond line' },
+          { id: 44000001, trackName: 'Flamingo', artistName: 'Fäaschtbänkler',
+            albumName: 'Zirbenlieder', duration: 240,
+            syncedLyrics: '[00:01.00]deutsche Zeile\n[00:05.00]noch eine' },
+          { id: 37537527, trackName: 'Flamingo', artistName: '米津玄師',
+            albumName: 'Flamingo / TEENAGE RIOT', duration: 240,
+            syncedLyrics: '[00:01.00]宵闇に爪弾き\n[00:05.00]悲しみに雨ざらし' },
+          { id: 34560247, trackName: 'Flamingo', artistName: 'Kenshi Yonezu',
+            albumName: 'Flamingo / TEENAGE RIOT', duration: 240,
+            syncedLyrics: '[00:01.00]romanized synced words' },
+        ]);
+      }],
+      ['lyrics.kugou.com/search', (url) => { kgUrls.push(url); return J({ candidates: [] }); }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_flmpool0001', title: 'Flamingo／rei shirose', artist: 'R', durationSec: 72,
+    });
+    assert.equal(res?.extId, 'lrclib_37537527');
+    assert.equal(res?.synced, true);
+    assert.equal(res?.meta.artist, '米津玄師');
+    // choose 单发实锤：整池一发选择题直接收录，不再逐候选烧 N 发 AI
+    assert.equal(aiCalls, 1);
+    assert.match(aiArgs[0].system, /消歧助手/);
+    // 排序后全池身份都进了同一发 prompt——判官拿相对语境做选择题
+    assert.match(aiArgs[0].user,
+      /候选池：\n1\. Flamingo \/ Kero Kero Bonito \/ Flamingo\n2\. Flamingo \/ Kero Kero Bonito \/ Flamingo \(Remixes\)\n3\. Flamingo \/ Fäaschtbänkler \/ Zirbenlieder\n4\. Flamingo \/ 米津玄師 \/ Flamingo \/ TEENAGE RIOT\n5\. Flamingo \/ Kenshi Yonezu \/ Flamingo \/ TEENAGE RIOT\n6\. Flamingo \/ Earl Bostic \/ Jazz Icons/);
+    // 末轮单开放轮实锤不变：具名 'R' 只在常规首轮打（2 发 ' R' 尾检索），
+    // 末轮检索（位序最末两发）不带 artist
+    assert.equal(lrcQueries.filter((q) => q.endsWith(' R')).length, 2);
+    assert.equal(lrcQueries.length, 6);      // 'R'轮2 + ''轮2 + 末轮开放2
+    assert.ok(lrcQueries.slice(4).every((q) => !q.endsWith(' R')));
+    // 末轮 lrclib 命中即收——酷狗只在常规轮被检索（全带 duration=72000）
+    assert.ok(kgUrls.length >= 1 && kgUrls.every((u) => u.includes('duration=72000')));
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('免时长末轮 pick=null：判官选不出 → 落回逐候选核验照判照收', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    // pick 选择题回 null（池中无合理候选/拿不准）→ 逐候选核验接棒按
+    // 候选条目身份判：KKB 英文版判否、米津玄師 判过
+    aiAnswer = (a) => (/消歧助手/.test(a.system)
+      ? { pick: null }
+      : { ok: /候选条目：[^\n]*艺人 米津玄師/.test(a.user) });
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        { id: 36018560, trackName: 'Flamingo', artistName: 'Kero Kero Bonito',
+          albumName: 'Flamingo', duration: 240,
+          syncedLyrics: '[00:01.00]english cover words' },
+        { id: 37537527, trackName: 'Flamingo', artistName: '米津玄師',
+          albumName: 'Flamingo / TEENAGE RIOT', duration: 240,
+          syncedLyrics: '[00:01.00]本物の詞' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_picknull001', title: 'Flamingo', artist: 'R', durationSec: 72,
+    });
+    assert.equal(res?.extId, 'lrclib_37537527');
+    // 1 发选择题（判不出）+ 2 发逐候选核验——落回后烧的是逐候选判定面
+    assert.equal(aiCalls, 3);
+    assert.match(aiArgs[0].system, /消歧助手/);          // 首发的确是选择题
+    assert.match(aiArgs[1].user, /候选条目：标题 Flamingo \/ 艺人 Kero Kero Bonito/);
+    assert.match(aiArgs[2].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
+    // 落回核验仍带同题池语境——v3 键与盲审互不命中
+    assert.match(aiArgs[1].user,
+      /同题候选池（供判歧义）：\n1\. Flamingo \/ Kero Kero Bonito \/ Flamingo\n2\. Flamingo \/ 米津玄師 \/ Flamingo \/ TEENAGE RIOT/);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('choose 故障落回：choose 抛错 → 逐候选核验迭代照常判否换条', async () => {
+  const verifyCalls = [];
+  reset([['lrclib.net', () => J([
+    { id: 610, trackName: 'Flamingo', artistName: 'Kero Kero Bonito', duration: 240, syncedLyrics: '[00:01.00]x' },
+    { id: 611, trackName: 'Flamingo', artistName: '米津玄師', duration: 240, syncedLyrics: '[00:01.00]y' },
+  ])]]);
+  const res = await svc.lrclibFetch({
+    title: 'Flamingo', artist: '', strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return h.extId === 'lrclib_611'; },
+    choose: async () => { throw new Error('消歧上游炸'); },
+  });
+  assert.equal(res?.extId, 'lrclib_611');              // 故障不整源判死
+  assert.deepEqual(verifyCalls, ['lrclib_610', 'lrclib_611']);  // 迭代序不变
+  assert.equal(res?.verified, true);                   // 过 verify 烙记照打
+});
+
+test('choose 不触发的面：单候选池（items<2）直走 verify 迭代', async () => {
+  let chooseCalls = 0;
+  reset([['lrclib.net', () => J([
+    { id: 620, trackName: 'Flamingo', artistName: '米津玄師', duration: 240, syncedLyrics: '[00:01.00]y' },
+  ])]]);
+  const res = await svc.lrclibFetch({
+    title: 'Flamingo', artist: '', strictTitle: true,
+    verify: async () => true,
+    choose: async () => { chooseCalls++; return 'lrclib_620'; },
+  });
+  assert.equal(res?.extId, 'lrclib_620');
+  assert.equal(chooseCalls, 0);                        // 单候选无歧义——choose 未启用
+});
+
+test('choose 指回池外 extId（判官答非所问）→ 按未选中落回逐候选迭代', async () => {
+  const verifyCalls = [];
+  reset([['lrclib.net', () => J([
+    { id: 621, trackName: 'Flamingo', artistName: 'Kero Kero Bonito', duration: 240, syncedLyrics: '[00:01.00]x' },
+    { id: 622, trackName: 'Flamingo', artistName: '米津玄師', duration: 240, syncedLyrics: '[00:01.00]y' },
+  ])]]);
+  const res = await svc.lrclibFetch({
+    title: 'Flamingo', artist: '', strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return h.extId === 'lrclib_622'; },
+    choose: async () => 'lrclib_99999999',             // 池里没有这条 id
+  });
+  assert.equal(res?.extId, 'lrclib_622');
+  assert.deepEqual(verifyCalls, ['lrclib_621', 'lrclib_622']);
+});
+
+test('kugou choose：挑中只对一条发 download——整池消歧替代逐条试下', async () => {
+  const dlUrls = [];
+  const verifyCalls = [];
+  reset([
+    ['lyrics.kugou.com/search', () => J({
+      candidates: [
+        // score 决胜序 kc1>kc2>kc3——choose 不取首顺位取 kc2
+        { id: 'kc1', accesskey: 'ak1', singer: 'Kero Kero Bonito', song: 'Flamingo', duration: 240000, score: 99 },
+        { id: 'kc2', accesskey: 'ak2', singer: '米津玄師', song: 'Flamingo', duration: 240000, score: 50 },
+        { id: 'kc3', accesskey: 'ak3', singer: 'Fäaschtbänkler', song: 'Flamingo', duration: 240000, score: 10 },
+      ],
+    })],
+    ['lyrics.kugou.com/download', (url) => { dlUrls.push(url); return kgAll(); }],
+  ]);
+  const res = await svc.kugouFetch({
+    title: 'Flamingo', artist: '', strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return true; },
+    choose: async (pool) => {
+      // 池行 extId 与 hit.extId 同式——choose 凭它指回条目
+      assert.deepEqual(pool.map((p) => p.extId), ['kugou_kc1', 'kugou_kc2', 'kugou_kc3']);
+      return 'kugou_kc2';
+    },
+  });
+  assert.equal(res?.extId, 'kugou_kc2');
+  assert.equal(res?.meta.artist, '米津玄師');
+  assert.equal(dlUrls.length, 1);                      // 只对挑中条发 download
+  assert.ok(dlUrls[0].includes('id=kc2'));
+  assert.equal(verifyCalls.length, 0);                 // pick 即核验结论——不再单审
+  assert.equal(res?.verified, true);
+});
+
+test('免时长末轮不执行具名轮：检索面 = 常规轮变体数 + 单开放轮变体数', async () => {
+  const lrcQueries = [];
+  const kgUrls = [];
+  reset([
+    ['/youtubei/v1/next', () => nextNoTab()],
+    ['lrclib.net/api/search', (url) => { lrcQueries.push(decodeURIComponent(url)); return J([]); }],
+    ['lyrics.kugou.com/search', (url) => { kgUrls.push(url); return J({ candidates: [] }); }],
+  ]);
+  const res = await svc.fetchExternalLyric({
+    songId: 'yt_openround01', title: 'X／vocal', artist: 'UP主', durationSec: 60,
+  });
+  assert.equal(res, null);                   // 全干净 miss → null
+  // 全灭才数检索面：'X／vocal' 变体 = raw + 'X' 两枚；常规轮 'UP主' + ''
+  // 两轮 ×2 变体 = 4 发；末轮单开放轮再 ×2 = 6 发——旧按轮次面重扫会是
+  // 8 发（'UP主' 轮在末轮再打一遍）。具名轮只在常规轮出现
+  assert.equal(lrcQueries.length, 6);
+  assert.equal(lrcQueries.filter((q) => q.endsWith(' UP主')).length, 2);
+  assert.ok(lrcQueries.slice(4).every((q) => !q.includes('UP主')));
+  assert.equal(kgUrls.filter((u) => !u.includes('duration=')).length, 2);
+});
+
+test('同题候选池进判定 prompt：排序前 8 条身份列出，未轮判的候选也在', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };
+    reset([
+      ['lrclib.net', () => J([
+        { id: 910, trackName: '曲', artistName: '甲', albumName: 'A1', duration: 200, syncedLyrics: '[00:01.00]对词' },
+        { id: 911, trackName: '曲', artistName: '甲乐队', albumName: 'A2', duration: 201, syncedLyrics: '[00:01.00]别词' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'qq_poolprompt1', title: '曲', artist: '甲', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_910');  // 首顺位判过即收
+    assert.equal(aiCalls, 1);
+    // 911 没轮到逐候选核验，但它的条目身份已进 pool 段给判官作比较证据
+    assert.match(aiArgs[0].user,
+      /同题候选池（供判歧义）：\n1\. 曲 \/ 甲 \/ A1\n2\. 曲 \/ 甲乐队 \/ A2/);
+    assert.match(aiArgs[0].system, /候选池若含多个同题条目/);
+    assert.match(aiArgs[0].system, /来源实际所唱那首/);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('v3 键不复用 v2 判定：同 extId 的盲审判否 verdict 不挡 pool 语境重判', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    // 预置「无池盲审」口径的判否 verdict（v2 键）——级联核验带 pool 走
+    // v3 键不复用它：判据语境不同，判定记忆不互相命中，照发新判定
+    lyricAiRepo.upsertVerdict(
+      lyricVerdictKey('lrclib_950', '曲', '艺人'), 'lyric', false, 'test');
+    aiAnswer = { ok: true };
+    reset([
+      ['lrclib.net', () => J([
+        { id: 950, trackName: '曲', artistName: '艺人', duration: 200, syncedLyrics: '[00:01.00]词' },
+        { id: 951, trackName: '曲', artistName: '艺人二号', duration: 201, syncedLyrics: '[00:01.00]词2' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'qq_v3key00001', title: '曲', artist: '艺人', durationSec: 200,
+    });
+    // v2 判否若被复用，950 会被拒收续到酷狗归 null——实收证明 v3 重判
+    assert.equal(res?.extId, 'lrclib_950');
+    assert.equal(aiCalls, 1);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+// ── 免时长末轮 gate 收紧 / deadline 短路 / LYRIC_PROXY 接线 ──
+
+test('免时长末轮 gate：常规轮全灭于传输故障不展开——抛 lastErr 不归 null 不固化', async () => {
+  let kgLastRound = 0;
+  reset([
+    // lrclib 恒传输炸；酷狗常规轮（带 duration=）也炸——若末轮误展开，
+    // 免时长检索（不带 duration=）会干净空回把 cleanMiss 污染成 true，
+    // 尾部 lastErr && !cleanMiss 失稳归 null 被固化成 10min 负缓存
+    ['lrclib.net', () => { throw new Error('lrclib 传输炸'); }],
+    ['lyrics.kugou.com/search', (url) => {
+      if (!url.includes('duration=')) { kgLastRound++; return J({ candidates: [] }); }
+      throw new Error('kugou 传输炸');
+    }],
+  ]);
+  const args = { songId: 'yt_gatefail001', title: 'Flamingo', artist: 'R', durationSec: 72 };
+  await assert.rejects(svc.fetchExternalLyric(args), /传输炸/);
+  assert.equal(kgLastRound, 0);              // 末轮一发免时长检索都没打
+  const n = calls.length;
+  await assert.rejects(svc.fetchExternalLyric(args), /传输炸/);
+  assert.ok(calls.length > n);               // 故障不固化负缓存——重查仍打上游
+});
+
+test('免时长末轮 gate：durationSec 缺省时末轮与宽检轮逐字节同参——不重复扇出', async () => {
+  const lrcQueries = [];
+  reset([
+    ['/youtubei/v1/next', () => nextNoTab()],
+    ['lrclib.net/api/search', (url) => { lrcQueries.push(decodeURIComponent(url)); return J([]); }],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  const res = await svc.fetchExternalLyric({ songId: 'yt_nodur000001', title: 'Flamingo', artist: 'R' });
+  assert.equal(res, null);                   // 全干净 miss → null
+  // UGC 降轮面 = 2 轮（'R' + ''）各一发检索；durationSec 缺省时常规轮
+  // 本就免时长过滤，末轮同参再打纯属重复扇出
+  assert.equal(lrcQueries.length, 2);
+  assert.equal(calls.filter((u) => u.includes('kugou.com/search')).length, 2);
+});
+
+test('verify 吃级联 deadline：迭代中过期——候选核验短路放行不再烧 AI', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: false };    // 无短路时这发判定判否丢词——短路才放行出 hit
+    reset([
+      ['lrclib.net', () => J([])],
+      ['lyrics.kugou.com/search', () => J({
+        candidates: [{ id: 'kd1', accesskey: 'ak1', singer: 'a', song: 'x', duration: 200000, score: 10 }],
+      })],
+      // download 慢回把 verify 推到 30ms 软时限之后——迭代起轮时尚未过，
+      // 落到核验调用点才过期
+      ['lyrics.kugou.com/download', async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        return J({ content: Buffer.from('[00:03.00]词一\n[00:06.00]词二').toString('base64'), charset: 'utf8' });
+      }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'qq_vdeadline01', title: 'x', artist: 'a', durationSec: 200, deadlineMs: 30,
+    });
+    assert.equal(res?.extId, 'kugou_kd1');   // 迭代中过期——短路放行照收
+    assert.equal(aiCalls, 0);                // 没再起 AI 判定
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('候选迭代吃级联 deadline：过期起轮即停——不再发 download/烧 AI', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };
+    let kgDl = 0;
+    // LRCLIB 检索慢回——候选到手时 30ms 软时限已过，逐候选迭代首轮即停，
+    // verify/AI 一次不起（截断 null 不落负缓存，由级联尾部分流）
+    reset([
+      ['lrclib.net/api/search', async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        return J([{ id: 901, trackName: 'x', artistName: 'a', duration: 200, syncedLyrics: '[00:01.00]迟词' }]);
+      }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'qq_vdeadline02', title: 'x', artist: 'a', durationSec: 200, deadlineMs: 30,
+    });
+    assert.equal(res, null);                 // 过期截断 → null（truncated 不落负缓存）
+    assert.equal(aiCalls, 0);                // 候选根本没进 verify
+    // 酷狗支路同理——检索慢回时 download 一发不发（下载在候选迭代体内，
+    // 外层 runRound 的 deadline 闸管不到这里）
+    reset([
+      ['lrclib.net/api/search', () => J([])],
+      ['lyrics.kugou.com/search', async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        return J({ candidates: [{ id: 'kd2', accesskey: 'ak2', singer: 'a', song: 'x', duration: 200000, score: 10 }] });
+      }],
+      ['lyrics.kugou.com/download', () => { kgDl++; return kgAll(); }],
+    ]);
+    const res2 = await svc.fetchExternalLyric({
+      songId: 'qq_vdeadline03', title: 'x', artist: 'a', durationSec: 200, deadlineMs: 30,
+    });
+    assert.equal(res2, null);
+    assert.equal(kgDl, 0);
+    assert.equal(aiCalls, 0);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('LYRIC_PROXY：LRCLIB/酷狗 fetch 三面带共享 dispatcher；缺省无 dispatcher 键', async () => {
+  delete process.env.LYRIC_PROXY;
+  const inits = [];
+  reset([
+    ['lrclib.net/api/search', (url, init) => { inits.push(['lrc', init]); return J([]); }],
+    ['lrclib.net/api/get', (url, init) => {
+      inits.push(['lrcg', init]);
+      return J({ id: 55, trackName: 'x', artistName: 'a', syncedLyrics: '[00:01.00]S' });
+    }],
+    ['lyrics.kugou.com/search', (url, init) => { inits.push(['kgs', init]); return J(kg); }],
+    ['lyrics.kugou.com/download', (url, init) => { inits.push(['kgd', init]); return kgAll(); }],
+  ]);
+  // 缺省——检索/下载 init 全无 dispatcher 键（逐字节旧行为）
+  await svc.fetchExternalLyric({ songId: 'qq_noproxy001', title: '曲', artist: '艺人', durationSec: 200 });
+  assert.equal(inits.length, 3);             // lrc search + kg search + kg download
+  assert.ok(inits.every(([, i]) => !('dispatcher' in i)));
+  // env 在位——检索/下载/反查三面同携共享 ProxyAgent
+  inits.length = 0;
+  process.env.LYRIC_PROXY = 'http://127.0.0.1:12093';
+  try {
+    await svc.fetchExternalLyric({ songId: 'qq_proxy00001', title: '曲', artist: '艺人', durationSec: 200 });
+    assert.equal(inits.length, 3);
+    assert.ok(inits.every(([, i]) => i.dispatcher instanceof ProxyAgent));
+    assert.ok(inits.every(([, i]) => i.dispatcher === inits[0][1].dispatcher)); // 同池
+    inits.length = 0;
+    const back = await svc.fetchByExtId('lrclib_55');
+    assert.equal(back.extId, 'lrclib_55');   // 反查支路（lrclibGetById）同接线
+    assert.equal(inits.length, 1);
+    assert.ok(inits[0][1].dispatcher instanceof ProxyAgent);
+  } finally {
+    delete process.env.LYRIC_PROXY;
+    lyricProxy.lyricDispatcher();            // 值变重建顺带销毁测试池
+  }
+});
+
+test('lyricDispatcher：懒建缓存、值变重建销毁旧池、清除归 null；畸形/socks5 按未配置 warn 一次', () => {
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warns.push(a.map(String).join(' '));
+  try {
+    delete process.env.LYRIC_PROXY;
+    assert.equal(lyricProxy.lyricDispatcher(), null);
+    process.env.LYRIC_PROXY = 'http://127.0.0.1:12093';
+    const d1 = lyricProxy.lyricDispatcher();
+    assert.ok(d1 instanceof ProxyAgent);
+    assert.equal(lyricProxy.lyricDispatcher(), d1);            // 懒建缓存同实例
+    process.env.LYRIC_PROXY = 'http://127.0.0.1:12094';
+    const d2 = lyricProxy.lyricDispatcher();
+    assert.ok(d2 instanceof ProxyAgent && d2 !== d1);          // 值变重建
+    assert.equal(d1.destroyed, true);                          // 旧池销毁
+    delete process.env.LYRIC_PROXY;
+    assert.equal(lyricProxy.lyricDispatcher(), null);          // 清除归 null
+    // 畸形/scheme 非 http(s) 按未配置处理——URL 可内嵌凭据，值不落日志
+    for (const bad of ['socks5://127.0.0.1:1080', 'not-a-url', 'http://']) {
+      warns.length = 0;
+      process.env.LYRIC_PROXY = bad;
+      assert.equal(lyricProxy.lyricDispatcher(), null, bad);
+      assert.equal(warns.length, 1, bad);
+      assert.ok(!warns[0].includes(bad));
+    }
+    warns.length = 0;
+    lyricProxy.lyricDispatcher();                              // 同坏值不重复刷
+    assert.equal(warns.length, 0);
+  } finally {
+    console.warn = realWarn;
+    delete process.env.LYRIC_PROXY;
+    lyricProxy.lyricDispatcher();
+  }
 });
