@@ -6,13 +6,16 @@
 // 单一源全灭在传输层（没有一个「干净无词」终态）时抛错——这是故障不是
 // 缺词，让调用方走重试语义，且不写负缓存。
 //
-// 结果面 { lrc, source:'ytm'|'lrclib'|'kugou', extId, synced, plain? }：
+// 结果面 { lrc, source:'ytm'|'lrclib'|'kugou', extId, synced, plain?, meta? }：
 //   lrc    最佳文本——synced=true 是标准 LRC；false 时是纯文本（无时间戳
 //          行，落盘仍是可读词稿，播放端解析不出滚动行而已）
 //   extId  源内稳定 id（ytm_<videoId>/lrclib_<条目id>/kugou_<行id>）——
 //          归属核验 vkey 与 AI 译文缓存键都挂它，与网易云/QQ id 空间隔离，
 //          形态见 shared/predicates.js EXT_LYRIC_ID_RE
 //   plain  纯文本歌词（LRCLIB 条目常带 synced+plain 两形态时顺带透出）
+//   meta   候选条目身份 {title, artist, album}——lrclib/kugou 检索命中透出，
+//          verifyHit 喂给 AI 归属判定作同名异曲拦截证据；ytm 支路
+//          （timedLyricsData 无候选条目元数据）与缓存反查略
 //
 // 进程内 LRU 缓存（cap 500，不建表）：正结果 6h、负结果 10min——负窗短
 // 防一次上游抖动把「无词」固化成准永久，正窗长削重播/重试的上游扇出。
@@ -25,9 +28,10 @@
 // fetchExternalLyric 的 gate.catch），不陪绑也不重复打上游（重跑先吃
 // 缓存/新 gate）。
 //
-// AI 归属核验：产出词在 aiEnabled 时过 lyric-verify.judgeLyricLines——
-// 判「明显是别的歌」视同无词继续下一源；AI 关/判不定放行（「AI 是增强
-// 不是门禁」与 lyric-verify 同口径）。
+// AI 归属核验：产出词过 lyric-verify.judgeLyricLines——判「明显是别的歌」
+// 视同无词继续下一源；已落库判定不随 aiEnabled 旁路（记忆是累积知识，
+// AI 关只影响新判定），AI 关/判不定放行（「AI 是增强不是门禁」与
+// lyric-verify 同口径）。
 const { ytDispatcher } = require('../lib/yt-proxy');
 const { YT_TRACK_ID_RE, BV_TRACK_ID_RE, EXT_LYRIC_ID_STRICT_RE } = require('../../shared/predicates.js');
 // 标题变体/剥艺人/检索词清理的唯一真相源上提到 shared——网易云匹配漏斗
@@ -35,7 +39,7 @@ const { YT_TRACK_ID_RE, BV_TRACK_ID_RE, EXT_LYRIC_ID_STRICT_RE } = require('../.
 const {
   titleVariantsOf, artistFromTitle, cleanQueryTitle, normKey, isPlaceholderAuthor,
 } = require('../../shared/title-variants.js');
-const { aiEnabled } = require('../lib/ai');
+const { normToken } = require('./netease-score');
 const { parseLrcLines, judgeLyricLines, lyricVerdictKey } = require('./lyric-verify');
 
 const EXT_TIMEOUT_MS = 12000;
@@ -115,6 +119,22 @@ const artistHit = (want, got) => {
   const g = normName(got);
   if (!w) return true;      // 调用方没给艺人——不卡
   return Boolean(g) && (g.includes(w) || w.includes(g));
+};
+
+// 宽检轮标题身份闸：artist 空检时 artistHit 全放行，/api/search 自由文本
+// 命中的「子串撞名」候选会照收（实证病例：查询 'Twig' 撞上英文同名异曲
+// 'Pinocchio Twig / Koosje'，时长还巧合贴近）。闸=候选标题剥缀面
+// （titleVariantsOf 单份规则集：尾括弧/feat./ver./cover/'A - B' 头等）
+// 归一后与检索变体精确相等才放行——'Twig (feat. Miku)'→'twig' 收、
+// 'twig' vs 'pinocchiotwig' 拒、'ロストアンブレラ' 精确收。
+// 刻意取舍：跨文字形态（罗马音 vs 日文原名）不互认——漏判由绑后外源
+// 兜底与自动首配愈合，错词比没词更伤。具名 artist 轮不上此闸（artistHit
+// 交叉约束在位，保模糊召回）
+const strictTitleHit = (candTitle, queryTitle) => {
+  const want = normToken(cleanQueryTitle(queryTitle));
+  if (!want) return true;            // 检索词归一后为空——无可比对不卡
+  return titleVariantsOf(candTitle, '')
+    .some((v) => normToken(v) === want);
 };
 
 // 检索标题清理（cleanQueryTitle）、剥艺人候选（artistFromTitle）与
@@ -257,7 +277,8 @@ async function ytmFetchLyric(videoId, signal) {
 // /api/get 的 ±2s 精确闸对它们太严）。~20req/s 礼仪：429 尊重 Retry-After
 // 重试一次即止，不叠重试打爆公共上游。
 const LRCLIB_UA = 'MeowSync external-lyric fallback (self-hosted)';
-async function lrclibFetch({ title, artist, durationSec, signal }) {
+// strictTitle：宽检轮（无艺人约束）标题身份闸——见 strictTitleHit
+async function lrclibFetch({ title, artist, durationSec, strictTitle = false, signal }) {
   const q = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
   if (!q) return null;
   const url = `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`;
@@ -290,6 +311,7 @@ async function lrclibFetch({ title, artist, durationSec, signal }) {
     .filter((it) => (typeof it.syncedLyrics === 'string' && it.syncedLyrics.trim())
       || (typeof it.plainLyrics === 'string' && it.plainLyrics.trim()))
     .filter((it) => artistHit(artist, it.artistName))
+    .filter((it) => !strictTitle || strictTitleHit(it.trackName, title))
     .map((it) => ({
       it,
       synced: Boolean(typeof it.syncedLyrics === 'string' && it.syncedLyrics.trim()),
@@ -309,6 +331,9 @@ async function lrclibFetch({ title, artist, durationSec, signal }) {
     source: 'lrclib',
     extId: `lrclib_${pick.id}`,
     synced: Boolean(syncedText),
+    // 候选条目身份——归属核验的同名异曲拦截证据（判定只入参与键版本段，
+    // 不进 vkey 签名料：条目身份随 extId 稳定，不构成第二判定对象）
+    meta: { title: pick.trackName, artist: pick.artistName, album: pick.albumName },
   };
 }
 
@@ -340,7 +365,7 @@ async function lrclibGetById(id, signal) {
 // search 拿 candidates（id+accesskey 成对出现才可用），download fmt=lrc
 // 直给行级 LRC 的 base64（krc 加密形态不解）。候选按时长差升序、上游
 // score 决胜，至多串行试 3 条——单条失败换条不恋战。
-async function kugouFetch({ title, artist, durationSec, signal }) {
+async function kugouFetch({ title, artist, durationSec, strictTitle = false, signal }) {
   const kw = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
   if (!kw) return null;
   const durArg = durationSec ? `&duration=${Math.round(durationSec * 1000)}` : '';
@@ -351,9 +376,12 @@ async function kugouFetch({ title, artist, durationSec, signal }) {
   });
   if (!sres.ok) throw new Error(`kugou search HTTP ${sres.status}`);
   const sbody = await readJsonCapped(sres);
+  // 候选标题字段实测是 song（部分回包形态带 songname——两槽都认）
+  const candTitleOf = (cd) => cd.song || cd.songname;
   const cands = (Array.isArray(sbody?.candidates) ? sbody.candidates : [])
     .filter((cd) => cd && cd.id != null && cd.accesskey)
     .filter((cd) => artistHit(artist, cd.singer))
+    .filter((cd) => !strictTitle || strictTitleHit(candTitleOf(cd), title))
     .map((cd) => ({
       cd,
       // 候选 duration 是毫秒——与 durationSec 同量纲化再比差
@@ -379,6 +407,11 @@ async function kugouFetch({ title, artist, durationSec, signal }) {
       return {
         lrc, source: 'kugou', extId: `kugou_${cd.id}`,
         synced: parseLrcLines(lrc).length > 0,
+        // 同 lrclib——候选条目身份透给归属核验（酷狗候选无专辑字段则略）
+        meta: {
+          title: candTitleOf(cd), artist: cd.singer,
+          album: cd.album || cd.albumname || undefined,
+        },
       };
     } catch (e) {
       if (e?.aborted || signal?.aborted) throw abortErr();
@@ -388,16 +421,33 @@ async function kugouFetch({ title, artist, durationSec, signal }) {
   return null;
 }
 
+// 纯文本词 → 判定抽样行：剥方括号段（[mm:ss] 时间戳、[ti:]/[ar:] 元行、
+// [re:]/[ve:] 词源烙记同剥）取词文——「没轴的文本词」也过 AI 归属核验。
+// 出参与 parseLrcLines 同构 {text}（judgeInner 只消费 .text）
+const plainTextLines = (lrc) => String(lrc || '').split('\n')
+  .map((l) => ({ text: l.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim() }))
+  .filter((l) => l.text);
+
 // ── 级联与缓存包装 ──
-// AI 归属核验：产出词在 aiEnabled 时判「明显是别的歌」视同无词继续下一
-// 源；核验通道故障/判不定放行。vkey 锚 (extId, title, author)——与下载链
-// verifyDownloadOwnership 传 providerData 同款签名时同键命中落库判定。
+// AI 归属核验：判「明显是别的歌」视同无词继续下一源；核验通道故障/判不定
+// 放行。无条件走 judgeLyricLines——它内部 getVerdict 缓存先行（命中即返不烧
+// AI），「已落库判定不随 aiEnabled 旁路」与下载链 verifyDownloadOwnership
+// 同口径；AI 关时 askAiJson 前置返 null 按判不定放行。vkey 锚
+// (extId, title, author)——与 verifyDownloadOwnership 传 providerData 同款
+// 签名时同键命中落库判定。
+// hit.meta（检索命中的候选条目身份）进 judgeLyricLines 的 candidate 参——
+// 词面撞名时条目身份是同名异曲拦截的关键证据
 async function verifyHit(hit, { title, artist, signal }) {
-  if (!aiEnabled()) return true;
-  const lines = parseLrcLines(hit.lrc);
-  if (!lines.length) return true;  // 纯文本词无时间戳行可验——放行
+  let lines = parseLrcLines(hit.lrc);
+  // 纯文本词不再零核验：剥标签行取词文行抽样——剥完真空（纯元行/
+  // instrumental 声明词这类没词文的形态）才放行
+  if (!lines.length) lines = plainTextLines(hit.lrc);
+  if (!lines.length) return true;
   const vkey = lyricVerdictKey(hit.extId, title || '', artist || '');
-  const ok = await judgeLyricLines({ vkey, lines, title: title || '', author: artist || '', signal });
+  const ok = await judgeLyricLines({
+    vkey, lines, title: title || '', author: artist || '',
+    candidate: hit.meta, signal,
+  });
   return ok !== false;             // null=无法判定按相符放行
 }
 
@@ -419,8 +469,11 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
   // （qq_/数字）的 artist 是元数据，可信。UGC 曲（bv_/yt_/显式 videoId）
   // 的 artist 实为 UP 主/频道名，严格轮必灭——干净 miss 后追加降轮：
   //   1. artistFromTitle 剥出的真实艺人候选
-  //   2. artist:'' 宽检——artistHit('','x') 放行全部，错词由 verifyHit
-  //      归属核验兜（UGC 严格轮本就必灭，宽检严格劣化不了什么）
+  //   2. artist:'' 宽检——artistHit('','x') 放行全部
+  // 宽检轮（artist 归一为空=无艺人约束，'' 与 '_'/'--' 类占位符都算——
+  // 实证病例作者就是 '_'）改由 strictTitle 标题身份闸先挡同名异曲，
+  // 再由 verifyHit 归属核验兜；具名 artist 轮 artistHit 交叉约束在位，
+  // 保持模糊召回
   // 曲库行不加降轮：宽检会把「真无词」变成「可能错词」（AI 关时无核验兜底）
   const ugc = Boolean(ytVid) || BV_TRACK_ID_RE.test(String(songId));
   const artistRounds = [String(artist || '')];
@@ -438,11 +491,14 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
     if (signal?.aborted) throw abortErr();
     if (Date.now() > deadline) { deadlineHit = true; break; }
     const roundArtist = artistRounds[round];
+    // 本轮无艺人约束 → 上标题身份闸：artistHit 全放行时自由文本「子串
+    // 撞名」照收的口子由 strictTitleHit 确定性闸掉（先于 AI 核验）
+    const strictTitle = !normName(roundArtist);
     const sources = [];
     // YTM 支路吃 videoId 不吃 artist——只在首轮排（重复打同一份词没意义）
     if (round === 0 && ytVid) sources.push(['ytm', (sig) => ytmFetchLyric(ytVid, sig)]);
-    sources.push(['lrclib', (sig, t) => lrclibFetch({ title: t, artist: roundArtist, durationSec, signal: sig })]);
-    sources.push(['kugou', (sig, t) => kugouFetch({ title: t, artist: roundArtist, durationSec, signal: sig })]);
+    sources.push(['lrclib', (sig, t) => lrclibFetch({ title: t, artist: roundArtist, durationSec, strictTitle, signal: sig })]);
+    sources.push(['kugou', (sig, t) => kugouFetch({ title: t, artist: roundArtist, durationSec, strictTitle, signal: sig })]);
     for (const [name, run] of sources) {
       if (signal?.aborted) throw abortErr();
       let hit = null;
@@ -550,7 +606,7 @@ module.exports = {
   fetchExternalLyric,
   fetchByExtId,
   // 源内函数导出供测试探针/调试——正常消费只走 fetchExternalLyric
-  ytmFetchLyric, lrclibFetch, kugouFetch, lrclibGetById, titleVariantsOf,
+  ytmFetchLyric, lrclibFetch, kugouFetch, lrclibGetById, titleVariantsOf, strictTitleHit,
   // 测试钩子：清空进程内缓存（不改生产语义）
   _clearCache: () => { resultCache.clear(); inflight.clear(); },
 };
