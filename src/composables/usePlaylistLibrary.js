@@ -2,6 +2,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
+import { onRemoteApply } from '../lib/sync.js'
 import { toast } from '../lib/feedback.js'
 import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides, slimTrack } from '../lib/song.js'
 import { SAVED_QUEUE_PREFIX } from '../shared/predicates.js'
@@ -71,6 +72,38 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
   }
 
+  // 多端同步打点：持久化形态剔 updatedAt 逐单指纹比对——内容真变才抬
+  // updatedAt。全量同刻盖章会推高 LWW 平局率、还会让没动过的旧单以
+  // 「当前刻」压掉远端新值，所以必须按指纹逐个判
+  const playlistFingerprints = new Map() // playlistId → 上轮持久化形态指纹
+  const storedFingerprint = (stored) => {
+    // 指纹只认用户可编辑面——剔除两类簿记：
+    //   lastRemoteIds/lastSyncedAt — selectPlaylist/syncPlaylist 写的内部
+    //     簿记（远端成员基线/同步时刻）非用户内容——参与指纹会让「打开远端
+    //     单」变成「编辑」抬 updatedAt，拿浏览戳在 LWW 里压死他端真实编辑；
+    //     他端簿记值漂了但内容相同的单同样不打点
+    //   playCount/updateTime 等 — detail 回包整摊进库对象的上游漂移簿记
+    //    （播放/收藏/分享/评论计数与上游时间戳），每次拉取都在动——上游
+    //     计数漂移不打点，否则浏览远端单同样抬戳抢 LWW
+    // name/description/coverImgUrl/trackCount 与本地差量字段
+    //（addedTracks/removedTrackIds/trackOrder/trackOverrides/custom…）
+    // 留在指纹内——它们是内容本身，真变照旧抬戳
+    const {
+      updatedAt, lastRemoteIds, lastSyncedAt,
+      playCount, subscribedCount, shareCount, commentCount,
+      updateTime, trackNumberUpdateTime, cloudTrackCount,
+      ...rest
+    } = stored || {}
+    return JSON.stringify(rest)
+  }
+  // 登记存量/远端落盘形态的基线：load/远端重建后首个 save 不该把没动的
+  // 旧单全盖成当前刻（那才是 LWW 语义里的「没改过」）
+  const registerFingerprints = (rawList) => {
+    for (const p of rawList || []) {
+      if (p && p.id != null) playlistFingerprints.set(String(p.id), storedFingerprint(p))
+    }
+  }
+
   let saveFailWarned = false
   const savePlaylistsToStorage = () => {
     pruneSavedQueues()
@@ -91,6 +124,26 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       }
       return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
     })
+    // 指纹比对打点：一切增删/重排/编辑路径都汇到这个持久化收口，
+    // 内容真变的单盖当前刻 updatedAt（库对象同源打点，内存态也是判据源）
+    const now = Date.now()
+    const liveIds = new Set()
+    for (let i = 0; i < toStore.length; i++) {
+      const stored = toStore[i]
+      if (!stored || stored.id == null) continue
+      const id = String(stored.id)
+      liveIds.add(id)
+      const fp = storedFingerprint(stored)
+      if (playlistFingerprints.get(id) !== fp) {
+        playlistFingerprints.set(id, fp)
+        stored.updatedAt = now
+        userPlaylists.value[i].updatedAt = now
+      }
+    }
+    // 出库 id 的指纹基线清掉（id 理论不复用——防手工数据复活旧基线误判未变）
+    for (const id of playlistFingerprints.keys()) {
+      if (!liveIds.has(id)) playlistFingerprints.delete(id)
+    }
     // 配额写爆一次性提示——静默失败=刷新后歌单库消失，比提示烦人严重得多
     if (!writeJSON(PLAYLISTS_STORAGE_KEY, toStore) && !saveFailWarned) {
       saveFailWarned = true
@@ -98,49 +151,87 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
   }
 
+  // 存量歌单净化：滤脏条目 + healExternalAr 自愈（远端重建共用同一读盘
+  // 口径——远端落盘的库同样要走这道净化才进内存）
+  const sanitizeStoredPlaylists = (savedPlaylists) => {
+    let healedAny = false
+    const healExternalAr = (t) => {
+      // custom 位=用户显式编辑过的曲——自愈会还原 provider 口径覆盖用户意图，停手
+      if (t?.custom) return t
+      const ext = t && externalArtistName(t)
+      // 只在确实偏离口径时改写——无病曲不动引用，也不触发无意义回写
+      if (ext && !(t.ar?.length === 1 && t.ar[0]?.name === ext)) {
+        t.ar = [{ name: ext }]
+        healedAny = true
+      }
+      const extCover = t && externalCoverUrl(t)
+      // al 也可能是字符串形态（旧数据/上游简化对象）——只对对象形态自愈
+      if (extCover && t.al && typeof t.al === 'object' && t.al.picUrl !== extCover) {
+        t.al = { ...t.al, picUrl: extCover }
+        healedAny = true
+      }
+      return t
+    }
+    const list = savedPlaylists
+      .filter(p => p && p.id != null)
+      .map(p => ({
+        ...p,
+        tracks: Array.isArray(p.tracks) ? p.tracks.map(healExternalAr) : p.tracks,
+        addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks.map(healExternalAr) : undefined,
+        removedTrackIds: Array.isArray(p.removedTrackIds) ? p.removedTrackIds : undefined,
+        lastRemoteIds: Array.isArray(p.lastRemoteIds) ? p.lastRemoteIds : undefined,
+        // 曲序覆盖层同净化：非数组/脏条目（旧数据/手工改坏）清掉而不是带病进合并
+        trackOrder: Array.isArray(p.trackOrder) ? p.trackOrder.map(String) : undefined
+      }))
+    return { list, healedAny }
+  }
+
   const loadPlaylistsFromStorage = () => {
     const savedPlaylists = readJSON(PLAYLISTS_STORAGE_KEY)
     if (Array.isArray(savedPlaylists)) {
-      // 过滤 null/无 id 的脏条目，避免后续 String(p.id) 访问抛异常；
-      // 同步字段若非数组（旧数据/手工改坏）会在合并/添加路径抛异常——load 时净化。
-      // healExternalAr：旧版导入曲的 ar 曾被网易云匹配艺人覆盖——按持久化的
-      // 频道/UP主名重建演唱者口径；al.picUrl 同口径自愈——视频封面是新口径
-      // （yt_ 由 videoId 推导、bv_ 吃持久化的 bilibili.cover，无此字段的旧
-      // bv_ 数据保持不动），存量导入曲加载即自愈
-      let healedAny = false
-      const healExternalAr = (t) => {
-        // custom 位=用户显式编辑过的曲——自愈会还原 provider 口径覆盖用户意图，停手
-        if (t?.custom) return t
-        const ext = t && externalArtistName(t)
-        // 只在确实偏离口径时改写——无病曲不动引用，也不触发无意义回写
-        if (ext && !(t.ar?.length === 1 && t.ar[0]?.name === ext)) {
-          t.ar = [{ name: ext }]
-          healedAny = true
-        }
-        const extCover = t && externalCoverUrl(t)
-        // al 也可能是字符串形态（旧数据/上游简化对象）——只对对象形态自愈
-        if (extCover && t.al && typeof t.al === 'object' && t.al.picUrl !== extCover) {
-          t.al = { ...t.al, picUrl: extCover }
-          healedAny = true
-        }
-        return t
-      }
-      const validPlaylists = savedPlaylists
-        .filter(p => p && p.id != null)
-        .map(p => ({
-          ...p,
-          tracks: Array.isArray(p.tracks) ? p.tracks.map(healExternalAr) : p.tracks,
-          addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks.map(healExternalAr) : undefined,
-          removedTrackIds: Array.isArray(p.removedTrackIds) ? p.removedTrackIds : undefined,
-          lastRemoteIds: Array.isArray(p.lastRemoteIds) ? p.lastRemoteIds : undefined,
-          // 曲序覆盖层同净化：非数组/脏条目（旧数据/手工改坏）清掉而不是带病进合并
-          trackOrder: Array.isArray(p.trackOrder) ? p.trackOrder.map(String) : undefined
-        }))
-      userPlaylists.value.push(...validPlaylists)
+      // 存量形态先登指纹基线——首个 save 只给真变单盖戳，旧单不带新戳
+      registerFingerprints(savedPlaylists)
+      const { list, healedAny } = sanitizeStoredPlaylists(savedPlaylists)
+      userPlaylists.value.push(...list)
       if (healedAny) savePlaylistsToStorage() // 自愈结果落盘——下次启动不再依赖重算
-      console.log('✅ 从本地存储加载歌单:', validPlaylists.length, '个')
+      console.log('✅ 从本地存储加载歌单:', list.length, '个')
     }
   }
+
+  // 远端歌单库应用（同步引擎 per-playlist LWW 已合进 LS）：把内存态重建到
+  // 同一事实源。选中单仍在库则刷成库对象新值；被远端墓碑删掉则按本地删除
+  // 同口径收掉选中态。songs 行表是 selectPlaylist 拉取的详情视图，不动——
+  // 下次选中自然重拉
+  const applyRemoteLibrary = () => {
+    const raw = readJSON(PLAYLISTS_STORAGE_KEY)
+    if (!Array.isArray(raw)) return
+    const wasMember = !!selectedPlaylist.value
+      && userPlaylists.value.some(p => String(p.id) === String(selectedPlaylist.value.id))
+    registerFingerprints(raw)
+    const { list, healedAny } = sanitizeStoredPlaylists(raw)
+    userPlaylists.value = list
+    const sel = selectedPlaylist.value
+    if (sel && wasMember) {
+      const hit = list.find(p => String(p.id) === String(sel.id))
+      if (hit) {
+        // hit 是持久化形态（远端单无 tracks 缓存）——摊开合并不丢
+        // 选中快照上的详情字段，同时让远端字段（名/封面/同步字段）生效
+        selectedPlaylist.value = { ...sel, ...hit }
+      } else {
+        gates.select.invalidate()
+        loadingSongs.value = false
+        selectedPlaylist.value = null
+        songs.value = []
+      }
+    }
+    // 播放归属悬空同口径清（本地 removePlaylistFromLibrary 同款收尾）
+    if (playingPlaylistId.value != null
+        && !list.some(p => String(p.id) === String(playingPlaylistId.value))) {
+      playingPlaylistId.value = null
+    }
+    if (healedAny) savePlaylistsToStorage()
+  }
+  onRemoteApply(PLAYLISTS_STORAGE_KEY, applyRemoteLibrary)
 
   const addPlaylistToLibrary = async (playlist) => {
     try {

@@ -1,9 +1,10 @@
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { Howl, Howler } from 'howler'
 import { musicApi, parseLyrics, mergeTranslations } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { aiApi } from '../api/ai.js'
 import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
+import { onRemoteApply } from '../lib/sync.js'
 import { formatTime } from '../lib/format.js'
 import { toast } from '../lib/feedback.js'
 import { glitchBurst } from '../lib/theme.js'
@@ -124,6 +125,12 @@ export function usePlayer({
     // 待落地 seek 挂账：playSong 先把 currentTime 清 0，恢复用的 seekTime 要等
     // onload 才写回——挂账期内一切落盘仍写挂账值，否则存档续播点被 0 覆盖
     let pendingSeekTime = null
+    // 远端续播位挂账（pendingSeekTime 同款「写盘写挂账不写内存」手法）：
+    // 远端 player-state 落 LS 后只灌了 UI 偏好，恢复位（currentSongId/
+    // currentTime/歌单归属）留在存档里待重启/下次恢复消费——消费前任何
+    // 本地整文写盘（音量/偏好写回等）会把这些字段抹成空值还广播出去；
+    // 挂了账就照账补写，本地真起播即销账
+    let pendingRemoteResume = null
     // 恢复窗口（restoreUiState→restorePlaybackState）内禁止持久化：UI 态
     // 还原会触发 prefs watcher 冲刷 savePlayerStateToStorage，此刻
     // currentSong 尚为 null——写出 {currentSongId:null,currentTime:0}
@@ -148,6 +155,14 @@ export function usePlayer({
         isFullscreenPlayerOpen: isFullscreenPlayerOpen.value,
         fullscreenLyricMode: fullscreenLyricMode.value,
         fullscreenInteractionMode: fullscreenInteractionMode.value
+      }
+      // 无正播曲且有远端续播挂账：恢复位四字段照账写——否则此刻的本地
+      // 存档会以 currentSongId:null 把远端续播位整文抹掉（还广播空值）
+      if (!currentSong.value && pendingRemoteResume) {
+        state.selectedPlaylistId = pendingRemoteResume.selectedPlaylistId
+        state.playingPlaylistId = pendingRemoteResume.playingPlaylistId
+        state.currentSongId = pendingRemoteResume.currentSongId
+        state.currentTime = pendingRemoteResume.currentTime
       }
 
       writeJSON(PLAYER_STATE_STORAGE_KEY, state)
@@ -690,6 +705,7 @@ export function usePlayer({
         pendingSeekTime = Number.isFinite(seekTime) && seekTime > 0 ? seekTime : null
 
         currentSong.value = song
+        pendingRemoteResume = null // 本地真起播即销账——恢复位归属本地播放事实
 
         // 本地已下载音频工件优先于在线流（与 watch 页视频档同律）：盘上
         // 有档就不打上游玩一遍。audioReady 跨歌单寻址——暂存/搜索队列或
@@ -1794,6 +1810,37 @@ export function usePlayer({
     })
 
     const getHowl = () => howl
+
+    // 多端同步：远端 player-state 已由引擎落进 LS。活动播放中的会话不被
+    // 远端队列/进度覆盖（值只落存档，正在播的不强切）；空闲时回读 UI
+    // 偏好（音量/循环/随机/自动播放等），续播位留给下次 playSong/重启
+    // 恢复自然消费——不主动重建播放
+    onRemoteApply(LS_KEYS.PLAYER_STATE, () => {
+      if (howl && isPlaying.value) return
+      const applied = loadPlayerStateFromStorage()
+      // UI 态恢复触发 prefs watcher 冲刷 savePlayerStateToStorage：挂起窗
+      // 要盖过 post-flush（nextTick 回调排在 watcher 冲刷后），volume 的
+      // 300ms 防抖写盘另算——一并清掉，否则远端续播位（currentSongId/
+      // currentTime）还没被消费就被本地内存态重写盖掉
+      setPlayerPersistSuspended(true)
+      try {
+        restoreUiState(applied)
+        clearTimeout(volumeSaveTimer)
+      } finally {
+        void nextTick(() => setPlayerPersistSuspended(false))
+      }
+      // 远端续播位挂账：本次远端 state 的恢复位原样记账——消费（重启
+      // 恢复/本地起播）前 savePlayerStateToStorage 在无正播曲时照账补写。
+      // 远端不带续播位（currentSongId 空）即销账——空值也是远端真相
+      pendingRemoteResume = applied?.currentSongId != null
+        ? {
+            selectedPlaylistId: applied.selectedPlaylistId ?? null,
+            playingPlaylistId: applied.playingPlaylistId ?? null,
+            currentSongId: applied.currentSongId,
+            currentTime: Number.isFinite(applied.currentTime) ? applied.currentTime : 0,
+          }
+        : null
+    })
 
     return {
       // 播放态

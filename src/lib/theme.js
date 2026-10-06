@@ -19,7 +19,7 @@
  * 'default' 不写属性（:root 基线即默认主题，UI 显示名 retro）；未知/非法 id 一律回落 default。
  */
 import { ref, readonly } from 'vue'
-import { LS_KEYS } from './storage.js'
+import { LS_KEYS, notifyStorageWrite } from './storage.js'
 
 export const THEMES = [
   { id: 'default', name: 'retro' },
@@ -30,7 +30,9 @@ export const THEMES = [
 const STORAGE_KEY = LS_KEYS.THEME
 const VALID = new Set(THEMES.map(t => t.id))
 
-function readStoredTheme() {
+// 导出给同步引擎远端回填用（src/lib/sync.js 的远端订阅调它）——
+// 叶模块不许反向 import sync.js：会把 api/http 链拖进 node:test 裸跑面
+export function readStoredTheme() {
   try {
     const v = localStorage.getItem(STORAGE_KEY)
     if (v && VALID.has(v)) return v
@@ -66,7 +68,22 @@ export function setTheme(id) {
   try {
     if (id === 'default') localStorage.removeItem(STORAGE_KEY)
     else localStorage.setItem(STORAGE_KEY, id)
+    // 同步脏标记（含 'default' 的 removeItem 墓碑）——引擎未 init 时 no-op
+    notifyStorageWrite(STORAGE_KEY)
   } catch { /* 持久化失败不阻断应用 */ }
+  applyTheme(id)
+}
+
+// 多端同步远端落地（订阅在同步侧 sync.js initSync 注册——本文件保持叶
+// 模块不反向依赖引擎）。只做内存/DOM 侧归一，不回写 LS：远端可能存着
+// 新版客户端才有、本机 VALID 不认的主题 id——经 setTheme 归一会把 LS
+// 原文重写成 default/removeItem，同步层再把它当本地删除推成墓碑，
+// 等于旧版客户端把新版数据从服务端抹掉
+export function applyRemoteTheme() {
+  let raw = null
+  try { raw = localStorage.getItem(STORAGE_KEY) } catch { /* 隐私模式 */ }
+  const id = raw && VALID.has(raw) ? raw : 'default'
+  stored.value = id
   applyTheme(id)
 }
 
