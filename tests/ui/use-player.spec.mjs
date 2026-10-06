@@ -34,6 +34,7 @@ vi.mock('../../src/api/music.js', () => ({
     getLyrics: vi.fn(async () => ({ lyrics: [] })),
     getQQLyric: vi.fn(async () => ({ lyrics: [] })),
     getExternalLyric: vi.fn(async () => null),
+    lyricAlign: vi.fn(async () => null),
     retryMatch: vi.fn(async () => null),
   },
   parseLyrics: vi.fn(() => []),
@@ -115,6 +116,7 @@ beforeEach(() => {
   parseLyrics.mockImplementation(() => [])
   musicApi.getLyrics.mockResolvedValue({ lyrics: [] })
   musicApi.getExternalLyric.mockResolvedValue(null)
+  musicApi.lyricAlign.mockResolvedValue(null)
   musicApi.retryMatch.mockResolvedValue(null)
   aiApi.status.mockResolvedValue({ enabled: false })
   aiApi.verifyLyric.mockResolvedValue({ ok: true })
@@ -806,5 +808,327 @@ describe('usePlayer：远端 player-state 续播位挂账', () => {
     await player.playSong(song(9))
     player.savePlayerStateToStorage()
     expect(JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE)).currentSongId).toBe(9)
+  })
+})
+
+describe('usePlayer：手动词务（获取歌词 / 生成滚动词）', () => {
+  const bvSong = (extra) => song('bv_BV1xx411c7mD', {
+    bilibili: { bvid: 'BV1xx411c7mD', title: '视频标题', author: 'UP主' },
+    ...extra,
+  })
+
+  it('manualFetchLyrics 命中：行集落地 + extId 词属主键 + 源名 toast；曲名取 song.name 优先', async () => {
+    const { player } = makePlayer()
+    await player.playSong(bvSong()) // 自动支 mock 归 null → 空词
+    howls.at(-1).fire('onload') // 切歌锁在 onload 才松——手动支有 songSwitching 闸
+    expect(player.lyrics.value).toEqual([])
+
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '外源词' }])
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]外源词', source: 'lrclib', extId: 'lrclib_42', synced: true,
+    })
+    await player.manualFetchLyrics()
+    // 手动支检索口径：song.name 优先于 ext.title（手改名生效），artist 用 ext.author
+    expect(musicApi.getExternalLyric).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: 'bv_BV1xx411c7mD', title: '歌bv_BV1xx411c7mD', artist: 'UP主', durationSec: 200,
+      }))
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '外源词' }])
+    expect(downloadsApi.getSongMeta).toHaveBeenCalledWith('lrclib_42')
+    expect(toast).toHaveBeenCalledWith('已从 LRCLIB 获取歌词', 'success')
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('manualFetchLyrics 外源全灭（null）：「暂无歌词」toast 且不清空已有词', async () => {
+    // 先经自动支落一份纯文本词
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行\n二行', source: 'kugou', extId: 'kugou_1', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    expect(player.lyrics.value).toHaveLength(2)
+
+    musicApi.getExternalLyric.mockResolvedValue(null)
+    await player.manualFetchLyrics()
+    expect(toast).toHaveBeenCalledWith('外部词源暂无这首歌的歌词', 'info')
+    expect(player.lyrics.value).toHaveLength(2) // 旧词原样保留
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('manualFetchLyrics 防降级：滚动词在屏时纯文本命中被闸拦，只 toast 不换词', async () => {
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '滚动词' }])
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]滚动词', source: 'lrclib', extId: 'lrclib_1', synced: true,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '滚动词' }])
+
+    // 手动再拉：外源这次只给纯文本——不许盖掉现有滚动词
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '纯文本词', source: 'kugou', extId: 'kugou_2', synced: false,
+    })
+    await player.manualFetchLyrics()
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '滚动词' }])
+    expect(toast).toHaveBeenCalledWith('外源仅有纯文本歌词，保留现有滚动词', 'info')
+  })
+
+  it('manualFetchLyrics 升级放行：纯文本词在屏时滚动命中照常落地', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行\n二行', source: 'lrclib', extId: 'lrclib_1', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    expect(player.lyrics.value.every(l => !Number.isFinite(l.time))).toBe(true)
+
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '滚动词' }])
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]滚动词', source: 'ytm', extId: 'ytm_abcdefghijk', synced: true,
+    })
+    await player.manualFetchLyrics()
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '滚动词' }])
+    expect(toast).toHaveBeenCalledWith('已从 YouTube Music 获取歌词', 'success')
+  })
+
+  it('manualFetchLyrics 词源抛错（非 abort）：「暂时不可用」toast，词不动', async () => {
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    musicApi.getExternalLyric.mockRejectedValue(new Error('timeout'))
+    await player.manualFetchLyrics()
+    expect(toast).toHaveBeenCalledWith('歌词源暂时不可用，稍后重试', 'error')
+    expect(player.lyrics.value).toEqual([])
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('manualFetchLyrics 在途防重入：闸锁期第二次调用不新发请求', async () => {
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    musicApi.getExternalLyric.mockClear()
+    let release
+    musicApi.getExternalLyric.mockImplementation(() => new Promise(r => { release = r }))
+    const p1 = player.manualFetchLyrics()
+    const p2 = player.manualFetchLyrics() // lyricFetching 已锁——直退
+    release(null)
+    await Promise.all([p1, p2])
+    expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith('外部词源暂无这首歌的歌词', 'info')
+  })
+
+  it('manualFetchLyrics 中途切歌：回包晚落不写新歌界面（seq 陈旧闸）', async () => {
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    let release
+    musicApi.getExternalLyric.mockImplementation(() => new Promise(r => { release = r }))
+    const p = player.manualFetchLyrics()
+    await new Promise(r => setTimeout(r, 0)) // 让手动请求确实发出（release 赋值）
+    await player.playSong(song(2)) // 切歌——lyricLoadSeq 再升，本代作废
+    howls.at(-1).fire('onload')
+    release({ lrc: '[00:01.00]晚到词', source: 'lrclib', extId: 'lrclib_9', synced: true })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '晚到词' }])
+    await p
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.lyrics.value).toEqual([]) // song(2) 的词没被晚到回包盖掉
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('已从'), 'success')
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('alignCurrentLyrics 成功：纯文本词换成解析后的滚动行 + toast', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行\n二行', source: 'kugou', extId: 'kugou_1', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload') // 切歌锁在 onload 才松——手动支有 songSwitching 闸
+    expect(player.lyrics.value).toEqual([
+      { time: Infinity, text: '一行' },
+      { time: Infinity, text: '二行' },
+    ])
+
+    musicApi.lyricAlign.mockResolvedValue({
+      code: 200, lrc: '[00:01.00]一行\n[00:04.00]二行', alignedBy: 'llm',
+    })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '一行' }, { time: 4, text: '二行' }])
+    await player.alignCurrentLyrics()
+    expect(musicApi.lyricAlign).toHaveBeenCalledWith({
+      songId: 'bv_BV1xx411c7mD', lines: ['一行', '二行'],
+    })
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '一行' }, { time: 4, text: '二行' }])
+    expect(player.currentLyricIndex.value).toBe(0)
+    expect(toast).toHaveBeenCalledWith('已生成滚动歌词', 'success')
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('alignCurrentLyrics 404（无已下载音频）：专属文案，纯文本词原样保留', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行', source: 'kugou', extId: 'kugou_1', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    musicApi.lyricAlign.mockRejectedValue({
+      response: { status: 404, data: { message: '该曲目没有已下载的音频文件' } },
+    })
+    await player.alignCurrentLyrics()
+    expect(toast).toHaveBeenCalledWith('该歌曲还没有已下载的音频，无法生成滚动歌词', 'error')
+    expect(player.lyrics.value).toEqual([{ time: Infinity, text: '一行' }])
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('alignCurrentLyrics 429/503 分诊文案', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行', source: 'kugou', extId: 'kugou_1', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    musicApi.lyricAlign.mockRejectedValueOnce({ response: { status: 503 } })
+    await player.alignCurrentLyrics()
+    expect(toast).toHaveBeenCalledWith('ffmpeg 不可用，无法生成滚动歌词', 'error')
+    musicApi.lyricAlign.mockRejectedValueOnce({ response: { status: 429 } })
+    await player.alignCurrentLyrics()
+    expect(toast).toHaveBeenCalledWith('请求过于频繁，稍后再试', 'error')
+    musicApi.lyricAlign.mockRejectedValueOnce({ response: { status: 502 } })
+    await player.alignCurrentLyrics()
+    expect(toast).toHaveBeenCalledWith('生成滚动歌词失败', 'error')
+  })
+
+  it('alignCurrentLyrics 已是滚动词/无词：直退不打请求', async () => {
+    parseLyrics.mockImplementation(() => [{ time: 1, text: 'x' }])
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]x', source: 'lrclib', extId: 'lrclib_1', synced: true,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload') // 松开切歌锁——否则走的是 songSwitching 闸而非词态闸
+    await player.alignCurrentLyrics()
+    expect(musicApi.lyricAlign).not.toHaveBeenCalled()
+    // 无词态同样直退
+    parseLyrics.mockImplementation(() => [])
+    musicApi.getExternalLyric.mockResolvedValue(null)
+    await player.playSong(song(3))
+    howls.at(-1).fire('onload')
+    await player.alignCurrentLyrics()
+    expect(musicApi.lyricAlign).not.toHaveBeenCalled()
+  })
+
+  it('手动代在途被切歌顶替：loadLyrics 升号即清悬挂锁，旧代 finally 不抢新代的锁', async () => {
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    let releaseA
+    musicApi.getExternalLyric.mockImplementation(() => new Promise(r => { releaseA = r }))
+    const pA = player.manualFetchLyrics()
+    await new Promise(r => setTimeout(r, 0)) // A 代请求确实发出（releaseA 赋值）
+    expect(player.lyricFetching.value).toBe(true)
+
+    // 切歌：loadLyrics 升号接管词态——悬挂锁当场清，不等 A 代 80s 超时 settle
+    await player.playSong(song(2))
+    howls.at(-1).fire('onload')
+    expect(player.lyricFetching.value).toBe(false)
+
+    // 新曲手动代照常进（旧锁不挡），重入闸语义：B 代在途再点仍被早退挡
+    let releaseB
+    musicApi.getExternalLyric.mockImplementation(() => new Promise(r => { releaseB = r }))
+    const callsBefore = musicApi.getExternalLyric.mock.calls.length
+    const pB = player.manualFetchLyrics()
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(callsBefore + 1)
+    expect(player.lyricFetching.value).toBe(true)
+
+    // A 代迟到回包：seq 失配 stale 丢弃，finally 也不抢 B 代持有的锁
+    releaseA({ lrc: '[00:01.00]晚到词', source: 'lrclib', extId: 'lrclib_9', synced: true })
+    await pA
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.lyricFetching.value).toBe(true) // 仍属 B 代——没被 A 清掉
+
+    releaseB(null)
+    await pB
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('manualFetchLyrics 命中但行集为空（lrc 全是元行被滤光）：归「暂无歌词」不报假成功', async () => {
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    // hit 非 null 但剥完行首元行后一行不剩——applied=true、rows=[]
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[ti:歌名]\n[ar:某人]\n[offset:0]', source: 'lrclib', extId: 'lrclib_7', synced: false,
+    })
+    await player.manualFetchLyrics()
+    expect(toast).toHaveBeenCalledWith('外部词源暂无这首歌的歌词', 'info')
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('已从'), 'success')
+    expect(player.lyrics.value).toEqual([])
+  })
+
+  it('manualFetchLyrics 撞 429：限流专属文案（与生成滚动词分诊同口径）', async () => {
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    musicApi.getExternalLyric.mockRejectedValue({ response: { status: 429 } })
+    await player.manualFetchLyrics()
+    expect(toast).toHaveBeenCalledWith('请求过于频繁，稍后再试', 'error')
+    expect(player.lyricFetching.value).toBe(false)
+  })
+
+  it('alignCurrentLyrics 切歌锁未松（songSwitching）时直退：不拿新曲音频对旧词打轴', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '一行', source: 'kugou', extId: 'kugou_1', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    // 不 fire onload——songSwitching 仍 true（旧词还挂在屏上、音频是旧曲的）
+    expect(player.lyrics.value).toEqual([{ time: Infinity, text: '一行' }])
+    await player.alignCurrentLyrics()
+    expect(musicApi.lyricAlign).not.toHaveBeenCalled()
+  })
+
+  it('alignCurrentLyrics 行集超契约上限：≤600 行/单行 ≤500 字截断发送，成功文案补注', async () => {
+    // 650 行纯文本词（首行 600 字长行）——走真实 plainRowsOf 落 Infinity 行
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: ['长'.repeat(600), ...Array(649).fill('词')].join('\n'),
+      source: 'kugou', extId: 'kugou_1', synced: false,
+    })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    howls.at(-1).fire('onload')
+    expect(player.lyrics.value).toHaveLength(650)
+
+    musicApi.lyricAlign.mockResolvedValue({ code: 200, lrc: '[00:01.00]x' })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: 'x' }])
+    await player.alignCurrentLyrics()
+    const payload = musicApi.lyricAlign.mock.calls.at(-1)[0]
+    expect(payload.lines).toHaveLength(600)
+    expect(payload.lines.every(l => l.length <= 500)).toBe(true)
+    expect(payload.lines[0]).toHaveLength(500) // 600 字长行被切到契约上限
+    expect(toast).toHaveBeenCalledWith('已生成滚动歌词（超出上限部分已截断）', 'success')
+  })
+
+  it('alignCurrentLyrics 落地后补发 postProcess：无戳批次跳过的 AI 翻译补位', async () => {
+    aiApi.status.mockResolvedValue({ enabled: true })
+    // 网易云曲拿到无戳纯文本词（getLyrics 直接回行集）
+    musicApi.getLyrics.mockResolvedValue({
+      lyrics: [{ time: Infinity, text: 'line one' }, { time: Infinity, text: 'line two' }],
+    })
+    const { player } = makePlayer()
+    await player.playSong(song(7))
+    howls.at(-1).fire('onload')
+    // 自动支 postProcess 确实跑过，但在「无有限戳无挂载点」闸早退——translate 未发
+    await vi.waitFor(() => expect(aiApi.status).toHaveBeenCalled())
+    await new Promise(r => setTimeout(r, 0))
+    expect(aiApi.translateLyric).not.toHaveBeenCalled()
+
+    musicApi.lyricAlign.mockResolvedValue({
+      code: 200, lrc: '[00:01.00]line one\n[00:04.00]line two',
+    })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: 'line one' }, { time: 4, text: 'line two' }])
+    await player.alignCurrentLyrics()
+    // 补轴成行集有戳后重发一轮后处理——翻译按词属主键（=lyricId 7）补位
+    await vi.waitFor(() => expect(aiApi.translateLyric).toHaveBeenCalledWith(7))
   })
 })
