@@ -1,5 +1,6 @@
 const { Hono } = require('hono');
 const streamVault = require('../lib/stream-vault');
+const mediaCache = require('../services/media-cache');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const { resolveYoutubeStreams } = require('../services/youtube-resolve');
@@ -300,7 +301,20 @@ app.get('/youtube/stream', async (c) => {
     // vault 单实体：跨分辨率/编码的候选是不同字节文件，混排换档会把同一
     // offset 的另一文件字节拼给客户端（bilibili 链同字节镜像先例的反面）——
     // 只 mint 首链；次优档不是活链而是错位毒源。死档由前端重试触发重解
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(head.url)}`, 302);
+    // 缓存键挂同一字节实体的指纹（codec+br+itag）——重解换签名/IP 段
+    // 不变键：播过的完整档直接命中，签名过期也能播。itag 段防同 codec
+    // 同 br 的不同上游流撞键（googlevideo URL 恒带 itag 参数——取不到
+    // 时指纹退化为旧格式，旧键档自然淘汰不迁移）
+    let itag = '';
+    try { itag = new URL(head.url).searchParams.get('itag') || ''; } catch { /* 畸形 URL 不落指纹段 */ }
+    const cacheKey = mediaCache.keyOf('yt', videoId, kind === 'video' ? 'v' : 'a',
+      mediaCache.fingerprintOf(head.mimeType, head.br, null, itag));
+    const cacheMeta = {
+      muxed: mediaCache.muxedOf(head.mimeType),
+      codec: mediaCache.codecOf(head.mimeType) || null,
+      br: head.br ?? null,
+    };
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(head.url, { cacheKey, cacheMeta })}`, 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] stream 失败:', e.message);

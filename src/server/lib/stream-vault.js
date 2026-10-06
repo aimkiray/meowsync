@@ -20,7 +20,10 @@ const vault = new Map(); // token -> { urls, idx, expiresAt, notAfter }
 // baseUrl/backup_url）：跨分辨率/编码的不同文件不能混排，代理换档会把
 // 同一 offset 的另一文件字节当答案回给客户端。代理侧逐个候选试到 2xx
 // 为止并把 idx 钉在成功位——后续 Range 直吃可用镜像，不再每跳白探死链
-function mint(urlOrUrls, { ttlMs = SLIDING_TTL_MS } = {}) {
+// cacheKey/cacheMeta（可选）：该 URL 组对应的媒体缓存键与档形态快照
+// （{muxed, br, codec, h, w}）——/audio-proxy 命中完整档即直接喂盘字
+// 节，未命中则旁路 tee 落盘。vault 只存不做判定，判定全在 media-cache
+function mint(urlOrUrls, { ttlMs = SLIDING_TTL_MS, cacheKey = null, cacheMeta = null } = {}) {
   const token = randomBytes(24).toString('base64url');
   const now = Date.now();
   const urls = (Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls])
@@ -33,6 +36,8 @@ function mint(urlOrUrls, { ttlMs = SLIDING_TTL_MS } = {}) {
     idx: 0,
     expiresAt: now + ttlMs,
     notAfter: now + MAX_TTL_MS,
+    cacheKey: typeof cacheKey === 'string' && cacheKey ? cacheKey : null,
+    cacheMeta: cacheMeta && typeof cacheMeta === 'object' ? cacheMeta : null,
   });
   return token;
 }

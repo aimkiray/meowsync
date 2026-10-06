@@ -1,6 +1,7 @@
 const { Hono } = require('hono');
 const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
 const streamVault = require('../lib/stream-vault');
+const mediaCache = require('../services/media-cache');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const { tokenMatches } = require('../lib/token-eq');
@@ -267,7 +268,11 @@ app.get('/bilibili/stream', async (c) => {
   try {
     const pageWanted = pickPageParam(`?p=${c.req.query('p') || 1}`);
     let cid = c.req.query('cid');
-    if (!cid || !/^\d+$/.test(cid)) {
+    // 显式 cid 在位时实际播放内容由 cid 决定而非 ?p——mint 缓存键前要把
+    // cid 反解回真实分P 序（下方 pagePart），否则 ?p=1&cid=<P2的cid> 会
+    // 把 P2 字节写进 p1 键，正常 P1 请求吃到 P2 档
+    let cidExplicit = /^\d+$/.test(String(cid || ''));
+    if (!cidExplicit) {
       const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
       cid = pickCidFromView(view, pageWanted);
     }
@@ -282,6 +287,7 @@ app.get('/bilibili/stream', async (c) => {
       if (!/^\d+$/.test(c.req.query('cid') || '')) throw e;
       const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
       cid = pickCidFromView(view, pageWanted);
+      cidExplicit = false; // 自愈后内容跟分P 序走——键段回到 p<pageWanted>
       playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`, c.req.raw.signal);
     }
     // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
@@ -329,6 +335,10 @@ app.get('/bilibili/stream', async (c) => {
       return checked.ok && isAllowedHost(checked.url.hostname);
     };
     let usable = [...new Set(durlUrls)].filter(passesWhitelist);
+    // 缓存键材料随胜出集走：durl 合流整段 mp4（无档对象）→ muxed 直标；
+    // 自适应镜像组挂所在 tier 的 codecs/bandwidth 指纹
+    let cacheTier = null;
+    let cacheMuxed = usable.length > 0;
     if (!usable.length) {
       // dash 无 avc1 且 durl 没接住——hevc/av01 原样塞给 <video> 是黑屏，
       // 按无流 404（与 resolve 的 hasVideo 口径一致）
@@ -341,14 +351,37 @@ app.get('/bilibili/stream', async (c) => {
       const usableTier = (s) => flatUrls(s).map(x => x.url).filter(passesWhitelist);
       const tier = streams.find(s => usableTier(s).length);
       usable = tier ? [...new Set(usableTier(tier))] : [];
+      cacheTier = tier || null;
     }
     if (!usable.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
     // 写响应前的终态断连检查——durl/view/playurl 多跳 await 期间客户端可能已走
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
-    // vault token 化——登录态 baseUrl 带 mid/uipk/deadline，不出进程
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(usable)}`, 302);
+    // vault token 化——登录态 baseUrl 带 mid/uipk/deadline，不出进程；
+    // cacheKey 挂字节实体指纹（codec+bandwidth+流 id）——签名过期照样
+    // 命中盘上档。键的 page 成分必须跟内容走：显式 cid 请求经 view.pages
+    // 反解真实分P；反解不出（cid 陈旧/上游抖动）用 cid 本身入键——宁可
+    // 键不合并，绝不让 P2 字节写进 p1 键错位喂出
+    let pagePart = `p${pageWanted}`;
+    if (cidExplicit) {
+      const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal)
+        .catch(() => null);
+      const idx = (Array.isArray(view?.pages) ? view.pages : [])
+        .findIndex(pg => String(pg?.cid) === String(cid));
+      pagePart = idx >= 0 ? `p${idx + 1}` : `c${cid}`;
+    }
+    const cacheKey = mediaCache.keyOf('bv', bvid, pagePart, kind === 'video' ? 'v' : 'a',
+      mediaCache.fingerprintOf(cacheTier?.mimeType || (cacheMuxed ? 'video/mp4' : ''),
+        cacheTier?.bandwidth ?? 0, cacheTier?.codecs, cacheTier?.id));
+    const cacheMeta = {
+      muxed: cacheMuxed,
+      codec: cacheTier?.codecs || mediaCache.codecOf(cacheTier?.mimeType) || null,
+      br: cacheTier?.bandwidth ?? null,
+      h: cacheTier?.height || 0,
+      w: cacheTier?.width || 0,
+    };
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(usable, { cacheKey, cacheMeta })}`, 302);
   } catch (e) {
     // 客户端断连不算服务端错误（与 resolve/audio-proxy 同口径）
     if (c.req.raw.signal?.aborted) return c.body(null, 499);

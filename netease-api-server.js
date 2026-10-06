@@ -265,6 +265,16 @@ try {
   console.warn('[downloads] 孤儿文件清扫失败:', error?.message || error);
 }
 
+// 媒体字节缓存清扫（/audio-proxy 过路落盘档）：启动跑一遍 + 每小时续扫——
+// TTL 过期删、超总量按 lastAccessAt LRU 挤。缓存是优化路径，失败只告警
+{
+  const mediaCache = require('./src/server/services/media-cache');
+  try { mediaCache.sweep(); } catch { /* 目录缺席/权限均不致命 */ }
+  setInterval(() => {
+    try { mediaCache.sweep(); } catch { /* 同上 */ }
+  }, 3600 * 1000).unref();
+}
+
 // 启动服务器（serve() 返回原生 http.Server，可挂 WebSocket upgrade）。
 // autoCleanupIncoming 显式声明：多条路由故意不读 body（401/400 早退、纯触发型 POST
 // /downloads/queues/:id/start 等），未读完的 body 靠它自动 drain——若按性能建议
