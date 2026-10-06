@@ -350,11 +350,14 @@ test('标类硬拒连兜底池都开除：伴奏标候选进不了 AI pick', asy
 
 test('中立艺人分+非精确 title：同名异曲压到灰区下，不确定收', async () => {
   reset();
-  // author/artists 全缺 → artist 中立 15；互含 title 45 + 时长近 16 = 76
-  // 修复前越过 ≥75 误收；修复后 <50 丢弃，只剩 AI 兜底池可救
+  // author/artists 全缺 → artist 中立 15；互含 title ~39 + 时长近 16 = ~70
+  // 修复前越过 ≥75 误收；修复后 <50 丢弃，只剩 AI 兜底池可救。
+  // 标题带「现场版」尾：候选串经 titleVariantsOf 展开后进入 srcBaseTitles，
+  // 若源标题是 '乐园(粤)'，剥缀变体 '乐园' 会与同名异曲精确命中（title=50）
+  // 绕过中立艺人压分——钉「变体也剥不掉的后缀」让 title 证据保持非精确
   apiScript = [[song(2, '乐园', 236000, '别人2')]];
   aiScript = [{ queries: [] }, { match: 0 }];
-  const r = await matchNeteaseSong(['乐园(粤)'], 240, 't', null, { title: '乐园(粤)' });
+  const r = await matchNeteaseSong(['乐园(粤) 现场版'], 240, 't', null, { title: '乐园(粤) 现场版' });
   assert.equal(r.song, null);
   assert.equal(aiCalls.length, 2);   // extract + pick 都走了——没被确定性短路
 });

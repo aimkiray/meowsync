@@ -72,7 +72,7 @@ function extractYtSong(title, author) {
   candidates = [...new Set(candidates.map(c => c.trim()).filter(Boolean))];
   // VTuber/翻唱投稿常挂 'ver.<歌姬>' 检索噪声尾（'Dream Play Sick ver.EMA'）——
   // 每个已有候选补一条剥缀腿给匹配器；songName 不动（显示层保持诚实）。
-  // 与 services/lyric-external.js titleVariantsOf 的 VER_TAIL_RE 同口径，
+  // 与 shared/title-variants.js titleVariantsOf 的 VER_TAIL_RE 同口径，
   // 正则改动要两边同步
   const VER_TAIL_RE = /\s*[-–—~\/|：:]?\s*(?<![\p{L}\p{N}])ver(?:sion)?[\.。]\s*[\p{L}\p{N}][\p{L}\p{N}\s_'&·-]{0,30}$/iu;
   const verStripped = [...new Set(
