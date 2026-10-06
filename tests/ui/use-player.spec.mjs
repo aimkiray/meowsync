@@ -848,7 +848,7 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     expect(musicApi.retryMatch).toHaveBeenCalledTimes(1)
   })
 
-  it('外源（extId）词判否：藏词但不发 retryMatch——判否对象不是 neteaseId', async () => {
+  it('外源（extId）词判否且曲未绑定：藏词 + 接首配兜底（extId 不进 excludeIds）', async () => {
     musicApi.getExternalLyric.mockResolvedValue({
       lrc: '[00:01.00]外源词', source: 'lrclib', extId: 'lrclib_9', synced: true,
     })
@@ -859,9 +859,13 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     await vi.waitFor(() =>
       expect(aiApi.verifyLyric).toHaveBeenCalledWith('lrclib_9', '视频标题', 'UP主', expect.anything()))
     await vi.waitFor(() => expect(player.lyrics.value).toEqual([]))
-    await new Promise(r => setTimeout(r, 0))
-    expect(musicApi.retryMatch).not.toHaveBeenCalled()
     expect(toast).toHaveBeenCalledWith('歌词与歌曲疑似不匹配，已隐藏', 'info')
+    // 判否对象是外源词源（lrclib_9 非 neteaseId）——不走换绑否决记账，
+    // 但词已藏、曲仍裸着：rematchUnbound 首配兜底接管把歌接上匹配链
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    const payload = musicApi.retryMatch.mock.calls[0][0]
+    expect(payload).toMatchObject({ trackId: 'bv_BV1xx411c7mD', title: '视频标题', author: 'UP主' })
+    expect(payload.excludeIds ?? []).not.toContain('lrclib_9')
   })
 
   it('notifyLyricRematch 在无正播曲（currentSong==null）时丢弃', async () => {
@@ -872,6 +876,254 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(musicApi.getLyrics).not.toHaveBeenCalled()
     expect(player.currentSong.value).toBeNull()
+  })
+
+  // ── rematchUnbound：外源词全灭后的未绑定曲自动首配 ──
+  // yt_/bv_ 未绑 neteaseId 且外源词落空（级联全灭/hit=null/行集剥空）时
+  // 自动重跑一次 /match/retry——VOCALOID 翻唱等曲外源三源缺收录而网易本体常有
+  const ytUnbound = (extra) => song('yt_abcdefghijk', {
+    youtube: {
+      videoId: 'abcdefghijk', title: 'sasayakuを歌いました',
+      author: 'rei sirose - Topic', authorClean: 'rei sirose', hasVideo: true,
+    },
+    ...extra,
+  })
+
+  it('外源全灭（hit=null）+ 未绑定 yt_ 曲：自动首配一次，材料取 provider 块', async () => {
+    musicApi.retryMatch.mockResolvedValue(null) // 服务端也没配到——不留痕
+    const yt = ytUnbound()
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    const payload = musicApi.retryMatch.mock.calls[0][0]
+    expect(payload).toMatchObject({
+      trackId: 'yt_abcdefghijk',
+      title: 'sasayakuを歌いました',
+      author: 'rei sirose - Topic',
+      // provider 块无 artists 字段——发的是 [author, authorClean] 过滤产物
+      artists: ['rei sirose - Topic', 'rei sirose'],
+      durationSec: 200,
+    })
+    // 首配语义：无否决对象不发 excludeIds
+    expect(payload).not.toHaveProperty('excludeIds')
+    // matched=null 不留痕——无匹配仍是事实，曲对象一个字不写
+    await new Promise(r => setTimeout(r, 0))
+    expect(yt.neteaseId).toBeUndefined()
+    expect(musicApi.getLyrics).not.toHaveBeenCalled()
+    expect(player.lyrics.value).toEqual([])
+  })
+
+  it('首配命中：applyMatchResult 重建 neteaseId/name，热重载走常规网易词支', async () => {
+    musicApi.retryMatch.mockResolvedValue({
+      id: 1316563227, name: 'sasayaku', matchedBy: 'title+artist', score: 0.98,
+      ar: [{ name: 'rei sirose' }],
+      al: { id: 9, name: '对的专辑', picUrl: 'http://n/9.jpg' },
+    })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '网易词' }] })
+    const yt = ytUnbound()
+    const { player, deps } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(yt.neteaseId).toBe(1316563227))
+    // 修复器整组重建：name 吃匹配名、证据随绑定落 provider 块
+    expect(yt.name).toBe('sasayaku')
+    expect(yt.youtube.matchedBy).toBe('title+artist')
+    expect(yt.youtube.matchScore).toBe(0.98)
+    expect(deps.savePlaylistsToStorage).toHaveBeenCalled()
+    // 热重载：neteaseId 已写 → 常规网易词支，不重打外源；人还在看这首
+    // → 补 toast（与判否换绑同文案）
+    await vi.waitFor(() =>
+      expect(musicApi.getLyrics).toHaveBeenCalledWith(1316563227, expect.anything()))
+    await vi.waitFor(() =>
+      expect(player.lyrics.value).toEqual([{ time: 1, text: '网易词' }]))
+    expect(toast).toHaveBeenCalledWith('词源已自动重匹配', 'success')
+    expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(1)
+  })
+
+  it('首配 RTT 期间切歌：写回+落盘照做（持久属性），但不重载词', async () => {
+    const yt = ytUnbound()
+    let releaseMatch
+    musicApi.retryMatch.mockImplementation(
+      () => new Promise(r => { releaseMatch = () => r({ id: 1316563227, name: 'sasayaku' }) }))
+    const { player, deps } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalled())
+    // RTT 窗内切走：signal 随之 abort，但 mock 仍按正常 resolve 走完回包路径
+    await player.playSong(song(2))
+    releaseMatch()
+    // 绑定是曲的持久属性——写回对象+显式落盘不因切歌丢弃
+    // （旧口径 stale 弃写会让已记账的本曲拖到下次会话才愈）
+    await vi.waitFor(() => expect(yt.neteaseId).toBe(1316563227))
+    expect(deps.savePlaylistsToStorage).toHaveBeenCalled()
+    // stale 只闸歌词重载与 toast——没人看的歌不刷词不弹提示
+    expect(musicApi.getLyrics).not.toHaveBeenCalledWith(1316563227, expect.anything())
+    expect(toast).not.toHaveBeenCalledWith('词源已自动重匹配', 'success')
+  })
+
+  it('外源已命中（lyrics 非空）：不触发自动首配', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[00:01.00]外源词', source: 'lrclib', extId: 'lrclib_42', synced: true,
+    })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '外源词' }])
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    await vi.waitFor(() => expect(player.lyrics.value.length).toBeGreaterThan(0))
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.retryMatch).not.toHaveBeenCalled()
+  })
+
+  it('已绑定曲（neteaseId 在）：走常规网易词支，不触发', async () => {
+    const yt = ytUnbound({ neteaseId: 777 })
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(777, expect.anything()))
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.getExternalLyric).not.toHaveBeenCalled()
+    expect(musicApi.retryMatch).not.toHaveBeenCalled()
+  })
+
+  it('每曲每会话限一次：同曲重播外源照打但 retryMatch 不再发', async () => {
+    const yt = ytUnbound()
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    await player.playSong(song(2))
+    await player.playSong(yt) // 槽位已消费——外源兜底照走，首配不重试
+    await vi.waitFor(() => expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(2))
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.retryMatch).toHaveBeenCalledTimes(1)
+    expect(yt.neteaseId).toBeUndefined()
+  })
+
+  it('裸 yt_ id（缺 provider 对象的老行）：形态闸同走首配，材料回退 song.name', async () => {
+    const yt = song('yt_abcdefghijk') // 无 youtube 对象——闸按 id 前缀命中
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    const payload = musicApi.retryMatch.mock.calls[0][0]
+    expect(payload).toMatchObject({
+      trackId: 'yt_abcdefghijk', title: '歌yt_abcdefghijk',
+      author: '', artists: [], durationSec: 200,
+    })
+    expect(payload).not.toHaveProperty('excludeIds')
+  })
+
+  it('非外链曲（网易云原生 id）：形闸拦在门外，不触发', async () => {
+    const { player } = makePlayer()
+    await player.playSong(song(7)) // getLyrics 空词终态——但不是外链曲
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(7, expect.anything()))
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.retryMatch).not.toHaveBeenCalled()
+  })
+
+  // ── matchVetoedIds 否决簿（B1）：菜单解绑/换绑否掉的旧词源 id 随
+  // notifyLyricRematch 第三参记账，rematchUnbound 首配兜底并入
+  // excludeIds——否则服务端 skipCache 重跑把刚否决的确定性高分原样
+  // 送回，用户纠正被反噬 ──
+  it('显式解绑后外源落空：retryMatch 的 excludeIds 含被否决 id', async () => {
+    const { notifyLyricRematch } = await import('../../src/composables/usePlayer.js')
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: 'x' }] })
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(111, expect.anything()))
+    // 菜单「重新匹配歌词」空回包 → 解绑：prevId 作 vetoedId 捎进通知
+    notifyLyricRematch('bv_BV1xx411c7mD', null, 111)
+    // 清绑后热重载走外源路 → 全灭触发 rematchUnbound——刚否决的 111
+    // 必须并进 excludeIds，否则确定性高分原样复活
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    expect(musicApi.retryMatch.mock.calls[0][0].excludeIds).toEqual([111])
+    expect(bv.neteaseId).toBeNull()
+  })
+
+  it('换绑路捎旧 id 同记否：111→333 换绑再解绑，excludeIds 两否决俱在', async () => {
+    const { notifyLyricRematch } = await import('../../src/composables/usePlayer.js')
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: 'x' }] })
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(111, expect.anything()))
+    // 换绑 111→333：用户选了新词源即对旧源的否决——111 记进否决簿
+    notifyLyricRematch('bv_BV1xx411c7mD', 333, 111)
+    await vi.waitFor(() => expect(musicApi.getLyrics).toHaveBeenCalledWith(333, null))
+    // 再解绑 333 → 外源空 → rematchUnbound：两次否决都进 excludeIds
+    notifyLyricRematch('bv_BV1xx411c7mD', null, 333)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    const ids = musicApi.retryMatch.mock.calls[0][0].excludeIds
+    expect(ids).toHaveLength(2)
+    expect(ids).toEqual(expect.arrayContaining([111, 333]))
+  })
+
+  it('非正播曲的否决也记账：留给它下次播放时的首配兜底消费', async () => {
+    const { notifyLyricRematch } = await import('../../src/composables/usePlayer.js')
+    const bv = bvSong() // 菜单侧已 applyMatchResult(song,null) 解绑——曲对象 neteaseId 空
+    const { player } = makePlayer()
+    await player.playSong(song(2)) // 正播的是别的曲
+    // 对非正播曲的解绑通知：只记否决簿（neteaseId 写回被异曲闸丢弃）
+    notifyLyricRematch('bv_BV1xx411c7mD', null, 111)
+    await player.playSong(bv) // 轮到它开播：外源空 → 首配兜底捎上早前否决
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    expect(musicApi.retryMatch.mock.calls[0][0].excludeIds).toEqual([111])
+  })
+
+  it('hit 非空但行集剥空（lrc 全是元行）：同算词全灭，触发 rematchUnbound', async () => {
+    musicApi.getExternalLyric.mockResolvedValue({
+      lrc: '[ti:歌名]\n[ar:某人]\n[offset:0]', source: 'lrclib', extId: 'lrclib_7', synced: false,
+    })
+    const yt = ytUnbound()
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    // plain 兜底剥行首时间戳+滤元行后一行不剩——与 hit=null 同终态
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    const payload = musicApi.retryMatch.mock.calls[0][0]
+    expect(payload.trackId).toBe('yt_abcdefghijk')
+    expect(payload).not.toHaveProperty('excludeIds') // 无否决账不捎字段
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.lyrics.value).toEqual([])
+    expect(yt.neteaseId).toBeUndefined()
+  })
+
+  it('首配在途被 abort（ERR_CANCELED）：释放槽位，重播同曲可再试', async () => {
+    const yt = ytUnbound()
+    musicApi.retryMatch.mockRejectedValue(
+      Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }))
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    await new Promise(r => setTimeout(r, 0)) // 让 catch 的槽位释放跑完
+    await player.playSong(song(2))
+    await player.playSong(yt) // 槽位已释放——重播再试一次
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(2))
+  })
+
+  it('首配撞 429 限流：同 abort 列释放槽位——「稍后再试」不该烧掉自愈机会', async () => {
+    const yt = ytUnbound()
+    musicApi.retryMatch
+      .mockRejectedValueOnce({ response: { status: 429 } })
+      .mockResolvedValue({ id: 1316563227, name: 'sasayaku' })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '网易词' }] })
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    await new Promise(r => setTimeout(r, 0))
+    await player.playSong(song(2))
+    await player.playSong(yt) // 槽位已释放——重播重试命中即自愈
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(yt.neteaseId).toBe(1316563227))
+  })
+
+  it('首配非 abort/限流失败（502 等）：槽位保留，同会话不再重试', async () => {
+    const yt = ytUnbound()
+    musicApi.retryMatch.mockRejectedValue(
+      Object.assign(new Error('重匹配失败'), { response: { status: 502 } }))
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    await player.playSong(song(2))
+    await player.playSong(yt) // 槽位已消费——重播不再发 retryMatch
+    await vi.waitFor(() => expect(musicApi.getExternalLyric).toHaveBeenCalledTimes(2))
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.retryMatch).toHaveBeenCalledTimes(1)
+    expect(yt.neteaseId).toBeUndefined()
   })
 })
 

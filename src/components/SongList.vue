@@ -1075,6 +1075,9 @@ export default {
       rematchInflight.add(song.id)
       const ext = song.youtube || song.bilibili
       const durationMs = song.dt || song.duration
+      // 点击时刻的绑定即用户否决对象——先定格再发：RTT 窗内别路（自动
+      // 首配兜底等）可能已改写 neteaseId；excludeIds 与否决簿同锚此 id
+      const prevId = song.neteaseId
       // /match/retry 最坏 ~55s——关菜单后没有任何反馈会像点了死键，先落
       // in-flight 提示；终态（命中/解绑/失败）由下方 toast 接管
       toast('正在重新匹配歌词…', 'info')
@@ -1088,7 +1091,7 @@ export default {
           // 后的真艺人名，一并喂服务端 sourceInfo.artists 打分器
           artists: [ext?.author, ext?.authorClean].filter(Boolean),
           durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
-          excludeIds: song.neteaseId != null ? [song.neteaseId] : [],
+          excludeIds: prevId != null ? [prevId] : [],
         })
         if (matched?.id) {
           // retryMatch 回包已把同层诊断字段并进 matched 返回（matchedBy/
@@ -1097,16 +1100,19 @@ export default {
           emit('song-meta-updated', song)
           toast(`词源已重匹配为《${matched.name || matched.id}》`, 'success')
           // 菜单侧对象与正播对象不一定是同一引用（搜索/快照来源不同）——
-          // 通知里捎上新词源 id，播放器侧幂等补写
-          notifyLyricRematch(song.id, matched.id)
+          // 通知里捎上新词源 id，播放器侧幂等补写；prevId 同捎记否（换绑
+          // 即对旧词源的否决）——自动首配兜底不得把它复活送回
+          notifyLyricRematch(song.id, matched.id, prevId)
         } else {
           // 用户显式否决后的空回包按解绑处理而非「没找到」败象：词源与
           // 派生字段回 provider 态——「这不是」是强信号，留错绑不如没绑
-          const hadBinding = song.neteaseId != null
+          const hadBinding = prevId != null
           applyMatchResult(song, null)
           emit('song-meta-updated', song)
           toast(hadBinding ? '已解除错配，暂无更准的词源' : '没找到更准的匹配', 'info')
-          notifyLyricRematch(song.id, null) // 解绑信号：正播曲清绑+热重载词
+          // 解绑信号：正播曲清绑+热重载词；prevId 进否决簿——否则外源
+          // 兜底触发的自动首配会把刚否决的确定性高分原样送回，反噬纠正
+          notifyLyricRematch(song.id, null, prevId)
         }
       } catch (e) {
         toast(`重新匹配失败：${e?.response?.data?.message || e?.message || '网络错误'}`, 'error')
