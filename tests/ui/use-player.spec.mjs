@@ -58,6 +58,13 @@ vi.mock('../../src/api/ai.js', () => ({
     verifyLyric: vi.fn(async () => ({ ok: true })),
   },
 }))
+// http.js 只被 usePlayer 的 apiErrorMessage 引用（music/downloads/ai 三只
+// api 已全桩，拦截器/axios 实例不进用例图）
+vi.mock('../../src/api/http.js', () => ({
+  default: {},
+  API_BASE_URL: 'http://api',
+  apiErrorMessage: (e) => e?.response?.data?.message || e?.message,
+}))
 vi.mock('../../src/lib/feedback.js', () => ({ toast: vi.fn() }))
 // theme.js 全替桩：usePlayer 消费 glitchBurst；lib/sync.js（usePlayer 引入）
 // 还 import applyRemoteTheme——缺导出名会让整个 import 图链接失败
@@ -111,9 +118,12 @@ beforeEach(() => {
   localStorage.clear()
   resetSyncState() // 引擎模块级状态跨用例隔离（远端应用用例会 init）
   musicApi.getSongUrl.mockImplementation(async () => ({ url: 'https://cdn.example/online.mp3', br: 320000 }))
+  musicApi.youtubeStreamUrl.mockImplementation(() => 'https://x/yt')
   downloadsApi.getSongDownloadStatus.mockImplementation(async () => null)
   // clearAllMocks 只清调用记录不清实现——逐用例覆写的 mock 全部归位
   parseLyrics.mockImplementation(() => [])
+  downloadsApi.downloadSongToServer.mockImplementation(async () => ({ data: { status: 'completed' } }))
+  downloadsApi.mirrorLocalPlaylist.mockImplementation(async () => ({}))
   musicApi.getLyrics.mockResolvedValue({ lyrics: [] })
   musicApi.getExternalLyric.mockResolvedValue(null)
   musicApi.lyricAlign.mockResolvedValue(null)
@@ -198,22 +208,27 @@ describe('usePlayer：播放主链', () => {
     expect(howls[1].opts.src).toEqual(['https://cdn.example/online.mp3'])
   })
 
-  it('yt 曲不打在线流：无本地档直转下载链，completed 短路后递归钉 _localFile', async () => {
+  it('yt 曲恢复在线链：直挂 /youtube/stream，本地档探测命中仍优先', async () => {
+    // 在线位用回真形态 URL——断言 URL 含 /youtube/stream 而非桩串
+    musicApi.youtubeStreamUrl.mockImplementation(
+      (v, kind) => `http://api/youtube/stream?v=${v}&kind=${kind}`)
     const yt = song('yt_abcdefghijk', { youtube: { videoId: 'abcdefghijk', hasVideo: true } })
     const { player, deps } = makePlayer()
     deps.selectedPlaylist.value = { id: 'local_pl_1', name: 'P', tracks: [yt], isLocal: true }
     await player.playSong(yt)
-    // completed 短路 → playDownloadedCopy 递归 playSong(_localFile) → Howl 挂 /file
-    await vi.waitFor(() => expect(howls).toHaveLength(1))
-    // 在线位全程零请求——不打 /youtube/stream，也不走网易云 getSongUrl
-    expect(musicApi.youtubeStreamUrl).not.toHaveBeenCalled()
     expect(musicApi.getSongUrl).not.toHaveBeenCalled()
-    // hasVideo 的 yt 曲提交下载连视频档一起下（WatchView 本地视频档的来源）
-    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
-      'local_pl_1', 'yt_abcdefghijk',
-      expect.objectContaining({ downloadVideo: true }))
-    expect(downloadsApi.songFileUrl).toHaveBeenCalledWith('local_pl_1', 'yt_abcdefghijk', 'audio')
-    expect(howls[0].opts.src).toEqual(['http://api/dl/local_pl_1/yt_abcdefghijk'])
+    expect(musicApi.youtubeStreamUrl).toHaveBeenCalledWith('abcdefghijk', 'audio', '', 0)
+    expect(howls).toHaveLength(1)
+    expect(howls[0].opts.src[0]).toContain('/youtube/stream')
+
+    // audioReady 探测命中时本地档仍优先——在线链一次都不打
+    downloadsApi.getSongDownloadStatus.mockResolvedValue({
+      data: { audioReady: true, audioPlaylistId: 7 },
+    })
+    await player.playSong(yt)
+    expect(musicApi.youtubeStreamUrl).toHaveBeenCalledTimes(1)
+    expect(howls).toHaveLength(2)
+    expect(howls[1].opts.src).toEqual(['http://api/dl/7/yt_abcdefghijk'])
   })
 
   it('在线链返回空 → playbackError 上屏、不建 Howl', async () => {
@@ -227,22 +242,44 @@ describe('usePlayer：播放主链', () => {
   })
 })
 
-describe('usePlayer：YT 下载兜底链', () => {
+describe('usePlayer：YT 在线链与下载兜底', () => {
   // 'abcdefghijk' 是合法 11 位 videoId 形态，yt_ 前缀走 YT_TRACK_ID_RE 判定
   const ytSong = (extra) => song('yt_abcdefghijk', extra)
   const localPl = (t) => ({ id: 'local_pl_1', name: 'P', tracks: [t], isLocal: true })
 
-  it('yt_ 形态 id 缺 provider 对象（老持久化行）仍进下载链，不落 getSongUrl 死路', async () => {
-    const yt = ytSong() // 无 youtube 对象——id 形态是全部凭据
+  // yt 在线位两级败亡驱动：当前末例首败 → _streamRetried 重解（retry=1）
+  // 再建一例，再败 → ownSource 闸落 playDownloadedCopy 兜底链
+  const driveToDownloadFallback = async () => {
+    const len = howls.length
+    howls.at(-1).fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls.length).toBeGreaterThan(len))
+    howls.at(-1).fire('onloaderror', 0, 'MEDIA_ERR')
+  }
+
+  it('yt_ 裸 id（缺 provider 对象老行）按形态自解在线链，不落 getSongUrl 死路', async () => {
+    const yt = ytSong() // 无 youtube 对象——videoId 从 id 还原
     const { player, deps } = makePlayer()
     deps.selectedPlaylist.value = localPl(yt)
     await player.playSong(yt)
-    await vi.waitFor(() => expect(howls).toHaveLength(1))
     expect(musicApi.getSongUrl).not.toHaveBeenCalled()
-    // 无 provider 对象 → downloadVideo 保持 false（服务端按 id 前缀自解 videoId）
+    expect(musicApi.youtubeStreamUrl).toHaveBeenCalledWith('abcdefghijk', 'audio', '', 0)
+    expect(howls[0].opts.src).toEqual(['https://x/yt'])
+  })
+
+  it('在线两级败亡回落下载兜底：retry=1 重解→提交→completed 短路钉 _localFile', async () => {
+    const yt = ytSong({ youtube: { videoId: 'abcdefghijk', hasVideo: true } })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(yt)
+    await player.playSong(yt)
+    expect(howls[0].opts.src).toEqual(['https://x/yt'])
+    await driveToDownloadFallback()
+    // 重解代带 retry=1 旁路服务端 gateCache 判定缓存
+    expect(musicApi.youtubeStreamUrl).toHaveBeenLastCalledWith('abcdefghijk', 'audio', '', 1)
+    await vi.waitFor(() => expect(howls).toHaveLength(3))
+    // hasVideo 的 yt 曲提交下载连视频档一起下（WatchView 本地视频档的来源）
     expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
-      'local_pl_1', 'yt_abcdefghijk', expect.objectContaining({ downloadVideo: false }))
-    expect(howls[0].opts.src).toEqual(['http://api/dl/local_pl_1/yt_abcdefghijk'])
+      'local_pl_1', 'yt_abcdefghijk', expect.objectContaining({ downloadVideo: true }))
+    expect(howls[2].opts.src).toEqual(['http://api/dl/local_pl_1/yt_abcdefghijk'])
   })
 
   it('yt 曲仅 hasDownloadableVideo（vp9/av01 独占稿）也带视频相位', async () => {
@@ -250,6 +287,7 @@ describe('usePlayer：YT 下载兜底链', () => {
     const { player, deps } = makePlayer()
     deps.selectedPlaylist.value = localPl(yt)
     await player.playSong(yt)
+    await driveToDownloadFallback()
     await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalled())
     expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
       'local_pl_1', 'yt_abcdefghijk', expect.objectContaining({ downloadVideo: true }))
@@ -259,28 +297,31 @@ describe('usePlayer：YT 下载兜底链', () => {
     const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
     const { player, deps } = makePlayer()
     deps.selectedPlaylist.value = localPl(yt)
+    await player.playSong(yt)
     let releaseMirror
     downloadsApi.mirrorLocalPlaylist.mockImplementationOnce(
       () => new Promise(r => { releaseMirror = () => r({}) }))
-    const p1 = player.playSong(yt)
+    await driveToDownloadFallback()
     // 旧代兜底链停在 mirrorLocalPlaylist 的 await 上
     await vi.waitFor(() => expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalled())
     const p2 = player.playSong(song(2)) // 切歌落在镜像在途窗内
     releaseMirror()
-    await Promise.all([p1, p2])
+    await p2
     await new Promise(r => setTimeout(r, 0)) // 让旧代 mirror 回落跑完代次闸
     expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
-    expect(howls).toHaveLength(1) // 新歌在线链照常建实例
+    expect(howls.at(-1).opts.src).toEqual(['https://cdn.example/online.mp3']) // 新歌在线链照常建实例
   })
 
-  it('无歌单上下文探测又无档：跳过 toast/镜像/提交，直落失败终态', async () => {
+  it('无歌单上下文探测又无档：在线败亡后兜底链形态闸直落失败终态', async () => {
     const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
     const { player } = makePlayer() // playingPlaylistId/selectedPlaylist 皆空 → playlistId=undefined
     await player.playSong(yt)
+    await driveToDownloadFallback()
     await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
     expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
     expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
     expect(player.songSwitching.value).toBe(false)
+    expect(howls).toHaveLength(2) // 在线两例（首试+retry）——兜底链未建实例
   })
 
   it('single_song_ 壳不可镜像：同跳提交直落失败终态', async () => {
@@ -288,6 +329,7 @@ describe('usePlayer：YT 下载兜底链', () => {
     const { player, deps } = makePlayer()
     deps.selectedPlaylist.value = { id: 'single_song_9', name: 'S', tracks: [yt] }
     await player.playSong(yt)
+    await driveToDownloadFallback()
     await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
     expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
     expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
@@ -298,11 +340,15 @@ describe('usePlayer：YT 下载兜底链', () => {
     const { player } = makePlayer()
     downloadsApi.getSongDownloadStatus
       .mockImplementationOnce(async () => null)                            // 主链探测无档
-      .mockResolvedValue({ data: { audioReady: true, audioPlaylistId: 7 } }) // 兜底探测命中别单
+      .mockResolvedValue({ data: { audioReady: true, audioPlaylistId: 7 } }) // 重解代探测命中别单
     await player.playSong(yt)
     await vi.waitFor(() => expect(howls).toHaveLength(1))
+    expect(howls[0].opts.src).toEqual(['https://x/yt']) // 首挂在线链
+    // 在线首败 → 重解代再探即命中别单档——不等下载链，直接换播本地档
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
     expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
-    expect(howls[0].opts.src).toEqual(['http://api/dl/7/yt_abcdefghijk'])
+    expect(howls[1].opts.src).toEqual(['http://api/dl/7/yt_abcdefghijk'])
   })
 
   it('同曲连点：旧代兜底链被代次闸压死，不重复提交', async () => {
@@ -312,15 +358,19 @@ describe('usePlayer：YT 下载兜底链', () => {
     let releaseStale
     downloadsApi.getSongDownloadStatus
       .mockImplementationOnce(async () => null)                                         // 一代主链探测
-      .mockImplementationOnce(() => new Promise(r => { releaseStale = () => r(null) })) // 一代兜底探测挂起
+      .mockImplementationOnce(() => new Promise(r => { releaseStale = () => r(null) })) // 一代重解探测挂起
       .mockImplementation(async () => null)                                             // 其余一律无档
     const p1 = player.playSong(yt)
-    // 一代兜底链停在探测 await 上（主链探测+兜底探测共 2 次）
+    await vi.waitFor(() => expect(howls).toHaveLength(1))
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR') // → 二代重解代，探测挂起
     await vi.waitFor(() => expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(2))
-    const p2 = player.playSong(yt) // 同 id 重进——currentPlayingId 分不开两代
+    const p2 = player.playSong(yt) // 同 id 重进三代——controller 换代压死二代
     await Promise.all([p1, p2])
-    await vi.waitFor(() => expect(howls).toHaveLength(1)) // 二代 completed 短路→递归钉档建实例
-    releaseStale() // 一代探测落地时世界已属三代
+    // 三代在线链两级败亡进兜底：completed 短路 → 递归钉 _localFile 建实例
+    await driveToDownloadFallback()
+    await vi.waitFor(() =>
+      expect(howls.at(-1).opts.src).toEqual(['http://api/dl/local_pl_1/yt_abcdefghijk']))
+    releaseStale() // 二代探测落地时世界已属三代——abortSignal 已废，不再建实例
     await new Promise(r => setTimeout(r, 0))
     expect(downloadsApi.downloadSongToServer).toHaveBeenCalledTimes(1)
     expect(player.playbackError.value).toBe('')
@@ -335,15 +385,17 @@ describe('usePlayer：YT 下载兜底链', () => {
       { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
     downloadsApi.getSongDownloadStatus
       .mockImplementationOnce(async () => null)                                    // 主链探测无档
+      .mockImplementationOnce(async () => null)                                    // 重解代探测无档
       .mockImplementationOnce(async () => null)                                    // 兜底探测无档
       .mockImplementationOnce(async () => ({ data: { audioReady: false, task: { status: 'downloading' } } })) // 轮询1：仍在下
       .mockResolvedValue({ data: { audioReady: true, audioPlaylistId: 'local_pl_1' } })                      // 轮询2：档落
     await player.playSong(yt)
+    await driveToDownloadFallback()
     // 轮询档 1500ms/轮是真实时钟——waitFor 窗放宽罩住两轮
-    await vi.waitFor(() => expect(howls).toHaveLength(1), { timeout: 8000 })
+    await vi.waitFor(() => expect(howls).toHaveLength(3), { timeout: 8000 })
     expect(player.playbackError.value).toBe('')
-    expect(howls[0].opts.src).toEqual(['http://api/dl/local_pl_1/yt_abcdefghijk'])
-    howls[0].fire('onload') // 切歌锁在 onload 才松——换链全程不弹失败文案
+    expect(howls[2].opts.src).toEqual(['http://api/dl/local_pl_1/yt_abcdefghijk'])
+    howls[2].fire('onload') // 切歌锁在 onload 才松——换链全程不弹失败文案
     expect(player.songSwitching.value).toBe(false)
   })
 
@@ -355,12 +407,14 @@ describe('usePlayer：YT 下载兜底链', () => {
       { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
     downloadsApi.getSongDownloadStatus
       .mockImplementationOnce(async () => null)                          // 主链探测无档
+      .mockImplementationOnce(async () => null)                          // 重解代探测无档
       .mockImplementationOnce(async () => null)                          // 兜底探测无档
       .mockResolvedValue({ data: { audioReady: false, task: null } })    // 轮询见任务行空
     await player.playSong(yt)
+    await driveToDownloadFallback()
     await vi.waitFor(() => expect(player.playbackError.value).toMatch(/仍在进行/), { timeout: 8000 })
     expect(player.songSwitching.value).toBe(false)
-    expect(howls).toHaveLength(0)
+    expect(howls).toHaveLength(2) // 在线两例——兜底链未建实例
   })
 
   it('提交撞非 409（500）：穿透判失败终态，不进轮询', async () => {
@@ -371,12 +425,13 @@ describe('usePlayer：YT 下载兜底链', () => {
     downloadsApi.downloadSongToServer.mockRejectedValueOnce(
       { response: { status: 500, data: { message: 'x' } } })
     await player.playSong(yt)
+    await driveToDownloadFallback()
     await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
     expect(player.songSwitching.value).toBe(false)
-    // 探测调用钉死在 2（主链 1 + 兜底 1）即证明没进轮询段——若 500 也被
-    // 误吞，calls 会随轮询轮次继续涨
-    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(2)
-    expect(howls).toHaveLength(0)
+    // 探测调用钉死在 3（主链+重解代+兜底各 1）即证明没进轮询段——若 500
+    // 也被误吞，calls 会随轮询轮次继续涨
+    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(3)
+    expect(howls).toHaveLength(2)
   })
 
   it('轮询连续 4 次探测失联：按停机收束 break，落「仍在进行」文案', async () => {
@@ -388,15 +443,59 @@ describe('usePlayer：YT 下载兜底链', () => {
       { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
     downloadsApi.getSongDownloadStatus
       .mockImplementationOnce(async () => null)      // 主链探测无档
+      .mockImplementationOnce(async () => null)      // 重解代探测无档
       .mockImplementationOnce(async () => null)      // 兜底探测无档
       .mockRejectedValue(new Error('server down'))   // 轮询段全灭
     await player.playSong(yt)
+    await driveToDownloadFallback()
     // 4 轮 × 1500ms 真实时钟 ≈6s 收束——waitFor 窗放宽罩住
     await vi.waitFor(() => expect(player.playbackError.value).toMatch(/仍在进行/), { timeout: 12000 })
     expect(player.songSwitching.value).toBe(false)
-    expect(howls).toHaveLength(0)
-    // 主链+兜底 2 次探测 + 恰好 4 次失联轮询即 break——不撑满 3min deadline
-    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(6)
+    expect(howls).toHaveLength(2)
+    // 主链+重解+兜底 3 次探测 + 恰好 4 次失联轮询即 break——不撑满 3min deadline
+    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(7)
+  })
+
+  // 成员预检同 downloadCurrentSong：队列插入曲不落归属单 tracks，拿归属单
+  // 提交必 404——兜底链先扫全库找含该曲的可提交单顶替寻址
+  const driveQueueInsertedFallback = async (fallbackPl) => {
+    const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
+    const a = song(1)
+    const plA = { id: 'local_pl_a', name: 'A', tracks: [a], isLocal: true }
+    const { player, deps } = makePlayer({ songs: [a] })
+    deps.userPlaylists.value = fallbackPl ? [plA, fallbackPl] : [plA]
+    deps.selectedPlaylist.value = plA
+    await player.playSong(a)       // playingPlaylistId=local_pl_a
+    player.playNextInQueue(yt)     // yt 只进 playingSongs 不落户 local_pl_a
+    const howlCount = howls.length
+    player.queueJump(1)            // preserveContext 跳播——归属仍 local_pl_a
+    // currentSong 先于 Howl 构造落地——等实例落册才算 yt 代起播完成
+    await vi.waitFor(() => expect(howls.length).toBeGreaterThan(howlCount))
+    await driveToDownloadFallback()
+    return { player, plA }
+  }
+
+  it('队列插入曲不在归属单：兜底链扫到别单顶替寻址提交', async () => {
+    const plB = { id: 'local_pl_b', name: 'B', tracks: [ytSong()] , isLocal: true }
+    const { player } = await driveQueueInsertedFallback(plB)
+    await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalled())
+    // 顶替寻址：镜像/提交都走含该曲的 local_pl_b 而非归属单 local_pl_a
+    expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(plB)
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      'local_pl_b', 'yt_abcdefghijk', expect.anything())
+    await vi.waitFor(() =>
+      expect(howls.at(-1).opts.src).toEqual(['http://api/dl/local_pl_b/yt_abcdefghijk']))
+    expect(player.playbackError.value).toBe('')
+  })
+
+  it('队列插入曲无任何可解归属：兜底链直落失败终态不白跑', async () => {
+    const { player } = await driveQueueInsertedFallback(null)
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
+    expect(player.songSwitching.value).toBe(false)
+    // 全册 3 例 = a 起播 + yt 在线两例（首试+retry）——兜底链未建实例
+    expect(howls).toHaveLength(3)
   })
 })
 
@@ -431,7 +530,7 @@ describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', 
     await player.playSong(bv) // bv_ 在线链 + loadLyrics 外源兜底（mock 归 null=级联全灭）
     const yt = song('yt_abcdefghijk')
     deps.selectedPlaylist.value = localPl(yt)
-    await player.playSong(yt) // yt_ 下载兜底链里 loadLyrics 同样走外源
+    await player.playSong(yt) // yt_ 在线链里 loadLyrics 同样走外源
     await vi.waitFor(() => expect(howls).toHaveLength(2))
     expect(musicApi.getLyrics).not.toHaveBeenCalled()
     const ids = musicApi.getExternalLyric.mock.calls.map(c => c[0].id)
@@ -1130,5 +1229,231 @@ describe('usePlayer：手动词务（获取歌词 / 生成滚动词）', () => {
     await player.alignCurrentLyrics()
     // 补轴成行集有戳后重发一轮后处理——翻译按词属主键（=lyricId 7）补位
     await vi.waitFor(() => expect(aiApi.translateLyric).toHaveBeenCalledWith(7))
+  })
+})
+
+describe('usePlayer：downloadCurrentSong（watch 顶行键）', () => {
+  // 归属性注入靠 selectedPlaylist→playSong 快照落 playingPlaylistId；镜像
+  // 对象解析靠 userPlaylists 里同名行（queueOwner 同一张闸）
+  const localPl = (t) => ({ id: 'local_pl_1', name: 'P', tracks: [t], isLocal: true })
+
+  it('数字归属 id 直提（不镜像），completed 短路即成功 toast', async () => {
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = { id: 12345 }
+    await player.playSong(song(7))
+    await player.downloadCurrentSong()
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(12345, 7, expect.objectContaining({
+      bitrate: 320000, downloadAudio: true, downloadLyrics: true,
+      downloadCover: true, downloadVideo: false,
+    }))
+    expect(toast).toHaveBeenCalledWith('下载成功', 'success')
+    expect(player.songDownloading.value).toBe(false)
+  })
+
+  it('yt 可视曲带视频相位（hasVideo 命中）', async () => {
+    const { player, deps } = makePlayer()
+    const yt = song('yt_abcdefghijk', { youtube: { videoId: 'abcdefghijk', hasVideo: true } })
+    deps.selectedPlaylist.value = { id: 12345 }
+    await player.playSong(yt)
+    await player.downloadCurrentSong()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      12345, 'yt_abcdefghijk', expect.objectContaining({ downloadVideo: true }))
+  })
+
+  it('bv 可视曲沿用 hasVideo 判视频相位', async () => {
+    const { player, deps } = makePlayer()
+    const bv = song('bv_BV1xx411c7mD', { bilibili: { bvid: 'BV1xx411c7mD', hasVideo: true } })
+    deps.selectedPlaylist.value = { id: 12345 }
+    await player.playSong(bv)
+    await player.downloadCurrentSong()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      12345, 'bv_BV1xx411c7mD', expect.objectContaining({ downloadVideo: true }))
+  })
+
+  it('local_pl_ 归属先镜像再提交；file_ 与 in-flight 连点被闸', async () => {
+    const { player, deps } = makePlayer()
+    const t = song(7)
+    deps.userPlaylists.value = [localPl(t)]
+    deps.selectedPlaylist.value = localPl(t)
+    await player.playSong(t) // playingPlaylistId=local_pl_1
+    downloadsApi.downloadSongToServer.mockImplementation(async () => ({ data: { status: 'pending' } }))
+    downloadsApi.getSongDownloadStatus.mockResolvedValue({ data: { downloaded: true } })
+    let release
+    downloadsApi.downloadSongToServer.mockImplementationOnce(
+      () => new Promise(r => { release = () => r({ data: { status: 'pending' } }) }))
+    const p1 = player.downloadCurrentSong()
+    expect(player.songDownloading.value).toBe(true)   // busy 按曲锚定
+    await player.downloadCurrentSong()                // 同曲连点被 busy 闸弹回
+    // 镜像 .catch 多一跳微任务——等提交真到（挂起 impl 就位）再放行
+    await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalledTimes(1))
+    release()
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith('下载成功', 'success'), { timeout: 8000 })
+    await p1
+    expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(localPl(t))
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledTimes(1)
+    expect(player.songDownloading.value).toBe(false)
+
+    // file_ 上传曲资产本就在服务端——键面不亮，误调也直接弹回
+    toast.mockClear()
+    const ft = song('file_abcd1234')
+    deps.userPlaylists.value = [localPl(ft)]
+    deps.selectedPlaylist.value = localPl(ft)
+    await player.playSong(ft)
+    await player.downloadCurrentSong()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledTimes(1)
+  })
+
+  it('local_pl_ 归属：镜像先于提交，playlistId 直传 local_pl_1', async () => {
+    const { player, deps } = makePlayer()
+    const t = song(7)
+    deps.userPlaylists.value = [localPl(t)]
+    deps.selectedPlaylist.value = localPl(t)
+    await player.playSong(t) // playingPlaylistId=local_pl_1
+    await player.downloadCurrentSong()
+    // 调用序钉死：镜像先于提交——服务端须先落镜像行才解得出 local_pl_ 寻址
+    expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(localPl(t))
+    expect(downloadsApi.mirrorLocalPlaylist.mock.invocationCallOrder[0])
+      .toBeLessThan(downloadsApi.downloadSongToServer.mock.invocationCallOrder[0])
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      'local_pl_1', 7, expect.objectContaining({ bitrate: 320000 }))
+    expect(toast).toHaveBeenCalledWith('下载成功', 'success')
+  })
+
+  it('saved_queue_ 归属同走镜像+提交（镜像形态白名单一员）', async () => {
+    const { player, deps } = makePlayer()
+    const t = song(7)
+    const q = { id: 'saved_queue_1', name: '队列单', tracks: [t], isLocal: true }
+    deps.userPlaylists.value = [q]
+    deps.selectedPlaylist.value = q
+    await player.playSong(t) // playingPlaylistId=saved_queue_1
+    await player.downloadCurrentSong()
+    expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(q)
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      'saved_queue_1', 7, expect.anything())
+  })
+
+  it('队列无归属（playingPlaylistId=null）→ toast 指引早退，不提交', async () => {
+    const { player } = makePlayer()
+    await player.playSong(song(7)) // 搜索/暂存语境：playingPlaylistId 快照为 null
+    await player.downloadCurrentSong()
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('未归属歌单'), 'info')
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
+  })
+
+  it('single_song_ 壳同按无归属早退', async () => {
+    const { player, deps } = makePlayer()
+    const t = song(7)
+    deps.selectedPlaylist.value = { id: 'single_song_9', name: 'S', tracks: [t] }
+    await player.playSong(t) // playingPlaylistId=single_song_9
+    await player.downloadCurrentSong()
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('未归属歌单'), 'info')
+    expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
+  })
+
+  it('提交成功 → 队列 toast；轮询见 downloaded → 成功 toast', async () => {
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = { id: 777 }
+    await player.playSong(song(7))
+    downloadsApi.downloadSongToServer.mockImplementation(async () => ({ data: { status: 'pending' } }))
+    let st = { data: { audioReady: false, task: { status: 'downloading' } } }
+    downloadsApi.getSongDownloadStatus.mockImplementation(async () => st)
+    const p = player.downloadCurrentSong()
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith('已加入下载队列', 'info'))
+    st = { data: { downloaded: true, audioReady: true, task: { status: 'completed' } } }
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith('下载成功', 'success'), { timeout: 8000 })
+    await p
+  })
+
+  it('提交撞 409（任务已在跑）：不误判失败，进轮询等终态', async () => {
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = { id: 777 }
+    await player.playSong(song(7))
+    downloadsApi.downloadSongToServer.mockRejectedValue(
+      { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
+    downloadsApi.getSongDownloadStatus.mockResolvedValue({ data: { downloaded: true } })
+    await player.downloadCurrentSong()
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith('下载成功', 'success'), { timeout: 8000 })
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('下载失败'), expect.anything())
+  })
+
+  it('切歌静默：服务端任务照跑，终态 toast 按归属曲压制', async () => {
+    const { player, deps } = makePlayer()
+    const a = song(7)
+    deps.selectedPlaylist.value = { id: 777 }
+    await player.playSong(a)
+    downloadsApi.downloadSongToServer.mockImplementation(async () => ({ data: { status: 'pending' } }))
+    let st = { data: { audioReady: false, task: { status: 'downloading' } } }
+    downloadsApi.getSongDownloadStatus.mockImplementation(async () => st)
+    const p = player.downloadCurrentSong()
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith('已加入下载队列', 'info'))
+    // 切走：任务在服务端继续跑（轮询不打断），但终态 toast 不再弹
+    await player.playSong(song(8))
+    st = { data: { downloaded: true, audioReady: true, task: { status: 'completed' } } }
+    await p // 轮询至多 3min——mock 已落 downloaded，一轮即收
+    expect(toast).not.toHaveBeenCalledWith('下载成功', 'success')
+    expect(player.songDownloading.value).toBe(false)
+  })
+
+  it('提交报文被拒（非 409）：失败原因 toast', async () => {
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = { id: 777 }
+    await player.playSong(song(7))
+    downloadsApi.downloadSongToServer.mockRejectedValue({ response: { status: 500, data: { message: 'boom' } } })
+    await player.downloadCurrentSong()
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('boom'), 'error')
+    expect(player.songDownloading.value).toBe(false)
+  })
+
+  // 「下一首播放」插入曲只进 playingSongs 快照、不落户归属单 tracks——拿归属单
+  // 提交服务端按单查曲必 404；成员预检应改扫全库找含该曲的单顶替寻址
+  const queueInsertedDownload = async (fallbackPl) => {
+    const a = song(1)
+    const x = song(99)
+    const plA = { id: 'local_pl_a', name: 'A', tracks: [a, song(2)], isLocal: true }
+    const { player, deps } = makePlayer({ songs: [a, song(2)] })
+    deps.userPlaylists.value = fallbackPl ? [plA, fallbackPl] : [plA]
+    deps.selectedPlaylist.value = plA
+    await player.playSong(a)   // playingPlaylistId=local_pl_a，队列=[a,b]
+    player.playNextInQueue(x)  // x 插队尾邻——不落 local_pl_a.tracks
+    const howlCount = howls.length
+    player.queueJump(1)        // 快照内导航：playingPlaylistId 保持 local_pl_a
+    // currentSong 先于 Howl 构造落地——等实例落册才算 x 代起播完成
+    await vi.waitFor(() => expect(howls.length).toBeGreaterThan(howlCount))
+    expect(player.currentSong.value?.id).toBe(99)
+    return { player, deps, plA, x }
+  }
+
+  it('在播曲不在归属单曲目表（队列插入曲）：扫到兜底单顶替寻址直提', async () => {
+    const x = song(99)
+    const plB = { id: 'local_pl_b', name: 'B', tracks: [x], isLocal: true }
+    const { player } = await queueInsertedDownload(plB)
+    await player.downloadCurrentSong()
+    // 顶替寻址：镜像/提交都走含该曲的 local_pl_b，而非归属单 local_pl_a
+    expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(plB)
+    expect(downloadsApi.mirrorLocalPlaylist.mock.invocationCallOrder[0])
+      .toBeLessThan(downloadsApi.downloadSongToServer.mock.invocationCallOrder[0])
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      'local_pl_b', 99, expect.anything())
+    expect(toast).toHaveBeenCalledWith('下载成功', 'success')
+  })
+
+  it('兜底单命中数字 id 歌单：直提不镜像（服务端自有导入路径）', async () => {
+    const x = song(99)
+    const plNum = { id: 888, name: 'N', tracks: [x] } // 库行已摊曲目表的远端单
+    const { player } = await queueInsertedDownload(plNum)
+    await player.downloadCurrentSong()
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(888, 99, expect.anything())
+  })
+
+  it('在播曲不在任何歌单：toast 指引早退，不白跑必败提交', async () => {
+    const { player } = await queueInsertedDownload(null)
+    await player.downloadCurrentSong()
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('不在任何歌单'), 'info')
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
+    expect(player.songDownloading.value).toBe(false)
   })
 })

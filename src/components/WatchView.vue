@@ -15,6 +15,16 @@
         <button v-if="!isFileTrackId(currentSong?.id)" class="ink-btn ink-btn--ghost ink-btn--sm watch-action" @click="shareSong" :disabled="!currentSong">
           <PixelIcon name="share" :size="14" /> 分享歌曲
         </button>
+        <!-- 下载到服务器：file_ 上传曲资产本就在服务端（无可下对象）不亮键。
+             busy/已下载态由 songDownloading/songDownloaded 透传——提交、镜像、
+             终态轮询全在 usePlayer 侧，切歌任务照跑、键面随曲换 -->
+        <button
+          v-if="currentSong && !isFileTrackId(currentSong.id)"
+          class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
+          :disabled="songDownloading || songDownloaded"
+          :title="songDownloaded ? '已下载到服务器' : '下载到服务器'"
+          @click="$emit('download-song')"
+        ><span v-if="songDownloading" class="pixel-loading" aria-hidden="true"></span><PixelIcon v-else :name="songDownloaded ? 'check' : 'download'" :size="14" /> {{ songDownloading ? '下载中…' : (songDownloaded ? '已下载' : '下载') }}</button>
         <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）；
              noreferrer 不给源站带去本站 Referer -->
         <a
@@ -28,14 +38,14 @@
         <!-- 音画切换对「可能有视频」的曲出现；关闭即只拉音频流省流量。
              bv/yt 按 provider 存在性出键（与 mediaVideoKey 同律）——导入标记
              可能被裁/老数据缺标，盘上躺着档的曲也要能切回音频、VIDEO_MODE=0
-             的用户也要有入口开视频重探；裸 bv_ id（缺对象老行）凭 id 形态
-             同出键；file_ 仍按 hasVideo（上传曲的标记即工件真相，探测链对
-             它关闭）。无可放源时靠 title 提示降级（探测无果视觉不变）；
-             yt 无在线位兜底——未下视频档的曲开着视频也只显封面，title
-             同步提示「需已下载视频档」 -->
+             的用户也要有入口开视频重探；裸 bv_/yt_ id（缺对象老行）凭 id
+             形态同出键；file_ 仍按 hasVideo（上传曲的标记即工件真相，探测链
+             对它关闭）。bv/yt 都有在线流位可乐观放行（yt 经 YT_PROXY 恢复）——
+             残余「判无可放」情形（hasVideo=false 的 bv 稿且无档）靠 title
+             提示降级 -->
         <button
           v-if="currentSong?.bilibili?.bvid || currentSong?.youtube?.videoId
-            || currentSong?.file?.hasVideo || bvM"
+            || currentSong?.file?.hasVideo || bvM || ytM"
           class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
           :class="{ 'watch-action--on': videoOn }"
           @click="videoOn = !videoOn"
@@ -441,7 +451,7 @@ import PixelIcon from './PixelIcon.vue'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
-import { httpsCover, BV_TRACK_ID_RE } from '../lib/url'
+import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
 import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
 
@@ -486,7 +496,11 @@ export default {
     playModeText: { type: String, default: '' },
     // 沉浸歌词层开着时本页仍挂载但被整体盖住——视频此时不可见，
     // mediaVideoActive 据此收掉（卸载 <video> 止流，关层经对齐链重挂续播）
-    fullscreenPlayerOpen: { type: Boolean, default: false }
+    fullscreenPlayerOpen: { type: Boolean, default: false },
+    // 顶行「下载」键态：busy 按曲锚定透传（usePlayer.downloadingSongId）、
+    // 已下载态来自 App 侧探测——提交/轮询动作走 download-song emit
+    songDownloading: { type: Boolean, default: false },
+    songDownloaded: { type: Boolean, default: false }
   },
   emits: [
     'back', 'open-fullscreen', 'toggle-play',
@@ -495,7 +509,7 @@ export default {
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
     'play-song', 'open-source', 'add-to-playlist',
     'lyric-offset-adjust', 'lyric-offset-reset',
-    'lyric-fetch', 'lyric-align'
+    'lyric-fetch', 'lyric-align', 'download-song'
   ],
   setup(props, { emit }) {
     const queueContainer = ref(null)
@@ -970,10 +984,10 @@ export default {
     const mediaVideoFailed = ref(false)
     // 瞬时断流自愈：每 mediaVideoKey 至多两次延迟复位重试——复位重挂即
     // 真重试，真死链会再 error 回闩且不再排新计时（上界=2，防重试循环）。
-    // mediaStreamRetry 原喂 youtube 流 URL 的 retry 参数（旁路服务端闸控
-    // 判定缓存，见 onMediaVideoError）——YT 在线位已摘（mediaVideoUrl yt
-    // 支只认本地档），戳留作重试序数记账；bv/file 链 URL 从不带它，
-    // 重挂本身即服务端重解。切歌（key 换）清零，新源拿满重试预算
+    // mediaStreamRetry 戳喂进 yt 支在线 URL 的 retry 参数（旁路服务端
+    // gateCache 闸控判定缓存——与 usePlayer 音频链 _streamRetried 同口径）；
+    // bv/file 链 URL 不带它，重挂本身即服务端重解。切歌（key 换）清零，
+    // 新源拿满重试预算
     const mediaStreamRetry = ref(0)
     let mediaRetryTimer = null
     let mediaRetriedKey = null
@@ -982,6 +996,9 @@ export default {
     // usePlayer 音频主链同一张 BV_TRACK_ID_RE——bvid/_pN 分P 全在 id 里，
     // 视频键/探测门/在线位三处共用这一处 match；对象在场时以对象为准
     const bvM = computed(() => String(props.currentSong?.id ?? '').match(BV_TRACK_ID_RE))
+    // 裸 yt_ 轨道 id 同型解形：videoId 内嵌在 id 里（usePlayer 音频链同款
+    // ytM）。与 bvM 不会同中——轨道 id 前缀互斥
+    const ytM = computed(() => String(props.currentSong?.id ?? '').match(YT_TRACK_ID_RE))
     // 视频源键：两个 provider 各取各自的定位串——换曲（哪怕同 provider）必然换键
     const mediaVideoKey = computed(() => {
       const song = props.currentSong
@@ -993,8 +1010,10 @@ export default {
       const bv = bvM.value
       if (song?.bilibili?.bvid || bv)
         return `bv:${song?.bilibili?.bvid || bv?.[1]}:${song?.bilibili?.cid || 0}:${song?.bilibili?.page || +bv?.[2] || 1}`
-      if (song?.youtube?.videoId)
-        return `yt:${song.youtube.videoId}`
+      // 裸 yt_ id 同键域——videoId 从 id 还原
+      const yt = ytM.value
+      if (song?.youtube?.videoId || yt)
+        return `yt:${song?.youtube?.videoId || yt?.[1]}`
       // videoV 版本戳随换源刷新——key 不变 <video> 不重载，旧画面继续播
       if (song?.file?.hasVideo) return `file:${song.id}:${song.file.videoV || 0}`
       return null
@@ -1011,12 +1030,16 @@ export default {
     const mediaVideoActive = computed(() =>
       !!(mediaVideoKey.value && videoOn.value && !props.fullscreenPlayerOpen
         && !mediaVideoFailed.value && mediaVideoUrl.value))
-    // 有无「确定可放」的视频源：bv/file 的在线流（hasVideo）或探测落地的
-    // 本地档；yt 的 hasVideo 不计入——在线位对它已不挂（见 mediaVideoUrl
-    // yt 支），可放=本地档在盘（downloadedVideoUrl 已含）。音画切换键的
-    // title 据此提示「需已下载视频档」而非空许诺
+    // 有无「确定可放」的视频源：bv 对象稿按 hasVideo、裸 bv_ id（缺对象
+    // 老行）乐观放行（mediaVideoUrl 同口径——BV 号在 id 即视频稿）、yt 有
+    // videoId 即计入（在线位经 YT_PROXY 恢复后与 bv 同口径乐观，裸 yt_ id
+    // 同律）、file 按 hasVideo、或探测落地的本地档。音画切换键的 title
+    // 据此只给残余「判无可放」情形提示「需已下载视频档」
     const hasPlayableVideo = computed(() =>
       !!(props.currentSong?.bilibili?.hasVideo || props.currentSong?.file?.hasVideo
+        || props.currentSong?.youtube?.videoId
+        || (!props.currentSong?.bilibili && bvM.value)
+        || (!props.currentSong?.youtube && ytM.value)
         || downloadedVideoUrl.value))
     // 关层重挂=天然重试点：failed 闩若来自限流/瞬时断流（层开关不动 URL，
     // watch(mediaVideoUrl) 不会自愈），复位让这次重挂真重试——流确实死了
@@ -1025,8 +1048,7 @@ export default {
       if (!open) mediaVideoFailed.value = false
     })
     // 已下载视频工件优先于在线流：本地 mp4 不撞 CDN 403/签名过期——歌单下
-    // 的视频下载此前是纯只写功能（App 内无处可播）；yt 支它更是唯一来源
-    // （在线位已摘）。探测跨歌单寻址——
+    // 的视频下载此前是纯只写功能（App 内无处可播）。探测跨歌单寻址——
     // 任务行按 (playlist,song) 登记，暂存/搜索队列或别单借源的播放没有
     // 归属歌单上下文，服务端 videoReady 按全表找档并回带寻址键
     // videoPlaylistId。切歌竞态用序号丢弃
@@ -1054,11 +1076,11 @@ export default {
       downloadedVideoUrl.value = cached
       // 探测门按 provider 存在性而非导入期标记：标记被裁/老数据缺
       // hasDownloadableVideo 的 bv_/yt_ 曲盘上可能有档——档在不在以
-      // videoReady 为准，不拿导入时的能力声明当工件真相。裸 bv_ id
+      // videoReady 为准，不拿导入时的能力声明当工件真相。裸 bv_/yt_ id
       // （缺对象老行）同放进——服务端按 id 查档不依赖对象。
       // 视频关着时不探——纯音频用户不该为每首视频曲白打一跳 status 请求
       const probeable = videoOn.value
-        && (song?.bilibili?.bvid || song?.youtube?.videoId || bvM.value)
+        && (song?.bilibili?.bvid || song?.youtube?.videoId || bvM.value || ytM.value)
       if (!probeable) {
         dlProbeSettled.value = true
         return
@@ -1099,12 +1121,16 @@ export default {
             : '')
       }
       const y = song?.youtube
-      if (y?.videoId) {
+      const yt = ytM.value
+      // 裸 yt_ id（缺对象老行）进同一支：videoId 从 id 还原（bv 支同口径）
+      if (y?.videoId || yt) {
         if (!dlProbeSettled.value) return ''
-        // YT 不挂在线流：匿名 Innertube 已被反机器人墙拦死、/youtube/stream
-        // 恒 502（与 usePlayer 音频主链同口径——YT 源只播/下载本地档）。
-        // 视频位只剩已下载档：无档空串不挂 <video>，封面回落
-        return downloadedVideoUrl.value || ''
+        // 本地档优先（不撞 CDN 闸控）；档缺席挂 /youtube/stream 在线位——
+        // YT_PROXY 恢复后与 bv 支同口径乐观放行，真死链由 error 闩回封面。
+        // mediaStreamRetry 戳带 retry=1 旁路服务端 gateCache 判定缓存
+        // （与 usePlayer 音频链 _streamRetried 同口径）
+        return downloadedVideoUrl.value
+          || musicApi.youtubeStreamUrl(y?.videoId || yt?.[1], 'video', '', mediaStreamRetry.value)
       }
       // 上传曲的视频资产走 file 端点（kind=video→videoPath 列）；videoV 戳
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
@@ -1119,11 +1145,10 @@ export default {
     watch(mediaVideoActive, () => nextTick(() => {
       if (props.tab === 'queue' || props.tab === 'lyrics') centerCurrentRow()
     }))
-    // 本地档解码失败（hev1/av01-in-mp4 等 Safari 放不动的封装）——bv 支先
-    // 回落在线流再闩封面：清 downloadedVideoUrl 让 mediaVideoUrl 换源重载，
-    // watcher 顺带复位 mediaVideoFailed；在线源也失败才真闩。yt 支无在线
-    // 位可落——本地档败即空串回落封面，档被搬别单靠下方 dlProbeNonce
-    // 单发重探找回
+    // 本地档解码失败（hev1/av01-in-mp4 等 Safari 放不动的封装）——bv/yt 两支
+    // 同口径先回落在线流再闩封面：清 downloadedVideoUrl 让 mediaVideoUrl
+    // 换源重载，watcher 顺带复位 mediaVideoFailed；在线源也失败才真闩。
+    // 档被搬别单靠下方 dlProbeNonce 单发重探找回
     const onMediaVideoError = (e) => {
       // 迟到的旧元素 error（换曲后 DOM 复用期）：key 换绑后旧元素的迟投
       // 事件不能打到新歌状态——按 target 身份闸
@@ -1149,10 +1174,9 @@ export default {
       // 每 key 至多两次（mediaRetriedKey 戳+计数），死链回闩后不再自愈。
       // 预算口径按挂载计：另一 key 也报过 error 才重置单槽戳——
       // A→B(error)→A 给 A 新预算，A→B(干净)→A 不重置，防重试循环。
-      // 序数戳 mediaStreamRetry++：原给 youtube URL 带 &retry=1 旁路服务
-      // 端闸控判定缓存（SABR 探测无定论按未闸放行）——yt 支到不了这里
-      // （本地档 error 在上一支已清档重探 return），戳本体照留：bv/file
-      // 支仍靠这套闩复位重挂走真重试，bv 重挂本身即服务端重解 playurl
+      // 序数戳 mediaStreamRetry++：yt 支 URL 带 retry=1 旁路服务端闸控判定
+      // 缓存（SABR 探测无定论按未闸放行，mediaVideoUrl 的 yt 支消费它）；
+      // bv/file 支 URL 不带戳——重挂本身即服务端重解 playurl
       if (mediaRetriedKey !== mediaVideoKey.value) {
         mediaRetriedKey = mediaVideoKey.value
         mediaRetryN = 0
@@ -1337,6 +1361,7 @@ export default {
       mediaVideoKey,
       mediaVideoUrl,
       bvM,
+      ytM,
       hasPlayableVideo,
       onMediaVideoError,
       pauseLyricFollow,

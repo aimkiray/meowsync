@@ -2,6 +2,7 @@ import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { Howl, Howler } from 'howler'
 import { musicApi, parseLyrics, mergeTranslations } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
+import { apiErrorMessage } from '../api/http.js'
 import { aiApi } from '../api/ai.js'
 import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
 import { onRemoteApply } from '../lib/sync.js'
@@ -508,6 +509,17 @@ export function usePlayer({
       }
     }
 
+    // 下载寻址兜底单扫描（downloadCurrentSong 与 playDownloadedCopy 成员
+    // 预检共用口径）：队列插入/相关接续曲只进 playingSongs 不落户歌单，拿
+    // 归属单提交服务端按单查曲必 404「歌曲不存在」——全库找一张曲目含该
+    // 曲且 id 形态可提交的单顶替寻址。数字 id 与镜像形态 local_pl_/
+    // saved_queue_ 服务端 resolvePlaylistId/findExistingPlaylistId 都解得
+    // 出；single_song_ 壳与杂形被形态闸滤掉，扫到也没用
+    const findDownloadAddrPlaylist = (song) =>
+      userPlaylists.value.find(p =>
+        (NETEASE_ID_RE.test(String(p.id)) || MIRROR_PLAYLIST_ID_RE.test(String(p.id)))
+        && p.tracks?.some(t => String(t.id) === String(song.id)))
+
     // 静音切换：记住静音前的音量，恢复时回填
     let mutedVolume = 0
     const toggleMute = () => {
@@ -519,17 +531,14 @@ export function usePlayer({
       }
     }
 
-    // 【序】必须声明在 playSong 之前：主链对「无本地档的 yt 曲」同步直调本
-    // 函数——const 箭头不 hoist，挪回 playSong 后会在调用点撞 TDZ（此前它
-    // 只被 onloaderror 回调惰性引用，调用点晚于初始化才没炸）。本函数尾部
-    // 对 playSong 的递归引用仍是回调惰性求值，反向不受声明序约束
-    // 在线流彻底失效后的兜底（SABR 闸控的 YouTube 自适应流/签名批量耗尽的
-    // 实际救法），也是 YT 源曲的主播放路径（匿名 Innertube 已被反机器人墙
-    // 拦死，前端不再试在线流）：先查服务器有没有已下载工件，没有就触发
+    // 在线流彻底失效后的兜底（SABR 闸控的 YouTube 自适应流/签名批量耗尽、
+    // 本地档解码再败的实际救法）：先查服务器有没有已下载工件，没有就触发
     // 服务器下载、完成后续播本地文件——用户口径「不能在线放就先下载下来」。
-    // 只对自有源外部曲开放；新一代 playSong 起锚（切歌或同曲重进，
-    // playSeq 换代）即整链作废——seq 判比 currentPlayingId 严，同 id 两代
-    // 连点也压得住旧代
+    // 只对自有源外部曲开放（onloaderror 的 ownSource 闸收编，yt 在内——
+    // /youtube/stream 经 YT_PROXY 恢复在线位后，本链仍是它两级败亡的退路）；
+    // 新一代 playSong 起锚（切歌或同曲重进，playSeq 换代）即整链作废——
+    // seq 判比 currentPlayingId 严，同 id 两代连点也压得住旧代。
+    // 声明序在 playSong 之前只是历史位置：调用点如今全是惰性回调，不再依赖
     const playDownloadedCopy = async (song, playlistId, options, seq) => {
       if (seq !== playSeq) return
       songSwitching.value = true // 下载等待期维持切换态——底栏别装死
@@ -551,6 +560,24 @@ export function usePlayer({
           && st.data.audioPlaylistId !== options._localTried
           ? st.data.audioPlaylistId : null
         if (audioPlId === null) {
+          // 成员预检（downloadCurrentSong 同口径）：寻址单曲目表在而在播曲
+          // 不在（「下一首播放/队尾加入/相关接续」只进 playingSongs 不落户
+          // 歌单）时提交必 404——扫全库找一张曲目含该曲的可提交单顶替寻址；
+          // 扫不到直落失败终态（本链是自愈兜底不另发 toast），不白跑必败
+          // 提交。寻址对象缺席/缺 tracks 按无法验证放行，交下方形态闸与
+          // 服务端成员校验兜底
+          let pl = (selectedPlaylist.value && String(selectedPlaylist.value.id) === String(playlistId))
+            ? selectedPlaylist.value
+            : userPlaylists.value.find(p => String(p.id) === String(playlistId))
+          if (Array.isArray(pl?.tracks) && !pl.tracks.some(t => String(t.id) === String(song.id))) {
+            pl = findDownloadAddrPlaylist(song) ?? null
+            if (!pl) {
+              songSwitching.value = false
+              playbackError.value = '音频加载失败，点击播放键或重新点歌可重试'
+              return
+            }
+            playlistId = pl.id // 顶替寻址：探测/提交/轮询全换这张单
+          }
           // 提交前先验寻址键形态：服务端 resolvePlaylistId 只接数字 id
           // （库行命中/走上游导入）与镜像形态 local_pl_/saved_queue_
           // （下方补镜像后按 neteasePlaylistId 命中）。空值/single_song_
@@ -566,10 +593,8 @@ export function usePlayer({
           toast('在线源不可用，先下载到服务器再播…', 'info')
           // 未镜像的本地单先补镜像（幂等：内容签名未变时服务端直接短路
           // 返回）。过了形态闸只剩 local_pl_/saved_queue_ 可能配到 pl——
-          // 数字 id 的 isLocalPlaylistId=false 不镜像，服务端自有导入路径
-          const pl = (selectedPlaylist.value && String(selectedPlaylist.value.id) === String(playlistId))
-            ? selectedPlaylist.value
-            : userPlaylists.value.find(p => String(p.id) === String(playlistId))
+          // 数字 id 的 isLocalPlaylistId=false 不镜像，服务端自有导入路径；
+          // 顶替寻址命中的兜底单同样要把曲目表镜像上去服务端才认得出成员
           if (pl && isLocalPlaylistId(pl.id)) await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
           // mirror RTT 窗内播放可能已换代——旧代不替没人等的歌提交孤儿下载任务
           if (seq !== playSeq) return
@@ -577,11 +602,12 @@ export function usePlayer({
           try {
             submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, {
               bitrate: 320000,
-              // yt 可视曲连视频档一起下——WatchView 视频档的唯一来源（YT
-              // 在线流两端都已不消费）。谓词与 useServerDownloads.canServerVideo
-              // 的 yt 支同口径：hasDownloadableVideo 兜住 vp9/av01 独占稿
-              // （服务端下载链能合流 mp4），hasVideo 兼容无新字段的旧数据；
-              // song.youtube?. 天然限定 YT 域，bv_/qq_ 曲该位恒 false，行为不变
+              // yt 可视曲连视频档一起下——本地档仍是 WatchView 视频位的首选源
+              // （不撞 CDN 闸控，在线流只是其缺席时的回落位）。谓词与
+              // useServerDownloads.canServerVideo 的 yt 支同口径：
+              // hasDownloadableVideo 兜住 vp9/av01 独占稿（服务端下载链能合流
+              // mp4），hasVideo 兼容无新字段的旧数据；song.youtube?. 天然限定
+              // YT 域，bv_/qq_ 曲该位恒 false，行为不变
               downloadVideo: song.youtube?.hasDownloadableVideo === true
                 || song.youtube?.hasVideo === true
             })
@@ -742,44 +768,18 @@ export function usePlayer({
         // onload 时长差文案口径与 onloaderror 在线全灭的下载兜底资格共用，
         // 别在各回调里重撒形态判断
         const ownSource = !!(song.bilibili || song.youtube || song.qq || bvM || ytM || qqM)
-        // 「不可在线播的自有源」收敛一处判定（只 yt 一家——在线链两端已死，
-        // 见下）：provider 对象或裸 yt_ id 命中即整支转下载兜底；bv_/qq_
-        // 无墙可自解在线链，不入此闸
-        const downloadOnly = !!(song.youtube?.videoId || ytM)
 
-        // YouTube 源不打在线流（用户口径「YT 曲只播/下载本地档」）：匿名
-        // Innertube 全形态已被反机器人墙拦死、/youtube/stream 恒 502——
-        // 建 Howl 挂死链只是白等一轮 loaderror 再回落到同一条下载链。
-        // 本地档上面已钉（_localFile/audioReady 命中走不到这），到此即
-        // 「无档可播」：先起 playDownloadedCopy（探测别单档→镜像本地单→
-        // 提交下载→轮询续播本地文件，全程自管 songSwitching），歌词照常
-        // 加载——下载等待期词可见。controller 清理与主路径同口径：
-        // 递归续播换绑新 controller 时身份闸不会误清。
-        // downloadOnly 闸已含 yt_ 裸 id 形态：老持久化行可能只剩 yt_<videoId>
-        // id 缺 youtube 对象——放过去会落 getSongUrl('yt_x') 死路（网易云
-        // 端点不吃这形态），而下载链服务端按 id 前缀自解 videoId
-        // （file-downloader YT_TRACK_ID_RE），不依赖对象
-        if (localPlId === null && downloadOnly) {
-          void playDownloadedCopy(song,
-            playingPlaylistId.value || selectedPlaylist.value?.id, options, mySeq)
-          await loadLyrics(song, abortSignal)
-          if (abortSignal.aborted) return
-          // 仅清除仍属于本次请求的 controller 引用
-          if (currentAbortController === myController) currentAbortController = null
-          savePlayerStateToStorage()
-          return
-        }
-
-        // 获取歌曲播放URL：B 站导入曲走 /bilibili/stream 端点——服务端每次
-        // 重解 playurl（CDN 签名会过期）再 302 进 audio-proxy，URL 不落库。
+        // 获取歌曲播放URL：自有源端点每次重解签名再 302 进 audio-proxy，URL
+        // 不落库——B 站 /bilibili/stream 重解 playurl、YouTube /youtube/stream
+        // 重解 Innertube（YT_PROXY 恢复后在线位可用；败亡经 onloaderror→
+        // ownSource 回落 playDownloadedCopy 下载兜底）、QQ /qq/stream 重取 vkey。
         // 本地档（探测命中/_localFile 钉档）优先级最高——文件在盘上；
         // file_ 上传曲没有在线链——资产就是服务端 uploads/ 工件，直连 file 端点。
-        // yt 支不在此表：无档上面已直转下载兜底，在线位留了也恒 502 走不通。
-        // provider 对象缺失的裸 bv_/qq_ id（老持久化行）按上面的解形重建
-        // 在线链：bv_ 的 cid 缺省由 /bilibili/stream 走 view 自愈、分P 序号
-        // 从 _pN 段还原；qq_ 的 mediaMid 缺省由服务端 pickStreamUrl 详情回填
-        // 兜底——两源参数面都能从 id 单解，放过去会落 getSongUrl(前缀id)
-        // 死路（网易云端点不吃这形态）
+        // provider 对象缺失的裸前缀 id（老持久化行）按上面的解形重建在线链：
+        // bv_ 的 cid 缺省由 /bilibili/stream 走 view 自愈、分P 序号从 _pN 段
+        // 还原；yt_ 的 videoId 即 id 内嵌段；qq_ 的 mediaMid 缺省由服务端
+        // pickStreamUrl 详情回填兜底——三源参数面都能从 id 单解，放过去会落
+        // getSongUrl(前缀id) 死路（网易云端点不吃这形态）
         const songUrlData = localPlId !== null
           ? { url: downloadsApi.songFileUrl(localPlId, song.id, 'audio') }
           : isFileTrackId(song.id)
@@ -787,6 +787,12 @@ export function usePlayer({
             : song.bilibili || bvM
             ? { url: musicApi.bilibiliStreamUrl(song.bilibili?.bvid || bvM?.[1], 'audio',
                 song.bilibili?.cid, song.bilibili?.page || +bvM?.[2] || 1) }
+            // _streamRetried 重试带 retry=1：旁路服务端 gateCache 的闸控判定
+            // 缓存（30min 判定可能误判），强制重探拿新候选而非重放死链；首试
+            // 与 bv/qq 同口径不带参
+            : song.youtube || ytM
+              ? { url: musicApi.youtubeStreamUrl(song.youtube?.videoId || ytM?.[1],
+                  'audio', '', options._streamRetried ? 1 : 0) }
             : song.qq || qqM
               ? { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '', song.qq?.mediaMid) }
               : await musicApi.getSongUrl(song.id, abortSignal)
@@ -1614,6 +1620,112 @@ export function usePlayer({
       }
     }
 
+    // ── watch 顶行「下载」键：当前正播曲下载到服务器 ──
+    // 归属寻址与 playDownloadedCopy 同一张形态闸：纯数字 id 服务端直解
+    // （库行/上游导入），local_pl_/saved_queue_ 先镜像再提交，null/
+    // single_song_ 壳/杂形不提交必 400 的裸 id——早退给指引。
+    // 任务在服务端跑：切歌/换代不打断在途下载——只挡结果 toast 与终态
+    // 写回（stale 判 currentPlayingId）；busy 闸按曲锚定（downloadingSongId），
+    // 换回在途曲仍显下载中、同曲连点不重复提交
+    const downloadingSongId = ref(null)
+    const songDownloading = computed(() => downloadingSongId.value != null
+      && String(downloadingSongId.value) === String(currentSong.value?.id))
+    const downloadCurrentSong = async () => {
+      const song = currentSong.value
+      // file_ 上传曲资产本就在服务端（键面也不亮）；busy 闸挡同曲连点
+      if (!song || songDownloading.value || isFileTrackId(song.id)) return
+      // 成员预检先于形态闸：归属单曲目表在而在播曲不在（「下一首播放/
+      // 队尾加入/相关接续」只进 playingSongs 不落户歌单）时，服务端按单
+      // 查曲必 404「歌曲不存在」——先扫全库找一张曲目含该曲的可提交单
+      // 顶替寻址；扫不到给指引早退，不白跑一次必败提交。库行缺 tracks
+      // （远端单详情未摊进库/离库悬空 id）按无法验证放行，交服务端兜底
+      let pl = queueOwner.value
+      if (Array.isArray(pl?.tracks) && !pl.tracks.some(t => String(t.id) === String(song.id))) {
+        pl = findDownloadAddrPlaylist(song) ?? null
+        if (!pl) {
+          toast('该歌曲不在任何歌单中，请先加入歌单再下载', 'info')
+          return
+        }
+      }
+      const playlistId = pl?.id ?? playingPlaylistId.value ?? null
+      // 服务端 resolvePlaylistId 只接数字 id 与镜像形态 local_pl_/
+      // saved_queue_；null/single_song_ 壳/其它杂形提交必 400——早退给指引
+      const plKey = String(playlistId ?? '')
+      if (!NETEASE_ID_RE.test(plKey) && !MIRROR_PLAYLIST_ID_RE.test(plKey)) {
+        toast('当前队列未归属歌单，点「存为歌单」后再下载', 'info')
+        return
+      }
+      // 结果 toast/终态写回的归属闸：任务本体不受切歌影响（服务端继续跑）
+      const stale = () => currentPlayingId !== song.id
+      downloadingSongId.value = song.id
+      try {
+        // 本地单先补镜像（幂等：内容签名未变服务端短路返回）——顶替寻址的
+        // 兜底单同样要先把曲目表镜像上去，服务端才认得出该曲成员。寻址对象
+        // 缺席时跳镜像——服务端若留有旧镜像行仍按 neteasePlaylistId 命中，
+        // 解不出由服务端报错透传
+        if (isLocalPlaylistId(playlistId) && pl) {
+          await downloadsApi.mirrorLocalPlaylist(pl).catch(() => null)
+        }
+        let submitted = null
+        try {
+          submitted = await downloadsApi.downloadSongToServer(playlistId, song.id, {
+            bitrate: 320000,
+            downloadAudio: true,
+            downloadLyrics: true,
+            downloadCover: true,
+            // 可视曲连视频档一起下：yt 支与 canServerVideo 同口径收
+            // hasDownloadableVideo（兜 vp9/av01 独占稿）+hasVideo（旧数据），
+            // bv 支沿用 hasVideo；两域各自限定，qq_/file_ 到不了这里
+            downloadVideo: song.youtube?.hasDownloadableVideo === true
+              || song.youtube?.hasVideo === true
+              || song.bilibili?.hasVideo === true,
+          })
+        } catch (e) {
+          // 409 = 该曲任务已在跑——瞬时态不是失败：既有任务继续下，进轮询等终态
+          if (e?.response?.status !== 409) throw e
+        }
+        if (submitted?.data?.status === 'completed') {
+          if (!stale()) toast('下载成功', 'success')
+          return
+        }
+        if (!stale()) toast('已加入下载队列', 'info')
+        // 终态轮询（useServerDownloads 同款范式）：1.5s 间隔、连续 3 次探测
+        // 失联才弃、封顶 3min——超时任务在服务端照跑，只少一枚成功 toast
+        const deadline = Date.now() + 3 * 60 * 1000
+        let pollErrors = 0
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 1500))
+          let st = null
+          try {
+            st = (await downloadsApi.getSongDownloadStatus(playlistId, song.id))?.data
+            pollErrors = 0
+          } catch {
+            if (++pollErrors >= 3) break
+            continue
+          }
+          if (st?.downloaded === true || st?.audioReady === true) {
+            if (!stale()) toast('下载成功', 'success')
+            return
+          }
+          if (st?.task?.status === 'failed') {
+            if (!stale()) toast(`下载失败：${st.task?.errorMessage || '未知原因'}`, 'error')
+            return
+          }
+          // 任务行被外部清掉（下载页手动清理）——没有可等的终态
+          if (st && st.task === null) {
+            if (!stale()) toast('下载失败：下载任务已不存在（可能在下载页中被清理）', 'error')
+            return
+          }
+        }
+        if (!stale()) toast('下载仍在后台进行中，可稍后在下载页里查看结果', 'info')
+      } catch (e) {
+        if (!stale()) toast(`下载失败：${apiErrorMessage(e) || '网络错误'}`, 'error')
+      } finally {
+        // 闸按曲锚定：期间别曲下载把标记换走了不能误解别人的锁
+        if (String(downloadingSongId.value) === String(song.id)) downloadingSongId.value = null
+      }
+    }
+
     // 播放进度更新（单条 rAF 循环：startProgressLoop 幂等，避免重复并发循环）
     const updateProgress = () => {
       progressRafId = null
@@ -2005,6 +2117,8 @@ export function usePlayer({
       adjustLyricOffset, resetLyricOffset, scheduleLyricOffsetSave,
       // 手动词务（watch 工具条）：外源重取 / 纯文本补轴成滚动词
       manualFetchLyrics, alignCurrentLyrics,
+      // watch 顶行下载键：busy 按曲锚定的在途态 + 提交/轮询动作
+      songDownloading, downloadCurrentSong,
       // file_ 曲换歌词文件后热重载：song.id 没变不会触发切歌路径的 loadLyrics，
       // 编辑弹窗传完 .lrc 调它重拉。无 signal——靠 currentPlayingId 守卫丢弃过期回包
       reloadLyrics: () => { if (currentSong.value) loadLyrics(currentSong.value) },

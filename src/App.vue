@@ -131,12 +131,15 @@
           :shuffle-on="shuffleOn"
           :play-mode="playMode"
           :play-mode-text="getPlayModeText()"
+          :song-downloading="songDownloading"
+          :song-downloaded="songDownloaded"
           v-model:tab="watchTab"
           v-model:autoplay="autoplayOn"
           @lyric-offset-adjust="adjustLyricOffset"
           @lyric-offset-reset="resetLyricOffset"
           @lyric-fetch="manualFetchLyrics"
           @lyric-align="alignCurrentLyrics"
+          @download-song="onWatchDownloadSong"
           @back="watchBack"
           @open-fullscreen="openFullscreenPlayer"
           @toggle-play="togglePlay"
@@ -410,7 +413,7 @@ import { useHomeFeed } from './composables/useHomeFeed'
 import { visibleSongs } from './lib/song'
 import { serverCaps, loadServerCaps } from './lib/caps'
 import { isConfirmOpen, resolveConfirm, toast, pixelConfirm } from './lib/feedback'
-import { httpsCover } from './lib/url'
+import { httpsCover, isResolvableTrackId } from './lib/url'
 import { readShareParams, consumeUrlShareParams } from './lib/share-params'
 import { LS_KEYS, readJSON, writeJSON } from './lib/storage'
 import { initSync, pullFromServer, markDirty, onRemoteApply, attachWriteHook } from './lib/sync'
@@ -424,6 +427,7 @@ import TopNavigation from './components/TopNavigation.vue'
 import PlaylistPanel from './components/PlaylistPanel.vue'
 import HomeFeed from './components/HomeFeed.vue'
 import { uploadFile, deleteUploadedSong } from './api/uploads'
+import { downloadsApi } from './api/downloads'
 import { isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, coverSizeUrl } from './lib/song'
 import FeedbackHost from './components/FeedbackHost.vue'
 import BottomPlayer from './components/BottomPlayer.vue'
@@ -832,6 +836,7 @@ export default {
       lyrics, currentLyricIndex, lyricOffsetMs, loadingLyrics, lyricFetching,
       adjustLyricOffset, resetLyricOffset, reloadLyrics,
       manualFetchLyrics, alignCurrentLyrics,
+      songDownloading, downloadCurrentSong,
       playbackList, currentPlayingIndex, toggleShuffle,
       queueJump, queueRemove, queueMove, clearQueue,
       playNextInQueue, addToQueueEnd, saveQueueAsPlaylist, openQueueSource,
@@ -883,6 +888,32 @@ export default {
       playSongFromRelated: (s, l) => playSongFromRelated(s, l),
       playPlaylist: (sh) => playPlaylist(sh),
     })
+
+    // watch 顶行「下载」键的已下载态：探测挂在 App 侧而非 usePlayer——
+    // 播放链的本地档探测在 usePlayer 内部有严格的调用序契约（同曲连点/
+    // 兜底链各代精确计次），不往里塞第二路同端点调用。这里只在 watch
+    // 页可见时随换曲/进页探一次，寻址口径与播放探测同（audioReady 跨歌单
+    // 命中也算下过——重复提交只会撞 409/幂等短路）。file_ 曲不探：资产
+    // 本就在服务端（按钮也不亮）；下载动作落地后复探归真值
+    const songDownloaded = ref(false)
+    let dlStatusProbeSeq = 0
+    const probeSongDownloaded = async () => {
+      const seq = ++dlStatusProbeSeq
+      songDownloaded.value = false
+      const song = currentSong.value
+      if (!song || isFileTrackId(song.id) || !isResolvableTrackId(song.id)) return
+      const plHint = playingPlaylistId.value || selectedPlaylist.value?.id || null
+      const st = await downloadsApi.getSongDownloadStatus(plHint, song.id).catch(() => null)
+      if (seq !== dlStatusProbeSeq) return
+      songDownloaded.value = !!(st?.data?.downloaded === true || st?.data?.audioReady === true)
+    }
+    watch([() => currentSong.value?.id, centerView], () => {
+      if (centerView.value === 'watch') probeSongDownloaded()
+    })
+    const onWatchDownloadSong = async () => {
+      await downloadCurrentSong()
+      probeSongDownloaded() // 幂等短路/轮询完成/失败都归探测真值
+    }
 
     // 外部导入域（composables/useExternalImport.js）：单曲 resolve 导入 / 三源整单导入 /
     // mix 内容分享导入 / 网易云单曲壳。跨域回调沿用惰性转发惯例（顺序无关）
@@ -1221,6 +1252,12 @@ export default {
       lyricOffsetMs,
       adjustLyricOffset,
       resetLyricOffset,
+      lyricFetching,
+      manualFetchLyrics,
+      alignCurrentLyrics,
+      songDownloading,
+      songDownloaded,
+      onWatchDownloadSong,
       centerView,
       sidebarOpen,
       watchTab,

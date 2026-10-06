@@ -3,6 +3,7 @@
 // lyricFetching/songSwitching/loadingLyrics 透传；点击只发 emit（逻辑在
 // usePlayer 侧，见 use-player.spec.mjs 手动词务用例）
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 
 // 组件图依赖桩——挂载不打真服务端；相关曲/下载视频探测这两路
@@ -26,6 +27,9 @@ vi.mock('../../src/api/downloads.js', () => ({
 vi.mock('../../src/lib/feedback.js', () => ({ toast: vi.fn() }))
 
 import WatchView from '../../src/components/WatchView.vue'
+import { musicApi } from '../../src/api/music.js'
+import { downloadsApi } from '../../src/api/downloads.js'
+import { prefVideoOn } from '../../src/lib/prefs.js'
 
 // jsdom 缺口补丁：matchMedia（歌词跟随 watcher）、scrollIntoView/scrollTo
 // （行居中）在生产浏览器都有，这里只保证存在不报错
@@ -53,6 +57,9 @@ const alignBtn = (w) => fetchGroup(w).findAll('button').find(b => b.text().inclu
 
 beforeEach(() => {
   localStorage.clear()
+  vi.clearAllMocks() // 只清调用记录——vi.fn(impl) 的桩实现不受影响
+  downloadsApi.getSongDownloadStatus.mockImplementation(async () => null)
+  musicApi.youtubeStreamUrl.mockImplementation(() => 'https://x/yt')
 })
 
 describe('WatchView：歌词获取工具组', () => {
@@ -111,5 +118,139 @@ describe('WatchView：歌词获取工具组', () => {
   it('无当前曲（currentSong=null）→整条工具条不渲染', () => {
     const w = mountWatch({ currentSong: null, lyrics: [] })
     expect(fetchGroup(w).exists()).toBe(false)
+  })
+})
+
+describe('WatchView：顶行下载键', () => {
+  // 键在 watch-actions 组内、分享键之后；busy/已下载态由 App 侧 props 透传，
+  // 点击只发 emit——提交/镜像/轮询全在 usePlayer（见 use-player.spec.mjs）
+  const dlBtn = (w) => w.find('.watch-actions button[title*="下载到服务器"]')
+
+  it('当前曲可下载即亮键，点击发 download-song', async () => {
+    const w = mountWatch({ tab: 'queue' })
+    const btn = dlBtn(w)
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('disabled')).toBeUndefined()
+    await btn.trigger('click')
+    expect(w.emitted('download-song')).toHaveLength(1)
+  })
+
+  it('file_ 上传曲不亮键（资产本就在服务端）', () => {
+    const w = mountWatch({
+      tab: 'queue',
+      currentSong: { id: 'file_abcd1234', name: 'f', ar: [], al: {}, dt: 0, file: { hasAudio: true } },
+    })
+    expect(dlBtn(w).exists()).toBe(false)
+  })
+
+  it('songDownloading busy：禁用 + 转圈 + 文案', () => {
+    const w = mountWatch({ tab: 'queue', songDownloading: true })
+    const btn = dlBtn(w)
+    expect(btn.attributes('disabled')).toBeDefined()
+    expect(btn.text()).toContain('下载中')
+    expect(btn.find('.pixel-loading').exists()).toBe(true)
+  })
+
+  it('songDownloaded：✓态禁用', () => {
+    const w = mountWatch({ tab: 'queue', songDownloaded: true })
+    const btn = w.find('.watch-actions button[title="已下载到服务器"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('disabled')).toBeDefined()
+    expect(btn.text()).toContain('已下载')
+  })
+})
+
+describe('WatchView：yt 视频位在线流', () => {
+  const YT_SONG = {
+    id: 'yt_abcdefghijk', name: 'yt', ar: [{ name: 'a' }], al: {}, dt: 0,
+    youtube: { videoId: 'abcdefghijk', hasVideo: true },
+  }
+
+  it('本地档缺席挂 /youtube/stream 在线流；探测未落地前不上屏', async () => {
+    const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
+    await vi.waitFor(() =>
+      expect(musicApi.youtubeStreamUrl).toHaveBeenCalledWith('abcdefghijk', 'video', '', 0))
+    expect(w.vm.mediaVideoUrl).toBe('https://x/yt')
+    expect(w.find('video').exists()).toBe(true)
+    expect(w.find('video').attributes('src')).toBe('https://x/yt')
+  })
+
+  it('探测未落地时 yt 支返回空串（不提前撞 CDN）', async () => {
+    let release
+    downloadsApi.getSongDownloadStatus.mockImplementation(
+      () => new Promise(r => { release = () => r(null) }))
+    const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
+    await new Promise(r => setTimeout(r, 0)) // 让 watcher 跑到探测 await
+    expect(w.vm.mediaVideoUrl).toBe('')
+    expect(w.find('video').exists()).toBe(false)
+    release()
+    await vi.waitFor(() => expect(w.vm.mediaVideoUrl).toBe('https://x/yt'))
+  })
+
+  it('已下载视频档优先于在线流', async () => {
+    downloadsApi.getSongDownloadStatus.mockResolvedValue(
+      { data: { videoReady: true, videoPlaylistId: 7 } })
+    downloadsApi.songFileUrl.mockImplementation(() => 'http://api/dl/7/yt_abcdefghijk')
+    const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
+    await vi.waitFor(() => expect(w.vm.mediaVideoUrl).toBe('http://api/dl/7/yt_abcdefghijk'))
+    expect(musicApi.youtubeStreamUrl).not.toHaveBeenCalled()
+  })
+
+  it('本地档视频错误 → 清档重探 → 回落在线流', async () => {
+    downloadsApi.getSongDownloadStatus.mockResolvedValue(
+      { data: { videoReady: true, videoPlaylistId: 7 } })
+    downloadsApi.songFileUrl.mockImplementation(() => 'http://api/dl/7/yt_abcdefghijk')
+    const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
+    await vi.waitFor(() => expect(w.vm.mediaVideoUrl).toBe('http://api/dl/7/yt_abcdefghijk'))
+    // 本地档解码败 → onMediaVideoError 清档重探——探测再报无档 → yt 支落在线流
+    downloadsApi.getSongDownloadStatus.mockResolvedValue(null)
+    w.find('video').element.dispatchEvent(new Event('error'))
+    await vi.waitFor(() => expect(w.vm.mediaVideoUrl).toBe('https://x/yt'))
+    expect(musicApi.youtubeStreamUrl).toHaveBeenCalledWith('abcdefghijk', 'video', '', 0)
+  })
+
+  it('hasPlayableVideo：yt 有 videoId 即计入可放（与 bv 乐观放行同口径）', async () => {
+    const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
+    await vi.waitFor(() => expect(w.vm.hasPlayableVideo).toBe(true))
+    // 音画切换 title 只在 videoOn=false 时落到「切到视频模式」支——
+    // 直接翻模块级偏好 ref（localStorage 换名不回读），用毕归位
+    const prev = prefVideoOn.value
+    prefVideoOn.value = false
+    await nextTick()
+    const toggle = w.find('.watch-actions button[title*="切到视频模式"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('title')).not.toContain('需已下载视频档')
+    prefVideoOn.value = prev
+  })
+})
+
+describe('WatchView：yt_ 裸 id（缺 provider 对象老行）视频位', () => {
+  // videoId 内嵌在 id 里——切换键/键值/可放判定/探测门/在线位五处与
+  // bv_ 裸 id 同型防御（usePlayer 音频链同款 ytM）
+  const BARE_YT = { id: 'yt_abcdefghijk', name: 'yt', ar: [{ name: 'a' }], al: {}, dt: 0 }
+
+  it('音画切换键按 id 形态出键，可点', async () => {
+    const w = mountWatch({ currentSong: BARE_YT, tab: 'queue' })
+    const toggle = w.find('.watch-actions button[title*="切到"]')
+    expect(toggle.exists()).toBe(true)
+    await toggle.trigger('click')
+    expect(prefVideoOn.value).toBe(false) // 键活着：点击翻转共享偏好
+    prefVideoOn.value = true              // 归位默认开
+  })
+
+  it('mediaVideoKey/hasPlayableVideo 按 id 内嵌 videoId 成立', async () => {
+    const w = mountWatch({ currentSong: BARE_YT, tab: 'queue' })
+    await vi.waitFor(() => expect(w.vm.mediaVideoKey).toBe('yt:abcdefghijk'))
+    expect(w.vm.hasPlayableVideo).toBe(true)
+  })
+
+  it('探测门放行且在线位 URL 用 id 内嵌 videoId（ytM[1]）', async () => {
+    const w = mountWatch({ currentSong: BARE_YT, tab: 'queue' })
+    await vi.waitFor(() =>
+      expect(musicApi.youtubeStreamUrl).toHaveBeenCalledWith('abcdefghijk', 'video', '', 0))
+    // probeable 过闸才打 status 探测——缺这环等于探测门没认裸 id
+    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalled()
+    expect(w.vm.mediaVideoUrl).toBe('https://x/yt')
+    expect(w.find('video').attributes('src')).toBe('https://x/yt')
   })
 })
