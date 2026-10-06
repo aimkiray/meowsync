@@ -68,7 +68,16 @@ function extractYtSong(title, author) {
     candidates = [`${artistFromAuthor} ${cleanTitle}`, cleanTitle];
   }
   // 先 trim 再去重——author 为空时组合串退化成 ' name' 会与 name 判异白占一席
-  candidates = [...new Set(candidates.map(c => c.trim()).filter(Boolean))].slice(0, 3);
+  candidates = [...new Set(candidates.map(c => c.trim()).filter(Boolean))];
+  // VTuber/翻唱投稿常挂 'ver.<歌姬>' 检索噪声尾（'Dream Play Sick ver.EMA'）——
+  // 每个已有候选补一条剥缀腿给匹配器；songName 不动（显示层保持诚实）。
+  // 与 services/lyric-external.js titleVariantsOf 的 VER_TAIL_RE 同口径，
+  // 正则改动要两边同步
+  const VER_TAIL_RE = /\s*[-–—~\/|：:]?\s*(?<![\p{L}\p{N}])ver(?:sion)?[\.。]\s*[\p{L}\p{N}][\p{L}\p{N}\s_'&·-]{0,30}$/iu;
+  const verStripped = [...new Set(
+    candidates.map(c => c.replace(VER_TAIL_RE, '').replace(/\s+/g, ' ').trim()))]
+    .filter(c => c && !candidates.includes(c));
+  candidates = [...candidates, ...verStripped].slice(0, 4);
   return { songName, candidates, artistFromAuthor };
 }
 

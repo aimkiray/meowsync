@@ -16,6 +16,8 @@
 //
 // 进程内 LRU 缓存（cap 500，不建表）：正结果 6h、负结果 10min——负窗短
 // 防一次上游抖动把「无词」固化成准永久，正窗长削重播/重试的上游扇出。
+// 级联被 deadline 截断的终态不进缓存：纯没跑完回 null 但不落负窗（「没
+// 查完」≠「无词」），截断前已有源传输抛错则整链抛错走重试语义。
 // 同键并发单飞共享一次级联——下载相位并行任务与路由重试不重复打上游。
 // 与 lyric-verify 的 judgeInflight 不同语义：那里的共享 promise 不吃调用
 // 方 signal；这里的级联由首个调用方的 signal 驱动，其 abort 会让搭车者
@@ -32,6 +34,9 @@ const { aiEnabled } = require('../lib/ai');
 const { parseLrcLines, judgeLyricLines, lyricVerdictKey } = require('./lyric-verify');
 
 const EXT_TIMEOUT_MS = 12000;
+// 级联软时限默认值——fetchExternalLyric 经 args.deadlineMs 可覆写（测试
+// 注入点；同键并发搭车共享的是首个调用方那次级联的时限）
+const CASCADE_DEADLINE_MS = 45_000;
 const abortErr = () => Object.assign(new Error('已取消'), { aborted: true });
 const timedSignal = (extraSignal, ms = EXT_TIMEOUT_MS) => extraSignal
   ? AbortSignal.any([AbortSignal.timeout(ms), extraSignal])
@@ -135,6 +140,119 @@ function artistFromTitle(title) {
   m = t.match(/^\s*【([^】]{1,30})】\s*\S/);
   if (m) return strip(m[1]);
   return '';
+}
+
+// 检索标题变体：VTuber/翻唱投稿标题常带检索噪声段——'ver.<歌姬>' 尾缀、
+// cover 标记、尾括弧、'Artist - Title' 前缀、【栏目】头、feat. 尾、
+// '曲 ／ 演唱者' 斜杠尾、'を歌いました/歌ってみた' 日语翻唱语尾、
+// 中文字幕/中字/CC字幕 字幕组标记、艺人名头尾缀。
+// 实证病例：'Dream Play Sick ver.EMA' 原始形态级联全灭、剥成
+// 'Dream Play Sick' 后 LRCLIB 命中（lrclib_25010661）；
+// 'ロストアンブレラを歌いました ／ rei sirose' 要斜杠尾+歌系中缀双剥才出真名。
+// 基座 = cleanQueryTitle（已剥 MV/官方类视频语境括弧）占首，规则集对基座
+// 各剥一层产单变体——剥一层即止不滚雪球；normKey 去重，总量上限 4 项。
+// 「激进变体」= 全规则迭代到不动点（≤3 趟）：单规则产不出的复合噪声形态
+// 靠它兜底，保底末位槽（最冒险最后试）——它有效时单变体只取前 2 给它
+// 留位，无效/与已有项重复时单变体取满 3 不浪费槽位。
+// 变体只喂检索词——归属核验签名仍用调用方原始 title（见 cascade）。
+// ver/feat/艺人锚剥缀带边界断言：'Conver. x'/'Somewith you'/'EMAIL'/
+// 'ver.EMA' 这类词干内嵌的形态不误剥出残片变体。
+// routes/youtube.js extractYtSong 的 candidates 补腿与 a 规则同口径——
+// VER_TAIL_RE 改动要两边同步。
+const VER_TAIL_RE = /\s*[-–—~\/|：:]?\s*(?<![\p{L}\p{N}])ver(?:sion)?[\.。]\s*[\p{L}\p{N}][\p{L}\p{N}\s_'&·-]{0,30}$/iu;
+// b 系 cover 尾缀三件：cover 语义的尾括弧组 / 'covered by X'（'×' 多人连接
+// 不挡路——cover 语后整段剥）/ 分隔符引导的裸 cover 尾
+const COVER_BRACKET_TAIL_RE = /[（(【\[][^（）()【】\[\]]{0,38}?\bcover(?:ed|s)?\b[^（）()【】\[\]]{0,38}?[)）】\]]\s*$/iu;
+const COVER_BY_TAIL_RE = /[\s\-–—~\/|：:／]+cover(?:ed)?\s+by\s+\S.{0,38}$/iu;
+const BARE_COVER_TAIL_RE = /[\s\-–—~\/|：:／]+covers?\s*$/iu;
+const TAIL_GROUP_RE = /(?:（[^（）]{1,40}）|\([^()]{1,40}\)|【[^【】]{1,40}】|\[[^\[\]]{1,40}\])\s*$/u;
+const ARTIST_DASH_HEAD_RE = /^.{1,40}?\s*[-–—]\s+/;
+const HEAD_BANG_RE = /^【[^【】]{1,40}】\s*/u;
+const FEAT_TAIL_RE = /\s*(?<![\p{L}\p{N}])(?:feat\.?|ft\.?|featuring|with)\s+.{1,40}$/i;
+// 斜杠尾：'X ／ Y'/'X / Y'（全/半角、前后空格可缺）尾段 ≤40 字——VTuber
+// 标题挂演唱者尾巴的常见形态（'幸福な死を ／ 久遠千歳'）
+const SLASH_TAIL_RE = /\s*[/／]\s*[^/／]{1,40}\s*$/u;
+// 日语翻唱语尾/中缀：を歌いました/歌ってみた/歌った/歌わせて頂きました/
+// 歌ってみたよ——仅近行尾才剥（尾段 ≤12 字且不含斜杠/括弧），标题中段的
+// 歌系词不剥，叠了斜杠尾的形态留给激进变体双剥
+const UTA_TAIL_RE = /\s*[をはが]?\s*歌(?:いました|ってみた|った|わせて頂きました|ってみたよ)[^\/／（(【\[]{0,12}$/iu;
+// 字幕组标记：出现即剥（剥完非空才收，push 闸把空结果滤掉）——长短语
+// 先列（'中文字幕' 先于子串 '中字'，'付き' 先于 '付'）
+const SUBTITLE_TAG_RE = /\s*(?:CC字幕|中文字幕|字幕付き|歌詞付き|歌词付き|字幕付|歌詞付|歌词付|中字)\s*/giu;
+// 艺人锚用归一分隔符字符集（与 normName 剥除同族，加冒号/全角斜杠/波浪）
+const NAME_SEP_CH = String.raw`\s\-_·•、,，。&+＋/／\\'’"（）()【】\[\]:：~～|`;
+const NAME_SEP_RUN = new RegExp(`[${NAME_SEP_CH}]+`);
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// artist 可缺省：级联传调用方原始 artist——变体生成是输入清洗，与归属
+// 轮次（roundArtist 降轮）解耦
+function titleVariantsOf(title, artist = '') {
+  const base = cleanQueryTitle(title);
+  const seen = new Set([normKey(base)]);
+  // 单规则变体先全量收集（normKey 去重、保规则序）——席位在末尾拼装时
+  // 再切，好给激进变体保底末位槽（见 return 前注释）
+  const singles = [];
+  const collect = (v) => {
+    const t = String(v || '').replace(/\s+/g, ' ').trim();
+    if (!t) return;
+    const k = normKey(t);
+    if (seen.has(k)) return;
+    seen.add(k);
+    singles.push(t);
+  };
+  // 艺人锚：parts 间容许任意连接料（与归一后比同口径），锚后须分隔符或
+  // 行尾——'EMA' 不切进 'EMAIL'/'ver.EMA' 的词干粘连
+  const ap = String(artist || '').trim().split(NAME_SEP_RUN).filter(Boolean).map(escRe);
+  const ab = ap.join(`[${NAME_SEP_CH}]*`);
+  // 规则集：每条对输入剥一层——单规则变体对基座各剥一次；激进变体对
+  // 进化中的串迭代应用
+  const rules = [
+    // a. 尾缀 ver.<名>——$ 锚定只剥尾巴，标题中段的 ver. 不动
+    (s) => s.replace(VER_TAIL_RE, ''),
+    // b. cover 尾缀——cleanQueryTitle 故意保 cover 括弧作版本限定，但作
+    //    检索变体剥掉是对的（cover 与原曲同词）
+    (s) => s.replace(COVER_BRACKET_TAIL_RE, '')
+            .replace(COVER_BY_TAIL_RE, '')
+            .replace(BARE_COVER_TAIL_RE, ''),
+    // c. 尾括弧组：'乐园(粤)' → '乐园'——只剥最后一个、组内 ≤40 字
+    (s) => s.replace(TAIL_GROUP_RE, ''),
+    // d. 'Artist - Title' 前缀——artistFromTitle 的 title 侧补腿
+    (s) => s.replace(ARTIST_DASH_HEAD_RE, ''),
+    // e. 头部【…】B 站栏目头
+    (s) => s.replace(HEAD_BANG_RE, ''),
+    // f. 尾缀 feat./ft./featuring/with X
+    (s) => s.replace(FEAT_TAIL_RE, ''),
+    // g. 斜杠尾
+    (s) => s.replace(SLASH_TAIL_RE, ''),
+    // h. 日语翻唱语尾/中缀
+    (s) => s.replace(UTA_TAIL_RE, ''),
+    // i. 字幕组标记
+    (s) => s.replace(SUBTITLE_TAG_RE, ' '),
+    // j/k. 艺人锚前缀/尾缀（'EMA rumor'→'rumor'；'X ／ artist'、
+    //      'X by artist'、裸 artist 尾——artist 缺省时规则缺席）
+    ...(ab ? [
+      (s) => s.replace(new RegExp(`^[${NAME_SEP_CH}]*${ab}(?:[${NAME_SEP_CH}]+|$)`, 'iu'), ''),
+      (s) => s.replace(new RegExp(`[${NAME_SEP_CH}]+(?:by[${NAME_SEP_CH}]+)?${ab}[${NAME_SEP_CH}]*$`, 'iu'), ''),
+    ] : []),
+  ];
+  for (const r of rules) collect(r(base));
+  // 激进变体：全规则迭代到不动点（≤3 趟）——'Xを歌いました ／ Y' 这类复合
+  // 噪声要斜杠尾+歌系中缀双剥才出真名，单规则各剥一层产不出
+  let agg = base;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = rules.reduce((s, r) => r(s), agg).replace(/\s+/g, ' ').trim();
+    if (normKey(next) === normKey(agg)) break;
+    agg = next;
+  }
+  agg = String(agg || '').replace(/\s+/g, ' ').trim();
+  const aggOk = Boolean(agg) && !seen.has(normKey(agg));
+  // 拼装：raw 永远占首（空基座也保形——级联按一次正常尝试消费）；激进
+  // 变体保底末位槽——复合噪声正是它的设计目标病例形态（'【栏】A - B
+  // (cover) ／ 演唱者' 这类标题单规则恰占满 3 席时，真名只有全剥才得出）。
+  // agg 有效→单变体只取前 2 给它留位；无效/重复→取满 3 不浪费槽位
+  const out = [base, ...singles.slice(0, aggOk ? 2 : 3)];
+  if (aggOk) out.push(agg);
+  return out;
 }
 
 // 外源 fetch 通用防御：三家 API 均无合法跳转语义——redirect:'manual' 把
@@ -290,6 +408,12 @@ async function lrclibFetch({ title, artist, durationSec, signal }) {
     await abortableSleep(waitSec * 1000, signal);
     res = await doFetch();
   }
+  // 5xx 单点重试：观测过真实 503 抖动——800ms 后原样重发一次再判死。
+  // 429 分支语义不动（Retry-After 已尊重过）；重发仍走 doFetch 同防御面
+  if (!res.ok && res.status >= 500) {
+    await abortableSleep(800, signal);
+    res = await doFetch();
+  }
   if (!res.ok) throw new Error(`lrclib HTTP ${res.status}`);
   const list = await readJsonCapped(res);
   const items = (Array.isArray(list) ? list : [])
@@ -409,8 +533,18 @@ async function verifyHit(hit, { title, artist, signal }) {
   return ok !== false;             // null=无法判定按相符放行
 }
 
-async function cascade({ songId, title, artist, durationSec, videoId, signal }) {
+async function cascade({ songId, title, artist, durationSec, videoId, signal, deadlineMs = CASCADE_DEADLINE_MS }) {
   const ytVid = String(videoId || '') || String(songId || '').match(YT_TRACK_ID_RE)?.[1] || '';
+  // 检索标题变体：raw 在前、剥缀形态殿后——每个 artist 轮内 LRCLIB/酷狗
+  // 各自按序串行试，首个非 null 命中即停该源（YTM 吃 videoId 不吃
+  // title——保持首轮一次不动）。artist 传调用方原始值而非 roundArtist
+  // ——变体生成是输入清洗，与归属轮次解耦
+  const titleVariants = titleVariantsOf(title, artist);
+  // 级联软时限：artist 轮 × 源 × 变体的展开会挤爆前端 80s 超时里 AI 核验
+  // 与响应的份额——每轮/每变体启动前查一次，超线记 deadlineHit 截断。
+  // 截断不是干净 miss，尾部按「截断前已有源抛错→抛 lastErr 走重试；
+  // 纯没跑完→null+truncated（调用方不落负缓存）」分流
+  const deadline = Date.now() + deadlineMs;
   // 检索轮次（artist 画像）：首轮严格用调用方给的 artist——曲库 id
   // （qq_/数字）的 artist 是元数据，可信。UGC 曲（bv_/yt_/显式 videoId）
   // 的 artist 实为 UP 主/频道名，严格轮必灭——干净 miss 后追加降轮：
@@ -428,29 +562,41 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal }) 
     }
   }
   let lastErr = null;
-  let cleanMiss = false; // 有过「干净的无词」终态（区别于全源传输故障）
+  let cleanMiss = false;   // 有过「干净的无词」终态（区别于全源传输故障）
+  let deadlineHit = false; // 被软时限截断——展开没跑完，不等价于「无词」
   for (let round = 0; round < artistRounds.length; round++) {
+    if (signal?.aborted) throw abortErr();
+    if (Date.now() > deadline) { deadlineHit = true; break; }
     const roundArtist = artistRounds[round];
     const sources = [];
     // YTM 支路吃 videoId 不吃 artist——只在首轮排（重复打同一份词没意义）
     if (round === 0 && ytVid) sources.push(['ytm', (sig) => ytmFetchLyric(ytVid, sig)]);
-    sources.push(['lrclib', (sig) => lrclibFetch({ title, artist: roundArtist, durationSec, signal: sig })]);
-    sources.push(['kugou', (sig) => kugouFetch({ title, artist: roundArtist, durationSec, signal: sig })]);
+    sources.push(['lrclib', (sig, t) => lrclibFetch({ title: t, artist: roundArtist, durationSec, signal: sig })]);
+    sources.push(['kugou', (sig, t) => kugouFetch({ title: t, artist: roundArtist, durationSec, signal: sig })]);
     for (const [name, run] of sources) {
       if (signal?.aborted) throw abortErr();
-      let hit;
-      try {
-        hit = await run(signal);
-      } catch (e) {
-        if (e?.aborted || signal?.aborted) throw abortErr();
-        console.warn(`[lyric-ext] ${name} 源失败（第${round + 1}轮）：${e?.message || e}`);
-        lastErr = e;
-        continue;
+      let hit = null;
+      // LRCLIB/酷狗按标题变体串行展开（YTM 单次——t=null 占位不吃）
+      for (const t of (name === 'ytm' ? [null] : titleVariants)) {
+        if (signal?.aborted) throw abortErr();
+        if (Date.now() > deadline) { deadlineHit = true; break; }
+        try {
+          hit = await run(signal, t);
+        } catch (e) {
+          if (e?.aborted || signal?.aborted) throw abortErr();
+          // 变体标注进日志便于病例回放——语义同原「第N轮」
+          const vtag = t && t !== titleVariants[0] ? `·变体「${t}」` : '';
+          console.warn(`[lyric-ext] ${name} 源失败（第${round + 1}轮${vtag}）：${e?.message || e}`);
+          lastErr = e;
+          break;  // 传输故障换源——同族变体重打大概率同死
+        }
+        if (hit) break;   // 首个非 null 命中即停该源
+        cleanMiss = true;
       }
-      if (!hit) { cleanMiss = true; continue; }
+      if (!hit) continue;
       try {
         // 归属核验签名始终用来源原标题/作者（vkey 与下载链同口径）——
-        // roundArtist 只是检索降轮的候选料，不进归属判定
+        // roundArtist 与变体 title 只是检索展开的候选料，不进归属判定
         if (!(await verifyHit(hit, { title, artist, signal }))) {
           console.info(`[lyric-ext] ${name} 词归属核验不符，继续下一源`);
           cleanMiss = true;
@@ -460,13 +606,19 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal }) 
         if (e?.aborted || signal?.aborted) throw abortErr();
         // 核验通道故障放行——与 verifyDownloadOwnership 归 null 同口径
       }
-      return hit;
+      return { hit, truncated: false };
     }
   }
-  // 全源都死在传输层（一个「干净无词」都没有）= 故障不是缺词——抛给
-  // 调用方走重试语义，不写负缓存
+  // 尾部判定：
+  //  · deadline 截断且截断前已有源在传输层抛错（混合故障）→ 抛
+  //    lastErr——截断掐掉的只是「还没跑的源/变体」，已发生的故障不能
+  //    被吞成「无词」固化 10min；与全源故障同待遇走重试、不写缓存
+  //  · 全源都死在传输层（一个「干净无词」终态都没有）→ 抛 lastErr
+  //  · 其余回 null；deadlineHit 带 truncated——纯上游慢/展开没跑完
+  //    ≠ 无词，调用方透 null 但跳过负缓存
+  if (deadlineHit && lastErr) throw lastErr;
   if (lastErr && !cleanMiss) throw lastErr;
-  return null;
+  return { hit: null, truncated: deadlineHit };
 }
 
 // extId → 词原文反查（ai.js 词源核验/翻译端点的取词支路——它们手里只有
@@ -492,9 +644,10 @@ async function fetchByExtId(extId, { signal } = {}) {
   return null; // kugou_
 }
 
-// 入口：单飞 + LRU。{ songId, title, artist, durationSec, videoId, signal }
-// ——songId 为 yt_<videoId> 时 YTM 支路自动抽 videoId；title/artist 是
-// LRCLIB/酷狗的检索词与核验签名料。
+// 入口：单飞 + LRU。{ songId, title, artist, durationSec, videoId, signal,
+// deadlineMs }——songId 为 yt_<videoId> 时 YTM 支路自动抽 videoId；
+// title/artist 是 LRCLIB/酷狗的检索词与核验签名料；deadlineMs 覆写级联
+// 软时限（测试注入点，缺省 CASCADE_DEADLINE_MS=45s）。
 async function fetchExternalLyric(args) {
   const key = cacheKeyOf(args);
   const hit = cacheRead(key);
@@ -511,7 +664,13 @@ async function fetchExternalLyric(args) {
     ));
   }
   const p = cascade(args)
-    .then((res) => { cacheWrite(key, res); return res; })
+    .then(({ hit, truncated }) => {
+      // 截断 null 不落负缓存——「没跑完」≠「无词」，固化会把上游慢写成
+      // 10min 假阴性。truncated 与 hit 不并存（命中在级联内即早返）；
+      // 搭车者共享本 promise，同待遇
+      if (!truncated) cacheWrite(key, hit);
+      return hit;
+    })
     .finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
@@ -521,7 +680,7 @@ module.exports = {
   fetchExternalLyric,
   fetchByExtId,
   // 源内函数导出供测试探针/调试——正常消费只走 fetchExternalLyric
-  ytmFetchLyric, lrclibFetch, kugouFetch, lrclibGetById,
+  ytmFetchLyric, lrclibFetch, kugouFetch, lrclibGetById, titleVariantsOf,
   // 测试钩子：清空进程内缓存（不改生产语义）
   _clearCache: () => { resultCache.clear(); inflight.clear(); },
 };

@@ -6,6 +6,9 @@
 //     最近取胜，纯文本形态 synced=false；429 尊重 Retry-After 重试一次
 //   · 酷狗候选筛选 + fmt=lrc base64 解码
 //   · 级联顺序 ytm→lrclib→kugou、全灭回 null、全源传输故障抛错
+//   · 标题变体检索：ver.<歌姬>/cover 标记/尾括弧/Artist - Title/【栏目】头
+//     /feat. 尾的剥缀形态在 LRCLIB/酷狗源内串行补位（raw 先、命中即停）
+//   · LRCLIB 5xx 抖动单点重试（429 Retry-After 语义不动）
 //   · 进程内 LRU：同键命中/负结果缓存都不打穿上游；并发同键单飞
 //   · file-downloader：外源曲无 neteaseId 时外源词落盘；网易侧 romalrc
 //     作为独立层与译文一同按同刻行落盘
@@ -309,6 +312,39 @@ test('全源传输故障 → 抛错（不写负缓存，下次仍打上游）', 
   assert.ok(calls.length > n);               // 故障不固化成负缓存
 });
 
+test('级联 deadline 截断：纯没跑完回 null 但不写负缓存', async () => {
+  reset([
+    ['lrclib.net', () => J([
+      { id: 95, trackName: 'x', artistName: 'a', duration: 200, syncedLyrics: '[00:01.00]迟词' },
+    ])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+  ]);
+  const args = { songId: 'qq_deadline001', title: 'x', artist: 'a', durationSec: 200 };
+  // deadlineMs 注入成已过期：级联首轮启动前即截断——一个上游请求都不发
+  assert.equal(await svc.fetchExternalLyric({ ...args, deadlineMs: -1 }), null);
+  assert.equal(calls.length, 0);
+  // 同键正常重查必须真打级联——若截断 null 被写成 10min 负缓存，这次会
+  // 吃缓存静默返回 null
+  const res = await svc.fetchExternalLyric(args);
+  assert.equal(res?.extId, 'lrclib_95');
+});
+
+test('级联 deadline 截断前已有源抛错（混合故障）→ 抛 lastErr 不吞不固化', async () => {
+  reset([
+    // lrclib 拖 60ms 再炸——30ms 的 deadline 被耗穿时 lastErr 已记
+    ['lrclib.net', async () => {
+      await new Promise((r) => setTimeout(r, 60));
+      throw new Error('lrclib 传输炸');
+    }],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+  ]);
+  const args = { songId: 'qq_deaderr0001', title: 'x', artist: 'a', deadlineMs: 30 };
+  await assert.rejects(svc.fetchExternalLyric(args), /传输炸/);
+  const n = calls.length;
+  await assert.rejects(svc.fetchExternalLyric(args), /传输炸/);
+  assert.ok(calls.length > n);   // 故障不固化成负缓存——重试仍打上游
+});
+
 test('调用方 signal 已 abort → 立即拒绝且不打上游', async () => {
   reset([['', () => J({})]]);
   const ac = new AbortController();
@@ -583,10 +619,12 @@ test('级联降轮：title 剥出艺人候选——UP 主名严格轮滤净后�
     songId: 'bv_BV1xx411c7mD', title: '周杰伦 - 晴天', artist: '音乐搬运工',
   });
   assert.equal(res.extId, 'lrclib_88');
-  // 第一轮 '音乐搬运工' 被 artistHit 滤净 → 第二轮 'A - B' 剥出的「周杰伦」命中
-  assert.equal(seen.length, 2);
+  // 第一轮 '音乐搬运工' 被 artistHit 滤净——raw 与 'A - B' 剥出的「晴天」
+  // 变体同轮都试（两发检索）→ 第二轮「周杰伦」候选命中
+  assert.equal(seen.length, 3);
   assert.ok(seen[0].includes('音乐搬运工'));
-  assert.ok(seen[1].includes('周杰伦') && !seen[1].includes('音乐搬运工'));
+  assert.ok(seen[1].includes('音乐搬运工'));
+  assert.ok(seen[2].includes('周杰伦') && !seen[2].includes('音乐搬运工'));
 });
 
 test('级联降轮：title 剥不出艺人 → artist:\'\' 宽检放行全候选', async () => {
@@ -613,6 +651,101 @@ test('级联降轮不波及曲库 id：qq_ 严格轮全灭即 null，不派生�
   const res = await svc.fetchExternalLyric({ songId: 'qq_abc12345678', title: 'x', artist: '原艺人' });
   assert.equal(res, null);
   assert.equal(seen.length, 1); // 只打了严格轮
+});
+
+// ── 标题变体检索（ver.<歌姬>/cover/尾括弧/前缀剥除）与 LRCLIB 5xx 重试 ──
+
+test('titleVariantsOf：剥缀形态、raw 占首、去重与上限', () => {
+  // 真实病例形态：VTuber 翻唱标题的 'ver.<歌姬>' 检索噪声尾
+  const v = svc.titleVariantsOf('Dream Play Sick ver.EMA');
+  assert.equal(v[0], 'Dream Play Sick ver.EMA');            // raw 永远占首
+  assert.ok(v.includes('Dream Play Sick'));
+  assert.ok(svc.titleVariantsOf('乐园(粤)').includes('乐园'));
+  assert.ok(svc.titleVariantsOf('EMA - Dream Play Sick').includes('Dream Play Sick'));
+  assert.ok(svc.titleVariantsOf('【栏目】某曲').includes('某曲'));
+  assert.ok(svc.titleVariantsOf('某曲 Covered by X').includes('某曲'));
+  assert.ok(svc.titleVariantsOf('某曲 (cover)').includes('某曲'));
+  assert.ok(svc.titleVariantsOf('某曲 ／COVER').includes('某曲'));
+  assert.ok(svc.titleVariantsOf('Song feat. Guest').includes('Song'));
+  assert.deepEqual(svc.titleVariantsOf('晴天'), ['晴天']);     // 无变体 → 仅 raw
+  assert.equal(svc.titleVariantsOf('').length, 1);
+  // '(cover)' 同是 cover 括弧与尾括弧——两规则产同形去重只剩一份
+  const d = svc.titleVariantsOf('某曲(cover)');
+  assert.equal(d.filter((x) => x === '某曲').length, 1);
+  // 上限 4：多条剥缀规则同产的标题也不超帽
+  assert.ok(svc.titleVariantsOf('【栏】A - B (c) feat. D ver.E').length <= 4);
+});
+
+test('titleVariantsOf 第二参 artist：歌系中缀/斜杠尾/字幕组/艺人锚与激进变体', () => {
+  // 真实未匹配库形态：'を歌いました ／ 演唱者' 复合噪声要双剥才出真名——
+  // 单规则各剥一层产不出，激进变体（全规则迭代到不动点）必须能
+  assert.ok(svc.titleVariantsOf('ロストアンブレラを歌いました ／ rei sirose', 'rei sirose')
+    .includes('ロストアンブレラ'));
+  assert.ok(svc.titleVariantsOf('アンノウン・マザーグースを歌いました ／ rei sirose', 'rei sirose')
+    .includes('アンノウン・マザーグース'));
+  // 艺人锚前缀/尾缀（归一比对）：'EMA 世界寿命'/'EMA rumor' 剥艺人前缀
+  assert.ok(svc.titleVariantsOf('EMA rumor', 'EMA').includes('rumor'));
+  assert.ok(svc.titleVariantsOf('EMA 世界寿命と最後の一日', 'EMA')
+    .includes('世界寿命と最後の一日'));
+  // covered by 多人 × 连接不挡路——cover 语后整段剥
+  assert.ok(svc.titleVariantsOf('ホワイトリリー covered by 雨森小夜 × 久遠千歳', 'rei sirose')
+    .includes('ホワイトリリー'));
+  // 斜杠尾：全角 ／ 也剥（尾段 ≤40 字）
+  assert.ok(svc.titleVariantsOf('幸福な死を ／ 久遠千歳', '久遠千歳').includes('幸福な死を'));
+  // 字幕组尾 + by 尾 + 括弧 + 歌系中缀——激进变体收敛到真名
+  assert.ok(svc.titleVariantsOf('雲散霧消を歌いました by ニート(rei sirose) 中文字幕', 'rei sirose')
+    .includes('雲散霧消'));
+  // 艺人词干粘连不切：'ver.EMA' 尾的 'EMA' 不是独立尾缀；'EMAIL' 不吃 'EMA' 前缀
+  assert.ok(!svc.titleVariantsOf('Dream Play Sick ver.EMA', 'EMA')
+    .includes('Dream Play Sick ver.'));
+  assert.ok(!svc.titleVariantsOf('EMAIL test', 'EMA').includes('IL test'));
+  // artist 缺省退化为旧行为——艺人锚规则缺席不炸
+  assert.ok(svc.titleVariantsOf('EMA rumor').length >= 1);
+});
+
+test('titleVariantsOf：激进变体保底末位槽——单变体占满时真名不被挤出', () => {
+  // 复合噪声病例：【栏目】头 + 'A - B' 前缀 + '(cover)' + 斜杠尾艺人——
+  // 单规则各剥一层恰好占满 3 个变体席，而真名 'B' 只有激进腿迭代收敛
+  // 才出。钉末位元素而非 includes——保底槽语义保证它在 4 项上限内不被
+  // 挤掉（旧实现 push 闸丢弃时末位是 '【X】A - B (cover)'）
+  const v = svc.titleVariantsOf('【X】A - B (cover) ／ rei sirose', 'rei sirose');
+  assert.ok(v.length <= 4);
+  assert.equal(v.at(-1), 'B');
+});
+
+test('级联标题变体：ver.<名> 尾缀原始形态全灭，剥缀形态在 LRCLIB 命中', async () => {
+  const queries = [];
+  reset([
+    ['/youtubei/v1/next', () => nextUnselectable()],
+    ['lrclib.net/api/search', (url) => {
+      const q = decodeURIComponent(url);
+      queries.push(q);
+      // 病例回放：带 'ver.EMA' 的原始形态全灭，剥成 'Dream Play Sick' 才命中
+      return q.includes('Dream Play Sick EMA') && !q.includes('ver.')
+        ? J([{ id: 25010661, trackName: 'Dream Play Sick', artistName: 'EMA', duration: 234, plainLyrics: 'p1\np2' }])
+        : J([]);
+    }],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+  ]);
+  const res = await svc.fetchExternalLyric({
+    songId: 'yt_variantvid1', title: 'Dream Play Sick ver.EMA', artist: 'EMA', durationSec: 234,
+  });
+  assert.equal(res?.extId, 'lrclib_25010661');
+  // 剥缀变体须真实发检索——raw 命中或没打过都不算数
+  assert.ok(queries[0].includes('ver.'), 'raw 形态先打');
+  assert.ok(queries.some((q) => q.includes('Dream Play Sick EMA') && !q.includes('ver.')));
+});
+
+test('LRCLIB：5xx 抖动单点重试——503 后原样重发一次命中', async () => {
+  let hits = 0;
+  reset([['lrclib.net', () => {
+    hits++;
+    return hits === 1 ? J({ error: 'upstream flap' }, 503)
+      : J([{ id: 66, trackName: '曲', artistName: '艺人', duration: 200, syncedLyrics: '[00:01.00]抖后词' }]);
+  }]]);
+  const res = await svc.lrclibFetch({ title: '曲', artist: '艺人', durationSec: 200 });
+  assert.equal(hits, 2);
+  assert.equal(res.extId, 'lrclib_66');
 });
 
 test('外源 fetch 全走 redirect:manual——3xx 当源失败不裸 follow', async () => {
