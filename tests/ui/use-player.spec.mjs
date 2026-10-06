@@ -651,6 +651,47 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     expect(bv.neteaseId).toBe(333)
   })
 
+  it('换绑命中走 applyMatchResult：al 按艺人重合闸重建（不只换 neteaseId）', async () => {
+    const bv = bvSong({ neteaseId: 111 })
+    bv.al = { id: 99, name: '错配残留专辑', picUrl: 'http://n/dirty.jpg' }
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    aiApi.verifyLyric
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValue({ ok: true })
+    // 艺人重合（bilibili.author='UP主' ∈ matched.ar）→ 新匹配专辑被采纳，
+    // 脏 al 连根修而非只换个词源 id
+    musicApi.retryMatch.mockResolvedValue({
+      id: 222, name: '对的歌', ar: [{ name: 'UP主' }],
+      al: { id: 9, name: '对的专辑', picUrl: 'http://n/9.jpg' },
+    })
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(bv.neteaseId).toBe(222))
+    expect(bv.name).toBe('对的歌')
+    expect(bv.al.name).toBe('对的专辑')
+    expect(bv.al.id).toBe(9)
+    // bv.cover 未持久化（bvSong 没给）→ provider 封面空，重合兜底吃匹配封面
+    expect(bv.al.picUrl).toBe('http://n/9.jpg')
+    expect(player.lyrics.value.length).toBeGreaterThan(0)
+  })
+
+  it('行菜单解绑信号（neteaseId=null）：清绑+落盘+热重载走外源词路', async () => {
+    const { notifyLyricRematch } = await import('../../src/composables/usePlayer.js')
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: 'x' }] })
+    const { player, deps } = makePlayer()
+    await player.playSong(bv)
+    expect(musicApi.getLyrics).toHaveBeenCalledWith(111, expect.anything())
+    musicApi.getLyrics.mockClear()
+    deps.savePlaylistsToStorage.mockClear()
+    notifyLyricRematch('bv_BV1xx411c7mD', null)
+    // 解绑后热重载走 /lyric/external 外源兜底，不再打网易云 /lyric
+    await vi.waitFor(() => expect(musicApi.getExternalLyric).toHaveBeenCalled())
+    expect(bv.neteaseId).toBeNull()
+    expect(deps.savePlaylistsToStorage).toHaveBeenCalled()
+    expect(musicApi.getLyrics).not.toHaveBeenCalled()
+  })
+
   it('retryMatch RTT 期间切歌：写回+落盘照做，但不 toast 不重载词', async () => {
     const bv = bvSong({ neteaseId: 111 })
     musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })

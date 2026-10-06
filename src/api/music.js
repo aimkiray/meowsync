@@ -299,8 +299,11 @@ export const musicApi = {
 
   // 错配纠正口：POST /match/retry——前端拿持久化 provider 字段组匹配材料，
   // excludeIds 把当前判否的词源 id 并进请求级否决集重跑云搜+AI 复核链，
-  // 命中即服务端覆写 song_match 行。回命中对象 {id,name,ar,al}，未中回
-  // null；错误（429/502 等）照常抛给调用方。最坏 ~55s，超时放宽到 60s
+  // 命中即服务端覆写 song_match 行。回命中对象 {id,name,ar,al} 并透传同层
+  // 诊断字段：matchedBy 是命中它的查询串、score 是置信分，调用方经 extras
+  // 落 provider.matchedBy/matchScore 供纠错排查（score 为调用方实读字段，
+  // matchScore 别名对齐 provider 侧命名）；未中回 null；错误（429/502 等）
+  // 照常抛给调用方。最坏 ~55s，超时放宽到 60s
   retryMatch: async ({ trackId, title, author, artists, durationSec, candidates, excludeIds },
     abortSignal = null) => {
     const response = await api.post('/match/retry', {
@@ -310,7 +313,13 @@ export const musicApi = {
     if (data.code !== 200) throw new Error(data.message || '重匹配失败')
     const payload = data.data && typeof data.data === 'object' ? data.data : data
     return payload.matched && typeof payload.matched === 'object' && payload.matched.id != null
-      ? payload.matched : null
+      ? {
+        ...payload.matched,
+        matchedBy: payload.matchedBy ?? null,
+        matchScore: payload.score ?? null,
+        score: payload.score ?? null,
+      }
+      : null
   },
 
   getSongDetail: async (id, abortSignal = null) => {

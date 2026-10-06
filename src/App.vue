@@ -91,6 +91,7 @@
           @move-song="moveSongInPlaylist"
           @group-by-artist="groupSongsByArtist"
           @open-downloads="openDownloadsForPlaylist(selectedPlaylist?.id)"
+          @song-meta-updated="savePlaylistsToStorage"
         />
         <PlaylistGrid
           v-else-if="centerView === 'search'"
