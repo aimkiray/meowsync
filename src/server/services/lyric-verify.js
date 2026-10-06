@@ -37,8 +37,10 @@ function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor) {
   // 播放链传全量、下载链传投影截断值，两侧对同一首歌必须产同一个键。
   // 必须先 slice 后 trim：trim(raw)[0:300] ≠ trim(raw[0:300])——前导空白
   // 或第 300 位恰是空白时两序产不同 sig（截断顺序不可交换）
+  // v2 版本段：判定输入已含候选条目身份（judgeInner 的 candidate 段）——
+  // v1 键下落的旧判定（无候选信息的保守放行/错判）不能被新判定吃到
   const sig = createHash('sha1')
-    .update(`${String(sourceTitle).slice(0, 300).toLowerCase().trim()}|${String(sourceAuthor).slice(0, 120).toLowerCase().trim()}`)
+    .update(`v2|${String(sourceTitle).slice(0, 300).toLowerCase().trim()}|${String(sourceAuthor).slice(0, 120).toLowerCase().trim()}`)
     .digest('hex').slice(0, 12);
   return `${lyricId}@${aiModel()}@${sig}`;
 }
@@ -50,8 +52,11 @@ function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor) {
 const judgeInflight = new Map();
 
 // lines 为 parseLrcLines 产出。命中 verdict 缓存直接返回（不消耗 AI）；
-// 判定为布尔时写 kind='lyric' verdict 后返回；模型未给合法判定返回 null
-async function judgeLyricLines({ vkey, lines, title, author, signal }) {
+// 判定为布尔时写 kind='lyric' verdict 后返回；模型未给合法判定返回 null。
+// candidate（可选）= 外源检索命中条目的平台元数据 {title, artist, album}——
+// 词面撞名时「候选条目身份」是同名异曲拦截的关键证据（无候选信息的旧
+// 判定口径见 lyricVerdictKey 的 v2 版本段说明）
+async function judgeLyricLines({ vkey, lines, title, author, candidate, signal }) {
   const cached = lyricAiRepo.getVerdict(vkey, 'lyric');
   if (cached) return !!cached.ok;
   if (signal?.aborted) return null;
@@ -61,16 +66,30 @@ async function judgeLyricLines({ vkey, lines, title, author, signal }) {
     // 搭车者用自己的 signal 决定吃不吃结果——返回前复查
     return signal?.aborted ? null : shared;
   }
-  const p = judgeInner(vkey, lines, title, author)
+  const p = judgeInner(vkey, lines, title, author, candidate)
     .finally(() => judgeInflight.delete(vkey));
   judgeInflight.set(vkey, p);
   return p;
 }
 
-async function judgeInner(vkey, lines, title, author) {
+async function judgeInner(vkey, lines, title, author, candidate) {
 
   const sourceTitle = sanitizePrompt(title).slice(0, 500);
   const sourceAuthor = sanitizePrompt(author).slice(0, 200);
+
+  // 候选条目身份段：来源视频是 'Twig' 而词源条目是 'Pinocchio Twig /
+  // Koosje' 时，词里撞见 'twig' 不足以证相符。字段与来源标题同走
+  // sanitizePrompt（不可信输入不伪造消息边界）；判定指引随段同给——
+  // 身份与词文双不符才判 false，翻唱借词（语义一致）仍判 true
+  const candTitle = sanitizePrompt(candidate?.title).slice(0, 200);
+  const candArtist = sanitizePrompt(candidate?.artist).slice(0, 120);
+  const candAlbum = sanitizePrompt(candidate?.album).slice(0, 200);
+  const candSeg = (candTitle || candArtist || candAlbum)
+    ? `\n候选条目：标题 ${candTitle || '未知'} / 艺人 ${candArtist || '未知'} / 专辑 ${candAlbum || '未知'}`
+    : '';
+  const candGuide = candSeg
+    ? '若候选条目标题/艺人与来源明显不同且歌词内容语言/主题也不符，判 false；翻唱曲借用原词但词文语义一致判 true。'
+    : '';
 
   // 抽样而非全文：首 4 行抓歌名植入（很多歌词开头点题），中段 6 行看主题；
   // 同文行（多时间戳副歌展开）去重，不浪费采样位
@@ -85,8 +104,9 @@ async function judgeInner(vkey, lines, title, author) {
       + '判断这份歌词是否明显属于另一首歌（完全不同的主题/内容/语言体系）。'
       + '罗马音/音译词视同语言相符；双语对照歌词按原文判。'
       + '保守原则：只有「明显是别的歌」才判不符；拿不准、纯音乐标注、语言相符但主题难判都回 true。'
+      + candGuide
       + '只输出 JSON {"ok":true|false}',
-    user: `来源标题：${sourceTitle}\n来源作者/频道：${sourceAuthor || '未知'}\n歌词抽样：\n${sample.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
+    user: `来源标题：${sourceTitle}\n来源作者/频道：${sourceAuthor || '未知'}${candSeg}\n歌词抽样：\n${sample.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
     maxTokens: 64,
   });
   if (ans == null || typeof ans.ok !== 'boolean') return null;

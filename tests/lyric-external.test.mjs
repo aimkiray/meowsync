@@ -26,13 +26,15 @@ process.env.DATA_DIR = tmpDataDir('meowsync-lyrext-');
 const require = createRequire(import.meta.url);
 
 // AI 层桩：核验走 lyric-verify.judgeLyricLines → lib/ai.askAiJson
+// aiArgs 录制入参——「候选条目身份进 prompt」这类断言要看 user/system 段
 let aiOn = false;
 let aiAnswer = null;
 let aiCalls = 0;
+const aiArgs = [];
 seed('../src/server/lib/ai.js', {
   aiEnabled: () => aiOn,
   aiModel: () => 'test-model',
-  askAiJson: async () => { aiCalls++; return aiAnswer; },
+  askAiJson: async (args) => { aiCalls++; aiArgs.push(args); return aiAnswer; },
 });
 
 // file-downloader 的网易云 API 桩：callNeteaseApi('lyric') 回包可控
@@ -627,10 +629,10 @@ test('级联降轮：title 剥出艺人候选——UP 主名严格轮滤净后�
   assert.ok(seen[2].includes('周杰伦') && !seen[2].includes('音乐搬运工'));
 });
 
-test('级联降轮：title 剥不出艺人 → artist:\'\' 宽检放行全候选', async () => {
+test('级联降轮：title 剥不出艺人 → artist:\'\' 宽检放行（艺人不约束；候选标题须归一相等——见标题闸用例）', async () => {
   reset([
     ['lrclib.net/api/search', () => J([
-      { id: 89, trackName: '某曲', artistName: '真艺人', duration: 200, syncedLyrics: '[00:02.00]宽检词' },
+      { id: 89, trackName: '无名投稿标题', artistName: '真艺人', duration: 200, syncedLyrics: '[00:02.00]宽检词' },
     ])],
     ['lyrics.kugou.com', () => J({ candidates: [] })],
   ]);
@@ -862,4 +864,145 @@ test('downloadLyrics：网易嫁接词判否 → 外源级联命中即落盘', a
   // 判否后外源接一手：title 剥出的「周杰伦」候选轮命中（UP 主严格轮滤净），
   // 落盘的是外源词而非错配的网易词，也不是 NO_LYRICS
   assert.equal(readFileSync(out, 'utf-8'), '[re:MeowSync lrclib_77]\n[00:01.00]外源对词');
+});
+
+// ── 宽检轮标题身份闸 / 候选 meta 进判定 / 纯文本词抽样核验 ──
+// 实证病例：yt_ 曲 'Twig ／ rei sirose'（author='_'）级联撞上英文同名异曲
+// 'Pinocchio Twig / Koosje'（lrclib_12990682，时长 214s 巧合贴近 212s）——
+// 子串撞名 + AI 判定器看不见候选身份 + 纯文本零核验，三层缺口分别钉死。
+
+test('strictTitleHit：候选剥缀归一与检索变体精确等才放行', () => {
+  const gate = svc.strictTitleHit;
+  assert.equal(gate('Pinocchio Twig', 'Twig'), false);          // 子串撞名拒
+  assert.equal(gate('Pinocchio Twig', 'Twig ／ rei sirose'), false);
+  assert.equal(gate('Twig (feat. Miku)', 'Twig'), true);        // 尾括弧剥缀收
+  assert.equal(gate('Twig', 'Twig'), true);                     // 精确同名收
+  assert.equal(gate('ロストアンブレラ', 'ロストアンブレラ'), true);
+  // 刻意取舍：跨文字形态不互认（罗马音 vs 日文原名）——漏判由兜底链愈合
+  assert.equal(gate('ロストアンブレラ', 'Lost Umbrella'), false);
+  assert.equal(gate('曲', ''), true);                           // 查询侧空不卡
+});
+
+test('LRCLIB 宽检标题闸：strictTitle 下撞名拒、剥缀/精确同名收；具名轮保模糊召回', async () => {
+  reset([['lrclib.net', () => J([
+    { id: 201, trackName: 'Pinocchio Twig', artistName: 'Koosje', duration: 214, syncedLyrics: '[00:01.00]撞名词' },
+    { id: 202, trackName: 'Twig (feat. Miku)', artistName: 'P主', duration: 214, syncedLyrics: '[00:01.00]剥缀同名' },
+    { id: 203, trackName: 'Twig', artistName: 'rei sirose', duration: 214, syncedLyrics: '[00:01.00]精确同名' },
+  ])]]);
+  // strictTitle（级联宽检轮同款入参）：201 撞名拒收，202/203 归一相等放行
+  const res = await svc.lrclibFetch({ title: 'Twig', artist: '', durationSec: 212, strictTitle: true });
+  assert.equal(res.extId, 'lrclib_202');
+  // 闸缺席（具名 artist 轮）：艺人吻合时子串撞名照旧收——模糊召回不劣化
+  const named = await svc.lrclibFetch({ title: 'Twig', artist: 'Koosje', durationSec: 212 });
+  assert.equal(named.extId, 'lrclib_201');
+});
+
+test('酷狗宽检标题闸：song 字段撞名拒、同名收；hit 带 meta', async () => {
+  reset([
+    ['lyrics.kugou.com/search', () => J({
+      candidates: [
+        { id: 'kx', accesskey: 'akx', singer: 'Koosje', song: 'Pinocchio Twig', duration: 214000, score: 99 },
+        { id: 'ky', accesskey: 'aky', singer: 'sirose', song: 'Twig', duration: 214000, score: 10 },
+      ],
+    })],
+    ['lyrics.kugou.com/download', () => kgAll()],
+  ]);
+  const res = await svc.kugouFetch({ title: 'Twig', artist: '', durationSec: 212, strictTitle: true });
+  assert.equal(res.extId, 'kugou_ky');       // 撞名拒收，同名者进 download
+  assert.equal(res.meta.title, 'Twig');
+  assert.equal(res.meta.artist, 'sirose');
+});
+
+test('端到端钉案：Twig ／ rei sirose（author=_）→「Pinocchio Twig」确定性闸拒，级联 NULL', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };                 // AI 连判 ok 也救不回——闸先于 AI
+    const queries = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => { queries.push(decodeURIComponent(url)); return J([
+        // 病例回放：lrclib_12990682 英文同名异曲，214s 时长巧合贴近
+        { id: 12990682, trackName: 'Pinocchio Twig', artistName: 'Koosje', duration: 214, syncedLyrics: '[00:01.00]little twig song' },
+      ]); }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_KhdXvKwrAcQ', title: 'Twig ／ rei sirose', artist: '_', durationSec: 212,
+    });
+    assert.equal(res, null);                 // 占位作者轮即上闸——确定性拒收
+    assert.equal(aiCalls, 0);                // 候选根本没走到 AI 判定
+    assert.ok(queries.length >= 2);          // raw 与剥缀变体都真打过检索
+    // 对照：同轮里精确同名候选正常收（闸只挡撞名不挡真名）
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        { id: 12990682, trackName: 'Pinocchio Twig', artistName: 'Koosje', duration: 214, syncedLyrics: '[00:01.00]little twig song' },
+        { id: 1300, trackName: 'Twig', artistName: 'rei sirose', duration: 213, syncedLyrics: '[00:01.00]真词' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res2 = await svc.fetchExternalLyric({
+      songId: 'yt_KhdXvKwrAcQ', title: 'Twig ／ rei sirose', artist: '_', durationSec: 212,
+    });
+    assert.equal(res2?.extId, 'lrclib_1300');
+    // meta 随 hit 透出并进了判定提示词——同名异曲拦截证据到模型
+    assert.deepEqual(res2.meta, { title: 'Twig', artist: 'rei sirose', album: undefined });
+    assert.equal(aiCalls, 1);
+    assert.match(aiArgs[0].user, /候选条目：标题 Twig \/ 艺人 rei sirose/);
+    assert.match(aiArgs[0].system, /候选条目标题\/艺人与来源明显不同/);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('AI 核验：纯文本命中也过判定——剥标签行抽样；判否视同无词续级联', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: false };
+    reset([
+      ['lrclib.net', () => J([
+        { id: 401, trackName: '某曲', artistName: '某艺', duration: 200,
+          plainLyrics: '[ti:某曲]\n[ar:某艺]\n纯文一\n纯文二' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'qq_plainai0001', title: '某曲', artist: '某艺', durationSec: 200,
+    });
+    assert.equal(res, null);                 // 纯文本命中不再零核验——判否即丢
+    assert.equal(aiCalls, 1);
+    assert.match(aiArgs[0].user, /纯文一/);   // 词文行进抽样
+    assert.ok(!aiArgs[0].user.includes('ti:')); // 元行剥净不混进证据
+    // 剥完真空（纯元行）才放行——不打模型
+    reset([['lrclib.net', () => J([
+      { id: 402, trackName: '某曲', artistName: '某艺', duration: 200, plainLyrics: '[ti:x]\n[ar:y]' },
+    ])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })]]);
+    const res2 = await svc.fetchExternalLyric({
+      songId: 'qq_plainai0002', title: '某曲', artist: '某艺', durationSec: 200,
+    });
+    assert.equal(res2?.extId, 'lrclib_402');
+    assert.equal(aiCalls, 1);                // 没再打模型
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('AI 核验：已落库判否 verdict 不随 aiEnabled 旁路——AI 关仍拒收续级联', async () => {
+  // 播放预览链与下载链同口径（verifyDownloadOwnership 缓存先行）：记忆是
+  // 累积知识，AI 关只影响新判定。播种 lrclib_66 对本曲的 ok=0 判定——
+  // vkey 锚 (extId, title, artist)，verifyHit 不再被 aiEnabled 短路
+  aiOn = false; aiCalls = 0; aiArgs.length = 0;
+  lyricAiRepo.upsertVerdict(
+    lyricVerdictKey('lrclib_66', '曲', '艺人'), 'lyric', false, 'test');
+  reset([
+    ['lrclib.net/api/search', () => J([
+      { id: 66, trackName: '曲', artistName: '艺人', duration: 200, syncedLyrics: '[00:01.00]错配词' },
+    ])],
+    ['lyrics.kugou.com/search', () => J(kg)],
+    ['lyrics.kugou.com/download', () => kgAll()],
+  ]);
+  const res = await svc.fetchExternalLyric({
+    songId: 'qq_verdictmem01', title: '曲', artist: '艺人', durationSec: 200,
+  });
+  assert.equal(res?.extId, 'kugou_k3');      // 判否拒收 → 级联转下一源
+  // 落库判定命中即返不烧 AI；幸存候选判定入 askAiJson——桩按入口计数，
+  // 真身 aiEnabled false 时前置返 null（不发 HTTP）→ 判不定按相符放行
+  assert.equal(aiCalls, 1);
 });
