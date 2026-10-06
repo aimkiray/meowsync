@@ -297,6 +297,21 @@ export const musicApi = {
     }
   },
 
+  // 手动「生成滚动词」：POST /lyric-align——纯文本词行 + 已下载音频工件
+  // （songId 寻址，服务端跨歌单查 download_tasks 的 completed 行）经
+  // ffmpeg 抽包络 + LLM 行首映射产滚动 LRC。ffmpeg 解码+AI 是重活，
+  // 超时放宽到 120s。错误不吞——调用方按 e.response.status 分诊文案
+  // （404 无已下载音频或无词 / 503 ffmpeg 缺席 / 429 限流 / 502 对齐失败）
+  lyricAlign: async ({ songId, lines }, abortSignal = null) => {
+    const response = await api.post('/lyric-align', { songId, lines }, {
+      signal: abortSignal,
+      timeout: 120000
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || '歌词对齐失败')
+    return data
+  },
+
   // 错配纠正口：POST /match/retry——前端拿持久化 provider 字段组匹配材料，
   // excludeIds 把当前判否的词源 id 并进请求级否决集重跑云搜+AI 复核链，
   // 命中即服务端覆写 song_match 行。回命中对象 {id,name,ar,al} 并透传同层

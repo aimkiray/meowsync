@@ -124,6 +124,7 @@
           :current-lyric-index="currentLyricIndex"
           :loading-lyrics="loadingLyrics"
           :lyric-offset-ms="lyricOffsetMs"
+          :lyric-fetching="lyricFetching"
           :playback-error="playbackError"
           :duration-warning="durationWarning"
           :fullscreen-player-open="isFullscreenPlayerOpen"
@@ -134,6 +135,8 @@
           v-model:autoplay="autoplayOn"
           @lyric-offset-adjust="adjustLyricOffset"
           @lyric-offset-reset="resetLyricOffset"
+          @lyric-fetch="manualFetchLyrics"
+          @lyric-align="alignCurrentLyrics"
           @back="watchBack"
           @open-fullscreen="openFullscreenPlayer"
           @toggle-play="togglePlay"
@@ -826,8 +829,9 @@ export default {
       songSwitching, isPlaying, isFullscreenPlayerOpen,
       currentTime, duration, volume, durationWarning, playbackError,
       playingSongs, queueTitle, queueOwner, playerIsTemp,
-      lyrics, currentLyricIndex, lyricOffsetMs, loadingLyrics,
+      lyrics, currentLyricIndex, lyricOffsetMs, loadingLyrics, lyricFetching,
       adjustLyricOffset, resetLyricOffset, reloadLyrics,
+      manualFetchLyrics, alignCurrentLyrics,
       playbackList, currentPlayingIndex, toggleShuffle,
       queueJump, queueRemove, queueMove, clearQueue,
       playNextInQueue, addToQueueEnd, saveQueueAsPlaylist, openQueueSource,

@@ -352,6 +352,24 @@
               @click="$emit('lyric-offset-adjust', 500)"
               title="歌词提前 0.5 秒" aria-label="歌词提前 0.5 秒">+0.5s</button>
           </div>
+          <div class="lyric-tools-group" role="group" aria-label="歌词获取">
+            <!-- 手动重打外源级联（YTM→LRCLIB→酷狗）：曲名以 song.name
+                 （手改过的）优先——防降级闸在 usePlayer 侧；busy 由
+                 lyricFetching 透传，防重入也在那边收口 -->
+            <button type="button" class="lyric-tool lyric-tool--icon"
+              :disabled="songSwitching || loadingLyrics || lyricFetching"
+              @click="$emit('lyric-fetch')"
+              :title="lyrics.length ? '重新从外部词源获取歌词' : '从外部词源获取歌词'"
+              :aria-label="lyrics.length ? '重新获取歌词' : '获取歌词'"
+            ><PixelIcon name="download" :size="11" /> {{ lyricFetching ? '获取中…' : (lyrics.length ? '重新获取' : '获取歌词') }}</button>
+            <!-- 纯文本词（无时间戳行）才露脸——滚动词再对齐是降级 -->
+            <button v-if="lyrics.length && lyrics.every(l => !Number.isFinite(l.time))"
+              type="button" class="lyric-tool lyric-tool--icon"
+              :disabled="songSwitching || loadingLyrics || lyricFetching"
+              @click="$emit('lyric-align')"
+              title="按已下载音频给歌词打时间轴" aria-label="生成滚动歌词"
+            ><PixelIcon name="sand" :size="11" /> {{ lyricFetching ? '生成中…' : '生成滚动词' }}</button>
+          </div>
         </div>
 
         <!-- 相关（按当前艺人拉取，点击即播） -->
@@ -453,6 +471,8 @@ export default {
     lyrics: { type: Array, default: () => [] },
     currentLyricIndex: { type: Number, default: -1 },
     loadingLyrics: { type: Boolean, default: false },
+    // 手动词务在途（获取歌词/生成滚动词）——工具条 busy 态与防重点击
+    lyricFetching: { type: Boolean, default: false },
     // 歌词时间校准（ms，正=提前）——值与持久化都在 App 侧，这里只做调节入口
     lyricOffsetMs: { type: Number, default: 0 },
     playbackError: { type: String, default: '' },
@@ -474,7 +494,8 @@ export default {
     'update:tab', 'update:autoplay',
     'queue-jump', 'queue-remove', 'queue-move', 'save-queue', 'clear-queue',
     'play-song', 'open-source', 'add-to-playlist',
-    'lyric-offset-adjust', 'lyric-offset-reset'
+    'lyric-offset-adjust', 'lyric-offset-reset',
+    'lyric-fetch', 'lyric-align'
   ],
   setup(props, { emit }) {
     const queueContainer = ref(null)
@@ -1887,6 +1908,8 @@ export default {
 }
 .lyric-tool:hover:not(:disabled) { background: var(--ink-06); color: var(--ink); }
 .lyric-tool:disabled { opacity: .38; cursor: default; }
+/* 图标+文案混排键（歌词获取组）：PixelIcon 是 block 件，inline-flex 收平 */
+.lyric-tool--icon { display: inline-flex; align-items: center; gap: 3px; }
 .lyric-tool-val {
   font-size: 10px; /* 裸 span 继承 body 16px 会夹在 10px 控件间形制分裂——显式同档 */
   font-variant-numeric: tabular-nums;
