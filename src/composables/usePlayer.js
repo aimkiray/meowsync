@@ -10,6 +10,7 @@ import { toast } from '../lib/feedback.js'
 import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId, NETEASE_ID_RE, YT_TRACK_ID_RE, BV_TRACK_ID_RE, QQ_SONG_ID_RE } from '../lib/url.js'
 import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song.js'
+import { applyMatchResult } from '../lib/external-songs.js'
 // MIRROR_PLAYLIST_ID_RE 未走 lib 转口（lib/url.js 转口表无它）——直引共享层
 import { MIRROR_PLAYLIST_ID_RE } from '../shared/predicates.js'
 import { SAVED_QUEUE_TRACK_CAP } from './usePlaylistLibrary.js'
@@ -38,12 +39,13 @@ if (typeof Audio !== 'undefined' && typeof Howler._releaseHtml5Audio === 'functi
   }
 }
 
-// 行菜单「重新匹配歌词」换绑通知：SongList 改写 song.neteaseId 成功后调
+// 行菜单「重新匹配歌词」换绑/解绑通知：SongList 改写曲对象后调
 // notifyLyricRematch 通知播放器（emit 接线表没有 rematch 通道且组件域不
 // 许动 App.vue——跨组件通知走模块级单槽回调）。单槽而非订阅者集：usePlayer
 // 仅 App 一处实例化，后注册覆盖旧槽即够；测试多次实例化也只有最新一只
-// 响应，跨实例不串话。载荷捎新词源 id：正播的曲对象与菜单侧写过的对象
-// 不一定是同一引用（搜索队列/快照来源不同），播放器侧那份要单独补写
+// 响应，跨实例不串话。载荷捎词源 id（null=菜单侧解绑：用户显式否决错配
+// 且无更准替代）：正播的曲对象与菜单侧写过的对象不一定是同一引用
+// （搜索队列/快照来源不同），播放器侧那份要单独补写
 let lyricRematchHandler = null
 export const notifyLyricRematch = (trackId, neteaseId) => {
   lyricRematchHandler?.(trackId, neteaseId)
@@ -1267,12 +1269,18 @@ export function usePlayer({
           durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
           excludeIds: [...freshVetoed],
         }, signal)
+        // 空回包/同 id 早退：自动路径不解绑——与菜单显式纠错的不对称是
+        // 刻意的。用户点「重新匹配」等于显式说「这不是」（强信号，空回包
+        // 即解绑）；verify 判否是弱信号（inconclusive/误报都可能），
+        // 「没找到更准的」不该替用户摘掉现有绑定——只换不修
         if (!matched?.id || String(matched.id) === String(song.neteaseId)) return
-        // 换绑写回曲对象+显式落盘：savePlaylistsToStorage 是显式调用制
-        // （非 watch），只变异要等下一次任意歌单写才经 slimTrack 落盘——
-        // 用户直接关页则下会话重走判否→藏词→rematch 循环。服务端
-        // song_match 行已被 /match/retry 覆写兜底，两端同写才算闭环
-        song.neteaseId = matched.id
+        // 换绑走共享修复器整组重建 name/al/证据（不只换 neteaseId）——
+        // 错配的专辑身份是持久化元信息残留，要连根修。写回曲对象+显式
+        // 落盘：savePlaylistsToStorage 是显式调用制（非 watch），只变异
+        // 要等下一次任意歌单写才经 slimTrack 落盘——用户直接关页则下
+        // 会话重走判否→藏词→rematch 循环。服务端 song_match 行已被
+        // /match/retry 覆写兜底，两端同写才算闭环
+        applyMatchResult(song, matched, { matchedBy: matched.matchedBy, matchScore: matched.score })
         savePlaylistsToStorage()
         // RTT 期间歌可能已切走（signal 随切歌 abort 通常已把请求打断；
         // 陈旧序未 abort 时靠这层再兜）：写回/落盘照做（那是曲的持久
@@ -1296,13 +1304,12 @@ export function usePlayer({
     // 的 loadLyrics 自然消费
     const onLyricRematch = (trackId, neteaseId) => {
       if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
-      if (neteaseId != null) {
-        currentSong.value.neteaseId = neteaseId
-        // 本侧对象与菜单侧写过的对象不一定是同一引用——补写后显式落盘
-        // （同 rematchLyricSource：savePlaylistsToStorage 是显式调用制，
-        // 只变异不落盘会丢「关页前最后一次换绑」）
-        savePlaylistsToStorage()
-      }
+      // neteaseId=null 是菜单侧解绑信号（用户显式否决错配且无更准替代）：
+      // 清绑与换绑同一收口。本侧对象与菜单侧写过的对象不一定是同一引用
+      // ——补写后显式落盘（同 rematchLyricSource：savePlaylistsToStorage
+      // 是显式调用制，只变异不落盘会丢「关页前最后一次换绑/解绑」）
+      currentSong.value.neteaseId = neteaseId ?? null
+      savePlaylistsToStorage()
       void loadLyrics(currentSong.value)
     }
     lyricRematchHandler = onLyricRematch

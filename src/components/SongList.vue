@@ -823,6 +823,7 @@ import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { musicApi } from '../api/music.js'
 import { notifyLyricRematch } from '../composables/usePlayer.js'
+import { applyMatchResult } from '../lib/external-songs.js'
 
 export default {
   name: 'SongList',
@@ -865,7 +866,7 @@ export default {
       default: true
     }
   },
-  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'edit-song', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs', 'move-song', 'open-downloads', 'group-by-artist'],
+  emits: ['play-song', 'play-all', 'play-shuffle', 'play-next', 'add-to-queue', 'add-to-playlist', 'add-songs', 'edit-song', 'collect-playlist', 'remove-from-playlist', 'sync-playlist', 'toggle-vip-songs', 'move-song', 'open-downloads', 'group-by-artist', 'song-meta-updated'],
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const menuPositions = ref({})
@@ -1059,10 +1060,12 @@ export default {
     }
 
     // 重新匹配歌词（外源曲词源纠错）：把错配的 neteaseId 否进 excludeIds
-    // 让服务端 /match/retry 换绑重跑（无匹配史则空否决集跑首配）。命中写回
-    // 曲对象——本地单里这份对象就是库 pl.tracks 的元素（slimTrack 带
-    // neteaseId，随下次 savePlaylistsToStorage 落盘；服务端 song_match 行
-    // 也已被 retry 覆写——即便本地没赶上落盘窗口，重导入/重匹配链也自洽）。
+    // 让服务端 /match/retry 换绑重跑（无匹配史则空否决集跑首配）。写回走
+    // applyMatchResult 整组重建（name/al/匹配证据随行）而非只换
+    // neteaseId——错配烘进 al 的专辑名/封面是持久化元信息残留，光换绑
+    // 洗不掉。命中/解绑两路都 emit 'song-meta-updated' 让 App 立即落盘：
+    // 改的是库 pl.tracks 元素，等下一次歌单写捎带会丢「关页前最后一次
+    // 纠错」（服务端 song_match 行已被 retry 覆写，两端同写才算闭环）。
     // 正播的曲再 notifyLyricRematch 让播放器侧补写引用+热重载词
     const rematchInflight = new Set()
     const rematchLyricFromMenu = async () => {
@@ -1073,7 +1076,7 @@ export default {
       const ext = song.youtube || song.bilibili
       const durationMs = song.dt || song.duration
       // /match/retry 最坏 ~55s——关菜单后没有任何反馈会像点了死键，先落
-      // in-flight 提示；终态（命中/未命中/失败）由下方 toast 接管
+      // in-flight 提示；终态（命中/解绑/失败）由下方 toast 接管
       toast('正在重新匹配歌词…', 'info')
       try {
         const matched = await musicApi.retryMatch({
@@ -1087,14 +1090,23 @@ export default {
           durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
           excludeIds: song.neteaseId != null ? [song.neteaseId] : [],
         })
-        if (matched?.id && String(matched.id) !== String(song.neteaseId)) {
-          song.neteaseId = matched.id
+        if (matched?.id) {
+          // retryMatch 回包已把同层诊断字段并进 matched 返回（matchedBy/
+          // score，见 music.js）——extras 直接喂修复器落 provider 块
+          applyMatchResult(song, matched, { matchedBy: matched.matchedBy, matchScore: matched.score })
+          emit('song-meta-updated', song)
           toast(`词源已重匹配为《${matched.name || matched.id}》`, 'success')
           // 菜单侧对象与正播对象不一定是同一引用（搜索/快照来源不同）——
           // 通知里捎上新词源 id，播放器侧幂等补写
           notifyLyricRematch(song.id, matched.id)
         } else {
-          toast('没找到更准的匹配', 'info')
+          // 用户显式否决后的空回包按解绑处理而非「没找到」败象：词源与
+          // 派生字段回 provider 态——「这不是」是强信号，留错绑不如没绑
+          const hadBinding = song.neteaseId != null
+          applyMatchResult(song, null)
+          emit('song-meta-updated', song)
+          toast(hadBinding ? '已解除错配，暂无更准的词源' : '没找到更准的匹配', 'info')
+          notifyLyricRematch(song.id, null) // 解绑信号：正播曲清绑+热重载词
         }
       } catch (e) {
         toast(`重新匹配失败：${e?.response?.data?.message || e?.message || '网络错误'}`, 'error')
