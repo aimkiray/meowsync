@@ -4,6 +4,10 @@ const {
   scoreCandidate, normToken, noiseKey, QUERY_NOISE,
   ACCEPT_SCORE, GRAY_SCORE, DUR_HARD_GATE_SEC,
 } = require('./netease-score');
+// 标题变体层与外源歌词级联（lyric-external.js）共用同一份规则集——
+// 'Xを歌いました ／ UP主'/'Title ver.EMA' 这类 UGC 噪声形态在漏斗层统一
+// 剥缀，四个匹配入口（yt/bv/qq/rematch）一次全愈
+const { titleVariantsOf, isPlaceholderAuthor, normKey } = require('../../shared/title-variants.js');
 const songMatchRepo = require('../repositories/songMatch');
 
 // 外部导入曲（B 站/YouTube/QQ）匹配网易云词源：每个候选串云搜 limit:10，
@@ -13,7 +17,9 @@ const songMatchRepo = require('../repositories/songMatch');
 // 硬闸/封顶在打分器内：源有时长且差>45s reject、源无伴奏标候选带伴奏标
 // reject、title<15 总分不过灰区、中立艺人分配非精确 title 压到灰区下——
 // 纯时长命中永不确定性收（错词源比没词源更糟的哲学不变，只是把单维判据
-// 换成证据总分）。标类硬拒连 AI 兜底池都开除；时长类硬拒留池等 120s 粗闸
+// 换成证据总分）。中立艺人面下「仅剥缀变体作证」的精确 title 命中由
+// searchOnce 内钳回灰区顶（打分器不动）——同名异曲不走确定性通道固化。
+// 标类硬拒连 AI 兜底池都开除；时长类硬拒留池等 120s 粗闸
 const MATCH_DUR_TOLERANCE_SEC = DUR_HARD_GATE_SEC;
 
 // 每首曲目的 AI 调用硬上界（confirm + extract + pick 合计）——超预算后
@@ -187,6 +193,86 @@ function writeMatchCache(trackId, r) {
   }
 }
 
+// ── candidates 标题变体展开 ──
+// 输入 candidates 常带 UGC 噪声（'Xを歌いました ／ UP主'、'Title ver.EMA'、
+// 'covered by X'、'【栏目】Title'）——漏斗层统一过 titleVariantsOf 展开剥缀
+// 形态，四个入口（yt/bv/qq/rematch）一次全愈，不再依赖各路由自己的清洗腿。
+// 逐 candidate 交错展开（raw 占首、剥缀形态殿后）→ normKey 大小写不敏感
+// 去重 → cap 8 封顶：25s 预算下单串 ~0.5s 云搜，8 串稳进预算；原 ~4 串
+// 上限外的增量正是变体收益位。
+const SEARCH_QUERY_CAP = 8;
+
+// 展开结果行首的占位作者 token 剥除：路由侧把 author 拼进候选串时
+// （'_ sasayaku…'）占位前缀本身是检索噪声，且会让艺人锚剥缀错位——
+// '_ sasayaku' → 'sasayaku'。行首纯分隔料 run（'-- '/'__ '）恒剥——
+// 它不含词义，'_ sasayaku' 正是目标病例；词形 token（含
+// 'various artists' 二词组）只在头词 normKey ∈ placeholderKeys（本曲
+// sourceInfo artists∪author 中占位成员的集合）时才剥——全局占位表
+// 直接套任意标题首词会把 'Unknown Pleasures'/'Various Positions' 这类
+// 真名剥残、原始串整列丢失；sourceInfo 无占位作者时词形剥头整体不启用。
+// 迭代剥至非占位词（'unknown _ X' 叠罗汉形态也收），≤4 轮防死循环；
+// 全剥空回 '' 由调用方丢弃（'--' 纯噪声串不构成检索词）。
+// 括弧字符刻意不进分隔料——'【栏目】X' 这类括弧组有配对语义，
+// 留给变体规则的 HEAD_BANG/TAIL_GROUP 整组剥
+const HEAD_JUNK_RE = /^[^\p{L}\p{N}【】「」『』《》（）()\[\]]+/u;
+const HEAD_WORD_RE = /^[\p{L}\p{N}]+/u;
+const HEAD_BIGRAM_RE = /^[\p{L}\p{N}]+\s+[\p{L}\p{N}]+/u;
+function stripPlaceholderHead(s, placeholderKeys) {
+  let t = String(s || '').trim();
+  for (let i = 0; i < 4 && t; i++) {
+    const junk = t.match(HEAD_JUNK_RE);
+    if (junk) { t = t.slice(junk[0].length).trimStart(); continue; }
+    const bigram = t.match(HEAD_BIGRAM_RE)?.[0];
+    if (bigram && placeholderKeys.has(normKey(bigram))) { t = t.slice(bigram.length); continue; }
+    const word = t.match(HEAD_WORD_RE)?.[0];
+    if (word && placeholderKeys.has(normKey(word))) { t = t.slice(word.length); continue; }
+    break;
+  }
+  return t.trim();
+}
+
+// informativeArtist：sourceInfo.artists/author 里首个非占位艺人——占位值
+// （'_'/'unknown'）传 ''，避免 '_ X' 这类假锚污染变体生成（j/k 艺人锚规则
+// 会拿 '_' 当锚把标题首词吃掉）
+// variantKeys（可选收集器出参）：收回「剥缀产出串」的 normToken 集——
+// 与所属原始 candidate 归一同键的产出（'_ X' 剥头/'X【MV】' 清洗在打分器
+// normToken 归一下本就同串）不算变体；真·剥缀形态才入集。searchOnce 的
+// S1 钳制拿它判「精确命中是否仅由变体作证」，打分比对同口径用 normToken
+function expandSearchQueries(candidates, sourceInfo, variantKeys = null) {
+  const informativeArtist = [
+    ...(Array.isArray(sourceInfo?.artists) ? sourceInfo.artists : []),
+    sourceInfo?.author,
+  ].map(x => String(x || '').trim())
+    .find(x => x && !isPlaceholderAuthor(x)) || '';
+  // 本曲实际挂的占位作者集（normKey）——词形剥头闸（S3）：头词命中这个
+  // 集合才剥；空集=词形剥头整体不启用，'Unknown Soldier' 类真名不剥残
+  const placeholderKeys = new Set(
+    [...(Array.isArray(sourceInfo?.artists) ? sourceInfo.artists : []),
+      sourceInfo?.author]
+      .map(x => String(x || '').trim())
+      .filter(x => x && isPlaceholderAuthor(x))
+      .map(normKey));
+  const seen = new Set();
+  const out = [];
+  for (const q of (Array.isArray(candidates) ? candidates : [])) {
+    const qk = normToken(q);
+    for (const v of titleVariantsOf(q, informativeArtist)) {
+      const t = stripPlaceholderHead(v, placeholderKeys);
+      if (!t) continue;
+      const k = normKey(t);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (variantKeys) {
+        const tk = normToken(t);
+        if (tk && tk !== qk) variantKeys.add(tk);
+      }
+      out.push(t);
+      if (out.length >= SEARCH_QUERY_CAP) return out;
+    }
+  }
+  return out;
+}
+
 // candidates 按优先级排（提取名/频道歌手组合 → 清洗标题），逐个云搜打分；
 // 首个产出可收命中的串即返回（确定性 ≥75 或灰区收下）。signal：客户端断连/
 // 调用方主动作废时早退，不刷无意义的上游云搜。
@@ -196,6 +282,17 @@ function writeMatchCache(trackId, r) {
 // opts={excludeIds}：请求级预置否决集（/match/retry 纠错口）——并入
 //   vetoedIds，与 AI 否决同规则永不复活
 async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal = null, sourceInfo = null, opts = null) {
+  // 输入 candidates 常带 UGC 噪声——漏斗层统一展开标题变体（去重、cap 8、
+  // 剥行首占位作者 token），展开后的列表同时进 srcBaseTitles 打分参照面。
+  // variantKeys 收回「剥缀产出串」normToken 集，origTitleKeys 记调用方
+  // 原始串 ∪ 源标题集——S1 变体命中钳制的判定面（见 searchOnce 打分循环）
+  const variantKeys = new Set();
+  const origTitleKeys = new Set(
+    [...(Array.isArray(candidates) ? candidates : []),
+      ...(Array.isArray(sourceInfo?.titles) ? sourceInfo.titles : []),
+      sourceInfo?.title]
+      .map(x => normToken(x)).filter(Boolean));
+  candidates = expandSearchQueries(candidates, sourceInfo, variantKeys);
   const seenSongs = new Map();
   const scoreById = new Map();
   const vetoedIds = new Set();
@@ -210,10 +307,13 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
 
   // 打分参照源：titles = 查询串 ∪ 候选串 ∪ 源标题（候选串本身是「我们认为
   // 歌名长这样」的提取产物，是最强比对面）；artists = artists[] ∪ author
+  // ——占位作者（'_'/'unknown'/'VA'）滤出不占槽：它不含艺人信息，
+  // 留着只会混进 refMembers 比对（normToken 后空串虽不收，过滤语义更诚实）
   const srcArtists = [...new Set(
     [...(Array.isArray(sourceInfo?.artists) ? sourceInfo.artists : []),
       sourceInfo?.author]
-      .map(x => String(x || '').trim()).filter(Boolean))];
+      .map(x => String(x || '').trim())
+      .filter(x => x && !isPlaceholderAuthor(x)))];
   const srcBaseTitles = [
     ...(Array.isArray(sourceInfo?.titles) ? sourceInfo.titles : []),
     ...(Array.isArray(candidates) ? candidates : []),
@@ -247,6 +347,19 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       if (sc.reject) {
         if (sc.rejectKind === 'marker') rejectedMarkerIds.add(String(s.id));
         continue;
+      }
+      // S1 钳制：源艺人面缺位（srcArtists 空→中立 15 分）时，仅由剥缀变体
+      // 作证的 title=50 精确命中绕过了打分器的中立压分（只在 title<50
+      // 生效）——50+15+时长≈85 会把同名异曲确定性收进 song_match 正行
+      // 无 TTL 固化。候选名归一 ∈ 变体集且 ∉ 原始串/源标题集 → 钳到灰区
+      // 顶走既有灰区流：AI 在→复核过照样收/否决取下一个；AI 不在→宽松
+      // 收 top。召回不变，只关这条确定性错配通道
+      if (sc.score >= ACCEPT_SCORE && !srcArtists.length) {
+        const cn = normToken(s.name);
+        if (cn && variantKeys.has(cn) && !origTitleKeys.has(cn)) {
+          console.info(`[${tag}] 变体命中钳灰区: ${songDesc(s)} ← ${q}`);
+          sc.score = ACCEPT_SCORE - 1;
+        }
       }
       scoreById.set(s.id, Math.max(scoreById.get(s.id) ?? 0, sc.score));
       if (sc.score >= GRAY_SCORE) scored.push({ s, score: sc.score });
@@ -429,4 +542,9 @@ async function matchTracksPool(tracks, { signal, budgetMs, concurrency, tag, can
   return matchedCount;
 }
 
-module.exports = { matchNeteaseSong, matchWithBudget, matchTracksPool, toMatchedJson, nameHitNeedsConfirm, MATCH_DUR_TOLERANCE_SEC };
+module.exports = {
+  matchNeteaseSong, matchWithBudget, matchTracksPool, toMatchedJson,
+  nameHitNeedsConfirm, MATCH_DUR_TOLERANCE_SEC,
+  // 候选串展开（含占位作者剥头/去重/cap 8）——导出供测试直钉展开面
+  expandSearchQueries,
+};
