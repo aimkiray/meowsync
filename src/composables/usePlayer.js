@@ -45,11 +45,13 @@ if (typeof Audio !== 'undefined' && typeof Howler._releaseHtml5Audio === 'functi
 // 许动 App.vue——跨组件通知走模块级单槽回调）。单槽而非订阅者集：usePlayer
 // 仅 App 一处实例化，后注册覆盖旧槽即够；测试多次实例化也只有最新一只
 // 响应，跨实例不串话。载荷捎词源 id（null=菜单侧解绑：用户显式否决错配
-// 且无更准替代）：正播的曲对象与菜单侧写过的对象不一定是同一引用
-// （搜索队列/快照来源不同），播放器侧那份要单独补写
+// 且无更准替代）与被换下/解绑的旧词源 id（vetoedId——进 matchVetoedIds
+// 否决簿，供 rematchUnbound 并入 excludeIds 防它复活）：正播的曲对象与
+// 菜单侧写过的对象不一定是同一引用（搜索队列/快照来源不同），播放器侧
+// 那份要单独补写
 let lyricRematchHandler = null
-export const notifyLyricRematch = (trackId, neteaseId) => {
-  lyricRematchHandler?.(trackId, neteaseId)
+export const notifyLyricRematch = (trackId, neteaseId, vetoedId) => {
+  lyricRematchHandler?.(trackId, neteaseId, vetoedId)
 }
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
@@ -1103,6 +1105,14 @@ export function usePlayer({
           }, signal).catch(() => null) // 级联全灭(404)/网络错同终态：照旧空词
           if (stale()) return
           await applyExternalLyricHit(song, hit, { signal, stale })
+          // 外源终态仍无词（级联全灭/hit=null/行集剥空）且曲仍未绑网易词源
+          // ——外源三源对 VOCALOID 翻唱等曲天然缺收录，而这些曲网易云本体
+          // 常有：未绑定曲自动重匹配一次兜底（每曲每会话限一次，详见
+          // rematchUnbound 头注）。neteaseId 复查防御——applyExternalLyricHit
+          // 不改它，但 RTT 窗内菜单换绑等别路可能已补绑
+          if (!stale() && !lyrics.value.length && song.neteaseId == null) {
+            void rematchUnbound(song, signal)
+          }
         } catch (error) {
           if (stale() || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
           console.error('❌ 加载外源歌词失败:', error)
@@ -1273,9 +1283,22 @@ export function usePlayer({
     // 时 excludeIds 发当下累积全量。跨会话收敛靠服务端 song_match 行，
     // 前端不持久化否决集
     const rematchTried = new Map()
+    // 菜单显式否决簿：行菜单解绑/换绑否掉的旧词源 id 按曲记账
+    // （onLyricRematch 写入、rematchUnbound 并入 excludeIds 消费）——
+    // 显式解绑后服务端 skipCache 重跑会把刚否决的确定性高分原样送回，
+    // 不记否等于反噬用户纠正。会话级，与 rematchTried 同寿命语义：
+    // 跨会话收敛靠服务端 song_match 行，前端不持久化
+    const matchVetoedIds = new Map()
     const rematchLyricSource = async (song, lyricId, signal = null) => {
       if (!(song?.youtube || song?.bilibili) || song.neteaseId == null
-          || String(lyricId) !== String(song.neteaseId)) return
+          || String(lyricId) !== String(song.neteaseId)) {
+        // 曲未绑定（neteaseId==null）时判否的是外源词——lyricId 是 extId
+        // 不是 neteaseId，无可否对象不进 excludeIds：此刻词已藏、曲仍
+        // 未绑，把歌接上 rematchUnbound 首配兜底。槽位独立不冲突——
+        // 「词全灭」触发点当时 lyrics 非空，没消费过槽位
+        if (song?.neteaseId == null) void rematchUnbound(song, signal)
+        return
+      }
       const key = String(song.id)
       const vetoed = rematchTried.get(key)
       if (vetoed) {
@@ -1329,10 +1352,90 @@ export function usePlayer({
       }
     }
 
-    // 行菜单换绑通知槽（模块级单槽，见 notifyLyricRematch 头注）：正播同曲
-    // 才把新词源 id 补写进本侧曲对象并重载词——非当前曲的改动留给下次播放
-    // 的 loadLyrics 自然消费
-    const onLyricRematch = (trackId, neteaseId) => {
+    // 外源词全灭后的未绑定曲首配（与 rematchLyricSource 对偶：那边是已
+    // 绑定曲判否换绑，这边是 yt_/bv_ 未绑定曲「词落空自动重匹配一次」）。
+    // 动机：外源三源（YTM/LRCLIB/酷狗）对 VOCALOID 翻唱等曲天然缺收录，
+    // 而这些曲网易云本体常有——拿 provider 材料重跑服务端匹配链，命中经
+    // applyMatchResult 整组重建（name/al/证据同口径），热重载走常规网易
+    // 词支。rematchUnboundTried 是独立 Map——与 rematchTried 不串账
+    // （那边记已绑定曲换绑额度与否决集，这边只记未绑定曲首配），每曲每
+    // 会话限一次。excludeIds 按需捎——判否累积集（rematchTried）与菜单
+    // 显式否决簿（matchVetoedIds）有账则并入：显式解绑/换绑否掉的 id
+    // 不送回候选，否则服务端 skipCache 重跑会把刚否决的确定性高分原样
+    // 送回反噬用户纠正；空集则保持首配契约不捎该字段。matched=null
+    // 不留痕（无匹配仍是事实，不写曲对象）；错误静默 warn 级——后台
+    // 自愈不配打扰用户
+    const rematchUnboundTried = new Map()
+    const rematchUnbound = async (song, signal = null) => {
+      // 形闸与外源支同口径：provider 对象或裸前缀 id 任一命中（老持久化
+      // 行只剩 id 形态）。neteaseId/id 合法复查——触发点到本函数入口间
+      // 别路（菜单换绑等）可能已补绑，已绑定的曲由常规词支接管不该到这
+      const extTrack = !!(song?.youtube || song?.bilibili)
+        || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id))
+      if (!extTrack || song?.id == null || song.neteaseId != null) return
+      const key = String(song.id)
+      if (rematchUnboundTried.has(key)) return
+      rematchUnboundTried.set(key, true)
+      const ext = song.youtube || song.bilibili || null
+      // 否决集 = 判否累积（rematchTried 同键域）∪ 菜单显式否决簿——
+      // 解绑/换绑否掉的 id 不进候选（防自动首配复活用户纠正）
+      const excludeIds = [...new Set([
+        ...(rematchTried.get(key) ?? []),
+        ...(matchVetoedIds.get(key) ?? []),
+      ])]
+      try {
+        const matched = await musicApi.retryMatch({
+          trackId: song.id,
+          title: ext?.title || song.name || '',
+          author: ext?.author || '',
+          // provider 块无 artists 字段（同 rematchLyricSource 口径）——
+          // authorClean 是剥 ' - Topic'/'VEVO' 后的真艺人名，一并喂打分器
+          artists: [ext?.author, ext?.authorClean].filter(Boolean),
+          durationSec: Math.round((song.dt || song.duration || 0) / 1000) || undefined,
+          // 空集不捎字段——保持首配契约干净（有否决账才发 excludeIds）
+          ...(excludeIds.length ? { excludeIds } : {}),
+        }, signal)
+        // matched=null 不留痕（无匹配仍是事实，不写曲对象）；RTT 窗内
+        // 被别路补绑也不再覆写——用户显式选择优先
+        if (!matched?.id || song.neteaseId != null) return
+        // 首配与判否换绑同走共享修复器整组重建；savePlaylistsToStorage
+        // 是显式调用制——只变异不落盘会把绑定丢在关页前。写回+落盘是曲的
+        // 持久属性修正（与 rematchLyricSource 同口径：曲对象是歌单里的
+        // 共享引用，写它不打扰当前播放），不因 stale 弃写——已到手的匹配
+        // 白丢会让 rematchUnboundTried 已记账的本曲拖到下次会话才愈
+        applyMatchResult(song, matched, { matchedBy: matched.matchedBy, matchScore: matched.score })
+        savePlaylistsToStorage()
+        // stale（切走/信号作废）只闸歌词重载与提示——别替没人看的歌刷词
+        if (signal?.aborted || currentPlayingId !== song.id) return
+        toast('词源已自动重匹配', 'success') // 与判否换绑同文案——人还在看才发
+        void loadLyrics(song, signal) // neteaseId 已写——本次走常规网易词支
+      } catch (e) {
+        // abort（切歌打断在途请求）与 429 限流不消费额度——前者是本曲
+        // 下次播放再试的机会，后者是「稍后再试」语义（烧槽位会让整单
+        // autoplay 下永不自愈）；其它错误保留占位防每播一次刷
+        // match-retry 限流桶，静默 warn
+        if (signal?.aborted || e?.code === 'ERR_CANCELED'
+            || e?.name === 'AbortError' || e?.name === 'CanceledError'
+            || e?.response?.status === 429) {
+          rematchUnboundTried.delete(key)
+        } else {
+          console.warn('未绑定曲自动重匹配失败:', e?.message || e)
+        }
+      }
+    }
+
+    // 行菜单换绑通知槽（模块级单槽，见 notifyLyricRematch 头注）：vetoedId
+    // 先记否决簿（不限正播曲——Map 记账无写入成本，非正播曲的否决留到
+    // 它下次播放时由 rematchUnbound 消费）；正播同曲才把新词源 id 补写进
+    // 本侧曲对象并重载词——非当前曲的改动留给下次播放的 loadLyrics 自然
+    // 消费
+    const onLyricRematch = (trackId, neteaseId, vetoedId) => {
+      if (vetoedId != null) {
+        const key = String(trackId)
+        let vetoed = matchVetoedIds.get(key)
+        if (!vetoed) matchVetoedIds.set(key, (vetoed = new Set()))
+        vetoed.add(vetoedId)
+      }
       if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
       // neteaseId=null 是菜单侧解绑信号（用户显式否决错配且无更准替代）：
       // 清绑与换绑同一收口。本侧对象与菜单侧写过的对象不一定是同一引用

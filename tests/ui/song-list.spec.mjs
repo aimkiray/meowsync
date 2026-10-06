@@ -96,7 +96,8 @@ describe('SongList：行菜单重匹配', () => {
     expect(song.al.picUrl).toBe('http://i0.hdslb.com/bfs/c.jpg')
     // 持久化收口：菜单侧拿不到 savePlaylistsToStorage——emit 上抛 App 落盘
     expect(wrapper.emitted('song-meta-updated')).toBeTruthy()
-    expect(notifyLyricRematch).toHaveBeenCalledWith('bv_BV1xx411c7mD', 222)
+    // 第三参捎被换下的旧词源 id——换绑=对旧源的否决，进播放器否决簿
+    expect(notifyLyricRematch).toHaveBeenCalledWith('bv_BV1xx411c7mD', 222, 111)
   })
 
   it('空回包=解绑：neteaseId 置 null、al 回 provider 态，emit+通知照常发', async () => {
@@ -113,8 +114,9 @@ describe('SongList：行菜单重匹配', () => {
     expect(song.al.picUrl).toBe('https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg')
     expect(song.name).toBe('EMA - 乐园(粤)')
     expect(wrapper.emitted('song-meta-updated')).toBeTruthy()
-    // 解绑信号也通知播放器（neteaseId=null）——正播曲清绑+热重载词
-    expect(notifyLyricRematch).toHaveBeenCalledWith('yt_abcdefghijk', null)
+    // 解绑信号也通知播放器（neteaseId=null）——正播曲清绑+热重载词；
+    // 第三参捎被否决的旧词源 id（点击时刻的绑定 390558）进否决簿
+    expect(notifyLyricRematch).toHaveBeenCalledWith('yt_abcdefghijk', null, 390558)
   })
 
   it('请求失败：不改曲对象，落错误 toast', async () => {
