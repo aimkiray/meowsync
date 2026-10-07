@@ -13,6 +13,9 @@ const { trustProxyEnabled, clientIp } = require('../lib/env');
 // authGate 的写请求 Origin 校验不会覆盖 /auth/*，必须各自显式调用；
 // COOKIE_NAME 同源复用防两处字面量漂移
 const { csrfOriginOk, COOKIE_NAME } = require('../lib/auth-gate');
+// 登出吊销钩子：收掉挂在被删会话上的遥控 WS（remote 持连接集——
+// 单向依赖 routes→ws，remote.js 不回引 routes，无环）
+const { revokeConnections } = require('../ws/remote');
 const usersRepo = require('../repositories/users');
 const sessionsRepo = require('../repositories/sessions');
 const { hashPassword, verifyPassword, needsRehash, getDummyHash, argon2Available } = require('../lib/password');
@@ -147,7 +150,12 @@ app.post('/auth/logout', (c) => {
     return fail(c, 403, '非法请求来源');
   }
   const raw = getCookie(c, COOKIE_NAME);
-  if (raw) sessionsRepo.deleteSession(raw);
+  if (raw) {
+    sessionsRepo.deleteSession(raw);
+    // 同步收掉挂在该会话上的遥控 WS——WS 不吃 HTTP 401 语义，不主动收
+    // 会挂着死会话继续收广播/发控制指令（本端重连时握手自然撞 401 收束）
+    revokeConnections({ tokenId: sessionsRepo.tokenId(raw) });
+  }
   deleteCookie(c, COOKIE_NAME, { path: '/' });
   c.header('Cache-Control', 'no-store');
   return c.json({ code: 200 });

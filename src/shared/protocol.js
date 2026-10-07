@@ -27,6 +27,8 @@ export const CONTROL_PAYLOAD_GUARDS = {
 //   server→host:       {type: <控制指令原样转发>} | {type:'request_state'}
 //   （'info' 消息型常量保留于下方 MSG_TYPES，服务端已停发——无消费端）
 //   host→server:       {type:'state_update', payload} —— 经 sanitizeStatePayload 白名单投影
+//   （payload.currentSong.al.picUrl 只放行 http(s) 或 '/'+非'//' 开头的本服务
+//   相对路径——file_ 封面以 apiBase 相对形态上线，controller 端自行拼回）
 //   server→controller: {type:'state_update', payload} | 'host_joined' | 'host_disconnected' | 'host_absent'
 export const MSG_TYPES = {
   STATE_UPDATE: 'state_update',
@@ -39,6 +41,14 @@ export const MSG_TYPES = {
 
 // 连线约束（服务端执行，前端仅作展示一致性参考）
 export const REMOTE_LIMITS = {
+  // 单帧硬顶（ws maxPayload）：一切入向帧的兜底上限
   MAX_PAYLOAD_BYTES: 64 * 1024,
   MAX_CONTROLLERS: 32,
+  // 状态帧专用上限：广播帧（state_update）扇出代价 = 字节 × controller 数，
+  // 8KB 卡住「200msg/s × 64KB × 32」的放大面。发送侧（host）与广播侧
+  // （服务端消毒后裁剪 queue 尾）共用同值
+  MAX_STATE_PAYLOAD_BYTES: 8 * 1024,
+  // 控制帧专用上限（controller→server 入向原始帧）：合法指令 ≤ ~200B，
+  // 1KB 足够宽松；超限帧直接丢（不浪费解析成本，也不误杀连接）
+  MAX_CONTROL_PAYLOAD_BYTES: 1024,
 };

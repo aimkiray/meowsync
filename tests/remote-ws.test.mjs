@@ -13,8 +13,8 @@ const require = createRequire(import.meta.url);
 
 const http = require('http');
 const { WebSocket, WebSocketServer } = require('ws'); // eslint-disable-line no-unused-vars
-const { attachRemoteControl } = require('../src/server/ws/remote.js');
-const { MSG_TYPES } = require('../src/shared/protocol.js');
+const { attachRemoteControl, revokeConnections } = require('../src/server/ws/remote.js');
+const { MSG_TYPES, REMOTE_LIMITS } = require('../src/shared/protocol.js');
 
 let server, remote, base;
 const liveClients = new Set();
@@ -136,10 +136,10 @@ test('remote：state_update 白名单投影——host 脏 song 被消毒后才�
   assert.equal(p.currentTime, 0);
   assert.equal(p.volume, 100);
   assert.equal('evil' in p, false);
-  // song 消毒：picUrl 非 http(s) 清、ar 字符串→[]、id 截断、未知字段剥
+  // song 消毒：picUrl 非 http(s)/相对路径 清、ar 字符串→[]、id 截断、未知字段剥
   assert.equal(p.currentSong.al.picUrl, '');
   assert.deepEqual(p.currentSong.ar, []);
-  assert.equal(p.currentSong.id.length, 64);
+  assert.equal(p.currentSong.id.length, 128); // 与 play_song 守卫同值
   assert.equal('secret' in p.currentSong, false);
   // queue：合法条目保留消毒形、非对象条目被丢；queueIndex 钳 49
   assert.equal(p.queue.length, 1);
@@ -273,6 +273,172 @@ test('remote：未认证升级洪泛触发 429 限流（20/min/IP 滑窗）', as
   } finally {
     remote5.close();
     await new Promise(r => srv5.close(r));
+  }
+});
+
+test('remote：picUrl 放行 http(s) 与本服务相对路径，拒 //协议相对与异 scheme', async () => {
+  const host = await tryConnect('?role=host');
+  await waitFor(host.inbox, 1);
+  const ctrl = await tryConnect('');
+  await waitFor(host.inbox, 2); // 无快照 → controller 入会回源要 request_state
+
+  const sendState = (picUrl) => host.send(JSON.stringify({
+    type: 'state_update',
+    payload: { currentSong: { id: 1, name: 'x', al: { picUrl }, ar: [] } },
+  }));
+  sendState('/downloads/songs/file_abc/file?kind=cover');
+  sendState('https://cdn.example/c.jpg');
+  sendState('//evil.example/x.jpg');
+  await waitFor(ctrl.inbox, 3);
+  // file_ 封面以 apiBase 相对形态上线——服务端放行 '/x'，拒 '//x'（协议相对=任意外链）
+  assert.equal(ctrl.inbox[0].payload.currentSong.al.picUrl, '/downloads/songs/file_abc/file?kind=cover');
+  assert.equal(ctrl.inbox[1].payload.currentSong.al.picUrl, 'https://cdn.example/c.jpg');
+  assert.equal(ctrl.inbox[2].payload.currentSong.al.picUrl, '');
+  await closeWs(ctrl);
+  await closeWs(host);
+});
+
+test('remote：state_update 广播帧上限 8KB——queue 砍尾不丢整帧', async () => {
+  const host = await tryConnect('?role=host');
+  await waitFor(host.inbox, 1);
+  const ctrl = await tryConnect('');
+  await waitFor(host.inbox, 2);
+
+  // 50 条各 ~1KB 的肥队列 → 原始帧 ~50KB，广播侧必须压到 8KB 内
+  const fatQueue = Array.from({ length: 50 }, (_, i) => ({
+    id: i, name: '歌'.repeat(200),
+    ar: [{ name: 'a'.repeat(100) }],
+    al: { picUrl: `https://cdn.example/${'p'.repeat(400)}` },
+  }));
+  host.send(JSON.stringify({
+    type: 'state_update',
+    payload: { isPlaying: true, currentSong: { id: 1, name: 'x', ar: [] },
+      queue: fatQueue, queueIndex: 49 },
+  }));
+  await waitFor(ctrl.inbox, 1);
+  const msg = ctrl.inbox.at(-1);
+  assert.equal(msg.type, MSG_TYPES.STATE_UPDATE);
+  // 按线上字节量核——CJK 歌名 UTF-8 每字 3B，str.length 会低估
+  const wireLen = Buffer.byteLength(JSON.stringify(msg));
+  assert.ok(wireLen <= REMOTE_LIMITS.MAX_STATE_PAYLOAD_BYTES,
+    `广播帧 ${wireLen}B 超过状态帧上限 ${REMOTE_LIMITS.MAX_STATE_PAYLOAD_BYTES}`);
+  assert.ok(msg.payload.queue.length > 0 && msg.payload.queue.length < 50,
+    'queue 应被砍尾保留部分，而非丢整帧');
+  assert.equal(msg.payload.queueIndex, -1); // 砍尾后 index 越界归 -1
+  await closeWs(ctrl);
+  await closeWs(host);
+});
+
+test('remote：控制帧小顶——>1KB 的 controller 帧静默丢弃不炸连', async () => {
+  const host = await tryConnect('?role=host');
+  await waitFor(host.inbox, 1);
+  const ctrl = await tryConnect('');
+  await waitFor(host.inbox, 2);
+  const before = host.inbox.length;
+  // 形状合法但超控制帧上限：转发面直接丢，连 parse 都不进
+  ctrl.send(JSON.stringify({ type: 'play_song', payload: 'q', pad: 'x'.repeat(2048) }));
+  await tick(120);
+  assert.equal(host.inbox.length, before);
+  // 连接没死：合法小帧照常转发
+  ctrl.send(JSON.stringify({ type: 'pause' }));
+  await waitFor(host.inbox, before + 1);
+  assert.equal(ctrl.readyState, WebSocket.OPEN);
+  await closeWs(ctrl);
+  await closeWs(host);
+});
+
+test('remote：新 controller 优先回缓存快照（不打扰 host）；host 断线缓存清、回 host_absent', async () => {
+  const host = await tryConnect('?role=host');
+  await waitFor(host.inbox, 1); // request_state 欢迎包
+  host.send(JSON.stringify({
+    type: 'state_update',
+    payload: { isPlaying: true, currentSong: { id: 42, name: '缓存曲', ar: [] },
+      currentTime: 7, duration: 200, volume: 50 },
+  }));
+  await tick(100); // 快照落服务端缓存
+  const ctrl = await tryConnect('');
+  await waitFor(ctrl.inbox, 1);
+  assert.equal(ctrl.inbox[0].type, MSG_TYPES.STATE_UPDATE);
+  assert.equal(ctrl.inbox[0].payload.currentSong.id, 42);
+  await tick(120);
+  assert.equal(host.inbox.length, 1, '有快照时新客入会不应再打扰 host 要 request_state');
+  await closeWs(ctrl);
+  await closeWs(host);
+  await tick(80);
+  // host 断线 → 快照已清：新客拿到 host_absent 而非陈快照
+  const ctrl2 = await tryConnect('');
+  await waitFor(ctrl2.inbox, 1);
+  assert.equal(ctrl2.inbox[0].type, MSG_TYPES.HOST_ABSENT);
+  await closeWs(ctrl2);
+});
+
+// ── 会话吊销与全量限流（各自独立 server——auth 态与限流桶不当共享）──
+
+test('remote：会话吊销同步断关联 WS（logout=tokenId / deleteAllForUser=userId）', async () => {
+  const usersRepo = require('../src/server/repositories/users.js');
+  const sessionsRepo = require('../src/server/repositories/sessions.js');
+  if (!usersRepo.findByUsername('wsrevoke')) {
+    usersRepo.createUser('wsrevoke', 'scrypt$test');
+  }
+  const uid = usersRepo.findByUsername('wsrevoke').id;
+  const srv6 = http.createServer((req, res) => res.end('ok'));
+  const remote6 = attachRemoteControl(srv6, { allowedOrigins: [], token: '' });
+  await new Promise(r => srv6.listen(0, '127.0.0.1', r));
+  const b6 = `ws://127.0.0.1:${srv6.address().port}`;
+  const connAuthed = (raw) => new Promise((resolve) => {
+    const ws = new WebSocket(`${b6}/remote`, { headers: { cookie: `ms_session=${raw}` } });
+    ws.once('open', () => resolve(ws));
+    ws.once('error', (e) => resolve({ code: Number(String(e.message).match(/\d{3}/)?.[0]) || 0 }));
+  });
+  const closedOf = (ws) => new Promise(r => ws.once('close', r));
+  try {
+    const rawA = sessionsRepo.createSession(uid);
+    const rawB = sessionsRepo.createSession(uid);
+    const wsA = await connAuthed(rawA);
+    const wsB = await connAuthed(rawB);
+    assert.ok(wsA instanceof WebSocket && wsB instanceof WebSocket);
+    // tokenId 粒度（logout 路径）：只收该会话的连接
+    const closedA = closedOf(wsA);
+    revokeConnections({ tokenId: sessionsRepo.tokenId(rawA) });
+    await closedA;
+    await tick(60);
+    assert.equal(wsB.readyState, WebSocket.OPEN);
+    // userId 粒度（deleteAllForUser 路径）：该用户全部端收编
+    const closedB = closedOf(wsB);
+    sessionsRepo.deleteAllForUser(uid); // repo 内部惰性调 remote 钩子
+    await closedB;
+  } finally {
+    remote6.close();
+    await new Promise(r => srv6.close(r));
+    const { getDb } = require('../src/server/db/client.js');
+    getDb().exec('DELETE FROM sessions; DELETE FROM users');
+  }
+});
+
+test('remote：upgrade 全量限流——per-IP 60/min 不计成败（成功握手也计数）', async () => {
+  const srv7 = http.createServer((req, res) => res.end('ok'));
+  const remote7 = attachRemoteControl(srv7, { allowedOrigins: [], token: '' });
+  await new Promise(r => srv7.listen(0, '127.0.0.1', r));
+  const b7 = `ws://127.0.0.1:${srv7.address().port}`;
+  try {
+    let opened = 0;
+    let saw429 = false;
+    // role=host 绕过 controller 容量闸——每次成功握手互为顶替，
+    // 第 61 发起应被全量桶拦成 429（证明成功握手也计入计数）
+    for (let i = 0; i < 70; i++) {
+      const res = await new Promise((resolve) => {
+        const ws = new WebSocket(`${b7}/remote?role=host`);
+        ws.once('open', () => { liveClients.add(ws); resolve('open'); });
+        ws.once('error', (e) => resolve(Number(String(e.message).match(/\d{3}/)?.[0]) || 0));
+      });
+      if (res === 'open') opened++;
+      else if (res === 429) saw429 = true;
+    }
+    assert.equal(opened, 60, '60/min 桶应恰好放行 60 个 upgrade');
+    assert.ok(saw429, '超过 60 应见 429');
+  } finally {
+    remote7.close();
+    await new Promise(r => srv7.close(r));
   }
 });
 

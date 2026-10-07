@@ -5,11 +5,17 @@ const { WebSocketServer } = require('ws');
 // 控制面契约与共享表对齐（src/shared/protocol.js）——controller/host 三端同源
 const { CONTROL_TYPES, CONTROL_PAYLOAD_GUARDS, REMOTE_LIMITS, MSG_TYPES } = require('../../shared/protocol.js');
 // 登录会话优先于 REMOTE_TOKEN——浏览器 WS 握手带 cookie，遥控器页面登录后零改造
-const { sessionFromCookieHeader, authEnabled } = require('../lib/auth-gate');
+const { sessionFromCookieHeader, sessionTokenFromCookie, authEnabled } = require('../lib/auth-gate');
+// tokenId 用于把会话身份钉到 ws 上——logout/全量吊销要按它收掉已建连接
+const sessionsRepo = require('../repositories/sessions');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_PAYLOAD_BYTES = REMOTE_LIMITS.MAX_PAYLOAD_BYTES;
 const MAX_CONTROLLERS = REMOTE_LIMITS.MAX_CONTROLLERS;
+// 状态帧（host→server→controllers 广播）与控制帧（controller→server）
+// 分开封顶：广播帧限定出向扇出体积，控制帧合法载荷 ≤ ~200B 用 1KB 小顶
+const MAX_STATE_BYTES = REMOTE_LIMITS.MAX_STATE_PAYLOAD_BYTES;
+const MAX_CONTROL_BYTES = REMOTE_LIMITS.MAX_CONTROL_PAYLOAD_BYTES;
 // 广播背压：单个 controller 的 socket 发送缓冲超 1MB 说明对端消费跟不上
 // （弱网/挂起标签页）。state_update 是全量快照——跳帧安全，靠下次快照追平
 const SLOW_CONSUMER_BYTES = 1024 * 1024;
@@ -22,9 +28,19 @@ const UPGRADE_LIMIT_PER_MIN = 20;
 // watch 逐帧推 state_update，高刷屏下可达 ~144/s，host 桶取 200 留足余量
 const HOST_MSG_PER_SEC = 200;
 const CONTROLLER_MSG_PER_SEC = 30;
+// 全量 upgrade 的宽松 per-IP 限流（/min）：不只计鉴权失败——合法页面加载+
+// 断线重连的量级 <10/min，60 足以挡住「鉴权通过但狂连」的连接风暴。
+// 桶键带 attach 序号：同进程多次 attach（测试场景）各自独立计数
+const UPGRADE_ALL_LIMIT_PER_MIN = 60;
+let attachSeq = 0;
 
 let hostSocket = null;
 const controllers = new Set();
+// 最近一份消毒后的 state_update 快照：新 controller 入会优先回它，
+// 不为每人再打扰 host 要 REQUEST_STATE（上行 200msg/s 面下每新客一次
+// 请求都是放大点）。产出它的 host 断线即清——陈快照会让新客看到僵尸状态
+let lastState = null;
+let lastStateFrom = null;
 
 function send(ws, msg) {
   if (ws.readyState === ws.OPEN) {
@@ -36,9 +52,7 @@ function send(ws, msg) {
   }
 }
 
-function broadcastToControllers(msg) {
-  // 一次序列化全员复用——原先每连接各 JSON.stringify 一遍纯属浪费
-  const str = JSON.stringify(msg);
+function broadcastStr(str) {
   for (const ctrl of controllers) {
     if (ctrl.readyState !== ctrl.OPEN) continue;
     // 背压：缓冲超限就跳帧（state_update 快照可丢，下帧自然追平）；
@@ -58,6 +72,11 @@ function broadcastToControllers(msg) {
   }
 }
 
+function broadcastToControllers(msg) {
+  // 一次序列化全员复用——原先每连接各 JSON.stringify 一遍纯属浪费
+  broadcastStr(JSON.stringify(msg));
+}
+
 const clampStr = (v, max) => typeof v === 'string' ? v.slice(0, max) : undefined;
 const clampNum = (v) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 
@@ -70,12 +89,16 @@ const clampNum = (v) => typeof v === 'number' && Number.isFinite(v) ? v : undefi
 function sanitizeRemoteSong(song) {
   if (!song || typeof song !== 'object' || Array.isArray(song)) return undefined;
   const artists = Array.isArray(song.ar) ? song.ar : [];
-  // picUrl 只收 http(s)——恶意 host 能广播任意 URL，至少封掉 javascript:/
-  // data: 之类会在 <img> 上下文语义异常的 scheme（外链本身即指 roplatform）
+  // picUrl 收 http(s) 或本服务工件的相对路径（'/' 开头非 '//'——file_ 封面
+  // 以 apiBase 相对形态上线，controller 用自身基址拼回；'//' 协议相对形态
+  // 等于任意外链，与 javascript:/data: 之类异 scheme 同拒）
   const picRaw = clampStr(song.al?.picUrl, 500);
-  const picUrl = picRaw && /^https?:/i.test(picRaw) ? picRaw : '';
+  const picUrl = picRaw && (/^https?:/i.test(picRaw)
+    || (picRaw.startsWith('/') && !picRaw.startsWith('//'))) ? picRaw : '';
   return {
-    id: clampNum(song.id) ?? clampStr(song.id, 64) ?? null,
+    // id 截断与 CONTROL_PAYLOAD_GUARDS.play_song 的 128 上限同值——队列点歌
+    // 回送的 id 若被截短成 64，host 侧 findIndex 会失配静默拒播
+    id: clampNum(song.id) ?? clampStr(song.id, 128) ?? null,
     name: clampStr(song.name, 300) ?? '',
     al: { picUrl },
     ar: artists.slice(0, 20).map(a => ({ name: clampStr(a?.name, 200) ?? '' }))
@@ -207,6 +230,7 @@ function attachRemoteControl(server, options = {}) {
   // 与 serve() 入口的 BASE_PATH 剥前缀同口径：WS upgrade 不走 fetch 管道，
   // 握手路径在这里单独对齐（base '/' → '/remote'；'/music' → '/music/remote'）
   const remotePath = (basePath === '/' ? '' : basePath) + '/remote';
+  const upgradeBucketKey = `remote-upgrade-all#${++attachSeq}`;
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
@@ -225,8 +249,11 @@ function attachRemoteControl(server, options = {}) {
   });
 
   const onUpgrade = (req, socket, head) => {
-    // 握手完成前 socket 出错也要兜底销毁，避免未处理的 'error' 事件抛出
-    socket.once('error', () => socket.destroy());
+    // 握手完成前 socket 出错也要兜底销毁，避免未处理的 'error' 事件抛出；
+    // 具名以便升级成功后摘除——ws 接管 socket 后留着它会把传输期普通
+    // error 再翻译成 destroy() 误杀已建连接
+    const onPreUpgradeError = () => socket.destroy();
+    socket.once('error', onPreUpgradeError);
 
     let url;
     try {
@@ -239,6 +266,15 @@ function attachRemoteControl(server, options = {}) {
     // 精确匹配 remotePath，避免 /remotexxx 误命中
     if (url.pathname !== remotePath) {
       socket.destroy();
+      return;
+    }
+
+    // 全量 upgrade 的宽松限流先于 Origin/鉴权——计数不看成败：未认证洪泛
+    // 另有 'remote-upgrade' 20/min 收紧桶兜底，这里 60/min 管的是「鉴权能过
+    // 但狂连」（撞库成功的会话/合法 token 脚本）的连接风暴面
+    const upgradeIp = clientIpFromHeaders(req.headers, req.socket?.remoteAddress);
+    if (!rateLimitForIp(upgradeBucketKey, upgradeIp, UPGRADE_ALL_LIMIT_PER_MIN)) {
+      rejectUpgrade(socket, 429, 'Too Many Requests');
       return;
     }
 
@@ -264,12 +300,22 @@ function attachRemoteControl(server, options = {}) {
 
     // 'upgrade' 事件监听器抛错直达 uncaughtException 杀进程——鉴权级联
     // （session 解析走 DB）起所有异常必须就地收敛成 HTTP 拒绝
+    // 会话身份钉件（仅 cookie 会话；REMOTE_TOKEN 旁路无会话可钉）：
+    // logout/deleteAllForUser 吊销会话时按它收掉已建连接——WS 不吃
+    // HTTP 401 语义，不主动收会一直挂着死会话收发控制面消息
+    let wsSession = null;
     try {
       // 鉴权级联：session cookie（浏览器登录态，同源握手天然携带）→
       // REMOTE_TOKEN 子协议/?token=（非浏览器客户端旁路，不落 URL 日志优先）。
       // 先于容量检查——未认证客户端不应能经 401/503 差异探测连接数状态。
       // 两者皆未配置时保持开放（局域网自用兼容；公网部署必须启用登录或配 token）
       const sess = sessionFromCookieHeader(req.headers.cookie || '');
+      if (sess) {
+        wsSession = {
+          userId: sess.userId,
+          tokenId: sessionsRepo.tokenId(sessionTokenFromCookie(req.headers.cookie || ''))
+        };
+      }
       if (!sess) {
         const provided = tokenFromProtocols(req) ?? url.searchParams.get('token');
         // 启用登录后 REMOTE_TOKEN 未配也必须拒——否则「登录开着、WS 裸奔」
@@ -304,6 +350,12 @@ function attachRemoteControl(server, options = {}) {
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
+      // 握手完成——握手前的 error 兜底摘除，之后由 ws 自身的 error/close 接管
+      socket.removeListener('error', onPreUpgradeError);
+      if (wsSession) {
+        ws.sessionUserId = wsSession.userId;
+        ws.sessionTokenId = wsSession.tokenId;
+      }
       // 握手完成后连接回调的异常无法再回 HTTP 拒绝——就地 terminate
       try {
         wss.emit('connection', ws, req, url);
@@ -364,7 +416,11 @@ function attachRemoteControl(server, options = {}) {
     const role = url.searchParams.get('role') || 'controller';
 
     if (role === 'host') {
-      // Only one host allowed at a time。判活用 !== CLOSED 而非 === OPEN：
+      // Only one host allowed at a time——任何鉴权者带 ?role=host 都可顶替
+      // 现 host（「第二个窗口夺权」是有意保留的 UX，不加 force 闸——闸了
+      // 合法第二窗口也接管不了）。被踢端客户端侧自愈：降级成 controller
+      // 观望连接，host 位空出后自动回接管——抢占粘性消解于双方都活着。
+      // 判活用 !== CLOSED 而非 === OPEN：
       // 老 host 正处 CLOSING 时跳过顶替逻辑会让它按时序"正常关闭→触发重连"
       // 把新 host 反踢，形成踢皮球循环
       if (hostSocket && hostSocket !== ws && hostSocket.readyState !== hostSocket.CLOSED) {
@@ -396,9 +452,24 @@ function attachRemoteControl(server, options = {}) {
         // 所有 controller 的渲染（artistName computed 对 song.ar 无守卫）
         if (msg && msg.type === MSG_TYPES.STATE_UPDATE) {
           const payload = sanitizeStatePayload(msg.payload);
-          if (payload) {
-            broadcastToControllers({ type: MSG_TYPES.STATE_UPDATE, payload });
+          if (!payload) return;
+          // 广播帧封顶（与 host 发送侧共用 REMOTE_LIMITS 同值）：扇出代价
+          // = 帧字节 × controller 数。queue 是唯一弹性字段——超帧砍尾重算
+          // （queueIndex 越界归 -1，错位点亮比空槽更糟）；砍空仍超说明
+          // currentSong 单体超限，整帧丢。裁剪而非拒帧：未截断的旧 host
+          // 客户端照样有画面，不至于全量丢帧静默断更
+          let str = JSON.stringify({ type: MSG_TYPES.STATE_UPDATE, payload });
+          // 封顶按线上字节量（str.length 把中文按 1 计——UTF-8 实际占 3B，
+          // CJK 歌名队列会钻出 ~3x 上限）
+          while (Buffer.byteLength(str) > MAX_STATE_BYTES && payload.queue?.length) {
+            payload.queue = payload.queue.slice(0, Math.ceil(payload.queue.length / 2));
+            if (payload.queueIndex >= payload.queue.length) payload.queueIndex = -1;
+            str = JSON.stringify({ type: MSG_TYPES.STATE_UPDATE, payload });
           }
+          if (Buffer.byteLength(str) > MAX_STATE_BYTES) return;
+          lastState = payload;
+          lastStateFrom = ws;
+          broadcastStr(str);
         }
       });
 
@@ -409,6 +480,11 @@ function attachRemoteControl(server, options = {}) {
           console.log('[remote] host disconnected');
           broadcastToControllers({ type: MSG_TYPES.HOST_DISCONNECTED });
         }
+        // 快照归属按产出者清（被顶替时也清——顶替后的新 host 会随即供新帧）
+        if (lastStateFrom === ws) {
+          lastState = null;
+          lastStateFrom = null;
+        }
       });
 
     } else {
@@ -416,9 +492,13 @@ function attachRemoteControl(server, options = {}) {
       controllers.add(ws);
       console.log(`[remote] controller connected (total: ${controllers.size})`);
 
-      // If host is connected, ask it to send current state；无 host 时明示空态
+      // 优先回服务端缓存的最近消毒快照——host 2s 一拍+变更即推，缓存时效
+      // 足够，不必为每位新客打扰 host 要 REQUEST_STATE（上行放大面）；
+      // 无快照且 host 在位才回源要一次；无 host 时明示空态
       // （controller UI 靠 host_disconnected/host_absent 区分"断了"与"从未有过"）
-      if (hostSocket && hostSocket.readyState === hostSocket.OPEN) {
+      if (lastState) {
+        send(ws, { type: MSG_TYPES.STATE_UPDATE, payload: lastState });
+      } else if (hostSocket && hostSocket.readyState === hostSocket.OPEN) {
         send(hostSocket, { type: MSG_TYPES.REQUEST_STATE });
       } else {
         send(ws, { type: MSG_TYPES.HOST_ABSENT });
@@ -429,6 +509,9 @@ function attachRemoteControl(server, options = {}) {
           ws.close(1008, 'rate limited');
           return;
         }
+        // 控制帧小顶：合法指令 ≤ ~200B——超限帧在解析前丢（大载荷丢进
+        // 白名单校验只会白费 JSON.parse），与畸形消息同口径不炸连
+        if (data.length > MAX_CONTROL_BYTES) return;
         const msg = parseMessage(data);
         // Forward control commands to host（type+payload 双层白名单形状）
         if (msg && CONTROL_TYPES.has(msg.type)
@@ -452,4 +535,21 @@ function attachRemoteControl(server, options = {}) {
   return { close: cleanup };
 }
 
-module.exports = { attachRemoteControl };
+/**
+ * 会话吊销钩子：按握手时钉在 ws 上的会话身份收掉关联连接。
+ *   logout → revokeConnections({ tokenId })（只收该会话）
+ *   deleteAllForUser → revokeConnections({ userId })（该用户全部端）
+ * close(1008) 而非 terminate：对端走正常 close→重连，握手自然撞 401 收束；
+ * 仍赖着的半截连接交给心跳 isAlive 兜底 terminate
+ */
+function revokeConnections({ userId, tokenId } = {}) {
+  const all = hostSocket ? [hostSocket, ...controllers] : [...controllers];
+  for (const ws of all) {
+    if ((tokenId && ws.sessionTokenId === tokenId)
+      || (userId != null && ws.sessionUserId === userId)) {
+      try { ws.close(1008, 'session revoked'); } catch { /* 已在关闭中 */ }
+    }
+  }
+}
+
+module.exports = { attachRemoteControl, revokeConnections };
