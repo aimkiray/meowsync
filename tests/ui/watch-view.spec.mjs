@@ -238,6 +238,22 @@ describe('WatchView：yt_ 裸 id（缺 provider 对象老行）视频位', () =>
     prefVideoOn.value = true              // 归位默认开
   })
 
+  it('音画切换键：文案=目标动作，aria-label 自带当前态（pressed 已撤）', async () => {
+    const prev = prefVideoOn.value
+    prefVideoOn.value = true // 显式视频态（不赌模块序默认值）
+    const w = mountWatch({ currentSong: BARE_YT, tab: 'queue' })
+    const toggle = w.find('.watch-actions button[title*="切到"]')
+    // 视频态：文案=目标「音频」，态指示由 --on/aria-label 承担
+    expect(toggle.text()).toContain('音频')
+    expect(toggle.attributes('aria-pressed')).toBeUndefined() // pressed 报态+目标文案=播报矛盾
+    expect(toggle.attributes('aria-label')).toBe('音画切换，当前视频模式，切到纯音频（省流量）')
+    prefVideoOn.value = false // 翻音频态：文案转目标「视频」
+    await nextTick()
+    expect(toggle.text()).toContain('视频')
+    expect(toggle.attributes('aria-label')).toContain('当前音频模式')
+    prefVideoOn.value = prev // 归位
+  })
+
   it('mediaVideoKey/hasPlayableVideo 按 id 内嵌 videoId 成立', async () => {
     const w = mountWatch({ currentSong: BARE_YT, tab: 'queue' })
     await vi.waitFor(() => expect(w.vm.mediaVideoKey).toBe('yt:abcdefghijk'))
@@ -252,5 +268,27 @@ describe('WatchView：yt_ 裸 id（缺 provider 对象老行）视频位', () =>
     expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalled()
     expect(w.vm.mediaVideoUrl).toBe('https://x/yt')
     expect(w.find('video').attributes('src')).toBe('https://x/yt')
+  })
+})
+
+describe('WatchView：音画切换降级支（hasPlayableVideo=false 残余形）', () => {
+  // bilibili 对象在但 hasVideo=false、无本地视频档（探测桩回 null）——
+  // 键照出（按 bvid 存在性出键），可放判定却五支全空：title/label 落
+  // 第三支「需已下载视频档」降级提示，不乐观放行
+  const BV_NO_VIDEO = {
+    id: 2, name: 'bv', ar: [{ name: 'a' }], al: {}, dt: 0,
+    bilibili: { bvid: 'BV1xx411c7mD', cid: 100, hasVideo: false },
+  }
+
+  it('音频态 → title/aria-label 含「需已下载视频档」', () => {
+    const prev = prefVideoOn.value
+    prefVideoOn.value = false // 降级支只在音频态（目标=视频）落到 title
+    const w = mountWatch({ currentSong: BV_NO_VIDEO, tab: 'queue' })
+    expect(w.vm.hasPlayableVideo).toBe(false) // 钉住残余形本身（非只测文案串）
+    const toggle = w.find('.watch-actions button[title*="切到"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('title')).toBe('切到视频模式（需已下载视频档）')
+    expect(toggle.attributes('aria-label')).toBe('音画切换，当前音频模式，切到视频模式（需已下载视频档）')
+    prefVideoOn.value = prev // 归位
   })
 })

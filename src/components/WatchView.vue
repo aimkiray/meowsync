@@ -42,17 +42,21 @@
              形态同出键；file_ 仍按 hasVideo（上传曲的标记即工件真相，探测链
              对它关闭）。bv/yt 都有在线流位可乐观放行（yt 经 YT_PROXY 恢复）——
              残余「判无可放」情形（hasVideo=false 的 bv 稿且无档）靠 title
-             提示降级 -->
+             提示降级。
+             键面文案=目标动作（点此即切到所示模式），与 title 同向——态指示
+             留给 --on 反色承担。aria-pressed 撤掉改 aria-label：pressed 报
+             当前态、文案报目标态会把「音频·已按下」读成音频在场——label
+             自带「当前 X 模式」句补回态信息。title/aria-label/键面文案同出
+             setup 的 avToggle computed——三处串单源，改文案不漂移 -->
         <button
           v-if="currentSong?.bilibili?.bvid || currentSong?.youtube?.videoId
             || currentSong?.file?.hasVideo || bvM || ytM"
           class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
           :class="{ 'watch-action--on': videoOn }"
           @click="videoOn = !videoOn"
-          :title="videoOn ? '切到纯音频（省流量）'
-            : (hasPlayableVideo ? '切到视频模式' : '切到视频模式（需已下载视频档）')"
-          :aria-pressed="videoOn"
-        ><PixelIcon name="play" :size="14" /> {{ videoOn ? '视频' : '音频' }}</button>
+          :title="`切到${avToggle.action}`"
+          :aria-label="`音画切换，当前${avToggle.current}模式，切到${avToggle.action}`"
+        ><PixelIcon name="av-switch" :size="14" /> {{ avToggle.target }}</button>
       </div>
     </div>
 
@@ -1081,6 +1085,17 @@ export default {
         || (!props.currentSong?.bilibili && bvM.value)
         || (!props.currentSong?.youtube && ytM.value)
         || downloadedVideoUrl.value))
+    // 音画切换键面单源：target=键面目标态文案、current=aria-label「当前 X
+    // 模式」的态名、action=title 与 aria-label 共用的动作短串——三个槽位
+    // 同一分支族，合在一个 computed 里出，分写两版三元必漂移。残余
+    // 「判无可放」（hasPlayableVideo=false）落「需已下载视频档」降级支
+    const avToggle = computed(() => videoOn.value
+      ? { target: '音频', current: '视频', action: '纯音频（省流量）' }
+      : {
+        target: '视频',
+        current: '音频',
+        action: hasPlayableVideo.value ? '视频模式' : '视频模式（需已下载视频档）',
+      })
     // 关层重挂=天然重试点：failed 闩若来自限流/瞬时断流（层开关不动 URL，
     // watch(mediaVideoUrl) 不会自愈），复位让这次重挂真重试——流确实死了
     // 会再 error 回闩，代价一跳
@@ -1408,6 +1423,7 @@ export default {
       bvM,
       ytM,
       hasPlayableVideo,
+      avToggle,
       onMediaVideoError,
       pauseLyricFollow,
       onWatchTouchStart
