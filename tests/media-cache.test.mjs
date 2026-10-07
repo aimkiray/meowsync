@@ -294,6 +294,26 @@ test('serveComplete：200 全量 / 206 单段与后缀段 / 416 越界 / 400 畸
   assert.ok(Date.now() - meta.lastAccessAt < 5000);
 });
 
+test('serveComplete：外力截短 .bin 而 meta 完好 → 按 miss 拒供截断字节', async () => {
+  const key = mc.keyOf('t', 'serve-trunc');
+  await capture(key, { bytes: 'hello world', size: 11 });
+  assert.equal((await mc.serveComplete(fakeC(), key)).status, 200);
+  // 外力截短：meta.complete/size 仍在原位——修复前会照 5 字节截断档喂出
+  writeFileSync(join(mc.CACHE_DIR, `${key}.bin`), 'hello');
+  assert.equal(await mc.serveComplete(fakeC(), key), false);
+  assert.equal(await mc.serveComplete(fakeC('bytes=0-2'), key), false);
+  // meta.size 缺失/0 的对账豁免不回归：旧 meta 无 size 字段的档仍按盘上尺寸服务
+  const legacy = mc.keyOf('t', 'serve-legacy');
+  await capture(legacy, { bytes: 'abcdef', size: 6 });
+  const lp = join(mc.CACHE_DIR, `${legacy}.json`);
+  const lm = JSON.parse(readFileSync(lp, 'utf8'));
+  delete lm.size;
+  writeFileSync(lp, JSON.stringify(lm));
+  const res = await mc.serveComplete(fakeC(), legacy);
+  assert.equal(res.status, 200);
+  assert.equal(await bodyText(res), 'abcdef');
+});
+
 test('sweep：过期档连 bin+json 删；孤儿文件收尸', async () => {
   const key = mc.keyOf('t', 'sweep-exp');
   await capture(key, { bytes: 'dead', size: 4 });
