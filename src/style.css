@@ -967,7 +967,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 /* static 的 hover 抵色已由 :not(.pg-chip--static) 守卫兜底——
    勿再写 .pg-chip--static:hover{bg:transparent}，会剥掉 static+--on 组合（running 状态戳）的墨底 */
 /* 状态色档三态：绿戳 / 危险红 / 淡墨——下载域（队列/任务芯片）共享，
-   原 dql-chip--*/dtr-chip--* 两套私有色档已收口到这里（lib/downloadStatus.js 发牌） */
+   原 dql-chip--* / dtr-chip--* 两套私有色档已收口到这里（lib/downloadStatus.js 发牌） */
 .pg-chip--ok { color: var(--accent-green-ink); border-color: var(--accent-green); }
 .pg-chip--fail { color: var(--accent-danger-ink); border-color: var(--accent-danger); }
 .pg-chip--dim { color: var(--ink-64); }
