@@ -286,6 +286,118 @@ const timedSignal = (extraSignal, ms = YT_TIMEOUT_MS) => extraSignal
 // extraSignal 级联客户端断连——上游请求不随客户端断开变僵尸
 const fetchPlayer = (videoId, extraSignal) => fetchPlayerWith(videoId, extraSignal);
 
+// ── 描述文本本家声明解析 ──────────────────────────────────────────
+// utaite/翻唱投稿的描述普遍带投稿者自署的出处行（'本家：URL'、'original:
+// youtu.be/…'、'原曲 URL'）——同题异曲（'Moonlight' 撞 moumoon 与 shima/
+// VY1 同名曲）在标题/作者元数据层不可分，这手第一方声明是唯一能分它的
+// 证据。行级语义：标记词与出处须同行（跨行拼接是歌词/名单噪声区）；
+// 行序优先、同行取首个非自指链接——多条声明行时首行即作者认定的那条。
+// 出处两种形态：YT 链接（{videoId}，可回源反解元数据）与纯文本声明
+// '本家：Artist - Title'（{author,title}——niconico 本家/免链声明没有
+// 可回源的 videoId）；同行链接形态优先——链可反解，证据比文本硬。
+// 拉丁标记词要词边界——'resources'/'originality' 的词干内嵌不误吃
+const ORIG_MARK_RE = /本家|原曲|元曲|元動画|原動画|オリジナル|原视频|原影片|\boriginal\b|\bsource\b/i;
+// 链接形态与 shared/predicates YT_URL_RES 同口径（watch?v=/youtu.be/
+// shorts//embed//live/），但这里要保行内位序逐个扫——extractYouTubeId
+// 按表序返回而非按位置，本场景取的是「行内首个链接」
+const ORIG_LINK_RE = /youtu\.be\/([A-Za-z0-9_-]{11})|youtube(?:-nocookie)?\.com\/(?:watch\?[^\s]*?\bv=|shorts\/|embed\/|live\/)([A-Za-z0-9_-]{11})/gi;
+
+// 文本声明的标记尾界：标记词后容许一截短连接尾——'様'/'はこちら'/'楽曲'
+// 类敬称・助词尾（\W 域即非 [A-Za-z0-9_]，CJK/假名/标点全落此域）与一
+// 个短 ASCII 词缀（'MV'/'mix'/'ver' 类），且必须以 ':'/'：' 收口才出
+// 声明文本。限长防跨句跳吃（'本家の記事はこちら。詳細：…' 长噪不进门）；
+// 'source material:' 这类词组延伸超词缀上限同样不收
+const ORIG_DECL_SEP_RE = /^\W{0,8}(?:[A-Za-z]{1,4})?[:：]/;
+const ORIG_DECL_PAIRS = { '(': ')', '（': '）', '[': ']', '［': '］', '【': '】', '「': '」', '『': '』' };
+// '标记词[:]后的声明尾' → {author,title}|null。清洗只去尾噪不硬猜：
+// '#标签'起/裸 URL 起一律截断（走到文本形态的 URL 都不是本家证据——
+// YT 链已在链接形态先扫，nico 链/外链只算噪声）；整串成对外层括号
+// （'「A - B」'）与尾随括注（' (full ver.)'/'【MV】'，含未闭合半截）
+// 逐轮剥除；最后只认 ' - '（半角连字符两侧空白）单分隔——artist/title
+// 任一侧空即弃
+function parseOriginalDeclText(tail) {
+  const sep = ORIG_DECL_SEP_RE.exec(tail);
+  if (!sep) return null;
+  let s = tail.slice(sep[0].length)
+    .split(/(?:^|\s)[#＃]/, 1)[0]
+    .split(/https?:\/\/|www\./i, 1)[0]
+    .trim();
+  // 外层包裹与尾随括注逐轮交替剥——外层剥露出的新尾可能又是括注
+  // （'「A - B」（cover）'）；任一轮剥空则声明不成立
+  for (;;) {
+    let t = s;
+    const close = ORIG_DECL_PAIRS[t[0]];
+    if (close && t.length > 1 && t.endsWith(close)) {
+      // 开括号的配对闭括号恰好落在串尾才算包裹——'(A) - (B)' 首括号
+      // 中途闭合不算包裹形态，不剥
+      let depth = 0, wrapped = true;
+      for (let i = 0; i < t.length; i++) {
+        if (t[i] === t[0]) depth++;
+        else if (t[i] === close && --depth === 0 && i < t.length - 1) { wrapped = false; break; }
+      }
+      if (wrapped && depth === 0) t = t.slice(1, -1).trim();
+    }
+    t = t.replace(/\s*[\(（\[【『「［].*?[\)）\]】』」］]?\s*$/, '').trim();
+    if (t === s) break;
+    s = t;
+    if (!s) return null;
+  }
+  // ' - '（半角连字符两侧空白）取首个分隔——艺人名罕含 ' - '，曲名常带
+  // ' - feat.' 类尾段，首个以后整段归 title
+  const d = /^(.*?)\s+-\s+(.+)$/.exec(s);
+  if (!d) return null;
+  const author = d[1].trim();
+  const title = d[2].trim();
+  return author && title ? { author, title } : null;
+}
+
+// 命中返回判别式联合：链接形态 {videoId} / 文本声明形态 {author,title}
+// ——videoId 缺席即文本形态，消费方按有无 videoId 分派是否回源
+function parseOriginalRef(description, selfVideoId) {
+  for (const line of String(description || '').split(/\r\n|\r|\n/)) {
+    const mark = ORIG_MARK_RE.exec(line);
+    if (!mark) continue;
+    // 同行先扫链接形态（见上——链可回源反解，证据硬度高于文本）
+    ORIG_LINK_RE.lastIndex = 0;
+    let m;
+    while ((m = ORIG_LINK_RE.exec(line))) {
+      const id = m[1] || m[2];
+      // 自指链跳过（'本家：本稿' 引流/系列互推形态不构成出处证据）
+      if (id && id !== selfVideoId) return { videoId: id };
+    }
+    // 链接缺席（或只剩自指链）→ 退回文本声明形态
+    const decl = parseOriginalDeclText(line.slice(mark.index + mark[0].length));
+    if (decl) return decl;
+  }
+  return null;
+}
+
+// 本家元数据解析链：描述在手直用（调用方 resolve 期已拿过 player——省
+// 一跳回源），缺席才补打 self 的 player 取 shortDescription；命中链接
+// 形态再一跳取本家 {title,author}，文本形态声明已内联 author/title——
+// 零回本家跳、返回不带 videoId。全链 fail-soft——本家证据是增强不是
+// 门禁，任何一环失败（异常/超时/缺字段）按「无声明」交回，不抛
+async function resolveOriginalInfo({ videoId, description, signal }) {
+  try {
+    const desc = typeof description === 'string'
+      ? description
+      : (await fetchPlayer(videoId, signal))?.videoDetails?.shortDescription || '';
+    const ref = parseOriginalRef(desc, videoId);
+    if (!ref) return null;
+    // 文本声明形态：author/title 已在描述里内联——直交，videoId 缺席
+    if (!ref.videoId) {
+      const title = String(ref.title || '').trim();
+      return title ? { title, author: String(ref.author || '').trim() } : null;
+    }
+    const vd = (await fetchPlayer(ref.videoId, signal))?.videoDetails || {};
+    const title = String(vd.title || '').trim();
+    if (!title) return null;
+    return { videoId: ref.videoId, title, author: String(vd.author || '').trim() };
+  } catch {
+    return null;
+  }
+}
+
 // 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
 // spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强。
 // 客户端表回落与 fetchPlayer 同口径：Innertube 风控按客户端形态整体生效，
@@ -605,4 +717,4 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   };
 }
 
-module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, YT_TIMEOUT_MS };
+module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, parseOriginalRef, resolveOriginalInfo, YT_TIMEOUT_MS };

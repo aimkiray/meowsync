@@ -107,8 +107,9 @@ test('expandSearchQueries：交错序（raw 先变体后）、cap 8、normKey �
   assert.equal(out.length, 8);
   assert.deepEqual(out.slice(0, 4), ['Alpha cover', 'Alpha', 'Beta cover', 'Beta']);
   assert.deepEqual(out.slice(6, 8), ['Delta cover', 'Delta']);
-  // 大小写/空白归一视为同串——'ALPHA cover' 不再占席
-  const d = expandSearchQueries(['Alpha cover', 'ALPHA  cover'], { title: 't', author: 'up' });
+  // 大小写/空白归一视为同串——'ALPHA Cover' 不再占席
+  // （'Cover' 大写开头刻意避开 l 规则剥头——本钉只管 normKey 去重）
+  const d = expandSearchQueries(['Alpha cover', 'ALPHA  Cover'], { title: 't', author: 'up' });
   assert.deepEqual(d, ['Alpha cover', 'Alpha']);
 });
 
@@ -141,14 +142,79 @@ test('expandSearchQueries：词形剥头只认本曲作者——「Unknown Soldi
 });
 
 test('expandSearchQueries：artists 里首个非占位艺人作锚（_ 占位不传锚）', () => {
-  // 'EMA rumor' 只有拿到 'EMA' 作艺人锚才剥得出 'rumor'——证明 '_'
-  // 被跳过、真艺人 'EMA' 是 informativeArtist
-  const out = expandSearchQueries(['EMA rumor'], { title: 't', author: '_', artists: ['_', 'EMA'] });
-  assert.ok(out.includes('rumor'));
-  // 全占位 → artist='' → 艺人锚规则缺席，剥不出 'rumor'
-  const none = expandSearchQueries(['EMA rumor'], { title: 't', author: '_', artists: ['_'] });
-  assert.ok(!none.includes('rumor'));
-  assert.deepEqual(none, ['EMA rumor']);
+  // 'Eve rum' 只有拿到 'Eve' 作艺人锚才剥得出 'rum'——证明 '_'
+  // 被跳过、真艺人 'Eve' 是 informativeArtist。锚钉改用混合大小写头：
+  // 'EMA rumor' 类全大写署名头已由 l 规则无锚剥除（见下条钉测），
+  // 拿它测锚会分不清是哪条规则产的
+  const out = expandSearchQueries(['Eve rum'], { title: 't', author: '_', artists: ['_', 'Eve'] });
+  assert.ok(out.includes('rum'));
+  // 全占位 → artist='' → 艺人锚规则缺席（'Eve' 非全大写，l 也不触发）剥不出 'rum'
+  const none = expandSearchQueries(['Eve rum'], { title: 't', author: '_', artists: ['_'] });
+  assert.ok(!none.includes('rum'));
+  assert.deepEqual(none, ['Eve rum']);
+});
+
+test('titleVariantsOf：全大写署名头剥除——搬运号「歌手tag+曲名」形态（不锚 artist）', () => {
+  // yt_ 实案：'EMA rumor'/'EMA フォニイ'/'EMA first death'/'EMA 内臓ありますか'
+  // 的 author 是 'otaku'/'R'/'_' 类频道号——j/k 艺人锚拿不到真艺人永不触发，
+  // l 规则（CAPS_HEAD_RE）不锚 artist 恒定剥头，剥出串居返回数组尾部作
+  // 最末兜底查询（错配由 strictTitle 闸+AI 核验收）
+  assert.equal(titleVariantsOf('EMA rumor').at(-1), 'rumor');
+  assert.equal(titleVariantsOf('EMA フォニイ').at(-1), 'フォニイ');
+  assert.equal(titleVariantsOf('EMA first death').at(-1), 'first death');
+  assert.equal(titleVariantsOf('EMA 内臓ありますか').at(-1), '内臓ありますか');
+  // token2 仍大写开头 = 全大写词组而非署名形态——不剥
+  assert.ok(!titleVariantsOf('SUMMER NIGHT Lo-FI').includes('NIGHT Lo-FI'));
+  assert.ok(!titleVariantsOf('NOT CRYING').includes('CRYING'));
+  // token2 大写负断言吃 \p{Lu} 全集非 ASCII——'É'/'В'/'Ａ' 类非 ASCII
+  // 大写字母同样挡（旧 (?![A-Z]) 洞曾漏过）
+  assert.ok(!titleVariantsOf('ABBA Étude').includes('Étude'));
+  assert.ok(!titleVariantsOf('SUMMER ВЕЧЕР').includes('ВЕЧЕР'));
+  // token1 形态边界钉死：长度下界 {2,}——'A' 单字符不是署名头
+  assert.ok(!titleVariantsOf('A bc').includes('bc'));
+  // 长度上界 {,15}——16 字符全大写词是词组不是 tag 形态
+  assert.ok(!titleVariantsOf('ABCDEFGHIJKLMNOP x').includes('x'));
+  // 词内标点破 token——'U.S.A' 的 '.' 不在 [A-Z0-9&'] 内，整词不匹配
+  assert.ok(!titleVariantsOf('U.S.A x').includes('x'));
+  // token1 后无空白（'RTRT(Mili)' 括弧粘连）不剥头——其它既有变体照常
+  const rtrt = titleVariantsOf('RTRT(Mili) samayuzame Arrange ver.');
+  assert.ok(rtrt.every((v) => v.startsWith('RTRT')), `不应产首词剥离变体: ${JSON.stringify(rtrt)}`);
+  // 'In' 非全大写不剥头；'／EMA' 尾剥归既有 g 规则管（照常产 'In the brain'）
+  const inb = titleVariantsOf('In the brain／EMA');
+  assert.ok(!inb.includes('the brain'));
+  assert.ok(inb.includes('In the brain'));
+  // 'TK' 全大写 + 'from' 小写开头——形态吻合放行（最末位垃圾变体无害）
+  assert.equal(titleVariantsOf('TK from 凛として時雨').at(-1), 'from 凛として時雨');
+  // 端到端语义：author='_' 搬运号场景 'EMA rumor' 无锚也出 'rumor'
+  // （修复前该形态经漏斗全 MISS——artist 锚缺席时变体从未生成）
+  const q = expandSearchQueries(['EMA rumor'], { title: 't', author: '_', artists: ['_'] });
+  assert.ok(q.includes('rumor'));
+});
+
+test('titleVariantsOf：ft.无空格日文歌姬尾 + 整包围引号壳——GETCHA 实案出裸歌名', () => {
+  // 本家视频题实案形态：剥【MV】基座 → d 剥 'Giga & KIRA - ' → f 剥
+  // ' ft.初音ミク & GUMI'（日文惯写点号后无空格）→ f2 剥引号壳——激进腿
+  // 收敛裸歌名 'GETCHA!'（实证网易 'GETCHA!' 裸查询 rank1 = 真身原曲）
+  const v = titleVariantsOf("Giga & KIRA - 'GETCHA!' ft.初音ミク & GUMI【MV】");
+  assert.ok(v.includes('GETCHA!'));
+  // f 空白分案：带句点 feat./ft. 容许 \s*（'ft.歌姫' 无空格日文惯写）
+  assert.ok(titleVariantsOf('Song ft.初音ミク').includes('Song'));
+  assert.ok(titleVariantsOf('Song feat.初音ミク').includes('Song'));
+  // 裸词 feat/ft/featuring/with 仍须 \s+ + 前向断言挡字母粘连——
+  // 'Somewith'/'Within'/'feature'/'ftX' 词干形态不误剥残片
+  assert.deepEqual(titleVariantsOf('Somewith you'), ['Somewith you']);
+  assert.deepEqual(titleVariantsOf('Within you'), ['Within you']);
+  assert.ok(!titleVariantsOf('Song feature Presentation').includes('Song'));
+  assert.ok(!titleVariantsOf('Song ftX').includes('Song'));
+  // f2 只剥整包围单层：词中撇号/不整包围形态不产剥壳变体；异形对不跨对收
+  assert.deepEqual(titleVariantsOf("don't stop"), ["don't stop"]);
+  assert.deepEqual(titleVariantsOf("quoted 'mid' word"), ["quoted 'mid' word"]);
+  assert.deepEqual(titleVariantsOf('「曲名』'), ['「曲名』']);
+  // 各对整包围引号壳都剥出裸题：ASCII 同形对与弯引号/书名号异形成对
+  for (const [w, bare] of [["'曲名'", '曲名'], ['"曲名"', '曲名'],
+    ['‘曲名’', '曲名'], ['“曲名”', '曲名'], ['「曲名」', '曲名'], ['『曲名』', '曲名']]) {
+    assert.ok(titleVariantsOf(w).includes(bare), `应剥出裸题: ${w}`);
+  }
 });
 
 test('expandSearchQueries：防御——非数组/全剥空不产出垃圾查询', () => {

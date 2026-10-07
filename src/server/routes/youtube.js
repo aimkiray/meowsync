@@ -116,6 +116,9 @@ app.get('/youtube/resolve', async (c) => {
         title: vd.title || '', author,
         artists: [...new Set([author, artistFromAuthor].filter(Boolean))],
         trackId: `yt_${videoId}`,
+        // 描述在手交给匹配器的本家声明惰性解析——命中 utaite/翻唱稿的
+        // 自署出处链时省一跳 self player 回源（lib/youtube resolveOriginalInfo）
+        description: vd.shortDescription || '',
       },
     });
     // matchNeteaseSong 因断连早退后，继续构造响应只是写给死 socket
