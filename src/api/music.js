@@ -312,6 +312,19 @@ export const musicApi = {
     return data
   },
 
+  // 绑定态只读口：GET /match/state?trackId=——song_match 现行生效绑定的
+  // 查询面（读侧模型键与匹配管线同口径：跨模型行/异模负行按未命中回）。
+  // 客户端未绑定外源曲水合用：本地 neteaseId 缺席不代表服务端无正绑
+  // （别会话/服务端侧写入不回推客户端持久化）——读口零云搜/AI 上行，
+  // 与 /match/retry（skipCache 重跑+覆写）职责分离，改绑定只能走 retry。
+  // 回 {id,name,ar,al,matchedBy,score}|null（match=null=无正绑/负缓存行）；
+  // 错误照常抛——后台水合链自行 fail-soft，不在这里吞
+  getMatchState: async (trackId, abortSignal = null) => {
+    const response = await api.get('/match/state', { params: { trackId }, signal: abortSignal })
+    const data = unwrapBody(response)
+    return data.match ?? null
+  },
+
   // 错配纠正口：POST /match/retry——前端拿持久化 provider 字段组匹配材料，
   // excludeIds 把当前判否的词源 id 并进请求级否决集重跑云搜+AI 复核链，
   // 命中即服务端覆写 song_match 行。回命中对象 {id,name,ar,al} 并透传同层
