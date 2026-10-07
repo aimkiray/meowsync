@@ -202,6 +202,22 @@ describe('F2：共享 Tab 钳制（lib/focus-trap.js）', () => {
     dlg.remove()
   })
 
+  it('焦点不在可聚焦集（容器外锚点）：Tab 环入首项、Shift+Tab 环入末项', () => {
+    const dlg = buildDialog()
+    const [a, , c] = ['a', 'b', 'c'].map(id => dlg.querySelector(`#${id}`))
+    // 端点外逃逸口：原实现只盯首尾回绕，焦点在集外时 Tab 直落层外
+    const out = document.createElement('button')
+    document.body.appendChild(out)
+    out.focus()
+    expect(document.activeElement).toBe(out)
+    dlg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    expect(document.activeElement).toBe(a)
+    out.focus()
+    dlg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    expect(document.activeElement).toBe(c)
+    out.remove()
+  })
+
   it('SongFormDialog 实挂载：首焦 name 输入，Shift+Tab 回末键、Tab 回绕', async () => {
     const wrapper = mount(SongFormDialog, {
       attachTo: document.body,

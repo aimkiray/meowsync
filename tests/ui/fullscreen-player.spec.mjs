@@ -127,6 +127,74 @@ describe('FullscreenPlayer：dialog 语义与焦点闭环', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
+  it('Esc 已被上游消费（defaultPrevented）时本层让位——一键只收一层', async () => {
+    wrapper = mountPlayer()
+    const e = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    e.preventDefault() // 模拟 App 全局链任一 Esc 消费分支已打戳
+    window.dispatchEvent(e)
+    await nextTick()
+    expect(wrapper.emitted('close') ?? []).toHaveLength(0)
+  })
+
+  it('真实拓扑：先跑的监听当拍结算 confirm（打戳/不打戳两形）→ 本层同键让位', async () => {
+    // App onGlobalKeydown 恒先跑——挂载前注册的窗口监听即它的拓扑位
+    const withStamp = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); resolveConfirm(false) }
+    }
+    window.addEventListener('keydown', withStamp)
+    wrapper = mountPlayer()
+    let p = pixelConfirm('确定？')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    await nextTick()
+    expect(wrapper.emitted('close') ?? []).toHaveLength(0)
+    await p
+    window.removeEventListener('keydown', withStamp)
+
+    // FeedbackHost overlay @keydown.esc 同形：结算但不给事件打戳——
+    // feedback 的「本拍刚结算」读数兜底，后跑的本层仍让位
+    const bare = (e) => { if (e.key === 'Escape') resolveConfirm(false) }
+    window.addEventListener('keydown', bare)
+    p = pixelConfirm('确定？')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    await nextTick()
+    expect(wrapper.emitted('close') ?? []).toHaveLength(0)
+    await p
+    window.removeEventListener('keydown', bare)
+
+    // 戳随事件分发灭——下一发 Esc 恢复关层语义
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('Tab 钳制补洞：焦点在根（开层即此形态）时 Shift+Tab 回末项、Tab 进首项', async () => {
+    wrapper = mountPlayer()
+    await nextTick()
+    await nextTick()
+    const root = wrapper.element
+    expect(document.activeElement).toBe(root) // tabindex=-1 开层即焦——逃逸口现场
+    const first = root.querySelector('.fullscreen-player__topbar-button')
+    const last = root.querySelector('[role="slider"]')
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    expect(document.activeElement).toBe(last) // 不再从根落下层
+    root.focus()
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    expect(document.activeElement).toBe(first)
+  })
+
+  it('Tab 钳制补洞：焦点落 body（点画布等价形态）时 window 补网收进首项', async () => {
+    wrapper = mountPlayer()
+    await nextTick()
+    await nextTick()
+    wrapper.element.blur() // ae 落 body——此事件不冒泡经过根，走 window 侧补网
+    expect(document.activeElement).toBe(document.body)
+    const e = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(e)
+    expect(e.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(
+      wrapper.element.querySelector('.fullscreen-player__topbar-button'))
+  })
+
   it('body overflow 存旧还原：挂载压 hidden、卸载写回旧值而非清空', async () => {
     document.body.style.overflow = 'scroll'
     wrapper = mountPlayer()

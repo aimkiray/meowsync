@@ -171,7 +171,8 @@ export function useAddToPlaylist({
     pickerPrevFocus = null
     onCleanup(() => {
       pickerReturnFocus = null
-      if (prevFocus instanceof HTMLElement) prevFocus.focus({ preventScroll: true })
+      // isConnected 闸同 atp 归还——锚已随菜单/列表卸载时 focus 是静默空炮
+      if (prevFocus instanceof HTMLElement && prevFocus.isConnected) prevFocus.focus({ preventScroll: true })
     })
     await nextTick()
     songPickerInput.value?.focus()

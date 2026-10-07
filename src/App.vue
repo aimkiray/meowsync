@@ -1055,34 +1055,38 @@ export default {
       if (authRequired()) return
       // 确认框未决时全局快捷键全部冻结（/ 偷焦点会破焦点陷阱，F 会在遮罩下隐形切全屏）
       if (isConfirmOpen()) {
-        if (e.key === 'Escape') resolveConfirm(false) // 兜底：焦点逃出 overlay 时仍能关
+        // 兜底：焦点逃出 overlay 时仍能关。Esc 消费一律 preventDefault 打戳——
+        // 后注册的 window 监听（沉浸层 handleKeydown 等）见 defaultPrevented
+        // 让位，保证同一发按键只结算一层，不一键双关
+        if (e.key === 'Escape') { e.preventDefault(); resolveConfirm(false) }
         return
       }
       // 四弹窗冻结：互斥本无叠加态，但防线按堆叠序顶层优先
       //（模板序 atp < create < picker < songForm——万一叠加，Esc 先关看得见的）
       if (songFormOpen.value) {
         // busy 期 Esc 映射到中止上传——大文件在飞时 Escape 的直觉就是「停」
-        if (e.key === 'Escape') songFormBusy.value ? abortSongFormUpload() : closeSongForm()
+        if (e.key === 'Escape') { e.preventDefault(); songFormBusy.value ? abortSongFormUpload() : closeSongForm() }
         return
       }
       // 点歌台模态冻结。Esc 连框内焦点也收（输入态下 Esc 的直觉就是关窗）；
       // 非 Esc 键直接 return——空格/斜杠不会穿透到全局快捷键
       if (songPickerOpen.value) {
-        if (e.key === 'Escape') closeSongPicker()
+        if (e.key === 'Escape') { e.preventDefault(); closeSongPicker() }
         return
       }
       // 新建歌单模态同款冻结
       if (createPlaylistOpen.value) {
-        if (e.key === 'Escape') closeCreatePlaylist()
+        if (e.key === 'Escape') { e.preventDefault(); closeCreatePlaylist() }
         return
       }
       // 添加到歌单模态同款冻结——否则 Tab 到框外后 /、f、空格全部穿透生效
       if (addTargetSong.value) {
-        if (e.key === 'Escape') addTargetSong.value = null
+        if (e.key === 'Escape') { e.preventDefault(); addTargetSong.value = null }
         return
       }
       if (e.key === 'Escape') {
-        if (sidebarOpen.value) sidebarOpen.value = false
+        // 真收了侧栏才打戳——无可收层时 Esc 不打戳放行，沉浸层照常结算
+        if (sidebarOpen.value) { e.preventDefault(); sidebarOpen.value = false }
         return
       }
       const el = e.target

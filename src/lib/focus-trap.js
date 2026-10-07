@@ -13,7 +13,11 @@ export const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabl
 /**
  * Tab/Shift+Tab 焦点钳制：焦点在容器内可聚焦集首项时 Shift+Tab 跳末项、
  * 在末项时 Tab 跳回首项——其余位置放行自然 Tab 序（容器内 DOM 序即 Tab 序）。
- * @param {KeyboardEvent} e 容器上的 keydown（currentTarget 即容器时可省第二参）
+ * 焦点不在可聚焦集（容器根本体——FullscreenPlayer 根 tabindex=-1 开层即焦、
+ * 点非聚焦面落 body、被程序挪出层外）时浏览器默认序会穿出遮罩落进下层——
+ * 钳回端点封洞而不是放行，保「aria-modal 无洞」。
+ * @param {KeyboardEvent} e 容器上的 keydown（currentTarget 即容器时可省第二参；
+ *   window 监听补网根外焦点事件时须显式传容器——currentTarget 是 window）
  * @param {Element} [container] 钳制范围（默认 e.currentTarget）
  * @returns {boolean} 已消费（preventDefault+移焦）则 true
  */
@@ -24,7 +28,15 @@ export function trapTabKeydown(e, container = e.currentTarget) {
   if (!focusables.length) return false
   const first = focusables[0]
   const last = focusables[focusables.length - 1]
-  if (e.shiftKey && document.activeElement === first) {
+  const ae = document.activeElement
+  // 端点外逃逸口：ae 不在可聚焦集即「焦点已不在该走的序里」——Tab 收进首项、
+  // Shift+Tab 收进末项，两个方向都钳回层内而不是让默认序落出遮罩
+  if (!focusables.includes(ae)) {
+    e.preventDefault()
+    ;(e.shiftKey ? last : first).focus()
+    return true
+  }
+  if (e.shiftKey && ae === first) {
     e.preventDefault()
     last.focus()
     return true

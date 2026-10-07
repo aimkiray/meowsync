@@ -286,7 +286,9 @@ function handleWindowPointerDown(event) {
 }
 
 function handleWindowKeydown(event) {
-  if (event.key !== 'Escape' || openMenuId.value === null) return
+  // App onGlobalKeydown（window、注册更早先跑）已消费的 Esc 打
+  // defaultPrevented 戳——同一发按键只收一层，不连带关菜单
+  if (event.key !== 'Escape' || event.defaultPrevented || openMenuId.value === null) return
   // 归还闸（TopNav onMenuKeydown 同口径）：焦点已被挪出菜单与触发键
   // （Tab 逃逸等）时 Esc 只关菜单，不得把焦点强拽回 ⋯键
   const ae = document.activeElement
