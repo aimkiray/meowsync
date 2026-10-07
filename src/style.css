@@ -1212,12 +1212,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   gap: 6px;
   padding: 6px 6px 6px 4px;
   transition: background .12s;
-  /* 大队列的屏外行跳布局/绘制（与 .song-row 同律）。content-box 语义：
-     占位总高 = 值 + padding12 + hairline1。42.5 由实测反推校准（渲染行
-     54.5/55.5）——startDrag 的 y→下标换算吃的是占位累计偏移，估值每差
-     0.5px 深队列可积出一行级误命中；auto 在绘制后自记忆真实行高 */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 42.5px;
+  /* 不挂 content-visibility:auto：队列走真虚拟滑窗，DOM 恒收在视口
+     ±overscan 内——CV 是第二重虚拟化，窗外行进窗先按 contain-intrinsic
+     占位高跳绘、进视口才实渲 = 快滚逐行弹入闪（占位 42.5px vs 实高
+     ~55px 还叠纵向抖）。startDrag 的 y→下标换算吃真实行几何（滑窗内
+     行恒已渲染），摘除无影响。.song-row 的同款规则保留——其消费侧不同 */
 }
 /* 行间发丝分隔——印单的记账线，hover/当前行墨块在其上依旧清晰 */
 .queue-row + .queue-row { border-top: var(--hairline-soft); }
