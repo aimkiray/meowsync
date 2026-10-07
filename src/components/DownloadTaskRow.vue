@@ -2,10 +2,11 @@
   <!-- 单条下载任务卡：封面 + 名称/状态戳 + 资源章 + 进度/错误/完成尾注 -->
   <div class="dtr">
     <div class="dtr-cover">
+      <!-- alt 留空：封面与紧邻的 .dtr-name 同源文本——命名会让 SR 把歌名报两遍 -->
       <img
         v-if="task.coverUrl"
         :src="coverSrc"
-        :alt="task.songName"
+        alt=""
         class="dtr-cover-img"
         loading="lazy"
         decoding="async"

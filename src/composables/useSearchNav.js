@@ -186,6 +186,7 @@ export function useSearchNav({
     }
     downloadsPl.value = null
     centerView.value = 'downloads'
+    sidebarOpen.value = false // 与同族入口同律（toggleSettings/openDownloadsForPlaylist 都收）
     pushNavState()
   }
 
@@ -386,6 +387,25 @@ export function useSearchNav({
     }
   }
 
+  // 预览落空（未命中/拉取失败）的视图+URL 归一：popstate 路径上
+  // applyUrlNav 调本函数后即 return——不补救的话视图从未按 URL 落定，
+  // 地址栏还挂着 ?view=songs&pl=<失效 id> 死链，刷新/再回放必重放失败。
+  // 按 applyUrlNav 兜底阶梯同口径落定视图，replaceState 把 pl 归一回当前条目
+  //（不 push——popstate 回放不该产生新历史）
+  const recoverFailedPreview = () => {
+    const { view: urlView } = readNavParams(new URLSearchParams(window.location.search))
+    centerView.value = urlView === 'songs'
+      ? (selectedPlaylist.value ? 'songs' : 'home')
+      : resolveNavView({
+        view: urlView,
+        hasSelectedPlaylist: selectedPlaylist.value != null,
+        hasSong: currentSong.value != null,
+        hasSearchResults: searchResults.value.length > 0 || searchSongResults.value.length > 0,
+        searching: searching.value
+      })
+    window.history.replaceState(window.history.state, '', buildNavUrl().toString())
+  }
+
   // 顶栏数字 id 搜索：只预览不自动入库——入库与否由用户决定
   // （hero「收藏歌单」/搜索结果卡 + 键/点歌台直加自动收藏），
   // 避免「搜过一次 = 永久长进侧栏」的噪音积累。已入库则直接打开。
@@ -394,7 +414,6 @@ export function useSearchNav({
     try {
       // loadingSongs 而非 loading——loading 是侧栏整板 spinner，预览期间侧栏全空闪
       loadingSongs.value = true
-      console.log('🔍 通过ID预览歌单:', id)
       const lib = userPlaylists.value.find(p => String(p.id) === String(id))
       if (lib) {
         await selectPlaylistAndShow(lib)
@@ -411,11 +430,13 @@ export function useSearchNav({
         if (!rawQuery || searchQuery.value.trim() === rawQuery.trim()) searchQuery.value = ''
       } else {
         toast('未找到该歌单', 'info')
+        recoverFailedPreview()
       }
     } catch (error) {
       if (!gates.preview.isCurrent(myReq)) return
       console.error('❌ 加载歌单预览失败:', error)
       toast('歌单加载失败: ' + (apiErrorMessage(error)), 'error')
+      recoverFailedPreview()
     } finally {
       if (gates.preview.isCurrent(myReq)) loadingSongs.value = false
     }

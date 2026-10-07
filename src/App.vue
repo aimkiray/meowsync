@@ -2,7 +2,7 @@
   <!-- 登录门：探活完成前不渲染任何业务壳（否则 RemoteController 会抢在
        状态判定前发起未认证 WS）；需要登录而未认证时 AuthGate 接管全屏；
        登录成功整页重载重走初始化 -->
-  <div v-if="!authState.booted" style="position:fixed;inset:0;background:#f4f1ea;z-index:999"></div>
+  <div v-if="!authState.booted" style="position:fixed;inset:0;background:var(--page);z-index:var(--z-menu)"></div>
   <AuthGate
     v-else-if="authRequired()"
     :is-setup="authState.setupRequired"
@@ -156,11 +156,14 @@
         />
         <SettingsPanel v-else-if="centerView === 'settings'" />
         <DownloadsPanel
-          v-else
+          v-else-if="centerView === 'downloads'"
           :preselect-playlist-id="downloadsPl"
           :preselect-seq="downloadsPlSeq"
           @preselect-expired="clearDownloadsPl"
         />
+        <!-- 未知 centerView 不落任何分支——旧 v-else 兜底会把陌生/脏值视图
+             静默渲成下载页（还顺手激活其轮询），显式空分支更诚实 -->
+        <template v-else></template>
       </main>
     </div>
 
@@ -210,8 +213,18 @@
           aria-modal="true"
           :aria-label="`添加 ${addTargetSong.name} 到歌单`"
           @click.stop
+          @keydown="onDialogTrapKeydown"
         >
-          <div class="pg-menu-head">添加到歌单 · {{ addTargetSong.name }}</div>
+          <div class="pg-menu-head flex items-center justify-between gap-2">
+            <span class="truncate min-w-0">添加到歌单 · {{ addTargetSong.name }}</span>
+            <button
+              type="button"
+              class="pg-icobtn pg-icobtn--bare pg-icobtn--sm shrink-0"
+              aria-label="关闭"
+              title="关闭"
+              @click="addTargetSong = null"
+            ><PixelIcon name="close" :size="13" /></button>
+          </div>
           <div class="atp-list">
             <button
               v-for="pl in addablePlaylists"
@@ -260,8 +273,18 @@
           aria-modal="true"
           aria-label="新建歌单"
           @click.stop
+          @keydown="onDialogTrapKeydown"
         >
-          <div class="pg-menu-head">新建歌单</div>
+          <div class="pg-menu-head flex items-center justify-between gap-2">
+            <span class="truncate min-w-0">新建歌单</span>
+            <button
+              type="button"
+              class="pg-icobtn pg-icobtn--bare pg-icobtn--sm shrink-0"
+              aria-label="关闭"
+              title="关闭"
+              @click="closeCreatePlaylist()"
+            ><PixelIcon name="close" :size="13" /></button>
+          </div>
           <div class="atp-new atp-new--flush">
             <input
               ref="createPlaylistInput"
@@ -297,8 +320,18 @@
           aria-modal="true"
           :aria-label="`添加歌曲到 ${selectedPlaylist?.name}`"
           @click.stop
+          @keydown="onDialogTrapKeydown"
         >
-          <div class="pg-menu-head">添加歌曲 · {{ selectedPlaylist?.name }}</div>
+          <div class="pg-menu-head flex items-center justify-between gap-2">
+            <span class="truncate min-w-0">添加歌曲 · {{ selectedPlaylist?.name }}</span>
+            <button
+              type="button"
+              class="pg-icobtn pg-icobtn--bare pg-icobtn--sm shrink-0"
+              aria-label="关闭"
+              title="关闭"
+              @click="closeSongPicker()"
+            ><PixelIcon name="close" :size="13" /></button>
+          </div>
           <div class="atp-new asp-search">
             <input
               ref="songPickerInput"
@@ -329,8 +362,8 @@
               >创建</button>
             </div>
             <div
-              v-for="song in songPickerResults"
-              :key="song.id"
+              v-for="(song, index) in songPickerResults"
+              :key="`asp-${index}-${song.id}`"
               class="asp-row"
               role="listitem"
             >
@@ -418,6 +451,7 @@ import { readShareParams, consumeUrlShareParams } from './lib/share-params'
 import { LS_KEYS, readJSON, writeJSON } from './lib/storage'
 import { initSync, pullFromServer, markDirty, onRemoteApply, attachWriteHook } from './lib/sync'
 import { createReqGate } from './lib/req-gate'
+import { trapTabKeydown } from './lib/focus-trap'
 import { usePlaylistLibrary } from './composables/usePlaylistLibrary'
 import { usePlayer } from './composables/usePlayer'
 import { useSearchNav } from './composables/useSearchNav'
@@ -618,6 +652,11 @@ export default {
     const onAtpOverlayClick = overlayDismiss(() => { addTargetSong.value = null })
     const onCreateOverlayClick = overlayDismiss(() => closeCreatePlaylist())
     const onPickerOverlayClick = overlayDismiss(() => closeSongPicker())
+
+    // aria-modal 契约：Tab/Shift+Tab 把焦点钳在窗内首尾互跳（共享实现
+    // lib/focus-trap.js——SongFormDialog/确认框同源）。Esc 不接：走
+    // onGlobalKeydown 的四窗冻结链，语义比窗内自收更全（busy→abort 等）
+    const onDialogTrapKeydown = (e) => trapTabKeydown(e)
 
     // 焦点归还：rAF（本帧渲染 patch 全落地后）+ 可见性门槛——同三窗不变量
     watch(songFormOpen, (open) => {
@@ -847,7 +886,7 @@ export default {
       openFullscreenPlayer, closeFullscreenPlayer,
       savePlayerStateToStorage, loadPlayerStateFromStorage,
       restoreUiState, restorePlaybackState, setPlayerPersistSuspended,
-      setupMediaSessionHandlers, getHowl,
+      setupMediaSessionHandlers, teardownMediaSession, getHowl,
     } = usePlayer({
       gates,
       playingPlaylistId,
@@ -976,7 +1015,7 @@ export default {
     // 远程控制：host 模式 state_update 广播 + 指令执行 + 断线重连（composables/
     // useRemoteControl.js）。必须放在 usePlayer 之后实例化——依赖全部来自播放器域；
     // 模式判定要在播放器初始化前生效——controller 分支在下方 init 里提前 return
-    const { remoteMode, remoteControllerWsUrl, remoteWsProtocols, connectRemoteHost } = useRemoteControl({
+    const { remoteMode, remoteControllerWsUrl, remoteWsProtocols, connectRemoteHost, disconnectRemoteHost } = useRemoteControl({
       getHowl,
       isPlaying, currentSong, currentTime, duration, volume,
       playingSongs, songSwitching, filteredSongs,
@@ -989,9 +1028,28 @@ export default {
       import('./components/RemoteController.vue').catch(() => {})
     }
 
+    // 会话过期弹门清场（F2）：http.js 401 → authState.expired → AuthGate 接管、
+    // .app-shell 卸载——但 usePlayer/useRemoteControl 挂在 App 根作用域不随壳
+    // 卸载：音频续播、remote WS 继续收发指令、锁屏 MediaSession/全局热键仍控
+    // 播放、悬挂的 pixelConfirm 永不结算。门起即全部收掉；
+    // 重新登录走 @authed 整页 reload，无需恢复路径
+    watch(() => authRequired(), (required) => {
+      if (!required) return
+      const h = getHowl()
+      // 无条件 pause（含 loading 态）：isPlaying=false 的加载中 Howl 若漏闸，
+      // 其 onload 的 autoplay 分支会在门后出声；对已停实例 pause 是 no-op，
+      // 重新登录本就整页 reload，无需恢复路径
+      if (h) h.pause() // 暂停而非销毁——门后不留声
+      disconnectRemoteHost()
+      teardownMediaSession()
+      resolveConfirm(false) // 无悬挂框是 no-op；有则按「取消」结算不悬挂
+    })
+
     // 键盘快捷键（YTM 式）：空格播放暂停、←→ 进退、↑↓ 音量、M 静音、
     // F 全屏、Q 待播队列、/ 聚焦搜索；输入态/修饰键组合全部放行
     const onGlobalKeydown = (e) => {
+      // 弹门期壳已卸载——热键不得在门后控播放（F2 同一场景的窗口侧闸）
+      if (authRequired()) return
       // 确认框未决时全局快捷键全部冻结（/ 偷焦点会破焦点陷阱，F 会在遮罩下隐形切全屏）
       if (isConfirmOpen()) {
         if (e.key === 'Escape') resolveConfirm(false) // 兜底：焦点逃出 overlay 时仍能关
@@ -1111,27 +1169,15 @@ export default {
     // 登录/建号成功：cookie 已落盘，整页重载以干净状态重走 onMounted 管线
     const onAuthed = () => window.location.reload()
 
-    onMounted(async () => {
-      console.log('🚀 App组件挂载完成')
-
-      // 登录探活先行：需要登录而未认证时 AuthGate 接管，跳过全部初始化
-      // （遥控端同样被门——WS 握手也要带登录 cookie）
-      try {
-        const st = await authApi.status()
-        const d = st?.data || {}
-        authState.enabled = !!d.authEnabled
-        authState.setupRequired = !!d.setupRequired
-        authState.authenticated = !!d.authenticated
-        authState.username = d.username || null
-      } catch { /* 探活失败按未启用处理——离线单机的旧行为 */ }
-      authState.booted = true
-      if (authRequired()) return
+    // 完整初始化链（F1）：onMounted 与「暂不设置」补跑共用同一份——
+    // appInited 一次性闸让两路不重入（登录成功是整页 reload 不经过这里）
+    let appInited = false
+    const initApp = async () => {
+      if (appInited) return
+      appInited = true
 
       // 遥控器模式：不初始化播放器/歌单/播放状态恢复，纯控制端
-      if (remoteMode.value === 'controller') {
-        console.log('📱 遥控器模式，跳过播放器初始化')
-        return
-      }
+      if (remoteMode.value === 'controller') return
 
       setupMediaSessionHandlers()
       loadServerCaps() // 源凭据状态（qq loggedIn 等）——VIP 可见性等判定消费，无需 await
@@ -1177,7 +1223,6 @@ export default {
           // ?mix= 本地歌单内容链：重建 local_pl_mix_ 壳
           await importMixPlaylist(share.mix)
         } else if (share.songId) {
-          console.log('🎵 检测到单首歌曲分享，歌曲ID:', share.songId)
           await importNeteaseSongById(share.songId)
         } else if (restorePlayerState) {
           await restorePlaybackState(restorePlayerState)
@@ -1210,7 +1255,39 @@ export default {
         import('./components/WatchView.vue').catch(() => {})
         import('./components/SongList.vue').catch(() => {})
       })
-      console.log('✅ 初始化完成，用户歌单数量:', userPlaylists.value.length)
+    }
+
+    onMounted(async () => {
+      // 登录探活先行：需要登录而未认证时 AuthGate 接管，初始化整段押后
+      // （遥控端同样被门——WS 握手也要带登录 cookie）。
+      // 两条出门：@authed 整页 reload 重走全链；@skip 只翻标记留在会话内，
+      // 靠下方 authRequired watcher 就地补跑同一 initApp
+      try {
+        const st = await authApi.status()
+        const d = st?.data || {}
+        authState.enabled = !!d.authEnabled
+        authState.setupRequired = !!d.setupRequired
+        authState.authenticated = !!d.authenticated
+        authState.username = d.username || null
+      } catch { /* 探活失败按未启用处理——离线单机的旧行为 */ }
+      authState.booted = true
+      if (authRequired()) return
+      await initApp()
+    })
+
+    // 「暂不设置」补跑（F1）：skip 只翻 setupDismissed 标记——authRequired()
+    // 翻假瞬间把押后的初始化就地补上。此前壳会以未初始化状态挂载：
+    // initSync 唯一调用点在 onMounted，没有任何补跑路径
+    watch(() => authRequired(), (required) => {
+      // initApp 的 promise 不能 void 裸丢：回调返回 undefined 后 rejection
+      // 无人接会成 unhandled rejection，且 appInited 已闩不再重试——
+      // 就地捕获并明示用户刷新重进（重走 onMounted 干净初始化链）
+      if (!required) {
+        initApp().catch((e) => {
+          console.error('初始化失败:', e)
+          toast('初始化失败，请刷新页面重试', 'error')
+        })
+      }
     })
 
     // 组件卸载：音频/定时器/WS 由各 composable 自收；此处只摘全局键盘监听
@@ -1306,6 +1383,7 @@ export default {
       canCreateLocalSong, handleRemovePlaylist,
       onOverlayDown, onOverlayUp,
       onAtpOverlayClick, onCreateOverlayClick, onPickerOverlayClick,
+      onDialogTrapKeydown,
       handleOpenSongPicker, handleOpenAddToPlaylist, handleRemoveSongFromPlaylist,
       queueJump,
       queueRemove,

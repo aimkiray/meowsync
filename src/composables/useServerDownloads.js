@@ -166,9 +166,13 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
         serverDownloadingStates.value[song.id] = true
         await downloadsApi.deleteSongDownload(ownerPlaylistId, song.id)
         if (stillCurrent()) serverDownloadedStates.value[song.id] = false
+        // toast 有意不受 stillCurrent 把守（与下载分支不同口径）：删除是
+        // 全局破坏性操作——文件已没，跨视图也要给用户一句交代；状态位
+        // 才按视图归属把守
         toast('删除成功', 'success')
       } catch (error) {
         console.error('删除失败:', error)
+        // 失败同理：删除结果属于操作本身而非当前视图，该弹就弹
         toast('删除失败: ' + apiErrorMessage(error), 'error')
       } finally {
         // 在途标记无条件复位：它按 songId 记到请求结算为止——切走歌单
