@@ -7,17 +7,25 @@ import { ref, nextTick } from 'vue'
 const { howls } = vi.hoisted(() => ({ howls: [] }))
 vi.mock('howler', () => {
   class FakeHowl {
-    constructor(opts) { this.opts = opts; this._seek = 0; this._vol = 1; this.unloaded = false; howls.push(this) }
-    play() { this.opts.onplay?.() }
-    pause() { this.opts.onpause?.() }
-    stop() { this.opts.onstop?.() }
+    constructor(opts) {
+      this.opts = opts; this._seek = 0; this._vol = 1; this.unloaded = false
+      // _playing/_state 可控：play/pause/stop 真翻转（playing() 语义闸——
+      // 单曲就地重播、stopAtQueueEnd 收声都吃它）；_state 改 'loading'
+      // 驱动 togglePlay 加载窗吞键闸与看门狗回收用例
+      this._playing = false
+      this._state = 'loaded'
+      howls.push(this)
+    }
+    play() { this._playing = true; this.opts.onplay?.() }
+    pause() { this._playing = false; this.opts.onpause?.() }
+    stop() { this._playing = false; this.opts.onstop?.() }
     unload() { this.unloaded = true }
     duration() { return this.opts._duration ?? 200 }
     seek(v) { if (v === undefined) return this._seek; this._seek = v; return this._seek }
     volume(v) { if (v === undefined) return this._vol; this._vol = v }
     rate(v) { return v === undefined ? 1 : undefined }
-    playing() { return false }
-    state() { return 'loaded' }
+    playing() { return this._playing }
+    state() { return this._state }
     fire(name, ...args) { this.opts[name]?.(...args) }
   }
   return { Howl: FakeHowl, Howler: { html5PoolSize: 0, volume: vi.fn(), mute: vi.fn() } }
@@ -81,7 +89,7 @@ import { downloadsApi } from '../../src/api/downloads.js'
 import { aiApi } from '../../src/api/ai.js'
 import { syncApi } from '../../src/api/sync.js'
 import { toast } from '../../src/lib/feedback.js'
-import { usePlayer } from '../../src/composables/usePlayer.js'
+import { usePlayer, notifyRemoteSeek } from '../../src/composables/usePlayer.js'
 import { initSync, pullFromServer, resetSyncState } from '../../src/lib/sync.js'
 import { LS_KEYS } from '../../src/lib/storage.js'
 
@@ -121,6 +129,7 @@ beforeEach(() => {
   resetSyncState() // 引擎模块级状态跨用例隔离（远端应用用例会 init）
   musicApi.getSongUrl.mockImplementation(async () => ({ url: 'https://cdn.example/online.mp3', br: 320000 }))
   musicApi.youtubeStreamUrl.mockImplementation(() => 'https://x/yt')
+  musicApi.searchSongs.mockImplementation(async () => [])
   downloadsApi.getSongDownloadStatus.mockImplementation(async () => null)
   // clearAllMocks 只清调用记录不清实现——逐用例覆写的 mock 全部归位
   parseLyrics.mockImplementation(() => [])
@@ -456,6 +465,28 @@ describe('usePlayer：YT 在线链与下载兜底', () => {
     expect(player.songSwitching.value).toBe(false)
     expect(howls).toHaveLength(2)
     // 主链+重解+兜底 3 次探测 + 恰好 4 次失联轮询即 break——不撑满 3min deadline
+    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(7)
+  })
+
+  // L9：200 壳 data 缺省（网关掐 body）与探测抛错同计——不可读即失联，
+  // 旧口径 pollErrors=0 重置会把失联轮空转撑满 3min deadline
+  it('轮询回 200 但 data 缺省：与抛错同计失联，4 次收束「仍在进行」', async () => {
+    const yt = ytSong({ youtube: { videoId: 'abcdefghijk' } })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(yt)
+    downloadsApi.downloadSongToServer.mockRejectedValueOnce(
+      { response: { status: 409, data: { message: '该歌曲正在下载中' } } })
+    downloadsApi.getSongDownloadStatus
+      .mockImplementationOnce(async () => null)      // 主链探测无档
+      .mockImplementationOnce(async () => null)      // 重解代探测无档
+      .mockImplementationOnce(async () => null)      // 兜底探测无档
+      .mockResolvedValue({})                         // 轮询段：200 壳无 data 连击
+    await player.playSong(yt)
+    await driveToDownloadFallback()
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/仍在进行/), { timeout: 12000 })
+    expect(player.songSwitching.value).toBe(false)
+    expect(howls).toHaveLength(2)
+    // 与抛错失联同账：3 次探测 + 恰好 4 次 data 缺省轮询即 break
     expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(7)
   })
 
@@ -1899,6 +1930,27 @@ describe('usePlayer：downloadCurrentSong（watch 顶行键）', () => {
     expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('下载失败'), expect.anything())
   })
 
+  // L9 另一处轮询：downloadCurrentSong 终态轮询——data 缺省的 200 回包
+  // 与抛错同计失联（旧口径进 catch 旁路重置 pollErrors=0，失联轮空转）
+  it('终态轮询回 200 但 data 缺省：同计失联，3 次收束「仍在进行」', async () => {
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = { id: 777 }
+    await player.playSong(song(7))
+    downloadsApi.downloadSongToServer.mockImplementation(async () => ({ data: { status: 'pending' } }))
+    // 清掉 playSong 主链探测的一次调用——计数只钉终态轮询段
+    downloadsApi.getSongDownloadStatus.mockClear()
+    downloadsApi.getSongDownloadStatus.mockResolvedValue({}) // 200 壳无 data
+    const p = player.downloadCurrentSong()
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith('已加入下载队列', 'info'))
+    await vi.waitFor(() =>
+      expect(toast).toHaveBeenCalledWith('下载仍在后台进行中，可稍后在下载页里查看结果', 'info'),
+      { timeout: 10000 })
+    await p
+    expect(player.songDownloading.value).toBe(false)
+    // 恰好 3 次缺省即收——不空轮撑满 3min deadline
+    expect(downloadsApi.getSongDownloadStatus).toHaveBeenCalledTimes(3)
+  })
+
   it('切歌静默：服务端任务照跑，终态 toast 按归属曲压制', async () => {
     const { player, deps } = makePlayer()
     const a = song(7)
@@ -1976,5 +2028,324 @@ describe('usePlayer：downloadCurrentSong（watch 顶行键）', () => {
     expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
     expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
     expect(player.songDownloading.value).toBe(false)
+  })
+})
+
+// ═══ 评审回归（F1–F6 中项 + 轻项 L7/L9/L10/L11/L13/L15）═══
+describe('usePlayer：F1 continueWithRelated 代次闸与在途去重', () => {
+  it('同代连入合流一票；换代后旧票落地被弃，新票按新曲艺人另立种子', async () => {
+    const a = song(1)
+    const b = song(2, { ar: [{ name: '甲' }] }) // 种子取当前播放曲的艺人——队尾是 b
+    const { player, deps } = makePlayer({ songs: [a, b] })
+    player.autoplayOn.value = true
+    await player.playSong(a)
+    await player.playSong(b, { preserveContext: true }) // 队列=[a,b]，b 为队尾
+    const resolvers = []
+    musicApi.searchSongs.mockImplementation(() => new Promise(r => resolvers.push(r)))
+
+    howls.at(-1).fire('onend') // 队尾自然播完 → continueWithRelated 票1
+    expect(musicApi.searchSongs).toHaveBeenCalledTimes(1)
+    expect(musicApi.searchSongs.mock.calls[0][0]).toBe('甲')
+    howls.at(-1).fire('onend') // 同代第二入口合流——仍一票，不双发
+    expect(musicApi.searchSongs).toHaveBeenCalledTimes(1)
+
+    // 换代：重拍队列成 [c] 并播它——旧票种子（甲）属旧曲，不得收养进新代
+    const c = song(3, { ar: [{ name: '乙' }] })
+    deps.filteredSongs.value = [c]
+    await player.playSong(c)
+    howls.at(-1).fire('onend') // 新代队尾 → 另立新票新种子
+    expect(musicApi.searchSongs).toHaveBeenCalledTimes(2)
+    expect(musicApi.searchSongs.mock.calls[1][0]).toBe('乙')
+
+    // 旧票晚到落地：代次闸丢弃——队列/实例皆不动，也不误收 stopAtQueueEnd
+    const howlCount = howls.length
+    resolvers[0]([song(50), song(51)])
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.playingSongs.value.map(s => s.id)).toEqual([3])
+    expect(howls).toHaveLength(howlCount)
+
+    // 新票落地：pushTail+playSong 照常续播
+    resolvers[1]([song(60)])
+    await vi.waitFor(() =>
+      expect(player.playingSongs.value.map(s => s.id)).toEqual([3, 60]))
+    expect(player.currentSong.value.id).toBe(60)
+  })
+
+  it('RTT 窗内切歌（换代）：旧票落地被代次闸弃，不劫持新队列复活出声', async () => {
+    const a = song(1, { ar: [{ name: '甲' }] })
+    const { player, deps } = makePlayer({ songs: [a] })
+    player.autoplayOn.value = true
+    await player.playSong(a)
+    let release
+    musicApi.searchSongs.mockImplementation(() => new Promise(r => { release = r }))
+    howls.at(-1).fire('onend')
+    expect(musicApi.searchSongs).toHaveBeenCalledTimes(1)
+
+    const c = song(9)
+    deps.filteredSongs.value = [c]
+    await player.playSong(c) // 换代——旧票 seq 失配
+    const howlCount = howls.length
+    release([song(70)])
+    await new Promise(r => setTimeout(r, 0))
+    // 落地被弃：队列仍 [9]、无新实例、当前曲不被拉回
+    expect(player.playingSongs.value.map(s => s.id)).toEqual([9])
+    expect(howls).toHaveLength(howlCount)
+    expect(player.currentSong.value.id).toBe(9)
+  })
+})
+
+describe('usePlayer：F2 restoreUiState 副作用', () => {
+  it('远端音量落到活跃 Howl 实例（ref+实例双写），越界钳 0-100', async () => {
+    const { player } = makePlayer({ songs: [song(1)] })
+    await player.playSong(song(1))
+    player.restoreUiState({ volume: 33 })
+    expect(player.volume.value).toBe(33)
+    expect(howls[0]._vol).toBeCloseTo(0.33) // 只写 ref 的旧病灶=界面 33 实例 80 两张皮
+    player.restoreUiState({ volume: 1e999 }) // 脏数据不炸 howl.volume
+    expect(player.volume.value).toBe(33)
+  })
+
+  it('远端置 shuffleOn：与 toggleShuffle 同构真重排——当前曲锚队首、复位还原原序', async () => {
+    const list = [song(1), song(2), song(3), song(4)]
+    const { player } = makePlayer({ songs: list })
+    await player.playSong(list[0]) // 原序 [1,2,3,4]
+    player.restoreUiState({ shuffleOn: true })
+    expect(player.shuffleOn.value).toBe(true)
+    const ids = player.playingSongs.value.map(s => s.id)
+    expect(ids[0]).toBe(1) // 当前曲锚定队首（与 toggleShuffle 同口径）
+    expect(new Set(ids)).toEqual(new Set([1, 2, 3, 4]))
+    player.restoreUiState({ shuffleOn: false }) // 复位还的是原序备份
+    expect(player.playingSongs.value.map(s => s.id)).toEqual([1, 2, 3, 4])
+    expect(player.shuffleOn.value).toBe(false)
+  })
+})
+
+describe('usePlayer：F3 悬挂词务锁终态补清', () => {
+  it('无 URL 早退：旧代 lyricFetching 残余被补清，工具条不卡死', async () => {
+    const { player } = makePlayer()
+    await player.playSong(song(1))
+    howls.at(-1).fire('onload')
+    // 旧代手动词务永不 settle——锁持着（复现病灶：新代早退不清锁）
+    musicApi.getExternalLyric.mockImplementation(() => new Promise(() => {}))
+    void player.manualFetchLyrics()
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.lyricFetching.value).toBe(true)
+
+    musicApi.getSongUrl.mockResolvedValue({ url: null })
+    await player.playSong(song(2)) // 无 URL 终态——代次闸见锁属旧代，补清
+    expect(player.playbackError.value).toMatch(/无法获取播放链接/)
+    expect(player.lyricFetching.value).toBe(false)
+  })
+})
+
+describe('usePlayer：F4 shuffle 态 queueMove 邻居锚定', () => {
+  it('打乱序里拖动：原序备份按新前驱锚定，关随机落锚定序非坐标错位', async () => {
+    const list = [song(1), song(2), song(3), song(4), song(5)]
+    const { player } = makePlayer({ songs: list })
+    await player.playSong(list[0])
+    player.toggleShuffle() // 备份=[1,2,3,4,5]，可视=[1,...打乱]
+    const vis = player.playingSongs.value.map(s => s.id)
+    expect(vis[0]).toBe(1)
+    const movedId = vis.at(-1)
+    // 打乱序末位拖到第 1 位：新前驱=vis[0]=1——原序里 movedId 应插到 1 之后
+    player.queueMove({ from: vis.length - 1, to: 1 })
+    expect(player.playingSongs.value.map(s => s.id)[1]).toBe(movedId)
+    player.toggleShuffle() // 关随机——还的应是邻居锚定后的原序
+    const expected = [1, movedId, ...[2, 3, 4, 5].filter(id => id !== movedId)]
+    expect(player.playingSongs.value.map(s => s.id)).toEqual(expected)
+  })
+
+  it('拖到队首（无前驱）：moved 落原序备份头', async () => {
+    const list = [song(1), song(2), song(3)]
+    const { player } = makePlayer({ songs: list })
+    await player.playSong(list[0])
+    player.toggleShuffle()
+    const vis = player.playingSongs.value.map(s => s.id)
+    const movedId = vis.at(-1)
+    player.queueMove({ from: vis.length - 1, to: 0 }) // 拖到队首——前驱缺席插原序头
+    player.toggleShuffle()
+    const expected = [movedId, ...[1, 2, 3].filter(id => id !== movedId)]
+    expect(player.playingSongs.value.map(s => s.id)).toEqual(expected)
+  })
+})
+
+describe('usePlayer：L7 loadingLyrics 顶置', () => {
+  it('hydrateMatchBinding RTT 窗内即进加载态——旧词不再裸挂无指示窗', async () => {
+    let releaseState
+    musicApi.getMatchState.mockImplementation(
+      () => new Promise(r => { releaseState = () => r(null) }))
+    const bv = song('bv_BV1xx411c7mD', {
+      bilibili: { bvid: 'BV1xx411c7mD', title: 't', author: 'a' },
+    })
+    const { player } = makePlayer()
+    const p = player.playSong(bv)
+    // 水合读口已发出、RTT 未完成——窗内 loadingLyrics 必须已置位
+    await vi.waitFor(() => expect(musicApi.getMatchState).toHaveBeenCalled())
+    expect(player.loadingLyrics.value).toBe(true)
+    releaseState()
+    await p
+    expect(player.loadingLyrics.value).toBe(false)
+  })
+})
+
+describe('usePlayer：L10 判否换绑形闸对齐裸 id', () => {
+  it('verify→rematch RTT 窗内 provider 块被剥：bv_ 裸 id 仍走 /match/retry', async () => {
+    const bv = song('bv_BV1xx411c7mD', {
+      neteaseId: 111,
+      bilibili: { bvid: 'BV1xx411c7mD', title: '视频标题', author: 'UP主' },
+    })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '错词' }] })
+    // 判否回包前把 provider 块剥走（持久化裁剪/旧行形态）——形闸若只认
+    // 对象则换绑资格随块蒸发；isUgcExternalTrack 裸 id 口径保住它
+    aiApi.verifyLyric.mockImplementation(async () => {
+      delete bv.bilibili
+      return { ok: false }
+    })
+    musicApi.retryMatch.mockResolvedValue(null)
+    const { player } = makePlayer()
+    await player.playSong(bv)
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalledTimes(1))
+    const payload = musicApi.retryMatch.mock.calls[0][0]
+    // provider 块缺席：检索喂料回退 song.name/ar（与 rematchUnbound 同口径）
+    expect(payload).toMatchObject({
+      trackId: 'bv_BV1xx411c7mD', title: '歌bv_BV1xx411c7mD', author: '',
+      excludeIds: [111],
+    })
+  })
+})
+
+describe('usePlayer：L11 队列播尽「已播完」语义', () => {
+  it('stopAtQueueEnd：UI 进度走满但落盘续播位写 0——重启不回最后半秒', async () => {
+    const list = [song(1), song(2)]
+    const { player } = makePlayer({ songs: list })
+    await player.playSong(list[1]) // 队列=[1,2]，播队尾 2
+    const h = howls.at(-1)
+    h.fire('onload')
+    h._state = 'loaded'
+    h.fire('onend') // list 模式 + autoplay 关 → stopAtQueueEnd
+    expect(player.isPlaying.value).toBe(false)
+    expect(player.currentTime.value).toBe(200) // UI 进度照常走满
+    const saved = JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE))
+    expect(saved.currentTime).toBe(0) // 落盘记「已播完」= 从头，不是尾刻
+  })
+
+  it('播尽后显式 seek：销「已播完」挂账，落盘写用户选的新位', async () => {
+    const list = [song(1), song(2)]
+    const { player } = makePlayer({ songs: list })
+    await player.playSong(list[1])
+    const h = howls.at(-1)
+    h.fire('onload')
+    h.fire('onend')
+    expect(JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE)).currentTime).toBe(0)
+    player.seekTo(0.5) // 比例 0-1：拖到正中——挂账销，下拍写 100
+    const saved = JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE))
+    expect(saved.currentTime).toBe(100)
+  })
+
+  // F-L1：遥控 seek 不走 seekTo——销账经模块级口（notifyRemoteSeek）
+  it('遥控 seek 销账口：不销账落盘仍写挂账 0；销账后写遥控选的新位', async () => {
+    const list = [song(1), song(2)]
+    const { player } = makePlayer({ songs: list })
+    await player.playSong(list[1])
+    const h = howls.at(-1)
+    h.fire('onload')
+    h.fire('onend') // → stopAtQueueEnd 挂账 pendingSeekTime=0
+    expect(JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE)).currentTime).toBe(0)
+
+    // 病灶臂（复现 F-L1）：遥控 seek 直写 howl+currentTime 不销账——
+    // 落盘被挂账 0 吞掉
+    h.seek(60)
+    player.currentTime.value = 60
+    await nextTick()
+    expect(JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE)).currentTime).toBe(0)
+
+    // 修复臂：useRemoteControl case 'seek' 先销账再写位——落盘写新位
+    notifyRemoteSeek()
+    player.currentTime.value = 90
+    await nextTick()
+    expect(JSON.parse(localStorage.getItem(LS_KEYS.PLAYER_STATE)).currentTime).toBe(90)
+  })
+})
+
+describe('usePlayer：L13 词同步计时器与 AI status 共账', () => {
+  it('lyricTimer 暂停清表停走、onplay 重建续走（playing() 可控桩驱动）', async () => {
+    vi.useFakeTimers()
+    try {
+      musicApi.getLyrics.mockResolvedValue({
+        lyrics: [{ time: 1, text: '一' }, { time: 5, text: '二' }],
+      })
+      const { player } = makePlayer()
+      await player.playSong(song(7))
+      const h = howls.at(-1)
+      h.fire('onload')
+      h.play() // _playing=true → onplay → isPlaying → 建表
+      expect(player.isPlaying.value).toBe(true)
+      h._seek = 5.2 // 越过第二行戳
+      vi.advanceTimersByTime(150)
+      expect(player.currentLyricIndex.value).toBe(1)
+
+      h.pause() // onpause → isPlaying=false + 清表——暂停期不再空转 tick
+      expect(player.isPlaying.value).toBe(false)
+      h._seek = 1.2
+      vi.advanceTimersByTime(600)
+      expect(player.currentLyricIndex.value).toBe(1) // 表已清：seek 挪回也不动
+
+      h.play() // onplay 重建——按当下 seek 归位
+      vi.advanceTimersByTime(150)
+      expect(player.currentLyricIndex.value).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aiApi.status 会话级共账：多曲后处理只问一次，失败销账可重试', async () => {
+    aiApi.status.mockResolvedValue({ enabled: true })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: 'x' }] })
+    const { player } = makePlayer()
+    await player.playSong(song(7))
+    await player.playSong(song(8))
+    await vi.waitFor(() => expect(aiApi.status).toHaveBeenCalled())
+    await new Promise(r => setTimeout(r, 0))
+    expect(aiApi.status).toHaveBeenCalledTimes(1) // 两曲两批 postProcess 共一票
+  })
+
+  it('aiApi.status 首问失败销账重抛——下曲后处理重新探测', async () => {
+    aiApi.status
+      .mockRejectedValueOnce(new Error('ai down'))
+      .mockResolvedValue({ enabled: true })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: 'x' }] })
+    const { player } = makePlayer()
+    await player.playSong(song(7))
+    await vi.waitFor(() => expect(aiApi.status).toHaveBeenCalledTimes(1))
+    await player.playSong(song(8))
+    await vi.waitFor(() => expect(aiApi.status).toHaveBeenCalledTimes(2))
+  })
+})
+
+describe('usePlayer：L15 看门狗与加载窗（state 可控桩驱动）', () => {
+  it('loading 态实例 20s 未 onload：看门狗回收置空，加载窗吞键闸先行验证', async () => {
+    vi.useFakeTimers()
+    try {
+      const { player } = makePlayer()
+      await player.playSong(song(7))
+      const h = howls.at(-1)
+      h._state = 'loading' // 实例已建、onload 未至——加载窗语义
+      // 加载窗内播放键被吞（防 _queue+onload autoplay 双音轨）
+      player.togglePlay()
+      expect(h._playing).toBe(false)
+      expect(player.isPlaying.value).toBe(false)
+
+      vi.advanceTimersByTime(20000) // PLAYBACK_LOAD_TIMEOUT_MS
+      expect(h.unloaded).toBe(true)
+      expect(player.getHowl()).toBeNull() // 实例回收——播放键交还 !howl 重建路径
+      expect(player.playbackError.value).toMatch(/加载超时/)
+      expect(player.songSwitching.value).toBe(false)
+
+      // 键复活：!howl 分支原地重走 playSong 建实例
+      player.togglePlay()
+      await vi.waitFor(() => expect(howls.length).toBeGreaterThan(1))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

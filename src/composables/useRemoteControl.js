@@ -2,6 +2,9 @@ import { ref, watch, onBeforeUnmount } from 'vue'
 import { resolveApiBaseUrl } from '../lib/api-base.js'
 import { songCoverUrl } from '../lib/song.js'
 import { toast } from '../lib/feedback.js'
+// 销「已播完」挂账走 usePlayer 模块级单槽——pendingSeekTime 是其闭包私有值，
+// deps 接线表（App.vue）无此通道；本 composable 同样仅 App 实例化，槽同寿
+import { notifyRemoteSeek } from './usePlayer.js'
 // WS 消息类型与服务端 remote.js 同源
 import { MSG_TYPES, REMOTE_LIMITS } from '../shared/protocol.js'
 
@@ -132,6 +135,10 @@ export function useRemoteControl(deps) {
         const t = msg.payload
         if (howl && typeof t === 'number' && Number.isFinite(t)) {
           const clamped = Math.max(0, Math.min(t, duration.value || 0))
+          // 显式 seek 销「已播完」挂账（与 seekTo/seekBy/MediaSession seekto
+          // 同口径）——队尾播尽 pendingSeekTime=0 挂账期间不销账，落盘仍写
+          // 挂账 0，遥控选的新位持久化被吞
+          notifyRemoteSeek()
           howl.seek(clamped)
           currentTime.value = clamped
         }
@@ -170,10 +177,16 @@ export function useRemoteControl(deps) {
   function connectRemoteHost(asRole = 'host') {
     if (remoteMode.value !== 'host') return
     // 幂等：重进（手动调用/降级/晋升/重连定时器叠加）先清挂单再关旧
-    // socket——旧 socket 的 onclose 置空，迟到的 close 不会再抢重连权
+    // socket——旧 socket 的 onclose 置空，迟到的 close 不会再抢重连权；
+    // 心跳 interval 同样要清——重进时旧 socket 的 onopen 已起的
+    // remoteStateTimer 不归任何存活引用管，留着就是逃逸的双心跳
     if (remoteReconnectTimer) {
       clearTimeout(remoteReconnectTimer)
       remoteReconnectTimer = null
+    }
+    if (remoteStateTimer) {
+      clearInterval(remoteStateTimer)
+      remoteStateTimer = null
     }
     if (remoteWs) {
       remoteWs.onclose = null
@@ -267,7 +280,10 @@ export function useRemoteControl(deps) {
     if (remoteMode.value === 'host') sendRemoteState()
   })
 
-  onBeforeUnmount(() => {
+  // 全量断开口：清挂单（重连定时器+心跳 interval）+ 摘回调后关 socket——
+  // 不摘 onclose 的话主动 close 会走 isCurrent 分支触发重连/降级链。
+  // 会话过期弹门（App 的 authRequired watcher）与组件卸载共用这一份
+  function disconnectRemoteHost() {
     remoteReconnectTimer && clearTimeout(remoteReconnectTimer)
     remoteReconnectTimer = null
     // onclose 被置 null 后不会再清 remoteStateTimer，这里必须手动清，否则 interval 泄漏
@@ -275,10 +291,14 @@ export function useRemoteControl(deps) {
     remoteStateTimer = null
     if (remoteWs) {
       remoteWs.onclose = null
-      remoteWs.close()
+      remoteWs.onerror = null
+      remoteWs.onmessage = null
+      try { remoteWs.close() } catch { /* 已关 */ }
       remoteWs = null
     }
-  })
+  }
 
-  return { remoteMode, remoteControllerWsUrl, remoteWsProtocols, connectRemoteHost }
+  onBeforeUnmount(disconnectRemoteHost)
+
+  return { remoteMode, remoteControllerWsUrl, remoteWsProtocols, connectRemoteHost, disconnectRemoteHost }
 }
