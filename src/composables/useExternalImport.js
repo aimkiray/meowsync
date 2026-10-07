@@ -49,9 +49,11 @@ export function useExternalImport({
     gates.select.invalidate()
     loadingSongs.value = false // 被顶的 selectPlaylist 不会再复位 loading——收掉
     searchQuery.value = '' // 提前清框——防用户重复回车并发多个 resolve
+    // 长驻进度 toast 必须终态回收——成功/失败/作废/自动转跳路径都不能让
+    // 「正在解析…」挂满 30s（useAddToPlaylist :252 同款范式）
+    const resolving = toast(`正在解析 ${spec.tag} 视频…`, 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
     try {
       console.log(`${spec.icon} 解析 ${spec.tag} 视频:`, input)
-      toast(`正在解析 ${spec.tag} 视频…`, 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
       const data = await spec.resolve(input)
       // 解析期间用户点了别的歌/再导入——过期意图不得抢播放+强跳视图
       if (!gates.mediaImport.isCurrent(myReq)) return
@@ -111,6 +113,8 @@ export function useExternalImport({
       console.error(`❌ ${spec.tag} 导入失败:`, error)
       searchQuery.value = input // 失败还原输入——用户可直接回车重试
       toast(`${spec.tag} 导入失败：${error.message || '请检查链接后重试'}`, 'error', 5000)
+    } finally {
+      toastDismiss(resolving) // 进度 toast 完成即退——stale/失败/转跳路径也收
     }
   }
   const importBilibili = (input) => importExternalMedia(input, 'bilibili')
@@ -318,6 +322,7 @@ export function useExternalImport({
 
       console.log('✅ 单首歌曲分享加载完成并开始播放')
     } catch (error) {
+      if (!gates.mediaImport.isCurrent(myReq)) return // 与 :94/:185/:451 同口径——过期请求的失败不打扰用户
       console.error('❌ 加载单首歌曲失败:', error)
       toast('分享的歌曲加载失败，请稍后重试', 'error')
     }
@@ -363,7 +368,8 @@ export function useExternalImport({
     const myReq = gates.mediaImport.claim()
     gates.select.invalidate()
     loadingSongs.value = false
-    toast(`正在导入分享歌单「${name}」…`, 'info', 30000)
+    // 与 importExternalMedia 同规约：长驻进度 toast 终态回收（成功/失败/作废都不留残）
+    const importing = toast(`正在导入分享歌单「${name}」…`, 'info', 30000)
     try {
       const numericIds = ids.filter(id => /^\d+$/.test(id))
       const detailMap = new Map()
@@ -451,6 +457,8 @@ export function useExternalImport({
       if (!gates.mediaImport.isCurrent(myReq)) return
       console.error('mix 导入失败:', error)
       toast(`导入分享歌单失败：${error.message || '请稍后重试'}`, 'error', 5000)
+    } finally {
+      toastDismiss(importing)
     }
   }
 

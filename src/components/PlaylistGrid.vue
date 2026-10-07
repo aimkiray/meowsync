@@ -30,7 +30,7 @@
         <div :ref="bindSongAnchor" :style="{ height: songTopPad + 'px' }" aria-hidden="true"></div>
         <div
           v-for="(song, i) in pagedSongs"
-          :key="song.id"
+          :key="pagedSongKeys[i]"
           class="song-result-row"
           :class="{ 'song-result-row--playing': String(currentSong?.id) === String(song.id) }"
         >
@@ -299,6 +299,19 @@ export default {
       resetWhen: () => props.songs[0]?.id,
     })
 
+    // 行键：搜索结果可含重复曲 id（云村/QQ 多源同曲、深挖去重只挡跨页），
+    // 裸 song.id 会撞 :key（duplicate-key 告警）。同 id 第 n 次出现给
+    // `id#n`；键随渲染位走——同 id 两份行内容等效，与 SongList 同口径
+    const pagedSongKeys = computed(() => {
+      const seen = new Map()
+      return pagedSongs.value.map(s => {
+        const k = String(s?.id)
+        const n = seen.get(k) ?? 0
+        seen.set(k, n + 1)
+        return `${k}#${n}`
+      })
+    })
+
     // 离场滚动记忆：搜索结果数据在 nav 层不丢，丢的是滚动位与卡片窗——
     // 重挂先把卡片前缀窗物化回深度再还 scrollTop（曲列 spacer 天然全高）。
     // 键编查询词：别处（watch 页顶栏）发起的新搜索重挂本组件时，旧词位置
@@ -338,6 +351,7 @@ export default {
       loadMoreGrid,
       bindSentinel,
       pagedSongs,
+      pagedSongKeys,
       songStartIndex,
       songTopPad,
       songBottomPad,
