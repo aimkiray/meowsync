@@ -40,13 +40,16 @@ export function useAddToPlaylist({
   const addablePlaylists = computed(() =>
     userPlaylists.value.filter(p => !isSingleSongShellId(p.id))
   )
-  const openAddToPlaylist = (song) => {
+  // returnFocus：行 ⋯ 菜单等会把焦点停在将随菜单卸载的 menuitem 上的路径，
+  // 调用方须显式传活着的 ⋯触发键作归还锚（openSongForm 的 returnFocus
+  // 同款传参形）；缺省回落 activeElement（直接按钮路径）
+  const openAddToPlaylist = (song, returnFocus = null) => {
     // 校验先于互斥收口（与 openSongPicker 同律）：无效曲不该碰弹窗态
     if (!song || song.id == null) {
       toast('这首歌无法加入歌单', 'error')
       return
     }
-    atpPrevFocus = document.activeElement
+    atpPrevFocus = returnFocus || document.activeElement
     closeSongPicker() // 与点歌台显式互斥（行菜单在模态外层但防御性收口）
     closeCreatePlaylist() // 与新建歌单弹窗同款互斥
     newPlaylistName.value = ''
@@ -58,8 +61,9 @@ export function useAddToPlaylist({
     if (!v) return
     const prevFocus = atpPrevFocus
     atpPrevFocus = null
-    // preventScroll：归还不该滚页面（互斥关闭路径上归还的只是中间态，滚了是闪动）
-    onCleanup(() => { if (prevFocus instanceof HTMLElement) prevFocus.focus({ preventScroll: true }) })
+    // preventScroll：归还不该滚页面（互斥关闭路径上归还的只是中间态，滚了是闪动）。
+    // isConnected：锚已随菜单/列表卸载时 focus 是静默空炮，先闸掉
+    onCleanup(() => { if (prevFocus instanceof HTMLElement && prevFocus.isConnected) prevFocus.focus({ preventScroll: true }) })
     await nextTick()
     atpInput.value?.focus()
   })

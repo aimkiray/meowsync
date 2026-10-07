@@ -119,7 +119,7 @@
       <!-- 拖拽监听器只在排序态挂载（v-on 对象）：常挂=每行 4 个永不触发的死监听 -->
       <div
         v-for="(song, index) in displayRows"
-        :key="song.id"
+        :key="displayRowKeys[index]"
         class="song-row"
         :class="{
           'song-row--playing': isCurrent(song),
@@ -197,14 +197,14 @@
           <template v-if="reorderMode">
             <button
               class="song-move-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
-              @click.stop="$emit('move-song', { dragId: song.id, targetId: displayRows[index - 1]?.id })"
+              @click.stop="$emit('move-song', { dragRef: song, targetRef: displayRows[index - 1] })"
               :disabled="index === 0"
               title="上移"
               aria-label="上移"
             >↑</button>
             <button
               class="song-move-btn pg-icobtn pg-icobtn--bare pg-icobtn--sm"
-              @click.stop="$emit('move-song', { dragId: song.id, targetId: displayRows[index + 1]?.id })"
+              @click.stop="$emit('move-song', { dragRef: song, targetRef: displayRows[index + 1] })"
               :disabled="index === displayRows.length - 1"
               title="下移"
               aria-label="下移"
@@ -247,6 +247,7 @@
           role="menu"
           :style="getMenuPosition(showDownloadMenu)"
           @click.stop
+          @keydown="cycleMenuItems"
         >
           <div class="pg-menu-head">
             {{ menuSong?.name || '歌曲操作' }}
@@ -821,7 +822,9 @@ import { isVipSong, visibleSongs, isLocalPlaylistId, isSingleSongShellId, isFile
 import { serverCaps } from '../lib/caps'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
+import { cycleMenuItems } from '../lib/focus-trap'
 import { musicApi } from '../api/music.js'
+import { apiErrorMessage } from '../api/http'
 import { notifyLyricRematch } from '../composables/usePlayer.js'
 import { applyMatchResult } from '../lib/external-songs.js'
 
@@ -870,7 +873,7 @@ export default {
   setup(props, { emit }) {
     const showDownloadMenu = ref(null)
     const menuPositions = ref({})
-    let menuTriggerBtn = null // 最近开菜单的 ⋯键——edit-song emit 的焦点归还目标
+    let menuTriggerBtn = null // 最近开菜单的 ⋯键——菜单 emit 的焦点归还锚（edit-song/add-to-playlist）
 
 
     // 过滤后的歌曲列表（根据VIP显示设置）——谓词与 App.vue 同一份（lib/song.js）
@@ -994,6 +997,9 @@ export default {
           left: Math.max(8, Math.min(rect.right - menuWidth, vw - menuWidth - 8)) + 'px'
         }
         showDownloadMenu.value = songId
+        // 菜单 teleport 到 body——不主动移焦时键盘 Tab 要翻遍整页才到菜单项；
+        // 开菜单即聚焦首项（TopNavigation ⋯ 菜单同口径），Esc 归还见 closeOnEscape
+        nextTick(() => document.querySelector('.download-menu-overlay .pg-menu-item')?.focus())
       }
     }
 
@@ -1030,11 +1036,13 @@ export default {
       if (song) emit('add-to-queue', song)
     }
 
-    // 添加到歌单：emit 给 App 统一弹选择器（歌单库与持久化都在 App 侧）
+    // 添加到歌单：emit 给 App 统一弹选择器（歌单库与持久化都在 App 侧）。
+    // 第二参带 ⋯触发键——menuitem 在菜单卸载时就死了，关窗焦点要还到 ⋯上
     const addToPlaylistFromMenu = () => {
       const song = menuSong.value
+      const trigger = menuTriggerBtn
       closeDownloadMenu()
-      if (song) emit('add-to-playlist', song)
+      if (song) emit('add-to-playlist', song, trigger)
     }
 
     // 编辑：emit 给 App 开 SongFormDialog（表单态/上传编排在 App 侧）。
@@ -1115,7 +1123,7 @@ export default {
           notifyLyricRematch(song.id, null, prevId)
         }
       } catch (e) {
-        toast(`重新匹配失败：${e?.response?.data?.message || e?.message || '网络错误'}`, 'error')
+        toast(`重新匹配失败：${apiErrorMessage(e)}`, 'error')
       } finally {
         rematchInflight.delete(song.id)
       }
@@ -1152,8 +1160,14 @@ export default {
       const closeOnScroll = () => { closeDownloadMenu() }
       const closeOnEscape = (e) => {
         if (e.key !== 'Escape') return
-        // 菜单优先：开着菜单时 Esc 归菜单（焦点归还触发键）；否则收排序态
-        if (showDownloadMenu.value !== null) { closeDownloadMenu(true); return }
+        // 菜单优先：开着菜单时 Esc 归菜单；否则收排序态。
+        // 焦点归还仅在焦点仍在菜单/触发键内时进行——用户已 Tab 挪出菜单时
+        // 不得强拽回 ⋯键（TopNavigation onMenuKeydown 同闸）
+        if (showDownloadMenu.value !== null) {
+          const ae = document.activeElement
+          closeDownloadMenu(ae === menuTriggerBtn || !!ae?.closest?.('.download-menu-overlay'))
+          return
+        }
         if (reorderMode.value) exitReorderMode()
       }
       window.addEventListener('scroll', closeOnScroll, true)
@@ -1190,6 +1204,19 @@ export default {
     // 行号：排序态 index 即全局序；滑窗态补 startIndex 偏移
     const rowNumber = (i) => (reorderMode.value ? i : vStartIndex.value + i) + 1
 
+    // 行键：远端单可合法含重复 trackId——裸 song.id 会撞 :key（duplicate-key
+    // 告警）。同 id 第 n 次出现给 `id#n` 行键；键随渲染位走，同 id 的两份
+    // 行内容等效，换位时按位复用 DOM 与「同 id 同位」的持久化粒度一致
+    const displayRowKeys = computed(() => {
+      const seen = new Map()
+      return displayRows.value.map(s => {
+        const k = String(s?.id)
+        const n = seen.get(k) ?? 0
+        seen.set(k, n + 1)
+        return `${k}#${n}`
+      })
+    })
+
     // 焦点归还锚：退出排序态（完成/Esc）把焦点还给入口键——键盘用户不落 body。
     // 入口键在排序态被 v-if 卸载、退出后才重挂载：当下 sortBtn 恒 null（旧代码
     // 因此是死路径），须等重渲一帧再聚焦；canReorder 同帧翻 false 时无锚可还
@@ -1216,8 +1243,9 @@ export default {
     }
 
     // HTML5 DnD：MIME 标记隔外来内容 drop（桌面文件/页内文本），曲对象在
-    // dragstart 捕获——排序态间列表被外部替换时，emit 仍带真实曲 id，
-    // 落点 id 在 drop 当下重解析（App 侧双端 id 锚定再保险）
+    // dragstart 捕获——emit 带行对象引用而非裸 id：同 id 重复行各自锚定
+    // （裸 id findIndex 恒中第一份，拖第二份移的会是第一份）；列表被外部
+    // 整体替换时旧引用解析落空=no-op（App 侧 indexOf 锚定再保险）
     const MOVE_MIME = 'application/x-meowsync-track-move'
     let dragSong = null
     const isMoveDrag = (e) => !!e.dataTransfer?.types?.includes(MOVE_MIME)
@@ -1237,10 +1265,9 @@ export default {
     }
     const onRowDrop = (index, e) => {
       e.preventDefault()
-      const dragId = dragSong?.id
-      const targetId = displayRows.value[index]?.id
-      if (dragId != null && targetId != null && dragIndex.value !== index) {
-        emit('move-song', { dragId, targetId })
+      const targetRef = displayRows.value[index]
+      if (dragSong && targetRef && dragIndex.value !== index) {
+        emit('move-song', { dragRef: dragSong, targetRef })
       }
       onRowDragEnd()
     }
@@ -1257,12 +1284,14 @@ export default {
       dragSong = null
     }
     // 外部整体换表（静默同步/追加撞库等）清在途拖拽态——下标已错位；
-    // 自身位移的写也走这里，无碍（drop 时已显式收尾）
-    watch(() => props.songs, onRowDragEnd)
+    // 自身位移的写也走这里，无碍（drop 时已显式收尾）。
+    // fixed ⋯ 菜单同关：目标行随旧表走，留着是指错歌的悬空菜单
+    watch(() => props.songs, () => { onRowDragEnd(); closeDownloadMenu() })
 
     return {
       filteredSongs,
       displayRows,
+      displayRowKeys,
       rowNumber,
       reorderMode,
       canReorder,
@@ -1310,6 +1339,7 @@ export default {
       canServerVideo,
       getMenuPosition,
       closeDownloadMenu,
+      cycleMenuItems,
       httpsCover,
       isFileTrackId,
       songCoverUrl,

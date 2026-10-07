@@ -124,6 +124,7 @@
             role="menu"
             aria-label="导航菜单"
             :style="menuPos"
+            @keydown="cycleMenuItems"
           >
             <!-- 下载页入口（与 toast「查看进度」/歌单菜单「下载进度」同视图）；
                  host 模式藏入口但深链仍可切进来——downloads 视图下保留「返回」逃生 -->
@@ -185,6 +186,7 @@ import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extrac
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import { authState } from '../lib/auth-state.js'
 import { authApi } from '../api/auth.js'
+import { cycleMenuItems } from '../lib/focus-trap.js'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 
@@ -236,6 +238,10 @@ export default {
       cancelSuggest()
       suggestions.value = []
       suggestOpen.value = false
+      // 移动端提交即收展开层：结果页接管全屏，悬空的输入框挡结果还偷焦点。
+      // 提在分派前统一收——URL/歌单/关键词各 emit 分支全覆盖；
+      // restoreFocus 归还触发钮（与 Esc 同律），桌面 searchOpen 恒 false 是空操作
+      closeSearch(true)
       // B 站收藏夹链接先于视频判定——favlist/medialist URL 也含 bilibili.com，
       // 顺序错了会被单曲导入抢走再被服务端弹回
       if (extractBiliFavlistId(query)) {
@@ -393,6 +399,8 @@ export default {
       suggestOpen.value = false
       emit('update:searchQuery', item.label)
       emit('search', item.label)
+      // 选完联想同样收层（与提交同律——pick 即一次提交）；焦点归还触发钮
+      closeSearch(true)
     }
 
     const clearQuery = () => {
@@ -580,6 +588,7 @@ export default {
       pickSettings,
       pickTheme,
       pickLogout,
+      cycleMenuItems,
       extractPlaylistId,
       handleSearch,
       onKeydown,
