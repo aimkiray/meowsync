@@ -574,17 +574,17 @@ async function processQueue(queueId, controller) {
         const pendingRows = downloadTasksRepo.listTasksByQueue(queueId)
           .filter(t => t.status === 'pending');
         if (pendingRows.length === 0) break;
-        // 剩余 pending 全部是退避中任务时睡到最近到期点——400ms 忙轮询
-        // 会在长退避窗内空扫几十次 listTasksByQueue
+        // 剩余 pending 全部是退避中任务时睡到最近到期点（50ms–1s 钳位）——
+        // 固定节拍忙轮询会在长退避窗内空扫几十次 listTasksByQueue
         const backoffAt = pendingRows.map(t => retryAfter.get(t.id) || 0)
           .filter(at => at > Date.now());
         if (backoffAt.length === pendingRows.length && backoffAt.length > 0) {
           await sleep(Math.min(Math.max(Math.min(...backoffAt) - Date.now(), 50), 1000));
           continue;
         }
-        // 全部剩余任务都在等路径锁（或退避与等锁并存）：退避后重试一轮。
-        // 400ms 忙轮询在长持锁/长退避窗口内空扫 DB——2s 下限的探测粒度对
-        // 锁释放与退避到期都足够快，且不死等（退避到期分支上一条已精确睡）
+        // 全部剩余任务都在等路径锁（或退避与等锁并存）：睡一轮再重试。
+        // 忙轮询在长持锁/长退避窗口内空扫 DB——2s 探测粒度对锁释放与
+        // 退避到期都足够快，且不死等（退避到期分支上一条已精确睡到点）
         // 不得 deferred.clear()——clear 会销毁 since 时间戳，锁泄漏场景下
         // 每轮重建即"全新冲突"，15min 硬顶永不可达；expireDeferred 已放行
         // 锁释放的条目，仍持锁的必须留住计时
@@ -796,20 +796,28 @@ async function processTask(task, queueId, signal) {
         downloadTasksRepo.updateTask(task.id, { progress: rounded });
       } catch { /* 行可能已被删 */ }
     };
-    // 视频相位拉走大头权重：音频 70→45，视频 35（两脚下载+合流远超一段音频）
-    const weights = videoPath
-      ? {
-        audio: task.downloadAudio ? 45 : 0,
-        video: 35,
-        lyrics: task.downloadLyrics ? 10 : 0,
-        cover: task.downloadCover ? 10 : 0
-      }
-      : {
-        audio: task.downloadAudio ? 70 : 0,
-        video: 0,
-        lyrics: task.downloadLyrics ? 15 : 0,
-        cover: task.downloadCover ? 15 : 0
-      };
+    // 视频相位拉走大头权重：音频 70→45，视频 35（两脚下载+合流远超一段音频）。
+    // 权重按「本任务真会跑的相位」归一化到 100——相位在工件路径键缺位时
+    // 不跑（downloadAudio=false 的 API 调用方、缺 coverUrl 的封面相位），
+    // 不归一的话被裁相位空占权重，进度中途封顶 <100 再跳变
+    const rawWeights = videoPath
+      ? { audio: 45, video: 35, lyrics: 10, cover: 10 }
+      : { audio: 70, video: 0, lyrics: 15, cover: 15 };
+    const phasePaths = { audio: audioPath, video: videoPath, lyrics: lyricsPath, cover: coverPath };
+    const activePhases = Object.keys(rawWeights)
+      .filter(k => phasePaths[k] && rawWeights[k] > 0);
+    const rawSum = activePhases.reduce((s, k) => s + rawWeights[k], 0);
+    const weights = { audio: 0, video: 0, lyrics: 0, cover: 0 };
+    if (rawSum > 0) {
+      // progress 列是 INTEGER——取整漂移贴给末个活跃相位兜底，总和恒 100
+      let remain = 100;
+      activePhases.forEach((k, i) => {
+        weights[k] = i === activePhases.length - 1
+          ? remain
+          : Math.round(rawWeights[k] * 100 / rawSum);
+        remain -= weights[k];
+      });
+    }
 
     if (audioPath) {
       // 分阶段幂等：上次尝试已完成的分段（abort/重试复位不清路径字段）跳过重下——
@@ -1772,6 +1780,14 @@ function getTaskArtifactPath(playlistId, songId, kind = 'audio') {
     // 页外消费视频档（与「视频只在 watch 页可见」口径冲突）
     const candidate = t[field] || (kind === 'audio' && FILE_TRACK_ID_RE.test(t.songId) ? t.videoPath : null);
     if (candidate && isUnderDownloadDir(candidate) && fs.existsSync(candidate)) {
+      // 文件级符号链接拒供：登记路径叶子是链接时 openSync 会跟链把下载根
+      // 外的文件喂出来——isUnderDownloadDir 只验链接路径自身。目录级链接
+      // 是支持的部署形态（audio/ 等整目录重定向到挂载卷），只拦叶子
+      try {
+        if (fs.lstatSync(candidate).isSymbolicLink()) continue;
+      } catch {
+        continue; // 竞态消失/不可读——按不存在收敛
+      }
       return candidate;
     }
   }

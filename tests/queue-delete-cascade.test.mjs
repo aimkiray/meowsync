@@ -327,6 +327,10 @@ test('status/file 契约：body.data.task 嵌套形态 + kind=video 的 Range �
     `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.id}&kind=video`);
   assert.equal(file.status, 200);
   assert.match(file.headers.get('content-type') || '', /video\/mp4/);
+  // 防护三头与 media-cache 供给同口径——同性质字节走同一边界
+  assert.equal(file.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(file.headers.get('content-security-policy'), 'sandbox');
+  assert.equal(file.headers.get('referrer-policy'), 'no-referrer');
 
   const ranged = await app.request(
     `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.id}&kind=video`,

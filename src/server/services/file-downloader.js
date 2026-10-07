@@ -887,7 +887,9 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     const err = new Error(`下载音频失败: ${describeError(error)}`);
     err.code = error.code;
     // aborted/fatal 标记对称透传：processTask 靠它们区分取消/可重试/确定性失败
-    err.aborted = Boolean(error.aborted) || error.code === 'ERR_CANCELED';
+    // signal?.aborted 兜底与 downloadVideo 同口径——上游抛的裸 Error
+    // （如 DOMException AbortError）无 aborted 标记，以 signal 为地面真相
+    err.aborted = Boolean(error.aborted) || error.code === 'ERR_CANCELED' || signal?.aborted;
     err.fatal = Boolean(error.fatal);
     throw err;
   }

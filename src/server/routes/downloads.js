@@ -13,6 +13,19 @@ const {
   downloadTaskBody, quickDownloadBody, mirrorBody
 } = require('../../shared/contracts.js');
 const { MIRROR_PLAYLIST_ID_RE, parseNumericId, QQ_SONG_ID_RE, SONGMID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, BVID_RE, YT_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
+// 写请求 CSRF 同源闸（与 routes/sync.js 同口径）：本文件全部非 GET/HEAD
+// 端点先过 csrfOriginOk——session 写 authGate 已查，但开放部署（users
+// 空表）与 DOWNLOAD_TOKEN 旁路不经那一道，且 parseJsonBody 不校验
+// Content-Type，text/plain 级 CORS simple request 不触发预检即可跨站
+// 写库/删文件。无 Origin 的非浏览器客户端放行（curl/脚本拿不到
+// cookie，不在 CSRF 威胁模型里）——同源判定细节见 lib/auth-gate.js
+const { csrfOriginOk } = require('../lib/auth-gate');
+// 写端点再叠一道单 IP 限流：csrf 闸挡的是跨站，限流闸收的是「同源/无 Origin
+// 客户端突发无限触发上游扇出+写盘」——桶档位对齐 uploads 20/min、
+// match-retry 12/min 的写面惯例取 30/min；15 个写端点共用一桶，
+// 单 IP 的全部写动作合计受限（pause/cancel 这类轻量写也计数——
+// 交互式点击打不到量，超了本身就是异常信号）
+const { rateLimit } = require('../lib/rate-limit');
 
 const app = new Hono();
 
@@ -42,6 +55,8 @@ function normalizeDownloadOptions(body) {
 }
 
 app.post('/downloads/queues', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const { data: body, error } = await parseJsonBody(c, downloadTaskBody);
     if (error) return error;
@@ -80,6 +95,8 @@ app.get('/downloads/queues/:id', async (c) => {
 });
 
 app.post('/downloads/queues/:id/start', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const queueId = parseIdParam(c);
     if (queueId === null) {
@@ -93,6 +110,8 @@ app.post('/downloads/queues/:id/start', async (c) => {
 });
 
 app.post('/downloads/queues/:id/pause', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const queueId = parseIdParam(c);
     if (queueId === null) {
@@ -106,6 +125,8 @@ app.post('/downloads/queues/:id/pause', async (c) => {
 });
 
 app.post('/downloads/queues/:id/resume', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const queueId = parseIdParam(c);
     if (queueId === null) {
@@ -119,6 +140,8 @@ app.post('/downloads/queues/:id/resume', async (c) => {
 });
 
 app.post('/downloads/queues/:id/cancel', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const queueId = parseIdParam(c);
     if (queueId === null) {
@@ -132,6 +155,8 @@ app.post('/downloads/queues/:id/cancel', async (c) => {
 });
 
 app.post('/downloads/queues/:id/retry', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const queueId = parseIdParam(c);
     if (queueId === null) {
@@ -145,6 +170,8 @@ app.post('/downloads/queues/:id/retry', async (c) => {
 });
 
 app.delete('/downloads/queues/:id', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const queueId = parseIdParam(c);
     if (queueId === null) {
@@ -187,6 +214,8 @@ app.get('/downloads/tasks/:id', async (c) => {
 });
 
 app.post('/downloads/tasks/:id/retry', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const taskId = parseIdParam(c);
     if (taskId === null) {
@@ -200,6 +229,8 @@ app.post('/downloads/tasks/:id/retry', async (c) => {
 });
 
 app.delete('/downloads/tasks/:id', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const taskId = parseIdParam(c);
     if (taskId === null) {
@@ -214,6 +245,8 @@ app.delete('/downloads/tasks/:id', async (c) => {
 
 // 下载单首歌曲到服务器
 app.post('/downloads/songs/:songId', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const songId = c.req.param('songId');
     const { data: body, error } = await parseJsonBody(c, downloadTaskBody);
@@ -335,7 +368,11 @@ app.get('/downloads/songs/:songId/file', async (c) => {
         'Content-Length': String(end - start + 1),
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-cache',
-        'ETag': etag
+        'ETag': etag,
+        // 防护头与 media-cache serveComplete 同口径——同性质字节供给走同一边界
+        'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': 'sandbox'
       };
       // download=<文件名基底>：触发附件语义并给真实扩展名——客户端 <a href>
       // 直链下载不再把整文件 blob 进内存（file_ 视频上限 2GB）。
@@ -377,6 +414,8 @@ app.get('/downloads/songs/:songId/file', async (c) => {
 
 // 删除已下载的歌曲文件
 app.delete('/downloads/songs/:songId', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const songId = c.req.param('songId');
     const { playlistId } = c.req.query();
@@ -394,6 +433,8 @@ app.delete('/downloads/songs/:songId', async (c) => {
 
 // 删除歌单已下载歌曲文件（playlistId 接受本地 id 或网易云 id）
 app.delete('/downloads/playlists/:playlistId/files', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const playlistId = c.req.param('playlistId');
     const result = await downloadManager.deletePlaylistDownloadedFiles(playlistId);
@@ -405,6 +446,8 @@ app.delete('/downloads/playlists/:playlistId/files', async (c) => {
 
 // 快速创建并启动歌单下载
 app.post('/downloads/playlists/:playlistId/quick', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const playlistId = c.req.param('playlistId');
     const { data: body, error } = await parseJsonBody(c, quickDownloadBody);
@@ -445,6 +488,8 @@ app.post('/downloads/playlists/:playlistId/quick', async (c) => {
 // 后三类走各源自有流直取（不经解锁链），provider 定位字段随 track 落库。
 const LOCAL_MIRROR_ID_MAX = 80;
 app.post('/downloads/local/mirror', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     // 前端按瘦身投影上载（~300B/曲，2000 曲 ≈600KB）；上限放宽到 8MB
     // 兜底未瘦身的旧端/手工调用发全量对象（~2-3KB/曲）——1MB 默认上限会在
@@ -522,6 +567,8 @@ app.post('/downloads/local/mirror', async (c) => {
 // 本地歌单从库中移除时清服务端镜像产物（镜像行 + 任务 + 已下载文件）。
 // 没有这一步镜像行会成永久孤儿——reapOrphanFiles 只清无行目录，镜像行还在就不扫
 app.delete('/downloads/local/mirror/:localId', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
+  if (!rateLimit(c, 'downloads-write', 30)) return fail(c, 429, '请求太频繁，稍后再试');
   try {
     const localId = String(c.req.param('localId') || '').trim();
     if (!MIRROR_PLAYLIST_ID_RE.test(localId)

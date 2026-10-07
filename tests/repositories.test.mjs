@@ -87,3 +87,23 @@ test('downloadTasks：listStandaloneTasksByPlaylist 只收 queue_id NULL 行', (
   assert.equal(downloadTasksRepo.listStandaloneTasksByPlaylist(pl.id).length, 0);
   assert.equal(queued.queueId, q.id);
 });
+
+test('downloadTasks.countTasksByQueueAndStatus：脏 status 键不污染结果对象', () => {
+  // status 列是 TEXT 无 CHECK——脏行（手工改库/历史遗留）可写任意字符串。
+  // 结果对象只回填预置四键；'constructor' 这类键不得落成 own 属性混进
+  // JSON 透出面（裸赋值会把原型键名写进响应）
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_dirtyst', name: 'dirty' });
+  const q = downloadQueuesRepo.createQueue({ playlistId: pl.id, name: 'q', totalTasks: 0 });
+  downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: q.id, songId: 'd-dirty', songName: 'n', artist: 'a',
+    status: 'constructor'
+  });
+  downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: q.id, songId: 'd-ok', songName: 'n', artist: 'a',
+    status: 'completed'
+  });
+  const counts = downloadTasksRepo.countTasksByQueueAndStatus(q.id);
+  assert.deepEqual(counts, { pending: 0, downloading: 0, completed: 1, failed: 0 });
+  assert.equal(Object.hasOwn(counts, 'constructor'), false);
+  assert.equal(Object.getPrototypeOf(counts), Object.prototype);
+});

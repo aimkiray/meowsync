@@ -281,7 +281,9 @@ function countTasksByQueueAndStatus(queueId) {
   };
 
   rows.forEach(row => {
-    result[row.status] = row.count;
+    // status 取自 DB 行而非纯枚举——脏行可写 '__proto__'/'constructor' 这类键：
+    // 只回填预置的 own 键（in 会认原型链键，必须 hasOwn），脏状态不混进响应对象
+    if (Object.hasOwn(result, row.status)) result[row.status] = row.count;
   });
 
   return result;
