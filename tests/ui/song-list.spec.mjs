@@ -130,4 +130,16 @@ describe('SongList：行菜单重匹配', () => {
     expect(song.neteaseId).toBe(390558) // 失败不动绑定
     expect(wrapper.emitted('song-meta-updated')).toBeFalsy()
   })
+
+  it('请求失败透出服务端文案——response.data.message 经 apiErrorMessage 上屏', async () => {
+    // apiErrorMessage 三级链首档：服务端 {message} 优先于裸 Error.message
+    const song = dirtyYtSong()
+    musicApi.retryMatch.mockRejectedValue({ response: { data: { message: '匹配服务繁忙' } } })
+    wrapper = mountList(song)
+    await nextTick()
+    await clickRematchItem()
+    await vi.waitFor(() =>
+      expect(toast).toHaveBeenCalledWith('重新匹配失败：匹配服务繁忙', 'error'))
+    expect(wrapper.emitted('song-meta-updated')).toBeFalsy()
+  })
 })

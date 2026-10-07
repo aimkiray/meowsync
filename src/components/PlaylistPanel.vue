@@ -28,7 +28,6 @@
         :key="playlist.id"
         class="pl-row"
         :class="{ 'pl-row--active': String(selectedPlaylist?.id) === String(playlist.id) }"
-        :aria-current="String(selectedPlaylist?.id) === String(playlist.id) ? 'true' : undefined"
       >
         <div
           @click="$emit('select-playlist', playlist)"
@@ -38,6 +37,7 @@
           tabindex="0"
           role="button"
           :aria-label="`打开歌单 ${playlist.name}`"
+          :aria-current="String(selectedPlaylist?.id) === String(playlist.id) ? 'true' : undefined"
         >
           <div class="pl-cover-wrap">
             <img
@@ -95,6 +95,7 @@
             class="pg-menu playlist-menu"
             role="menu"
             :style="getMenuPosition(playlist.id)"
+            @keydown="cycleMenuItems"
           >
             <button
               v-if="!isShareShell(playlist)"
@@ -165,7 +166,7 @@
 </template>
 
 <script>
-import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
 import { copyText, shareOrCopy, playlistShareUrl, mixShareIds, isEmptyMixShareUrl } from '../lib/share'
@@ -173,6 +174,7 @@ import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId, isSingleSongShellId, coverSizeUrl } from '../lib/song'
 import { isNeteasePlaylist } from '../shared/predicates.js'
 import { toast, pixelConfirm } from '../lib/feedback'
+import { cycleMenuItems } from '../lib/focus-trap'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 
@@ -204,7 +206,13 @@ export default {
     // （共享 helper 见 lib/url.js，歌曲封面/歌单封面/任务封面同一来源）
     const httpsCover = sharedHttpsCover
 
-    const closeOnEscape = (e) => { if (e.key === 'Escape') closeMenu(null, true) }
+    // Esc 解散菜单；焦点归还仅在焦点还在菜单/触发键内时进行——
+    // 用户已 Tab 挪出菜单时不得强拽回 ⋯键（TopNav onMenuKeydown 同闸）
+    const closeOnEscape = (e) => {
+      if (e.key !== 'Escape' || openMenuId.value == null) return
+      const ae = document.activeElement
+      closeMenu(null, ae === menuTriggerEl || !!ae?.closest?.('.playlist-menu'))
+    }
     // 滚动监听必须包箭头：直传 closeMenu 会把 Event 对象塞进 playlistId 形参，
     // 定点判定 String(event) 与任何歌单 id 不等 → 滚动关菜单静默失效
     const closeOnScroll = () => closeMenu()
@@ -259,6 +267,9 @@ export default {
           left: Math.max(8, Math.min(rect.right - menuWidth, vw - menuWidth - 8)) + 'px'
         }
         openMenuId.value = playlistId
+        // 菜单 teleport 到 body——不主动移焦时 Tab 要穿过整个面板才到菜单项；
+        // 开菜单即聚焦首个可用项（TopNavigation ⋯ 菜单同口径），Esc 归还触发键
+        nextTick(() => document.querySelector('.playlist-menu .pg-menu-item:not([disabled])')?.focus())
       }
     }
 
@@ -294,6 +305,12 @@ export default {
 
     const copyShareLink = async (playlist) => {
       const url = playlistShareUrl(playlist)
+      // url=null＝id 形态产不出合法链（非数字远端 id 等，share.js 拦截语义）——
+      // 复制按钮没有 shareOrCopy 的 text 兜底，copyText(null) 会被 clipboard
+      // 归一成字面量 'null' 还报成功 toast，必须拦在复制前
+      if (!url) {
+        toast('该歌单暂无可用分享链接', 'info'); closeMenu(playlist.id); return
+      }
       if (isEmptyMixShareUrl(url)) {
         toast('歌单里没有可分享的歌曲', 'info'); closeMenu(playlist.id); return
       }
@@ -497,6 +514,7 @@ export default {
        isShareShell,
        isNeteasePlaylist,
        getMenuPosition,
+       cycleMenuItems,
        httpsCover,
        coverSizeUrl,
      }

@@ -194,7 +194,6 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       const { list, healedAny } = sanitizeStoredPlaylists(savedPlaylists)
       userPlaylists.value.push(...list)
       if (healedAny) savePlaylistsToStorage() // 自愈结果落盘——下次启动不再依赖重算
-      console.log('✅ 从本地存储加载歌单:', list.length, '个')
     }
   }
 
@@ -244,19 +243,16 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       // 检查是否已存在（确保ID类型一致）
       const exists = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
       if (exists) {
-        console.log('ℹ️ 歌单已存在:', exists.name)
         return
       }
 
       // 确保歌单包含完整的tracks数据
       let fullPlaylist = playlist
       if (!playlist.tracks || playlist.tracks.length === 0) {
-        console.log('🔄 歌单缺少tracks数据，从服务器获取完整信息...')
         try {
           const detail = await musicApi.getPlaylistDetail(playlist.id)
           // 详情可能为 null 或缺字段的空壳对象：与原始数据合并，保留原 id/name，杜绝 push(null)
           fullPlaylist = detail ? { ...playlist, ...detail } : playlist
-          console.log('✅ 获取完整歌单数据成功，歌曲数量:', fullPlaylist.tracks?.length || 0)
         } catch (error) {
           console.error('❌ 获取完整歌单数据失败，使用原始数据:', error)
           fullPlaylist = playlist
@@ -265,13 +261,11 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
 
       // await 期间同一歌单可能已被并行添加，push 前再查一次重（与 loadDefaultPlaylists 一致）
       if (userPlaylists.value.some(p => String(p.id) === String(playlist.id))) {
-        console.log('ℹ️ 歌单已存在:', fullPlaylist.name)
         return
       }
 
       userPlaylists.value.push(fullPlaylist)
       savePlaylistsToStorage()
-      console.log('✅ 歌单已添加:', fullPlaylist.name)
     } catch (error) {
       console.error('❌ 添加歌单失败:', error)
     }
@@ -300,7 +294,6 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       }
 
       savePlaylistsToStorage()
-      console.log('✅ 歌单已移除:', playlist.name)
 
       // 如果移除的是当前选中（或在途加载中——claim 时已写 selectedPlaylist）
       // 的歌单：作废其 select 闸，迟到回包才不会盖写回来「复活」视图。
@@ -331,7 +324,6 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
 
   const loadPlaylistById = async (id) => {
     try {
-      console.log('🔍 加载歌单详情:', id)
       const playlist = await musicApi.getPlaylistDetail(id)
       return playlist
     } catch (error) {
@@ -354,15 +346,11 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       if (!silent) loadingSongs.value = true
       selectedPlaylist.value = playlist
 
-      console.log('🎵 加载歌单歌曲:', playlist.name)
-
       // 本地内存态歌单（单曲分享/队列存盘）没有接口数据——直接用内嵌 tracks
       if (isLocalPlaylistId(playlist.id)) {
         songs.value = playlist.tracks || []
-        console.log('✅ 临时歌单加载完成，共', songs.value.length, '首')
       } else {
         // 对于正常歌单，从服务器重新获取最新的歌单信息和歌曲数据
-        console.log('🔄 从服务器获取最新歌单数据...')
         const fullPlaylist = await musicApi.getPlaylistDetail(playlist.id)
         if (!gates.select.isCurrent(myReq)) return false // 已被更新的选择取代，丢弃过期数据
         const fetchedTracks = fullPlaylist?.tracks || []
@@ -414,7 +402,6 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
           [...visibleTracks, ...addedTracks].map(t => applyTrackOverrides(t, overrides)),
           libPl?.trackOrder
         )
-        console.log('✅ 获取最新歌曲完成，共', songs.value.length, '首')
 
         // hero 同步详情——否则侧栏种子行（只有 id+name）会让 hero 永久显示占位元数据。
         // 本地增删（addedTracks/墓碑）要计入 trackCount——远端计数不含它们
@@ -451,7 +438,6 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
             ...merged
           }
           savePlaylistsToStorage()
-          console.log('✅ 已更新本地歌单数据')
         }
       }
       return true
@@ -619,10 +605,23 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     return true
   }
 
-  // 行级位移（SongList 排序模式的拖拽/↑↓ emit）：双端 id 锚定——排序态期间
-  // 静默同步/行追加可能整体替换 songs，下标载荷会移错行
-  const moveSongInPlaylist = ({ dragId, targetId } = {}) => {
-    const ordered = moveTrackByIds(songs.value, dragId, targetId)
+  // 行级位移（SongList 排序模式的拖拽/↑↓ emit）：行对象引用锚定——同 id 重复
+  // 行裸 id 锚定恒中第一份（拖第二份会移第一份）；排序态期间静默同步/行追加
+  // 整体替换 songs 时旧引用 indexOf=-1 天然 no-op（下标载荷会移错行）。
+  // {dragId,targetId} 旧形载荷兜底按 id 锚首份——id 序持久化本就不区分
+  // 重复项（track-order.js 头注口径），同 id 两份行互为等效副本
+  const moveSongInPlaylist = ({ dragRef, targetRef, dragId, targetId } = {}) => {
+    let ordered = songs.value
+    if (dragRef && targetRef) {
+      const from = songs.value.indexOf(dragRef)
+      const to = songs.value.indexOf(targetRef)
+      if (from !== -1 && to !== -1 && from !== to) {
+        ordered = [...songs.value]
+        ordered.splice(to, 0, ordered.splice(from, 1)[0])
+      }
+    } else {
+      ordered = moveTrackByIds(songs.value, dragId, targetId)
+    }
     if (ordered !== songs.value) applySongsOrder(ordered)
   }
 
@@ -710,10 +709,22 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
   })
 
   // 建空白本地单。返回库内响应式代理——调用方再写字段/追加曲才走依赖追踪；
-  // 空名返回 null（toast/关窗由调用方决定）
+  // 空名返回 null（toast/关窗由调用方决定）。名长截 40（与远端单显示
+  // 口径同档，侧栏/hero 不留超长名）；重名自动编号「名(2)/(3)…」——
+  // 库内唯一（含远端单），否则侧栏两同名单分不清哪张是新建的空单
   const createLocalPlaylist = (name, { coverImgUrl = '' } = {}) => {
-    const trimmed = String(name || '').trim()
+    // [...str] 按码点切——code-unit slice 会在 emoji 边界斩断代理对留孤代理
+    const trimmed = [...String(name || '').trim()].slice(0, 40).join('')
     if (!trimmed) return null
+    let resolved = trimmed
+    if (userPlaylists.value.some(p => p.name === resolved)) {
+      let i = 2
+      // 编号名同受 40 上限：后缀占位从主体里扣，不留超档名
+      const numbered = () => `${[...trimmed].slice(0, 40 - `(${i})`.length).join('')}(${i})`
+      while (userPlaylists.value.some(p => p.name === numbered())) i++
+      resolved = numbered()
+      toast(`已存在同名歌单，已命名为「${resolved}」`, 'info', 3000)
+    }
     // Date.now 同毫秒双建会撞号——撞上就后错一毫秒（撞率≈0，一次自增即收敛）
     let id = `local_pl_${Date.now()}`
     while (userPlaylists.value.some(p => p.id === id)) {
@@ -721,7 +732,7 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
     const pl = {
       id,
-      name: trimmed,
+      name: resolved,
       coverImgUrl,
       creator: { nickname: '我' },
       trackCount: 0,
@@ -736,15 +747,11 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     // URL歌单加载（playlistIds 由 readShareParams 在挂载处一趟解析后传入）
     const loadDefaultPlaylists = async (urlPlaylistIds) => {
       try {
-        console.log('🎵 检查是否需要加载URL歌单...')
-
         // 如果没有URL参数，跳过加载
         if (urlPlaylistIds.length === 0) {
-          console.log('✅ 无URL歌单参数，跳过加载')
           return
         }
 
-        console.log('🔗 检测到URL歌单参数，加载指定歌单:', urlPlaylistIds)
         const defaultPlaylistIds = urlPlaylistIds
         
         const removedIds = getRemovedDefaultPlaylists()
@@ -752,14 +759,12 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
         // 过滤掉已移除的歌单ID和已存在的歌单ID；URL 内重复ID先去重，避免并行加载后重复push
         const validIds = [...new Set(defaultPlaylistIds)].filter(id => {
           if (removedIds.includes(id)) {
-            console.log('⏭️ 跳过已移除的默认歌单:', id)
             return false
           }
-          
+
           // 检查是否已存在相同ID的歌单（确保ID类型一致）
           const exists = userPlaylists.value.find(p => String(p.id) === String(id))
           if (exists) {
-            console.log('⏭️ 跳过已存在的歌单:', id, exists.name)
             return false
           }
           
@@ -767,11 +772,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
         })
         
         if (validIds.length === 0) {
-          console.log('✅ 所有默认歌单都已被用户删除，跳过加载')
           return
         }
-        
-        console.log('🌐 加载歌单:', validIds)
 
         // 侧栏整板 spinner 亮起——URL 歌单首载是唯一真正吃 loading 的路径
         loading.value = true
@@ -782,7 +784,6 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
             const playlist = await loadPlaylistById(id)
             if (playlist) {
               playlist.isDefault = true
-              console.log('✅ 默认歌单加载成功:', playlist.name)
               return playlist
             }
           } catch (error) {
@@ -806,8 +807,6 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
         if (playlists.some(p => p)) {
           savePlaylistsToStorage()
         }
-
-        console.log('✅ URL歌单加载完成')
       } catch (error) {
         console.error('❌ 加载URL歌单失败:', error)
       } finally {

@@ -15,10 +15,12 @@
           :value="searchQuery"
           type="text"
           placeholder="搜索队列名..."
+          aria-label="搜索队列名"
           @input="$emit('update:search-query', $event.target.value)"
         />
         <select
           :value="statusFilter"
+          aria-label="按状态过滤队列"
           @change="$emit('update:status-filter', $event.target.value)"
         >
           <option v-for="opt in queueStatusFilterOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -42,20 +44,24 @@
         class="dql-row"
         :class="{ 'dql-row--sel': selectedQueueId === queue.id }"
       >
+        <!-- 主区是 role=group 而非 button：button 的 children-presentational
+             会把行内 progressbar/失败戳/元信息整段从 a11y 树抹掉。group 保住
+             子级语义可浏览，焦点摘要编成一句话标签（含动作动词弥补 group
+             不报可激活的短板）；键盘激活仍由 tabindex+Enter/Space 承担 -->
         <div
           class="dql-row-main"
           @click="$emit('select', queue)"
           @keydown.enter="$emit('select', queue)"
           @keydown.space.prevent="$emit('select', queue)"
           tabindex="0"
-          role="button"
-          :aria-label="`查看队列 ${queue.name}`"
+          role="group"
+          :aria-label="queueRowLabel(queue)"
         >
         <div class="dql-cover-wrap">
           <img
             v-if="getQueueCover(queue)"
             :src="getQueueCover(queue)"
-            :alt="queue.name"
+            alt=""
             class="dql-cover"
             loading="lazy"
             decoding="async"
@@ -104,7 +110,9 @@
             v-if="openMenuId === queue.id"
             class="pg-menu queue-menu"
             role="menu"
+            aria-label="队列操作"
             :style="getMenuPosition(queue.id)"
+            @keydown="cycleMenuItems"
           >
             <button
               v-if="['pending', 'cancelled'].includes(queue.status)"
@@ -155,10 +163,11 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch, nextTick } from 'vue'
 import { httpsCover } from '../lib/url'
 import { coverSizeUrl } from '../lib/song'
 import { queueStatusMeta, statusChipClass, queueProgress, queueStatusFilterOptions } from '../lib/downloadStatus.js'
+import { cycleMenuItems } from '../lib/focus-trap'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
 
@@ -237,6 +246,10 @@ function toggleMenu(queueId, event) {
     left: `${left}px`
   }
   openMenuId.value = queueId
+  // 菜单 teleport 到 body——不主动移焦时键盘 Enter 开菜单后焦点滞留触发键、
+  // Tab 要穿过整列才到菜单项；开菜单即聚焦首个可用项
+  // （PlaylistPanel/TopNavigation ⋯ 菜单同口径），Esc 归还见 handleWindowKeydown
+  nextTick(() => document.querySelector('.queue-menu .pg-menu-item:not([disabled])')?.focus())
 }
 
 function getMenuPosition(queueId) {
@@ -273,9 +286,11 @@ function handleWindowPointerDown(event) {
 }
 
 function handleWindowKeydown(event) {
-  if (event.key === 'Escape') {
-    closeMenu(true)
-  }
+  if (event.key !== 'Escape' || openMenuId.value === null) return
+  // 归还闸（TopNav onMenuKeydown 同口径）：焦点已被挪出菜单与触发键
+  // （Tab 逃逸等）时 Esc 只关菜单，不得把焦点强拽回 ⋯键
+  const ae = document.activeElement
+  closeMenu(ae === menuTriggerEl || !!ae?.closest?.('.queue-menu'))
 }
 
 // 轮询驱动重排（状态翻转改排序）会让 fixed 菜单悬空指错行——
@@ -316,6 +331,15 @@ function getStatusClass(status) {
 
 function getProgress(queue) {
   return queueProgress(queue)
+}
+
+// 行焦点摘要（role=group 容器名）：名称·状态·失败数·x/y·p% 一句话——
+// 子级语义可浏览时它是定位锚，折叠播报时它兜住全部关键信息
+function queueRowLabel(queue) {
+  const parts = [`查看队列 ${queue.name}`, getStatusText(queue.status)]
+  if (queue.failedTasks > 0) parts.push(`失败 ${queue.failedTasks}`)
+  parts.push(`${queue.completedTasks}/${queue.totalTasks}`, `${getProgress(queue)}%`)
+  return parts.join('·')
 }
 
 function getQueueCover(queue) {
