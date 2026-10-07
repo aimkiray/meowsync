@@ -61,7 +61,8 @@ export function isPlaceholderAuthor(author) {
 // 检索标题变体：VTuber/翻唱投稿标题常带检索噪声段——'ver.<歌姬>' 尾缀、
 // cover 标记、尾括弧、'Artist - Title' 前缀、【栏目】头、feat. 尾、
 // '曲 ／ 演唱者' 斜杠尾、'を歌いました/歌ってみた' 日语翻唱语尾、
-// 中文字幕/中字/CC字幕 字幕组标记、艺人名头尾缀。
+// 中文字幕/中字/CC字幕 字幕组标记、艺人名头尾缀、全大写署名头
+// （'EMA rumor' 类搬运形态——不锚 artist 的末位兜底腿）。
 // 实证病例：'Dream Play Sick ver.EMA' 原始形态级联全灭、剥成
 // 'Dream Play Sick' 后 LRCLIB 命中（lrclib_25010661）；
 // 'ロストアンブレラを歌いました ／ rei sirose' 要斜杠尾+歌系中缀双剥才出真名。
@@ -84,7 +85,13 @@ const BARE_COVER_TAIL_RE = /[\s\-–—~\/|：:／]+covers?\s*$/iu;
 const TAIL_GROUP_RE = /(?:（[^（）]{1,40}）|\([^()]{1,40}\)|【[^【】]{1,40}】|\[[^\[\]]{1,40}\])\s*$/u;
 const ARTIST_DASH_HEAD_RE = /^.{1,40}?\s*[-–—]\s+/;
 const HEAD_BANG_RE = /^【[^【】]{1,40}】\s*/u;
-const FEAT_TAIL_RE = /\s*(?<![\p{L}\p{N}])(?:feat\.?|ft\.?|featuring|with)\s+.{1,40}$/i;
+// feat/ft 尾缀的空白分案：日文曲名惯写 'ft.初音ミク'/'feat.歌姫'——句点后
+// 无空格直接接名，故带句点形态 (feat.|ft.) 容许 \s* 零空白（前向
+// (?<![\p{L}\p{N}]) 已挡 'shift.x' 类字母粘连、'.\s*' 配 $ 锚限纯尾部，
+// 'draft.ft.x' 只剥尾段）；裸词 feat/ft/featuring/with 仍须 \s+ ——
+// 'feature X'/'ftX'/'Somewith you' 这类词干粘连不误剥残片。
+// /u 旗标不可省：无 u 时 \p{L} 退化为字面量 'p{L}'，前向断言形同虚设
+const FEAT_TAIL_RE = /\s*(?<![\p{L}\p{N}])(?:(?:feat|ft)\.\s*|(?:feat|ft|featuring|with)\s+).{1,40}$/iu;
 // 斜杠尾：'X ／ Y'/'X / Y'（全/半角、前后空格可缺）尾段 ≤40 字——VTuber
 // 标题挂演唱者尾巴的常见形态（'幸福な死を ／ 久遠千歳'）
 const SLASH_TAIL_RE = /\s*[/／]\s*[^/／]{1,40}\s*$/u;
@@ -95,6 +102,17 @@ const UTA_TAIL_RE = /\s*[をはが]?\s*歌(?:いました|ってみた|った|�
 // 字幕组标记：出现即剥（剥完非空才收，push 闸把空结果滤掉）——长短语
 // 先列（'中文字幕' 先于子串 '中字'，'付き' 先于 '付'）
 const SUBTITLE_TAG_RE = /\s*(?:CC字幕|中文字幕|字幕付き|歌詞付き|歌词付き|字幕付|歌詞付|歌词付|中字)\s*/giu;
+// 全大写署名头：YouTube 搬运标题的「歌手 tag + 曲名」形态（'EMA rumor'、
+// 'TK from 凛として時雨'）——token1 全大写拉丁/数字/&/'（2-15 字），
+// token2 以「非大写字母」开头：'SUMMER NIGHT'/'NOT CRYING' 全大写
+// 词组不是署名；负断言吃 \p{Lu} 全集而非 ASCII——'É'（'ABBA Étude'）/
+// 'В'（'SUMMER ВЕЧЕР'）/'Ａ' 这类非 ASCII 大写字母同样挡。'EMA - X'
+// 连字符形态归 d 规则、'RTRT(Mili) x' 括弧粘连无空白不剥、'_'/标点
+// 开头不剥（剥出 '- X' 类残片纯属噪声）。
+// 刻意不锚 artist：author 是搬运号/占位时 j/k 锚规则缺席，此变体只作
+// 末位兜底检索串——剥错（'TK from X'→'from X' 类垃圾）由下游
+// strictTitle 闸 + AI 核验兜
+const CAPS_HEAD_RE = /^[A-Z0-9&']{2,15}\s+((?!\p{Lu})\p{L}.*)$/u;
 // 艺人锚用归一分隔符字符集（与归一化剥除同族，加冒号/全角斜杠/波浪）
 const NAME_SEP_CH = String.raw`\s\-_·•、,，。&+＋/／\\'’"（）()【】\[\]:：~～|`;
 const NAME_SEP_RUN = new RegExp(`[${NAME_SEP_CH}]+`);
@@ -136,8 +154,20 @@ export function titleVariantsOf(title, artist = '') {
     (s) => s.replace(ARTIST_DASH_HEAD_RE, ''),
     // e. 头部【…】B 站栏目头
     (s) => s.replace(HEAD_BANG_RE, ''),
-    // f. 尾缀 feat./ft./featuring/with X
+    // f. 尾缀 feat./ft./featuring/with X（含日文惯写 'ft.歌姫' 无空格形）
     (s) => s.replace(FEAT_TAIL_RE, ''),
+    // f2. 整包围引号壳剥除：'A - 'B' ft.X' 剥头剥尾后剩 ''B'' 单层壳，
+    //     检索串带引号稀释命中。只剥「首字符即引号且同对收尾」的整包围
+    //     单层——ASCII '/" 同形对用后向引用 \1；弯引号 U+2018/2019 与
+    //     U+201C/201D、书名号 「…」/『…』是异形成对（\1 对异形对不成立）
+    //     各立分支。
+    //     'don't stop' 词中撇号、'x' mid 类不整包围形态由 ^$ 锚天然挡；
+    //     剥出空串由 collect 的 Boolean 闸滤掉
+    (s) => s.replace(/^\s*(['"])([\s\S]{1,80}?)\1\s*$/u, '$2')
+            .replace(/^\s*‘([\s\S]{1,80}?)’\s*$/u, '$1')
+            .replace(/^\s*“([\s\S]{1,80}?)”\s*$/u, '$1')
+            .replace(/^\s*「([\s\S]{1,80}?)」\s*$/u, '$1')
+            .replace(/^\s*『([\s\S]{1,80}?)』\s*$/u, '$1'),
     // g. 斜杠尾
     (s) => s.replace(SLASH_TAIL_RE, ''),
     // h. 日语翻唱语尾/中缀
@@ -150,6 +180,9 @@ export function titleVariantsOf(title, artist = '') {
       (s) => s.replace(new RegExp(`^[${NAME_SEP_CH}]*${ab}(?:[${NAME_SEP_CH}]+|$)`, 'iu'), ''),
       (s) => s.replace(new RegExp(`[${NAME_SEP_CH}]+(?:by[${NAME_SEP_CH}]+)?${ab}[${NAME_SEP_CH}]*$`, 'iu'), ''),
     ] : []),
+    // l. 全大写署名头剥除（'EMA rumor'→'rumor'）——不锚 artist 的兜底腿，
+    //    恒排规则最末：单变体序位最低，挤不进席时激进腿同效迭代兜底
+    (s) => s.replace(CAPS_HEAD_RE, '$1'),
   ];
   for (const r of rules) collect(r(base));
   // 激进变体：全规则迭代到不动点（≤3 趟）——'Xを歌いました ／ Y' 这类复合
