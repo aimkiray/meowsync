@@ -1000,6 +1000,16 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    pointer:coarse 覆盖平板触屏（旧 700px 断点漏 iPad 竖屏 768–834） */
 @media (pointer: coarse) {
   .pg-field input, .pg-field select, .atp-new input, .asp-search input { font-size: 16px; }
+  /* 触屏点按面双轨：常规档 32px 发丝盒低于 40px 触达下限——粗指针直接
+     放大视觉盒；--sm 行内尾键档（24px）放盒会撑爆密排行，改用透明外延
+     hit-area（::after 负 inset 把可点面扩到 40px，视觉密度不动） */
+  .pg-icobtn:not(.pg-icobtn--sm) { width: 40px; height: 40px; }
+  .pg-icobtn--sm { position: relative; }
+  .pg-icobtn--sm::after {
+    content: '';
+    position: absolute;
+    inset: -8px; /* 24+8×2=40 触达面，伪元素是按钮自身盒的一部分，命中即触发 */
+  }
 }
 
 /* 浮动菜单（teleport 到 body 脱离组件作用域——必须全局类） */
@@ -1608,6 +1618,10 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
 }
 @media (prefers-reduced-motion: reduce){
   .pixel-loading { animation: none; }
+  /* 下载队列/任务行/上传对话框的进度填充缓动同收 reduce 门——轮询刷新下
+     的常驻宽度动画对前庭敏感用户是持续动效（类在各组件 scoped 样式里，
+     全局规则按类名命中，scoped 属性选择器不挡） */
+  .dql-progress-fill, .dtr-progress-fill, .sfd-progress-bar { transition: none; }
 }
 
 /* 播放中封面脉冲（BottomPlayer/WatchView/FullscreenPlayer 共用——勿改） */

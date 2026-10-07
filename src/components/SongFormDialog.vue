@@ -85,6 +85,8 @@
                 class="sfd-progress"
                 role="progressbar"
                 :aria-label="`${slot.label}上传进度`"
+                aria-valuemin="0"
+                aria-valuemax="100"
                 :aria-valuenow="Math.round(progress[slot.kind] * 100)"
               >
                 <div class="sfd-progress-bar" :style="{ width: `${Math.round(progress[slot.kind] * 100)}%` }"></div>
@@ -115,6 +117,7 @@ import { ref, reactive, computed, watch, nextTick } from 'vue'
 import PixelIcon from './PixelIcon.vue'
 import { isFileTrackId } from '../lib/song'
 import { parseDurationMs } from '../lib/format'
+import { trapTabKeydown } from '../lib/focus-trap'
 
 // 上传文件位表：exts/maxBytes 与服务端 KIND_DEFS 白名单同口径（客户端预选 +
 // 预检——能选到必败类型/超体积只在提交后经服务端 400/413 才见太迟）
@@ -146,7 +149,9 @@ export default {
     const progress = reactive({})
     const error = ref('')
     const nameInput = ref(null)
-    const fileRefs = reactive({})
+    // DOM 句柄袋不是状态——reactive 会给元素套 proxy（无谓开销+调试噪音），
+    // 模板只在 click 里同步取 .click()，普通对象足够
+    const fileRefs = {}
     const fileSlots = FILE_SLOTS
 
     // create 模式（song=null）没有任何既有资产——「已有/更换」之说必须看真旗标；
@@ -267,11 +272,9 @@ export default {
     // busy 期左键=中止上传（emit abort 给父侧 xhr.abort），非 busy=取消
     const onLeftBtn = () => { props.busy ? emit('abort') : onCancel() }
 
-    // aria-modal 契约补课：Tab/Shift+Tab 把焦点钳在窗内（可聚焦集首尾互跳），
-    // Esc 走 onLeftBtn（与左键/全局热键同口径：闲=取消、busy=中止上传）。
-    // getClientRects 滤掉 display:none 的 file input——它们能匹配选择器但不可聚焦，
-    // 不滤会让首尾判定落空、Tab 从缝里逃出遮罩
-    const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    // aria-modal 契约补课：Tab/Shift+Tab 把焦点钳在窗内（可聚焦集首尾互跳，
+    // 共享实现 lib/focus-trap.js——App 三弹层/确认框同源）；
+    // Esc 走 onLeftBtn（与左键/全局热键同口径：闲=取消、busy=中止上传）
     const onDialogKeydown = (e) => {
       if (e.key === 'Escape') {
         // 与 App 全局 Esc 同映射（busy→中止上传、闲→关窗）：走 onLeftBtn 复用
@@ -281,19 +284,7 @@ export default {
         onLeftBtn()
         return
       }
-      if (e.key !== 'Tab') return
-      const focusables = [...e.currentTarget.querySelectorAll(FOCUSABLE_SEL)]
-        .filter(el => el.getClientRects().length > 0)
-      if (!focusables.length) return
-      const first = focusables[0]
-      const last = focusables[focusables.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
+      trapTabKeydown(e)
     }
 
     return {

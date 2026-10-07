@@ -31,7 +31,7 @@
       @click.self="answer(false)"
       @mousedown.prevent
       @keydown.esc="answer(false)"
-      @keydown.tab.prevent="cycleFocus"
+      @keydown="cycleFocus"
     >
       <div
         class="fb-dialog pg-panel pg-corners"
@@ -65,6 +65,7 @@
 <script>
 import { watch, nextTick, ref } from 'vue'
 import { useFeedbackState, resolveConfirm, toastDismiss, toastHold, toastRelease } from '../lib/feedback'
+import { trapTabKeydown } from '../lib/focus-trap'
 
 export default {
   name: 'FeedbackHost',
@@ -86,12 +87,10 @@ export default {
       } finally { toastDismiss(t.id) }
     }
 
-    // 模态内焦点循环——两个按钮间往复，不让 Tab 逃出去点背景页
-    const cycleFocus = (e) => {
-      const btns = [...e.currentTarget.querySelectorAll('.fb-btn')]
-      const i = btns.indexOf(document.activeElement)
-      btns[(i + (e.shiftKey ? -1 : 1) + btns.length) % btns.length]?.focus()
-    }
+    // 模态内焦点循环——两个按钮间往复，不让 Tab 逃出去点背景页。
+    // 首尾互跳共享实现（lib/focus-trap.js）：两枚 .fb-btn 即窗内全部
+    // 可聚焦集，边沿回绕与自然 Tab 序叠加后与原 modulo 循环等价
+    const cycleFocus = (e) => trapTabKeydown(e)
 
     // 打开确认框时焦点落在「取消」——破坏性操作默认安全项；关闭时归还焦点
     let lastFocused = null
