@@ -40,9 +40,14 @@ export function statusChipClass(tier) {
 
 // 队列完成度百分比——DownloadsPanel 排序键与 DownloadQueueList 行展示共用
 export function queueProgress(queue) {
-  if (!queue || !queue.totalTasks) return 0
-  // 计数漂移防御：completed>total 时仍钳 100（aria-valuenow 合法性）
-  return Math.min(100, Math.round((queue.completedTasks / queue.totalTasks) * 100))
+  if (!queue) return 0
+  // totalTasks/completedTasks 同口径归一：非数值（'abc'/undefined/NaN）按 0 计——
+  // 直接拿原值除会产 NaN 进度（aria-valuenow=NaN 比显示 0 更糟）；
+  // 数值串宽容计数（服务端偶发字符串列）；completed>total 时仍钳 100
+  const total = Number(queue.totalTasks) || 0
+  if (!total) return 0
+  const done = Number(queue.completedTasks) || 0
+  return Math.min(100, Math.max(0, Math.round((done / total) * 100)))
 }
 
 // 深链预选挑队列：一歌单可有多条兄弟队列（终态壳收养未净）——

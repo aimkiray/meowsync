@@ -9,6 +9,16 @@ export const API_BASE_URL = resolveApiBaseUrl()
 // 令牌只发自己的 API host（baseURL 同源/配置域），不会外泄给上游
 const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
 
+// 裸 fetch/XHR 通道（uploads.js / music.js 流式落盘）与请求拦截器同口径的
+// 令牌头构造——多处各自重复 VITE_DOWNLOAD_TOKEN 读取会漂移，统一收口在这里
+export const downloadTokenHeaders = () =>
+  DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
+
+// config.params 展开闸：只对 plain object 做合参——URLSearchParams/FormData
+// 实例的键位不可枚举，{...p} 会静默展开成全空对象丢光调用方参数
+const isPlainObject = (v) => typeof v === 'object' && v !== null
+  && (v.constructor === Object || Object.getPrototypeOf(v) === null)
+
 // 单实例三域共用：music/downloads/ai 此前各建实例，拦截器口径漂移
 // （music 剥 r.data、downloads 不剥、ai 在调用点手剥）。统一为：
 // 请求加 _t 防缓存；响应直接回 JSON body {code,...}——调用方读 body.data
@@ -24,13 +34,22 @@ const http = axios.create({
 
 http.interceptors.request.use(
   config => {
-    // 令牌只发自己的 API：按目标 URL 条件注入而非实例默认头——默认头会
-    // 跟着任何混进本实例的绝对 URL 外泄（当前无此调用方，属加固）
-    if (DOWNLOAD_TOKEN && config.url && !/^https?:/i.test(config.url)) {
+    // 令牌只发自己的 API：本实例调用全是根相对路径（'/x'），正向收敛
+    // startsWith('/') 且排除 '//'——协议相对 '//evil.com/x' 会被 axios 当
+    // 绝对地址直飞，旧的 /^https?:/i 负判定拦不住它，令牌随之裸泄
+    if (DOWNLOAD_TOKEN && typeof config.url === 'string' && /^\/(?!\/)/.test(config.url)) {
       config.headers['x-download-token'] = DOWNLOAD_TOKEN
     }
-    // 不污染调用方传入的 params 对象
-    config.params = { ...config.params, _t: Date.now() }
+    // 不污染调用方传入的 params 对象；非 plain object 展开即丢参——
+    // URLSearchParams 走 append，其它异常形态告警透传（当前无此调用方）
+    const p = config.params
+    if (p instanceof URLSearchParams) {
+      p.append('_t', String(Date.now()))
+    } else if (p == null || isPlainObject(p)) {
+      config.params = { ...p, _t: Date.now() }
+    } else {
+      console.warn('[http] config.params 非 plain object，防缓存参数 _t 未注入:', p?.constructor?.name)
+    }
     return config
   },
   error => Promise.reject(error)
@@ -65,5 +84,7 @@ export default http
 // 在 14 处手写，收口一处。注意：不经拦截器剥壳的错误（如 unwrapBody 抛的
 // 业务错）走 .message 兜底，口径不变
 export function apiErrorMessage(error) {
-  return error?.response?.data?.message || error?.message
+  // 三级兜底到非空串——裸 Error 无 message 的错误（如 DOMException/异常
+  // 形态）不能让调用方拼出 '下载失败: undefined' 或直接空串上屏
+  return error?.response?.data?.message || error?.message || '未知错误'
 }

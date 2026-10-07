@@ -34,6 +34,9 @@ export function readJSON(key, fallback = null) {
     return raw === null ? fallback : JSON.parse(raw)
   } catch (e) {
     console.warn(`localStorage 读取 ${key} 失败，已重置:`, e.message)
+    // 脏值清掉：不清则此后每次读取都重复告警且坏数据永久占位；
+    // removeItem 自身也可能因存储禁用抛——与读失败一起放弃即可
+    try { localStorage.removeItem(key) } catch { /* 存储禁用时同读失败一起放弃 */ }
     return fallback
   }
 }

@@ -118,6 +118,24 @@ test('toast：暂停中手动 dismiss 后迟到的 release 不误伤', (t) => {
   assert.ok(!has(id2))                // 后续 toast 计时簿记不受污染
 })
 
+test('toast：duration 超 int32 上限钳制——不溢出回绕成立即退场', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const id = toast('x', 'info', 2 ** 32)
+  t.mock.timers.tick(60000)
+  // 旧行为：>2^31-1 被 setTimeout 截断回绕成 ~1ms——长驻语义反而下一拍消失
+  assert.ok(has(id))
+  toastDismiss(id)
+})
+
+test('toast：并存超帽逐最旧——新条不挤自己', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const ids = [toast('1'), toast('2'), toast('3'), toast('4'), toast('5'), toast('6')]
+  assert.equal(state.toasts.length, 5)
+  assert.ok(!has(ids[0]))            // 最旧被逐
+  for (const id of ids.slice(1)) assert.ok(has(id))
+  for (const id of ids) toastDismiss(id) // 清场防串用例
+})
+
 test('toast：非数值 duration 退化取默认，簿记不产 NaN', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const id = toast('x', 'info', {})   // 传对象当毫秒——契约误用按默认收敛

@@ -1,4 +1,4 @@
-import api, { API_BASE_URL } from './http.js'
+import api, { API_BASE_URL, downloadTokenHeaders } from './http.js'
 import { httpsCover } from '../lib/url.js'
 
 const RETRY_COUNT = 3
@@ -60,6 +60,19 @@ function unwrapBody(response) {
   return data
 }
 
+// 上游业务码闸：HTTP 200 下发的 code!==200（301 重定向/460 拥挤/限流参数错
+// 等）不能当空态归一——「上游拒了」与「真没有」是两种结局，静默吞会让搜索
+// 空态/「没词」假象骗过排障。code 缺席放行：自有端点契约未必带 code，
+// 与 playlist_track_all/getSongsDetail 两处既有闸同口径。err.bizCode 打标——
+// 调用方要按码分诊不必回头串匹配 message
+function assertCode200(data, label) {
+  if (data.code != null && data.code !== 200) {
+    const err = new Error(`${label}接口异常（code ${data.code}）`)
+    err.bizCode = data.code
+    throw err
+  }
+}
+
 export const musicApi = {
   // limit 默认 100：网易歌单搜索对英文/长尾关键词的召回深度很差，
   // 相关结果常排在官方第一页之外（如 "mushroom" 的相关歌单在 25 位以后），
@@ -69,6 +82,7 @@ export const musicApi = {
       api.get('/search', { params: { keywords, type: 1000, limit }, signal: abortSignal })
     )
     const data = unwrapBody(response)
+    assertCode200(data, '歌单搜索')
     return data.result || {}
   },
 
@@ -80,6 +94,7 @@ export const musicApi = {
       timeout: 5000 // typeahead 要快——超时就别弹了
     })
     const data = unwrapBody(response)
+    assertCode200(data, '搜索建议')
     return data.result || {}
   },
 
@@ -91,6 +106,7 @@ export const musicApi = {
       api.get('/cloudsearch', { params: { keywords, type: 1, limit }, signal: abortSignal })
     )
     const data = unwrapBody(response)
+    assertCode200(data, '歌曲搜索')
     return data.result?.songs || []
   },
 
@@ -104,6 +120,7 @@ export const musicApi = {
       })
     )
     const data = unwrapBody(response)
+    assertCode200(data, '歌曲搜索')
     return { songs: data.result?.songs || [], total: data.result?.songCount ?? null }
   },
 
@@ -114,12 +131,14 @@ export const musicApi = {
       timeout: 15000
     })
     const data = unwrapBody(response)
+    assertCode200(data, '推荐歌单')
     return data.result || []
   },
 
   getSearchHot: async (abortSignal = null) => {
     const response = await api.get('/search_hot', { signal: abortSignal, timeout: 8000 })
     const data = unwrapBody(response)
+    assertCode200(data, '热搜')
     return data.result?.hots || []
   },
 
@@ -169,6 +188,9 @@ export const musicApi = {
           })
         )
         const data = unwrapBody(response)
+        // 上游业务码（301/460 等）随 HTTP 200 下发——换码率重试前先进
+        // lastError 簿记，全部码率失败时把它透出而非塌缩成「版权限制」
+        assertCode200(data, '播放地址')
         const songData = data.data?.[0] || {}
 
         if (songData.url && !songData.freeTrialInfo) {
@@ -180,13 +202,16 @@ export const musicApi = {
         }
 
         if (isUnavailableTrack(songData)) {
-          throw new Error('无法获取完整版播放链接，可能是版权限制')
+          // 打标分流：catch 侧靠 err.isUnavailable 透出，不靠「版权限制」
+          // 串匹配——改文案不会静默退化成换码率空转
+          const err = new Error('无法获取完整版播放链接，可能是版权限制')
+          err.isUnavailable = true
+          throw err
         }
       } catch (error) {
-        // 形态校验错误（部署错配/反代 HTML）必须直接透出——吞掉换码率重试会
-        // 把部署问题降级成误导性的"版权限制"
-        if (isAbortError(error) || error?.isShapeError
-            || String(error?.message ?? '').includes('版权限制')) throw error
+        // 形态校验错误（部署错配/反代 HTML）与不可用判定的错误必须直接透出——
+        // 吞掉换码率重试会把部署问题/确定性失败降级成误导性的重试空转
+        if (isAbortError(error) || error?.isShapeError || error?.isUnavailable) throw error
         lastError = error
         console.warn(`音质 ${br} 获取失败:`, error?.message)
       }
@@ -205,6 +230,9 @@ export const musicApi = {
       })
     )
     const data = unwrapBody(response)
+    // 与 getSongUrl 同口径：code!==200（404 无货/301/460 等）透出业务码，
+    // 不能塌缩成笼统「无法获取下载链接」让排障分不清上游拒与真没链
+    assertCode200(data, '下载地址')
     const songData = data.data?.[0] || {}
     if (!songData.url) throw new Error('无法获取下载链接')
     if (isUnavailableTrack(songData)) throw new Error('仅获取到试听片段，可能受版权限制')
@@ -229,10 +257,16 @@ export const musicApi = {
     const alreadyProxied = downloadData.url.includes('/audio-proxy/')
     const proxyUrl = alreadyProxied ? downloadData.url
       : `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
-    let blobResponse = await fetch(proxyUrl, { credentials: 'include' }).catch(() => null)
+    let blobResponse = await fetch(proxyUrl, {
+      credentials: 'include',
+      signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS)
+    }).catch(() => null)
     if (!blobResponse || !blobResponse.ok) {
       // CDN 直连必须 omit——上游普遍只回 ACAO:*，credentialed 请求会被浏览器拦
-      blobResponse = await fetch(downloadData.url, { credentials: 'omit' }).catch(error => {
+      blobResponse = await fetch(downloadData.url, {
+        credentials: 'omit',
+        signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS)
+      }).catch(error => {
         throw new Error(`下载失败: ${error.message || '网络错误'}`)
       })
     }
@@ -258,6 +292,8 @@ export const musicApi = {
       api.get('/lyric', { params: { id }, signal: abortSignal })
     )
     const data = unwrapBody(response)
+    // 上游错误码不当「没词」归一——歌词空与上游拒词是两种结局
+    assertCode200(data, '歌词')
     const lyrics = parseLyrics(data.lrc?.lyric || '')
     // 翻译文件常缺自己的 [offset:] 标签——用主歌词的 offset 兜底对齐，
     // 否则主词已偏移、翻译未偏移，0.5s 合并窗永远配不上对而全部丢弃
@@ -285,6 +321,10 @@ export const musicApi = {
     })
     if (response === null) return null
     const data = unwrapBody(response)
+    // 「外面确实没词」是常态结局：HTTP 404 已在 catch 归 null；body 内
+    // code:404（防御：契约漂移时）同口径归 null，其余业务码照常抛
+    if (data.code === 404) return null
+    assertCode200(data, '外部歌词')
     // 契约平铺 {code,lrc,...}；data 嵌套形态兼容性地看一眼
     const hit = data.data && typeof data.data === 'object' ? data.data : data
     if (typeof hit.lrc !== 'string' || !hit.lrc.trim()) return null
@@ -322,6 +362,9 @@ export const musicApi = {
   getMatchState: async (trackId, abortSignal = null) => {
     const response = await api.get('/match/state', { params: { trackId }, signal: abortSignal })
     const data = unwrapBody(response)
+    // match:null 是合法未命中（code 200 下发）；业务码非 200 照常抛——
+    // 水合链按错误通道分诊（429 释放槽位），不能归一成「无绑定」
+    assertCode200(data, '匹配状态')
     return data.match ?? null
   },
 
@@ -355,6 +398,7 @@ export const musicApi = {
       api.get('/song_detail', { params: { ids: id }, signal: abortSignal })
     )
     const data = unwrapBody(response)
+    assertCode200(data, '歌曲详情')
     const songs = data.songs || []
     if (songs.length > 0) return songs[0]
     throw new Error('歌曲不存在')
@@ -594,13 +638,18 @@ async function sniffExt(blob) {
   if (hex.startsWith('494433') || hex.startsWith('ffe')) return '.mp3'
   return null
 }
+// 大文件 blob 拉取没有进度可看——裸 fetch 悬挂会让「获取源文件」永远转圈，
+// 给总量级超时兜底（服务端代理链/外网 CDN 慢死时 5min 足够判死）。
+// TimeoutError 进错误通道与 axios ECONNABORTED 同族（isRetryable 不重试）
+const BLOB_FETCH_TIMEOUT_MS = 5 * 60 * 1000
+
 // prefer=best 在配了 DOWNLOAD_TOKEN+BILI_COOKIE 的部署要令牌——带上无妨，
-// 未配令牌门的服务端会忽略它
-const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
+// 未配令牌门的服务端会忽略它；头构造与 http.js 请求拦截器同一收口
 async function saveStreamAsFile(url, fileName) {
   const resp = await fetch(url, {
     credentials: 'include', // 跨域部署（VITE_API_BASE_URL ≠ 页面源）也要带会话 cookie
-    headers: DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
+    headers: downloadTokenHeaders(),
+    signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS)
   })
   if (!resp.ok) {
     // 服务端错误体是 {code,message}——「该视频没有可代理的音频流」这类

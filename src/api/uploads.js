@@ -4,15 +4,14 @@
 // （upload.onprogress 是浏览器里唯一的上行进度事件源）。
 // 返回 { promise, abort }——大文件（audio 512MB / video 2GB）上传中必须给
 // 逃生通道；abort 走 xhr.onabort → promise reject('已取消')
-import { API_BASE_URL } from './http.js'
+import { API_BASE_URL, downloadTokenHeaders } from './http.js'
 import { UPLOADS_PLAYLIST_ID, fileArtifactUrl } from '../lib/song.js'
 
 export { UPLOADS_PLAYLIST_ID, fileArtifactUrl }
 
 // 与 http.js 拦截器同口径：服务对服务/脚本旁路凭据（全量 API）部署下裸
 // XHR/fetch 也要带令牌——uploads 是 protectedWrite，会话 cookie 缺位时没它全 401
-const DOWNLOAD_TOKEN = import.meta.env.VITE_DOWNLOAD_TOKEN || ''
-const tokenHeaders = () => DOWNLOAD_TOKEN ? { 'x-download-token': DOWNLOAD_TOKEN } : {}
+// 头构造统一收口在 http.js downloadTokenHeaders（勿再本地重复读 env）
 
 export function uploadFile({ kind, file, filename, songId, onProgress }) {
   const params = new URLSearchParams({ kind })
@@ -24,11 +23,24 @@ export function uploadFile({ kind, file, filename, songId, onProgress }) {
     xhr.open('POST', `${API_BASE_URL}/uploads?${params}`)
     xhr.withCredentials = true
     xhr.setRequestHeader('Content-Type', 'application/octet-stream')
-    if (DOWNLOAD_TOKEN) xhr.setRequestHeader('x-download-token', DOWNLOAD_TOKEN)
+    for (const [k, v] of Object.entries(downloadTokenHeaders())) xhr.setRequestHeader(k, v)
+    // 大文件上行不定总时限（2GB 慢网以小时计）——做停滞看门狗：无上行进度
+    // 满 STALL_MS 才判死（服务端挂起/连接半开裸 XHR 永不 settle），
+    // 每次 onprogress 喂狗；timedOut 与用户主动 abort 在 onabort 分流
+    const STALL_MS = 120000
+    let stallTimer = null
+    let timedOut = false
+    const armStall = () => {
+      clearTimeout(stallTimer)
+      stallTimer = setTimeout(() => { timedOut = true; xhr.abort() }, STALL_MS)
+    }
+    const disarmStall = () => { clearTimeout(stallTimer); stallTimer = null }
     xhr.upload.onprogress = (e) => {
+      armStall()
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
     }
     xhr.onload = () => {
+      disarmStall()
       let body = null
       try { body = JSON.parse(xhr.responseText) } catch { /* 非 JSON 错误页 */ }
       if (xhr.status >= 200 && xhr.status < 300 && body?.code === 200) {
@@ -37,8 +49,12 @@ export function uploadFile({ kind, file, filename, songId, onProgress }) {
         reject(new Error(body?.message || `上传失败（HTTP ${xhr.status}）`))
       }
     }
-    xhr.onerror = () => reject(new Error('网络错误，上传失败'))
-    xhr.onabort = () => reject(new Error('已取消'))
+    xhr.onerror = () => { disarmStall(); reject(new Error('网络错误，上传失败')) }
+    xhr.onabort = () => {
+      disarmStall()
+      reject(new Error(timedOut ? '上传停滞超时，已中止' : '已取消'))
+    }
+    armStall()
     // File 直发——Blob 本体进请求体，不包 FormData（服务端 octet-stream 裸读）
     xhr.send(file)
   })
@@ -49,7 +65,7 @@ export async function deleteUploadedSong(songId) {
   const doDelete = () => fetch(`${API_BASE_URL}/uploads/${encodeURIComponent(songId)}`, {
     method: 'DELETE',
     credentials: 'include',
-    headers: tokenHeaders(),
+    headers: downloadTokenHeaders(),
   })
   let r = await doDelete()
   // abort→DELETE 竞态：xhr.abort 后服务端 inflight 锁要走「socket 断→流读失败

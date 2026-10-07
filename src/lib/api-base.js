@@ -45,6 +45,19 @@ export function resolveApiBaseUrl() {
         return devFallback()
       }
       const configuredUrl = new URL(configuredBase)
+      // userinfo（http://user:pass@host）会把凭据烘进每次请求的 origin 串——
+      // 多半是粘错地址；剥离并告警而不是把凭据静默带进 API 链路
+      if (configuredUrl.username || configuredUrl.password) {
+        console.warn('[api] VITE_API_BASE_URL 含 userinfo 凭据，已剥离:', configuredBase)
+        configuredUrl.username = ''
+        configuredUrl.password = ''
+      }
+      // 端口 0 永不连通但 new URL 不拒收（'http://x:0' 合法解析）——
+      // 与缺 scheme 同口径按无效配置退回推断端口
+      if (configuredUrl.port === '0') {
+        console.warn('[api] VITE_API_BASE_URL 端口为 0（不可连接），已忽略:', configuredBase)
+        return devFallback()
+      }
       // 配置带 query/hash 多半是误配（如带了 '?' 或 '#'）——剥掉并告警而不是
       // 让拼出的 '/downloads?x=1/queues' 静默打错端点
       if (configuredUrl.search || configuredUrl.hash) {

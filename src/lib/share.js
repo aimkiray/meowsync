@@ -40,12 +40,18 @@ export async function copyText(text) {
  */
 export function songShareUrl(song) {
   const origin = window.location.origin
+  // 各 id 过 encodeURIComponent：provider 字段是上游外链数据，带 &/#/=
+  // 会截断参数或注入额外 query 键——编码保参数边界完整
   if (song?.bilibili?.bvid) {
-    return `${origin}${BASE}?bili=${song.bilibili.bvid}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
+    return `${origin}${BASE}?bili=${encodeURIComponent(song.bilibili.bvid)}${song.bilibili.page > 1 ? `&p=${song.bilibili.page}` : ''}&view=watch`
   }
-  if (song?.youtube?.videoId) return `${origin}${BASE}?yt=${song.youtube.videoId}&view=watch`
-  if (song?.qq?.mid) return `${origin}${BASE}?qq=${song.qq.mid}&view=watch`
-  return `${origin}${BASE}?song=${song?.id}&view=watch`
+  if (song?.youtube?.videoId) return `${origin}${BASE}?yt=${encodeURIComponent(song.youtube.videoId)}&view=watch`
+  if (song?.qq?.mid) return `${origin}${BASE}?qq=${encodeURIComponent(song.qq.mid)}&view=watch`
+  // 无可用 id 不产 ?song=undefined 死链——接收端 ?song= 只收数字 id，
+  // 返回 null 让 shareOrCopy 回落复制文本而非分享坏链
+  const sid = String(song?.id ?? '')
+  if (!/^\d+$/.test(sid)) return null
+  return `${origin}${BASE}?song=${encodeURIComponent(sid)}&view=watch`
 }
 
 // 本地单无远端 id——?mix=<name>~<ids> 内容携带链，接收端按 id 重解析。
@@ -58,7 +64,7 @@ const MIX_IDS_BUDGET = 3000
 export function mixShareIds(playlist) {
   const ids = []
   let budget = MIX_IDS_BUDGET
-  for (const t of playlist.tracks || []) {
+  for (const t of playlist?.tracks || []) {
     const id = String(t.id)
     if (!isResolvableTrackId(id)) continue
     if (ids.length >= MIX_ID_CAP || id.length + 1 > budget) break
@@ -73,18 +79,23 @@ export function mixShareIds(playlist) {
 // 其余本地单退 ?mix= 内容携带链
 export function playlistShareUrl(playlist) {
   const origin = window.location.origin
-  if (!isLocalPlaylistId(playlist?.id)) {
-    return `${origin}${BASE}?playlist=${playlist.id}&view=songs&pl=${playlist.id}`
+  const pid = playlist?.id
+  if (pid != null && !isLocalPlaylistId(pid)) {
+    // 远端单按 id 引用分享——接收端 ?playlist= 只收数字 id，非数字 id
+    // （undefined/异形壳）产的是死链，返回 null 让调用方走文本兜底
+    if (!/^\d+$/.test(String(pid))) return null
+    const encPid = encodeURIComponent(String(pid))
+    return `${origin}${BASE}?playlist=${encPid}&view=songs&pl=${encPid}`
   }
-  const shell = parseProviderShellId(playlist.id)
+  const shell = parseProviderShellId(pid)
   if (shell?.source === 'yt') {
     return `${origin}${BASE}?yt=${encodeURIComponent(`https://www.youtube.com/playlist?list=${shell.key}`)}`
   }
   if (shell?.source === 'bili') {
     return `${origin}${BASE}?bili=${encodeURIComponent(`https://www.bilibili.com/list/ml${shell.key}`)}`
   }
-  if (shell?.source === 'qq') return `${origin}${BASE}?qqpl=${shell.key}`
-  return `${origin}${BASE}?mix=${encodeURIComponent(String(playlist.name || '歌单'))}~${mixShareIds(playlist).join(',')}`
+  if (shell?.source === 'qq') return `${origin}${BASE}?qqpl=${encodeURIComponent(shell.key)}`
+  return `${origin}${BASE}?mix=${encodeURIComponent(String(playlist?.name || '歌单'))}~${mixShareIds(playlist).join(',')}`
 }
 
 // ?mix= 链空载荷判定：ids 全部不可解析时 URL 以 ~ 收尾——分享侧据此拦截提示

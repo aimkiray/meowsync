@@ -18,18 +18,30 @@ const safeSetLs = (k, v) => {
 // 远端应用窗：同步引擎已把远端原文落进 LS，回填 ref 带起的 watcher
 // 写盘要跳过——本机口径钳位/归一后的值若写回 LS，会被记脏推上去把
 // 远端新版数据降级（如远端 lyric-fs=30、本机 MAX=24，回写 24 即成
-// 「本机以新戳压掉远端合法值」）。LS 原文保持，重启读回同口径归一
-let remoteApplying = false
-const beginRemoteApply = () => {
-  remoteApplying = true
-  // post watcher 在同微任务批冲刷——nextTick 回调排在其后，窗口盖住回填写
-  void nextTick(() => { remoteApplying = false })
+// 「本机以新戳压掉远端合法值」）。LS 原文保持，重启读回同口径归一。
+// 旗标键级独立（与 App.vue watchTabRemoteApplying 同口径）：applyRemoteItems
+// 同步 for 循环连发多键时，先到键 ref 值没变→无 watcher job→它的关窗
+// nextTick 会排在后到键的 watcher job 前面跑——共用单旗标被提前关窗，
+// 后到键的归一值照样被回写推回服务端
+const makeRemoteApplyGate = () => {
+  let applying = false
+  return {
+    isApplying: () => applying,
+    // 开窗/关窗拆两步，调用方在两步之间赋 ref——关窗 nextTick 必须挂在
+    // ref 赋值**之后**：watcher 是 pre-flush 任务，ref 一变才入队；若先挂
+    // nextTick 再改 ref，关窗回调会排在 watcher job 前面跑，窗口提前关上，
+    // 归一值照样被回写推上去（App.vue watchTab 的 onRemoteApply 同款坑同序）
+    begin: () => { applying = true },
+    end: () => { void nextTick(() => { applying = false }) }
+  }
 }
+const videoRemoteGate = makeRemoteApplyGate()
+const lyricFsRemoteGate = makeRemoteApplyGate()
 
 // 视频模式：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开。
 // LS_KEYS.VIDEO_MODE 沿用 B 站时代键名：YouTube 接入不换名重置用户选择
 export const prefVideoOn = ref(safeGetLs(LS_KEYS.VIDEO_MODE) !== '0')
-watch(prefVideoOn, v => { if (!remoteApplying) safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0') })
+watch(prefVideoOn, v => { if (!videoRemoteGate.isApplying()) safeSetLs(LS_KEYS.VIDEO_MODE, v ? '1' : '0') })
 
 // 歌词字号：本机偏好存 localStorage（不像时间校准那样随歌曲入库）。
 // CSS 变量 --lyric-fs 挂列表上，当前行/译文用 calc 相对值随动
@@ -40,15 +52,17 @@ export const LYRIC_FS_MAX = 24
 export const clampLyricFs = (raw) => Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MIN,
   parseInt(raw) || 18))
 export const prefLyricFontSize = ref(clampLyricFs(safeGetLs(LS_KEYS.LYRIC_FONT_SIZE)))
-watch(prefLyricFontSize, v => { if (!remoteApplying) safeSetLs(LS_KEYS.LYRIC_FONT_SIZE, String(v)) })
+watch(prefLyricFontSize, v => { if (!lyricFsRemoteGate.isApplying()) safeSetLs(LS_KEYS.LYRIC_FONT_SIZE, String(v)) })
 
 // 多端同步远端落地（订阅在同步侧 sync.js initSync 注册）：LS 已被引擎
-// 写好，这里只灌内存 ref；watcher 落盘由 remoteApplying 窗跳过
+// 写好，这里只灌内存 ref；watcher 落盘由各键自己的远端应用窗跳过
 export function applyRemoteVideoPref() {
-  beginRemoteApply()
+  videoRemoteGate.begin()
   prefVideoOn.value = safeGetLs(LS_KEYS.VIDEO_MODE) !== '0'
+  videoRemoteGate.end()
 }
 export function applyRemoteLyricFs() {
-  beginRemoteApply()
+  lyricFsRemoteGate.begin()
   prefLyricFontSize.value = clampLyricFs(safeGetLs(LS_KEYS.LYRIC_FONT_SIZE))
+  lyricFsRemoteGate.end()
 }

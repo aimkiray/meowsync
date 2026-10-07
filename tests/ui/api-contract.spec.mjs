@@ -99,6 +99,71 @@ describe('musicApi：歌单详情两段请求 + 字段形状', () => {
   })
 })
 
+describe('musicApi：上游业务码 code!==200 不吞成空态', () => {
+  it('搜索系（歌单/建议/单曲/深挖/推荐/热搜）code!==200 抛错', async () => {
+    setResponses({
+      get: {
+        '/search': { code: 301 },
+        '/search_suggest': { code: 460 },
+        '/cloudsearch': { code: 301 },
+        '/personalized': { code: 400 },
+        '/search_hot': { code: 500 },
+      },
+    })
+    await expect(musicApi.searchPlaylists('x')).rejects.toThrow(/code 301/)
+    await expect(musicApi.searchSuggest('x')).rejects.toThrow(/code 460/)
+    await expect(musicApi.searchSongs('x')).rejects.toThrow(/code 301/)
+    await expect(musicApi.searchSongsPage('x')).rejects.toThrow(/code 301/)
+    await expect(musicApi.getPersonalized()).rejects.toThrow(/code 400/)
+    await expect(musicApi.getSearchHot()).rejects.toThrow(/code 500/)
+  })
+
+  it('getLyrics：code!==200 抛错而非归一「没词」', async () => {
+    setResponses({ get: { '/lyric': { code: 460 } } })
+    await expect(musicApi.getLyrics(1)).rejects.toThrow(/code 460/)
+  })
+
+  it('getSongUrl：双码率都 code!==200——透出业务码而非塌缩成版权限制', async () => {
+    setResponses({ get: { '/song_url': { code: 301 } } })
+    await expect(musicApi.getSongUrl(1)).rejects.toThrow(/code 301/)
+  })
+
+  it('getSongDetail：code!==200 先于「歌曲不存在」抛错', async () => {
+    setResponses({ get: { '/song_detail': { code: 400 } } })
+    await expect(musicApi.getSongDetail(1)).rejects.toThrow(/code 400/)
+  })
+
+  it('getMatchState：code!==200 抛错（match:null 才归 null）', async () => {
+    setResponses({ get: { '/match/state': { code: 400 } } })
+    await expect(musicApi.getMatchState('yt_x')).rejects.toThrow(/code 400/)
+    setResponses({ get: { '/match/state': { code: 200, match: null } } })
+    expect(await musicApi.getMatchState('yt_x')).toBeNull()
+  })
+
+  it('getExternalLyric：body code:404 归 null；其它业务码抛错', async () => {
+    setResponses({ get: { '/lyric/external': { code: 404, message: '无匹配' } } })
+    expect(await musicApi.getExternalLyric({ id: 'yt_x', title: 't', artist: 'a', durationSec: 10 })).toBeNull()
+    setResponses({ get: { '/lyric/external': { code: 502, message: '上游挂' } } })
+    await expect(musicApi.getExternalLyric({ id: 'yt_x', title: 't', artist: 'a', durationSec: 10 }))
+      .rejects.toThrow(/code 502/)
+  })
+
+  it('getDownloadUrl：code!==200 透出业务码（err.bizCode）而非塌缩成「无法获取」', async () => {
+    setResponses({ get: { '/song_url': { code: 404 } } })
+    await expect(musicApi.getDownloadUrl(1)).rejects.toThrow(/code 404/)
+    setResponses({ get: { '/song_url': { code: 301 } } })
+    await expect(musicApi.getDownloadUrl(1)).rejects.toMatchObject({ bizCode: 301 })
+  })
+
+  it('getDownloadUrl：正常回包提取 url/br/size/type', async () => {
+    setResponses({ get: { '/song_url': { code: 200, data: [{ url: 'https://cdn/a.mp3', br: 320000, size: 1024 }] } } })
+    const r = await musicApi.getDownloadUrl(9)
+    expect(r).toMatchObject({ url: 'https://cdn/a.mp3', bitrate: 320000, size: 1024, type: 'mp3' })
+    // purpose=download 是服务端路由分流键——丢了会按 playback 语义走解锁链
+    expect(httpCalls.at(-1).cfg.params.purpose).toBe('download')
+  })
+})
+
 describe('downloadsApi：队列/任务形状', () => {
   it('createQueue：默认选项序列化 + 60s 超时通道', async () => {
     setResponses({ post: { '/downloads/queues': { code: 200, data: { id: 5, status: 'pending' } } } })
@@ -136,6 +201,44 @@ describe('downloadsApi：队列/任务形状', () => {
     await downloadsApi.deleteQueue(5)
     const [, cfg] = http.delete.mock.calls.at(-1)
     expect(cfg.timeout).toBe(90000)
+  })
+
+  it('mirrorLocalPlaylist：非数组 artists/字符串专辑名归一不丢不炸', async () => {
+    setResponses({ post: { '/downloads/local/mirror': { code: 200, data: {} } } })
+    await downloadsApi.mirrorLocalPlaylist({
+      id: 'local_pl_x', name: 'P',
+      tracks: [
+        // artists 非数组（脏数据）：旧实现 .map 直接 TypeError
+        { id: 1, name: 'a', artists: 42, al: { name: '专辑A', picUrl: 'p' } },
+        // 字符串专辑名：obj?.name 读不到会静默丢名
+        { id: 2, name: 'b', artists: '某艺人', al: '字符串专辑' },
+        null, // 空槽原样透传
+      ],
+    })
+    const [, body] = http.post.mock.calls.at(-1)
+    expect(body.tracks[0].ar).toEqual([])
+    expect(body.tracks[0].al).toMatchObject({ name: '专辑A', picUrl: 'p' })
+    expect(body.tracks[1].ar).toEqual([{ name: '某艺人' }])
+    expect(body.tracks[1].al.name).toBe('字符串专辑')
+    expect(body.tracks[2]).toBeNull()
+  })
+
+  it('mirrorLocalPlaylist：ar 数组成员是裸字符串不丢艺人名', async () => {
+    // ar:['Jay'] 若只读 a?.name 会产 {name:undefined}——slimTrack 同口径：
+    // 对象取 name、字符串透传
+    setResponses({ post: { '/downloads/local/mirror': { code: 200, data: {} } } })
+    await downloadsApi.mirrorLocalPlaylist({
+      id: 'local_pl_x', name: 'P',
+      tracks: [
+        { id: 1, name: 'a', ar: ['周杰伦', '方文山'] },
+        { id: 2, name: 'b', artists: ['裸串也收'] },
+        { id: 3, name: 'c', ar: [{ name: '对象形' }, '混排串'] },
+      ],
+    })
+    const [, body] = http.post.mock.calls.at(-1)
+    expect(body.tracks[0].ar).toEqual([{ name: '周杰伦' }, { name: '方文山' }])
+    expect(body.tracks[1].ar).toEqual([{ name: '裸串也收' }])
+    expect(body.tracks[2].ar).toEqual([{ name: '对象形' }, { name: '混排串' }])
   })
 })
 
