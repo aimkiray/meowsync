@@ -1081,6 +1081,23 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   overscroll-behavior: contain;
 }
 
+/* 滑窗虚拟化的锚定隔离：useVirtualList 消费方的滚动容器必须关 Chrome
+   scroll anchoring。窗滑动时上下 spacer 高随 update() 重算——浏览器锚定
+   把 spacer 伸缩当「视口上方内容增删」调 scrollTop 补偿，补偿触发 scroll
+   事件→update() 再算窗再改 spacer→锚定再补偿；自由滚轮冲进触底钳制区后
+   「钳制回弹」与「锚定补偿」互相拉锯，scroll 事件流不断自生=主线程死锁
+   （待播队列滚到底卡死即此形态）。spacer 高度由 useVirtualList 全权负责，
+   浏览器锚定必须关闭——新消费方滚动容器登记在此（tests/virtual-scroll-
+   anchor.test.mjs 钉着本清单）。
+   .watch-side-body=WatchView 队列栏内滚口（宽屏栏内滚/移动视频分屏，
+   歌词/相关面板同用此类——静态内容关了也无害）、.watch-view=单列整页
+   滚态的真滚动器、.song-rows=歌单行容器、.playlist-grid-wrap=搜索曲列
+   滑窗口。集中公共表而非散进各组件 scoped 块：四容器一处清单，与上条
+   overscroll 登记清单同位同律 */
+.watch-view, .watch-side-body, .song-rows, .playlist-grid-wrap {
+  overflow-anchor: none;
+}
+
 /* ── 添加到歌单对话框：居中模态，复用 pg-menu 发丝皮 ── */
 .atp-overlay {
   position: fixed;

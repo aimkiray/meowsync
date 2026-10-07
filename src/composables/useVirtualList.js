@@ -57,6 +57,14 @@ export const dividerRowShift = (i, dividerIndex, dividerH = 0) =>
 // 不用 matchMedia；全不命中退化 viewport。listTop 每帧实测（anchor spacer
 // 的 getBoundingClientRect）——列表上方内容（英雄区/表头/队列头）怎么变
 // 都自校准，不用簿记。
+// 滚动容器契约：消费方滚动器必须关 Chrome scroll anchoring
+// （overflow-anchor: none）——spacer 高度随窗重算，浏览器锚定把它当
+// 「视口上方内容增删」调 scrollTop 补偿，补偿→scroll 事件→update()
+// 再改 spacer→锚定再补偿，触底钳制区叠自由滚轮即成持续 scroll 事件流
+// 的主线程死锁。登记处在 style.css 滚动器清单块：现册 .watch-side-body /
+// .watch-view（WatchView 队列双根）、.song-rows（SongList）、
+// .playlist-grid-wrap（PlaylistGrid）——新消费方滚动容器须入册，
+// tests/virtual-scroll-anchor.test.mjs 钉着该清单
 export function useVirtualList({
   source,               // Ref<Array>：全量源（裸数组会静默渲空）
   rowHeight,            // number：行 border-box 均匀高（px）
