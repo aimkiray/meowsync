@@ -135,7 +135,7 @@
             aria-label="沉浸模式"
             title="沉浸模式"
           >
-            <PixelIcon name="lyrics" :size="14" />
+            <PixelIcon name="fullscreen" :size="14" />
           </button>
         </div>
       </div>
