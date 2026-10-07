@@ -5,12 +5,42 @@
 // 三路全灭回 null——调用方按「无词」处理（路由 404、下载链 NO_LYRICS）。
 // UGC 曲（yt_/bv_）在「有时长闸可摘 + 存在干净 miss 面」时追加「免时长
 // 末轮」：durationSec=0 + strictTitle 恒 true 的单次 artist='' 开放轮
-// 重扫两检索源，救「截取版/片头尾超长」型失效——同名歧义由标题精确闸 +
-// 末轮整池单发消歧兜：fetch 层多候选时走 choose 通道，排序后前 8 条身份
-// 交判官一发选择题「来源最可能翻唱哪条」——逐候选布尔盲审对同题异曲
-// 不够决断（实证：KKB 英文版被判 ok 收录），整池相对判定才分得清；
-// choose 未选中/故障落回逐候选归属核验（带同题池语境：条目身份进判定
-// prompt，vkey 换 v3 盐与无池盲审互不命中）。末轮不按 artist 轮次重扫——
+// 重扫两检索源，救「截取版/片头尾超长」型失效。
+// yt_ 曲在常规轮发起前先反解本家声明（投稿描述 original:/本家: 链接 →
+// {title,author} 真身元数据，至多 +2 跳 fail-soft）：choose/verify 自
+// 首轮起携 declared——判官对同题池看得到「自署本家」轴（池中有本家
+// 条目选它、没有则倾向判死而非乱挑；实案 'Moonlight ver.EMA' 开放轮
+// 曾把 Gaulin 英文同名异曲 pick+verify 连过收单、声明还没到场——判官
+// 是在无证据语境下对同题池做的选择）。常规轮全灭后原位置再追加「声明
+// 轮」（先于免时长末轮）以本家题/名重扫两检索源——同题异曲在元数据
+// 层不可分（'Moonlight'→moumoon/Gaulin、'Boi'→Dina Jashari 同名异曲），
+// 声明证据是检索侧的确定性出口、比摘时长闸更精准故排前；题归一相同
+// 且艺人面无新信息（本家 author 缺席/占位或与来源 artist 归一相同）
+// 才不重复打——题同而本家 author 是新艺人轴仍起轮。declared 透给判官
+// 作语境（自署本家行进 prompt；「有声明」位并进判定键盐尾分键——无
+// 声明语境落的旧 verdict 不被携自署证据的重判吃到，choose 侧
+// pickMemo 'd|' 同义）。
+// 标题身份闸（strictTitle）全轮次在位：候选标题剥缀归一后与检索标题
+// 精确等才放行——具名轮的 artistHit 子串约束只收窄召回、不能替代标题
+// 证据（'EMA' 撞进 'MAISONdes feat. EMA & たなか' 的艺人字段照样放行
+// 同题异曲：实案 '□° ver.EMA' 具名轮回收 'ダンス・ダンス・ダダ' 落错词）。
+// 无艺人约束轮（开放轮与免时长末轮）的同名歧义再交 choose 整池单发
+// 消歧兜：fetch 层池 ≥1 条即把排序后前 8 条身份交判官一发
+// 选择题「来源最可能翻唱哪条」——逐候选布尔盲审对同题异曲不够决断
+// （实证：KKB 英文版被判 ok 收录；常规开放轮 'Boi/Moonlight/匿名希望'
+// 类同题异曲被盲审连放），整池相对判定才分得清。挑中条再补 verify
+// 词文核验——pick 只比候选元数据不看词文（实案 'Boi ver.EMA' 开放轮
+// pick 选马其顿语同名歌直接收录，西里尔词文全程未验），元数据消歧与
+// 词文归属是两道独立证据缺一不可：判否即判死该变体不落回迭代（pick
+// 已是池内最优的相对判定，最优条过不了词文关说明池中无正解，逐条重
+// 验只是重复烧 AI 且同池条目大概率同错）；核验通道故障（非 abort）
+// 按未收录落回逐候选迭代——candidatePass 式「异常放行」会把没验过
+// 的错词重新放进门。判官明言「池中无合理候选」同判死不落回兜底
+// （precise 优先：错词比没词更糟，没词走 rematch 自愈）；choose 未应
+// 答/故障落回逐候选归属核验（带同题池语境：条目身份进判定 prompt，
+// vkey 换 v4 盐与无池盲审互不命中——降级期不缩召回）。具名 artist 轮
+// 不注入 choose（artistHit 已把候选池收窄到艺人相关——消歧面小，多烧
+// 一发整池判定不抵收益，逐候选核验照旧）。末轮不按 artist 轮次重扫——
 // 免时长后标题是唯一硬证据，UGC artist 是翻唱者/UP 主而非原曲艺人，具名
 // 约束只收窄（'Flamingo／rei shirose' 的 'R' 轮曾把真身 米津玄師 滤死、
 // 放行子串撞名的 Earl Bostic）。
@@ -56,6 +86,10 @@ const {
 } = require('../../shared/title-variants.js');
 const { normToken } = require('./netease-score');
 const { parseLrcLines, judgeLyricLines, lyricVerdictKey, judgePoolPick } = require('./lyric-verify');
+// 本家声明反解（投稿描述 original:/本家: 链接 → {title,author} 真身元数据）
+// ——经模块对象调用：测试面可就地桩，并行落地期缺席（undefined）按无
+// 声明 fail-soft 处理
+const ytLib = require('../lib/youtube');
 
 const EXT_TIMEOUT_MS = 12000;
 // 级联软时限默认值——fetchExternalLyric 经 args.deadlineMs 可覆写（测试
@@ -136,18 +170,26 @@ const artistHit = (want, got) => {
   return Boolean(g) && (g.includes(w) || w.includes(g));
 };
 
-// 宽检轮标题身份闸：artist 空检时 artistHit 全放行，/api/search 自由文本
-// 命中的「子串撞名」候选会照收（实证病例：查询 'Twig' 撞上英文同名异曲
-// 'Pinocchio Twig / Koosje'，时长还巧合贴近）。闸=候选标题剥缀面
-// （titleVariantsOf 单份规则集：尾括弧/feat./ver./cover/'A - B' 头等）
-// 归一后与检索变体精确相等才放行——'Twig (feat. Miku)'→'twig' 收、
+// 标题身份闸（级联全轮次在位）：闸=候选标题剥缀面（titleVariantsOf
+// 单份规则集：尾括弧/feat./ver./cover/'A - B' 头/全大写署名头等）
+// 归一后与检索标题精确相等才放行——'Twig (feat. Miku)'→'twig' 收、
 // 'twig' vs 'pinocchiotwig' 拒、'ロストアンブレラ' 精确收。
+// 开放轮里它是唯一挡「子串撞名」的确定性闸：artist 空检时 artistHit
+// 全放行，/api/search 自由文本命中的撞名候选会照收（实证病例：查询
+// 'Twig' 撞上英文同名异曲 'Pinocchio Twig / Koosje'，时长还巧合贴近）。
+// 具名轮同样要它——artistHit 子串约束只收窄召回、不能替代标题证据：
+// 'EMA' 会撞进 'MAISONdes feat. EMA & たなか' 的艺人字段（实案 '□°
+// ver.EMA' 具名轮回收 'ダンス・ダンス・ダダ' 同题异曲落错词——子串
+// 命中≠同曲）。
+// 检索词归一成空串（纯符号/分隔符标题，剥缀后无字母数字证据）同样走
+// 等比对：只收「候选标题归一后也为空」的条目（真·符号标题自证），
+// 正常标题一律拒——「无可比对不卡」的宽让等于放行一切，闸即虚设。
+// 查询词本身为空由上游 lrclibFetch/kugouFetch 的 `if (!q) return null`
+// 兜住不发请求，此闸面对的只有「非空但归一为空」的纯符号检索。
 // 刻意取舍：跨文字形态（罗马音 vs 日文原名）不互认——漏判由绑后外源
-// 兜底与自动首配愈合，错词比没词更伤。具名 artist 轮不上此闸（artistHit
-// 交叉约束在位，保模糊召回）
+// 兜底与自动首配愈合，错词比没词更伤。
 const strictTitleHit = (candTitle, queryTitle) => {
   const want = normToken(cleanQueryTitle(queryTitle));
-  if (!want) return true;            // 检索词归一后为空——无可比对不卡
   return titleVariantsOf(candTitle, '')
     .some((v) => normToken(v) === want);
 };
@@ -174,7 +216,8 @@ const markVerified = (hit) => Object.defineProperty(hit, 'verified', { value: tr
 // 标题变体生成（titleVariantsOf）已上提到 shared/title-variants.js——
 // 网易云匹配漏斗与本级联共用同一份规则集，本文件只留消费点。
 // 规则语义见该文件头部考据（'ver.<歌姬>'/cover/尾括弧/'Artist - Title'
-// 前缀/【栏目】头/feat.尾/斜杠尾/歌系语尾/字幕组/艺人锚十条）。
+// 前缀/【栏目】头/feat.尾/斜杠尾/歌系语尾/字幕组/艺人锚/全大写署名头
+// 十二条——'EMA rumor' 类搬运形态由 CAPS_HEAD_RE 无锚剥头兜底）。
 
 // 外源 fetch 通用防御：三家 API 均无合法跳转语义——redirect:'manual' 把
 // 3xx 显式露给上层（res.ok=false 走现有「源失败换下一源」语义），不裸
@@ -317,15 +360,27 @@ async function ytmFetchLyric(videoId, signal) {
 // /api/get 的 ±2s 精确闸对它们太严）。~20req/s 礼仪：429 尊重 Retry-After
 // 重试一次即止，不叠重试打爆公共上游。
 const LRCLIB_UA = 'MeowSync external-lyric fallback (self-hosted)';
-// strictTitle：宽检轮（无艺人约束）标题身份闸——见 strictTitleHit
+// strictTitle：标题身份闸——级联侧全轮次注入（具名轮同闸，见
+// strictTitleHit 头注实案）；直调/测试可显式关回旧行为
 // verify（可选）：(hit, {pool})=>Promise<boolean> 逐候选归属核验——同名
 // 汤里首顺位常被撞名者占住，判否换条在同源内完成而非整源判死；第二参
 // 透排序后候选池身份供判官比较同题异曲；verify 缺席保持旧行为取第一
 // 顺位（反查/直调等无核验通道场景，pool 也不构）
-// choose（可选）：(pool)=>Promise<extId|null> 整池单发消歧——免时长末轮
-// 注入，多候选（≥2）时把排序后前 8 条身份交判官一发选择题，挑中即收录
-// 不再逐候选核验（pick 已是全池相对判定）；null/抛错/池外 id 按未选中
-// 落回 verify 迭代；单候选无歧义不启用
+// choose（可选）：(pool)=>Promise<{pick,answered}|null> 整池单发消歧——
+// 级联侧无艺人约束轮注入（开放轮与免时长末轮——具名轮不注，见
+// cascade）：池 ≥1 条即把排序后前 8 条身份交判官一发选择题
+// （单候选同走——布尔盲审的「拿不准判真」对同题异曲太松）。裁决三态：
+//   {pick:extId, answered:true} —— 挑中后补跑 verify 词文核验再定收录
+//     （pick 只比候选元数据不看词文，元数据消歧与词文归属是两道独立
+//     证据）：判过 markVerified 收录；判否判死该变体不落回迭代（pick
+//     已是池内最优的相对判定，最优条过不了词文关=池中无正解，逐条重
+//     验只重复烧 AI）；核验通道故障（非 abort）按未收录落回 verify
+//     迭代——candidatePass 式「异常放行」会把没验过的错词重新放进门；
+//     指回池外 id 按未应答落回迭代
+//   {pick:null,  answered:true} —— 判官明言全池无合理候选：判死该变体，
+//     跳过逐候选核验兜底（precise 优先——错词比没词更糟）
+//   null/{answered:false}      —— 通道未给裁决（AI 关/故障/畸形应答）：
+//     落回 verify 迭代，降级期不缩召回
 // deadline（可选）：级联软时限戳——逐候选迭代把单源 AI 判定面放大到
 // 至多 3 次，过期起轮即停不再续烧；缺席保持旧行为（直调/测试不填）
 async function lrclibFetch({ title, artist, durationSec, strictTitle = false, verify, choose, signal, deadline }) {
@@ -375,7 +430,7 @@ async function lrclibFetch({ title, artist, durationSec, strictTitle = false, ve
   items.sort((a, b) => Number(b.synced) - Number(a.synced) || (a.diff ?? 9e9) - (b.diff ?? 9e9));
   // 同题候选池：排序后前 8 条的条目身份——extId 与 hit.extId 同式供
   // choose 指回条目；{title,artist,album} 随 verify 透出喂归属核验（进
-  // judgeInner 的 poolSeg 与 vkey v3 盐）。它是判定证据不是迭代面——
+  // judgeInner 的 poolSeg 与 vkey v4 盐）。它是判定证据不是迭代面——
   // 逐候选核验上限仍 3 条不变
   const pool = items.slice(0, 8).map(({ it }) => ({
     extId: `lrclib_${it.id}`,
@@ -396,20 +451,55 @@ async function lrclibFetch({ title, artist, durationSec, strictTitle = false, ve
       meta: { title: pick.trackName, artist: pick.artistName, album: pick.albumName },
     };
   };
-  // choose 通道：多候选时整池单发消歧，挑中即核验结论直接收录（外层
-  // verifyHit 凭 verified 烙记不重验）；未选中/故障/池外 id 落回迭代
-  if (choose && items.length >= 2) {
-    let picked = null;
+  // choose 通道：池 ≥1 条即整池单发消歧（单候选同走选择题——布尔盲审
+  // 的「拿不准判真」对同题异曲太松）。裁决三态见函数头注：挑中条补跑
+  // verify 词文核验再定收录（外层 verifyHit 凭 verified 烙记不重验）；
+  // 明言否决与挑中条判否都判死该变体不落回兜底；核验故障（非 abort）/
+  // 未应答/池外 id/迭代过期落回迭代
+  if (choose && items.length >= 1) {
+    let sel = null;
     try {
-      picked = await choose(pool);
+      sel = await choose(pool);
     } catch (e) {
       if (e?.aborted || signal?.aborted) throw abortErr();
-      picked = null;                        // 消歧故障按未选中——落回迭代
+      sel = null;                           // 消歧故障按未应答——落回迭代
     }
-    if (picked != null) {
-      const idx = pool.findIndex((p) => p.extId === picked);
-      if (idx >= 0) return markVerified(hitOf(items[idx].it));
-      // 指回池外 id 按未选中落回迭代——不整源判死
+    if (sel?.answered) {
+      // 判官否决全池——该变体判死：日志留痕，「池有候选却零产出」可回放
+      if (sel.pick == null) {
+        console.info(`[lyric-ext] lrclib 同题池 ${pool.length} 条被整池否决，判死该变体`);
+        return null;
+      }
+      // 同 kugouFetch——过期不做 pick 处理落回迭代（迭代顶部 deadline
+      // 闸自然截归 null）。不前置会让 verify 闭包的过期判否把「超龄未
+      // 验」误记成「词文核验判否」日志——病例回放分不出真判否与没来
+      // 得及验
+      if (!(deadline && Date.now() > deadline)) {
+        if (signal?.aborted) throw abortErr();
+        const idx = pool.findIndex((p) => p.extId === sel.pick);
+        if (idx >= 0) {
+          const hit = hitOf(items[idx].it);
+          if (!verify) return markVerified(hit);   // 无核验通道——挑中即收旧行为
+          try {
+            // pick 只是元数据相对判定——词文归属是第二道独立证据。判否即
+            // 判死该变体不落回迭代：池内最优条都过不了词文关说明池中无正
+            // 解，逐条重验只是重复烧 AI 且同池条目大概率同错。verify 闭包
+            // 自带 deadline 闸仍兜底「闸点到调用点间过期」的面——过期判否
+            // 不盲收（该变体归 null 由级联尾部按截断分流）
+            if (await verify(hit, { pool }) === false) {
+              console.info(`[lyric-ext] lrclib 挑中条 ${sel.pick} 词文核验判否，判死该变体`);
+              return null;
+            }
+            return markVerified(hit);
+          } catch (e) {
+            if (e?.aborted || signal?.aborted) throw abortErr();
+            // 核验通道故障按「未收录」落回逐候选迭代——candidatePass 式
+            // 异常放行会把没验过的错词重新放进门；迭代内回盲审保底，与
+            // 候选迭代已有容错同口径，不丢召回
+          }
+        }
+        // 指回池外 id 按未应答落回迭代——不整源判死
+      }
     }
   }
   // verify 在 → 至多前 3 条逐候选核验（条目内嵌歌词零额外请求），判否
@@ -458,12 +548,17 @@ async function lrclibGetById(id, signal) {
 // search 拿 candidates（id+accesskey 成对出现才可用），download fmt=lrc
 // 直给行级 LRC 的 base64（krc 加密形态不解）。候选按时长差升序、上游
 // score 决胜，至多串行试 3 条——单条失败换条不恋战。
+// strictTitle：标题身份闸——级联侧全轮次注入（具名轮同闸，语义同
+// lrclibFetch 头注）；直调/测试可显式关回旧行为
 // verify（可选）：(hit, {pool}) 逐候选归属核验——download 得词后判否即
 // 换条，并入「单条失败换条」同款语义；第二参透排序后候选池身份（同
 // lrclibFetch）；缺席取首个可用条（pool 也不构）
-// choose（可选）：(pool)=>Promise<extId|null> 整池单发消歧（同
-// lrclibFetch）——挑中只对这一条发 download；目标 download 失败/choose
-// 故障/池外 id 都按未选中落回逐候选迭代
+// choose（可选）：(pool)=>Promise<{pick,answered}|null> 整池单发消歧
+// （同 lrclibFetch 三态契约）——挑中只对这一条发 download，得词后同
+// 补 verify 词文核验：判过收录；判否判死该变体不落回迭代（最优条过
+// 不了词文关=池中无正解）；核验通道故障（非 abort）按未收录落回迭
+// 代；判官明言否决全池判死该变体；目标 download 失败/choose 故障/
+// 池外 id/未应答都按未选中落回逐候选迭代
 // deadline（可选）：级联软时限戳——候选迭代过期起轮即停（每条候选都
 // 还要烧一发 download 拿词再判定）；缺席保持旧行为
 async function kugouFetch({ title, artist, durationSec, strictTitle = false, verify, choose, signal, deadline }) {
@@ -530,22 +625,48 @@ async function kugouFetch({ title, artist, durationSec, strictTitle = false, ver
       return null;
     }
   };
-  // choose 通道同 lrclibFetch：多候选整池单发消歧，挑中只对这一条发
-  // download；choose 故障/池外 id/download 失败/迭代过期都按未选中落回
-  // 逐候选迭代（被挑条在迭代里再败即换条，语义同构）
-  if (choose && cands.length >= 2) {
-    let picked = null;
+  // choose 通道同 lrclibFetch：池 ≥1 条即整池单发消歧，挑中只对这一条发
+  // download，得词后补 verify 词文核验——判过 markVerified 收录；判否
+  // 判死该变体不落回迭代（理由同 lrclibFetch：池内最优过不了词文关=
+  // 池中无正解）；核验通道故障（非 abort）按未收录落回迭代（被挑条
+  // 在迭代里重 download 重验，盲审保底不丢召回）；明言否决判死该变
+  // 体；未应答/池外 id/download 失败/迭代过期都按未应答落回逐候选迭
+  // 代（被挑条在迭代里再败即换条，语义同构）
+  if (choose && cands.length >= 1) {
+    let sel = null;
     try {
-      picked = await choose(pool);
+      sel = await choose(pool);
     } catch (e) {
       if (e?.aborted || signal?.aborted) throw abortErr();
-      picked = null;                        // 消歧故障按未选中——落回迭代
+      sel = null;                           // 消歧故障按未应答——落回迭代
     }
-    if (picked != null && !(deadline && Date.now() > deadline)) {
-      if (signal?.aborted) throw abortErr();
-      const idx = pool.findIndex((p) => p.extId === picked);
-      const hit = idx < 0 ? null : await downloadHit(cands[idx].cd);
-      if (hit) return markVerified(hit);    // pick 即核验结论——不重验
+    if (sel?.answered) {
+      // 判官否决全池——该变体判死：日志留痕同 lrclibFetch
+      if (sel.pick == null) {
+        console.info(`[lyric-ext] kugou 同题池 ${pool.length} 条被整池否决，判死该变体`);
+        return null;
+      }
+      if (!(deadline && Date.now() > deadline)) {
+        if (signal?.aborted) throw abortErr();
+        const idx = pool.findIndex((p) => p.extId === sel.pick);
+        const hit = idx < 0 ? null : await downloadHit(cands[idx].cd);
+        if (hit) {
+          if (!verify) return markVerified(hit);   // 无核验通道——挑中即收旧行为
+          try {
+            // 得词补验（deadline 过期判否在 verify 闭包内——无法核验的
+            // 挑中条不收录、判死该变体，取舍同 lrclibFetch）
+            if (await verify(hit, { pool }) === false) {
+              console.info(`[lyric-ext] kugou 挑中条 ${sel.pick} 词文核验判否，判死该变体`);
+              return null;
+            }
+            return markVerified(hit);
+          } catch (e) {
+            if (e?.aborted || signal?.aborted) throw abortErr();
+            // 核验通道故障按「未收录」落回迭代——见上注
+          }
+        }
+        // 目标条 download 失败/核验故障都按「未选中」落回迭代——既有语义不动
+      }
     }
   }
   for (const { cd } of cands.slice(0, 3)) {
@@ -581,18 +702,22 @@ const plainTextLines = (lrc) => String(lrc || '').split('\n')
 // 签名时同键命中落库判定。
 // hit.meta（检索命中的候选条目身份）进 judgeLyricLines 的 candidate 参——
 // 词面撞名时条目身份是同名异曲拦截的关键证据；pool（可选，检索侧排序
-// 后前 8 条身份）挂 candidate.pool 进判定提示词，vkey 同步换 v3 盐——
-// pool 语境判定与无池盲审互不命中（见 lyricVerdictKey 版本段说明）
-async function verifyHit(hit, { title, artist, signal, pool }) {
+// 后前 8 条身份）挂 candidate.pool 进判定提示词，vkey 同步换 v4 盐——
+// pool 语境判定与无池盲审互不命中（见 lyricVerdictKey 版本段说明）；
+// declared（可选）= 已反解落地的本家声明 {title,author}——级联声明轮
+// 起透进判定语境（自署本家行进 prompt；「有声明」位进 vkey 盐尾分键
+// ——无声明语境落的持久 verdict 不能被携自署证据的重判吃到，否则
+// 声明轮/末轮同 extId 重进撞旧键、自署证据根本没进判）
+async function verifyHit(hit, { title, artist, signal, pool, declared }) {
   let lines = parseLrcLines(hit.lrc);
   // 纯文本词不再零核验：剥标签行取词文行抽样——剥完真空（纯元行/
   // instrumental 声明词这类没词文的形态）才放行
   if (!lines.length) lines = plainTextLines(hit.lrc);
   if (!lines.length) return true;
-  const vkey = lyricVerdictKey(hit.extId, title || '', artist || '', pool?.length);
+  const vkey = lyricVerdictKey(hit.extId, title || '', artist || '', pool?.length, Boolean(declared));
   const ok = await judgeLyricLines({
     vkey, lines, title: title || '', author: artist || '',
-    candidate: { ...hit.meta, pool }, signal,
+    candidate: { ...hit.meta, pool }, signal, declared,
   });
   return ok !== false;             // null=无法判定按相符放行
 }
@@ -617,9 +742,9 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
   //   1. artistFromTitle 剥出的真实艺人候选
   //   2. artist:'' 宽检——artistHit('','x') 放行全部
   // 宽检轮（artist 归一为空=无艺人约束，'' 与 '_'/'--' 类占位符都算——
-  // 实证病例作者就是 '_'）改由 strictTitle 标题身份闸先挡同名异曲，
-  // 再由 verifyHit 归属核验兜；具名 artist 轮 artistHit 交叉约束在位，
-  // 保持模糊召回
+  // 实证病例作者就是 '_'）在标题闸之上再注入 choose 整池消歧；具名
+  // artist 轮同样过 strictTitle 标题闸（artistHit 子串命中≠同曲——
+  // 见 strictTitleHit 头注 '□° ver.EMA' 实案），只不注 choose 保召回
   // 曲库行不加降轮：宽检会把「真无词」变成「可能错词」（AI 关时无核验兜底）
   const ugc = Boolean(ytVid) || BV_TRACK_ID_RE.test(String(songId));
   const artistRounds = [String(artist || '')];
@@ -639,45 +764,111 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
   // 判死面收窄成单候选判否。归属签名始终用来源原标题/作者（vkey 与
   // 下载链同口径）——roundArtist 与变体 title 只是检索展开的候选料，
   // 不进归属判定。extra.pool 是该次检索排序后前 8 条身份——判官拿到
-  // 同题池才分得清「同题异曲里来源实际唱哪条」（vkey 换 v3 盐与无池
-  // 判定互不命中）
+  // 同题池才分得清「同题异曲里来源实际唱哪条」（vkey 换 v4 盐与无池
+  // 判定互不命中）。declaredNow 同理随语境透传：yt_ 级联在常规轮发
+  // 起前已解析置位（下方 eager 解析点），逐候选调用读的是已落地的
+  // 同步值、不在闭包里每次 await
   const verify = async (h, extra) => {
-    // 软时限过期短路放行——候选迭代把单源单变体 AI 判定面放大到至多
-    // 3 次，迭代中过期还逐条烧 AI 会把级联拖出 45s 软时限；放行比继续
-    // 烧省（判否面收窄成「标题闸漏过」一种，归截断尾部语义兜）
-    if (Date.now() > deadline) return true;
-    const ok = await verifyHit(h, { title, artist, signal, pool: extra?.pool });
+    // 软时限过期判否而非放行——候选迭代把单源单变体 AI 判定面放大到至
+    // 多 3 次，迭代中过期还逐条烧 AI 会把级联拖出 45s 软时限；但过期
+    // 放行等于零词文核验盲收——choose 挑中条同此（无法核验的挑中条
+    // 不该入库，错词比没词更糟）。判否即收束：迭代路径由循环顶部
+    // deadline break 自然截断归 null（级联尾部按 truncated 不落负缓
+    // 存，下次播放重试）；pick 路径走 verify===false 判死该变体的既
+    // 有语义
+    if (Date.now() > deadline) return false;
+    const ok = await verifyHit(h, { title, artist, signal, pool: extra?.pool, declared: declaredNow });
     if (!ok) console.info(`[lyric-ext] 候选 ${h.extId} 词归属核验不符，试下一条`);
     return ok;
   };
 
-  // 免时长末轮的整池单发消歧闭包：同题异曲逐候选盲审不够决断（实证
-  // KKB 英文版被判 ok 收录）——排序后候选池整盘交 judgePoolPick 做
-  // 单发选择题「来源最可能翻唱哪条」，指回 extId 由 fetch 层直接收录
-  // （挑中即核验结论不再单审）。签名用来源原始 title/artist——与
-  // verify 同口径：roundArtist/变体只是检索展开的候选料不进判定。
-  // 按池 extId 集 memoize：LRCLIB/酷狗两池各判一次，同池在变体展开里
-  // 重进不重复烧 AI。过期/异常/abort 归 null——「未选中」由 fetch 层
-  // 落回逐候选核验（迭代自带 deadline/abort 闸）
-  const pickMemo = new Map();   // 池 extId 集 -> Promise<extId|null>
+  // 无艺人约束轮的整池单发消歧闭包：同题异曲逐候选盲审不够决断（实证
+  // KKB 英文版被判 ok 收录；开放轮 'Boi/Moonlight' 类同题异曲连放）——
+  // 排序后候选池整盘交 judgePoolPick 做单发选择题「来源最可能翻唱哪
+  // 条」，0 基下标翻回池条 extId 透传给 fetch 层。出参三态契约（fetch
+  // 层消费，见 lrclibFetch 头注）：{pick:extId, answered:true} 挑中 /
+  // {pick:null, answered:true} 判官明言否决全池（fetch 层判死该变体、
+  // 跳过逐候选兜底——错词比没词更糟）/ null 通道未给裁决（AI 关/异常/
+  // abort/畸形——落回逐候选核验，降级期不缩召回）。签名用来源原始
+  // title/artist——与 verify 同口径：roundArtist/变体只是检索展开的
+  // 候选料不进判定。按池 extId 集 memoize：LRCLIB/酷狗两池各判一次，
+  // 同池在变体/轮次展开里重进不重复烧 AI，否决亦按池存续（同池再进
+  // 同死；末轮免时长池 ⊋ 常规轮时长滤后池——异池换键重判不吃旧裁
+  // 决）。键上「d|」有声明位是兜底：declaredNow 现于常规轮发起前即
+  // 就位、级联内不再跨语境翻转，同池恒同键共享裁决；防御声明曾随声
+  // 明轮才落地的旧路径——无声明语境的旧裁决不复用到带自署证据的新
+  // 判定。过期/异常归 null——「未应答」由 fetch 层落回迭代（迭代自带
+  // deadline/abort 闸）
+  const pickMemo = new Map();   // 声明位+池 extId 集 -> Promise<{pick,answered}|null>
   const choose = (pool) => {
     if (Date.now() > deadline) return Promise.resolve(null);
-    const key = pool.map((p) => p.extId).join('|');
+    const key = (declaredNow ? 'd|' : '') + pool.map((p) => p.extId).join('|');
     let p = pickMemo.get(key);
     if (!p) {
-      p = judgePoolPick({ title, author: artist, pool, signal })
-        .then((idx) => (idx == null ? null : pool[idx]?.extId ?? null))
+      p = judgePoolPick({ title, author: artist, pool, signal, declared: declaredNow })
+        .then((r) => {
+          if (!r?.answered) return null;              // 通道未给裁决
+          // 0 基下标翻回 extId；pick:null 明言否决原样透传给 fetch 层
+          return { pick: r.pick == null ? null : pool[r.pick]?.extId ?? null, answered: true };
+        })
         .catch(() => null);
       pickMemo.set(key, p);
     }
     return p;
   };
 
-  // 单轮展开体：roundArtist × 源 × 标题变体——常规轮与免时长末轮共用
-  // 一份执行体（dur/strictTitle/withYtm/tag/choose 五处取值不同——choose
-  // 只在末轮注入，常规轮多候选仍走逐候选核验）。命中且过归属核验即返
-  // hit；干净 miss 归 null；deadline 记 deadlineHit 断展开
-  const runRound = async ({ roundArtist, dur, strictTitle, tag, withYtm = false, choose = undefined }) => {
+  // 本家声明证据（yt_ 限定）：utaite 投稿描述里的 original:/本家: 链接
+  // 反解 {title,author} 真身元数据——同题异曲在元数据层不可分，声明是
+  // 检索侧的确定性出口。常规轮发起前解析一次 + memoize：一次级联至
+  // 多一次（头轮起的判定语境与声明轮共用同一份证据）。fail-soft——
+  // 函数缺席（并行落地期）/故障/超时归 null 按无声明走原路径。abort
+  // 不在本层穿透：impl 真身把 abort 吞成 null 落地（归「无声明」继续），
+  // 中止信号靠级联轮/变体检查点的 signal?.aborted 闸穿透——declaredNow
+  // 落 null 照常展开即被下一闸截停；下方 catch 的重抛只兜 impl 真抛
+  // aborted 的面（fail-soft 不吞取消语义）。解析计入 deadline：signal
+  // 挂「调用方 signal ∪ 剩余时限」，外加 race 兜底——impl 不吃 signal
+  // 时硬等也不拖穿 45s 软时限（unref 计时器不绊事件循环收尾）
+  // declaredNow = 已落地的声明值——上方 verify/choose 闭包按调用时
+  // 读它进判定语境；置位点在下方常规轮循环前的 eager 解析点——yt_
+  // 级联自首轮起的 choose/verify 即持自署证据
+  let declaredP = null;
+  let declaredNow = null;
+  const resolveDeclared = () => {
+    if (declaredP) return declaredP;
+    const remaining = Math.max(1, deadline - Date.now());
+    const TIMEOUT = {};
+    declaredP = Promise.race([
+      Promise.resolve().then(() => ytLib.resolveOriginalInfo?.({
+        videoId: ytVid, signal: timedSignal(signal, remaining),
+      })),
+      new Promise((res) => {
+        const t = setTimeout(() => res(TIMEOUT), remaining);
+        t.unref?.();
+      }),
+    ]).then((r) => (r && r !== TIMEOUT && String(r.title || '').trim()
+      ? { title: String(r.title).trim(), author: String(r.author || '').trim() }
+      : null))
+      .catch((e) => {
+        if (e?.aborted || signal?.aborted) throw abortErr();
+        return null;
+      });
+    return declaredP;
+  };
+
+  // 检索面去重（源,roundArtist,title,dur 已打查询集）：声明轮本家变体
+  // 与来源变体交叠时同面查询在上游回包等值——跳过重打不重复扇出。
+  // 常规轮间 artist/变体已各自去重，此集只对声明轮真正咬人
+  const searched = new Set();
+
+  // 单轮展开体：roundArtist × 源 × 标题变体——常规轮/声明轮/免时长末轮
+  // 共用一份执行体（dur/withYtm/tag/choose/titles 取值不同；titles 缺省
+  // 用来源标题变体——声明轮喂本家题变体；strictTitle 保留为显式契约
+  // 入参——调用点现恒 true 全轮在位：具名轮 artistHit 子串约束只收窄
+  // 召回、不能替代标题证据，签名留参让「闸在位」自证、日后若有豁免轮
+  // 不必改形；choose 只注入无艺人约束轮：'' 开放轮/声明开放轮/免时长
+  // 末轮，具名轮多候选仍走逐候选核验）。命中且过归属核验即返 hit；
+  // 干净 miss 归 null；deadline 记 deadlineHit 断展开
+  const runRound = async ({ roundArtist, dur, strictTitle, tag, withYtm = false, choose = undefined, titles = titleVariants }) => {
     const sources = [];
     // YTM 支路吃 videoId 不吃 artist——只在常规首轮排（重复打同一份词没意义）
     if (withYtm) sources.push(['ytm', (sig) => ytmFetchLyric(ytVid, sig)]);
@@ -687,16 +878,29 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
       if (signal?.aborted) throw abortErr();
       let hit = null;
       // LRCLIB/酷狗按标题变体串行展开（YTM 单次——t=null 占位不吃）
-      for (const t of (name === 'ytm' ? [null] : titleVariants)) {
+      for (const t of (name === 'ytm' ? [null] : titles)) {
         if (signal?.aborted) throw abortErr();
+        // 已打过的 (源,artist,title,dur) 检索面不重打——声明轮与常规轮
+        // 交叠时同面查询回包等值，跳过只是省上游扇出，语义不变（miss 面
+        // 已记）。dur 在键里：免时长末轮的同题名同艺人查询时长面不同
+        // （kugou 摘 duration= 参、lrclib 摘 ±15s 自筛）——不是重复扇出
+        const sKey = t != null
+          ? JSON.stringify([name, normName(roundArtist), normKey(t), dur || 0])
+          : null;
+        if (sKey && searched.has(sKey)) continue;
+        if (sKey) searched.add(sKey);
         if (Date.now() > deadline) { deadlineHit = true; break; }
         try {
           hit = await run(signal, t);
         } catch (e) {
           if (e?.aborted || signal?.aborted) throw abortErr();
           // 轮次/变体标注进日志便于病例回放——语义同原「第N轮」
-          const vtag = t && t !== titleVariants[0] ? `·变体「${t}」` : '';
+          const vtag = t && t !== titles[0] ? `·变体「${t}」` : '';
           console.warn(`[lyric-ext] ${name} 源失败（${tag}${vtag}）：${e?.message || e}`);
+          // 传输故障的面没吃到回包——回滚「已检索」烙记：记席只该挡
+          // 「回包等值」的重复扇出，故障面不算已检索，给声明轮/末轮的
+          // 同面查询留一次新机会
+          if (sKey) searched.delete(sKey);
           lastErr = e;
           break;  // 传输故障换源——同族变体重打大概率同死
         }
@@ -706,9 +910,10 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
       if (!hit) continue;
       // fetch 内逐候选核验验收过的命中带 verified 烙记——vkey 同口径已
       // 验过不再二次烧 AI；YTM 支无逐候选通道，照旧过外层 verifyHit
+      // （declaredNow 同透——yt_ 级联自首轮起已持自署证据）
       if (!hit.verified) {
         try {
-          if (!(await verifyHit(hit, { title, artist, signal }))) {
+          if (!(await verifyHit(hit, { title, artist, signal, declared: declaredNow }))) {
             console.info(`[lyric-ext] ${name} 词归属核验不符，继续下一源`);
             cleanMiss = true;
             continue;
@@ -723,24 +928,86 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
     return null;
   };
 
+  // yt_ 级联 eager 解析点：常规轮发起前反解本家声明——choose/verify
+  // 自首轮起持自署证据（判官对同题池看得到「自署本家」轴，池中无本家
+  // 条目时倾向判死而非乱挑）。成本至多 +2 跳且只落在 yt_（self 描述
+  // +本家反解——描述缺席时自跳也计，fail-soft 归 null 继续）；fail-soft
+  // 在 resolveDeclared 内——故障/超时/无声明归 null 照常跑无声明路径。
+  // deadline 已穿不解析：轮循环头自会记 deadlineHit 截断，不白烧反解跳
+  if (ytVid) {
+    if (signal?.aborted) throw abortErr();
+    if (Date.now() <= deadline) declaredNow = await resolveDeclared();
+  }
+
   for (let round = 0; round < artistRounds.length; round++) {
     if (signal?.aborted) throw abortErr();
     if (Date.now() > deadline) { deadlineHit = true; break; }
     const roundArtist = artistRounds[round];
-    // 本轮无艺人约束 → 上标题身份闸：artistHit 全放行时自由文本「子串
-    // 撞名」照收的口子由 strictTitleHit 确定性闸掉（先于 AI 核验）
-    const strictTitle = !normName(roundArtist);
     const hit = await runRound({
-      roundArtist, dur: durationSec, strictTitle,
+      // 标题身份闸全轮在位（strictTitle 恒 true——具名轮的 artistHit
+      // 子串约束只收窄召回、不能替代标题证据：'EMA' 撞进 'MAISONdes
+      // feat. EMA & たなか' 艺人字段照样放行同题异曲，实案 '□° ver.EMA'
+      // 具名轮回收 'ダンス・ダンス・ダダ' 落错词）。上闸的有意取舍：
+      // 具名轮（含曲库单轮场景）的模糊召回面一并收掉——跨文字译名/
+      // 子串撞名命中一律拒，漏判走 rematch 与绑后外源兜底自愈，错词
+      // 比没词更伤
+      roundArtist, dur: durationSec, strictTitle: true,
       tag: `第${round + 1}轮`, withYtm: round === 0 && Boolean(ytVid),
+      // choose 仍只注入无艺人约束轮（'' 开放轮；末轮下方显式注入）——
+      // 具名轮 artistHit 已把候选池收窄到艺人相关条目，同题异曲面小，
+      // 多烧一发整池判定不抵收益：标题闸 + 逐候选核验照旧保召回
+      choose: normName(roundArtist) ? undefined : choose,
     });
     if (hit) return { hit, truncated: false };
   }
 
+  // 声明轮（yt_ 限定，先于免时长末轮）：常规轮全灭后以 eager 点已解析
+  // 的本家声明 {title,author}（上方 memoize 结果直读，不重解）重扫两检
+  // 索源——同题异曲在元数据层不可分（'Moonlight'→moumoon/Gaulin 同名
+  // 异曲、'Boi'→Dina Jashari 马其顿语同名歌），声明证据比摘时长闸更精
+  // 准故排前。具名本家 author 收窄池（artistHit 在位，同具名轮口径不
+  // 注 choose）；author 缺席/占位作开放轮照注 choose 整池消歧；
+  // strictTitle 恒 true。跳轮条件=「题相同且艺人面无新信息」：本家题
+  // 归一与来源题相同但 author 是新艺人轴仍起轮——具名轮 artistHit
+  // 收窄的正是缺的那条检索轴（实案：来源题归一与本家题同 'Moonlight'，
+  // 常规轮只跑过来源艺人具名+开放两轮，本家 author 'shima' 的具名面
+  // 从未被检索）；author 缺席/占位或与来源 artist 归一相同才是纯重复
+  // 不重打（残留交叠变体由 runRound 检索面去重再兜一层）。declaredNow
+  // 在 eager 点已置位——跳轮与否不影响判定语境（自首轮起已携）。常规
+  // 轮全死于传输故障（lastErr 无干净 miss）不展开——同源重试必死白打，
+  // 与末轮 gate 同口径；deadline 过期不起轮记 deadlineHit 走尾部分流
+  if (ytVid && !(lastErr && !cleanMiss)) {
+    if (signal?.aborted) throw abortErr();
+    if (Date.now() > deadline) deadlineHit = true;
+    else {
+      const declared = await resolveDeclared();   // memoize 直读——eager 点已发起
+      if (declared) {
+        // 占位本家 author（'unknown'/'_' 类）不配当具名约束——滤成 ''
+        // 走开放轮，与 artistRounds 的 informativeArtist 口径一致
+        const dAuthor = isPlaceholderAuthor(declared.author) ? '' : declared.author;
+        const sameTitle = normKey(cleanQueryTitle(declared.title))
+          === normKey(cleanQueryTitle(title));
+        // 艺人面相同 = 声明 author 缺席/占位（无艺人信息可增），或归一
+        // 后与来源 artist 相同（该具名面已被常规轮覆盖）
+        const sameArtist = !dAuthor || normName(dAuthor) === normName(artist);
+        if (!sameTitle || !sameArtist) {
+          const hit = await runRound({
+            roundArtist: dAuthor, dur: durationSec, strictTitle: true,
+            titles: titleVariantsOf(declared.title, dAuthor),
+            tag: '声明轮', choose: normName(dAuthor) ? undefined : choose,
+          });
+          if (hit) return { hit, truncated: false };
+        }
+      }
+    }
+  }
+
   // 免时长末轮（UGC 限定）：截取版/片头尾超长的投稿对 ±15s 时长闸必灭。
   // 收成单次 artist='' 开放轮重扫：durationSec=0 + strictTitle 恒 true
-  // + choose 整池单发消歧（多候选时一发选择题，未选中落回带同题池
-  // 语境的逐候选核验）兜撞名排序。刻意不按原 artist 轮次面重扫——
+  // ——无艺人约束轮自带 choose 整池单发消歧 + 带同题池语境的逐候选
+  // 核验兜底兜撞名排序（裁决按池 extId 集 memoize：末轮免时长池 ⊋
+  // 常规轮时长滤后池，异池换键重判不吃旧否决/旧 pick）。刻意不按原
+  // artist 轮次面重扫——
   // 免时长后标题是唯一硬证据，此时任何具名 artist 约束都只收窄不增益：
   // UGC 的 artist 是翻唱者/UP 主，不等于原曲艺人（实证：72s 截取版
   // 'Flamingo／rei shirose' artist='R'，具名轮 artistHit('R') 归一成
@@ -768,6 +1035,14 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
       if (hit) return { hit, truncated: false };
     }
   }
+  // 尾部判定前先补一记末位截断：deadlineHit 此前只在轮次/变体/轮段
+  // gate 的检查点置位——deadline 若在最后一次 run() 内部耗穿（fetch
+  // 层迭代判否/download 拖时）且其后无检查点（qq_/无时长路径不经声
+  // 明轮与免时长末轮 gate），循环正常归 null 会漏记截断，落成 10min
+  // 负缓存把「没跑完」固化成「无词」。截断 null 与干净 miss 的分界
+  // 只有「归 null 那刻是否已过期」——超龄级联一律按截断分流：恰过
+  // 线的真干净 miss 也只是少一次负窗（保守向安全），同键重查真打上级
+  deadlineHit ||= Date.now() > deadline;
   // 尾部判定：
   //  · deadline 截断且截断前已有源在传输层抛错（混合故障）→ 抛
   //    lastErr——截断掐掉的只是「还没跑的源/变体」，已发生的故障不能

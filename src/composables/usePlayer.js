@@ -1504,8 +1504,10 @@ export function usePlayer({
         if (fresh) {
           try {
             // verify 秒级任务随切歌一起 abort；translate 刻意不接 signal——
-            // 切歌不断连，服务端仍可完成并落库（页面关闭则连服务端一起中止）
-            const v = await aiApi.verifyLyric(lyricId, ext.title, ext.author, signal)
+            // 切歌不断连，服务端仍可完成并落库（页面关闭则连服务端一起中止）。
+            // 第 5 参携来源轨道 id：yt_ 时服务端反解投稿自署本家进判定语境
+            // （非 yt_ 形态服务端正则直接放过，不产生额外上行）
+            const v = await aiApi.verifyLyric(lyricId, ext.title, ext.author, signal, song?.id)
             ok = v?.ok !== false
             // inconclusive（服务端故障放行）不缓存——恢复后重播要能重验，
             // 与服务端不落库 inconclusive 的口径一致
