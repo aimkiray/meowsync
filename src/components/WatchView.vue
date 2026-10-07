@@ -9,7 +9,7 @@
            播放器页同款——顶条收 collapse+操作，画面区零干扰） -->
       <div class="watch-actions">
         <button class="ink-btn ink-btn--ghost ink-btn--sm watch-action" @click="$emit('open-fullscreen')" title="全屏歌词模式">
-          <PixelIcon name="expand" :size="14" /> 沉浸
+          <PixelIcon name="lyrics" :size="14" /> 沉浸
         </button>
         <!-- file_ 上传曲没有源站可分享链接（?song= 只收数字 id）——死链不亮 -->
         <button v-if="!isFileTrackId(currentSong?.id)" class="ink-btn ink-btn--ghost ink-btn--sm watch-action" @click="shareSong" :disabled="!currentSong">

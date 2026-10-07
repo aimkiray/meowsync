@@ -27,6 +27,7 @@ const ICONS = {
   'vol-mute': 'M12 7h2v1h1v1h2V8h1V7h2v2h-1v1h-1v2h1v1h1v2h-2v-1h-1v-1h-2v1h-1v1h-2v-2h1v-1h1v-2h-1V9h-1zM6 8V7h1V6h1V5h1V4h1V3h1v16h-1v-1H9v-1H8v-1H7v-1H6v-1H2V8zm1 2H4v2h3v1h1v1h1V8H8v1H7z',  // memory:volume-mute
   'vol-low': 'M6 8h4V7h1V6h1V5h1V4h1V3h1v16h-1v-1h-1v-1h-1v-1h-1v-1h-1v-1H6zm2 2v2h3v1h1v1h1V8h-1v1h-1v1z',  // memory:volume-low
   'expand': 'M7 10H5V9h1V8h2v1H7m4 1H9V9h1V8h2v1h-1m4 1h-2V9h1V8h2v1h-1m0 5h-1v-2h1v-1h1v2h-1m4 6H3v-1H2V4h1V3h16v1h1v14h-1m-1-1V5H4v12h10v-1h1v-1h1v2Z',  // memory:relative-scale
+  'lyrics': 'M2 2h6v2H4v4H2Zm18 0h-6v2h4v4h2ZM2 20h6v-2H4v-4H2Zm18 0h-6v-2h4v-4h2ZM5 9h12v2H5Zm3 3h6v2H8Z',  // 手拼：⛶ 四角括弧（6px 臂）+居中双词行（12w/6w）——角表全屏、行表歌词，沉浸层入口专用；memory 集无同义 glyph，闭盒会撞 plus/save/expand 盒族、裸行组会撞 m-list/menu
   'search': 'M19 20h-1v-1h-1v-1h-1v-1h-1v-1h-1v-1h-1v-1h-2v1H6v-1H4v-1H3v-2H2V6h1V4h1V3h2V2h5v1h2v1h1v2h1v5h-1v2h1v1h1v1h1v1h1v1h1v1h1v1h-1m-8-6v-1h1v-1h1V6h-1V5h-1V4H6v1H5v1H4v5h1v1h1v1Z',  // memory:search
   'download': 'M18 17v2H4v-2zM14 2v6h4v1h-1v1h-1v1h-1v1h-1v1h-1v1h-1v1h-2v-1H9v-1H8v-1H7v-1H6v-1H5V9H4V8h4V2zm-2 2h-2v6H9v1h1v1h2v-1h1v-1h-1z',  // memory:download
   'save': 'M2 3h1V2h13v1h1v1h1v1h1v1h1v13h-1v1H3v-1H2zm16 4h-1V6h-1V5h-1v4H6V4H4v14h2v-5h10v5h2zm-7-3v3h2V4zm3 14v-3H8v3z',  // memory:floppy-disk
