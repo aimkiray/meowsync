@@ -149,7 +149,7 @@ async function aiExtractQueries(sourceInfo, signal) {
 // 挑选口径与 aiConfirmMatch 同一「词源」语义（见上）：挑词文同源的条目
 // 而非同一录音——旧口径「翻唱/混音/live 版本不算」曾把翻唱投稿的
 // 正确原曲成批否决
-async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds = null, preferIds = null, scoreById = null, rejectedIds = null) {
+async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds = null, preferIds = null, scoreById = null, rejectedIds = null, derivedIds = null) {
   // 已被否决的候选不进池——否决后再被兜底挑回是语义矛盾；打分器标类硬拒
   // （伴奏/inst/karaoke——与源不是同类内容）同样开除出池，时长类硬拒留池：
   // 45s<diff≤120s 的「长片头视频真匹配」只能靠尾部 120s 粗闸救济。
@@ -180,9 +180,14 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
   if (!Number.isInteger(n) || n < 1 || n > list.length) return null;
   const pick = list[n - 1];
   // AI 兜底仍过粗粒度时长闸（120s，约为确定性窗口的 3 倍——片头尾垫长
-  // 可过，但「时长差几分钟的另一首歌」不能仅凭模型点头就命中）
+  // 可过，但「时长差几分钟的另一首歌」不能仅凭模型点头就命中）。
+  // 例外：声明派生串搜出的条目免闸——它自带第一方出处证据（打分面
+  // 同口径按无时长证据处理，见 srcFor 的 origDerivedKeys 判面）又经
+  // 模型点名挑中，双重证据在场；而切片翻唱对本家的时长失配是结构性
+  // 常态（87s 切片 vs 230s 本家），粗闸在派生面上必然误杀真身
   const pickDt = (pick.dt || pick.duration || 0) / 1000;
-  if (durationSec > 0 && pickDt > 0 && Math.abs(pickDt - durationSec) > 120) {
+  if (durationSec > 0 && pickDt > 0 && Math.abs(pickDt - durationSec) > 120
+    && !derivedIds?.has(pick.id)) {
     console.info(`[ai-pick] 时长差 ${Math.round(Math.abs(pickDt - durationSec))}s 超闸，弃票: ${songDesc(pick)}`);
     return null;
   }
@@ -412,15 +417,22 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   // 派生串归一键集：origDerived 构建同跳落键、构建完即只读——splice 消费
   // 的是数组本体，键集留存供 srcFor 判「本条查询是不是声明派生面」；挑战
   // 插队（派生串进主循环）与兜底轮（直调 searchOnce）两条消费路径同享判面。
+  // 角色判面按字面生效：与既有候选串撞键的派生字面值不入队重打（检索
+  // 面去重）但仍记键——同字面值的常规候选串命中同享派生待遇，而该字面
+  // 本就是第一方出处证据的检索词形态
   // 键粒度与 triedQueries（toLowerCase）不对称已知：normKey 多折一步空白
   // ——流经判面的串全链归一单空格（展开链 cleanQueryTitle/再生消毒同径），
   // 唯一可能带异型空白的是派生串字面值本身（anchor 内嵌空白），而它入队
   // 同跳双键齐落；normKey 同键即同一检索词，有害碰撞不可达
   const origDerivedKeys = new Set();
+  // 派生串检索命中的候选 id 集——aiPickMatch 对集内条目免 120s 粗闸
+  // （声明证据+模型点名=双重证据）；srcFor/acceptOrHold 的角色判面同口径
+  // ——按查询字面 ∈ origDerivedKeys 生效
+  const derivedSeenIds = new Set();
   let candidateCursor = -1;       // 主循环当前下标——派生串插队锚点
-  // 弱收单待定最优（至多一格，新待定覆盖旧的）——「可收单但身后还有未跑的
-  // 本家派生串」时挂起不返：主循环继续把第一方证据检索词打完，候选面+
-  // 兜底派生轮全穷尽仍无新收单才回补（见兜底轮尾）
+  // 弱收单待定最优（至多一格，分高者留、同分守先到者）——「可收单但身后
+  // 还有未跑的本家派生串」时挂起不返：主循环继续把第一方证据检索词打
+  // 完，候选面+兜底派生轮全穷尽仍无新收单才回补（见兜底轮尾）
   let heldHit = null;
   const ensureOriginal = async () => {
     if (!sourceInfo) return null;
@@ -432,14 +444,15 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       if (orig) sourceInfo.original = orig;
     }
     const o = sourceInfo.original;
+    // 本家艺人并进打分参照面与 o?.title 解耦（origDeclLine 对 author-only
+    // 声明同样产段——判定面有证据轴，打分面不该丢）——占位作者不过闸；
+    // 预注形态在 srcArtists 初始化已并入，此去重幂等
+    const oa = String(o?.author || '').trim();
+    if (oa && !isPlaceholderAuthor(oa)
+      && !srcArtists.some(a => normKey(a) === normKey(oa))) srcArtists.push(oa);
     if (o?.title && !origDerivedReady) {
       origDerivedReady = true;
-      const oa = String(o.author || '').trim();
       const ot = String(o.title || '').trim();
-      // 本家艺人/曲名只进打分参照面（声明一致是正分位证据）——占位作者
-      // 不过闸；预注形态在 srcArtists/srcBaseTitles 初始化已并入，此去重幂等
-      if (oa && !isPlaceholderAuthor(oa)
-        && !srcArtists.some(a => normKey(a) === normKey(oa))) srcArtists.push(oa);
       if (ot && !srcBaseTitles.some(t => normKey(t) === normKey(ot))) srcBaseTitles.push(ot);
       // 本家题是视频标题形态（'Giga & KIRA - 'GETCHA!' ft.初音ミク【MV】'/
       // 'Moonlight - VY1'）——原串直搜打不中网易的干净条目；origTitle 侧过与
@@ -454,11 +467,14 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       }
       for (const dq of [...new Set(derived)]
         .map(x => String(x || '').trim()).filter(Boolean)) {
+        // 免时长闸判面键按字面值无条件记——与既有候选串撞键的派生字面
+        // 值不入队重打（检索面去重），但同字面的常规候选串命中仍属
+        // 「声明派生面」（该字面本就是第一方检索词形态）
+        origDerivedKeys.add(normKey(dq));
         const k = dq.toLowerCase();
         if (!triedQueries.has(k)) {
           triedQueries.add(k);
           origDerived.push(dq);
-          origDerivedKeys.add(normKey(dq));  // 免时长闸判面——与入队同跳落键
         }
       }
     }
@@ -527,8 +543,12 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       || candidates.slice(candidateCursor + 1)
         .some(c => origDerivedKeys.has(normKey(c)));
     if (!pending) return true;
-    heldHit = hit;
-    console.info(`[${tag}] 收单待定: ${songDesc(hit.song)} ← ${hit.query}（身后有未跑本家派生串）`);
+    // 待定最优=分高者留（同分守先到者——先到先得与「最优」命名一致）；
+    // 低分后来者不覆盖也不记日志
+    if (!heldHit || hit.score > heldHit.score) {
+      heldHit = hit;
+      console.info(`[${tag}] 收单待定: ${songDesc(hit.song)} ← ${hit.query}（身后有未跑本家派生串）`);
+    }
     return false;
   };
 
@@ -628,6 +648,10 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   };
 
   const warnFail = (q, e) => {
+    // 预算/断连掐断的在途云搜不算源故障——abort 面不记噪声 warn；
+    // e.aborted 同静默（与 lyric-external 的 e?.aborted || signal?.aborted
+    // 口径对齐——上游 abort 拒绝冒泡到本层时自身 signal 可能仍活）
+    if (e?.aborted || signal?.aborted) return;
     // 上游 reject(answer) 形态无 .message——归一化再记
     const why = e?.message || (e?.body ? `code=${e.body.code ?? '?'}` : String(e));
     console.warn(`[${tag}] 网易云搜索「${q}」失败:`, why);
@@ -638,7 +662,9 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     if (signal?.aborted) break;
     if (!q) continue;
     try {
-      const hit = await searchOnce(q);
+      // 派生面字面的检索命中收进 derivedSeenIds（aiPickMatch 免 120s 闸
+      // 判面）——与 srcFor/acceptOrHold 的 origDerivedKeys 字面判面同口径
+      const hit = await searchOnce(q, origDerivedKeys.has(normKey(q)) ? derivedSeenIds : null);
       // searchOnce 内各收单点已过同款 acceptOrHold——此处同决策兜底：
       // 能回到主循环的 hit 在判面上必是即刻收单形态，待定则继续下一串
       if (hit && acceptOrHold(hit)) return { ...hit, ai: aiTouched, searchedAny };
@@ -657,7 +683,7 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   for (const q of origDerived.splice(0)) {
     if (signal?.aborted) break;
     try {
-      const hit = await searchOnce(q);
+      const hit = await searchOnce(q, derivedSeenIds);
       // 派生串自身收单即终态——acceptOrHold 在派生面恒放行（同判面兜底）
       if (hit && acceptOrHold(hit)) return { ...hit, ai: aiTouched, searchedAny };
     } catch (e) {
@@ -710,7 +736,7 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     aiLeft--; aiTouched = true;
     // 畸形上游数据（ar 非数组等）在 desc 构建处可能 TypeError——
     // 兜底是增强路径，异常按「无兜底」降级而非 502；再生批优先入池
-    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds, regenIds, scoreById, rejectedMarkerIds)
+    const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds, regenIds, scoreById, rejectedMarkerIds, derivedSeenIds)
       .catch(() => null);
     if (pick) {
       console.info(`[${tag}] AI 兜底命中: ${songDesc(pick)} ← ${sourceInfo.title}`);

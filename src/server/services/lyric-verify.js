@@ -29,6 +29,14 @@ function parseLrcLines(lrc) {
   return out;
 }
 
+// 纯文本词 → 判定抽样行：剥方括号段（[mm:ss] 时间戳、[ti:]/[ar:] 元行、
+// [re:]/[ve:] 词源烙记同剥）取词文——「没轴的文本词」也过 AI 归属核验。
+// 出参与 parseLrcLines 同构 {text}（judgeInner/composerCreditNames 只消费
+// .text）。级联 verifyHit 与下载链 verifyDownloadOwnership 共用同一口径
+const plainTextLines = (lrc) => String(lrc || '').split('\n')
+  .map((l) => ({ text: l.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim() }))
+  .filter((l) => l.text);
+
 // 进 prompt 的输入剥换行/方括号——标题作者与歌词原文都是不可信输入，
 // 去掉结构字符至少让注入不能伪造消息边界/键控协议
 const sanitizePrompt = (s) => String(s || '')
@@ -418,10 +426,16 @@ const _clearDeclaredMemo = () => declaredMemo.clear();
 // 1) 源签名按 songId 前缀正则选取——畸形 providerData 的 bilibili/youtube
 //    双字段并存时「bilibili || youtube」短路会选错核验对象
 // 2) 已落库判定不随 aiEnabled 旁路——记忆是累积知识，AI 关只影响新判定
-// 3) 无时间戳纯文本词 parse 出 0 行（没东西可验）或 AI 关 → 放行
+// 3) 纯文本词（无时间戳）与真空词分开：plainTextLines 剥标签行后仍有
+//    词文的照常进判定链（署名闸+AI，与级联 verifyHit 同口径）——剥完
+//    真空（纯元行/纯 instrumental 标记这类没词文的形态）或 AI 关才放行
+// candidate（可选）= 调用方已持有的候选条目身份 {title,artist,album}
+//   （级联命中的 hit.meta）——在手直用、跳过 song_detail 反查；extId
+//   词源（ytm_/lrclib_/kugou_）无网易条目可反查，candidate 在手署名闸
+//   照常生效（判定链与「resolved 到网易 candidate」走完全同一套）
 // 返回 true=放行 / false=判不符 / null=核验通道故障（调用方按放行处理）；
 // 只有 aborted 异常穿透，其余故障一律归 null 不炸下载任务
-async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted, lrc, signal }) {
+async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted, lrc, signal, candidate = null }) {
   try {
     const ytM = YT_TRACK_ID_RE.exec(String(songId));
     const extSrc = BV_TRACK_ID_RE.test(String(songId)) ? providerData?.bilibili
@@ -429,9 +443,11 @@ async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted,
       : grafted ? { title: providerData?.title, author: providerData?.author }
       : null;
     if (!extSrc?.title?.trim()) return true;
-    // 0 行可验先于声明解析——纯文本词没东西可判直接放行，省一跳反解
-    // 上行（缓存查询/aiEnabled 半支不动，仍在声明键落定后走原序）
-    const lines = parseLrcLines(lrc);
+    // 词文采样先于声明解析——剥完真空的纯文本/元行词直接放行，省一跳反解
+    // 上行（缓存查询/aiEnabled 半支不动，仍在声明键落定后走原序）；
+    // 无时戳但有词文的形态 plainTextLines 兜底取样，照常进判定链
+    let lines = parseLrcLines(lrc);
+    if (!lines.length) lines = plainTextLines(lrc);
     if (!lines.length) return true;
     // 声明解析先于 vkey——缓存键的声明位落定后才能查到「声明语境」已落
     // 的判定行（先算无声明键会把级联携证据落的 v2d3 判否 verdict 旁路
@@ -449,9 +465,13 @@ async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted,
     // 提前不够，judgeLyricLines 里的同款闸够不着本函数自己的 cached/AI 关
     // 早退，不内联跑一次同键已固化的放行错判会绕过闸直放（wholicoji 病灶
     // 形态）。判否不落 verdict——闸重算即得；对照轴不齐（无 candidate/无
-    // 声明）时 composerCreditRefutes 前置归 null，零成本不适用
-    const candidate = await resolveCreditGateCandidate({ id: lyricId, lines, declared, signal });
-    const refuteSig = composerCreditRefutes(lines, candidate?.artist, declared?.author);
+    // 声明）时 composerCreditRefutes 前置归 null，零成本不适用。
+    // 候选身份双通道：调用方在手（级联命中的 hit.meta）直用——extId 词源
+    // 没有网易条目可反查，candidate 在手署名闸照常生效；缺省才走
+    // song_detail 惰性补料（网易 lyricId 可反查的那半）
+    const cand = candidate
+      || await resolveCreditGateCandidate({ id: lyricId, lines, declared, signal });
+    const refuteSig = composerCreditRefutes(lines, cand?.artist, declared?.author);
     if (refuteSig !== null) {
       console.info(`[lyric-verify] 署名否证: 作曲「${sanitizePrompt(refuteSig).slice(0, 120)}」=候选艺人≠声明本家「${sanitizePrompt(declared?.author).slice(0, 120)}」`);
       return false;
@@ -467,11 +487,11 @@ async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted,
     if (cached) return !!cached.ok;
     // AI 关只挡新判定——已落库判定行上面已查（记忆不随开关旁路）
     if (!aiEnabled()) return true;
-    return await judgeLyricLines({ vkey, lines, title: extSrc.title, author: extSrc.author || '', candidate, signal, declared });
+    return await judgeLyricLines({ vkey, lines, title: extSrc.title, author: extSrc.author || '', candidate: cand, signal, declared });
   } catch (e) {
     if (e?.aborted || signal?.aborted) throw e?.aborted ? e : Object.assign(new Error('已取消'), { aborted: true });
     return null;
   }
 }
 
-module.exports = { parseLrcLines, lyricVerdictKey, judgeLyricLines, judgePoolPick, verifyDownloadOwnership, resolveYtDeclared, resolveCreditGateCandidate, composerCreditNames, composerCreditRefutes, sanitizePrompt, _clearDeclaredMemo };
+module.exports = { parseLrcLines, plainTextLines, lyricVerdictKey, judgeLyricLines, judgePoolPick, verifyDownloadOwnership, resolveYtDeclared, resolveCreditGateCandidate, composerCreditNames, composerCreditRefutes, sanitizePrompt, _clearDeclaredMemo };

@@ -406,6 +406,47 @@ test('调用方 signal 已 abort → 立即拒绝且不打上游', async () => {
   assert.equal(calls.length, 0);
 });
 
+test('YTM 命中到手时 deadline 已耗穿 → 不验不收，记截断不落负缓存（N4）', async () => {
+  // 外层 verifyHit 补级联 deadline 闸：YTM 支无逐候选核验通道，词由
+  // fetch 拿回来才过闸——browse 回包耗穿软时限后不得再发起核验（烧
+  // AI）、更不得盲收；记 deadlineHit 走尾部 truncated 分流，同键重查
+  // 仍真打上游（截断态不固化成负缓存）
+  aiOn = true; aiCalls = 0;
+  const infos = [];
+  const origInfo = console.info;
+  console.info = (...a) => infos.push(a.map(String).join(' '));
+  try {
+    aiAnswer = { ok: true };
+    reset([
+      ['/youtubei/v1/next', () => nextOk('MPLYt_n4')],
+      // browse 回包拖 60ms——30ms 的 deadline 在词到手前已被耗穿
+      ['/youtubei/v1/browse', async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        return browseOk();
+      }],
+      ['lrclib.net', () => J([])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_n4dead00001', title: 'x', artist: 'a', deadlineMs: 30,
+    });
+    assert.equal(res, null);               // 截断归 null——不判死也不盲收
+    assert.equal(aiCalls, 0);              // 外层核验没发起——不烧 AI
+    // 过期丢命中留 [lyric-ext] 日志——同类判否都有行，截断粒度可回放
+    assert.ok(infos.some((l) => /\[lyric-ext\] ytm 命中到手已过级联时限/.test(l)
+      && l.includes('第1轮')));
+    // 截断 null 不落负缓存：deadline 放宽后同键重查真打 YTM 并完成核验
+    const res2 = await svc.fetchExternalLyric({
+      songId: 'yt_n4dead00001', title: 'x', artist: 'a', deadlineMs: 5000,
+    });
+    assert.equal(res2?.source, 'ytm');
+    assert.ok(aiCalls > 0);
+  } finally {
+    console.info = origInfo;
+    aiOn = false; aiAnswer = null;
+  }
+});
+
 test('AI 核验：判不符视同无词继续级联；判相符放行', async () => {
   aiOn = true; aiCalls = 0;
   try {
@@ -924,6 +965,57 @@ test('downloadLyrics：网易嫁接词判否 → 外源级联命中即落盘', a
   // 判否后外源接一手：title 剥出的「周杰伦」候选轮命中（UP 主严格轮滤净），
   // 落盘的是外源词而非错配的网易词，也不是 NO_LYRICS
   assert.equal(readFileSync(out, 'utf-8'), '[re:MeowSync lrclib_77]\n[00:01.00]外源对词');
+});
+
+// ── hit.meta → verifyDownloadOwnership.candidate 接线（外源词核验）──
+// 级联命中条目自带候选身份 {title,artist,album}——下载链核验在手直用，
+// 署名闸对 extId 词源（无网易条目可反查）可达：声明本家≠候选艺人且词内
+// 作曲署名=候选艺人 → 确定性判否不落盘；声明一致则闸不适用照常放行
+test('downloadLyrics：hit.meta 在手进核验——extId 词源署名闸判否；声明一致放行', async () => {
+  aiOn = false; aiAnswer = null;
+  // 两段式声明桩：级联 eager 解析点（首次调用）归 null——命中条目活着出
+  // 级联（实案形态：级联侧反解失败/超时、下载侧再解成功）；下载链
+  // verifyDownloadOwnership 的反解（第二次调用）才拿到本家声明
+  const declaredOnVerify = (author) => async () =>
+    (origInfoCalls.length >= 2 ? { title: '早く帰りたい', author } : null);
+  const hitTable = () => [
+    ['/youtubei/v1/next', () => nextNoTab()],
+    ['lrclib.net', () => J([
+      { id: 882, trackName: '早く帰りたい', artistName: 'wholicoji', duration: 200,
+        syncedLyrics: '[00:01.00] 作曲 : wholicoji\n[00:02.00]行きたくない\n[00:03.00]帰りたい' },
+    ])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+  ];
+  try {
+    // 判否臂：声明本家「ポップしなないで」≠候选艺人/作曲署名「wholicoji」
+    origInfoCalls.length = 0;
+    origInfoImpl = declaredOnVerify('ポップしなないで');
+    reset(hitTable());
+    const out = join(process.env.DATA_DIR, 'ext-cred-refute.lrc');
+    await assert.rejects(
+      fd.downloadLyrics('yt_dlcredgate1', out, null, {
+        youtube: { videoId: 'dlcredgate1', title: '早く帰りたい', author: 'UP主' },
+      }),
+      (e) => e.code === 'NO_LYRICS');
+    // 两次反解实锤分工：级联那次归 null（命中放行出来）、核验那次得声明
+    assert.equal(origInfoCalls.length, 2);
+    assert.equal(origInfoCalls[1].videoId, 'dlcredgate1');
+    // 判否不落盘；候选在手/extId 词源都不发 song_detail 反查
+    assert.throws(() => readFileSync(out, 'utf-8'), /ENOENT/);
+    assert.equal(neCalls.filter((c) => c.name === 'song_detail').length, 0);
+
+    // 对照臂：声明本家=候选艺人=作曲署名——三轴归一相同，闸不适用放行落盘
+    origInfoCalls.length = 0;
+    origInfoImpl = declaredOnVerify('wholicoji');
+    const out2 = join(process.env.DATA_DIR, 'ext-cred-pass.lrc');
+    const r = await fd.downloadLyrics('yt_dlcredpass1', out2, null, {
+      youtube: { videoId: 'dlcredpass1', title: '早く帰りたい', author: 'UP主' },
+    });
+    assert.equal(origInfoCalls.length, 2);       // 核验侧声明同样解析到场
+    assert.equal(r.path, out2);
+    assert.equal(readFileSync(out2, 'utf-8'),
+      '[re:MeowSync lrclib_882]\n[00:01.00] 作曲 : wholicoji\n[00:02.00]行きたくない\n[00:03.00]帰りたい');
+  } finally { aiOn = false; aiAnswer = null; origInfoImpl = null; }
 });
 
 // ── 宽检轮标题身份闸 / 候选 meta 进判定 / 纯文本词抽样核验 ──

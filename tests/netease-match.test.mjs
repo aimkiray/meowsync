@@ -617,6 +617,26 @@ test('/match/retry：异源 Origin → 403；缺 trackId/材料 → 400', async 
   assert.equal((await postRetry({ trackId: 'yt_X' })).status, 400);
 });
 
+test('/match/retry：异常消息脱敏——绝对路径不外泄（F5）', async () => {
+  reset();
+  // 注入一枚含 POSIX 绝对路径的异常（fs/上游错误原文形态）。取道本家
+  // 惰性解析桩的同步抛错：种子桩是非 async 透传，同步异常在 .catch
+  // 挂上之前就抛出，穿透 ensureOriginal 的 fail-soft 兜底一路冒到
+  // 路由 catch——正是该 catch 把 e.message 拼进下发串的泄漏面
+  resolveOrigImpl = () => {
+    throw new Error("ENOENT: no such file or directory, open '/Users/alice/secret/data.json'");
+  };
+  apiScript = [[]];          // 云搜全灭 → miss 路径的 ensureOriginal 触雷
+  const res = await postRetry({
+    trackId: 'yt_sanit000001', title: 'x', author: 'a', candidates: ['查无此曲'],
+  });
+  const body = await res.json();
+  assert.equal(res.status, 502);
+  assert.match(body.message, /重匹配失败/);
+  assert.ok(!body.message.includes('/Users/alice'));   // 绝对路径被剥
+  assert.match(body.message, /'<path>'/);               // 引号包裹位换占位符
+});
+
 // ── 本家声明证据轮（yt_ 描述链 → 惰性解析 → 派生检索）────────────────
 // 'Moonlight ver.EMA' 实案型：首轮标题面撞同题异曲（moumoon 与 shima/VY1
 // 的同名 'Moonlight' 在元数据层不可分）——描述自署的本家链是唯一能分它的
@@ -1177,4 +1197,139 @@ test('AI 关+声明在场：未复核的强收单同挂起等派生——分数�
   assert.equal(aiCalls.length, 0);
   assert.deepEqual(apiCalls.map(c => c.keywords),
     ['Moonlight ver.EMA', 'shima Moonlight - VY1']);
+});
+
+// ── 派生串证据进兜底池（F3）／heldHit 最优保留（N5）／撞键判面（N6）／
+// author-only 并入（N8）／warnFail 静默 abort（N7）─────────────────────
+
+test('派生串搜出条目免 120s 粗闸：pick 兜底挑中的派生面命中不被时长差杀', async () => {
+  reset();
+  // GETCHA 实案变体：87s 切片声明 230s 本家——派生串搜出的真身名不沾边
+  // （打分 <50 沉进 seenSongs+derivedSeenIds），启发式/再生全灭后 pick
+  // 兜底挑中；|230-87|=143>120 的粗闸弃票会把它杀掉落负行——派生串自带
+  // 声明证据（打分面已按无时长证据免 dur）又经模型点名，双重证据在场
+  const info = { title: '切片脏串', author: 'coverup', trackId: 'yt_abcdefghijk' };
+  resolveOrigImpl = async () => ({ title: '本家曲', author: '本家P' });
+  const real = song(1479930555, 'GETCHA!', 230000, 'Giga');
+  apiScript = [
+    [],                  // 常规串 '切片脏串' 空
+    [],                  // 兜底派生 '本家P 本家曲' 空
+    [real],              // 兜底派生 '本家曲' 搜回真身——名不沾边沉池留证
+  ];
+  aiScript = [{ queries: [] }, { match: 1 }];
+  const r = await matchNeteaseSong(['切片脏串'], 87, 't', null, info);
+  assert.equal(r.song.id, 1479930555);   // 修复前被 120s 粗闸弃票 → null
+  assert.equal(r.query, 'ai:pick');
+  assert.equal(aiCalls.length, 2);       // extract + pick
+  assert.deepEqual(apiCalls.map(c => c.keywords),
+    ['切片脏串', '本家P 本家曲', '本家曲']);
+});
+
+test('对照：非派生面候选仍吃 120s 粗闸——派生豁免不溢出到常规串', async () => {
+  reset();
+  // 同一 143s 时长差、同一首歌——只是调度身份不同：常规串搜出的 dur 拒
+  // 条目留兜底池但不属派生集，pick 挑中照样被粗闸弃票（无出处证据面的
+  // 护栏不动）
+  apiScript = [[song(1479930555, 'GETCHA!', 230000, 'Giga')]];
+  aiScript = [{ queries: [] }, { match: 1 }];
+  const r = await matchNeteaseSong(['GETCHA!'], 87, 't', null,
+    { title: '切片', author: 'up' });
+  assert.equal(r.song, null);
+  assert.equal(aiCalls.length, 2);
+});
+
+test('待定最优=分高者留：撞键派生字面同享待定判面，低分后来者不覆盖 heldHit', async () => {
+  reset();
+  // 声明本家题 'Moonlight' 产派生字面 'Moonlight'——与既有候选串撞键：
+  // 不入队重打但同记 origDerivedKeys（角色判面按字面生效）——'脏串二'
+  // 弱命中时 'Moonlight' 仍压在身后 → 第二格待定成立；50<60 不覆盖已持
+  // 待定——全灭后回补的是先到的高分命中而非最后被挂起的那个
+  const info = { title: '脏稿', author: 'EMA', trackId: 'yt_abcdefghijk' };
+  resolveOrigImpl = async () => ({ title: 'Moonlight', author: 'shima' });
+  apiScript = [
+    [song(1, '脏串一', 215000, 'Mosq')],  // 名50+艺0+时10=60 灰区→待定
+    [],                                   // 插队派生 'shima Moonlight' 空
+    [song(2, '脏串二', 0, 'Mosq')],        // 名50+艺0+无时长=50 灰区→待定(50<60 不盖)
+    [],                                   // 撞键字面 'Moonlight'（常规候选身份）空
+  ];
+  aiScript = [{ match: true }, { match: true }, { match: true }];
+  const r = await matchNeteaseSong(['脏串一', '脏串二', 'Moonlight'], 200, 't', null, info);
+  assert.equal(r.song.id, 1);             // 待定最优回补——高分的先到者
+  assert.equal(r.query, '脏串一');
+  assert.equal(r.score, 60);
+  assert.equal(aiCalls.length, 3);        // 复核 + 挑战重判 + '脏串二' 复核
+  assert.deepEqual(apiCalls.map(c => c.keywords),
+    ['脏串一', 'shima Moonlight', '脏串二', 'Moonlight']);
+});
+
+test('待定最优同分守先到：同分后来者不覆盖 heldHit——严格 > 语义钉死', async () => {
+  reset();
+  // acceptOrHold 的 `hit.score > heldHit.score` 严格大于隐含「同分守先到」。
+  // 若被误改成 >=，后到同分命中会静默盖掉先到者——本用例两候选同 60 分
+  // （名50+艺0+时10），回补必须仍归首串命中
+  const info = { title: '脏稿', author: 'EMA', trackId: 'yt_abcdefghijk' };
+  resolveOrigImpl = async () => ({ title: 'Moonlight', author: 'shima' });
+  apiScript = [
+    [song(1, '脏串一', 215000, 'Mosq')],  // 名50+艺0+时10=60 灰区→待定
+    [],                                   // 插队派生 'shima Moonlight' 空
+    [song(2, '脏串二', 215000, 'Mosq')],  // 同 60 灰区→待定（同分不盖先到者）
+    [],                                   // 撞键字面 'Moonlight'（常规候选身份）空
+  ];
+  aiScript = [{ match: true }, { match: true }, { match: true }];
+  const r = await matchNeteaseSong(['脏串一', '脏串二', 'Moonlight'], 200, 't', null, info);
+  assert.equal(r.song.id, 1);             // 同分先到者回补——>= 会翻成 id 2
+  assert.equal(r.query, '脏串一');
+  assert.equal(r.score, 60);
+  assert.equal(aiCalls.length, 3);
+  assert.deepEqual(apiCalls.map(c => c.keywords),
+    ['脏串一', 'shima Moonlight', '脏串二', 'Moonlight']);
+});
+
+test('author-only 本家声明并入艺人参照面——缺题不丢艺人轴证据', async () => {
+  reset();
+  // 声明只自署艺人（题缺席）：origDeclLine 对 author-only 同样产段——
+  // 判定面看得到艺人轴证据，打分参照面同口径并入 srcArtists；
+  // 并入后声明艺人候选吃 +30 艺人分
+  const info = { title: '撞名稿', author: 'coverup', trackId: 'yt_abcdefghijk' };
+  resolveOrigImpl = async () => ({ title: '', author: 'shima' });   // author-only
+  apiScript = [
+    [song(1, '撞名', 200000, 'Mosq')],        // 50+0+20=70 灰区→复核放行→挑战否决
+    [song(2, 'Moonlight', 200000, 'shima')],  // 并入后 50+30+20=100 确定性收
+  ];
+  aiScript = [{ match: true }, { match: false }, { match: true }];
+  const r = await matchNeteaseSong(['撞名', 'Moonlight'], 200, 't', null, info);
+  assert.equal(r.song.id, 2);
+  assert.equal(r.query, 'Moonlight');
+  // 修复前 srcArtists 恒 ['coverup'] → 该命中只有 50+0+20=70 灰区
+  assert.equal(r.score, 100);
+  assert.equal(aiCalls.length, 3);
+  // author-only 声明在复核 prompt 也产段（缺席槽位填「未知」）
+  assert.match(aiCalls[1].user, /来源描述声明本家：未知 — shima/);
+});
+
+test('warnFail 静默 abort：预算/断连掐断的在途云搜不记噪声 warn', async () => {
+  reset();
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    // abort 面：云搜在途被掐断抛错——signal 已 abort 的不记 warn
+    const ctl = new AbortController();
+    apiScript = [async () => { ctl.abort(); throw new Error('掐断在途'); }];
+    const r = await matchNeteaseSong(['X'], 0, 't', ctl.signal, src);
+    assert.equal(r.song, null);
+    assert.equal(warns.length, 0);
+    // e.aborted 面同静默：上游 abort 拒绝冒泡、调用方 signal 仍活——
+    // 与 lyric-external 的 e?.aborted || signal?.aborted 口径对齐，
+    // 该拒绝链上的 in-flight 掐断同样不是源故障
+    apiScript = [Object.assign(new Error('上游 in-flight 掐断'), { aborted: true })];
+    const r2 = await matchNeteaseSong(['Z'], 0, 't', null, src);
+    assert.equal(r2.song, null);
+    assert.equal(warns.length, 0);
+    // 非 abort 真故障照常记——静默只掐 abort 面
+    apiScript = [new Error('风控')];
+    await matchNeteaseSong(['Y'], 0, 't', null, src);
+    assert.equal(warns.length, 1);
+    assert.match(warns[0], /风控/);
+  } finally { console.warn = origWarn; }
 });
