@@ -239,6 +239,81 @@ test('sync pull 分页：>PAGE_SIZE 截页 hasMore；末行 seq 作 since 续拉
   assert.equal(keys.size, 2001);
 });
 
+// 以下三个用例必须在分页用例之后：本文件 pull('?since=0') 的水位线基线
+// 依赖「全表小行一次拿完」——8.8MB 的 doc:bz* 若先入册会让该拉取被字节
+// 预算截页（这正是要测的行为），分页用例的 max(seq) 基线随之失真
+test('sync push：deleted 严格布尔——字符串 "false"/数字 1 不产墓碑', async () => {
+  const r = await json(await push({
+    changes: [
+      { key: 'doc:strict1', value: { v: 'alive' }, updatedAt: 4000, deleted: 'false' },
+      { key: 'doc:strict2', value: 'v', updatedAt: 4001, deleted: 1 },
+    ]
+  }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.applied.sort(), ['doc:strict1', 'doc:strict2']);
+  // 旧行为 Boolean('false')===true：活数据被写成墓碑——数据丢失方向回归钉
+  const i1 = syncItems.getItem('default', 'doc:strict1');
+  assert.equal(i1.deleted, false);
+  assert.deepEqual(i1.value, { v: 'alive' });
+  assert.equal(syncItems.getItem('default', 'doc:strict2').deleted, false);
+  // 真墓碑路径不受影响
+  await push({ changes: [{ key: 'doc:strict1', updatedAt: 4002, deleted: true }] });
+  assert.equal(syncItems.getItem('default', 'doc:strict1').deleted, true);
+});
+
+test('sync push 字节预算：整批 value 总字节>4MB 整批 400 不落一条', async () => {
+  // 20 条 × ~225KB：每条都过 256KB 单值闸，累计 ~4.4MB 超整批预算——
+  // 此前无总量闸，限流只管次数管不了这种体量膨胀
+  const r = await push({
+    changes: Array.from({ length: 20 }, (_, i) => ({
+      key: `doc:bb${String(i).padStart(2, '0')}`, value: 'x'.repeat(220 * 1024), updatedAt: 5000 + i,
+    })),
+  });
+  assert.equal(r.status, 400);
+  assert.equal(syncItems.getItem('default', 'doc:bb00'), undefined);
+  // 预算内的同形态批照常落库——闸按总字节不按条数
+  const ok = await push({
+    changes: Array.from({ length: 8 }, (_, i) => ({
+      key: `doc:bs${i}`, value: 'x'.repeat(200 * 1024), updatedAt: 6000 + i,
+    })),
+  });
+  assert.equal(ok.status, 200);
+});
+
+test('sync pull 字节预算：单页 >8MB 按字节截页 hasMore；seq 续拉不重不漏', async () => {
+  // repo 层直灌绕开 push 批量闸。先拿真水位线（probe 行 seq 必为当前 max——
+  // 库里已有 2001 行分页钉子，?since=0 的第一页只回前 2000 行，不能直接
+  // 取它算 max）
+  await syncItems.applyChanges('default', [
+    { key: 'doc:bz-probe', value: 0, updatedAt: 9e12, deleted: false },
+  ]);
+  const watermark = syncItems.getItem('default', 'doc:bz-probe').seq;
+  // 40 条 × ~220KB ≈ 8.8MB——按条数远没到 2000，纯字节预算截页
+  await syncItems.applyChanges('default', Array.from({ length: 40 }, (_, i) => ({
+    key: `doc:bz${String(i).padStart(3, '0')}`,
+    value: 'z'.repeat(220 * 1024), updatedAt: 9e12 + 1000 + i, deleted: false,
+  })));
+  const p1 = await json(await pull(`?since=${watermark}`));
+  assert.equal(p1.status, 200);
+  assert.equal(p1.body.hasMore, true);
+  assert.ok(p1.body.items.length > 0 && p1.body.items.length < 40,
+    `字节截页应放出部分行（预算内尽量多），实得 ${p1.body.items.length}`);
+  // 页末行 seq 喂回 since 续拉——keyset 语义在字节截页下不变：不重不漏收全
+  const seen = new Set(p1.body.items.map(i => i.key));
+  let since = p1.body.items.at(-1).seq;
+  while (true) {
+    const p = await json(await pull(`?since=${since}`));
+    assert.equal(p.status, 200);
+    for (const it of p.body.items) {
+      assert.equal(seen.has(it.key), false, `重复下发 ${it.key}`);
+      seen.add(it.key);
+    }
+    if (!p.body.hasMore) break;
+    since = p.body.items.at(-1).seq;
+  }
+  assert.equal(seen.size, 40);
+});
+
 // 限流收尾——把桶打满会影响后续用例，留最后跑；TRUST_PROXY+XFF 换 IP
 // 证明桶按 IP 独立（'local' 桶灌满不误伤别家）
 test('sync push 限流：sync-push 30/min per-IP 独立桶', async () => {

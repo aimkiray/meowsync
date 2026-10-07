@@ -9,6 +9,15 @@ const { parseJsonBody } = require('../lib/validate');
 const { settingsBody, aiTestBody } = require('../../shared/contracts.js');
 const { fail } = require('../lib/http-error');
 const { rateLimit } = require('../lib/rate-limit');
+// 错误消息透出前的绝对路径剥离（music.js 上游清洗同款）——undici/fs 层
+// 异常可携服务器路径（证书/凭据文件 ENOENT），不能原样回给调用方
+const { stripAbsolutePaths } = require('../lib/sanitize');
+// 写请求 CSRF 同源闸（与 routes/sync.js 同口径）：session 写 authGate 已查，
+// 但开放部署（users 空表）与 DOWNLOAD_TOKEN 旁路不经那一道——readJsonBody
+// 不校验 Content-Type，text/plain 级 CORS simple request 不触发预检即可
+// 跨站写。无 Origin 的非浏览器客户端放行（curl/脚本拿不到 cookie，不在
+// CSRF 威胁模型里）——同源判定细节见 lib/auth-gate.js
+const { csrfOriginOk } = require('../lib/auth-gate');
 const settingsLib = require('../lib/settings');
 const repo = require('../repositories/settings');
 const { aiEnabled, aiModel } = require('../lib/ai');
@@ -29,6 +38,7 @@ app.get('/settings', (c) => {
 // PUT /settings {key: value|null|''} —— ''/null = 清覆盖回落 env。
 // 逐键整形，第一处非法即整单 400（部分落库的半配置态比全拒更难排查）
 app.put('/settings', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
   const { data: body, error } = await parseJsonBody(c, settingsBody, 32 * 1024);
   if (error) return error;
   const entries = Object.entries(body || {}).filter(([k]) => settingsLib.DEFS[k]);
@@ -56,6 +66,7 @@ app.put('/settings', async (c) => {
 // AI_BASE_URL 的公网校验刻意不做（与 ai.js 头注同口径：管理员配置信任域，
 // 本机/内网聚合网关是主形态；写面已在 authGate 后）
 app.post('/settings/ai-test', async (c) => {
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
   const { data: body, error } = await parseJsonBody(c, aiTestBody, 8 * 1024);
   if (error) return error;
   if (!rateLimit(c, 'ai-test', 10)) return fail(c, 429, '请求过于频繁');
@@ -117,7 +128,10 @@ app.post('/settings/ai-test', async (c) => {
       model: model || null,
     });
   } catch (e) {
-    return c.json({ code: 200, ok: false, message: `连接失败：${e?.message || e}` });
+    // fetch/dns/socket 异常消息可携本地绝对路径（CA bundle、key 文件 ENOENT）——
+    // 透出前统一过剥离；URL 片段刻意不遮（sanitize 只剥路径，draft 地址是
+    // 调用方自持的输入不是秘密）
+    return c.json({ code: 200, ok: false, message: `连接失败：${stripAbsolutePaths(e?.message || e)}` });
   }
 });
 

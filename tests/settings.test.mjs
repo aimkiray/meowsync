@@ -364,6 +364,59 @@ test('POST /settings/ai-test：上游非 2xx 与异常形态', async (t) => {
   assert.match(body.message, /ECONNREFUSED/);
 });
 
+test('POST /settings/ai-test：异常消息透出前剥离绝对路径', async (t) => {
+  // undici/fs 层异常（CA bundle、key 文件 ENOENT）可携服务器绝对路径——
+  // 回包必须过 stripAbsolutePaths，否则设置页报错文案把部署目录结构
+  // 透给调用方。独用 XFF 桶隔离 ai-test 配额（本文件已消耗多拍 'local' 桶）
+  const savedTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    if (savedTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = savedTp;
+    globalThis.fetch = realFetch;
+  });
+  globalThis.fetch = async () => {
+    throw new Error("ENOENT: no such file or directory, open '/opt/meowsync-private/ca.pem'");
+  };
+  const res = await settingsRoute.request('http://t/settings/ai-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.99' },
+    body: JSON.stringify({ baseUrl: 'http://gw-a:8317', apiKey: 'k' }),
+  });
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.message.includes('/opt/meowsync-private'), false);
+  assert.match(body.message, /<path>/);
+});
+
+test('settings 写端点 CSRF：异源 Origin → 403，不落库也不触达上游', async () => {
+  const evil = { origin: 'https://evil.example' };
+  const put = await settingsRoute.request('http://t/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...evil },
+    body: JSON.stringify({ ai_model: 'csrf-probe' }),
+  });
+  assert.equal(put.status, 403);
+  assert.notEqual(repo.get('ai_model'), 'csrf-probe'); // 闸在落库前
+
+  // ai-test 闸在上游探测之前——跨站请求连出站 fetch 都触发不了
+  const realFetch = globalThis.fetch;
+  let called = 0;
+  globalThis.fetch = async () => { called++; return { ok: true, status: 200 }; };
+  try {
+    const r = await settingsRoute.request('http://t/settings/ai-test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...evil },
+      body: JSON.stringify({ baseUrl: 'http://gw-a:8317', apiKey: 'sk-x' }),
+    });
+    assert.equal(r.status, 403);
+    assert.equal(called, 0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('PUT /settings：空 body/纯未知键 → 400 无可写项', async () => {
   let res = await settingsRoute.request('http://t/settings', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}',

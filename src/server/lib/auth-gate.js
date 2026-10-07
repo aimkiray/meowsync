@@ -27,15 +27,21 @@ function isPublic(c) {
   return false;
 }
 
-function sessionFromCookieHeader(cookieHeader) {
+// cookie 内裸 token 切分（独立导出，勿再抄第三份）：sync.js 的读/写路径
+// 要拿裸 token 自选会话解析器（pull 用 peekSession 纯读、push 用
+// resolveSession 滑动续期）；本函数只做提取不解会话
+function sessionTokenFromCookie(cookieHeader) {
   const raw = String(cookieHeader || '').split(';')
     .map(s => s.trim())
     .find(s => s.startsWith(COOKIE_NAME + '='))
     ?.slice(COOKIE_NAME.length + 1);
   if (!raw) return null;
-  let token = raw;
-  try { token = decodeURIComponent(raw); } catch { /* 原样用 */ }
-  return sessionsRepo.resolveSession(token);
+  try { return decodeURIComponent(raw); } catch { return raw; /* 原样用 */ }
+}
+
+function sessionFromCookieHeader(cookieHeader) {
+  const token = sessionTokenFromCookie(cookieHeader);
+  return token ? sessionsRepo.resolveSession(token) : null;
 }
 
 async function authGate(c, next) {
@@ -100,4 +106,4 @@ function authEnabled() {
   return usersRepo.countUsers() > 0;
 }
 
-module.exports = { authGate, sessionFromCookieHeader, csrfOriginOk, COOKIE_NAME, authEnabled };
+module.exports = { authGate, sessionFromCookieHeader, sessionTokenFromCookie, csrfOriginOk, COOKIE_NAME, authEnabled };

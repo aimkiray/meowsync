@@ -56,10 +56,15 @@ const PULL_RETRY_MS = 60000 // pull 失败/回前台补拉的节流窗——轻�
 // push conflicts 回包采纳），陈旧本地值不得以启动刻压死远端编辑；
 // 远端无值则本机传播。随后真实本地写在脏标记时盖 now 不受影响
 const SEED_TS = 1
-// 与服务端 routes/sync.js 同源口径：changes>500 / 单条 value>256KB 是整批
-// 400 的硬顶——客户端提前分块/剔除，必败批次不进退避死循环
+// 与服务端 routes/sync.js 同源口径：changes>500 / 单条 value>256KB /
+// 整批 value 总字节>4MB 都是整批 400 的硬顶——客户端提前分块/剔除，
+// 必败批次不进退避死循环
 const PUSH_CHUNK_SIZE = 500
 const PUSH_MAX_VALUE_BYTES = 256 * 1024
+// 整批字节预算的客户端切块阈：服务端硬顶 MAX_BATCH_VALUE_BYTES=4MB，
+// 这里留 0.5MB 余量兜条目外壳（key/updatedAt/deleted 的 JSON 开销）与
+// 两侧序列化口径微差——只按条数切块时首同步 ~16 个 256KB 歌单即顶穿
+const PUSH_BATCH_BUDGET_BYTES = 3.5 * 1024 * 1024
 // 远端 updatedAt 未来戳宽容窗——与服务端 routes/sync.js 的
 // FUTURE_TOLERANCE_MS 同源口径（5min 钟漂容差）
 const FUTURE_TS_SKEW_MS = 5 * 60 * 1000
@@ -571,26 +576,48 @@ const flushPush = async () => {
     if (pulling) await pulling
     const built = buildChanges(batch)
     // 单条 value>256KB 会让服务端整批 400——剔出超限项保批次；
-    // 其基线不推进（本就不是可同步物，下趟照样被剔，告警可追）
+    // 其基线不推进（本就不是可同步物，下趟照样被剔，告警可追）。
+    // 字节口径与服务端 valueJsonOf 同源：墓碑恒 'null'、undefined 归一
+    // null——按真实落库串形计量，不算请求侧脏形态
     const sendable = []
     for (const c of built.changes) {
-      if (c.value != null && byteLen(JSON.stringify(c.value)) > PUSH_MAX_VALUE_BYTES) {
+      const valueBytes = byteLen(c.deleted
+        ? 'null'
+        : JSON.stringify(c.value === undefined ? null : c.value))
+      if (valueBytes > PUSH_MAX_VALUE_BYTES) {
         console.warn('[sync] 单条 value 超 256KB 上限，跳过推送:', c.key)
         built.docRaws.delete(c.key.startsWith(DOC_PREFIX) ? c.key.slice(DOC_PREFIX.length) : c.key)
         if (c.key.startsWith(PLAYLIST_PREFIX)) built.plPuts.delete(c.key.slice(PLAYLIST_PREFIX.length))
         continue
       }
-      sendable.push(c)
+      sendable.push({ ch: c, valueBytes })
     }
     if (sendable.length) {
       const conflicts = []
       const rejected = []
-      for (let i = 0; i < sendable.length; i += PUSH_CHUNK_SIZE) {
-        const resp = await syncApi.push(sendable.slice(i, i + PUSH_CHUNK_SIZE))
+      // 条数+字节双闸切块，谁先到顶谁开新块——只按 500 条切时首同步
+      // ~16 个 256KB 歌单即撞服务端 4MB 整批闸（必败批次进退避死循环）。
+      // 块首行豁免字节闸（与服务端 pull 页首行同口径）：单项已过 256KB
+      // 闸天然装得进预算，豁免只兜「单项超阈永远发不出」的死路
+      let chunk = []
+      let chunkBytes = 0
+      const sendChunk = async () => {
+        const resp = await syncApi.push(chunk)
         if (!resp || resp.code !== 200) throw new Error(`sync push code=${resp?.code}`)
         if (Array.isArray(resp.conflicts)) conflicts.push(...resp.conflicts)
         if (Array.isArray(resp.rejected)) rejected.push(...resp.rejected)
+        chunk = []
+        chunkBytes = 0
       }
+      for (const s of sendable) {
+        if (chunk.length >= PUSH_CHUNK_SIZE
+          || (chunk.length > 0 && chunkBytes + s.valueBytes > PUSH_BATCH_BUDGET_BYTES)) {
+          await sendChunk()
+        }
+        chunk.push(s.ch)
+        chunkBytes += s.valueBytes
+      }
+      if (chunk.length) await sendChunk()
       // 成功才推进基线：失败重试要靠旧基线 diff 出同一批变更
       for (const [k, raw] of built.docRaws) {
         if (raw === null) knownContent.delete(k)
