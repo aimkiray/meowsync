@@ -204,26 +204,58 @@ const ytAuthHeaders = () => {
 };
 
 // 认证档构造：UA/context.client 复用 DESKTOP_UA/WEB_CLIENT——
-// Authorization↔UA↔context 一致性是风控校验点（VISIONOS 内嵌 UA 同款）
+// Authorization↔UA↔context 一致性是风控校验点（VISIONOS 内嵌 UA 同款）。
+// auth 标记供各链在轮替尾记账（见 noteAuth*），不进 headers/clientHeaders
 const ytAuthForms = () => {
   const headers = ytAuthHeaders();
   if (!headers) return [];
   return [{
-    name: 'WEB_AUTH', clientId: WEB_CLIENT.clientId,
+    name: 'WEB_AUTH', auth: true, clientId: WEB_CLIENT.clientId,
     client: { ...WEB_CLIENT.client, userAgent: DESKTOP_UA },
     headers: { 'User-Agent': DESKTOP_UA, ...headers },
   }];
+};
+
+// 认证档失效负缓存：WEB_AUTH 档连续被拒（过期/失效 cookie 被风控拒采——
+// LOGIN_REQUIRED、HTTP 401/403、登录类 alert）到阈盖章 10min，期内三条
+// Innertube 链（player/search/browse）都跳过认证档直走匿名形态，窗过期
+// 自动重探——失效 cookie 的每请求白打既慢又是风控放大信号
+// （visitorDataFailAt 同款负缓存口径）
+const AUTH_FAIL_THRESHOLD = 3;
+const AUTH_FAIL_TTL_MS = 10 * 60e3;
+let authFailStreak = 0;   // 连续凭据被拒计数——成功即清零（连败语义）
+let authFailUntil = 0;    // 负缓存截止戳
+
+// 认证档排头、匿名档殿后的轮替链拼装：负缓存窗内跳过认证档——
+// ytAuthForms() 在 cookie 未配时本就回空，匿名口径与旧版逐字节同
+const formsWithAuth = (anonForms) =>
+  (Date.now() < authFailUntil ? anonForms : [...ytAuthForms(), ...anonForms]);
+
+// 认证档一次成功：cookie 有效——连败清零（恢复期内已转匿名，成功说明
+// 凭据回春/重配，立即撤负缓存语义回认证排头）
+const noteAuthOk = () => { authFailStreak = 0; };
+// 认证档一次失败记账：只有 err.authRejected（明确凭据被拒：LOGIN_REQUIRED/
+// 401/403/ALERT_AUTH）才计连败到阈盖章。传输层超时/5xx/空壳不算凭据证据
+// ——网络抖动把负缓存盖上会让健康 cookie 被冤枉跳过 10min
+const noteAuthVerdict = (err) => {
+  if (!err?.authRejected) return;
+  authFailStreak++;
+  if (authFailStreak >= AUTH_FAIL_THRESHOLD) {
+    authFailUntil = Date.now() + AUTH_FAIL_TTL_MS;
+    console.warn(`[youtube] 认证档连续 ${authFailStreak} 次凭据被拒（cookie 疑似失效），`
+      + `${Math.round(AUTH_FAIL_TTL_MS / 60000)} 分钟内跳过认证档改走匿名形态`);
+  }
 };
 
 // 指定客户端形态直解：clientName 用于「已知 ANDROID 流被闸」的升级路径——
 // 跳过无谓的前两形态白打，直接拿 VISIONOS 签名批。
 // 每形态至多两试：首试裸匿名，LOGIN_REQUIRED 后补 visitorData 原地重试
 async function fetchPlayerWith(videoId, extraSignal, clientName) {
-  // 认证档只进默认轮替链（排头）——指名形态（VISIONOS 升级路）维持
-  // 匿名口径不动；cookie 未配时链与旧版逐字节相同
+  // 认证档只进默认轮替链（排头，负缓存窗内跳过）——指名形态
+  // （VISIONOS 升级路）维持匿名口径不动；cookie 未配时链与旧版逐字节相同
   const forms = clientName
     ? INNERTUBE_CLIENTS.filter(f => f.name === clientName)
-    : [...ytAuthForms(), ...INNERTUBE_CLIENTS];
+    : formsWithAuth(INNERTUBE_CLIENTS);
   if (!forms.length) throw new Error(`未知客户端形态: ${clientName}`);
   let lastErr = null;
   for (const form of forms) {
@@ -253,7 +285,12 @@ async function fetchPlayerWith(videoId, extraSignal, clientName) {
           signal: timedSignal(extraSignal),
           ...ytFetchOpts(),
         });
-        if (!res.ok) throw new Error(`innertube HTTP ${res.status}`);
+        if (!res.ok) {
+          const err = new Error(`innertube HTTP ${res.status}`);
+          // 401/403 是凭据被拒的明确信号——认证档记账靠它，匿名档挂上无害
+          if (res.status === 401 || res.status === 403) err.authRejected = true;
+          throw err;
+        }
         body = await res.json();
       } catch (e) {
         formErr = lastErr = e;
@@ -263,16 +300,23 @@ async function fetchPlayerWith(videoId, extraSignal, clientName) {
       const ps = body?.playabilityStatus;
       // OK / LIVE_EDGE 才有流；LOGIN_REQUIRED/ERROR 等带 reason 落 formErr
       if (!ps?.status || ['OK', 'LIVE_EDGE'].includes(ps.status)) {
-        if (body?.streamingData) return body;
+        if (body?.streamingData) {
+          if (form.auth) noteAuthOk();
+          return body;
+        }
         formErr = lastErr = new Error('无流数据');
         break;
       }
       formErr = lastErr = new Error(`不可播放: ${ps.reason || ps.status}`);
+      // LOGIN_REQUIRED 是凭据被拒的明确信号（匿名吃它=bot 墙，认证档吃它
+      // =cookie 失效）——负缓存只凭认证档的 verdict 记账
+      if (ps.status === 'LOGIN_REQUIRED') formErr.authRejected = true;
       // 匿名被风控 → 补 visitorData 原地重试一次。已带 vd 还吃
       // LOGIN_REQUIRED 时重试是逐字节相同请求——注定重败，直接换形态
       if (ps.status === 'LOGIN_REQUIRED' && attempt === 0 && !vd) continue;
       break;
     }
+    if (form.auth) noteAuthVerdict(formErr);
     console.warn(`[youtube] ${form.name} 客户端取流失败:`, formErr?.message || '未知错误');
   }
   throw lastErr || new Error('所有客户端形态均失败');
@@ -440,7 +484,7 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
     }
   };
   let lastErr = null;
-  for (const form of [...ytAuthForms(), ...INNERTUBE_CLIENTS]) {
+  for (const form of formsWithAuth(INNERTUBE_CLIENTS)) {
     if (extraSignal?.aborted) throw new Error('aborted');
     try {
       const vd = freshVisitorData();
@@ -456,17 +500,23 @@ async function innertubeSearch(keyword, extraSignal, limit = 5) {
         signal: timedSignal(extraSignal),
         ...ytFetchOpts(),
       });
-      if (!res.ok) throw new Error(`innertube search HTTP ${res.status}`);
+      if (!res.ok) {
+        const err = new Error(`innertube search HTTP ${res.status}`);
+        if (res.status === 401 || res.status === 403) err.authRejected = true;
+        throw err;
+      }
       const body = await res.json();
       const out = [];
       walk(body?.contents, out);
       // 空壳响应（风控时常见 200+无 renderer）视为失败换下一客户端——
       // 与 fetchPlayer 的「无 streamingData 即换形态」同口径
       if (!out.length) throw new Error('搜索结果无候选（空壳响应/风控）');
+      if (form.auth) noteAuthOk();
       return out;
     } catch (e) {
       lastErr = e;
       if (extraSignal?.aborted) throw new Error('aborted');
+      if (form.auth) noteAuthVerdict(e);
       console.warn(`[youtube] ${form.name} 客户端搜索失败:`, e.message);
     }
   }
@@ -534,9 +584,10 @@ const rendererText = (n) => (n?.runs || []).map(r => r.text).join('') || n?.simp
 async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   const vd = freshVisitorData();
   // cookie 在位时认证档打头、匿名 WEB 档殿后（头构造与 player/search 共用
-  // ytAuthForms）——bot 墙若按端点生效，歌单导入同受益。认证档失败回落
-  // 匿名再试一次：过期/畸形 cookie 不该打死本来匿名就能过的歌单导入
-  const forms = [...ytAuthForms(), WEB_CLIENT];
+  // ytAuthForms，负缓存窗内认证档被跳过）——bot 墙若按端点生效，歌单导入
+  // 同受益。认证档失败回落匿名再试一次：过期/畸形 cookie 不该打死本来
+  // 匿名就能过的歌单导入
+  const forms = formsWithAuth([WEB_CLIENT]);
   let body = null;
   let lastErr = null;
   for (const form of forms) {
@@ -553,7 +604,11 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
         signal: timedSignal(extraSignal),
         ...ytFetchOpts(),
       });
-      if (!res.ok) throw new Error(`innertube browse HTTP ${res.status}`);
+      if (!res.ok) {
+        const err = new Error(`innertube browse HTTP ${res.status}`);
+        if (res.status === 401 || res.status === 403) err.authRejected = true;
+        throw err;
+      }
       const parsed = await res.json();
       // 私有/不存在/被删的歌单：200 + alerts[].alertRenderer.type='ERROR'
       // ——对用户是「不可访问」语义，挂 upstreamCode 供路由映射 404；
@@ -563,6 +618,8 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
         const text = rendererText(alert.alertRenderer.text);
         const e = new Error(`播放列表不可用: ${text || 'ERROR'}`);
         e.upstreamCode = /sign in|log ?in|bot|登录|登入|验证|確認/i.test(text) ? 'ALERT_AUTH' : 'ALERT_ERROR';
+        // ALERT_AUTH 是凭据被拒的明确信号——认证档负缓存记账靠它
+        if (e.upstreamCode === 'ALERT_AUTH') e.authRejected = true;
         throw e;
       }
       // 200 但三棵内容根与 header 全空——风控空壳/响应畸形，不是「歌单不存在」
@@ -573,6 +630,7 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
         throw e;
       }
       body = parsed;
+      if (form.auth) noteAuthOk();
       break;
     } catch (e) {
       lastErr = e;
@@ -580,6 +638,7 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
       // ALERT_ERROR 是歌单级终态（私有/不存在）——匿名重试逐字节同结果不
       // 重复打；ALERT_AUTH/空壳/传输错是凭据级失败，匿名档还有一次机会
       if (e.upstreamCode === 'ALERT_ERROR') throw e;
+      if (form.auth) noteAuthVerdict(e);
       console.warn(`[youtube] ${form.name} 客户端歌单页抓取失败:`, e.message);
     }
   }
@@ -638,7 +697,20 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
     const owner = partText(ownerPart).split(/\s*[•·]\s*/)[0].trim();
     pushItem(lv.contentId, meta?.title?.content || '', owner, parseSecs(badge));
   };
-  let nextAlt = null; // 非哨兵位 continuationCommand 兜底（哨兵优先）
+  let nextAlt = null; // playlistVideoListContinuation 已知槽位兜底（哨兵优先）
+  // 歌单续页续流指令只出现在已知槽位——任意节点上的裸
+  // continuationEndpoint/continuationCommand 可能是条目内「继续观看」等
+  // 非分页指令，裸收会把无关 token 当翻页游标（产出死循环续页请求）
+  const plcToken = (plc) => plc?.continuation
+    || plc?.continuationEndpoint?.continuationCommand?.token
+    || plc?.continuationCommand?.token
+    || (Array.isArray(plc?.continuations) ? plc.continuations : [])
+      .map(x => x?.nextContinuationData?.continuation
+        || x?.nextContinuationData?.continuationEndpoint?.continuationCommand?.token
+        || x?.continuationEndpoint?.continuationCommand?.token
+        || x?.continuationCommand?.token)
+      .find(Boolean)
+    || null;
   const walk = (node) => {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) { for (const it of node) walk(it); return; }
@@ -661,9 +733,8 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
       || node.nextContinuationData?.continuation
       || node.nextContinuationData?.continuationEndpoint?.continuationCommand?.token;
     if (sentinel && !next) next = sentinel;
-    if (!nextAlt) {
-      nextAlt = node.continuationEndpoint?.continuationCommand?.token
-        || node.continuationCommand?.token || null;
+    if (!nextAlt && node.playlistVideoListContinuation) {
+      nextAlt = plcToken(node.playlistVideoListContinuation);
     }
     for (const key of Object.keys(node)) walk(node[key]);
   };

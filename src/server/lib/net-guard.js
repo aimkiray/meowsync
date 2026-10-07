@@ -224,8 +224,13 @@ function makeGuardedLookup() {
     const key = hostname.toLowerCase();
 
     const pick = (list) => {
-      const filtered = wantFamily ? list.filter(r => r.family === wantFamily) : list;
-      const usable = filtered.length ? filtered : list;
+      // 指定 family 无匹配记录即拒——静默回落全表会把要求 v6 的连接绑到
+      // v4 地址（或反向），family 语义被架空的同时答案还脱离了请求方
+      // 预期的协议栈；fail closed 与空结果/私网拦截同口径
+      const usable = wantFamily ? list.filter(r => r.family === wantFamily) : list;
+      if (!usable.length) {
+        return [guardedError(`DNS 无 family=${wantFamily} 记录: ${hostname}`)];
+      }
       return wantAll
         ? [null, usable]
         : [null, usable[0].address, usable[0].family];

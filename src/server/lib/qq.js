@@ -325,7 +325,7 @@ async function getStreamCandidates(mid, mediaMid, ladder, extraSignal) {
 
 // 档梯取第一条能过宿主校验的回链（routes/qq.js 与 file-downloader 共用——
 // 只带档梯差异，宿主校验/mediaMid 回填两处同一份实现）
-async function pickStreamUrl(mid, { mediaMid = '', ladder = PLAY_LADDER, signal } = {}) {
+async function pickStreamUrlInner(mid, { mediaMid = '', ladder = PLAY_LADDER, signal } = {}) {
   const usable = async (mm) => {
     const cands = await getStreamCandidates(mid, mm, ladder, signal);
     for (const cand of cands) {
@@ -348,6 +348,28 @@ async function pickStreamUrl(mid, { mediaMid = '', ladder = PLAY_LADDER, signal 
     });
     if (detail?.mediaMid && detail.mediaMid !== tried) hit = await usable(detail.mediaMid);
   }
+  return hit;
+}
+
+// 同 (mid, mmid, 档梯) 在途解析单飞：一次选链含 midurlinfo 一跳 +
+// mediaMid 回填再一跳，播放/下载并发与前端重试叠放是纯放大。
+// 共享 promise 不吃调用方 signal——首调用方断连不该让搭车者陪绑
+// （unlock.js inflightRank 同款先例）；fcg 内部超时已是链内自净上限，
+// 各等待方 await 后用自己的 signal 决定吃不吃结果
+const pickStreamInflight = new Map();
+async function pickStreamUrl(mid, { mediaMid = '', ladder = PLAY_LADDER, signal } = {}) {
+  // 已 abort 的调用方不该再启动上游扇出（post-await 检查管「在途断连」，
+  // 这里管「出发前已死」）
+  if (signal?.aborted) throw new Error('aborted');
+  const key = `${mid}|${mediaMid}|${ladder.join(',')}`;
+  let gate = pickStreamInflight.get(key);
+  if (!gate) {
+    gate = pickStreamUrlInner(mid, { mediaMid, ladder })
+      .finally(() => pickStreamInflight.delete(key));
+    pickStreamInflight.set(key, gate);
+  }
+  const hit = await gate;
+  if (signal?.aborted) throw new Error('aborted');
   return hit;
 }
 

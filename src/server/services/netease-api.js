@@ -111,6 +111,7 @@ const UNLOCK_CONCURRENCY = 4;
 // 两语境共享同一键会让带代理的读消费直连写入的集合（绕过预筛产死链），
 // 或让直连的读消费被白名单筛过的集合（平白丢可用镜像）
 const UNLOCK_CACHE_TTL_MS = 60000;
+const UNLOCK_CACHE_MAX = 256;
 const unlockCache = new Map(); // `${purpose}|${'px'|'direct'}|${id}` -> {url, br, source, at}
 const unlockCacheKey = (purpose, id, proxied) => `${purpose}|${proxied ? 'px' : 'direct'}|${id}`;
 const unlockCacheGet = (purpose, id, proxied) => {
@@ -121,9 +122,22 @@ const unlockCacheGet = (purpose, id, proxied) => {
   return null;
 };
 const unlockCacheSet = (purpose, id, proxied, value) => {
-  if (unlockCache.size > 256) unlockCache.clear();
-  unlockCache.set(unlockCacheKey(purpose, id, proxied), { ...value, at: Date.now() });
+  const key = unlockCacheKey(purpose, id, proxied);
+  // 满容逐最旧键淘汰而非整表 clear()——突发满容全清会把仍在窗内的热键
+  // 一并冲掉造成缓存抖动（net-guard dnsCache 同款先例）；delete+set
+  // 刷新插入序，反复命中的热键不居队首被先挤掉
+  unlockCache.delete(key);
+  if (unlockCache.size >= UNLOCK_CACHE_MAX) {
+    unlockCache.delete(unlockCache.keys().next().value);
+  }
+  unlockCache.set(key, { ...value, at: Date.now() });
 };
+// 同键（purpose|代理语境|id）在途解锁单飞：song_url 批量里的重复 id 与
+// 并发请求此前各跑一遍完整解锁链（detail 规整→逐源 resolve→校验/HEAD）。
+// 共享 promise 不吃调用方 signal——首调用方断连不该让搭车者陪绑降级；
+// 各等待方 await 后用自己的 signal 决定吃不吃结果
+// （unlockInfoInflight / net-guard dnsInflight 同款先例）
+const unlockInflight = new Map(); // unlockCacheKey 同型键 -> Promise<resolved|null>
 
 // ── AI 解锁辅助 ────────────────────────────────────────────────
 // unm match() 内部的 select 用 keyword（name - artists）在各源站搜候选——
@@ -181,7 +195,12 @@ async function aiUnlockInfo(songRow, signal) {
   unlockInfoInflight.set(key, p);
   const data = await p;
   if (signal?.aborted) return data;
-  if (unlockInfoCache.size > 512) unlockInfoCache.clear();
+  // 满容逐最旧键淘汰而非整表 clear()——与 unlockCache/dnsCache 同口径；
+  // delete+set 刷新插入序
+  unlockInfoCache.delete(key);
+  if (unlockInfoCache.size >= 512) {
+    unlockInfoCache.delete(unlockInfoCache.keys().next().value);
+  }
   unlockInfoCache.set(key, { data, at: Date.now() });
   return data;
 }
@@ -282,6 +301,139 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
     }
   }
 
+  // 单 id 解锁链本体：AI 规整 → 逐源 resolve → 回链校验/白名单预筛/时长
+  // 对账 → 写缓存，产出 {url,urls,br,source,ext,size,timeMs} | null。
+  // 产出经 unlockInflight 键共享给并发搭车者，故本函数不消费调用方
+  // signal（自净上限靠每次 provider 调用的 UNBLOCK_TIMEOUT_MS）；并发等待
+  // 方在 await 共享 promise 后自查自己的 signal 决定吃不吃结果
+  const resolveOne = async (item, originalDt) => {
+    // AI 规整检索元数据：一次提取全源复用（provider 拿 keyword 去外站
+    // 搜候选，干净的 name/artists 让候选选择更准）。失败 → 退回
+    // song_detail 原始字段拼 keyword；连 songRow 都没有时 info=null——
+    // 搜索型源会拿不到 keyword，仅 id 直解源（pyncmd）仍可用
+    let info = null;
+    const songRow = songRows[item.id];
+    if (songRow) {
+      if (aiEnabled()) {
+        try {
+          const normalized = await aiUnlockInfo(songRow, null);
+          if (normalized) info = buildUnlockInfo(songRow, normalized);
+        } catch { /* AI 规整失败不阻塞解锁主路径 */ }
+      }
+      if (!info) info = baseUnlockInfo(songRow);
+    }
+    for (const source of allSources) {
+      const provider = PROVIDERS[source];
+      if (!provider) continue;
+      try {
+        const unblocked = await provider.resolve(
+          info ? { ...info } : { id: item.id, keyword: '' },
+          {
+            purpose,
+            // 真实取消透传：provider 内每次 fetch 都吃这个 signal。
+            // 共享链不接调用方 signal（断连不陪绑）——60s 内部超时即自净上限
+            signal: AbortSignal.timeout(UNBLOCK_TIMEOUT_MS),
+          },
+        );
+        // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，
+        // 域名再逐跳过公网 IP 校验——私网解析的 URL 若选中即 break，
+        // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
+        // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）。
+        // 逐源失败必须留痕——全静默 continue 下线上「该解的歌不解」无法
+        // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛。
+        // unblocked.urls（同字节镜像组）：整条候选链逐条过同一套校验，
+        // 活链集随 resolved 下发——代理逐试钉位，首链死掉自动换镜像；
+        // 无 urls 的源退化为单链（契约向后兼容）。跨字节实体的候选
+        // （不同分辨率/编码）不允许混排——代理换档语义见 proxy.js
+        const rawUrls = Array.isArray(unblocked?.urls) && unblocked.urls.length
+          ? unblocked.urls : [unblocked?.url];
+        const urls = [];
+        let checked = null;
+        for (const u of rawUrls) {
+          const chk = typeof u === 'string' && u ? normalizeOutboundUrl(u) : null;
+          if (!chk?.ok) continue;
+          if (!(await resolvesToPublicIp(chk.url.hostname))) continue;
+          if (!checked) checked = chk;
+          urls.push(chk.url.toString());
+        }
+        if (!checked) {
+          console.info(`[unlock] ${item.id} ${source}: 无可用回链或归一化/公网校验全拒`);
+          continue;
+        }
+
+        // 会被包进 /audio-proxy 的回链必须过代理白名单预筛——否则产出
+        // "已解析却 403"的死链并缓存 60s。qq 源必须算在内：其 https purl
+        // 明文带 uin/vkey 且 vkey 绑本机 IP，不代理既是凭据泄露又必然 403；
+        // youtube 的 googlevideo ip= 同理必须代理。
+        // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
+        // 明文签名链进 JSON 等于把 uin/vkey/出口 IP 发给访客；进程内调用方
+        // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
+        const willProxy = !!proxyOrigin
+          && (source === 'youtube' || source === 'qq' || checked.url.protocol === 'http:');
+        if (willProxy) {
+          // 多链场景整条都须过白名单——漏一条等于往 vault 里混一条
+          // 注定 403 的死链（代理逐试会空打一跳）或裸凭据外发
+          for (let i = urls.length - 1; i >= 0; i--) {
+            if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
+          }
+          if (!urls.length) {
+            console.info(`[unlock] ${item.id} ${source}: 不在代理白名单`);
+            continue;
+          }
+          // splice 可能换掉首链——checked 对齐过滤后的 urls[0]，
+          // extOf/HEAD 探测的口径必须是最终下发链而非被滤掉的链
+          checked = normalizeOutboundUrl(urls[0]);
+        }
+
+        // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
+        // 候选期已知秒数的源（youtube/qq）直接比对原始时长；
+        // 其余按 size×br 估算（unm range 探测已随库删除，回落 HEAD）
+        let estMs = null;
+        let sizeBytes = null;
+        if (originalDt) {
+          const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
+          if (Number.isFinite(unblocked.durationSec) && unblocked.durationSec > 0) {
+            estMs = unblocked.durationSec * 1000;
+          } else if (unblocked.br) {
+            // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
+            // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
+            sizeBytes = Number.isFinite(unblocked.size) && unblocked.size > 0
+              ? unblocked.size
+              : await withTimeout(getContentLength(checked.url.toString()), 8000, 'HEAD 探测')
+                .catch(() => null);
+            estMs = estimateDuration(sizeBytes, unblocked.br);
+          }
+          if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
+            console.warn(
+              `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
+            );
+            continue;
+          }
+        }
+
+        const resolved = {
+          url: urls[0], urls, br: unblocked.br || null, source,
+          // 真实文件形态写回：试听片的 time/size/type 透给下载端会
+          // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件。
+          // size 优先 provider/HEAD 实测值；youtube/qq 无 size 但知道
+          // br+durationSec——按 br×时长估值（标称码率，量级对即可，
+          // 至少比残片字节数更接近真相）
+          ext: extOf(checked.url),
+          size: sizeBytes
+            || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null)
+            || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),
+          timeMs: estMs || originalDt || null,
+        };
+        unlockCacheSet(purpose, item.id, !!proxyOrigin, resolved);
+        return resolved;
+      } catch (e) {
+        // 该源失败，继续下一个——留一行 info 让「逐源全灭」可排障
+        console.info(`[unlock] ${item.id} ${source}: ${e?.message || e}`);
+      }
+    }
+    return null;
+  };
+
   const runUnlock = async (item) => {
     throwIfAborted();
     if (item.id) {
@@ -289,135 +441,22 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
       const originalDt = originalDurations[item.id] || null;
       let resolved = unlockCacheGet(purpose, item.id, !!proxyOrigin);
       const wasCached = Boolean(resolved);
+      let shared = false;
       if (!resolved) {
-        // AI 规整检索元数据：一次提取全源复用（provider 拿 keyword 去外站
-        // 搜候选，干净的 name/artists 让候选选择更准）。失败 → 退回
-        // song_detail 原始字段拼 keyword；连 songRow 都没有时 info=null——
-        // 搜索型源会拿不到 keyword，仅 id 直解源（pyncmd）仍可用
-        let info = null;
-        const songRow = songRows[item.id];
-        if (songRow) {
-          if (aiEnabled()) {
-            try {
-              const normalized = await aiUnlockInfo(songRow, signal);
-              if (normalized) info = buildUnlockInfo(songRow, normalized);
-            } catch { /* AI 规整失败不阻塞解锁主路径 */ }
-          }
-          if (!info) info = baseUnlockInfo(songRow);
+        // in-flight 合流：同键已有在途链则搭车共享（批量重复 id/并发双发
+        // 不再各跑一遍完整解锁链）；无则本调用方建链，结果照常进缓存。
+        // 共享 promise 不吃本调用方 signal——await 后自查 abort 才消费结果
+        const gateKey = unlockCacheKey(purpose, item.id, !!proxyOrigin);
+        let gate = unlockInflight.get(gateKey);
+        if (!gate) {
+          gate = resolveOne(item, originalDt)
+            .finally(() => unlockInflight.delete(gateKey));
+          unlockInflight.set(gateKey, gate);
+        } else {
+          shared = true;
         }
-        for (const source of allSources) {
-          throwIfAborted();
-          const provider = PROVIDERS[source];
-          if (!provider) continue;
-          try {
-            const unblocked = await provider.resolve(
-              info ? { ...info } : { id: item.id, keyword: '' },
-              {
-                purpose,
-                // 真实取消透传：provider 内每次 fetch 都吃这个 signal——
-                // 客户端断开/超时立即杀上游 socket（取代旧 race 的僵尸链）
-                signal: AbortSignal.any(
-                  [AbortSignal.timeout(UNBLOCK_TIMEOUT_MS), ...(signal ? [signal] : [])]
-                ),
-              },
-            );
-            // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，
-            // 域名再逐跳过公网 IP 校验——私网解析的 URL 若选中即 break，
-            // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
-            // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）。
-            // 逐源失败必须留痕——全静默 continue 下线上「该解的歌不解」无法
-            // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛。
-            // unblocked.urls（同字节镜像组）：整条候选链逐条过同一套校验，
-            // 活链集随 resolved 下发——代理逐试钉位，首链死掉自动换镜像；
-            // 无 urls 的源退化为单链（契约向后兼容）。跨字节实体的候选
-            // （不同分辨率/编码）不允许混排——代理换档语义见 proxy.js
-            const rawUrls = Array.isArray(unblocked?.urls) && unblocked.urls.length
-              ? unblocked.urls : [unblocked?.url];
-            const urls = [];
-            let checked = null;
-            for (const u of rawUrls) {
-              const chk = typeof u === 'string' && u ? normalizeOutboundUrl(u) : null;
-              if (!chk?.ok) continue;
-              if (!(await resolvesToPublicIp(chk.url.hostname))) continue;
-              if (!checked) checked = chk;
-              urls.push(chk.url.toString());
-            }
-            if (!checked) {
-              console.info(`[unlock] ${item.id} ${source}: 无可用回链或归一化/公网校验全拒`);
-              continue;
-            }
-
-            // 会被包进 /audio-proxy 的回链必须过代理白名单预筛——否则产出
-            // "已解析却 403"的死链并缓存 60s。qq 源必须算在内：其 https purl
-            // 明文带 uin/vkey 且 vkey 绑本机 IP，不代理既是凭据泄露又必然 403；
-            // youtube 的 googlevideo ip= 同理必须代理。
-            // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
-            // 明文签名链进 JSON 等于把 uin/vkey/出口 IP 发给访客；进程内调用方
-            // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
-            const willProxy = !!proxyOrigin
-              && (source === 'youtube' || source === 'qq' || checked.url.protocol === 'http:');
-            if (willProxy) {
-              // 多链场景整条都须过白名单——漏一条等于往 vault 里混一条
-              // 注定 403 的死链（代理逐试会空打一跳）或裸凭据外发
-              for (let i = urls.length - 1; i >= 0; i--) {
-                if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
-              }
-              if (!urls.length) {
-                console.info(`[unlock] ${item.id} ${source}: 不在代理白名单`);
-                continue;
-              }
-              // splice 可能换掉首链——checked 对齐过滤后的 urls[0]，
-              // extOf/HEAD 探测的口径必须是最终下发链而非被滤掉的链
-              checked = normalizeOutboundUrl(urls[0]);
-            }
-
-            // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
-            // 候选期已知秒数的源（youtube/qq）直接比对原始时长；
-            // 其余按 size×br 估算（unm range 探测已随库删除，回落 HEAD）
-            let estMs = null;
-            let sizeBytes = null;
-            if (originalDt) {
-              const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
-              if (Number.isFinite(unblocked.durationSec) && unblocked.durationSec > 0) {
-                estMs = unblocked.durationSec * 1000;
-              } else if (unblocked.br) {
-                // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
-                // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
-                sizeBytes = Number.isFinite(unblocked.size) && unblocked.size > 0
-                  ? unblocked.size
-                  : await withTimeout(getContentLength(checked.url.toString()), 8000, 'HEAD 探测')
-                    .catch(() => null);
-                estMs = estimateDuration(sizeBytes, unblocked.br);
-              }
-              if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
-                console.warn(
-                  `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
-                );
-                continue;
-              }
-            }
-
-            resolved = {
-              url: urls[0], urls, br: unblocked.br || null, source,
-              // 真实文件形态写回：试听片的 time/size/type 透给下载端会
-              // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件。
-              // size 优先 provider/HEAD 实测值；youtube/qq 无 size 但知道
-              // br+durationSec——按 br×时长估值（标称码率，量级对即可，
-              // 至少比残片字节数更接近真相）
-              ext: extOf(checked.url),
-              size: sizeBytes
-                || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null)
-                || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),
-              timeMs: estMs || originalDt || null,
-            };
-            unlockCacheSet(purpose, item.id, !!proxyOrigin, resolved);
-            break;
-          } catch (e) {
-            if (signal?.aborted) throw e;
-            // 该源失败，继续下一个——留一行 info 让「逐源全灭」可排障
-            console.info(`[unlock] ${item.id} ${source}: ${e?.message || e}`);
-          }
-        }
+        resolved = await gate;
+        throwIfAborted();
       }
       if (resolved) {
         // 走代理的情形：youtube 的 googlevideo URL 带 ip= 绑定（浏览器直连
@@ -443,7 +482,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         if (resolved.ext) item.type = resolved.ext;
         if (resolved.size) item.size = resolved.size;
         if (resolved.timeMs) item.time = resolved.timeMs;
-        console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${useProxy}${wasCached ? ' (cached)' : ''}`);
+        console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${useProxy}${wasCached ? ' (cached)' : shared ? ' (shared)' : ''}`);
       } else {
         item.unlockFailed = true;
         // 试听片段/失效链不再下发——否则下载端会把 30s 残片当完整曲落盘并标 completed
