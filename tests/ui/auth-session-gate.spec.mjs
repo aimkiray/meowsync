@@ -100,7 +100,7 @@ vi.mock('../../src/lib/feedback.js', () => ({
 import { mount, shallowMount } from '@vue/test-utils'
 import { authApi } from '../../src/api/auth.js'
 import { syncApi } from '../../src/api/sync.js'
-import { resolveConfirm } from '../../src/lib/feedback.js'
+import { resolveConfirm, isConfirmOpen } from '../../src/lib/feedback.js'
 import { authState, dismissSetup } from '../../src/lib/auth-state.js'
 import { readJSON, LS_KEYS } from '../../src/lib/storage.js'
 import { resetSyncState } from '../../src/lib/sync.js'
@@ -181,6 +181,36 @@ describe('App.vue：会话过期清场（F2）', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }))
     await vi.advanceTimersByTimeAsync(400)
     expect(readJSON(LS_KEYS.PLAYER_STATE).volume).toBe(0)
+    wrapper.unmount()
+  })
+})
+
+// ── R1：Esc 消费打戳——一键只收一层 ──
+
+describe('App.vue：Esc 消费分支打 defaultPrevented 戳（R1）', () => {
+  it('确认框未决时 Esc 结算 confirm 并 preventDefault——下层沉浸层据此让位', async () => {
+    const wrapper = shallowMount(App)
+    await vi.waitFor(() => expect(syncApi.pull).toHaveBeenCalled())
+    isConfirmOpen.mockReturnValueOnce(true) // 当发事件报开——工厂默认 false 不被污染
+    const e = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    window.dispatchEvent(e)
+    expect(resolveConfirm).toHaveBeenCalledWith(false)
+    expect(e.defaultPrevented).toBe(true) // 戳即「本层已收」——后跑监听据此让位
+    wrapper.unmount()
+  })
+
+  it('侧栏开着时 Esc 关栏同打戳；无可收层不打戳放行', async () => {
+    const wrapper = shallowMount(App)
+    await vi.waitFor(() => expect(syncApi.pull).toHaveBeenCalled())
+    wrapper.vm.sidebarOpen = true
+    const e = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    window.dispatchEvent(e)
+    expect(wrapper.vm.sidebarOpen).toBe(false)
+    expect(e.defaultPrevented).toBe(true)
+    // 栏已关——下一发 Esc 无可结算层：不打戳放行，沉浸层等后跑监听照常收
+    const e2 = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    window.dispatchEvent(e2)
+    expect(e2.defaultPrevented).toBe(false)
     wrapper.unmount()
   })
 })

@@ -282,16 +282,28 @@ export default {
     // aria-modal 契约：Tab/Shift+Tab 把焦点钳在层内首尾互跳——共享实现
     // lib/focus-trap.js（SongFormDialog/确认框/App 弹层同源）。本层可聚焦集
     // 天然闭合：顶栏三键+播控三键+音量 range+进度滑杆。挂在根上吃冒泡的
-    // Tab——子键（滑杆/按钮）自己不拦 Tab，不钳则逃出遮罩落到下层控件
+    // Tab——子键（滑杆/按钮）自己不拦 Tab，不钳则逃出遮罩落到下层控件；
+    // 根外焦点（落 body/层外）的事件不经根——由 handleKeydown 在 window 侧补网
     const onDialogKeydown = (e) => trapTabKeydown(e)
 
     const handleKeydown = (event) => {
       wake()
       if (event.key === 'Escape') {
         // 确认弹层（pixelConfirm）叠在沉浸层上时 Esc 归确认框——App 全局链
-        // 按「取消」结算；本层不抢关，否则一键双关把两层一起收掉
-        if (isConfirmOpen()) return
+        // 按「取消」结算；本层不抢关，否则一键双关把两层一起收掉。
+        // defaultPrevented 主闸：先跑的监听已给事件打戳（App 各 Esc 消费分支）；
+        // isConfirmOpen 兜底——overlay 内结算后 state 虽空，feedback 的
+        // 「本拍刚结算」戳仍报开，两路叠住同一发按键
+        if (event.defaultPrevented || isConfirmOpen()) return
         emit('close')
+        return
+      }
+      // Tab 补网：焦点逃出根（点画布落 body 等）时 keydown 不冒泡经过根的
+      // @keydown——window 侧兜底，ae 不在可聚焦集时 trapTabKeydown 钳回端点。
+      // 框内按键先到过根（已结算的见 defaultPrevented 跳过，不二次移焦）；
+      // confirm 开着不夺焦——顶层遮罩的 Tab 序归它自己的陷阱管
+      if (event.key === 'Tab' && !event.defaultPrevented && !isConfirmOpen()) {
+        trapTabKeydown(event, rootEl.value)
       }
     }
 

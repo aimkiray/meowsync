@@ -1159,7 +1159,9 @@ export default {
     if (typeof window !== 'undefined') {
       const closeOnScroll = () => { closeDownloadMenu() }
       const closeOnEscape = (e) => {
-        if (e.key !== 'Escape') return
+        // App onGlobalKeydown（window、setup 同步注册——先于本监听）已消费的
+        // Esc 带 defaultPrevented 戳：confirm/弹窗结算的那发按键不再收第二层
+        if (e.key !== 'Escape' || e.defaultPrevented) return
         // 菜单优先：开着菜单时 Esc 归菜单；否则收排序态。
         // 焦点归还仅在焦点仍在菜单/触发键内时进行——用户已 Tab 挪出菜单时
         // 不得强拽回 ⋯键（TopNavigation onMenuKeydown 同闸）

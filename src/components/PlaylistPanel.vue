@@ -209,7 +209,9 @@ export default {
     // Esc 解散菜单；焦点归还仅在焦点还在菜单/触发键内时进行——
     // 用户已 Tab 挪出菜单时不得强拽回 ⋯键（TopNav onMenuKeydown 同闸）
     const closeOnEscape = (e) => {
-      if (e.key !== 'Escape' || openMenuId.value == null) return
+      // App onGlobalKeydown（window、注册更早先跑）已消费的 Esc 打
+      // defaultPrevented 戳——同一发按键只收一层，不连带关菜单
+      if (e.key !== 'Escape' || e.defaultPrevented || openMenuId.value == null) return
       const ae = document.activeElement
       closeMenu(null, ae === menuTriggerEl || !!ae?.closest?.('.playlist-menu'))
     }

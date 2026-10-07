@@ -533,7 +533,10 @@ export default {
     // 用户已把焦点挪去搜索框等别处时不得强拽（/ 快捷键开着菜单聚焦
     // 搜索的场景，Esc 关菜单不应夺走输入焦点）
     const onMenuKeydown = (e) => {
-      if (e.key !== 'Escape' || !menuOpen.value) return
+      // App onGlobalKeydown（window、setup 同步注册——先于本监听）已消费的
+      // Esc 带 defaultPrevented 戳：confirm/弹窗结算的那发按键不再收第二层。
+      // 监听须挂 window 相位——document 相位先于一切 window 监听跑，读不到戳
+      if (e.key !== 'Escape' || e.defaultPrevented || !menuOpen.value) return
       const ae = document.activeElement
       closeMenu(ae === menuBtn.value || !!ae?.closest?.('#topnav-menu'))
     }
@@ -550,7 +553,7 @@ export default {
 
     onMounted(() => {
       document.addEventListener('pointerdown', onDocPointerDown)
-      document.addEventListener('keydown', onMenuKeydown)
+      window.addEventListener('keydown', onMenuKeydown)
       // ≥1472 时 inner 居中、触发键距右缘随视口漂移；resize 菜单位置即过期
       window.addEventListener('resize', onResizeClose)
       searchMq = matchMedia('(max-width: 768px)')
@@ -560,7 +563,7 @@ export default {
       clearTimeout(suggestTimer)
       suggestAbort?.abort()
       document.removeEventListener('pointerdown', onDocPointerDown)
-      document.removeEventListener('keydown', onMenuKeydown)
+      window.removeEventListener('keydown', onMenuKeydown)
       window.removeEventListener('resize', onResizeClose)
       searchMq?.removeEventListener('change', onSearchMq)
     })

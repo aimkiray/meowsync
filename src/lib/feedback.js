@@ -89,8 +89,15 @@ export function pixelConfirm(message, { confirmText = '确定', danger = false }
   })
 }
 
+// 「本拍刚结算」对拍戳：confirm 在 overlay 内被 @keydown.esc 结算先于一切
+// window 层监听跑——轮到它们时 state.confirm 已 null，裸读会把同一发 Esc
+// 再结算一次（确认框+沉浸层一键双关）。结算起的同一同步分发内
+// isConfirmOpen 继续报开：后跑的 Esc/Tab 监听仍须把顶层让给它；
+// queueMicrotask 清戳——分发结束即恢复，下一发按键不受影响
+let settledInDispatch = false
+
 export function isConfirmOpen() {
-  return state.confirm != null
+  return state.confirm != null || settledInDispatch
 }
 
 // 仅供 FeedbackHost 使用
@@ -101,5 +108,10 @@ export function useFeedbackState() {
 export function resolveConfirm(ok) {
   const c = state.confirm
   state.confirm = null
+  // 仅真结算过才打戳——无悬挂框的 no-op 调用（auth 清场等）不伪造「刚结算」
+  if (c) {
+    settledInDispatch = true
+    queueMicrotask(() => { settledInDispatch = false })
+  }
   c?.resolve(ok)
 }

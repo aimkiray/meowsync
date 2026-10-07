@@ -10,6 +10,8 @@
 //      路径的 activeElement 是将随菜单卸载的 menuitem（openSongForm 同款传参形）；
 //      调用侧两扣：SongList addToPlaylistFromMenu emit 第二参带 ⋯键、
 //      App.vue handleOpenAddToPlaylist 透传 trigger
+//   Esc 一键只收一层：App onGlobalKeydown 消费的 Esc 打 defaultPrevented 戳，
+//      四个菜单 Esc 监听（SongList/PlaylistPanel/DQL/TopNav）见戳让位不双收
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -172,7 +174,8 @@ describe('M1：TopNavigation ⋯ 菜单补 ↑↓ 循环', () => {
     pressArrowOn(menu, 'ArrowUp')
     expect(document.activeElement).toBe(items[items.length - 1])
 
-    // TopNav Esc 监听挂在 document——归还闸是既有行为，顺带钉回归
+    // TopNav Esc 监听已迁 window 相位（document 相位读不到 App 的戳）——
+    // document 上 bubbles 派发照样冒到 window，归还闸是既有行为顺带钉回归
     pressEscOn(document)
     await nextTick()
     expect(document.querySelector('#topnav-menu')).toBeNull()
@@ -366,5 +369,103 @@ describe('L4：openAddToPlaylist 显式 returnFocus 锚', () => {
     atp.addTargetSong.value = null // 关窗 → watcher cleanup 归还 ⋯键
     await nextTick()
     expect(document.activeElement).toBe(trigger.element)
+  })
+})
+
+describe('Esc 一键只收一层：defaultPrevented 戳让位', () => {
+  // App onGlobalKeydown 在 setup 同步段注册 window keydown——先于一切子组件
+  // 挂载期监听。confirm/弹窗结算 Esc 时打 preventDefault 戳；菜单监听见戳
+  // 须让位，否则同一发按键收两层。stamp 先于 mount 注册，序与 App 一致；
+  // 派发须 cancelable——非可取消事件 preventDefault 是空炮
+  const stamp = (e) => { if (e.key === 'Escape') e.preventDefault() }
+  const pressConsumedEscOn = (target) =>
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  const SONG = { id: 1, name: '歌A', ar: [{ name: 'a' }], al: {}, dt: 1000 }
+  const PL = { id: 123, name: 'P', trackCount: 0, creator: { nickname: 'x' } }
+  const QUEUE = {
+    id: 7, name: 'Q7', status: 'pending', playlistId: 1,
+    completedTasks: 0, totalTasks: 3, failedTasks: 0, coverImgUrl: '',
+  }
+
+  it('SongList：已消费 Esc 不收 ⋯菜单', async () => {
+    window.addEventListener('keydown', stamp)
+    try {
+      wrapper = mount(SongList, {
+        attachTo: document.body,
+        props: {
+          songs: [SONG],
+          selectedPlaylist: { id: 'local_pl_1', name: 'P', tracks: [], isLocal: true },
+          playlistInLibrary: true,
+        },
+        global: STUBS,
+      })
+      await nextTick()
+      await wrapper.find('.song-menu-btn').trigger('click')
+      await nextTick()
+      expect(document.querySelector('.download-menu-overlay')).toBeTruthy()
+
+      pressConsumedEscOn(window)
+      await nextTick()
+      expect(document.querySelector('.download-menu-overlay')).toBeTruthy() // 让位不双收
+    } finally { window.removeEventListener('keydown', stamp) }
+  })
+
+  it('PlaylistPanel：已消费 Esc 不收 ⋯菜单', async () => {
+    window.addEventListener('keydown', stamp)
+    try {
+      wrapper = mount(PlaylistPanel, {
+        attachTo: document.body,
+        props: { userPlaylists: [PL] },
+        global: STUBS,
+      })
+      await nextTick()
+      await wrapper.find('button[aria-label="更多操作"]').trigger('click')
+      await nextTick()
+      expect(document.querySelector('.playlist-menu')).toBeTruthy()
+
+      pressConsumedEscOn(window)
+      await nextTick()
+      expect(document.querySelector('.playlist-menu')).toBeTruthy()
+    } finally { window.removeEventListener('keydown', stamp) }
+  })
+
+  it('DownloadQueueList：已消费 Esc 不收 ⋯菜单', async () => {
+    window.addEventListener('keydown', stamp)
+    try {
+      wrapper = mount(DownloadQueueList, {
+        attachTo: document.body,
+        props: { queues: [QUEUE] },
+        global: STUBS,
+      })
+      await nextTick()
+      await wrapper.find('.queue-menu-trigger').trigger('click')
+      await nextTick()
+      expect(document.querySelector('.queue-menu')).toBeTruthy()
+
+      pressConsumedEscOn(window)
+      await nextTick()
+      expect(document.querySelector('.queue-menu')).toBeTruthy()
+    } finally { window.removeEventListener('keydown', stamp) }
+  })
+
+  it('TopNavigation：已消费 Esc 不收 ⋯菜单（document 派发也冒到 window）', async () => {
+    window.addEventListener('keydown', stamp)
+    try {
+      wrapper = mount(TopNavigation, {
+        attachTo: document.body,
+        props: { remoteMode: 'off' },
+        global: STUBS,
+      })
+      await nextTick()
+      await wrapper.find('.topnav-menu-btn').trigger('click')
+      await nextTick()
+      expect(document.querySelector('#topnav-menu')).toBeTruthy()
+
+      // document 相位派发：先经 document 再到 window——stamp（先注册）
+      // 打戳后 onMenuKeydown 见 defaultPrevented 让位；未迁相位前读不到
+      pressConsumedEscOn(document)
+      await nextTick()
+      expect(document.querySelector('#topnav-menu')).toBeTruthy()
+    } finally { window.removeEventListener('keydown', stamp) }
   })
 })
