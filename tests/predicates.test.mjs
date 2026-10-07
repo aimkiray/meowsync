@@ -8,7 +8,7 @@ import {
   isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
   parseNumericId, extractYouTubeId, isYouTubeInput,
   isQQInput, pickQqFromUrl, extractQQPlaylistId, extractNeteaseSongId,
-  extractBiliFavlistId, extractYouTubePlaylistId
+  extractBiliFavlistId, extractYouTubePlaylistId, isLikelyChineseLyric
 } from '../src/shared/predicates.js';
 
 test('songmid：QQ songmid 形态', () => {
@@ -133,4 +133,63 @@ test('extractNeteaseSongId：URL/裸数字；?song= 是单曲不是歌单', () =
   assert.equal(extractNeteaseSongId('?song=186016&view=watch'), '186016');
   assert.equal(extractNeteaseSongId('186016'), '186016');
   assert.equal(extractNeteaseSongId('晴天'), null);
+});
+
+// ── isLikelyChineseLyric：汉字占比≥阈 且 假名/谚文占比<阈 双闸 ──
+// 少女レイ 实案病灶：日文词汉字密度 30-50% 是常态，单看汉字占比会把
+// 假名混排的日文词误判「已是中文」跳过翻译——假名/谚文是「需要翻译」硬证据
+
+test('isLikelyChineseLyric：日文汉字+假名混排判非中文（少女レイ 回归钉）', () => {
+  // 实案双行形态：cjk 15/39≈0.385——旧 cjkRatio 口径已越过 0.3 skip 线
+  // 被判「已是中文」跳过翻译；假名闸（foreign 0.615 ≫ 0.05）必须拦下
+  assert.equal(isLikelyChineseLyric(
+    '本能が狂い始める 追い詰められたハツカネズミ\n'
+    + '今 絶望の淵に立って 踏切へと飛び出した'), false);
+  // 单行同款混排（cjk≈0.29）——阈值上下都判非中文，不只压线才拦
+  assert.equal(isLikelyChineseLyric('本能が狂い始める 追い詰められたハツカネズミ'), false);
+  // cjk 越线的短混排（3/9≈0.33）同样拦下
+  assert.equal(isLikelyChineseLyric('言葉にできない想い'), false);
+  // 全假名日文词
+  assert.equal(isLikelyChineseLyric('ありがとう さようなら'), false);
+});
+
+test('isLikelyChineseLyric：纯中文/中文夹英文 hook 判中文', () => {
+  assert.equal(isLikelyChineseLyric('我看过沙漠下暴雨 看过大海亲吻鲨鱼'), true);
+  // 拉丁不构成豁免——中文为主体夹英文 hook 仍是中文语境（不送翻译）
+  assert.equal(isLikelyChineseLyric('你是我的唯一 stay with me 永远不分离'), true);
+});
+
+test('isLikelyChineseLyric：韩文/日文罗马音/纯英文判非中文', () => {
+  assert.equal(isLikelyChineseLyric('사랑해요 그대를 영원히'), false);        // 谚文
+  assert.equal(isLikelyChineseLyric('honnou ga kurui hajimeru'), false);      // 罗马音
+  assert.equal(isLikelyChineseLyric('hello world goodbye sky'), false);       // 纯英文
+});
+
+test('isLikelyChineseLyric：半角片假名混排判非中文（kana 含 U+FF66-FF9F 块）', () => {
+  // 汉字+半角片假名——半角形态是日语硬证据零中文歧义（EUC-JP 时代/旧
+  // 携帯系歌词库实存形态）；半角浊点 ﾞﾟ 一并计 kana
+  assert.equal(isLikelyChineseLyric('本能ｶﾞ狂ｲ始ﾒﾙ 追ｲ詰ﾒﾗﾚﾀ'), false);
+  assert.equal(isLikelyChineseLyric('漢字ｶﾀｶﾅ混排'), false);
+  // ﾊﾟﾋﾟﾌﾟ 系（假名+半角浊点两字符）同计不漏
+  assert.equal(isLikelyChineseLyric('漢漢漢ﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟ'), false);
+  // 半角句读/中点（｡･，FF66 之前）是标点不入计数——单放不顶 foreign 闸
+  assert.equal(isLikelyChineseLyric('漢字｡漢字･漢字'), true);
+});
+
+test('isLikelyChineseLyric：阈值边界与全角/数字混排', () => {
+  // cjk 恰在阈值 → 判中文；低一分不判
+  assert.equal(isLikelyChineseLyric('汉汉汉abcdefg'), true);    // 3/10 = 0.3
+  assert.equal(isLikelyChineseLyric('汉汉abcdefgh'), false);    // 2/10 = 0.2
+  // foreign 恰在阈值 → 判非中文（严格 <）——装饰性「の」也是硬证据
+  assert.equal(isLikelyChineseLyric('汉'.repeat(19) + 'の'), false);  // 1/20 = 0.05
+  assert.equal(isLikelyChineseLyric('汉'.repeat(20) + 'の'), true);   // 1/21 < 0.05
+  // 数字/全角字母/标点不入四类分母——不稀释判定
+  assert.equal(isLikelyChineseLyric('第１２３章 我们的故事！！！'), true);
+  assert.equal(isLikelyChineseLyric('私の心は１２３ｆｕｌｌ'), false);
+  // 空串/纯符号无判定材料 → 非中文（交上游/无词分支处理）
+  assert.equal(isLikelyChineseLyric(''), false);
+  assert.equal(isLikelyChineseLyric('12345 ！！！'), false);
+  // 可调阈值：cjkMin 收紧后同文判非中文；foreignMax 放宽同文判中文
+  assert.equal(isLikelyChineseLyric('汉汉汉abc', { cjkMin: 0.6 }), false);   // 0.5 < 0.6
+  assert.equal(isLikelyChineseLyric('言葉にできない想い', { foreignMax: 0.7 }), true);
 });

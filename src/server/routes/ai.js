@@ -15,7 +15,7 @@ const app = new Hono();
 // 词键，取词走 lyric-external.fetchByExtId 反查支路）；bv_/yt_ 轨道 id
 // 仍拒——它们没有可翻译词源，放行只会空耗一次上游调用再 404
 // 20 位上限的 bounded 形与共享无界 NETEASE_ID_RE 语义不同——直接用共享名防遮蔽
-const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, EXT_LYRIC_ID_RE, YT_TRACK_ID_RE } = require('../../shared/predicates.js');
+const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, EXT_LYRIC_ID_RE, YT_TRACK_ID_RE, isLikelyChineseLyric } = require('../../shared/predicates.js');
 // 翻译负载上限：千行级歌词多半是滚动歌词逐字拆分（字数标记），整单 AI 翻译
 // 既不经济也无必要——超量直接拒
 const MAX_LYRIC_LINES = 400;
@@ -23,8 +23,9 @@ const TRANSLATE_CHUNK = 40;
 // 翻译循环整体单调时间闸：到点不再开新块（含块内对半拆重试的耗时）。
 // 与上游 lyric ~30s 合计收进客户端 axios 300s 包线内
 const TRANSLATE_DEADLINE_MS = 240000;
-// CJK 占比 ≥30% 视为已是中文语境歌词（含日汉混排误判方向——宁可不翻不错翻）
-const CJK_SKIP_RATIO = 0.3;
+// 「已是中文语境」跳翻判定收敛在共享层 isLikelyChineseLyric——单看汉字占比
+// 会把高汉字密度的日文词（30-50% 是常态）误判 already-zh 跳翻；假名/谚文
+// 在场即「需要翻译」硬证据（少女レイ 实案：CJK 0.365 被旧 cjkRatio 跳翻）
 
 // 同 id/vkey 在途去重（值只是完成信号，不载数据——见各路由内注释）
 const inflightTranslate = new Map();
@@ -41,13 +42,6 @@ const lrcMetaLines = (lrc) => String(lrc || '').split('\n')
   .map(l => l.trim().match(/^\[(ti|ar|al|by|offset|re|ve):(.*)\]$/i))
   .filter(Boolean)
   .map(m => `[${m[1]}:${m[2].replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim()}]`);
-
-// CJK 占比：日文假名/韩文谚文计入分母（它们同样需要翻译）
-function cjkRatio(text) {
-  const cjk = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
-  const other = (text.match(/[A-Za-z぀-ヿ가-힯]/g) || []).length;
-  return cjk / (cjk + other || 1);
-}
 
 // 制作名单/纯音乐标记行不进翻译负载（它们没有翻译意义，译了反而污染对齐）
 // 词边界：op/sp/music/词/曲 这类短 token 必须跟冒号才判为信息行——
@@ -100,7 +94,7 @@ app.post('/ai/lyric-translate', async (c) => {
 
   // 行存在即命中——skip 哨兵（tlyric=''）也是有效缓存项，防止
   // already-zh/无词曲每次重播都重打上游 lyric。但 skip 是启发式判定
-  // 的结果（cjkRatio/credit 行都可能误判），给 7 天 TTL：过期按未命中
+  // 的结果（isLikelyChineseLyric/credit 行都可能误判），给 7 天 TTL：过期按未命中
   // 重判一次，避免一次瞬时误判被永久固化；重新判为 skip 时 DO UPDATE
   // 刷新 updated_at 续期（SQL 细节收敛在 repositories/lyricAi.js）。
   // 缓存查询先于 aiEnabled 闸：AI 关闭后已落库译文（含官方 netease/qq
@@ -154,7 +148,7 @@ app.post('/ai/lyric-translate', async (c) => {
     }
 
     const allText = lines.map(l => l.text).join('\n');
-    if (cjkRatio(allText) >= CJK_SKIP_RATIO) {
+    if (isLikelyChineseLyric(allText)) {
       skipInsert('already-zh');
       return c.json({ code: 200, tlyric: null, skipped: 'already-zh' });
     }

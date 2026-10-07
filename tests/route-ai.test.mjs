@@ -600,3 +600,54 @@ test('ai：kugou_ 查无词不写 skip 哨兵（null 是「无取词通道」非
     else process.env.TRUST_PROXY = prevTp;
   }
 });
+
+// ── already-zh 判定收口在 isLikelyChineseLyric ──
+// 少女レイ 实案病灶：日文词汉字密度 30-50% 常态——旧 cjkRatio 只数汉字占比，
+// CJK≈0.385 的假名混排词被判「已是中文」跳过翻译。假名/谚文在场即「需要
+// 翻译」硬证据；用例经独立 XFF IP 隔离限流桶（'local' 桶已被前置用例占近满）
+const postTranslateIp = (ip, id) => app.request('http://t/ai/lyric-translate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip },
+  body: JSON.stringify({ id }),
+});
+
+test('ai：日文汉字+假名混排词（CJK>0.3）不再 already-zh skip——走到 AI 翻译分支', async () => {
+  aiOn = true;
+  lyricPayload = {
+    lrc: { lyric: '[00:01.00]本能が狂い始める 追い詰められたハツカネズミ\n[00:02.00]今 絶望の淵に立って 踏切へと飛び出した' },
+    tlyric: { lyric: '' },   // 无官方译文的日文词——旧实现在这里被 skip 拦死
+  };
+  aiAnswer = { t: { '0': '本能开始发狂 被逼入绝境的旅鼠', '1': '此刻立于绝望深渊 纵身跃向道口' } };
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  try {
+    const r = await json(await postTranslateIp('10.8.1.1', '880060'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.source, 'ai');              // 走到 AI 翻译分支
+    assert.equal(r.body.skipped, undefined);        // 不是 already-zh skip
+    assert.match(r.body.tlyric, /\[00:01\.00\]本能开始发狂/);
+  } finally {
+    if (prevTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTp;
+  }
+});
+
+test('ai：纯中文词仍 already-zh skip（判定在模型前——零 AI 消耗）', async () => {
+  lyricPayload = {
+    lrc: { lyric: '[00:01.00]我看过沙漠下暴雨\n[00:02.00]看过大海亲吻鲨鱼\n[00:03.00]看过黄昏追逐黎明' },
+    tlyric: { lyric: '' },
+  };
+  const before = aiCalls.length;
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  try {
+    const r = await json(await postTranslateIp('10.8.1.2', '880061'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.skipped, 'already-zh');
+    assert.equal(r.body.tlyric, null);
+    assert.equal(aiCalls.length, before);   // skip 判定短路——没烧模型
+  } finally {
+    if (prevTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTp;
+  }
+});
