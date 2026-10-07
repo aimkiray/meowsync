@@ -133,6 +133,17 @@ test('authGate：公开前缀与非 API GET 始终放行（登录页可渲染）
   assert.equal((await api('/downloads/probe', { method: 'OPTIONS' })).status, 404);
 });
 
+test('authGate：sessionTokenFromCookie 裸 token 提取（URI 解码/缺名/空值）', () => {
+  // F6 收敛：sync.js 的读/写路径与 authGate 共用同一提取实现——
+  // 提取语义（; 切分/name 前缀匹配/decodeURIComponent 兜底原样）在这里钉死
+  assert.equal(authGate.sessionTokenFromCookie('a=1; ms_session=tok%40x; b=2'), 'tok@x');
+  assert.equal(authGate.sessionTokenFromCookie('ms_session=plain'), 'plain');
+  assert.equal(authGate.sessionTokenFromCookie('ms_session=%E0%A4%A'), '%E0%A4%A'); // 畸形百分号原样
+  assert.equal(authGate.sessionTokenFromCookie('ms_other=1'), null);
+  assert.equal(authGate.sessionTokenFromCookie(''), null);
+  assert.equal(authGate.sessionTokenFromCookie(undefined), null);
+});
+
 test('authGate：伪造/被删会话 cookie → 401', async () => {
   ensureAuthEnabled();
   const bogus = await api('/downloads/probe', {

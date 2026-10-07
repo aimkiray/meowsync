@@ -1,6 +1,8 @@
 const { Hono } = require('hono');
 const songMetaRepo = require('../repositories/songLyricMeta');
 const { parseJsonBody } = require('../lib/validate');
+const { csrfOriginOk } = require('../lib/auth-gate');
+const { fail } = require('../lib/http-error');
 const { songMetaBody } = require('../../shared/contracts.js');
 
 const app = new Hono();
@@ -23,6 +25,9 @@ app.get('/song-meta/:id', (c) => {
 // 并发两写按到达顺序后者胜，语义与「最后看到的校准值」一致）。
 // offsetMs=0 即恢复默认：直接删行，表保持「只有真正校准过的歌」
 app.put('/song-meta/:id', async (c) => {
+  // 写请求 CSRF 纵深（与 routes/sync.js 同口径）：session 写 authGate 已查，
+  // 但 DOWNLOAD_TOKEN 旁路/开放部署不经那一道——无登录态下跨站 PUT 也能改库
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
   const id = c.req.param('id');
   if (!SONG_ID_RE.test(id)) {
     return c.json({ code: 400, message: '非法 songId' }, 400);

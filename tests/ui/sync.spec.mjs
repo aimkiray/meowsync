@@ -178,6 +178,28 @@ describe('sync 引擎：推送', () => {
     expect(syncApi.push.mock.calls[0][0].length).toBe(500)
     expect(syncApi.push.mock.calls[1][0].length).toBe(2)
   })
+
+  it('整批 value 字节预算切块：大 value 批按字节开新块，不整批撞服务端 4MB 闸', async () => {
+    initSync()
+    // 20 单 × ~220KB ≈ 4.4MB——条数远未到 500，纯字节预算必须开新块；
+    // 不切块会撞服务端 MAX_BATCH_VALUE_BYTES=4MB 整批 400 + 无限退避
+    const pad = 'x'.repeat(220 * 1024)
+    writeJSON(LS_KEYS.PLAYLISTS, Array.from({ length: 20 }, (_, i) =>
+      ({ id: `big${i}`, name: `B${i}`, pad, updatedAt: 100 + i })))
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(syncApi.push).toHaveBeenCalledTimes(2)
+    // 每块 value 总字节压进客户端 3.5MB 切块阈（服务端 4MB 硬顶留余量）——
+    // 与服务端 valueJsonOf 同口径计量：墓碑 'null'、undefined 归一 null
+    for (const call of syncApi.push.mock.calls) {
+      const bytes = call[0].reduce((sum, c) =>
+        sum + Buffer.byteLength(c.deleted ? 'null' : JSON.stringify(c.value ?? null), 'utf8'), 0)
+      expect(bytes).toBeLessThanOrEqual(3.5 * 1024 * 1024)
+    }
+    // 切块不重不漏：20 单 + lib:index 全送达
+    const sentKeys = syncApi.push.mock.calls.flatMap(c => c[0].map(x => x.key))
+    expect(sentKeys.length).toBe(21)
+    expect(sentKeys).toContain('lib:index')
+  })
 })
 
 describe('sync 引擎：拉取与 LWW', () => {

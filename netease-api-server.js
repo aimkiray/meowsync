@@ -30,9 +30,10 @@ const PORT = parsedApiPort || parsedFallbackPort || 3101;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // 解析CORS来源配置（WebSocket Origin 校验共用此白名单）。
-// CORS 白名单收敛进 lib/env.js（HTTP cors / WS Origin / auth CSRF 三处共用）
+// CORS 白名单收敛进 lib/env.js（HTTP cors / WS Origin / auth CSRF 三处共用）。
+// 两处消费方都懒读（每请求/每握手重解析）而非启动快照——auth-gate 的
+// csrfOriginOk 就是每请求懒读，快照会让 CORS_ORIGINS 运行期改动在三方间漂移
 const { corsOrigins: corsOriginsFn } = require('./src/server/lib/env');
-const corsOrigins = corsOriginsFn();
 // 「这是 API 请求吗」唯一判定源——serveStatic Range 剥离与 SPA 兜底共用
 const { isApiPath } = require('./src/server/lib/api-path');
 
@@ -52,7 +53,8 @@ const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || process.env.VITE_BA
 
 // 中间件
 app.use('*', cors({
-  origin: (origin) => (origin && corsOrigins.includes(origin)) ? origin : null,
+  // origin 函数形态每请求执行——懒读 env 快照见上方注释
+  origin: (origin) => (origin && corsOriginsFn().includes(origin)) ? origin : null,
   credentials: true,
 }));
 
@@ -325,7 +327,9 @@ server.on('error', (err) => {
 
 const { attachRemoteControl } = require('./src/server/ws/remote');
 const remote = attachRemoteControl(server, {
-  allowedOrigins: corsOrigins,
+  // remote.js 对该参数只调 includes()——传惰性视图代替数组快照，
+  // WS 握手 Origin 校验随 CORS_ORIGINS 运行期改动即时生效（不改其本体）
+  allowedOrigins: { includes: (o) => corsOriginsFn().includes(o) },
   token: process.env.REMOTE_TOKEN || '',
   // WS upgrade 不经 fetch 管道——BASE_PATH 前缀在这里单独对齐
   basePath: BASE_PATH

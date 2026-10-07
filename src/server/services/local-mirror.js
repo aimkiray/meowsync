@@ -16,7 +16,15 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
   return db.transaction(() => {
     // 墓碑复查收敛在服务层：路由层前置检查（downloads.js mirror 路由）与本写
     // 之间一旦插入 await/新增调用方就开窗——行删后 upsert 以同 netease id 复活
-    // 新行，路由的检查点与下面的行 id 复查都够不着这个复活窗
+    // 新行，路由的检查点与下面的行 id 复查都够不着这个复活窗。
+    // 注意：对 local_pl_*/saved_queue_* 本地 id 这句墓碑检查恒 false——
+    // deletePlaylistCascade 只为纯数字 netease id 立碑（其 NETEASE_ID_RE 闸），
+    // 本地命名空间永远查不到墓碑；留着它作纵深无害。真正的复活防线是下方
+    // 行 id 复查，其成立押在一条承重不变量上：
+    //   deletePlaylistCascade 的行删 db.transaction() 提交 → finally 释放
+    //   deletingPlaylists 锁之间永不许插 await（当前 cleanupPlaylistFilesAndDirs
+    //   同步收尾）。一旦该段出现挂起点，本事务可在「旧行已删、锁未放」的
+    //   窗口里以新本地 id 复活行且复查放行——本检查随之整体失效
     if (isNeteasePlaylistDeleting(localId)) throw httpError(409, '该歌单正在删除中');
     const row = playlistsRepo.upsertPlaylist({
       neteasePlaylistId: localId,
@@ -27,7 +35,10 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
       source: 'local'
     });
     if (!row) throw httpError(500, '镜像歌单写入失败');
-    // 墓碑前置检查后，本地 id 级联拿的新行仍可能正被删——事务内按内部行 id 复查
+    // 墓碑前置检查后，本地 id 级联拿的新行仍可能正被删——事务内按内部行 id 复查。
+    // 复查在 upsert 之后：锁内跑镜像时行还在（级联事务未提交），upsert 命中
+    // 既有行原 id 返回——has(row.id) 真实命中级联锁；若行已删完，upsert 会以
+    // 新本地 id 复活新行，has(新 id) 查不到旧锁——这正是上方不变量要堵的窗
     if (deletingPlaylists.has(row.id)) throw httpError(409, '该歌单正在删除中');
     // mediaMid/bvid/videoId/neteaseId 入签名：老镜像（无 provider 字段）重传
     // 时触发一次重写补写源定位与词源元数据。

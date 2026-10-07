@@ -10,7 +10,7 @@
 // 门禁：两端点都在 authGate 后（登录态数据）；push 另加 csrfOriginOk 纵深
 // + protectedWrite 前缀集（netease-api-server.js）；两端点各有独立限流桶。
 const { Hono } = require('hono');
-const { csrfOriginOk, COOKIE_NAME } = require('../lib/auth-gate');
+const { csrfOriginOk, sessionTokenFromCookie } = require('../lib/auth-gate');
 const { rateLimit } = require('../lib/rate-limit');
 const { readJsonBody } = require('../lib/http-body');
 const { fail, handleError } = require('../lib/http-error');
@@ -28,30 +28,27 @@ const PAGE_SIZE = 2000;
 const MAX_CHANGES = 500;
 const MAX_VALUE_BYTES = 256 * 1024;
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
+// 单页字节预算（pull）：PAGE_SIZE×MAX_VALUE_BYTES 的理论最坏 ~512MB/页——
+// 超预算即截页置 hasMore，客户端以页末行 seq 续拉（keyset 语义不变）
+const MAX_PAGE_BYTES = 8 * 1024 * 1024;
+// 整批 value 字节预算（push）：单值 256KB×500 条理论面 ~128MB/请求，配合
+// 30/min 的限流桶仍是 ~14GB/h 的磁盘膨胀通道——请求级总预算 4MB 与 pull
+// 单页预算同量级收口。表级总配额（SUM(LENGTH(value_json)) 式存量核算）
+// 没有廉价落点（要全桶扫/额外汇总表），本次只收请求级预算
+const MAX_BATCH_VALUE_BYTES = 4 * 1024 * 1024;
 // 客户端未来戳宽容窗：钟漂 5min 内放行（设备校时误差常态），
 // 超窗该条诚拒进 rejected——静默 clamp 会藏起钟坏设备
 const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
-
-// cookie 内裸 token 切分：与 auth-gate.sessionFromCookieHeader 同源的
-// 提取半区（COOKIE_NAME 同源引入防两处名字漂移）；会话解析器由调用
-// 方按读/写路径选——见 syncUserId
-function sessionToken(cookieHeader) {
-  const raw = String(cookieHeader || '').split(';')
-    .map(s => s.trim())
-    .find(s => s.startsWith(COOKIE_NAME + '='))
-    ?.slice(COOKIE_NAME.length + 1);
-  if (!raw) return null;
-  try { return decodeURIComponent(raw); } catch { return raw; /* 原样用 */ }
-}
 
 // user_id 取值链：authGate 已验会话挂 c.get('user')（登录态主路径）；
 // cookie 兜底解析覆盖路由直挂（不经 authGate）与 DOWNLOAD_TOKEN 旁路
 // （无 cookie → 'default' 单桶）。
 // 会话解析器分路径：GET 用 peekSession 纯读判定——resolveSession 的
 // 滑动续期 WAL 写在高频轮询读路径是纯放大；写路径保留 resolveSession
-// （续期语义本就该随活跃写走）
+// （续期语义本就该随活跃写走）。裸 token 切分收敛在 auth-gate.js 的
+// sessionTokenFromCookie——两份拷贝曾各写一遍解析半区
 function syncUserId(c, resolve) {
-  const sess = c.get('user') || resolve(sessionToken(c.req.header('cookie')));
+  const sess = c.get('user') || resolve(sessionTokenFromCookie(c.req.header('cookie')));
   return sess ? String(sess.userId) : 'default';
 }
 
@@ -83,7 +80,8 @@ app.get('/sync/pull', (c) => {
   // （seq 序天然 keyset，since 本身就是续拉游标）；响应不再发 nextCursor
   try {
     const page = syncItems.listChanges(
-      syncUserId(c, sessionsRepo.peekSession), { since, limit: PAGE_SIZE });
+      syncUserId(c, sessionsRepo.peekSession),
+      { since, limit: PAGE_SIZE, maxBytes: MAX_PAGE_BYTES });
     return c.json({
       code: 200,
       items: page.items,
@@ -100,7 +98,7 @@ app.get('/sync/pull', (c) => {
 // 逐条 LWW：updatedAt 大者赢进 applied；平局/过期进 conflicts（回包服务端
 // 现值含 key/seq，客户端采纳对齐）；条目级非法（key 形状/updatedAt 非有限
 // 正数/超未来戳窗）进 rejected——整批不炸。体量级超限（changes>500 /
-// 单 value>256KB）整批 400
+// 单 value>256KB / 整批 value 总字节>4MB）整批 400
 app.post('/sync/push', async (c) => {
   // 写请求 CSRF 纵深（与 routes/match.js 同口径）：session 写 authGate 已查，
   // 但 DOWNLOAD_TOKEN 旁路/开放部署不经那一道——无登录态下跨站 POST 也能
@@ -124,9 +122,11 @@ app.post('/sync/push', async (c) => {
     return fail(c, 400, `changes 超过单次 ${MAX_CHANGES} 条上限`);
   }
   const serverNow = Date.now();
-  // 逐条整形：条目级非法入 rejected（整批不炸）；体量级超限整批拒
+  // 逐条整形：条目级非法入 rejected（整批不炸）；体量级超限整批拒。
+  // batchBytes 只累计过形状闸的条目——被拒条目不占写盘预算
   const valid = [];
   const rejected = [];
+  let batchBytes = 0;
   for (const ch of changes) {
     const key = typeof ch?.key === 'string' ? ch.key : '';
     if (!syncItems.ITEM_KEY_RE.test(key)) {
@@ -141,11 +141,20 @@ app.post('/sync/push', async (c) => {
       rejected.push({ key, reason: 'future-timestamp' });
       continue;
     }
-    const valueJson = syncItems.valueJsonOf(ch);
-    if (Buffer.byteLength(valueJson, 'utf8') > MAX_VALUE_BYTES) {
+    // 严格布尔：'false'/'1' 这类脏值不得成墓碑（Boolean('false')===true
+    // 会把活数据写成删除态——数据丢失方向）。按归一值算串形——字节闸
+    // 量的是真实落库 payload，不是原始请求的脏形态
+    const deleted = ch.deleted === true;
+    const valueJson = syncItems.valueJsonOf({ value: ch.value, deleted });
+    const valueBytes = Buffer.byteLength(valueJson, 'utf8');
+    if (valueBytes > MAX_VALUE_BYTES) {
       return fail(c, 400, `单条 value 超过 ${MAX_VALUE_BYTES / 1024}KB 上限（${key}）`);
     }
-    valid.push({ key, value: ch.value, updatedAt: ch.updatedAt, deleted: Boolean(ch.deleted) });
+    batchBytes += valueBytes;
+    if (batchBytes > MAX_BATCH_VALUE_BYTES) {
+      return fail(c, 400, `整批 value 总字节超过 ${MAX_BATCH_VALUE_BYTES / 1024 / 1024}MB 上限`);
+    }
+    valid.push({ key, value: ch.value, updatedAt: ch.updatedAt, deleted });
   }
   try {
     const { applied, conflicts } = syncItems.applyChanges(

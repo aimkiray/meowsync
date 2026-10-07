@@ -315,3 +315,17 @@ test('DELETE 非法/不存在的 songId', async () => {
   assert.equal((await app.request('http://t/uploads/not_a_file', { method: 'DELETE', headers: xff() })).status, 400);
   assert.equal((await app.request('http://t/uploads/file_zzzzzzzz', { method: 'DELETE', headers: xff() })).status, 404);
 });
+
+test('CSRF：异源 Origin 的 POST/DELETE → 403（开放部署裸奔面收口）', async () => {
+  const evil = { origin: 'https://evil.example' };
+  // POST 闸在读 body 之前——跨站请求连落盘通道都摸不到
+  const p = await post('kind=audio&filename=csrf.mp3', Buffer.from('x'), evil);
+  assert.equal(p.status, 403);
+  const d = await app.request('http://t/uploads/file_zzzzzzzz', {
+    method: 'DELETE', headers: { ...xff(), ...evil },
+  });
+  assert.equal(d.status, 403);
+  // 对照：无 Origin 的同请求进门走到资源判定层（非浏览器客户端不受闸影响）
+  const ok = await app.request('http://t/uploads/file_zzzzzzzz', { method: 'DELETE', headers: xff() });
+  assert.equal(ok.status, 404);
+});

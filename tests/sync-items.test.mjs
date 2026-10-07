@@ -1,6 +1,7 @@
 // syncItems repo 回归网：LWW 三向（新写赢/旧写拒/平局留旧）、墓碑行读写、
 // user 分域隔离、seq 域交付水位线（写方钟慢仍下发/被拒行不跳号/覆写拿新
-// seq/seq 续拉分页/since 越顶自愈全量重发）、老库 seq 补列迁移回填。
+// seq/seq 续拉分页/since 越顶自愈全量重发）、老库 seq 补列迁移回填、
+// 单页字节预算的页首行豁免。
 // DATA_DIR 指向临时目录，db/client 首次 require 时在该处建库跑迁移。
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -275,6 +276,23 @@ test('syncItems 迁移：老库无 seq 列——ALTER 补列+rowid 序回填+计
     if (savedItems) require.cache[itemsPath] = savedItems;
     rmSync(oldDir, { recursive: true, force: true });
   }
+});
+
+test('syncItems 字节预算：页首行豁免——单行超 maxBytes 也发出，防卡页死循环', () => {
+  const u = 'u-bigrow';
+  // 存量巨型单行（迁移前写入/手工改库可超 256KB）：若首行也吃字节闸，
+  // 每页都算出空页+hasMore——该端永远卡在这一页
+  repo.applyChanges(u, [
+    { key: 'doc:huge', value: 'x'.repeat(9 * 1024 * 1024), updatedAt: 10, deleted: false },
+    { key: 'doc:after', value: 's', updatedAt: 20, deleted: false },
+  ]);
+  const maxBytes = 8 * 1024 * 1024; // 与路由 MAX_PAGE_BYTES 同口径
+  const p1 = repo.listChanges(u, { since: 0, maxBytes });
+  assert.deepEqual(p1.items.map(i => i.key), ['doc:huge']); // 首行豁免放行
+  assert.equal(p1.hasMore, true); // 次行起预算闸恢复生效
+  const p2 = repo.listChanges(u, { since: p1.items.at(-1).seq, maxBytes });
+  assert.deepEqual(p2.items.map(i => i.key), ['doc:after']);
+  assert.equal(p2.hasMore, false);
 });
 
 test('syncItems valueJsonOf：墓碑恒 null；undefined 归一 null', () => {

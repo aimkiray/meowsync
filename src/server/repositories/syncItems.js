@@ -68,7 +68,14 @@ function getItem(userId, key) {
 // 器全局共享，B 桶发号把表级 max 推高后，A 桶的合法超顶会被误判成
 // 正常增量而永空）；本桶空表 COALESCE→0，任何 since>0 都走全量
 // （空集），语义自洽。
-function listChanges(userId, { since = 0, limit = 2000 } = {}) {
+//
+// maxBytes：单页字节预算（路由侧 8MB——2000 条×256KB 单值的最坏页
+// ~512MB 不能只按条数放）。iterate 逐行取而非 all() 物化——累计字节
+// 触预算即截页置 hasMore，不把超限余量读成内存里的巨型字符串数组。
+// 续拉游标仍是页末行 seq（keyset 语义不变：截断处之后的行下次
+// seq>since 照常发到，不重不漏）。页首行豁免字节闸：存量巨型单行
+// （迁移前写入/手工改库超 256KB）也得发得出，否则该端永远卡在这一页。
+function listChanges(userId, { since = 0, limit = 2000, maxBytes = Infinity } = {}) {
   const db = getDb();
   const uid = String(userId);
   // MAX(seq) 按 user 分域——(user_id, seq) 索引最右端一次定位，无全扫
@@ -76,13 +83,23 @@ function listChanges(userId, { since = 0, limit = 2000 } = {}) {
     'SELECT COALESCE(MAX(seq), 0) AS m FROM sync_items WHERE user_id = ?'
   ).get(uid).m;
   const reset = since > maxSeq;
-  const rows = db.prepare(`
+  const stmt = db.prepare(`
     SELECT item_key, value_json, updated_at, deleted, seq FROM sync_items
     WHERE user_id = ? AND seq > ?
     ORDER BY seq LIMIT ?
-  `).all(uid, reset ? 0 : since, limit + 1);
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
+  `);
+  const page = [];
+  let pageBytes = 0;
+  let hasMore = false;
+  for (const row of stmt.iterate(uid, reset ? 0 : since, limit + 1)) {
+    const rowBytes = Buffer.byteLength(row.value_json, 'utf8');
+    if (page.length >= limit || (page.length > 0 && pageBytes + rowBytes > maxBytes)) {
+      hasMore = true; // 本行起留下页——游标=当前页末行 seq
+      break;
+    }
+    page.push(row);
+    pageBytes += rowBytes;
+  }
   return { items: page.map(toItem), hasMore, reset };
 }
 

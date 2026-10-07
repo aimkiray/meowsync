@@ -36,9 +36,9 @@ before(() => {
 after(() => { rmSync(process.env.DATA_DIR, { recursive: true, force: true }); });
 
 const json = async (res) => ({ status: res.status, body: await res.json().catch(() => null) });
-const post = (path, body = {}) => app.request(`http://t${path}`, {
+const post = (path, body = {}, headers = {}) => app.request(`http://t${path}`, {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: { 'Content-Type': 'application/json', ...headers },
   body: JSON.stringify(body),
 });
 
@@ -116,4 +116,52 @@ test('playlists/delete：local_uploads 护栏 400 / 不存在 404 / 级联真值
   const del = await app.request(`http://t/playlists/${missing.id}`, { method: 'DELETE' });
   assert.equal(del.status, 200);
   assert.equal(cascadeCalls.at(-1), missing.id);
+});
+
+test('playlists 写端点 CSRF：异源 Origin → 403（import/refresh/delete 同闸）', async () => {
+  const evil = { origin: 'https://evil.example' };
+  assert.equal((await post('/playlists/import', { neteasePlaylistId: '123' }, evil)).status, 403);
+  assert.equal((await post('/playlists/1/refresh', {}, evil)).status, 403);
+  const del = await app.request('http://t/playlists/1', { method: 'DELETE', headers: evil });
+  assert.equal(del.status, 403);
+  // 对照：无 Origin 的同请求照常进门（非浏览器客户端不受闸影响）
+  assert.equal((await app.request('http://t/playlists/notanum', { method: 'DELETE' })).status, 400);
+});
+
+// 限流收尾——把桶打满会影响顺序无关断言，留最后跑；TRUST_PROXY+XFF 换 IP
+// 证明桶按 IP 独立（与 route-sync/settings 同款方法学）
+test('playlists/import 限流：pl-import 10/min per-IP 独立桶', async (t) => {
+  const savedTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  t.after(() => {
+    if (savedTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = savedTp;
+  });
+  const ipA = { 'x-forwarded-for': '203.0.113.91' };
+  for (let i = 0; i < 10; i++) {
+    const r = await post('/playlists/import', { neteasePlaylistId: `8800${i}` }, ipA);
+    assert.equal(r.status, 200, `第 ${i + 1} 次`);
+  }
+  assert.equal((await post('/playlists/import', { neteasePlaylistId: '8899' }, ipA)).status, 429);
+  // 另一 IP 同刻不受限——桶独立
+  assert.equal((await post('/playlists/import', { neteasePlaylistId: '8898' },
+    { 'x-forwarded-for': '203.0.113.92' })).status, 200);
+});
+
+test('playlists/refresh 限流：pl-refresh 20/min per-IP 独立桶', async (t) => {
+  const savedTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  t.after(() => {
+    if (savedTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = savedTp;
+  });
+  const row = playlistsRepo.upsertPlaylist({ neteasePlaylistId: '555777', name: 'rl-refresh' });
+  const ipB = { 'x-forwarded-for': '203.0.113.93' };
+  for (let i = 0; i < 20; i++) {
+    const r = await post(`/playlists/${row.id}/refresh`, {}, ipB);
+    assert.equal(r.status, 200, `第 ${i + 1} 次`);
+  }
+  assert.equal((await post(`/playlists/${row.id}/refresh`, {}, ipB)).status, 429);
+  // import 桶独立——refresh 灌满不误伤
+  assert.equal((await post('/playlists/import', { neteasePlaylistId: '555778' }, ipB)).status, 200);
 });

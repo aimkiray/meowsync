@@ -24,6 +24,12 @@ const { isNeteasePlaylistDeleting, deletingPlaylists } = require('../lib/deletio
 const { fail, handleError, httpError } = require('../lib/http-error');
 const { FILE_TRACK_ID_RE } = require('../../shared/predicates.js');
 const { rateLimit } = require('../lib/rate-limit');
+// 写请求 CSRF 同源闸（与 routes/sync.js 同口径）：session 写 authGate 已查，
+// 但开放部署（users 空表）与 DOWNLOAD_TOKEN 旁路不经那一道；body 走
+// octet-stream 流式读不校验 Content-Type，跨站表单/fetch 裸奔可写盘。
+// 无 Origin 的非浏览器客户端放行（curl/脚本拿不到 cookie，不在 CSRF
+// 威胁模型里）——同源判定细节见 lib/auth-gate.js
+const { csrfOriginOk } = require('../lib/auth-gate');
 
 const app = new Hono();
 
@@ -195,6 +201,7 @@ async function streamRequestBody(c, outputPath, maxBytes) {
 // 同 songId 复传同 kind = 换源：旧路径文件清掉再登记新路径（换扩展名不留孤儿）
 app.post('/uploads', async (c) => {
   try {
+    if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
     // 停机窗：10s 强推窗口内的在途上传会被截成 .part 孤儿（downloads 系同闸）
     if (downloadManager.isShuttingDown?.()) return fail(c, 503, '服务正在停机，请稍后再试');
     if (!rateLimit(c, 'uploads', 20)) {
@@ -341,6 +348,7 @@ async function handleUpload(c, { kind, def, ext, filename, songId }) {
 // 行先删文件后删，孤儿留清扫兜底）
 app.delete('/uploads/:songId', async (c) => {
   try {
+    if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
     if (!rateLimit(c, 'uploads-del', 30)) return fail(c, 429, '操作过于频繁');
     const songId = c.req.param('songId');
     if (!FILE_TRACK_ID_RE.test(songId)) return fail(c, 400, '非法 songId');
