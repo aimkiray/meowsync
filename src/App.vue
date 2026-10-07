@@ -1003,13 +1003,16 @@ export default {
       openSongPicker()
     }
 
-    // atp 同款（行菜单「添加到歌单」/队列面板等三处 emit 共用此口）
-    const handleOpenAddToPlaylist = (song) => {
+    // atp 同款（行菜单「添加到歌单」/队列面板等三处 emit 共用此口）。
+    // 第二参 trigger 是行 ⋯ 菜单捎来的归还锚（edit-song→openSongForm 同款
+    // 传参形）；PlaylistGrid/WatchView 直达键 emit 无此参——缺省回落
+    // activeElement 由 openAddToPlaylist 兜底
+    const handleOpenAddToPlaylist = (song, trigger = null) => {
       if (!song) return // 无效曲不误关其他窗（与 openSongPicker 同律）
       closeSongPicker()
       closeCreatePlaylist()
       closeSongForm()
-      openAddToPlaylist(song)
+      openAddToPlaylist(song, trigger)
     }
 
     // 远程控制：host 模式 state_update 广播 + 指令执行 + 断线重连（composables/
