@@ -233,8 +233,6 @@
                     :src="httpsCover(songThumbUrl(song, 80))"
                     :alt="song.name"
                     class="watch-queue-thumb"
-                    loading="lazy"
-                    decoding="async"
                   />
                   <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
                   <div class="queue-row-info">
@@ -261,8 +259,9 @@
                   @click.stop="$emit('add-to-playlist', song)"
                 ><PixelIcon name="plus" :size="14" /></button>
               </div>
-              <!-- 「接下来」分节线：印单的分栏刻痕，只在当前行之后出现 -->
-              <div v-if="queueStartIndex + i === currentQueueIndex && queueStartIndex + i < queue.length - 1" class="queue-sec">接下来 · {{ queue.length - currentQueueIndex - 1 }} 首</div>
+              <!-- 「接下来」分节线：印单的分栏刻痕，只在当前行之后出现。
+                   ref 实量真高回喂滑窗垫片归位（见 script 归位块） -->
+              <div v-if="queueStartIndex + i === currentQueueIndex && queueStartIndex + i < queue.length - 1" :ref="bindQueueSec" class="queue-sec">接下来 · {{ queue.length - currentQueueIndex - 1 }} 首</div>
             </template>
             <!-- 虚拟滚动下沿 spacer -->
             <div :style="{ height: queueBottomPad + 'px' }" aria-hidden="true"></div>
@@ -443,7 +442,7 @@
 
 <script>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { useVirtualList } from '../composables/useVirtualList.js'
+import { useVirtualList, dividerPadAdjust, dividerRowShift } from '../composables/useVirtualList.js'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
@@ -544,26 +543,62 @@ export default {
 
     // 待播队列真虚拟滚动：滑窗替代前缀窗——队列可达千曲规模（快照自
     // filteredSongs），前缀窗滚到底全量同构。行高 55.5px 均匀（首行
-    // 少 1px 发丝边/中途 queue-sec ~28px 是常量误差，overscan 吸收）。
+    // 少 1px 发丝边是常量误差，overscan 吸收）；「接下来」分节线的
+    // ~28px 非行高由下方归位块折回 spacer，不再是误差项。
     // 快照语义不挂 resetWhen——队列替换/增删不回卷。双滚动根候选：
     // ≥901px 栏内滚或移动视频分屏态（面板体 overflow-y:auto）的
     // queueContainer 在前、<901px 整页滚的 viewEl 殿后——每帧按
     // computed overflow 挑「此刻真会滚的」，breakpoint/分屏翻转
     // 不用 matchMedia。
+    // overscan 12（基线 8 +4）：快滚惯性一帧可跳 >8 行（≈444px）越过
+    // 窗沿露空白帧——每边多 4 行 DOM 吸掉，代价极小。
     // pinIndex=拖拽行：拖到窗外时行仍留 DOM（--dragging 与几何基准不丢）
     // dragIndex 上移：pinIndex 传 ref 对象本体，setup 时引用不能 TDZ
     const dragIndex = ref(-1)
+    // YTM：当前行之上的已播段淡显（id 匹配定位，乱序队列按 id 不按下标）。
+    // 声明前移——分节线位置与滑窗 rowShift 都消费它
+    const currentQueueIndex = computed(() =>
+      props.queue.findIndex(s => String(s.id) === String(props.currentSong?.id))
+    )
+    // 「接下来」分节线的滑窗归位：线是真 DOM 高但窗数学视其零高——
+    // 消费侧按线位把高度并回 spacer（dividerPadAdjust）：线在窗上沿
+    // 之上 → topPad、窗下沿之下 → bottomPad、窗内已随 DOM 渲染不补；
+    // 三态互斥，垫片+行区合计恒 total*rowH+secH，行位全线连续。
+    // 线紧跟当前行且仅 0≤ci<total-1 时存在（曲不在队/当前是末行无线）。
+    // 线高不写死：callback ref 在元素挂载时 offsetHeight 实测，未量到
+    // （线还没进过窗）前吃 fallback
+    const QUEUE_SEC_FALLBACK = 28
+    const queueSecIndex = computed(() => {
+      const ci = currentQueueIndex.value
+      return (ci >= 0 && ci < props.queue.length - 1) ? ci : -1
+    })
+    const queueSecH = ref(QUEUE_SEC_FALLBACK)
+    const bindQueueSec = (el) => {
+      if (el?.offsetHeight) queueSecH.value = el.offsetHeight
+    }
     const {
-      rows: queueRows, startIndex: queueStartIndex,
-      topPad: queueTopPad, bottomPad: queueBottomPad,
+      rows: queueRows, startIndex: queueStartIndex, endIndex: queueEndIndex,
+      topPad: queueTopPadBase, bottomPad: queueBottomPadBase,
       bindAnchor: bindQueueAnchor,
       scrollToIndex: queueScrollToIndex, ensureVisible: queueEnsureVisible,
     } = useVirtualList({
       source: computed(() => props.queue),
       rowHeight: 55.5,
+      overscan: 12,
       scrollRoots: () => [queueContainer.value, viewEl.value],
       pinIndex: dragIndex,
+      // 分节线把线下各行整体下移 secH——scrollToIndex/ensureVisible 落点
+      // 按此校正；反向 scrollTop→行号的窗数学不补（secH≪overscan 吸收域）
+      rowShift: (i) => dividerRowShift(i, queueSecIndex.value, queueSecH.value),
     })
+    // spacer 吃归位后垫片——模板仍用 queueTopPad/queueBottomPad 名
+    const queuePads = computed(() => dividerPadAdjust({
+      topPad: queueTopPadBase.value, bottomPad: queueBottomPadBase.value,
+      start: queueStartIndex.value, end: queueEndIndex.value,
+      dividerIndex: queueSecIndex.value, dividerH: queueSecH.value,
+    }))
+    const queueTopPad = computed(() => queuePads.value.topPad)
+    const queueBottomPad = computed(() => queuePads.value.bottomPad)
 
     // 歌词字号/视频模式偏好：共享态在 lib/prefs.js——设置页与本页是同组
     // localStorage 偏好的双写面，持久化 watcher 已收敛在 prefs 层
@@ -616,10 +651,6 @@ export default {
       if (!queueKeyMap.has(song)) queueKeyMap.set(song, `${song.id}-${++queueKeySeq}`)
       return queueKeyMap.get(song)
     }
-    // YTM：当前行之上的已播段淡显（id 匹配定位，乱序队列按 id 不按下标）
-    const currentQueueIndex = computed(() =>
-      props.queue.findIndex(s => String(s.id) === String(props.currentSong?.id))
-    )
     const jumpTo = (index) => emit('queue-jump', index)
     // 键盘排序等价路径：握把聚焦时 ↑↓ 移动该行
     const moveRow = (index, dir) => {
@@ -647,9 +678,8 @@ export default {
       // 会把「.queue-row+.queue-row」发丝边漏掉（无边行——窗内首行/分节线
       // 后行/全局 0 行——量矮 ~1.2px，乘上深下标就是数行级落点偏差）；
       // 中位数天然滤掉跨 queue-sec（+~28px）的异常对。虚拟窗下 DOM 首行
-      // =全局 queueStartIndex 行，行顶原点回推至全局 0
+      // =全局 queueStartIndex 行
       const rowEls = [...container.querySelectorAll('.queue-row')]
-      const firstRow = rowEls[0]
       const draggedRow = rowEls[index - queueStartIndex.value]
       const diffs = []
       for (let k = 1; k < rowEls.length; k++) {
@@ -660,27 +690,31 @@ export default {
       const rowH = diffs.length
         ? diffs[diffs.length >> 1]
         : (draggedRow ? draggedRow.getBoundingClientRect().height : 0)
-      const rowTop0 = firstRow
-        ? firstRow.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-          - queueStartIndex.value * rowH
-        : 0
       const total = props.queue.length
 
       const onMove = (e) => {
         if (e.pointerId !== pid || dragIndex.value === -1 || !rowH) return
         const cTop = container.getBoundingClientRect().top
-        let y = e.clientY - cTop + container.scrollTop
-        // 「接下来」分节线插在 currentQueueIndex 之后（~25px）——线下方的行
-        // 在可视空间整体下移了 secH，均距换算前得从 y 里扣掉；分隔线随拖拽
-        // 跨过当前曲会搬家，故每次 move 重查不缓存
-        const sec = container.querySelector('.queue-sec')
-        if (sec) {
-          const secTop = sec.getBoundingClientRect().top - cTop + container.scrollTop
-          if (y >= secTop) y -= sec.getBoundingClientRect().height
-        }
-        // 与原口径一致：越过行中点才算越过该行 → round 而非 floor；
-        // 现在能命中渲染窗外的行（原实现被 rows.length 截断）
-        const target = Math.min(total - 1, Math.max(0, Math.round((y - rowTop0) / rowH)))
+        const y = e.clientY - cTop + container.scrollTop
+        // 换算原点 = 顶 spacer（bindQueueAnchor 锚位）顶缘的滚动坐标——锚
+        // 钉在全局 0 行位，不随滑窗行集换代移位、不依赖 startIndex：scroll
+        // 监听里 update() 同步改 startIndex，而 DOM 行集要等 Vue 下个
+        // flush 才换——落在其间的 move 若照旧「当帧窗首行 − start·rowH」
+        // 回推会让原点偏 Δstart·rowH（拖拽中并发滚动的一帧竞态）。面板
+        // 隐藏/重建期 rect 全空，量不到原点就不换算——拿 0 矩形会 emit
+        // 出垃圾 queue-move。分节线不查 DOM：线在窗之上时高度折进 topPad
+        // 拿不到节点，其界点 u=(si+1)*rowH 纯算术可算；线随拖拽跨当前曲
+        // 搬家由 queueSecIndex 每 move 重读兜住
+        const anchor = container.querySelector(':scope > [aria-hidden="true"]')
+        if (!anchor?.getClientRects().length) return
+        const si = queueSecIndex.value
+        const origin = anchor.getBoundingClientRect().top - cTop + container.scrollTop
+        // y 折回「无线」均距坐标：线下各行在滚动空间整体下移 secH，落点
+        // 在线之下先把 secH 扣回再 round 均距换算（越过行中点才算越过
+        // 该行——与原口径一致；落点可命中渲染窗外的行）
+        let u = y - origin
+        if (si >= 0 && u > (si + 1) * rowH) u -= queueSecH.value
+        const target = Math.min(total - 1, Math.max(0, Math.round(u / rowH)))
         if (target !== dragIndex.value) {
           // 落点可越出滑窗——pinIndex(dragIndex) 会把被拖行钉在 DOM 里，
           // 换位后 dragIndex=target 窗跟着挪；窗内行按真实位置渲染，
@@ -738,6 +772,12 @@ export default {
       if (t === 'related' && relatedFor !== props.currentSong?.id) loadRelated()
       // 切到队列/歌词时把当前行滚进视野（与原抽屉一致）
       if (t === 'queue' || t === 'lyrics') nextTick(() => centerCurrentRow())
+      // 面板 display:none 期 .queue-sec 虽已挂载但 offsetHeight=0——secH
+      // 会滞留 fallback 28。回队列 tab 居中落定后的第二拍补实测：第一拍
+      // scrollToIndex 只改 startIndex，sec 要等再一拍 flush 才随窗渲出；
+      // 量不到（线缺席/未入窗）就保原值
+      if (t === 'queue') nextTick(() => nextTick(() =>
+        bindQueueSec(queueContainer.value?.querySelector('.queue-sec'))))
       if (t === 'lyrics') lyricFollowPausedUntil = 0
     }, { immediate: true })
     // 恢复链/换曲晚到也要落位：挂载 immediate 跑时队列还空、currentSong 未
@@ -1318,9 +1358,14 @@ export default {
       queueTotalLabel,
       queueRows,
       queueStartIndex,
+      queueEndIndex,
       queueTopPad,
       queueBottomPad,
       bindQueueAnchor,
+      bindQueueSec,
+      queueScrollToIndex,
+      queueSecIndex,
+      queueSecH,
       lyricFontSize,
       LYRIC_FS_MIN,
       LYRIC_FS_MAX,

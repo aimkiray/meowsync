@@ -18,6 +18,25 @@ export const computeVirtualWindow = ({ scrollTop, listTop, viewH, rowH, total, o
   return { start, end }
 }
 
+// ── 分节线类「非行高间隙元素」的滑窗归位（纯数学，供无 DOM 测试）──
+// 间隙挂在 dividerIndex 行之后、真实高 dividerH，但窗数学当它零高——
+// 消费侧按线位把高度并回 spacer：线在窗上沿之上 → topPad、窗下沿之下
+// → bottomPad、窗内已随 DOM 渲染不补。三态互斥完备，恒有
+// topPad' + (end-start)*rowH + bottomPad' ≡ total*rowH + dividerH，
+// scrollHeight 与行位全线连续
+export const dividerPadAdjust = ({ topPad, bottomPad, start, end, dividerIndex, dividerH = 0 }) => {
+  if (dividerIndex < 0 || !(dividerH > 0)) return { topPad, bottomPad }
+  if (dividerIndex < start) return { topPad: topPad + dividerH, bottomPad }
+  if (dividerIndex >= end) return { topPad, bottomPad: bottomPad + dividerH }
+  return { topPad, bottomPad }
+}
+
+// 行 i 在滚动坐标系的整体偏移：dividerIndex 之下的行统一下移 dividerH。
+// 只用于「下标→落点」正向（scrollToIndex 落点/拖拽换算）；反向
+// scrollTop→行号不补——dividerH 量级远在 overscan 吸收域内
+export const dividerRowShift = (i, dividerIndex, dividerH = 0) =>
+  (dividerIndex >= 0 && i > dividerIndex ? dividerH : 0)
+
 // 真虚拟滚动：滑窗渲染原语——usePagedList 的「前缀窗无上界」补集。
 // 前缀窗消的是首屏摊销，但滚到底时 DOM 与全量同构（万曲单=万行+万封面
 // img）。本原语渲染 viewport±overscan 的有界窗，上下用等高空洞 spacer
@@ -47,6 +66,9 @@ export function useVirtualList({
   pinIndex = null,      // Ref<number|null>：强制留在窗内的行号（拖拽中行
                         // 滚出窗会丢 --dragging 节点断手势）
   resetWhen = null,     // () => key —— 身份变化才回卷（同 usePagedList 口径）
+  rowShift = null,      // (i) => px：行 i 的非行高偏移（分节线把线下行整体
+                        // 下移，见 dividerRowShift）——只校正 scrollToIndex
+                        // 落点；窗数学不补（偏移量≪overscan 吸收域）
 } = {}) {
   const startIndex = ref(0)
   const endIndex = ref(0)
@@ -111,7 +133,7 @@ export function useVirtualList({
     const viewH = sc ? sc.clientHeight : window.innerHeight
     const listTop = listTopOf(sc)
     const cur = sc ? sc.scrollTop : window.scrollY
-    const rowY = listTop + i * rowHeight
+    const rowY = listTop + i * rowHeight + (rowShift?.(i) || 0)
     let y
     if (align === 'center') {
       y = rowY - (viewH - rowHeight) / 2
@@ -177,7 +199,7 @@ export function useVirtualList({
   }
 
   return {
-    rows, startIndex, topPad, bottomPad,
+    rows, startIndex, endIndex, topPad, bottomPad,
     bindAnchor, scrollToIndex, ensureVisible, update, reset,
   }
 }
