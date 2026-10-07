@@ -5,6 +5,7 @@ const { readParamsBody } = require('../lib/http-body');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const { trustProxyEnabled } = require('../lib/env');
 const { rateLimit } = require('../lib/rate-limit');
+const { csrfOriginOk } = require('../lib/auth-gate');
 
 const app = new Hono();
 
@@ -141,6 +142,12 @@ app.get('/', (c) => {
 });
 
 app.all('/:apiName', async (c) => {
+  // 写方法 CSRF 纵深（与 match.js POST /match/retry 同口径）：本端点是路由层
+  // 唯一收非 GET 写方法却没过 csrfOriginOk 的——开放部署下跨站表单 POST 可
+  // 触发白名单上游扇出。Origin 缺失的非浏览器请求天然放行，不误伤 API 客户端
+  if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && !csrfOriginOk(c)) {
+    return c.json({ code: 403, message: 'Forbidden' }, 403);
+  }
   // 全家族未鉴权直连上游——通用桶与 qq/bilibili 路由同规格，防循环刷量
   // 把服务端 IP 送进上游风控
   if (!rateLimit(c, 'music', 60)) {

@@ -322,6 +322,12 @@ async function serveComplete(c, key) {
   try {
     // 尺寸以盘上真实文件为准——meta.size 是声明值，写超/截短时不该透出去
     const stat = fs.fstatSync(fd);
+    // meta.size 声明与盘上对账（与 findComplete 同口径）：外力截短 .bin 而
+    // meta 完好时按 miss/损坏走——回 false 让调用方落回上游透传，不回送截断字节
+    if (meta.size > 0 && stat.size < meta.size) {
+      closeFd();
+      return false;
+    }
     let start = 0;
     let end = stat.size - 1;
     status = 200;
