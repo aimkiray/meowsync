@@ -270,6 +270,29 @@ export function isNeteasePlaylist(playlist) {
   return NETEASE_ID_RE.test(String(playlist?.id ?? ''));
 }
 
+// ── 歌词语言判定 ──
+// 「已是中文语境」判定：汉字占比≥阈值只是必要非充分——真中文词假名/谚文≈0；
+// 日文词汉字密度 30-50% 是常态，只看汉字占比会把日文误判成中文跳过翻译
+// （少女レイ 实案：词文 CJK 占比 0.365 被 already-zh 跳掉）。
+// 假名/谚文存在即「需要翻译」的硬证据；拉丁文不构成豁免（中文歌夹英文 hook
+// 仍算中文语境）。分母只计四类字母字符——数字/标点/空白不稀释判定
+export function isLikelyChineseLyric(text, { cjkMin = 0.3, foreignMax = 0.05 } = {}) {
+  const s = String(text ?? '');
+  // 四类字符计数口径：汉字 CJK 统一表意+扩展 A、假名 全角块 ぀-ヿ ∪
+  // 半角片假名 ｦ-ﾟ（U+FF66-FF9F——假名本体止于 ﾝ/FF9D，尾部 ﾞﾟ
+  // 半角浊点同为日语硬证据一并计；半角形态零中文歧义）、谚文
+  // 가-힯（韩文音节块）、拉丁 A-Za-z。残余漏译边如实登记（启发式
+  // 固有限度）：々〆 迭代记号、谚文 jamo 字母块、全角拉丁、CJK
+  // Ext-B 均不入四类计数——带这些特征的稀有文本会漏判，可接受
+  const cjk = (s.match(/[一-鿿㐀-䶿]/g) || []).length;
+  const kana = (s.match(/[぀-ヿｦ-ﾟ]/g) || []).length;
+  const hangul = (s.match(/[가-힯]/g) || []).length;
+  const latin = (s.match(/[A-Za-z]/g) || []).length;
+  const total = cjk + latin + kana + hangul;
+  if (!total) return false;
+  return cjk / total >= cjkMin && (kana + hangul) / total < foreignMax;
+}
+
 // ── 网易云 ──
 // 网易云歌曲 id 提取：music.163.com/song?id= / song/N / ?song=N / 裸数字
 export function extractNeteaseSongId(input) {

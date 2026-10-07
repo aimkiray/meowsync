@@ -3,19 +3,65 @@ const { matchWithBudget, toMatchedJson } = require('../services/netease-match');
 const { rateLimit } = require('../lib/rate-limit');
 const { csrfOriginOk } = require('../lib/auth-gate');
 const { readJsonBody } = require('../lib/http-body');
+const { callNeteaseApi } = require('../services/netease-api');
+const { aiEnabled, aiModel } = require('../lib/ai');
+const songMatchRepo = require('../repositories/songMatch');
 
 const app = new Hono();
 
+// GET /match/state?trackId= —— song_match 绑定态只读取口：客户端拿「这首
+// 外部轨当前生效的网易词源绑定」去直接取词，不必付一次带预算的重跑匹配。
+// 本端点只读不写——与 POST /match/retry（skipCache 重跑+覆写）职责分离：
+// 读口零云搜/AI 上行（至多一跳 song_detail 回水化），改绑定只能走 retry。
+// GET 只读不挂 csrfOriginOk 纵深（与全站 GET 同口径）。回包键名读口
+// `match`（绑定态投影，matchedBy/score 内嵌其中）与写口 `matched`
+// （重跑命中，matchedBy/score 同级平铺）刻意不对称——键位即职责记号
+//
 // POST /match/retry —— 错配纠正口：客户端拿持久化的 provider 字段重建
 // sourceInfo（不回源重取——视频可能已删/慢，纠错不该被上游可用性绑架），
 // excludeIds 并入请求级否决集重跑匹配，命中即 upsert 覆写 song_match 行
 // （正负缓存都刷——纠正前的错配/负缓存不能挡纠正结果）
 
-// trackId 覆盖 bv_/yt_/qq_ 前缀与数字词源 id（与 SONG_ID_RE 同口径）
+// trackId 形闸：本文件局部口径（非共享谓词，也不指 songmeta.js 的
+// SONG_ID_RE——那边 {1,64} 是别界）——bv_/yt_/qq_ 前缀与数字词源 id
+// 都落在 [A-Za-z0-9_-] 字符集内；{1,80} 上界与下方 str() 截断同长
 const TRACK_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const strList = (v, count, max) => (Array.isArray(v) ? v : [])
   .map(x => str(x, max)).filter(Boolean).slice(0, count);
+
+app.get('/match/state', async (c) => {
+  // 只读也要限流：客户端每轨首播都会问，裸奔可被批量轨道 id 刷成
+  // song_detail 扇出（与 match-retry 同思路，桶宽松一档——这是热路径）
+  if (!rateLimit(c, 'match-state', 60)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const trackId = str(c.req.query('trackId'), 80);
+  if (!TRACK_ID_RE.test(trackId)) {
+    return c.json({ code: 400, message: '非法 trackId' }, 400);
+  }
+  // 读侧模型键与写侧 cachedMatch 同口径（AI 此刻不可用等价纯启发式 ''）——
+  // 回的就是「匹配管线现在会认的那行」：跨模型的 AI 判定行、异模负行
+  // 读出来都是谎言（管线根本不会采纳它），按未命中回 match:null
+  const row = songMatchRepo.getMatch(trackId, aiEnabled() ? (aiModel() || '') : '');
+  if (!row || row.netease_id == null) {
+    return c.json({ code: 200, match: null });
+  }
+  // 正行只存 netease_id——song_detail 单跳回水化出 matched 投影（与
+  // cachedMatch 同款）；回水化失败退裸 id 壳，客户端只补 neteaseId 也能用
+  const rawId = String(row.netease_id);
+  let song = { id: /^\d+$/.test(rawId) ? Number(rawId) : rawId };
+  try {
+    const res = await callNeteaseApi('song_detail', { ids: rawId }, { signal: c.req.raw.signal });
+    const s = res.body?.songs?.[0];
+    if (s && typeof s === 'object') song = s;
+  } catch { /* 回水化失败——裸 id 壳仍保住词源 */ }
+  if (c.req.raw.signal?.aborted) return c.body(null, 499);
+  return c.json({
+    code: 200,
+    match: { ...toMatchedJson(song), matchedBy: row.matched_by || null, score: row.score ?? null },
+  });
+});
 
 app.post('/match/retry', async (c) => {
   // 写请求 CSRF 纵深（与 auth.js POST 同口径）+ 通用桶——重跑匹配会扇出
