@@ -53,16 +53,18 @@ export function readShareParams() {
     } else if (/^[A-Za-z0-9_-]{11}$/.test(ytRaw)) {
       // 传 ?yt= 形态而非裸 id：服务端 [?&]yt= 分支无 \D 要求（全数字 videoId
       // 也可解），且 resolve 失败还原进搜索框后仍是 isYouTubeInput 形态——
-      // 回车重试不会退化关键词搜索（isYouTubeInput 收窄后裸 id 不再命中）
-      yt = `?yt=${ytRaw}`
+      // 回车重试不会退化关键词搜索（isYouTubeInput 收窄后裸 id 不再命中）。
+      // id 过 encodeURIComponent 与生成侧 share.js 同口径（合法字符集下是
+      // 恒等映射——校验口径放宽时重建串不带裸特殊字符）
+      yt = `?yt=${encodeURIComponent(ytRaw)}`
     }
   }
 
   // ?qq=<songmid> 分享链——同 ?yt= 口径：传 ?qq= 形态让失败还原后仍命中
-  // isQQInput 可回车重试
+  // isQQInput 可回车重试；id 编码与生成侧 share.js 同口径
   let qq = null
   const qqRaw = urlParams.get('qq')
-  if (qqRaw && SONGMID_RE.test(qqRaw.trim())) qq = `?qq=${qqRaw.trim()}`
+  if (qqRaw && SONGMID_RE.test(qqRaw.trim())) qq = `?qq=${encodeURIComponent(qqRaw.trim())}`
 
   // ?qqpl=<disstid> QQ 歌单按引用分享链——接收端整单重拉
   const qqplRaw = urlParams.get('qqpl')?.trim()

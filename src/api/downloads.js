@@ -7,7 +7,7 @@ import http, { API_BASE_URL } from './http.js';
 
 export const downloadsApi = {
   createQueue: (playlistId, options = {}) => {
-    // 歌单未导入时服务端会先走两次上游往返（detail+tracks），慢网可超默认 15s——
+    // 歌单未导入时服务端会先走两次上游往返（detail+tracks），慢网可超默认 10s——
     // 超时后服务端仍建成队列，重试只会撞 409，给足 60s
     return http.post(`/downloads/queues`, {
       playlistId,
@@ -130,16 +130,30 @@ export const downloadsApi = {
     // 瘦身投影：服务端只消费 id/name/ar/al/dt + provider 定位字段。本地
     // tracks 存的是全量曲对象（~2-3KB/首），原样上载 ~400 首就撞 1MB body
     // 上限；投影后 2000 曲 ≈600KB
-    const tracks = (playlist.tracks || []).map(t => t && ({
+    // 字段归一：ar/artists 接受数组或字符串艺人名（非数组的脏数据 .map 即
+    // TypeError，整单镜像挂掉）；al/album 接受对象或字符串专辑名——
+    // obj?.name 读不到字符串形会把专辑名静默丢掉
+    const artistArr = (v) => Array.isArray(v) ? v
+      : (typeof v === 'string' && v.trim() ? [{ name: v.trim() }] : [])
+    const albumObj = (v) => typeof v === 'string' ? { name: v.trim() }
+      : (v && typeof v === 'object' ? v : {})
+    const tracks = (playlist.tracks || []).map(t => {
+      if (!t) return t
+      const al = albumObj(t.al)
+      const album = albumObj(t.album)
+      const ar = artistArr(t.ar)
+      return {
       id: t.id,
       name: t.name,
-      ar: (Array.isArray(t.ar) ? t.ar : t.artists || []).map(a => ({ name: a?.name })),
+      // 成员可能是裸字符串（与 lib/song.js slimTrack 同口径）：对象取 name、
+      // 字符串透传——ar:['Jay'] 若只读 a?.name 会产出 {name:undefined} 丢艺人名
+      ar: (ar.length ? ar : artistArr(t.artists)).map(a => ({ name: typeof a === 'object' ? a?.name : a })),
       al: {
-        name: t.al?.name || t.album?.name || '',
-        picUrl: t.al?.picUrl || t.album?.picUrl || '',
+        name: al.name || album.name || '',
+        picUrl: al.picUrl || album.picUrl || '',
         // pic_str 是上游专辑对象的双生字段——有些专辑只有它没有 picUrl，
         // 下载管理器取封面会先试 picUrl 再兜 pic_str，丢了会让封面静默缺失
-        pic_str: t.al?.pic_str || t.album?.pic_str || ''
+        pic_str: al.pic_str || album.pic_str || ''
       },
       dt: t.dt || t.duration || 0,
       // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返
@@ -157,7 +171,8 @@ export const downloadsApi = {
         title: t.youtube.title, author: t.youtube.author
       } } : {}),
       ...(t.neteaseId ? { neteaseId: t.neteaseId } : {})
-    }))
+      }
+    })
     return http.post(`/downloads/local/mirror`, {
       localId: playlist.id,
       name: playlist.name,

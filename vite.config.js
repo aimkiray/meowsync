@@ -1,8 +1,5 @@
 import { defineConfig, loadEnv } from 'vite'
-import { readFileSync } from 'node:fs'
 import vue from '@vitejs/plugin-vue'
-
-const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
 export default defineConfig(({ command, mode }) => {
   // 加载环境变量
@@ -57,15 +54,19 @@ export default defineConfig(({ command, mode }) => {
 
     // 环境变量配置
     define: {
-      __APP_VERSION__: JSON.stringify(pkg.version),
-      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
       // .env 里的 NODE_ENV=development 会被 Vite 构建期读取并把产物烘成
       // 开发态（PROD=false 关不掉 dev 警告/失压缩）——build 命令强制钉死，
       // 只对 build 生效，dev server 不受影响
       ...(command === 'build' ? {
         'import.meta.env.PROD': 'true',
-        'import.meta.env.DEV': 'false'
+        'import.meta.env.DEV': 'false',
+        // 同口径钉死依赖分支判定：Vue/三方库读 process.env.NODE_ENV 选
+        // dev/prod 代码分支，shell/.env 残留的 development 会把 dev 警告
+        // 打进 vendor 产物
+        'process.env.NODE_ENV': JSON.stringify('production')
       } : {})
+      // __APP_VERSION__/__BUILD_TIME__ 已删：全仓无消费方（SettingsPanel 无
+      // 关于区）——需要版本展示时在接入点重挂，不留悬置 define
     }
   }
 })

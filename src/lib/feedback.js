@@ -39,6 +39,13 @@ export function toastRelease(id, source) {
   t.deadline = performance.now() + t.remaining
 }
 
+// setTimeout 的 delay 按 int32 截断：>2^31-1 溢出回绕成 ~1ms——长驻语义
+// 传超大 duration 反而下一拍立即退场，钳到 int32 上限
+const MAX_TIMER_MS = 2 ** 31 - 1
+// toasts 并存上限：批量失败/错误风暴无限堆叠会把屏幕顶满且旧条永驻
+// 计时簿记白记——超帽逐最旧（与 scroll-mem FIFO 同思路）
+const TOAST_CAP = 5
+
 // 返回 toast id 供 toastDismiss 手动回收——长驻进度 toast（外部导入
 // 最坏分钟级）在完成后需要立即退场，不能挂着等超时。
 // action: { label, onAction }——带操作入口的 toast（"查看进度"类跳转），
@@ -52,8 +59,10 @@ export function toast(text, type = 'info', duration, action = null) {
   const id = ++toastSeq
   const fallback = action ? 6000 : 2600
   const raw = Number(duration ?? fallback)
-  const ms = Number.isFinite(raw) ? raw : fallback // 非数值 duration 退化取默认，簿记不产 NaN
+  const ms = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), MAX_TIMER_MS) : fallback // 非数值 duration 退化取默认，簿记不产 NaN
   state.toasts.push({ id, text: String(text), type, action })
+  // 超帽逐最旧——新条已入列尾，挤掉的总是最老那条
+  while (state.toasts.length > TOAST_CAP) toastDismiss(state.toasts[0].id)
   toastTimers.set(id, {
     timer: setTimeout(() => toastDismiss(id), ms),
     deadline: performance.now() + ms,

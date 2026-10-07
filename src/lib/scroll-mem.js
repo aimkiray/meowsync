@@ -13,13 +13,31 @@ export const writeScrollMem = (key, entry) => {
 
 export const readScrollMem = (key) => mem.get(key) ?? null
 
+// 键盘滚动键集：还位等待窗内这些按键滚动同样算用户显式意图——
+// 只盯 wheel/touch 会漏掉键盘用户（PageUp/Down、方向键、Home/End、空格），
+// 还位落笔会跟他抢滚动
+const SCROLL_INTENT_KEYS = new Set([
+  'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '
+])
+
 // 还位滚动：内容异步灌入时 scrollHeight 尚未长够，直接写 scrollTop 会被
 // 钳 0——轮询到内容够高再落笔；已够高立即写（同步列表零等待）。等待窗内
-// 用户先动滚轮/手指 = 显式意图，放弃还位不抢滚动。返回取消函数——调用方
-// 在 onBeforeUnmount 调用，避免等待窗内卸载后 interval 对游离节点空转
+// 用户先动滚轮/手指/键盘滚动键 = 显式意图，放弃还位不抢滚动。返回取消
+// 函数——调用方在 onBeforeUnmount 调用，避免等待窗内卸载后 interval 对
+// 游离节点空转
 export const restoreScrollTop = (el, top, { timeoutMs = 2500 } = {}) => {
   let iv = null
   let fallbackTimer = null
+  // 键盘滚动的目标不一定是 el 本身（焦点在子元素/文档上也滚得动它）——
+  // 监听挂到 window 层；非滚动键不结算，所以不能 once，done 时摘除
+  const view = el?.ownerDocument?.defaultView
+    || (typeof window !== 'undefined' ? window : null)
+  // 可编辑目标内的按键不算滚动意图——输入框/文本域里的空格与方向键是
+  // 文本编辑行为，误杀还位会让视图在用户打字时抢滚
+  const onKeydown = (e) => {
+    if (e.target?.closest?.('input,textarea,select,[contenteditable]')) return
+    if (SCROLL_INTENT_KEYS.has(e.key)) done()
+  }
   const done = () => {
     if (iv) clearInterval(iv)
     iv = null
@@ -28,12 +46,14 @@ export const restoreScrollTop = (el, top, { timeoutMs = 2500 } = {}) => {
     fallbackTimer = null
     el?.removeEventListener('wheel', done)
     el?.removeEventListener('touchstart', done)
+    view?.removeEventListener('keydown', onKeydown)
   }
   if (!el || !(top > 0)) return done
   const enough = () => el.scrollHeight >= top + el.clientHeight - 4
   if (enough()) { el.scrollTop = top; return done }
   el.addEventListener('wheel', done, { once: true, passive: true })
   el.addEventListener('touchstart', done, { once: true, passive: true })
+  view?.addEventListener('keydown', onKeydown)
   iv = setInterval(() => {
     if (enough()) { el.scrollTop = top; done() }
   }, 120)

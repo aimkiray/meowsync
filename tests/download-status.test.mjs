@@ -52,6 +52,26 @@ test('queueProgress：空值/零总/正常/超界钳位', () => {
   assert.equal(queueProgress({ totalTasks: 3, completedTasks: 5 }), 100)
 })
 
+test('queueProgress：completedTasks 缺位/非数值不产 NaN', () => {
+  // undefined/total 会算成 NaN——aria-valuenow=NaN 比显示 0 更糟
+  assert.equal(queueProgress({ totalTasks: 10 }), 0)
+  assert.equal(queueProgress({ totalTasks: 10, completedTasks: undefined }), 0)
+  assert.equal(queueProgress({ totalTasks: 10, completedTasks: NaN }), 0)
+  assert.equal(queueProgress({ totalTasks: 10, completedTasks: -3 }), 0)
+  // 数值串宽容计数（服务端偶发字符串列）
+  assert.equal(queueProgress({ totalTasks: 10, completedTasks: '5' }), 50)
+})
+
+test('queueProgress：totalTasks 非数值同样不产 NaN', () => {
+  // 与 completedTasks 同口径：'abc'/NaN 一律按 0 计而非裸除出门
+  assert.equal(queueProgress({ totalTasks: 'abc', completedTasks: 5 }), 0)
+  assert.equal(queueProgress({ totalTasks: NaN, completedTasks: 5 }), 0)
+  assert.equal(queueProgress({ totalTasks: undefined, completedTasks: 5 }), 0)
+  assert.equal(queueProgress({ totalTasks: 'abc', completedTasks: 'abc' }), 0)
+  // total 侧数值串同样宽容计数
+  assert.equal(queueProgress({ totalTasks: '10', completedTasks: 5 }), 50)
+})
+
 test('pickQueueForPlaylist：深链预选匹配与挑队列规则', () => {
   const queues = [
     { id: 10, status: 'completed', neteasePlaylistId: '777' },

@@ -22,6 +22,18 @@ test('parseDurationMs：纯秒与小数秒', () => {
   assert.equal(parseDurationMs('4:33.05'), 273050);
 });
 
+test('parseDurationMs：纯小数秒（无冒号段的点形态）', () => {
+  assert.equal(parseDurationMs('1.5'), 1500);
+  assert.equal(parseDurationMs('0.5'), 500);
+  assert.equal(parseDurationMs('12.05'), 12050);
+  // 单冒号 + 小数同收——'1:2.5' = 1 分 2.5 秒
+  assert.equal(parseDurationMs('1:2.5'), 62500);
+  // 小数段必须带数字——'1.'/'.5' 仍是非法输入
+  for (const bad of ['1.', '.5', '1.5:20']) {
+    assert.ok(Number.isNaN(parseDurationMs(bad)), `应拒绝: ${bad}`);
+  }
+});
+
 test('parseDurationMs：分钟 5 位上限（长播客/电台流）', () => {
   assert.equal(parseDurationMs('99999:59'), 5999999000);
   assert.ok(Number.isNaN(parseDurationMs('100000:00')));

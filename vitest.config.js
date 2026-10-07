@@ -9,10 +9,8 @@ import vue from '@vitejs/plugin-vue'
 // 拾取（*.test.?js/test-*/等），.spec.mjs 不在其词表，两套运行器天然错开
 export default defineConfig({
   plugins: [vue()],
-  define: {
-    __APP_VERSION__: JSON.stringify('0.0.0-test'),
-    __BUILD_TIME__: JSON.stringify('1970-01-01T00:00:00.000Z')
-  },
+  // 无 define.__APP_VERSION__/__BUILD_TIME__：vite.config.js 侧已删（全仓
+  // 无消费方），这里不留悬置——需要版本展示时在接入点重挂
   test: {
     environment: 'jsdom',
     include: ['tests/ui/**/*.spec.{js,mjs}'],
