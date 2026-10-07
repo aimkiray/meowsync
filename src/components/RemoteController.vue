@@ -10,8 +10,8 @@
       <!-- 封面 + 歌曲信息 -->
       <div class="rc-cover-wrap">
         <img
-          v-if="songCoverUrl(state.currentSong)"
-          :src="httpsCover(songThumbUrl(state.currentSong, 480))"
+          v-if="coverSrc(state.currentSong)"
+          :src="coverSrc(state.currentSong)"
           :alt="state.currentSong?.name || '专辑封面'"
           class="rc-cover"
           :class="{ 'playing-animation': state.isPlaying }"
@@ -99,7 +99,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
-import { songCoverUrl, songThumbUrl } from '../lib/song'
+import { resolveApiBaseUrl } from '../lib/api-base.js'
+import { songThumbUrl } from '../lib/song'
 // WS 消息类型与 shared/protocol.js 同源——字面量漂移会被服务端拒收
 import { MSG_TYPES, CONTROL_TYPES } from '../shared/protocol.js'
 import PixelIcon from './PixelIcon.vue'
@@ -149,8 +150,31 @@ let progressTickTimer = null
 let destroyed = false
 let retries = 0
 
+// 本服务工件封面以 apiBase 相对路径到达（host 端剥前缀形态——协议约定见
+// shared/protocol.js）：用本端 apiBase 拼回。直接把 '/downloads/...' 喂给
+// <img> 只在同源部署碰巧正确（dev 分离端口/子路径部署会死链）；
+// '//' 协议相对与外部 http(s) 链原样透传走 httpsCover 升级口径
+const apiBase = resolveApiBaseUrl()
+const coverSrc = (song) => {
+  const u = songThumbUrl(song, 480)
+  if (u.startsWith('/') && !u.startsWith('//')) return httpsCover(apiBase + u)
+  return httpsCover(u)
+}
+
 function connect() {
   if (destroyed) return
+  // 幂等：onclose 的 3s 重连挂单、手动 retry、异常路径都可能与在途 socket
+  // 叠加——先清挂单再收旧 socket（onclose 置空，迟到 close 不再二次重连）
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (ws) {
+    ws.onclose = null
+    ws.onerror = null
+    try { ws.close() } catch { /* 已关 */ }
+    ws = null
+  }
   ws = new WebSocket(props.wsUrl, props.wsProtocols)
 
   ws.onopen = () => {
@@ -211,6 +235,9 @@ function retry() {
   gaveUp.value = false
   connect()
 }
+
+// 暴露给宿主/测试件：script-setup 默认不透内部方法
+defineExpose({ retry })
 
 function send(type, payload) {
   // 白名单外 type 服务端会静默丢——本地先断言，拼错指令不至于无声消失

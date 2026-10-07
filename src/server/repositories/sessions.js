@@ -83,6 +83,13 @@ function deleteSession(rawToken) {
 // 改密/「登出所有设备」用
 function deleteAllForUser(userId) {
   getDb().prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  // 已建 WS 连接同步收掉：remote 持有连接集，repo→ws 是反向依赖——
+  // 必须惰性 require（remote→auth-gate→sessions 构成静态环，顶层
+  // require 会拿到半成品模块）；remote 未装配的上下文（纯 repo 用
+  // 例/工具脚本）不阻塞吊销本身
+  try {
+    require('../ws/remote').revokeConnections({ userId });
+  } catch { /* remote 未加载/未装配——吊销已完成，连接面无对象可收 */ }
 }
 
 // 过期行清扫（启动即跑 + 每小时，定时器 unref 不拦退出）
@@ -93,5 +100,7 @@ function sweepExpired() {
 
 module.exports = {
   createSession, resolveSession, peekSession, deleteSession, deleteAllForUser,
-  sweepExpired, IDLE_TTL_MS, ABSOLUTE_TTL_MS
+  sweepExpired, IDLE_TTL_MS, ABSOLUTE_TTL_MS,
+  // WS 侧按它给连接钉会话身份（remote.js 的 revokeConnections 对照键）
+  tokenId
 };
