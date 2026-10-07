@@ -12,8 +12,8 @@ import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId, NETEASE_ID_RE, YT_TRACK_ID_RE, BV_TRACK_ID_RE, QQ_SONG_ID_RE } from '../lib/url.js'
 import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song.js'
 import { applyMatchResult } from '../lib/external-songs.js'
-// MIRROR_PLAYLIST_ID_RE 未走 lib 转口（lib/url.js 转口表无它）——直引共享层
-import { MIRROR_PLAYLIST_ID_RE } from '../shared/predicates.js'
+// MIRROR_PLAYLIST_ID_RE/isLikelyChineseLyric 未走 lib 转口（lib/url.js 转口表无它们）——直引共享层
+import { MIRROR_PLAYLIST_ID_RE, isLikelyChineseLyric } from '../shared/predicates.js'
 import { SAVED_QUEUE_TRACK_CAP } from './usePlaylistLibrary.js'
 
 // html5 池是全局常驻的 <audio> 元素组——预垫节点未置 src 不占媒体缓冲区，
@@ -1103,6 +1103,11 @@ export function usePlayer({
         if (stale()) return
         await applyExternalLyricHit(song, hit, { signal, stale })
       }
+      // 绑定态水合（hydrateMatchBinding 头注）：yt_/bv_ 曲本地 neteaseId
+      // 缺席 ≠ 服务端 song_match 无正绑——读口补绑成功则下方外源支谓词
+      // 自然变 false，落回常规网易词支拿官方译文
+      await hydrateMatchBinding(song, signal)
+      if (stale()) return
       // 外部导入曲（B 站/YouTube）无 neteaseId 时走服务端外源词兜底
       // /lyric/external（YTM→LRCLIB→酷狗级联）。provider 对象缺失的老持久
       // 化行按 bv_/yt_ id 形态同判（对象与形态任一命中）——服务端按 id 前缀
@@ -1270,14 +1275,13 @@ export function usePlayer({
       return { applied: true, synced, rows }
     }
 
-    // 已是中文语境歌词就不再翻译（CJK 字符占比 ≥30%——日汉混排宁误判跳过
-    // 也不错翻；日文假名/韩文谚文计入分母，它们正是需要翻译的对象）
-    const lyricCjkDominant = (lines) => {
-      const text = lines.map(l => l.text).join('')
-      const cjk = (text.match(/[一-鿿㐀-䶿]/g) || []).length
-      const other = (text.match(/[A-Za-z぀-ヿ가-힯]/g) || []).length
-      return cjk / (cjk + other || 1) >= 0.3
-    }
+    // 已是中文语境歌词就不再翻译——判定收敛在共享层 isLikelyChineseLyric
+    // （与服务端 lyric-translate 的 already-zh 跳翻同一份口径）：汉字占比
+    // ≥阈值只是必要非充分，假名/谚文在场即「需要翻译」硬证据——日文词
+    // 汉字密度 30-50% 是常态，旧占比闸把它误判中文语境跳翻（少女レイ
+    // 实案：CJK 0.365 被跳）；拉丁文不构成豁免
+    const lyricCjkDominant = (lines) =>
+      isLikelyChineseLyric(lines.map(l => l.text).join(''))
 
     // AI 歌词后处理：① 外部导入曲核验配到的网易云歌词确实属于这首（错配时
     // 「错歌词比没歌词更糟」→ 整组隐藏）；② 无官方译文且非中文语境 → 自动
@@ -1310,10 +1314,12 @@ export function usePlayer({
     // 前端不持久化否决集
     const rematchTried = new Map()
     // 菜单显式否决簿：行菜单解绑/换绑否掉的旧词源 id 按曲记账
-    // （onLyricRematch 写入、rematchUnbound 并入 excludeIds 消费）——
-    // 显式解绑后服务端 skipCache 重跑会把刚否决的确定性高分原样送回，
-    // 不记否等于反噬用户纠正。会话级，与 rematchTried 同寿命语义：
-    // 跨会话收敛靠服务端 song_match 行，前端不持久化
+    // （onLyricRematch 写入、rematchUnbound 并入 excludeIds 消费、
+    // hydrateMatchBinding 否决闸消费）——显式解绑后服务端 skipCache
+    // 重跑会把刚否决的确定性高分原样送回，不记否等于反噬用户纠正。
+    // 簿内统一 String 记账（neteaseId 数字与字符串词源 id 同键域，
+    // 消费端按 String 口径比对/外发）。会话级，与 rematchTried 同寿命
+    // 语义：跨会话收敛靠服务端 song_match 行，前端不持久化
     const matchVetoedIds = new Map()
     const rematchLyricSource = async (song, lyricId, signal = null) => {
       if (!(song?.youtube || song?.bilibili) || song.neteaseId == null
@@ -1450,6 +1456,62 @@ export function usePlayer({
       }
     }
 
+    // 绑定态水合（loadLyrics 未绑定支前的读口自愈）：yt_/bv_ 曲对象
+    // neteaseId 缺席只代表「本端没记到」——服务端 song_match 可能已有
+    // 正向绑定（别会话/服务端侧写入的行不回推客户端持久化）。不补这
+    // 一跳，客户端会一直走外源词，丢掉网易侧官方译文（少女レイ ver.EMA
+    // 实案：服务端绑 2068956580 带 44 行官方译文，raw_json.neteaseId=
+    // undefined 播的却是无译文 lrclib 词）。形闸与未绑定支同口径
+    // （provider 对象或裸前缀 id 任一）；每曲每会话只查一次——状态查
+    // 询是幂等读，abort/429 释槽（与 rematchUnbound 同口径）其余记账，
+    // 防快速重播刷 /match/state。命中前先过 matchVetoedIds 否决簿——
+    // 菜单解绑/换绑否掉的 id 不被水合复活；否决簿仅会话内存，跨会话
+    // 复活残面在服务端（retry 传输失败不落负行、正行无 TTL），留作
+    // 已知残面。命中经 applyMatchResult 整组重建并显式落盘（绑定是
+    // 持久属性，与 rematchLyricSource/rematchUnbound 同口径）；
+    // match=null 什么都不写。静默自愈不配 toast；读段异常静默吞、
+    // 写回段 warn 留痕——后台链路不配打扰用户但缺陷不该没痕迹
+    const hydrateTried = new Set()
+    const hydrateMatchBinding = async (song, signal = null) => {
+      const extTrack = !!(song?.youtube || song?.bilibili)
+        || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id))
+      // id 合法复查与 rematchUnbound 同口径；已绑定（neteaseId 在）直接
+      // 早退——别路已写回的曲不再查
+      if (!extTrack || song?.id == null || song.neteaseId != null) return
+      const key = String(song.id)
+      if (hydrateTried.has(key)) return
+      hydrateTried.add(key)
+      let match = null
+      try {
+        match = await musicApi.getMatchState(song.id, signal)
+      } catch (e) {
+        // 读失败分诊与 rematchUnbound 同构：abort（切歌打断在途请求）与
+        // 429 限流释放槽位——RTT 窗内切歌/「稍后再试」不该烧掉本曲下次
+        // 播放的水合机会；其它错误保留记账防每播一次刷读口限流桶
+        if (signal?.aborted || e?.code === 'ERR_CANCELED'
+            || e?.name === 'AbortError' || e?.name === 'CanceledError'
+            || e?.response?.status === 429) {
+          hydrateTried.delete(key)
+        }
+        return
+      }
+      // match=null（无正绑/负缓存行）不留痕；RTT 窗内被别路补绑
+      // （菜单换绑等）也不覆写——用户显式选择优先
+      if (!match?.id || song.neteaseId != null) return
+      // 显式否决簿闸（与 rematchUnbound 并入 excludeIds 同一张账）：
+      // 菜单解绑/换绑否掉的 id 不许被水合静默绑回——服务端 retry 传输
+      // 失败不落负行、旧正行存活时读口会原样送回
+      if (matchVetoedIds.get(key)?.has(String(match.id))) return
+      // 写回段与读段分 try：applyMatchResult/落盘的缺陷不许静默吞成
+      // 「请求失败」——后台自愈不打扰用户照旧，但留 warn 可查
+      try {
+        applyMatchResult(song, match, { matchedBy: match.matchedBy, matchScore: match.score })
+        savePlaylistsToStorage() // 显式调用制——只变异不落盘会丢「关页前刚水合的绑定」
+      } catch (e) {
+        console.warn('绑定态水合写回失败:', e?.message || e)
+      }
+    }
+
     // 行菜单换绑通知槽（模块级单槽，见 notifyLyricRematch 头注）：vetoedId
     // 先记否决簿（不限正播曲——Map 记账无写入成本，非正播曲的否决留到
     // 它下次播放时由 rematchUnbound 消费）；正播同曲才把新词源 id 补写进
@@ -1460,7 +1522,7 @@ export function usePlayer({
         const key = String(trackId)
         let vetoed = matchVetoedIds.get(key)
         if (!vetoed) matchVetoedIds.set(key, (vetoed = new Set()))
-        vetoed.add(vetoedId)
+        vetoed.add(String(vetoedId)) // 簿内 String 记账——数字 neteaseId 与字符串词源 id 同键域
       }
       if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
       // neteaseId=null 是菜单侧解绑信号（用户显式否决错配且无更准替代）：
