@@ -100,6 +100,18 @@ export function visibleSongs(list, showVip, caps) {
   return (list || []).filter(song => !isVipUnplayable(song, caps))
 }
 
+/**
+ * UGC 外链曲谓词（B 站/YouTube 投稿视频轨道）：provider 对象或裸前缀 id
+ * 任一命中——provider 对象缺失的老持久化行只剩 bv_/yt_ 形态 id，id 即
+ * 真理来源。qq_ 不在此列（QQ 曲有自家权威源，ar/词源链路都不同口径）。
+ * 词务形闸（外源兜底/自动首配/水合/判否换绑）唯一消费点——此前 5+ 处
+ * 各写一份「对象或形态任一」判断，口径漂移重灾区，收敛单点。
+ */
+export function isUgcExternalTrack(song) {
+  return !!(song?.bilibili || song?.youtube)
+    || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id))
+}
+
 /** 导入来源标签：youtube/bilibili/qq/file 字段即持久化的来源凭据（行内小牌用） */
 export function songSource(song) {
   if (song?.bilibili) return 'B站'

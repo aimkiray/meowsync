@@ -1,6 +1,7 @@
 // useRemoteControl host 端行为：远端 play 重建的 pendingSeekTime 口径
-// （resumeSeek）、被顶替（4000）降级自愈重连、file_ 封面相对路径化、
-// queueIndex 按已发队列重定位。WebSocket 全桩捕获实例手动驱动事件。
+// （resumeSeek）、遥控 seek 销「已播完」挂账、被顶替（4000）降级自愈重连、
+// file_ 封面相对路径化、queueIndex 按已发队列重定位。
+// WebSocket 全桩捕获实例手动驱动事件。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 
@@ -26,8 +27,13 @@ class FakeWs {
 vi.stubGlobal('WebSocket', FakeWs)
 
 vi.mock('../../src/lib/feedback.js', () => ({ toast: vi.fn() }))
+// usePlayer 只借模块级销账口——全桩避免把 howler/api 图拉进本谱
+vi.mock('../../src/composables/usePlayer.js', () => ({
+  notifyRemoteSeek: vi.fn(),
+}))
 
 import { toast } from '../../src/lib/feedback.js'
+import { notifyRemoteSeek } from '../../src/composables/usePlayer.js'
 import { useRemoteControl } from '../../src/composables/useRemoteControl.js'
 
 function makeDeps() {
@@ -133,6 +139,45 @@ describe('useRemoteControl：被顶替降级自愈', () => {
     rc.connectRemoteHost() // 幂等重进——ws1 被取代（remoteWs 指向 ws2）
     staleOnclose({ code: 4000 }) // 迟到顶替帧落旧 socket
     expect(toast).not.toHaveBeenCalled()
+  })
+})
+
+describe('useRemoteControl：远端 seek 销「已播完」挂账', () => {
+  it('合法 seek 先经销账口销账再落位（钳到 duration）；非法载荷整条丢弃不销账', () => {
+    const deps = makeDeps()
+    const fakeHowl = { seek: vi.fn() }
+    deps.setHowl(fakeHowl)
+    const rc = useRemoteControl(deps)
+    rc.connectRemoteHost()
+    const ws = sockets.at(-1)
+    ws.open()
+
+    ws.recv({ type: 'seek', payload: 150 })
+    // 销账先于写位——队尾播尽的 pendingSeekTime=0 挂账不再压掉遥控新位
+    expect(notifyRemoteSeek).toHaveBeenCalledTimes(1)
+    expect(fakeHowl.seek).toHaveBeenCalledWith(150)
+    expect(deps.currentTime.value).toBe(150)
+
+    ws.recv({ type: 'seek', payload: 9999 }) // 越界钳到 duration=200
+    expect(fakeHowl.seek).toHaveBeenLastCalledWith(200)
+    expect(notifyRemoteSeek).toHaveBeenCalledTimes(2)
+
+    ws.recv({ type: 'seek', payload: 'abc' }) // 非数值载荷整条丢弃——不销账不落位
+    ws.recv({ type: 'seek', payload: NaN })
+    expect(notifyRemoteSeek).toHaveBeenCalledTimes(2)
+    expect(fakeHowl.seek).toHaveBeenCalledTimes(2)
+    expect(deps.currentTime.value).toBe(200)
+  })
+
+  it('howl 已毁（加载失败/等手势窗）时 seek 丢弃——挂账续播位保留给重建路径消费', () => {
+    const deps = makeDeps()
+    const rc = useRemoteControl(deps)
+    rc.connectRemoteHost()
+    const ws = sockets.at(-1)
+    ws.open()
+    ws.recv({ type: 'seek', payload: 120 })
+    expect(notifyRemoteSeek).not.toHaveBeenCalled()
+    expect(deps.currentTime.value).toBe(0)
   })
 })
 

@@ -10,7 +10,7 @@ import { formatTime } from '../lib/format.js'
 import { toast } from '../lib/feedback.js'
 import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId, NETEASE_ID_RE, YT_TRACK_ID_RE, BV_TRACK_ID_RE, QQ_SONG_ID_RE } from '../lib/url.js'
-import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl } from '../lib/song.js'
+import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl, isUgcExternalTrack } from '../lib/song.js'
 import { applyMatchResult } from '../lib/external-songs.js'
 // MIRROR_PLAYLIST_ID_RE/isLikelyChineseLyric 未走 lib 转口（lib/url.js 转口表无它们）——直引共享层
 import { MIRROR_PLAYLIST_ID_RE, isLikelyChineseLyric } from '../shared/predicates.js'
@@ -52,6 +52,16 @@ if (typeof Audio !== 'undefined' && typeof Howler._releaseHtml5Audio === 'functi
 let lyricRematchHandler = null
 export const notifyLyricRematch = (trackId, neteaseId, vetoedId) => {
   lyricRematchHandler?.(trackId, neteaseId, vetoedId)
+}
+
+// 遥控 seek 的「已播完」销账口（上行 notifyLyricRematch 同款模块级单槽）：
+// useRemoteControl 的 seek 指令直写 howl.seek+currentTime、不走 seekTo——
+// pendingSeekTime 是 usePlayer 闭包私有值，而 deps 接线表在 App.vue（不含
+// 本通道且该文件不在改动域）。usePlayer 仅 App 一处实例化，后注册覆盖旧槽
+// 即够；调用语义=「外部显式 seek 已落地，销挂账让落盘写真播放位」
+let remoteSeekSettleHandler = null
+export const notifyRemoteSeek = () => {
+  remoteSeekSettleHandler?.()
 }
 
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
@@ -120,6 +130,14 @@ export function usePlayer({
 
     let howl = null
     let lyricTimer = null
+    // 词同步计时器唯一清表口（暂停/切歌/无戳词/卸载共用）——暂停期间
+    // 100ms 空转 tick 是无谓唤醒，清表+onplay 重建（startLyricSync 处）
+    const stopLyricSync = () => {
+      if (lyricTimer) {
+        clearInterval(lyricTimer)
+        lyricTimer = null
+      }
+    }
     let progressRafId = null
     let howlWatchdog = null // 加载看门狗定时器（随每个新 Howl 重置）
     let currentAbortController = null // 用于取消正在进行的网络请求
@@ -196,9 +214,19 @@ export function usePlayer({
       if (!savedState) return
 
       // 拦截 Infinity/越界脏数据（如 1e999 经 JSON.parse 还原为 Infinity），避免 howl.volume() 抛异常
-      if (Number.isFinite(savedState.volume)) volume.value = Math.max(0, Math.min(100, savedState.volume))
+      if (Number.isFinite(savedState.volume)) {
+        volume.value = Math.max(0, Math.min(100, savedState.volume))
+        // 音量是「ref + 实例」双写才生效——远端应用只落 ref 会出现
+        // 「界面 33 实际 80」两张皮（冷恢复 howl 未建无操作，实例音量
+        // 由 playSong 建 Howl 时按 volume.value 初始化接管）
+        if (howl) howl.volume(volume.value / 100)
+      }
       if (typeof savedState.playMode === 'string') playMode.value = savedState.playMode
-      if (typeof savedState.shuffleOn === 'boolean') shuffleOn.value = savedState.shuffleOn
+      // 远端 shuffle 翻转要与 toggleShuffle 同构真重排——只落 flag 是
+      // 「界面随机/队列顺序」两张皮；flag 无变化跳过（同值重排是白洗牌）
+      if (typeof savedState.shuffleOn === 'boolean' && savedState.shuffleOn !== shuffleOn.value) {
+        applyShuffleState(savedState.shuffleOn)
+      }
       if (typeof savedState.showVipSongs === 'boolean') showVipSongs.value = savedState.showVipSongs
       if (typeof savedState.autoplayOn === 'boolean') autoplayOn.value = savedState.autoplayOn
       if (typeof savedState.fullscreenLyricMode === 'string') fullscreenLyricMode.value = savedState.fullscreenLyricMode
@@ -286,12 +314,14 @@ export function usePlayer({
       }
     }
 
-    const toggleShuffle = () => {
-      shuffleOn.value = !shuffleOn.value
-      // 空队列开随机不能把当前曲塞进队列变成"只有一首"——next 会误判队列耗尽停播
+    // shuffle 置位/复位的同构重排：toggleShuffle 手动切换与 restoreUiState
+    // 远端置位共用——远端快照说 shuffleOn=true 时当前队列须真打乱，否则
+    // UI 显示随机态而队列仍顺序播（「只写 ref 不落副作用」病灶）。空队列
+    // 不把当前曲塞进队列变成"只有一首"——next 会误判队列耗尽停播
+    const applyShuffleState = (on) => {
+      shuffleOn.value = !!on
       if (!playingSongs.value.length) {
         queueOriginalOrder = null
-        savePlayerStateToStorage()
         return
       }
       if (shuffleOn.value) {
@@ -314,6 +344,10 @@ export function usePlayer({
           queueOriginalOrder.unshift(cur)
         }
       }
+    }
+
+    const toggleShuffle = () => {
+      applyShuffleState(!shuffleOn.value)
       savePlayerStateToStorage()
     }
 
@@ -441,8 +475,14 @@ export function usePlayer({
         const oi = queueOriginalOrder.findIndex(s => String(s.id) === String(moved.id))
         if (oi !== -1) {
           const [m] = queueOriginalOrder.splice(oi, 1)
-          const toOrig = Math.min(to, queueOriginalOrder.length)
-          queueOriginalOrder.splice(toOrig, 0, m)
+          // 邻居锚定：to 是打乱坐标系，当下标插进原序表是两套坐标混用
+          // （原序下标与打乱下标无语义对应）。moved 在打乱序里的新前驱
+          // 是谁，它在原序里就跟在谁后面——两表邻里关系同构，关随机后
+          // 顺序不回弹错位。拖到队首无前驱（或前驱不在备份）→ 插原序头
+          const prevId = to > 0 ? list[to - 1]?.id : null
+          const ai = prevId == null ? -1
+            : queueOriginalOrder.findIndex(s => String(s.id) === String(prevId))
+          queueOriginalOrder.splice(ai === -1 ? 0 : ai + 1, 0, m)
         }
       }
       playingSongs.value = list.slice()
@@ -494,21 +534,44 @@ export function usePlayer({
       if (queueOriginalOrder) queueOriginalOrder.push(...list)
     }
 
-    // autoplay：自然播完且队列耗尽时，拉当前艺人相关歌接进队列继续播
-    const continueWithRelated = async () => {
-      const artist = (currentSong.value?.ar || currentSong.value?.artists || [])[0]?.name
-      if (!artist) return false
-      try {
-        const list = await musicApi.searchSongs(artist, 15)
-        const exist = new Set(playingSongs.value.map(s => String(s.id)))
-        const fresh = (list || []).filter(s => s?.id != null && !exist.has(String(s.id)))
-        if (!fresh.length) return false
-        pushTail(fresh)
-        playSong(fresh[0], { preserveContext: true })
-        return true
-      } catch {
-        return false
+    // autoplay：自然播完且队列耗尽时，拉当前艺人相关歌接进队列继续播。
+    // in-flight 去重只合流同代调用：自动/手动两入口或队尾连点在一代内
+    // 共享一张票，各发各的 RTT 落地会双份 pushTail。票的种子（当前艺人）
+    // 在立案那刻读取——换代后旧票种子已属旧曲，绝不能「收养」进新代
+    // （落地会拿旧艺人的相关歌劫持新队列）；新代来调用则另立新票新种子，
+    // 旧票随其 RTT 落地被代次闸弃。代次闸：落地前复查 ticket.seq——RTT
+    // 窗内用户切歌/卸载（playSeq 换代）时 pushTail+playSong 会劫持新代
+    // 队列复活出声；seq 失配返回 true 抑制调用方的 stopAtQueueEnd——
+    // 此刻停下的是新代实例，不是本代该收的尾
+    let relatedContinuation = null
+    const continueWithRelated = () => {
+      if (relatedContinuation && relatedContinuation.seq === playSeq) {
+        return relatedContinuation.p
       }
+      const ticket = { seq: playSeq, p: null }
+      const p = (async () => {
+        try {
+          const artist = (currentSong.value?.ar || currentSong.value?.artists || [])[0]?.name
+          if (!artist) return false
+          const list = await musicApi.searchSongs(artist, 15)
+          // 换代即弃：不得动 playingSongs（可能已是新代重拍的队列），也不得
+          // playSong 把人拉回旧代——true 让调用方静默收尾（世界已归新代）
+          if (ticket.seq !== playSeq) return true
+          const exist = new Set(playingSongs.value.map(s => String(s.id)))
+          const fresh = (list || []).filter(s => s?.id != null && !exist.has(String(s.id)))
+          if (!fresh.length) return false
+          pushTail(fresh)
+          playSong(fresh[0], { preserveContext: true })
+          return true
+        } catch {
+          return false
+        } finally {
+          if (relatedContinuation === ticket) relatedContinuation = null
+        }
+      })()
+      ticket.p = p
+      relatedContinuation = ticket
+      return p
     }
 
     // 下载寻址兜底单扫描（downloadCurrentSong 与 playDownloadedCopy 成员
@@ -628,11 +691,13 @@ export function usePlayer({
           while (audioPlId === null && Date.now() < deadline && seq === playSeq) {
             await new Promise(r => setTimeout(r, 1500))
             const st2 = await downloadsApi.getSongDownloadStatus(playlistId, song.id).catch(() => null)
-            if (st2 === null) { if (++nullPolls >= 4) break; continue }
+            // data 缺省的 200 回包（网关掐 body/代理截断）与探测失联同计——
+            // 内容不可读即失联，攒满阈值收束而非空轮撑到 deadline
+            if (st2?.data == null) { if (++nullPolls >= 4) break; continue }
             nullPolls = 0
-            if (st2?.data?.audioReady === true) { audioPlId = st2.data.audioPlaylistId ?? playlistId; break }
-            const ts = st2?.data?.task?.status
-            if (ts === 'failed' || (st2?.data && st2.data.task === null)) break
+            if (st2.data.audioReady === true) { audioPlId = st2.data.audioPlaylistId ?? playlistId; break }
+            const ts = st2.data.task?.status
+            if (ts === 'failed' || st2.data.task === null) break
           }
         }
         if (seq !== playSeq) return // 等下载期间播放已换代——静默弃
@@ -663,7 +728,12 @@ export function usePlayer({
       if (!song || song.id == null) return
       gates.mediaImport.invalidate() // 用户点了别的歌——同上，作废在途外部媒体解析
       gates.preview.invalidate()     // 同上，作废在途的 id 预览
-      const { autoplay = true, seekTime = 0, preserveContext = false } = options
+      let { autoplay = true, seekTime = 0, preserveContext = false } = options
+      // resumeSeek（远端 play 的实例重建路径走它）：与本地 togglePlay 的
+      // !howl 分支同口径——续播 seek 尚未落地实例就死了，挂账值优先于已被
+      // 清零的 currentTime。在入口就地换算成 seekTime，739 挂账与 858
+      // 落地两处下游零改动
+      if (options.resumeSeek) seekTime = pendingSeekTime ?? currentTime.value
 
       console.log('🎵 播放歌曲:', song.name)
 
@@ -671,6 +741,10 @@ export function usePlayer({
       currentPlayingId = song.id
       // 代次升号：同 id 连点/递归续播靠它区分新旧链（currentPlayingId 分不开）
       const mySeq = ++playSeq
+      // 词务代次快照：本代若走不到 loadLyrics（其 ++lyricLoadSeq 处即复
+      // 位），终态补清 lyricFetching 前先确认锁仍属旧代——期间新开的手
+      // 动词务（代次已升）的锁由它自己 finally 管，抢清会提前解新代的锁
+      const lyricSeqAtEntry = lyricLoadSeq
 
       // 取消上一个正在进行的网络请求
       if (currentAbortController) {
@@ -721,10 +795,7 @@ export function usePlayer({
         clearHowlWatchdog()
 
         // 清除歌词定时器
-        if (lyricTimer) {
-          clearInterval(lyricTimer)
-          lyricTimer = null
-        }
+        stopLyricSync()
         // 重置歌词加载态：上一次被 abort 的 loadLyrics 不会进 finally 复位，
         // 若本次请求随后提前返回（如无URL），loadingLyrics 会一直卡 true
         loadingLyrics.value = false
@@ -809,6 +880,11 @@ export function usePlayer({
           console.error('❌ 无法获取歌曲播放链接')
           songSwitching.value = false
           playbackError.value = '无法获取播放链接（所有音源均未命中），请稍后重试或换一首'
+          // 终态同补手动词务锁：本代不进 loadLyrics（其顶部复位是常规清
+          // 锁点）——早退不补则 lyricFetching 卡 true 到旧请求自然超时，
+          // 新曲工具条锁死。代次闸：期间新开的词务（lyricLoadSeq 已升）
+          // 的锁归它自己 finally 管，本代只清旧代残余
+          if (lyricSeqAtEntry === lyricLoadSeq) lyricFetching.value = false
           if (currentAbortController === myController) currentAbortController = null
           return
         }
@@ -881,10 +957,14 @@ export function usePlayer({
             recordPlayHistory(song) // 真实起播才计入最近播放（加载失败/恢复态不记）
             recordPlaylistHistory() // 同口径记归属歌单——首页「最近播放的歌单」数据源
             startProgressLoop()
+            // 起播重建词同步表（暂停已清表——100ms 空 tick 是无谓唤醒）；
+            // 内部 isPlaying/syncable 双闸自行兜「无词/无戳词」不建的情形
+            startLyricSync()
           },
           onpause: () => {
             if (isStale()) return
             isPlaying.value = false
+            stopLyricSync() // 暂停清表——空转 tick 白耗电，起播经 onplay 重建
             savePlaybackTimeIfNeeded(true)
           },
           onstop: () => {
@@ -1030,6 +1110,9 @@ export function usePlayer({
         console.error('❌ 播放歌曲失败:', error)
         songSwitching.value = false
         playbackError.value = '播放请求失败，请稍后重试'
+        // 终态同补手动词务锁（与无 URL 早退同代次口径）：本代可能没走
+        // 到 loadLyrics 的顶部复位——期间新开的词务锁归它自己 finally 管
+        if (lyricSeqAtEntry === lyricLoadSeq) lyricFetching.value = false
         // 清掉上一首歌的残留歌词，避免在新歌标题下渲染旧歌词
         lyrics.value = []
         currentLyricIndex.value = 0
@@ -1057,6 +1140,11 @@ export function usePlayer({
       // 失配不再碰锁，这里不清则 lyricFetching 卡 true，新曲工具条
       // 死锁到旧请求 settle 才放
       lyricFetching.value = false
+      // loadingLyrics 顶部置位（旧版散在各支 try 内）：hydrateMatchBinding
+      // 的 RTT 窗内旧词仍挂屏上且无加载态——顶置让窗内即进 loading。
+      // 终态各支 try/finally 照旧复位；stale 早退留给新代（或看门狗
+      // 显式清）——本代被顶替时绝不能抢新代的旗
+      loadingLyrics.value = true
       const stale = () => signal?.aborted || currentPlayingId !== song.id || mySeq !== lyricLoadSeq
       // file_ 曲：词源=用户上传的 .lrc 工件（file 端点 kind=lyrics）。无资产时 404 → 空词。
       // 词属主键用 song.id——file 词与曲同生死，offset 校准也挂它（song_lyric_meta 按 id 存）
@@ -1064,7 +1152,6 @@ export function usePlayer({
         lyricOffsetMs.value = 0
         lyricOwnerKey.value = null
         try {
-          loadingLyrics.value = true
           const metaPromise = downloadsApi.getSongMeta(song.id).catch(() => null)
           const res = await fetch(fileArtifactUrl(song.id, 'lyrics'), { signal, credentials: 'include' })
           const text = res.ok ? await res.text() : null
@@ -1113,11 +1200,8 @@ export function usePlayer({
       // 化行按 bv_/yt_ id 形态同判（对象与形态任一命中）——服务端按 id 前缀
       // 自解定位，title/artist 只是检索喂料，缺了降级不致死。
       // qq_ 不在此列——QQ 曲有自家权威词源（/qq/lyric），无匹配也能出词
-      if ((song?.bilibili || song?.youtube
-          || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id)))
-          && !song.neteaseId) {
+      if (isUgcExternalTrack(song) && !song.neteaseId) {
         try {
-          loadingLyrics.value = true
           await fetchApplyExternal(song, signal)
           // 外源终态仍无滚动词（级联全灭/hit=null/行集剥空，或只命中纯文
           // 本词——time 全非有限的静态行只算「有字」不算「有词」：绑上网
@@ -1147,10 +1231,10 @@ export function usePlayer({
       // 同样自解 mid——/qq/lyric 只吃 mid，不落网易云 /lyric 死路
       const qqMid = song?.qq?.mid || String(song?.id ?? '').match(QQ_SONG_ID_RE)?.[1] || null
       let lyricId = qqMid ? `qq_${qqMid}` : (song?.neteaseId ?? song?.id)
-      if (lyricId == null) return
+      // 非 stale 的早退出口须自清加载旗（顶部已置位，本代仍是新代无人接管）
+      if (lyricId == null) { loadingLyrics.value = false; return }
       lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
       try {
-        loadingLyrics.value = true
         console.log('📝 加载歌词:', lyricId)
 
         // 校准随词源走（neteaseId 优先）：同一网易云词源在本地单/远端单/壳间共享。
@@ -1168,16 +1252,14 @@ export function usePlayer({
           if (stale()) return
         }
         // 绑后词空兜底：词源终态行集为空（含 qq→netease 回落后仍空）且曲
-        // 是 UGC 形态（provider 对象或 bv_/yt_ 裸 id——与上方未绑定支同
-        // 谓词）→ 再走一遍外源级联。曲绑上 neteaseId 后 !song.neteaseId
-        // 闸使外源支本不再进——若绑定的词源无词，本在显示的外源词（如首
-        // 配前命中的纯文本词）会永久消失：绑错=丢词。数字/qq_ 纯曲库 id
-        // 不进——外源宽检对目录曲是误导通道（既有设计口径）。外源也空
-        // 则 lyrics=[] 与现状同终态；rematchUnbound 的 neteaseId==null
-        // 闸天然防环——绑后兜底不回触首配
-        if (!lyricsData?.lyrics?.length
-            && (song?.youtube || song?.bilibili
-                || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id)))) {
+        // 是 UGC 形态（isUgcExternalTrack——与上方未绑定支同谓词）→ 再走
+        // 一遍外源级联。曲绑上 neteaseId 后 !song.neteaseId 闸使外源支本
+        // 不再进——若绑定的词源无词，本在显示的外源词（如首配前命中的纯
+        // 文本词）会永久消失：绑错=丢词。数字/qq_ 纯曲库 id 不进——外源
+        // 宽检对目录曲是误导通道（既有设计口径）。外源也空则 lyrics=[]
+        // 与现状同终态；rematchUnbound 的 neteaseId==null 闸天然防环——
+        // 绑后兜底不回触首配
+        if (!lyricsData?.lyrics?.length && isUgcExternalTrack(song)) {
           await fetchApplyExternal(song, signal)
           return
         }
@@ -1259,11 +1341,10 @@ export function usePlayer({
       const seq = ++lyricProcSeq
       if (synced && rows.length > 0) {
         startLyricSync()
-      } else if (lyricTimer) {
+      } else {
         // 防御（热重载/菜单换绑不经 playSong 的计时器清理）：旧 synced
         // 计时器若在会把无戳词的 currentLyricIndex 恒压回 0
-        clearInterval(lyricTimer)
-        lyricTimer = null
+        stopLyricSync()
       }
       // extId 缺席时词属主键已降级成轨道 id（bv_/yt_）——该形态不在
       // /ai/lyric-verify 与 /ai/lyric-translate 白名单内，postProcess
@@ -1302,6 +1383,20 @@ export function usePlayer({
     const aiLyricTranslations = new Map() // lyricId -> tlyric 字符串
     let lyricProcSeq = 0 // 每次歌词落盘 +1；postProcess 捕获，ownsLyric 比对
 
+    // /ai/status 会话级挂账：postProcess 每过一份词都问一次「AI 开了
+    // 没」，而开关在同会话内不变（服务端配置项）——首问 Promise 挂账，
+    // 并发与后续共账只打一跳；失败销账重抛，下次重新探测不缓存错误
+    let aiStatusPromise = null
+    const getAiStatus = () => {
+      if (!aiStatusPromise) {
+        aiStatusPromise = aiApi.status().catch(e => {
+          aiStatusPromise = null
+          throw e
+        })
+      }
+      return aiStatusPromise
+    }
+
     // verify 判否后的自动换绑：判否等于「当前词源错配」的强信号，把该
     // neteaseId 否进 excludeIds 让服务端 /match/retry 换绑重跑。每曲每
     // 会话限一次（Map 键 trackId——有键即算 tried）——新词源若仍被判否，
@@ -1322,7 +1417,11 @@ export function usePlayer({
     // 语义：跨会话收敛靠服务端 song_match 行，前端不持久化
     const matchVetoedIds = new Map()
     const rematchLyricSource = async (song, lyricId, signal = null) => {
-      if (!(song?.youtube || song?.bilibili) || song.neteaseId == null
+      // 形闸对齐 isUgcExternalTrack 裸 id 口径（与各词务形闸同一张谓
+      // 词）：provider 对象在 verify→rematch 的 RTT 窗内被剥走（持久化
+      // 裁剪/旧行形态）只剩 bv_/yt_ 形态 id 时，换绑资格不该跟着蒸发
+      const extTrack = isUgcExternalTrack(song)
+      if (!extTrack || song.neteaseId == null
           || String(lyricId) !== String(song.neteaseId)) {
         // 曲未绑定（neteaseId==null）时判否的是外源词——lyricId 是 extId
         // 不是 neteaseId，无可否对象不进 excludeIds：此刻词已藏、曲仍
@@ -1339,13 +1438,15 @@ export function usePlayer({
       }
       const freshVetoed = new Set([lyricId])
       rematchTried.set(key, freshVetoed)
-      const ext = song.youtube || song.bilibili
+      // provider 块可缺席（裸 id 过闸）：检索喂料回退 song.name/ar，与
+      // rematchUnbound 同口径——缺了降级不致死，服务端按 id 前缀自解
+      const ext = song.youtube || song.bilibili || null
       const durationMs = song.dt || song.duration
       try {
         const matched = await musicApi.retryMatch({
           trackId: song.id,
-          title: ext.title || song.name || '',
-          author: ext.author || '',
+          title: ext?.title || song.name || '',
+          author: ext?.author || '',
           // provider 块从不存 artists 字段（external-songs.js 只落 author/
           // authorClean）——authorClean 是剥 ' - Topic'/'VEVO' 后的真艺人名，
           // 一并喂服务端打分器 sourceInfo.artists（YT Topic 频道场景 retry
@@ -1399,12 +1500,11 @@ export function usePlayer({
     // 自愈不配打扰用户
     const rematchUnboundTried = new Map()
     const rematchUnbound = async (song, signal = null) => {
-      // 形闸与外源支同口径：provider 对象或裸前缀 id 任一命中（老持久化
-      // 行只剩 id 形态）。neteaseId/id 合法复查——触发点到本函数入口间
-      // 别路（菜单换绑等）可能已补绑，已绑定的曲由常规词支接管不该到这
-      const extTrack = !!(song?.youtube || song?.bilibili)
-        || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id))
-      if (!extTrack || song?.id == null || song.neteaseId != null) return
+      // 形闸与外源支同一张谓词（isUgcExternalTrack：provider 对象或裸
+      // 前缀 id 任一命中——老持久化行只剩 id 形态）。neteaseId/id 合法
+      // 复查——触发点到本函数入口间别路（菜单换绑等）可能已补绑，
+      // 已绑定的曲由常规词支接管不该到这
+      if (!isUgcExternalTrack(song) || song?.id == null || song.neteaseId != null) return
       const key = String(song.id)
       if (rematchUnboundTried.has(key)) return
       rematchUnboundTried.set(key, true)
@@ -1473,11 +1573,9 @@ export function usePlayer({
     // 写回段 warn 留痕——后台链路不配打扰用户但缺陷不该没痕迹
     const hydrateTried = new Set()
     const hydrateMatchBinding = async (song, signal = null) => {
-      const extTrack = !!(song?.youtube || song?.bilibili)
-        || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id))
       // id 合法复查与 rematchUnbound 同口径；已绑定（neteaseId 在）直接
       // 早退——别路已写回的曲不再查
-      if (!extTrack || song?.id == null || song.neteaseId != null) return
+      if (!isUgcExternalTrack(song) || song?.id == null || song.neteaseId != null) return
       const key = String(song.id)
       if (hydrateTried.has(key)) return
       hydrateTried.add(key)
@@ -1534,13 +1632,18 @@ export function usePlayer({
       void loadLyrics(currentSong.value)
     }
     lyricRematchHandler = onLyricRematch
+    // 遥控 seek 销账槽注册：与 lyricRematchHandler 同生命周期口径——卸载只摘
+    // 自己的槽（测试多实例共存时不误摘新实例的注册）
+    const onRemoteSeek = () => { pendingSeekTime = null }
+    remoteSeekSettleHandler = onRemoteSeek
     onBeforeUnmount(() => {
       if (lyricRematchHandler === onLyricRematch) lyricRematchHandler = null
+      if (remoteSeekSettleHandler === onRemoteSeek) remoteSeekSettleHandler = null
     })
 
     const postProcessLyrics = async (song, lyricId, seq, signal = null) => {
       if (!lyrics.value.length) return
-      const st = await aiApi.status()
+      const st = await getAiStatus()
       // 词属主复查：每个 await 后都可能已切歌/重载——写回前必须确认
       const ownsLyric = () => lyricProcSeq === seq
         && lyricOwnerKey.value === lyricId && currentPlayingId === song.id
@@ -1623,10 +1726,15 @@ export function usePlayer({
       } catch { /* 翻译失败静默——原文歌词照常可用 */ }
     }
 
+    // 建表双闸：暂停不建（加载窗内用户已暂停——onpause 早已跑过，没人
+    // 清就得靠本闸；起播经 onplay 重建）、无可滚词不建（无戳行 time 全
+    // Infinity，建表只会把 currentLyricIndex 从 -1 恒压回 0）
+    const lyricsSyncable = () =>
+      lyrics.value.some(l => Number.isFinite(l?.time))
+
     const startLyricSync = () => {
-      if (lyricTimer) {
-        clearInterval(lyricTimer)
-      }
+      stopLyricSync()
+      if (!isPlaying.value || !lyricsSyncable()) return
 
       lyricTimer = setInterval(() => {
         if (!howl || !isPlaying.value || lyrics.value.length === 0) return
@@ -1891,21 +1999,21 @@ export function usePlayer({
           let st = null
           try {
             st = (await downloadsApi.getSongDownloadStatus(playlistId, song.id))?.data
-            pollErrors = 0
-          } catch {
-            if (++pollErrors >= 3) break
-            continue
-          }
-          if (st?.downloaded === true || st?.audioReady === true) {
+          } catch { /* 探测抛错与下方 data 缺省同归失联计数 */ }
+          // data 缺省的 200 回包（网关掐 body/代理截断）与抛错同计——
+          // 探测内容不可读即失联，攒满阈值收束而非空轮撑到 deadline
+          if (st == null) { if (++pollErrors >= 3) break; continue }
+          pollErrors = 0
+          if (st.downloaded === true || st.audioReady === true) {
             if (!stale()) toast('下载成功', 'success')
             return
           }
-          if (st?.task?.status === 'failed') {
+          if (st.task?.status === 'failed') {
             if (!stale()) toast(`下载失败：${st.task?.errorMessage || '未知原因'}`, 'error')
             return
           }
           // 任务行被外部清掉（下载页手动清理）——没有可等的终态
-          if (st && st.task === null) {
+          if (st.task === null) {
             if (!stale()) toast('下载失败：下载任务已不存在（可能在下载页中被清理）', 'error')
             return
           }
@@ -2069,6 +2177,11 @@ export function usePlayer({
       if (howl?.playing()) howl.pause()
       isPlaying.value = false
       currentTime.value = duration.value
+      // 「已播完」记 0 而非尾刻：存档续播点落 currentTime=duration 的话，
+      // 重启恢复 seek 会被 onload 的 -0.5s 尾钳钉回最后半秒（已播完的曲
+      // 不该再送用户回结尾）。UI 进度照常显示走满——落盘写挂账与播放位
+      // 续播同一机制（pendingSeekTime），用户显式 seek/下次起播时销账
+      pendingSeekTime = 0
       savePlaybackTimeIfNeeded(true)
     }
 
@@ -2118,6 +2231,8 @@ export function usePlayer({
       const clamped = Math.max(0, Math.min(1, ratio))
       const seekTime = clamped * duration.value
 
+      // 显式 seek 销「已播完」挂账——下拍落盘写用户选的新播放位而非 0
+      pendingSeekTime = null
       howl.seek(seekTime)
       currentTime.value = seekTime
       // 拖拽中高频 seek：走非强制路径，整秒去重限制 localStorage 写入频率
@@ -2196,6 +2311,7 @@ export function usePlayer({
         seekto: (d) => {
           if (howl && typeof d?.seekTime === 'number' && Number.isFinite(d.seekTime)) {
             const t = Math.max(0, Math.min(d.seekTime, duration.value || 0))
+            pendingSeekTime = null // 显式 seek 销「已播完」挂账（同 seekTo 口径）
             howl.seek(t)
             currentTime.value = t
           }
@@ -2231,6 +2347,7 @@ export function usePlayer({
     const seekBy = (delta) => {
       if (!howl || !Number.isFinite(duration.value) || duration.value <= 0) return
       const t = Math.max(0, Math.min((howl.seek() ?? 0) + delta, duration.value))
+      pendingSeekTime = null // 显式 seek 销「已播完」挂账（同 seekTo 口径）
       howl.seek(t)
       currentTime.value = t
       savePlaybackTimeIfNeeded(true)
@@ -2249,10 +2366,7 @@ export function usePlayer({
         cancelAnimationFrame(progressRafId)
         progressRafId = null
       }
-      if (lyricTimer) {
-        clearInterval(lyricTimer)
-        lyricTimer = null
-      }
+      stopLyricSync()
       clearHowlWatchdog()
       clearTimeout(volumeSaveTimer)
       flushLyricOffsetSave() // 卸载前把待发的校准写出去

@@ -1,12 +1,21 @@
 <template>
   <div
+    ref="rootEl"
     class="fullscreen-player fixed inset-0 z-[var(--z-fullscreen)]"
     :class="{ 'fullscreen-player--idle': chromeHidden }"
+    role="dialog"
+    aria-modal="true"
+    aria-label="全屏播放器"
+    tabindex="-1"
     @mousemove="wake"
     @pointerdown="wake"
+    @keydown="onDialogKeydown"
   >
+    <!-- 画布是纯视觉通道：读屏歌词走 WatchView 的 DOM 词列，画布文本进
+         a11y 树只会把逐字滚动噪音灌给 AT——整条子树藏掉 -->
     <TextAliveLyricCanvas
       class="fullscreen-player__canvas"
+      aria-hidden="true"
       :lyrics="lyrics"
       :current-time="currentTime"
       :duration="duration"
@@ -31,12 +40,18 @@
         <div class="fullscreen-player__topbar-actions">
           <button
             class="fullscreen-player__topbar-button"
+            :aria-pressed="lyricMode === 'translation'"
+            aria-label="切换歌词原文/译文"
+            title="切换歌词原文/译文"
             @click="$emit('update:lyric-mode', lyricMode === 'original' ? 'translation' : 'original')"
           >
             {{ lyricMode === 'original' ? '原文' : '译文' }}
           </button>
           <button
             class="fullscreen-player__topbar-button"
+            :aria-pressed="interactionMode === 'pointer'"
+            aria-label="切换歌词自动/鼠标交互"
+            title="切换歌词自动/鼠标交互"
             @click="$emit('update:interaction-mode', interactionMode === 'auto' ? 'pointer' : 'auto')"
           >
             {{ interactionMode === 'auto' ? '自动' : '鼠标' }}
@@ -95,10 +110,33 @@
         ><PixelIcon name="note" :size="40" /></div>
       </div>
 
-      <!-- 命中壳 24px（触屏可点）+ 内层 4px 视觉轨道（pill 裁切保留） -->
-      <div class="fullscreen-player__progress-hit" @click="onSeekClick">
+      <!-- 命中壳 24px（触屏可点）+ 内层 4px 视觉轨道（pill 裁切保留）。
+           滑杆契约与 BottomPlayer 同款：role=slider + ±5s 方向键 + Home/End
+           + pointer 拖拽链（down/move/up/cancel/lostcapture）。无 @click——
+           pointer 链已全覆盖鼠/触/笔，click 会与 pointerup 双发 seek -->
+      <div
+        class="fullscreen-player__progress-hit"
+        role="slider"
+        aria-label="播放进度"
+        :aria-valuenow="Math.round(seekProgress)"
+        :aria-valuetext="`${formatTime(currentTime)} / ${formatTime(duration)}`"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        tabindex="0"
+        @keydown.arrow-right.prevent="nudgeSeek(5)"
+        @keydown.arrow-left.prevent="nudgeSeek(-5)"
+        @keydown.home.prevent="seekToPosition(0)"
+        @keydown.end.prevent="seekToPosition(1)"
+        @keydown.enter.prevent="$emit('toggle-play')"
+        @keydown.space.prevent="$emit('toggle-play')"
+        @pointerdown="onProgressPointerDown"
+        @pointermove="onProgressPointerMove"
+        @pointerup="onProgressPointerUp"
+        @pointercancel="onProgressPointerCancel"
+        @lostpointercapture="onProgressPointerUp"
+      >
         <div class="player-progress-bar fullscreen-player__progress">
-          <div class="player-progress-fill" :style="{ '--p': progressPercentage }"></div>
+          <div class="player-progress-fill" :style="{ '--p': seekProgress }"></div>
         </div>
       </div>
     </div>
@@ -106,12 +144,14 @@
 </template>
 
 <script>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import TextAliveLyricCanvas from './TextAliveLyricCanvas.vue'
 import PixelIcon from './PixelIcon.vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 import { songCoverUrl } from '../lib/song'
+import { trapTabKeydown } from '../lib/focus-trap'
+import { isConfirmOpen } from '../lib/feedback'
 
 export default {
   name: 'FullscreenPlayer',
@@ -162,17 +202,65 @@ export default {
   emits: ['close', 'toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:lyric-mode', 'update:interaction-mode'],
   setup(props, { emit }) {
 
-    const progressPercentage = computed(() => {
+    // 进度条拖拽状态：按下期间 UI 播放在这里走，不跟随 props.currentTime 抢
+    // （与 BottomPlayer 同口径——滑杆组件间行为对齐，seek 契约=归一化比例）
+    const dragActive = ref(false)
+    const dragProgress = ref(0)
+    // 多指隔离：第二指 pointerdown 不得覆写进行中的拖拽
+    const dragPointerId = ref(null)
+
+    const seekProgress = computed(() => {
+      if (dragActive.value) return dragProgress.value * 100
       // seek 漂移/duration 修正会让 currentTime 短暂越过 duration——钳制
       return props.duration > 0
         ? Math.max(0, Math.min(100, (props.currentTime / props.duration) * 100))
         : 0
     })
 
-    // 进度条点击 → 归一化比例 0-1（父组件负责换算为秒）
-    const onSeekClick = (event) => {
-      const rect = event.currentTarget.getBoundingClientRect()
-      emit('seek-to', (event.clientX - rect.left) / rect.width)
+    const positionFromEvent = (e, bar) => {
+      const rect = bar.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      return Math.min(1, Math.max(0, x / rect.width))
+    }
+
+    // seek 契约：emit 归一化比例 0-1（父组件 seekTo 换算秒）
+    const seekToPosition = (pos) => {
+      emit('seek-to', pos)
+    }
+
+    const nudgeSeek = (sec) => {
+      const target = Math.max(0, Math.min(props.duration || 0, props.currentTime + sec))
+      emit('seek-to', props.duration ? target / props.duration : 0)
+    }
+
+    const onProgressPointerDown = (e) => {
+      if (e.button !== 0 || dragActive.value) return
+      const bar = e.currentTarget
+      bar.setPointerCapture?.(e.pointerId)
+      dragActive.value = true
+      dragPointerId.value = e.pointerId
+      dragProgress.value = positionFromEvent(e, bar)
+    }
+
+    const onProgressPointerMove = (e) => {
+      if (!dragActive.value || e.pointerId !== dragPointerId.value) return
+      dragProgress.value = positionFromEvent(e, e.currentTarget)
+    }
+
+    const onProgressPointerUp = (e) => {
+      if (!dragActive.value || e.pointerId !== dragPointerId.value) return
+      dragActive.value = false
+      dragPointerId.value = null
+      // 发 up 点实况而非末次 move 值——coalesced events 下甩动松手不滞后
+      emit('seek-to', positionFromEvent(e, e.currentTarget))
+    }
+
+    /* 浏览器接管手势（pan-y 竖滑起步）时只收拖拽态不 emit——
+       用户本意是滚动页面，按触点位置 seek 是误操作 */
+    const onProgressPointerCancel = (e) => {
+      if (e.pointerId !== dragPointerId.value) return
+      dragActive.value = false
+      dragPointerId.value = null
     }
 
     // 沉浸页 idle 自隐：2.6s 无输入 → 光标+全部 chrome（顶栏/底栏/进度条）
@@ -191,33 +279,62 @@ export default {
       else clearTimeout(chromeHideTimer)   // 暂停→常显（computed 的 !isPlaying 兜底）
     })
 
+    // aria-modal 契约：Tab/Shift+Tab 把焦点钳在层内首尾互跳——共享实现
+    // lib/focus-trap.js（SongFormDialog/确认框/App 弹层同源）。本层可聚焦集
+    // 天然闭合：顶栏三键+播控三键+音量 range+进度滑杆。挂在根上吃冒泡的
+    // Tab——子键（滑杆/按钮）自己不拦 Tab，不钳则逃出遮罩落到下层控件
+    const onDialogKeydown = (e) => trapTabKeydown(e)
+
     const handleKeydown = (event) => {
       wake()
       if (event.key === 'Escape') {
+        // 确认弹层（pixelConfirm）叠在沉浸层上时 Esc 归确认框——App 全局链
+        // 按「取消」结算；本层不抢关，否则一键双关把两层一起收掉
+        if (isConfirmOpen()) return
         emit('close')
       }
     }
 
+    // dialog 焦点闭环：开层把焦点收进根（tabindex=-1 只收程序焦点不入
+    // Tab 序——否则 Tab 会在不可聚焦的根上白停一站）；关层归还到打开
+    // 前的活动元素（沉浸层是 v-if 整棵卸，不归还则焦点落 body 重头 Tab）
+    const rootEl = ref(null)
+    let prevActiveEl = null
+    // body overflow 存旧还原——裸写 '' 会冲掉上游（别的遮罩层/调用方）设的值
+    let prevBodyOverflow = ''
+
     onMounted(() => {
+      prevBodyOverflow = document.body.style.overflow
       document.body.style.overflow = 'hidden'
       window.addEventListener('keydown', handleKeydown)
+      prevActiveEl = document.activeElement
+      nextTick(() => rootEl.value?.focus())
       wake() // 挂载即亮一轮；播放中挂上自隐计时
     })
 
     onUnmounted(() => {
-      document.body.style.overflow = ''
+      document.body.style.overflow = prevBodyOverflow
       window.removeEventListener('keydown', handleKeydown)
       clearTimeout(chromeHideTimer)
+      // 归还前先确认触发元素仍在树里——宿主可能同拍卸载（如路由切走）
+      if (prevActiveEl?.isConnected) prevActiveEl.focus()
     })
 
     return {
-      progressPercentage,
+      rootEl,
+      seekProgress,
       formatTime,
       httpsCover,
       songCoverUrl,
-      onSeekClick,
+      seekToPosition,
+      nudgeSeek,
+      onProgressPointerDown,
+      onProgressPointerMove,
+      onProgressPointerUp,
+      onProgressPointerCancel,
       chromeHidden,
-      wake
+      wake,
+      onDialogKeydown
     }
   }
 }
@@ -271,16 +388,19 @@ export default {
    持 :focus 不持 :focus-visible：focus-within 会把栏钉成恒显（配合
    cursor:none 形成「恒显 chrome+消失光标」的最坏组合）；音量 range 拖
    杆点击持 :focus-visible——焦点在可操作件上就该常显，语义正确。
-   pointer-events 一并归还：露出的栏必须可点（idle 规则把它收走过）。
-   无 :has 的老浏览器退 focus-within：宁恒显勿键盘陷阱 */
+   进度滑杆同列：它本体即焦点件，idle 收过 opacity 后焦点仍落在看不见的
+   滑杆上是键盘陷阱。pointer-events 一并归还：露出的栏必须可点（idle
+   规则把它收走过）。无 :has 的老浏览器退 focus-within：宁恒显勿键盘陷阱 */
 .fullscreen-player__topbar:has(:focus-visible),
-.fullscreen-player__bottom:has(:focus-visible) {
+.fullscreen-player__bottom:has(:focus-visible),
+.fullscreen-player__progress-hit:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
 @supports not (selector(:has(:focus-visible))) {
   .fullscreen-player__topbar:focus-within,
-  .fullscreen-player__bottom:focus-within {
+  .fullscreen-player__bottom:focus-within,
+  .fullscreen-player__progress-hit:focus-within {
     opacity: 1;
     pointer-events: auto;
   }
@@ -291,7 +411,8 @@ export default {
 .fullscreen-player--idle .fullscreen-player__topbar:has(:focus-visible),
 .fullscreen-player--idle .fullscreen-player__topbar:has(:focus-visible) *,
 .fullscreen-player--idle .fullscreen-player__bottom:has(:focus-visible),
-.fullscreen-player--idle .fullscreen-player__bottom:has(:focus-visible) * {
+.fullscreen-player--idle .fullscreen-player__bottom:has(:focus-visible) *,
+.fullscreen-player--idle .fullscreen-player__progress-hit:focus-visible {
   cursor: auto !important;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -368,8 +489,10 @@ export default {
   width: min(100%, 520px);
 }
 
-/* 命中壳：定位与触控语义在这层——click 读的是壳 rect（与轨道同宽，比例不变）。
-   抬高让出 Home 指示条热区（iOS ~34px），否则点按触发系统手势 */
+/* 命中壳：定位与触控语义在这层——pointer 链读的是壳 rect（与轨道同宽，
+   比例不变）。抬高让出 Home 指示条热区（iOS ~34px），否则点按触发系统
+   手势。touch-action 与 BottomPlayer 滑杆同口径：横滑 seek 被捕获不丢
+   浏览器手势，竖滑放行滚页——none 会把竖滑也窃成拖拽 */
 .fullscreen-player__progress-hit {
   position: absolute;
   left: 24px;
@@ -379,7 +502,7 @@ export default {
   display: flex;
   align-items: center;
   cursor: pointer;
-  touch-action: none;
+  touch-action: pan-y;
 }
 .fullscreen-player__progress {
   position: static;
