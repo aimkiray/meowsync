@@ -164,11 +164,11 @@ describe('WatchView：顶行下载键', () => {
 describe('WatchView：顶行沉浸键', () => {
   // 与底栏沉浸键同字形（同开 FullscreenPlayer）——钉键名防回退成只表
   // 「缩放」的 expand；path 非空顺带钉住 ICONS 注册
-  it('渲染 lyrics 图标，点击发 open-fullscreen', async () => {
+  it('渲染 fullscreen 图标，点击发 open-fullscreen', async () => {
     const w = mountWatch({ tab: 'queue' })
     const btn = w.find('.watch-actions button[title="全屏歌词模式"]')
     expect(btn.exists()).toBe(true)
-    expect(btn.findComponent(PixelIcon).props('name')).toBe('lyrics')
+    expect(btn.findComponent(PixelIcon).props('name')).toBe('fullscreen')
     expect(btn.find('svg path').attributes('d')).toBeTruthy()
     await btn.trigger('click')
     expect(w.emitted('open-fullscreen')).toHaveLength(1)
