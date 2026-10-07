@@ -13,9 +13,19 @@
 //   · file-downloader：外源曲无 neteaseId 时外源词落盘；网易侧 romalrc
 //     作为独立层与译文一同按同刻行落盘
 //   · 免时长末轮 gate：常规轮传输故障全灭/durationSec 缺省时末轮不展开
-//   · 末轮收成单开放轮 + 同题候选池语境（pool 进判定 prompt、vkey v3
+//   · 末轮收成单开放轮 + 同题候选池语境（pool 进判定 prompt、vkey v4
 //     盐与无池盲审互不命中）
-//   · deadline 短路：verify 闭包与逐候选迭代过期即停不续烧 AI/download
+//   · yt_ 声明：常规轮发起前反解本家声明 {title,author}——choose/verify
+//     自首轮起携 declared（同题池判官看得到自署本家轴）；常规轮全灭
+//     后原位置声明轮重扫、先于免时长末轮、题同且艺人面无新信息才跳
+//     （题同作者异仍起轮）、反解故障/超时静默走原路径
+//   · 标题身份闸全轮在位（strictTitle 恒 true）——具名轮 artistHit 子串
+//     命中不豁免：'□° ver.EMA'→'ダンス・ダンス・ダダ' 实案钉死
+//   · choose 整池单发消歧：无艺人约束轮（开放+末轮）池 ≥1 即发选择题，
+//     挑中条补跑词文核验——判否判死不落回、核验故障落回逐候选迭代；
+//     明言否决判死、未应答/故障落回逐候选核验；具名轮不注入
+//   · deadline 短路：逐候选迭代过期起轮即停不续烧 AI/download；verify
+//     闭包过期判否不盲收（choose 挑中条过期补验判死该变体不收录）
 //   · LYRIC_PROXY：LRCLIB/酷狗 fetch 带共享 dispatcher，缺省无 dispatcher 键
 // globalThis.fetch 按 URL 分发到各源桩——不打真网络；lib/ai 桩控
 // aiEnabled/askAiJson（核验路径开/关都要钉）；netease-api 桩供
@@ -66,6 +76,19 @@ seed('../src/server/services/lyric-align.js', {
   alignAudioToLrc: async (args) => { alignCalls.push(args); return alignImpl(args); },
 });
 
+// lyric-verify 真身先加载再 seed 一层入参录制包装：judgePoolPick/
+// judgeLyricLines 的实参形态（declared 声明证据是否透到判定层）靠它
+// 钉——委托真实现不改行为语义。须在 lyric-external/file-downloader
+// require 前播种：它们 require 时解构绑定这些函数
+const realLyricVerify = require('../src/server/services/lyric-verify.js');
+const judgePoolArgs = [];
+const judgeLineArgs = [];
+seed('../src/server/services/lyric-verify.js', {
+  ...realLyricVerify,
+  judgePoolPick: (a) => { judgePoolArgs.push(a); return realLyricVerify.judgePoolPick(a); },
+  judgeLyricLines: (a) => { judgeLineArgs.push(a); return realLyricVerify.judgeLyricLines(a); },
+});
+
 const svc = require('../src/server/services/lyric-external.js');
 const app = require('../src/server/routes/lyric-external.js');
 const fd = require('../src/server/services/file-downloader.js');
@@ -80,6 +103,17 @@ const { DOWNLOAD_BASE_DIR } = require('../src/server/services/download-fs.js');
 // 归属核验的 verdict 预置（下载链「判否→外源接一手」用例）与反查 LRU 命中
 const lyricAiRepo = require('../src/server/repositories/lyricAi.js');
 const { lyricVerdictKey } = require('../src/server/services/lyric-verify.js');
+// 本家声明反解可控桩：lyric-external 经模块对象调 lib/youtube 的
+// resolveOriginalInfo（真身在并行单元落地中）——钉录制桩让声明轮用例
+// 可控（默认 null=无声明，各用例 origInfoImpl 覆写），也隔离真身内部
+// 的 fetchPlayer 上行面
+const ytLib = require('../src/server/lib/youtube.js');
+let origInfoImpl = null;
+const origInfoCalls = [];
+ytLib.resolveOriginalInfo = async (args) => {
+  origInfoCalls.push(args);
+  return origInfoImpl ? origInfoImpl(args) : null;
+};
 
 // ── fetch 桩：URL 子串分发；calls 记序（级联顺序断言用）──
 const calls = [];
@@ -637,11 +671,14 @@ test('级联降轮：title 剥出艺人候选——UP 主名严格轮滤净后�
   });
   assert.equal(res.extId, 'lrclib_88');
   // 第一轮 '音乐搬运工' 被 artistHit 滤净——raw 与 'A - B' 剥出的「晴天」
-  // 变体同轮都试（两发检索）→ 第二轮「周杰伦」候选命中
-  assert.equal(seen.length, 3);
+  // 变体同轮都试（两发检索）；第二轮「周杰伦」具名轮也过标题闸：raw
+  // 变体 '周杰伦 - 晴天' 归一 ≠ '晴天' 被闸拒，剥缀变体 '晴天' 归一相等
+  // 才命中——具名轮检索面比上闸前多一发（raw 变体白打换确定性）
+  assert.equal(seen.length, 4);
   assert.ok(seen[0].includes('音乐搬运工'));
   assert.ok(seen[1].includes('音乐搬运工'));
   assert.ok(seen[2].includes('周杰伦') && !seen[2].includes('音乐搬运工'));
+  assert.ok(seen[3].includes('晴天') && seen[3].includes('周杰伦'));
 });
 
 test('级联降轮：title 剥不出艺人 → artist:\'\' 宽检放行（艺人不约束；候选标题须归一相等——见标题闸用例）', async () => {
@@ -684,6 +721,11 @@ test('titleVariantsOf：剥缀形态、raw 占首、去重与上限', () => {
   assert.ok(svc.titleVariantsOf('某曲 (cover)').includes('某曲'));
   assert.ok(svc.titleVariantsOf('某曲 ／COVER').includes('某曲'));
   assert.ok(svc.titleVariantsOf('Song feat. Guest').includes('Song'));
+  // 日文惯写 'ft.歌姫' 点号后无空格也剥；整包围引号壳剥出裸题
+  assert.ok(svc.titleVariantsOf('Song ft.初音ミク').includes('Song'));
+  assert.ok(svc.titleVariantsOf("'GETCHA!'").includes('GETCHA!'));
+  // 词干粘连不误剥残片：'Somewith you' 原样保留不产 'Some'
+  assert.deepEqual(svc.titleVariantsOf('Somewith you'), ['Somewith you']);
   assert.deepEqual(svc.titleVariantsOf('晴天'), ['晴天']);     // 无变体 → 仅 raw
   assert.equal(svc.titleVariantsOf('').length, 1);
   // '(cover)' 同是 cover 括弧与尾括弧——两规则产同形去重只剩一份
@@ -859,8 +901,11 @@ test('fetchByExtId：kugou_ 入参带空白也吃进程内级联缓存', async (
 
 test('downloadLyrics：网易嫁接词判否 → 外源级联命中即落盘', async () => {
   aiOn = false;
+  // 括弧形态【官方MV】走 cleanQueryTitle 剥除——标题身份闸现全轮在位，
+  // 具名轮也要求候选标题与某检索变体剥缀归一精确等；裸 ' 官方MV' 尾不在
+  // 剥缀面内（候选 '晴天' 会被闸拒），括弧形态才能剥出 '晴天' 变体
   const providerData = {
-    bilibili: { bvid: 'BV1xx411c7mD', title: '周杰伦 - 晴天 官方MV', author: '音乐搬运工' },
+    bilibili: { bvid: 'BV1xx411c7mD', title: '周杰伦 - 晴天【官方MV】', author: '音乐搬运工' },
     neteaseId: '88001',
   };
   // 预置网易云词源的判否 verdict——已落库判定不随 aiEnabled 旁路
@@ -895,19 +940,30 @@ test('strictTitleHit：候选剥缀归一与检索变体精确等才放行', () 
   assert.equal(gate('ロストアンブレラ', 'ロストアンブレラ'), true);
   // 刻意取舍：跨文字形态不互认（罗马音 vs 日文原名）——漏判由兜底链愈合
   assert.equal(gate('ロストアンブレラ', 'Lost Umbrella'), false);
-  assert.equal(gate('曲', ''), true);                           // 查询侧空不卡
+  // 检索词归一成空串（'——' 类纯符号标题）：无标题证据不放行——只收
+  // 「候选标题归一后也为空」的条目自证，正常标题一律拒（实案 '□°' 型
+  // 检索开放轮回收 'ダンス・ダンス・ダダ' 同题异曲即旧宽让漏入）
+  assert.equal(gate('ダンス・ダンス・ダダ', '——'), false);
+  assert.equal(gate('曲', '——'), false);
+  assert.equal(gate('——', '——'), true);                       // 真·符号同名收
+  assert.equal(gate('(——)', '——'), true);                     // 剥括弧归一为空收
+  assert.equal(gate('曲', ''), false);                          // 空查询词同样只收归一空候选
+  // 候选侧全大写署名头放宽是特性不是 bug（'EMA rumor' 类搬运形态——候选
+  // 侧 titleVariantsOf 剥缀归一）——显式钉住防日后被当误剥修回
+  assert.equal(gate('EMA rumor', 'rumor'), true);
 });
 
-test('LRCLIB 宽检标题闸：strictTitle 下撞名拒、剥缀/精确同名收；具名轮保模糊召回', async () => {
+test('LRCLIB 宽检标题闸：strictTitle 下撞名拒、剥缀/精确同名收；闸仍是拉取层可选参数', async () => {
   reset([['lrclib.net', () => J([
     { id: 201, trackName: 'Pinocchio Twig', artistName: 'Koosje', duration: 214, syncedLyrics: '[00:01.00]撞名词' },
     { id: 202, trackName: 'Twig (feat. Miku)', artistName: 'P主', duration: 214, syncedLyrics: '[00:01.00]剥缀同名' },
     { id: 203, trackName: 'Twig', artistName: 'rei sirose', duration: 214, syncedLyrics: '[00:01.00]精确同名' },
   ])]]);
-  // strictTitle（级联宽检轮同款入参）：201 撞名拒收，202/203 归一相等放行
+  // strictTitle（级联各轮同款入参）：201 撞名拒收，202/203 归一相等放行
   const res = await svc.lrclibFetch({ title: 'Twig', artist: '', durationSec: 212, strictTitle: true });
   assert.equal(res.extId, 'lrclib_202');
-  // 闸缺席（具名 artist 轮）：艺人吻合时子串撞名照旧收——模糊召回不劣化
+  // 闸缺席（直调拉取层不传参数）：艺人吻合时子串撞名照旧收——strictTitle
+  // 参数本身仍是可选；级联层现已全轮恒 true，具名轮不再有此模糊召回形态
   const named = await svc.lrclibFetch({ title: 'Twig', artist: 'Koosje', durationSec: 212 });
   assert.equal(named.extId, 'lrclib_201');
 });
@@ -926,6 +982,129 @@ test('酷狗宽检标题闸：song 字段撞名拒、同名收；hit 带 meta', 
   assert.equal(res.extId, 'kugou_ky');       // 撞名拒收，同名者进 download
   assert.equal(res.meta.title, 'Twig');
   assert.equal(res.meta.artist, 'sirose');
+});
+
+test('LRCLIB 宽检标题闸：检索词归一为空（纯符号标题）——正常标题拒、同型符号条目自证收', async () => {
+  // 实案回放：UGC 纯符号标题（实录 '□°'）检索词被 normToken 剥净成空串——
+  // 旧码 `if (!want) return true` 放行一切候选，开放轮回收
+  // 'ダンス・ダンス・ダダ / MAISONdes feat. EMA & たなか' 同题异曲落错词。
+  // 新语义：归一空=查询侧无标题证据——只收「候选标题归一后也为空」的条目
+  reset([['lrclib.net', () => J([
+    { id: 301, trackName: 'ダンス・ダンス・ダダ', artistName: 'MAISONdes', duration: 200, syncedLyrics: '[00:01.00]同题异曲' },
+    { id: 302, trackName: '——', artistName: '真作者', duration: 200, syncedLyrics: '[00:01.00]符号同名' },
+  ])]]);
+  const res = await svc.lrclibFetch({ title: '——', artist: '', durationSec: 200, strictTitle: true });
+  assert.equal(res.extId, 'lrclib_302');     // 正常标题撞闸拒收，纯符号同名过闸
+});
+
+test('酷狗宽检标题闸：检索词归一为空——song 字段正常标题拒、纯符号收', async () => {
+  reset([
+    ['lyrics.kugou.com/search', () => J({
+      candidates: [
+        { id: 'ks1', accesskey: 'ak1', singer: 'MAISONdes', song: 'ダンス・ダンス・ダダ', duration: 200000, score: 99 },
+        { id: 'ks2', accesskey: 'ak2', singer: '真作者', song: '——', duration: 200000, score: 10 },
+      ],
+    })],
+    ['lyrics.kugou.com/download', () => kgAll()],
+  ]);
+  const res = await svc.kugouFetch({ title: '——', artist: '', durationSec: 200, strictTitle: true });
+  assert.equal(res.extId, 'kugou_ks2');      // 正常标题拒收，符号同名进 download
+});
+
+test('端到端钉案：纯符号标题 UGC（「—— ver.EMA」）剥缀变体归一为空——同题异曲闸拒，级联 NULL', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };                 // AI 连判 ok 也救不回——闸先于 AI
+    const queries = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      // 病例回放：'—— ver.EMA' 剥出变体 '—'（归一为空）——旧码该变体
+      // 开放轮放行一切，'—' 检索回收 'ダンス・ダンス・ダダ' 同题异曲
+      ['lrclib.net/api/search', (url) => { queries.push(decodeURIComponent(url)); return J([
+        { id: 777001, trackName: 'ダンス・ダンス・ダダ', artistName: 'MAISONdes feat. EMA & たなか',
+          duration: 200, syncedLyrics: '[00:01.00]little dance song' },
+      ]); }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_symgate0001', title: '—— ver.EMA', artist: '_', durationSec: 200,
+    });
+    assert.equal(res, null);                 // 正常标题候选全轮次被闸拒
+    assert.equal(aiCalls, 0);                // 候选根本没走到 AI 判定/消歧
+    assert.ok(queries.length >= 2);          // raw 与剥缀变体都真打过检索
+    assert.ok(queries.some((q) => !q.includes('ver.EMA')));   // 归一为空变体实发
+    // 对照：归一也为空的纯符号条目正常收（闸只挡「有词形」不同名者）——
+    // 过闸后走 strictTitle 轮的 choose 消歧（桩 {ok:true} 畸形应答→未应答）
+    // 落回逐候选核验判过收录
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        { id: 777001, trackName: 'ダンス・ダンス・ダダ', artistName: 'MAISONdes feat. EMA & たなか',
+          duration: 200, syncedLyrics: '[00:01.00]little dance song' },
+        { id: 777002, trackName: '——', artistName: '某P',
+          duration: 200, syncedLyrics: '[00:01.00]真词' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res2 = await svc.fetchExternalLyric({
+      songId: 'yt_symgate0002', title: '—— ver.EMA', artist: '_', durationSec: 200,
+    });
+    assert.equal(res2?.extId, 'lrclib_777002');
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+// ── 具名轮标题闸（strictTitle 恒 true）──
+// 实案：'□° ver.EMA'（本家宇田もずく，翻唱者 EMA）具名 'EMA' 轮撞上
+// 'ダンス・ダンス・ダダ / MAISONdes feat. EMA & たなか'——候选艺人字段
+// 真含 'EMA'，artistHit 子串通过；旧码具名轮无标题闸，同题异曲直接放行
+// + AI 盲审 ok:1 落错词。artistHit 只收窄召回，不能替代标题证据
+
+test('具名轮标题闸：艺人字段子串命中 ≠ 同曲——「□° ver.EMA」实案重演', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };               // 闸先于 AI——连判 ok 也救不回
+    const queries = [];
+    const kgDl = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => { queries.push(decodeURIComponent(url)); return J([
+        { id: 8801, trackName: 'ダンス・ダンス・ダダ', artistName: 'MAISONdes feat. EMA & たなか',
+          duration: 200, syncedLyrics: '[00:01.00]dance dance dada' },
+      ]); }],
+      // 酷狗同形态候选也进钉——双源具名轮都被闸拒
+      ['lyrics.kugou.com/search', () => J({
+        candidates: [
+          { id: 'kg88', accesskey: 'ak88', singer: 'MAISONdes feat. EMA & たなか',
+            song: 'ダンス・ダンス・ダダ', duration: 200000, score: 99 },
+        ],
+      })],
+      ['lyrics.kugou.com/download', (url) => { kgDl.push(url); return kgAll(); }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_namedgate01', title: '□° ver.EMA', artist: 'EMA', durationSec: 200,
+    });
+    assert.equal(res, null);                 // 标题不符全轮次被闸拒
+    assert.equal(aiCalls, 0);                // 候选根本没走到 AI 判定/消歧
+    assert.equal(kgDl.length, 0);            // 酷狗候选被闸拒——download 都没发
+    // 具名 'EMA' 轮真实打过检索（artistHit 子串是过的——拒它的是标题闸）
+    assert.ok(queries.filter((q) => q.endsWith(' EMA')).length >= 2);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('具名轮标题闸不误伤：标题剥缀相等 + 艺人命中照收（feat. 形态）', async () => {
+  reset([
+    ['lrclib.net', () => J([
+      { id: 8810, trackName: 'Twig (feat. Miku)', artistName: 'rei sirose',
+        duration: 212, syncedLyrics: '[00:01.00]真词' },
+    ])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+  ]);
+  // qq_ 单具名轮——'Twig (feat. Miku)' 剥缀归一 = 'twig' 精确等，闸放行
+  const res = await svc.fetchExternalLyric({
+    songId: 'qq_namedgate02', title: 'Twig', artist: 'rei sirose', durationSec: 212,
+  });
+  assert.equal(res?.extId, 'lrclib_8810');
+  assert.equal(res?.meta.artist, 'rei sirose');
 });
 
 test('端到端钉案：Twig ／ rei sirose（author=_）→「Pinocchio Twig」确定性闸拒，级联 NULL', async () => {
@@ -962,9 +1141,13 @@ test('端到端钉案：Twig ／ rei sirose（author=_）→「Pinocchio Twig」
     assert.equal(res2?.extId, 'lrclib_1300');
     // meta 随 hit 透出并进了判定提示词——同名异曲拦截证据到模型
     assert.deepEqual(res2.meta, { title: 'Twig', artist: 'rei sirose', album: undefined });
-    assert.equal(aiCalls, 1);
-    assert.match(aiArgs[0].user, /候选条目：标题 Twig \/ 艺人 rei sirose/);
-    assert.match(aiArgs[0].system, /候选条目标题\/艺人与来源明显不同/);
+    // 单候选池同走一发选择题（≥1 语义）——桩回 {ok:true} 对选择题是畸形
+    // 应答 → 按未应答落回逐候选核验判过收录
+    assert.equal(aiCalls, 2);
+    assert.match(aiArgs[0].system, /消歧助手/);
+    assert.match(aiArgs[0].user, /候选池：\n1\. Twig \/ rei sirose/);
+    assert.match(aiArgs[1].user, /候选条目：标题 Twig \/ 艺人 rei sirose/);
+    assert.match(aiArgs[1].system, /候选条目标题\/艺人与来源明显不同/);
   } finally { aiOn = false; aiAnswer = null; }
 });
 
@@ -1004,7 +1187,7 @@ test('AI 核验：已落库判否 verdict 不随 aiEnabled 旁路——AI 关仍
   // 累积知识，AI 关只影响新判定。播种 lrclib_66 对本曲的 ok=0 判定——
   // vkey 锚 (extId, title, artist)，verifyHit 不再被 aiEnabled 短路
   aiOn = false; aiCalls = 0; aiArgs.length = 0;
-  // 级联核验带候选池语境 → v3 键（pool 非空即换盐——见 lyricVerdictKey
+  // 级联核验带候选池语境 → v4 键（pool 非空即换盐——见 lyricVerdictKey
   // 版本段）；预置要锚新口径的判定键
   lyricAiRepo.upsertVerdict(
     lyricVerdictKey('lrclib_66', '曲', '艺人', true), 'lyric', false, 'test');
@@ -1055,10 +1238,14 @@ test('免时长末轮：时长闸全灭的截取版 UGC → durationSec=0 + stri
       songId: 'yt_o5wwDO4eDo8', title: 'Flamingo／rei shirose', artist: 'R', durationSec: 72,
     });
     assert.equal(res?.extId, 'lrclib_502');
-    assert.equal(aiCalls, 1);                    // 撞名者被确定性闸挡在 AI 之前
+    // 撞名者被确定性闸挡在 AI 之前；末轮单候选池走一发选择题（≥1 语义），
+    // 桩回 {ok:true} 是畸形应答 → 未应答落回逐候选核验判过收录
+    assert.equal(aiCalls, 2);
+    assert.match(aiArgs[0].system, /消歧助手/);
+    assert.match(aiArgs[0].user, /候选池：\n1\. Flamingo \/ 米津玄師/);
     // meta 随末轮 hit 照常透出并进判定提示词——AI 拿候选身份才分得清同名
     assert.deepEqual(res.meta, { title: 'Flamingo', artist: '米津玄師', album: undefined });
-    assert.match(aiArgs[0].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
+    assert.match(aiArgs[1].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
     // durationSec=0 实锤上行：常规轮酷狗检索带 duration=72000；末轮是
     // 单次 '' 开放轮——lrclib 命中即收不再打酷狗。检索面 = 常规两轮 4 发
     // + 末轮 2 发 = 6，具名 'R' 检索只在常规轮出现（末轮再打一遍会是 8）
@@ -1071,7 +1258,9 @@ test('免时长末轮：时长闸全灭的截取版 UGC → durationSec=0 + stri
 test('逐候选核验：首顺位同名候选判否 → 次位判过收录（vkey 挂各自 extId 不串）', async () => {
   aiOn = true; aiCalls = 0; aiArgs.length = 0;
   try {
-    aiAnswer = { ok: true };
+    // 选择题哑火（未应答）才落到本用例要测的逐候选核验面——回 {pick:x}
+    // 会直接收录、回 {pick:null} 会判死全池，都测不到换条
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? null : { ok: true });
     // 预置首顺位候选的判否 verdict——vkey 锚 (extId, 来源title, 来源artist)，
     // 601 判否不影响 602 的判定行
     lyricAiRepo.upsertVerdict(
@@ -1093,16 +1282,19 @@ test('逐候选核验：首顺位同名候选判否 → 次位判过收录（vke
     });
     assert.equal(res?.extId, 'lrclib_602');
     assert.equal(res.meta.artist, '米津玄師');
-    assert.equal(aiCalls, 1);              // 601 判否吃落库 verdict 不烧 AI
-    // 进判定的是次位候选的条目身份——候选序断言（首顺位确被先试）
-    assert.match(aiArgs[0].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
+    assert.equal(aiCalls, 2);              // choose 哑火 1 发 + 602 判定 1 发
+    assert.match(aiArgs[0].system, /消歧助手/);   // 开放轮池先进选择题
+    // 601 判否吃落库 verdict 不烧 AI；进判定的是次位候选的条目身份——
+    // 候选序断言（首顺位确被先试）
+    assert.match(aiArgs[1].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
   } finally { aiOn = false; aiAnswer = null; }
 });
 
 test('逐候选核验（酷狗）：首条 download 得词判否 → 换条判过收录', async () => {
   aiOn = true; aiCalls = 0; aiArgs.length = 0;
   try {
-    aiAnswer = { ok: true };
+    // 同上——选择题哑火才进逐候选迭代面（开放轮池现在先走 choose）
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? null : { ok: true });
     lyricAiRepo.upsertVerdict(
       lyricVerdictKey('kugou_kc1', 'Flamingo', 'R', true), 'lyric', false, 'test');
     const dlUrls = [];
@@ -1130,8 +1322,10 @@ test('逐候选核验（酷狗）：首条 download 得词判否 → 换条判�
     assert.equal(dlUrls.length, 2);
     assert.ok(dlUrls[0].includes('id=kc1'));
     assert.ok(dlUrls[1].includes('id=kc2'));
-    assert.equal(aiCalls, 1);              // kc1 判否吃落库；kc2 判过进 AI
-    assert.match(aiArgs[0].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
+    assert.equal(aiCalls, 2);              // choose 哑火 1 发 + kc2 判定 1 发
+    assert.match(aiArgs[0].system, /消歧助手/);   // 开放轮池先进选择题
+    // kc1 判否吃落库；kc2 判过进 AI
+    assert.match(aiArgs[1].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
   } finally { aiOn = false; aiAnswer = null; }
 });
 
@@ -1197,8 +1391,9 @@ test('免时长末轮整池消歧 e2e：Flamingo 钉案——choose 单发指中
   aiOn = true; aiCalls = 0; aiArgs.length = 0;
   try {
     // AI 桩：pick 选择题回 4（排序后池序见下——synced 优先纯文本殿后）；
-    // 万一误落逐候选核验，判否全池让用例露馅而非静默放行
-    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 4 } : { ok: false });
+    // 挑中条词文核验判过——若代码误落逐候选核验，首顺位 KKB 判过收录会
+    // 让 extId 断言露馅（不会静默收错条）
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 4 } : { ok: true });
     const lrcQueries = [];
     const kgUrls = [];
     reset([
@@ -1238,12 +1433,16 @@ test('免时长末轮整池消歧 e2e：Flamingo 钉案——choose 单发指中
     assert.equal(res?.extId, 'lrclib_37537527');
     assert.equal(res?.synced, true);
     assert.equal(res?.meta.artist, '米津玄師');
-    // choose 单发实锤：整池一发选择题直接收录，不再逐候选烧 N 发 AI
-    assert.equal(aiCalls, 1);
+    // choose 单发挑中 + 挑中条词文核验判过收录——两道独立证据各一发，
+    // 不再逐候选烧 N 发 AI
+    assert.equal(aiCalls, 2);
     assert.match(aiArgs[0].system, /消歧助手/);
     // 排序后全池身份都进了同一发 prompt——判官拿相对语境做选择题
     assert.match(aiArgs[0].user,
       /候选池：\n1\. Flamingo \/ Kero Kero Bonito \/ Flamingo\n2\. Flamingo \/ Kero Kero Bonito \/ Flamingo \(Remixes\)\n3\. Flamingo \/ Fäaschtbänkler \/ Zirbenlieder\n4\. Flamingo \/ 米津玄師 \/ Flamingo \/ TEENAGE RIOT\n5\. Flamingo \/ Kenshi Yonezu \/ Flamingo \/ TEENAGE RIOT\n6\. Flamingo \/ Earl Bostic \/ Jazz Icons/);
+    // 第二发是挑中条的词文核验——判米津玄師条目的词文抽样（带同题池语境）
+    assert.match(aiArgs[1].system, /核验助手/);
+    assert.match(aiArgs[1].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
     // 末轮单开放轮实锤不变：具名 'R' 只在常规首轮打（2 发 ' R' 尾检索），
     // 末轮检索（位序最末两发）不带 artist
     assert.equal(lrcQueries.filter((q) => q.endsWith(' R')).length, 2);
@@ -1254,14 +1453,13 @@ test('免时长末轮整池消歧 e2e：Flamingo 钉案——choose 单发指中
   } finally { aiOn = false; aiAnswer = null; }
 });
 
-test('免时长末轮 pick=null：判官选不出 → 落回逐候选核验照判照收', async () => {
+test('免时长末轮 choose 明言否决全池：判死该变体——跳过逐候选核验兜底归 null', async () => {
   aiOn = true; aiCalls = 0; aiArgs.length = 0;
   try {
-    // pick 选择题回 null（池中无合理候选/拿不准）→ 逐候选核验接棒按
-    // 候选条目身份判：KKB 英文版判否、米津玄師 判过
-    aiAnswer = (a) => (/消歧助手/.test(a.system)
-      ? { pick: null }
-      : { ok: /候选条目：[^\n]*艺人 米津玄師/.test(a.user) });
+    // pick:null 是判官应答且明言「池中无合理候选」——precise 优先：判官
+    // 说不合理就判死（错词比没词更糟，没词走 rematch 自愈）；若误落回
+    // 逐候选核验，桩判 ok 全收会把「不该收录」露馅成 hit
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: null } : { ok: true });
     reset([
       ['/youtubei/v1/next', () => nextNoTab()],
       ['lrclib.net/api/search', () => J([
@@ -1277,15 +1475,12 @@ test('免时长末轮 pick=null：判官选不出 → 落回逐候选核验照�
     const res = await svc.fetchExternalLyric({
       songId: 'yt_picknull001', title: 'Flamingo', artist: 'R', durationSec: 72,
     });
-    assert.equal(res?.extId, 'lrclib_37537527');
-    // 1 发选择题（判不出）+ 2 发逐候选核验——落回后烧的是逐候选判定面
-    assert.equal(aiCalls, 3);
-    assert.match(aiArgs[0].system, /消歧助手/);          // 首发的确是选择题
-    assert.match(aiArgs[1].user, /候选条目：标题 Flamingo \/ 艺人 Kero Kero Bonito/);
-    assert.match(aiArgs[2].user, /候选条目：标题 Flamingo \/ 艺人 米津玄師/);
-    // 落回核验仍带同题池语境——v3 键与盲审互不命中
-    assert.match(aiArgs[1].user,
-      /同题候选池（供判歧义）：\n1\. Flamingo \/ Kero Kero Bonito \/ Flamingo\n2\. Flamingo \/ 米津玄師 \/ Flamingo \/ TEENAGE RIOT/);
+    assert.equal(res, null);                 // 全池否决 → 级联无词
+    // 只有一发选择题——逐候选核验兜底被跳过（否决不回落、不落 verdict）
+    assert.equal(aiCalls, 1);
+    assert.match(aiArgs[0].system, /消歧助手/);
+    assert.match(aiArgs[0].user,
+      /候选池：\n1\. Flamingo \/ Kero Kero Bonito \/ Flamingo\n2\. Flamingo \/ 米津玄師 \/ Flamingo \/ TEENAGE RIOT/);
   } finally { aiOn = false; aiAnswer = null; }
 });
 
@@ -1305,21 +1500,28 @@ test('choose 故障落回：choose 抛错 → 逐候选核验迭代照常判否�
   assert.equal(res?.verified, true);                   // 过 verify 烙记照打
 });
 
-test('choose 不触发的面：单候选池（items<2）直走 verify 迭代', async () => {
+test('choose ≥1 语义：单候选池同走一发选择题——布尔盲审对同题异曲太松', async () => {
   let chooseCalls = 0;
+  const verifyCalls = [];
   reset([['lrclib.net', () => J([
     { id: 620, trackName: 'Flamingo', artistName: '米津玄師', duration: 240, syncedLyrics: '[00:01.00]y' },
   ])]]);
   const res = await svc.lrclibFetch({
     title: 'Flamingo', artist: '', strictTitle: true,
-    verify: async () => true,
-    choose: async () => { chooseCalls++; return 'lrclib_620'; },
+    verify: async (h) => { verifyCalls.push(h.extId); return true; },
+    choose: async (pool) => {
+      chooseCalls++;
+      assert.deepEqual(pool.map((p) => p.extId), ['lrclib_620']);
+      return { pick: 'lrclib_620', answered: true };
+    },
   });
   assert.equal(res?.extId, 'lrclib_620');
-  assert.equal(chooseCalls, 0);                        // 单候选无歧义——choose 未启用
+  assert.equal(chooseCalls, 1);                        // 单候选也发选择题
+  assert.deepEqual(verifyCalls, ['lrclib_620']);       // 挑中条补跑一发词文核验
+  assert.equal(res?.verified, true);
 });
 
-test('choose 指回池外 extId（判官答非所问）→ 按未选中落回逐候选迭代', async () => {
+test('choose 指回池外 extId（判官答非所问）→ 按未应答落回逐候选迭代', async () => {
   const verifyCalls = [];
   reset([['lrclib.net', () => J([
     { id: 621, trackName: 'Flamingo', artistName: 'Kero Kero Bonito', duration: 240, syncedLyrics: '[00:01.00]x' },
@@ -1328,7 +1530,8 @@ test('choose 指回池外 extId（判官答非所问）→ 按未选中落回逐
   const res = await svc.lrclibFetch({
     title: 'Flamingo', artist: '', strictTitle: true,
     verify: async (h) => { verifyCalls.push(h.extId); return h.extId === 'lrclib_622'; },
-    choose: async () => 'lrclib_99999999',             // 池里没有这条 id
+    // 池里没有这条 id——应答了但指不回去，按未应答落回（不整源判死）
+    choose: async () => ({ pick: 'lrclib_99999999', answered: true }),
   });
   assert.equal(res?.extId, 'lrclib_622');
   assert.deepEqual(verifyCalls, ['lrclib_621', 'lrclib_622']);
@@ -1354,15 +1557,248 @@ test('kugou choose：挑中只对一条发 download——整池消歧替代逐�
     choose: async (pool) => {
       // 池行 extId 与 hit.extId 同式——choose 凭它指回条目
       assert.deepEqual(pool.map((p) => p.extId), ['kugou_kc1', 'kugou_kc2', 'kugou_kc3']);
-      return 'kugou_kc2';
+      return { pick: 'kugou_kc2', answered: true };
     },
   });
   assert.equal(res?.extId, 'kugou_kc2');
   assert.equal(res?.meta.artist, '米津玄師');
   assert.equal(dlUrls.length, 1);                      // 只对挑中条发 download
   assert.ok(dlUrls[0].includes('id=kc2'));
-  assert.equal(verifyCalls.length, 0);                 // pick 即核验结论——不再单审
+  assert.deepEqual(verifyCalls, ['kugou_kc2']);        // 得词后补跑一发词文核验
   assert.equal(res?.verified, true);
+});
+
+// ── choose 只注无艺人约束轮（strictTitle 恒 true 全轮在位）：≥1 启用 /
+// 否决判死三态 / 挑中条补验 ──
+// 实证病例：常规开放轮（±15s 时长闸在位）里 'Boi ver.EMA'→'Boi/Dina
+// Jashari' 马其顿语歌、'Moonlight ver.EMA'→'Moonlight/Gaulin' rap、
+// '匿名希望 ver.EMA'→'匿名希望/amazarashi' 同题异曲被逐候选盲审连判
+// ok:1 收录——时长闸与标题闸都拦不住的形态，只有整池选择题分得清；
+// 且 pick 只比候选元数据不看词文——挑中条补跑 verify 才有第二道证据
+// （'Boi' 实案里被 pick 选中的恰是马其顿语同名歌，词文判否即判死变体）。
+
+test('strictTitle 开放轮多候选：choose 单发挑中 + 补验判过收录——常规轮也走整池消歧', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 2 } : { ok: true });
+    const lrcQueries = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => { lrcQueries.push(decodeURIComponent(url)); return J([
+        { id: 710, trackName: '曲', artistName: '撞名艺人', duration: 200, syncedLyrics: '[00:01.00]撞名词' },
+        { id: 711, trackName: '曲', artistName: '真身艺人', duration: 205, syncedLyrics: '[00:01.00]真词' },
+      ]); }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_openchoose1', title: '曲', artist: 'UP主', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_711');
+    assert.equal(res?.meta.artist, '真身艺人');
+    // 选择题挑中 + 挑中条补一发词文核验判过收录——漏接 verify 的话
+    // 挑中条会不验词直接收录（旧病灶：'Boi' 实案西里尔词文未验即收）
+    assert.equal(aiCalls, 2);
+    assert.match(aiArgs[0].system, /消歧助手/);
+    assert.match(aiArgs[0].user, /候选池：\n1\. 曲 \/ 撞名艺人 \/ 未知\n2\. 曲 \/ 真身艺人 \/ 未知/);
+    assert.match(aiArgs[1].system, /核验助手/);
+    assert.match(aiArgs[1].user, /候选条目：标题 曲 \/ 艺人 真身艺人/);
+    // 命中发生在常规开放轮而非免时长末轮：'UP主' 具名轮（artistHit 滤净）
+    // 1 发检索 + '' 开放轮 1 发即收，没走到末轮
+    assert.equal(lrcQueries.length, 2);
+    assert.ok(lrcQueries[0].endsWith(' UP主'));
+    assert.ok(!lrcQueries[1].includes('UP主'));
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('choose 否决全池（lrclib）：判官明言无合理候选 → 该变体判死不落回 verify', async () => {
+  const verifyCalls = [];
+  reset([['lrclib.net', () => J([
+    { id: 630, trackName: 'Boi', artistName: 'Dina Jashari', duration: 200, syncedLyrics: '[00:01.00]macedonian words' },
+    { id: 631, trackName: 'Boi', artistName: '別人', duration: 200, syncedLyrics: '[00:01.00]x' },
+  ])]]);
+  const res = await svc.lrclibFetch({
+    title: 'Boi', artist: '', durationSec: 200, strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return true; },
+    choose: async () => ({ pick: null, answered: true }),  // 「池中无合理候选」
+  });
+  assert.equal(res, null);                   // 判死——precise 优先不落回兜底
+  assert.equal(verifyCalls.length, 0);       // 盲审「拿不准判真」没机会再放行
+});
+
+test('choose 否决全池（酷狗）：判死即停——挑中 download 与逐候选迭代都不发', async () => {
+  const dlUrls = [];
+  const verifyCalls = [];
+  reset([
+    ['lyrics.kugou.com/search', () => J({
+      candidates: [
+        { id: 'kv1', accesskey: 'ak1', singer: '别人', song: 'Boi', duration: 200000, score: 99 },
+        { id: 'kv2', accesskey: 'ak2', singer: '別二', song: 'Boi', duration: 200000, score: 50 },
+      ],
+    })],
+    ['lyrics.kugou.com/download', (url) => { dlUrls.push(url); return kgAll(); }],
+  ]);
+  const res = await svc.kugouFetch({
+    title: 'Boi', artist: '', durationSec: 200, strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return true; },
+    choose: async () => ({ pick: null, answered: true }),
+  });
+  assert.equal(res, null);
+  assert.equal(dlUrls.length, 0);
+  assert.equal(verifyCalls.length, 0);
+});
+
+test('choose 未应答（AI 关/哑火/畸形）→ 落回逐候选核验迭代——降级期不缩召回', async () => {
+  const verifyCalls = [];
+  reset([['lrclib.net', () => J([
+    { id: 640, trackName: 'Boi', artistName: 'Dina Jashari', duration: 200, syncedLyrics: '[00:01.00]x' },
+    { id: 641, trackName: 'Boi', artistName: '可不', duration: 200, syncedLyrics: '[00:01.00]y' },
+  ])]]);
+  const res = await svc.lrclibFetch({
+    title: 'Boi', artist: '', strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return h.extId === 'lrclib_641'; },
+    choose: async () => null,                  // 通道不可用——没给裁决
+  });
+  assert.equal(res?.extId, 'lrclib_641');
+  assert.deepEqual(verifyCalls, ['lrclib_640', 'lrclib_641']);  // 迭代序照走
+});
+
+test('choose 挑中条词文核验判否 → 判死该变体不落回迭代（Boi/Dina Jashari 实案形态）', async () => {
+  // 实案回放：'Boi ver.EMA'（本家ポリスピカデリー）开放轮池=[Boi/Dina
+  // Jashari 马其顿语同名歌]——旧码 pick 选中即 markVerified 收录，西里尔
+  // 词文全程未验。新语义挑中补验：pick 已是池内最优的相对判定，最优条
+  // 过不了词文关说明池中无正解——判死该变体，逐条重验只是重复烧 AI
+  const verifyCalls = [];
+  reset([['lrclib.net', () => J([
+    { id: 650, trackName: 'Boi', artistName: 'Dina Jashari', duration: 200, syncedLyrics: '[00:01.00]македонски зборови' },
+    { id: 651, trackName: 'Boi', artistName: 'ポリスピカデリー', duration: 200, syncedLyrics: '[00:01.00]y' },
+  ])]]);
+  const res = await svc.lrclibFetch({
+    title: 'Boi', artist: '', durationSec: 200, strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return false; },
+    choose: async () => ({ pick: 'lrclib_650', answered: true }),
+  });
+  assert.equal(res, null);                          // 判死——不落回逐候选迭代
+  assert.deepEqual(verifyCalls, ['lrclib_650']);    // 只对挑中条补验一发即终
+});
+
+test('choose 挑中条补验抛错（非 abort）→ 按未收录落回逐候选核验迭代', async () => {
+  // candidatePass 式「异常放行」会把没验过的错词重新放进门——故障改按
+  // 未收录落回迭代，迭代内再走 candidatePass 盲审保底（与候选迭代已有
+  // 容错同口径，不丢召回）
+  const verifyCalls = [];
+  let n = 0;
+  reset([['lrclib.net', () => J([
+    { id: 652, trackName: 'Boi', artistName: 'Dina Jashari', duration: 200, syncedLyrics: '[00:01.00]x' },
+    { id: 653, trackName: 'Boi', artistName: 'ポリスピカデリー', duration: 200, syncedLyrics: '[00:01.00]y' },
+  ])]]);
+  const res = await svc.lrclibFetch({
+    title: 'Boi', artist: '', durationSec: 200, strictTitle: true,
+    verify: async (h) => {
+      verifyCalls.push(h.extId);
+      if (++n === 1) throw new Error('核验通道炸');   // 挑中条补验故障
+      return h.extId === 'lrclib_653';
+    },
+    choose: async () => ({ pick: 'lrclib_652', answered: true }),
+  });
+  assert.equal(res?.extId, 'lrclib_653');           // 落回迭代照常判否换条
+  // 挑中条在迭代里被盲审重验一发——故障不白打也不直接放行
+  assert.deepEqual(verifyCalls, ['lrclib_652', 'lrclib_652', 'lrclib_653']);
+  assert.equal(res?.verified, true);
+});
+
+test('choose 挑中条词文核验判否（酷狗）→ 判死该变体不落回迭代', async () => {
+  // 同 lrclib 侧——挑中只对一条发 download，得词补验判否即判死；
+  // 不落回迭代（池内最优过不了词文关=池中无正解）
+  const dlUrls = [];
+  const verifyCalls = [];
+  reset([
+    ['lyrics.kugou.com/search', () => J({
+      candidates: [
+        { id: 'kb1', accesskey: 'ak1', singer: 'Dina Jashari', song: 'Boi', duration: 200000, score: 99 },
+        { id: 'kb2', accesskey: 'ak2', singer: 'ポリスピカデリー', song: 'Boi', duration: 200000, score: 50 },
+      ],
+    })],
+    ['lyrics.kugou.com/download', (url) => { dlUrls.push(url); return kgAll(); }],
+  ]);
+  const res = await svc.kugouFetch({
+    title: 'Boi', artist: '', durationSec: 200, strictTitle: true,
+    verify: async (h) => { verifyCalls.push(h.extId); return false; },
+    choose: async () => ({ pick: 'kugou_kb1', answered: true }),
+  });
+  assert.equal(res, null);
+  assert.equal(dlUrls.length, 1);                   // 只对挑中条烧过一发 download
+  assert.deepEqual(verifyCalls, ['kugou_kb1']);     // 补验一发判否即终
+});
+
+test('choose 挑中 + 词文核验判死 e2e：Boi/Dina Jashari 实案——判死变体级联归 null', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    // 实案回放：'Boi ver.EMA'（本家ポリスピカデリー，翻唱 EMA）开放轮池
+    // 只剩 Dina Jashari 马其顿语同名歌——选择题按元数据指中它（确实最合），
+    // 词文核验判否即判死变体；判否落 v4 verdict——末轮同池重进吃落库
+    // 判否与 memoize 裁决，不再重复烧 AI
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 1 } : { ok: false });
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        { id: 8802, trackName: 'Boi', artistName: 'Dina Jashari', duration: 200,
+          syncedLyrics: '[00:01.00]македонски зборови\n[00:05.00]втора линија' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_boiverema01', title: 'Boi ver.EMA', artist: 'EMA', durationSec: 200,
+    });
+    assert.equal(res, null);                 // 池中无正解——错词不收录
+    assert.equal(aiCalls, 2);                // 选择题 1 发 + 挑中条词文核验 1 发
+    assert.match(aiArgs[0].system, /消歧助手/);
+    assert.match(aiArgs[0].user, /候选池：\n1\. Boi \/ Dina Jashari/);
+    assert.match(aiArgs[1].system, /核验助手/);
+    assert.match(aiArgs[1].user, /候选条目：标题 Boi \/ 艺人 Dina Jashari/);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('choose 降级不缩召回 e2e：AI 关时开放轮池未应答 → 落回逐候选核验照收', async () => {
+  aiOn = false; aiCalls = 0; aiArgs.length = 0;
+  reset([
+    ['/youtubei/v1/next', () => nextNoTab()],
+    ['lrclib.net/api/search', () => J([
+      { id: 730, trackName: '曲', artistName: '撞名', duration: 200, syncedLyrics: '[00:01.00]词' },
+      { id: 731, trackName: '曲', artistName: '真身', duration: 205, syncedLyrics: '[00:01.00]词2' },
+    ])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+  ]);
+  const res = await svc.fetchExternalLyric({
+    songId: 'yt_aioffpool01', title: '曲', artist: 'UP主', durationSec: 200,
+  });
+  // aiEnabled 前置 false——选择题一发不发（未应答）；落回逐候选核验后
+  // 模型判不定按相符放行，首顺位照收（与旧「AI 是增强不是门禁」同口径）
+  assert.equal(res?.extId, 'lrclib_730');
+  assert.ok(!aiArgs.some((a) => /消歧助手/.test(a.system)));
+});
+
+test('具名轮不注入 choose：artistHit 约束在位——多候选照旧逐候选核验', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    aiAnswer = { ok: true };
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        { id: 720, trackName: '曲', artistName: '艺人', duration: 200, syncedLyrics: '[00:01.00]词一' },
+        { id: 721, trackName: '曲', artistName: '艺人', duration: 201, syncedLyrics: '[00:01.00]词二' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_namedround01', title: '曲', artist: '艺人', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_720');        // 首顺位盲审判过即收
+    assert.equal(aiCalls, 1);
+    assert.match(aiArgs[0].system, /核验助手/);    // 发的是逐候选判定题
+    // 具名轮一发选择题都没打——{ok:true} 对选择题是畸形应答，若误注
+    // choose 会先烧一发 消歧助手 再落回 verify，aiArgs[0] 就会是选择题
+    assert.ok(!aiArgs.some((a) => /消歧助手/.test(a.system)));
+  } finally { aiOn = false; aiAnswer = null; }
 });
 
 test('免时长末轮不执行具名轮：检索面 = 常规轮变体数 + 单开放轮变体数', async () => {
@@ -1410,11 +1846,11 @@ test('同题候选池进判定 prompt：排序前 8 条身份列出，未轮判�
   } finally { aiOn = false; aiAnswer = null; }
 });
 
-test('v3 键不复用 v2 判定：同 extId 的盲审判否 verdict 不挡 pool 语境重判', async () => {
+test('v4 键不复用 v2 判定：同 extId 的盲审判否 verdict 不挡 pool 语境重判', async () => {
   aiOn = true; aiCalls = 0; aiArgs.length = 0;
   try {
     // 预置「无池盲审」口径的判否 verdict（v2 键）——级联核验带 pool 走
-    // v3 键不复用它：判据语境不同，判定记忆不互相命中，照发新判定
+    // v4 键不复用它：判据语境不同，判定记忆不互相命中，照发新判定
     lyricAiRepo.upsertVerdict(
       lyricVerdictKey('lrclib_950', '曲', '艺人'), 'lyric', false, 'test');
     aiAnswer = { ok: true };
@@ -1426,9 +1862,9 @@ test('v3 键不复用 v2 判定：同 extId 的盲审判否 verdict 不挡 pool 
       ['lyrics.kugou.com', () => J({ candidates: [] })],
     ]);
     const res = await svc.fetchExternalLyric({
-      songId: 'qq_v3key00001', title: '曲', artist: '艺人', durationSec: 200,
+      songId: 'qq_v4key00001', title: '曲', artist: '艺人', durationSec: 200,
     });
-    // v2 判否若被复用，950 会被拒收续到酷狗归 null——实收证明 v3 重判
+    // v2 判否若被复用，950 会被拒收续到酷狗归 null——实收证明 v4 重判
     assert.equal(res?.extId, 'lrclib_950');
     assert.equal(aiCalls, 1);
   } finally { aiOn = false; aiAnswer = null; }
@@ -1471,17 +1907,18 @@ test('免时长末轮 gate：durationSec 缺省时末轮与宽检轮逐字节同
   assert.equal(calls.filter((u) => u.includes('kugou.com/search')).length, 2);
 });
 
-test('verify 吃级联 deadline：迭代中过期——候选核验短路放行不再烧 AI', async () => {
+test('verify 吃级联 deadline：迭代中过期——候选核验判否不收录不烧 AI', async () => {
   aiOn = true; aiCalls = 0; aiArgs.length = 0;
   try {
-    aiAnswer = { ok: false };    // 无短路时这发判定判否丢词——短路才放行出 hit
+    aiAnswer = { ok: true };    // 即便 AI 本会判过——过期判否在先，不收录也不烧 AI
     reset([
       ['lrclib.net', () => J([])],
       ['lyrics.kugou.com/search', () => J({
         candidates: [{ id: 'kd1', accesskey: 'ak1', singer: 'a', song: 'x', duration: 200000, score: 10 }],
       })],
       // download 慢回把 verify 推到 30ms 软时限之后——迭代起轮时尚未过，
-      // 落到核验调用点才过期
+      // 落到核验调用点才过期：旧码「过期短路放行」会把这条未验词直接收录，
+      // 新语义判否出局（错词比没词更糟）
       ['lyrics.kugou.com/download', async () => {
         await new Promise((r) => setTimeout(r, 60));
         return J({ content: Buffer.from('[00:03.00]词一\n[00:06.00]词二').toString('base64'), charset: 'utf8' });
@@ -1490,8 +1927,54 @@ test('verify 吃级联 deadline：迭代中过期——候选核验短路放行�
     const res = await svc.fetchExternalLyric({
       songId: 'qq_vdeadline01', title: 'x', artist: 'a', durationSec: 200, deadlineMs: 30,
     });
-    assert.equal(res?.extId, 'kugou_kd1');   // 迭代中过期——短路放行照收
+    assert.equal(res, null);                 // 迭代中过期——判否不盲收
     assert.equal(aiCalls, 0);                // 没再起 AI 判定
+    // 截断 null 不落负缓存：deadline 在末次 run() 内部耗穿（download 拖
+    // 时），其后再无检查点（qq_/无时长路径不经声明轮与免时长末轮 gate）
+    // ——级联尾部兜底补记 truncated。同键重查必须真打级联：若被固化成
+    // 10min 负缓存会静默吃缓存 null
+    const n = calls.length;
+    assert.equal(await svc.fetchExternalLyric({
+      songId: 'qq_vdeadline01', title: 'x', artist: 'a', durationSec: 200, deadlineMs: 30,
+    }), null);
+    assert.ok(calls.length > n);
+  } finally { aiOn = false; aiAnswer = null; }
+});
+
+test('choose 挑中条补验落在 deadline 之后：过期判否——判死该变体不收录不烧 AI', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  try {
+    // 选择题应答本身耗穿 30ms 软时限——判官确已挑中（pick 有效应答），但
+    // 补验落到核验调用点时已过期：旧码「过期短路放行」会把挑中的同题异曲
+    // 零词文核验 markVerified 收录（'Boi ver.EMA'→Dina Jashari 实案形态），
+    // 新语义 verify===false 判死该变体——无法核验的挑中条不收录
+    aiAnswer = async (a) => {
+      if (/消歧助手/.test(a.system)) {
+        await new Promise((r) => setTimeout(r, 60));
+        return { pick: 1 };
+      }
+      return { ok: true };
+    };
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', () => J([
+        { id: 960, trackName: 'Boi', artistName: 'Dina Jashari', duration: 200,
+          syncedLyrics: '[00:01.00]македонски зборови' },
+      ])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const args = {
+      songId: 'yt_pickdl00001', title: 'Boi ver.EMA', artist: 'EMA',
+      durationSec: 200, deadlineMs: 30,
+    };
+    const res = await svc.fetchExternalLyric(args);
+    assert.equal(res, null);                 // 挑中条过期判否→判死变体，不收录
+    assert.equal(aiCalls, 1);                // 只烧了选择题一发——补验没再打模型
+    assert.match(aiArgs[0].system, /消歧助手/);
+    // 截断 null 不落负缓存——同键重查必须真打级联（若被固化会静默吃 null）
+    const n = calls.length;
+    await svc.fetchExternalLyric(args);
+    assert.ok(calls.length > n);
   } finally { aiOn = false; aiAnswer = null; }
 });
 
@@ -1601,4 +2084,444 @@ test('lyricDispatcher：懒建缓存、值变重建销毁旧池、清除归 null
     delete process.env.LYRIC_PROXY;
     lyricProxy.lyricDispatcher();
   }
+});
+
+// ── 本家声明（yt_ 限定：头轮前反解 + 原位声明轮先于免时长末轮）──
+// utaite 投稿描述里的 original:/本家: 链接反解 {title,author} 真身元数据——
+// 同题异曲在元数据层不可分（'Moonlight'→moumoon/Gaulin 同名异曲、'Boi'→
+// Dina Jashari 马其顿语同名歌），声明是检索侧的确定性出口。级联常规轮
+// 发起前解析、一次级联至多一次——choose/verify 自首轮起携 declared
+// （判官看得到「自署本家」轴：池中有本家条目选它、没有则倾向判死而非
+// 乱挑）；声明轮保留原位——常规轮全灭后以本家题/名重扫，具名本家
+// author 收窄池、缺席作开放轮照注 choose；跳轮条件=题同且艺人面无新
+// 信息（author 缺席/占位或与来源 artist 归一相同）——题同而本家
+// author 是新艺人轴仍起轮
+
+test('本家声明轮命中：常规轮全灭 → 以本家题名具名重扫命中（解析至多一次、头轮前触发）', async () => {
+  origInfoCalls.length = 0;
+  const order = [];
+  origInfoImpl = async ({ videoId }) => { order.push('decl'); return { videoId, title: 'Moonlight', author: 'shima' }; };
+  try {
+    const lrcQueries = [];
+    const kgUrls = [];
+    reset([
+      ['/youtubei/v1/next', () => { order.push('ytm'); return nextNoTab(); }],
+      ['lrclib.net/api/search', (url) => {
+        order.push('lrc');
+        const q = decodeURIComponent(url);
+        lrcQueries.push(q);
+        // 本家题检索才回真身条目——来源 'Boi ver.EMA' 检索面全 miss
+        return q.includes('Moonlight') ? J([
+          { id: 9901, trackName: 'Moonlight', artistName: 'shima',
+            duration: 200, syncedLyrics: '[00:01.00]本家詞' },
+        ]) : J([]);
+      }],
+      ['lyrics.kugou.com/search', (url) => { kgUrls.push(decodeURIComponent(url)); return J({ candidates: [] }); }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_declhit0001', title: 'Boi ver.EMA', artist: 'EMA', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_9901');
+    assert.equal(res?.meta.artist, 'shima');
+    // 头轮发起前解析实锤：反解先于一切检索源调用；一次级联至多一次
+    // （songId yt_ 前缀抽出的 videoId 直达反解）
+    assert.equal(order[0], 'decl');
+    assert.equal(origInfoCalls.length, 1);
+    assert.equal(origInfoCalls[0].videoId, 'declhit0001');
+    // 声明轮具名检索实锤：'Moonlight shima' 真打过——常规轮只有
+    // 'Boi ver.EMA'/'Boi' × ('EMA'/'') 面（4 发），本家题检索在其后
+    const decl = lrcQueries.filter((q) => q.includes('Moonlight'));
+    assert.equal(decl.length, 1);
+    assert.ok(decl[0].includes('shima'));
+    assert.equal(lrcQueries.indexOf(decl[0]), 4);
+    // lrclib 具名轮命中即收——酷狗 'Moonlight' 检索没追加（声明轮内短路）
+    assert.ok(kgUrls.every((u) => !u.includes('Moonlight')));
+  } finally { origInfoImpl = null; }
+});
+
+test('本家声明轮先于免时长末轮：声明检索位序在末轮免时长查询之前', async () => {
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: 'Boi2', author: 'shima' });
+  try {
+    const lrcQueries = [];
+    const kgUrls = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => { lrcQueries.push(decodeURIComponent(url)); return J([]); }],
+      ['lyrics.kugou.com/search', (url) => { kgUrls.push(url); return J({ candidates: [] }); }],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_declord0001', title: 'Boi ver.EMA', artist: 'EMA', durationSec: 200,
+    });
+    assert.equal(res, null);                 // 声明轮也全灭 → 末轮仍展开兜底
+    // 'Boi ver.EMA' 变体 2 枚：常规 'EMA'+'' 两轮 = 4 发；声明轮具名
+    // 'Boi2 shima' 第 5 发；末轮免时长 '' 开放轮 2 发殿后 = 7
+    assert.equal(lrcQueries.length, 7);
+    assert.ok(lrcQueries[4].includes('Boi2') && lrcQueries[4].includes('shima'));
+    // 声明轮酷狗检索带 duration=（时长闸在位）；末轮检索全部免时长
+    assert.ok(kgUrls.some((u) => u.includes('Boi2') && u.includes('duration=')));
+    assert.equal(kgUrls.filter((u) => !u.includes('duration=')).length, 2);
+  } finally { origInfoImpl = null; }
+});
+
+test('本家声明轮（author 缺席/占位）：作开放轮照注 choose 整池消歧', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: '本家题', author: 'unknown' });
+  try {
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 1 } : { ok: true });
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => {
+        return decodeURIComponent(url).includes('本家题') ? J([
+          { id: 9902, trackName: '本家题', artistName: '本家P',
+            duration: 200, syncedLyrics: '[00:01.00]本家の詞' },
+        ]) : J([]);
+      }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_declopen001', title: '別の題', artist: 'UP主', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_9902');
+    // 占位 author 滤成 '' 走开放轮：整池选择题 + 挑中条补词文核验，
+    // 两道证据与常规开放轮同构
+    assert.equal(aiCalls, 2);
+    assert.match(aiArgs[0].system, /消歧助手/);
+    assert.match(aiArgs[0].user, /候选池：\n1\. 本家题 \/ 本家P/);
+    assert.match(aiArgs[1].user, /候选条目：标题 本家题 \/ 艺人 本家P/);
+  } finally { aiOn = false; aiAnswer = null; origInfoImpl = null; }
+});
+
+// 跳轮条件回归：题同作者异照起轮（旧病灶——只比标题会把新艺人轴吞掉）；
+// 题同作者同/占位才跳。顺带钉 declared 自头轮起透进判定层的实参形态
+test('本家声明：题同作者异 → 声明轮照起（author 是新艺人轴）；头轮判定实参即携 declared', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  judgePoolArgs.length = 0; judgeLineArgs.length = 0;
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: 'Moonlight', author: 'shima' });
+  try {
+    // 开放轮选择题携声明后判官明言否决同题池（池中无 'shima' 条不乱挑
+    // ——声明语境下倾向判死）；声明轮具名 'shima' 命中真身条补验判过。
+    // 若 declared 没落进选择题 prompt（旧「常规轮全灭才解析」惰性时序），
+    // 无声明应答 pick:1 会把 moumoon 条收进来露馅
+    aiAnswer = (a) => (/消歧助手/.test(a.system)
+      ? (a.user.includes('声明本家') ? { pick: null } : { pick: 1 })
+      : { ok: a.user.includes('声明本家') });
+    const lrcQueries = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => {
+        const q = decodeURIComponent(url);
+        lrcQueries.push(q);
+        // 声明轮具名 'Moonlight shima' 回真身条目；常规开放轮
+        // 'Moonlight' 给同题异曲池（声明语境下被整池否决）；具名 'UP主' 空
+        if (q.includes('shima')) return J([
+          { id: 9905, trackName: 'Moonlight', artistName: 'shima',
+            duration: 200, syncedLyrics: '[00:01.00]本家の詞' },
+        ]);
+        if (q.endsWith('q=Moonlight')) return J([
+          { id: 7701, trackName: 'Moonlight', artistName: 'moumoon',
+            duration: 200, syncedLyrics: '[00:01.00]moumoon詞' },
+          { id: 7702, trackName: 'Moonlight', artistName: 'VY1',
+            duration: 200, syncedLyrics: '[00:01.00]VY1詞' },
+        ]);
+        return J([]);
+      }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_declart0001', title: 'Moonlight', artist: 'UP主', durationSec: 200,
+    });
+    // 题归一相同不挡轮——'Moonlight shima' 具名检索实锤打过并命中
+    assert.equal(res?.extId, 'lrclib_9905');
+    assert.equal(res?.meta.artist, 'shima');
+    assert.equal(origInfoCalls.length, 1);
+    const decl = lrcQueries.filter((q) => q.includes('shima'));
+    assert.equal(decl.length, 1);
+    assert.ok(decl[0].includes('Moonlight'));
+    assert.equal(lrcQueries.indexOf(decl[0]), 2);   // 常规两轮后第 3 发
+    // 判定层实参形态：声明头轮前就位——唯一一发选择题（开放轮）与
+    // 唯一一发词文核验（声明轮具名轮命中条）实参全程携 declared
+    assert.equal(aiCalls, 2);
+    assert.equal(judgePoolArgs.length, 1);
+    assert.deepEqual(judgePoolArgs[0].declared, { title: 'Moonlight', author: 'shima' });
+    assert.equal(judgeLineArgs.length, 1);
+    assert.deepEqual(judgeLineArgs[0].declared, { title: 'Moonlight', author: 'shima' });
+    // 自署本家行进两条判定通道的 prompt（整池选择题 + 词文核验）
+    assert.match(aiArgs[0].user, /声明本家：Moonlight — shima/);
+    assert.match(aiArgs[0].system, /消歧助手/);
+    assert.match(aiArgs[1].user, /声明本家：Moonlight — shima/);
+    assert.match(aiArgs[1].system, /核验助手|自署的本家/);
+  } finally { aiOn = false; aiAnswer = null; origInfoImpl = null; }
+});
+
+test('本家声明：题同作者同 → 声明轮跳过；证据仍进末轮判定语境', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  judgePoolArgs.length = 0; judgeLineArgs.length = 0;
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: 'Moonlight', author: 'shima' });
+  try {
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 1 } : { ok: true });
+    let moonOpen = 0;
+    const lrcQueries = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => {
+        const q = decodeURIComponent(url);
+        lrcQueries.push(q);
+        // 常规开放轮（含时长闸）miss，末轮免时长同词重扫回同题池——
+        // 同名查询两入两出按序分派
+        if (q.endsWith('q=Moonlight')) {
+          moonOpen += 1;
+          return moonOpen >= 2 ? J([
+            { id: 8801, trackName: 'Moonlight', artistName: 'moumoon',
+              duration: 200, syncedLyrics: '[00:01.00]moumoon詞' },
+            { id: 8802, trackName: 'Moonlight', artistName: 'VY1',
+              duration: 200, syncedLyrics: '[00:01.00]VY1詞' },
+          ]) : J([]);
+        }
+        return J([]);
+      }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      // 来源 artist 即本家 author——艺人轴已被常规具名轮覆盖，声明轮
+      // 是纯重复（即便跑了检索面去重也使查询面等值，此断言钉的是「不
+      // 追加任何检索面」这一可观测口径）
+      songId: 'yt_declsame002', title: 'Moonlight', artist: 'shima', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_8801');
+    assert.equal(origInfoCalls.length, 1);
+    // 全程只有 具名'Moonlight shima' + 开放'Moonlight' + 末轮免时长
+    // 'Moonlight' = 3 发——声明轮零追加
+    assert.equal(lrcQueries.length, 3);
+    assert.equal(lrcQueries.filter((q) => q.includes('shima')).length, 1);
+    // 声明轮跳过不影响语境——declaredNow 头轮前已置位：末轮 choose/verify
+    // 实参携声明
+    assert.equal(judgePoolArgs.length, 1);
+    assert.deepEqual(judgePoolArgs[0].declared, { title: 'Moonlight', author: 'shima' });
+    assert.deepEqual(judgeLineArgs.at(-1).declared, { title: 'Moonlight', author: 'shima' });
+    // 自署本家行进两条判定通道的 prompt（整池选择题 + 词文核验）
+    assert.ok(aiArgs.some((a) => /消歧助手/.test(a.system)
+      && a.user.includes('声明本家：Moonlight — shima')));
+    assert.ok(aiArgs.some((a) => /核验助手/.test(a.system)
+      && a.user.includes('声明本家：Moonlight — shima')));
+  } finally { aiOn = false; aiAnswer = null; origInfoImpl = null; }
+});
+
+test('本家声明证据自头轮入判定语境：开放轮 choose/verify 携 declared 挑中本家条即收', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  judgePoolArgs.length = 0; judgeLineArgs.length = 0;
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: 'Moonlight', author: 'shima' });
+  try {
+    // 声明语境下的选择题指中本家条（索引 2）；无声明语境挑首顺位
+    // moumoon——declared 没到头轮判定层就收错条露馅
+    aiAnswer = (a) => (/消歧助手/.test(a.system)
+      ? (a.user.includes('声明本家') ? { pick: 2 } : { pick: 1 })
+      : { ok: a.user.includes('声明本家') });
+    const lrcQueries = [];
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => {
+        lrcQueries.push(decodeURIComponent(url));
+        // 常规开放轮（±15s 时长闸在位）同题异曲池——声明语境下判官
+        // 一发选择题直接指中本家条，级联在开放轮即收
+        if (decodeURIComponent(url).endsWith('q=Moonlight')) return J([
+          { id: 8801, trackName: 'Moonlight', artistName: 'moumoon',
+            duration: 200, syncedLyrics: '[00:01.00]moumoon詞' },
+          { id: 8802, trackName: 'Moonlight', artistName: 'shima',
+            duration: 200, syncedLyrics: '[00:01.00]本家の詞' },
+        ]);
+        return J([]);
+      }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_declctx0001', title: 'Moonlight', artist: 'UP主', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_8802');
+    assert.equal(res?.meta.artist, 'shima');
+    // 具名 'UP主' + 开放 'Moonlight' 两发即收——声明轮/末轮都不再需要
+    assert.equal(lrcQueries.length, 2);
+    // 头轮起的判定实参全程携 declared：选择题与挑中条词文核验各一发
+    assert.equal(aiCalls, 2);
+    assert.equal(judgePoolArgs.length, 1);
+    assert.deepEqual(judgePoolArgs[0].declared, { title: 'Moonlight', author: 'shima' });
+    assert.equal(judgeLineArgs.length, 1);
+    assert.deepEqual(judgeLineArgs[0].declared, { title: 'Moonlight', author: 'shima' });
+    assert.match(aiArgs[0].user, /声明本家：Moonlight — shima/);
+    assert.match(aiArgs[1].user, /声明本家：Moonlight — shima/);
+  } finally { aiOn = false; aiAnswer = null; origInfoImpl = null; }
+});
+
+test('声明语境头轮就位 e2e（Moonlight ver.EMA 实案）：开放轮同题池按自署本家挑 VY1——Gaulin 同名异曲不再错收', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  judgePoolArgs.length = 0; judgeLineArgs.length = 0;
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: 'Moonlight', author: 'shima' });
+  try {
+    // 实案回放：yt_xuFgAqSU4dE 开放轮 strictTitle 池里 Gaulin 英文同名
+    // 异曲曾被 pick+verify 连过收单（lrclib_37347988）——声明 {shima}
+    // 根本没到场，判官在无证据语境下对同题池做了选择。新时序头轮判定
+    // 即携「自署本家：Moonlight — shima」：选择题指中 VY1 本家条；
+    // declared 没落进 prompt 则无声明应答 pick:1 回首顺位 Gaulin 露馅
+    aiAnswer = (a) => (/消歧助手/.test(a.system)
+      ? (a.user.includes('声明本家') ? { pick: 2 } : { pick: 1 })
+      : { ok: a.user.includes('候选条目：标题 Moonlight / 艺人 VY1') });
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => {
+        if (decodeURIComponent(url).includes('Moonlight')) return J([
+          { id: 37347988, trackName: 'Moonlight', artistName: 'Gaulin',
+            duration: 200, syncedLyrics: '[00:01.00]english words' },
+          { id: 37347999, trackName: 'Moonlight', artistName: 'VY1',
+            duration: 200, syncedLyrics: '[00:01.00]本家の詞' },
+        ]);
+        return J([]);
+      }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      // author='_' 占位：首轮即无艺人约束开放轮——choose 在头轮就注
+      songId: 'yt_xuFgAqSU4dE', title: 'Moonlight ver.EMA', artist: '_', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_37347999');   // 本家条——不是 Gaulin 同名异曲
+    assert.equal(res?.meta.artist, 'VY1');
+    // 声明实锤头轮前解析：一轮选择题 + 挑中条词文核验实参全程携 declared
+    assert.equal(origInfoCalls.length, 1);
+    assert.equal(origInfoCalls[0].videoId, 'xuFgAqSU4dE');
+    assert.equal(aiCalls, 2);
+    assert.equal(judgePoolArgs.length, 1);
+    assert.deepEqual(judgePoolArgs[0].declared, { title: 'Moonlight', author: 'shima' });
+    assert.equal(judgeLineArgs.length, 1);
+    assert.deepEqual(judgeLineArgs[0].declared, { title: 'Moonlight', author: 'shima' });
+    assert.match(aiArgs[0].user, /声明本家：Moonlight — shima/);
+    assert.match(aiArgs[1].user, /声明本家：Moonlight — shima/);
+  } finally { aiOn = false; aiAnswer = null; origInfoImpl = null; }
+});
+
+test('vkey 声明位 e2e：无声明语境落的判否 verdict 不被声明语境重进复用——同 extId 换键重判', async () => {
+  aiOn = true; aiCalls = 0; aiArgs.length = 0;
+  judgePoolArgs.length = 0; judgeLineArgs.length = 0;
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: 'DeclKey', author: '本家P' });
+  try {
+    // 病灶回放：无声明语境的旧级联对同 extId 落过 ok:false（v4 盐、无
+    // 声明位）。声明到场后同条目重进核验——若不分键，旧 verdict 直接
+    // 命中判死、自署证据根本没机会进判。预置无声明键的判否 verdict
+    lyricAiRepo.upsertVerdict(
+      lyricVerdictKey('lrclib_8892', 'DeclKey', 'DKUP', true), 'lyric', false, 'test');
+    // 开放轮选择题指中本家条、词文核验判过——若 verify 侧没分键，8892
+    // 会吃旧判否 verdict 判死变体归 null（v4d2 键不命中 v4 行才走到判定）
+    aiAnswer = (a) => (/消歧助手/.test(a.system) ? { pick: 2 } : { ok: true });
+    reset([
+      ['/youtubei/v1/next', () => nextNoTab()],
+      ['lrclib.net/api/search', (url) => {
+        // 具名 'DKUP' 轮查询带艺人尾不进此分支（endsWith 不咬）；
+        // '' 开放轮 'q=DeclKey' 回同题池
+        if (decodeURIComponent(url).endsWith('q=DeclKey')) return J([
+          { id: 8891, trackName: 'DeclKey', artistName: 'moumoon',
+            duration: 200, syncedLyrics: '[00:01.00]moumoon詞' },
+          { id: 8892, trackName: 'DeclKey', artistName: '本家P',
+            duration: 200, syncedLyrics: '[00:01.00]本家の詞' },
+        ]);
+        return J([]);
+      }],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_declvkey001', title: 'DeclKey', artist: 'DKUP', durationSec: 200,
+    });
+    assert.equal(res?.extId, 'lrclib_8892');   // 无声明判否没挡住声明语境重判
+    assert.equal(aiCalls, 2);                  // 选择题 + 挑中条词文核验各一发
+    // 判定键实锤携声明位：与「无声明同参」键不同、与携声明手算键逐位同
+    assert.equal(judgeLineArgs.length, 1);
+    assert.equal(judgeLineArgs[0].vkey,
+      lyricVerdictKey('lrclib_8892', 'DeclKey', 'DKUP', true, true));
+    assert.notEqual(judgeLineArgs[0].vkey,
+      lyricVerdictKey('lrclib_8892', 'DeclKey', 'DKUP', true));
+  } finally { aiOn = false; aiAnswer = null; origInfoImpl = null; }
+});
+
+test('本家声明：反解故障/无声明/超时 → 静默走原路径不炸不误时', async () => {
+  const missTable = () => [
+    ['/youtubei/v1/next', () => nextNoTab()],
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+  ];
+  // 反解抛错（头轮前 eager 解析点炸）→ 按无声明处理：级联照常跑检索
+  // 路径、归 null 不炸
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => { throw new Error('本家反解传输炸'); };
+  try {
+    reset(missTable());
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_declerr0001', title: 'Boi ver.EMA', artist: 'EMA', durationSec: 200,
+    });
+    assert.equal(res, null);
+    assert.equal(origInfoCalls.length, 1);
+    // 失败后检索路径照展开——反解故障不吞常规轮
+    assert.ok(calls.some((u) => u.includes('lrclib.net')));
+    assert.ok(calls.some((u) => u.includes('kugou')));
+  } finally { origInfoImpl = null; }
+
+  // 无声明（impl=null 默认桩回 null）→ 原路径干净 miss
+  origInfoCalls.length = 0;
+  reset(missTable());
+  const res2 = await svc.fetchExternalLyric({
+    songId: 'yt_declnull001', title: 'Boi ver.EMA', artist: 'EMA', durationSec: 200,
+  });
+  assert.equal(res2, null);
+  assert.equal(origInfoCalls.length, 1);
+
+  // 反解超时（impl 挂起不吃 signal）→ race 兜底按 deadline 归 null，
+  // 不拖穿级联软时限；反解计入 deadline——60ms 软时限被反解吃满后
+  // 常规轮一记 deadlineHit 截断，上游检索一发不打
+  origInfoCalls.length = 0;
+  origInfoImpl = () => new Promise(() => {});    // 永不落地
+  try {
+    reset(missTable());
+    const t0 = Date.now();
+    const res3 = await svc.fetchExternalLyric({
+      songId: 'yt_declslow001', title: 'Boi ver.EMA', artist: 'EMA',
+      durationSec: 200, deadlineMs: 60,
+    });
+    assert.equal(res3, null);
+    assert.ok(Date.now() - t0 < 5000);           // 没被挂起 impl 拖死
+    assert.equal(origInfoCalls.length, 1);
+    assert.equal(calls.length, 0);               // 软时限被反解吃满——零检索
+  } finally { origInfoImpl = null; }
+});
+
+test('本家声明解析限 yt_：首轮命中也已付头轮前解析成本；qq_/bv_ 永不解析', async () => {
+  origInfoCalls.length = 0;
+  origInfoImpl = async () => ({ title: '本家题', author: 'shima' });
+  try {
+    reset([
+      ['/youtubei/v1/next', () => nextOk('MPLYt_decl')],
+      ['/youtubei/v1/browse', () => browseOk()],
+    ]);
+    const res = await svc.fetchExternalLyric({
+      songId: 'yt_decllazy001', title: '曲', artist: '艺人',
+    });
+    assert.equal(res.source, 'ytm');             // 常规首轮命中即返
+    // yt_ 级联头轮发起前必解析——首轮命中不省这 +2 跳成本（判定语境
+    // 自首轮就位的前提）
+    assert.equal(origInfoCalls.length, 1);
+
+    // 曲库/bv_ 全灭也不解析——声明证据只服务 yt_ 投稿
+    reset([
+      ['lrclib.net', () => J([])],
+      ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ]);
+    assert.equal(await svc.fetchExternalLyric({
+      songId: 'qq_declnone001', title: '曲', artist: '艺人', durationSec: 200,
+    }), null);
+    assert.equal(await svc.fetchExternalLyric({
+      songId: 'bv_BV1xx411c7mD', title: '曲', artist: '艺人', durationSec: 200,
+    }), null);
+    assert.equal(origInfoCalls.length, 1);       // 非 yt_ 零调用
+  } finally { origInfoImpl = null; }
 });

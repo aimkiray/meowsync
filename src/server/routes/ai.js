@@ -1,6 +1,6 @@
 const { Hono } = require('hono');
 const lyricAiRepo = require('../repositories/lyricAi');
-const { parseLrcLines, lyricVerdictKey, judgeLyricLines } = require('../services/lyric-verify');
+const { parseLrcLines, lyricVerdictKey, judgeLyricLines, resolveYtDeclared, resolveCreditGateCandidate, composerCreditRefutes, sanitizePrompt } = require('../services/lyric-verify');
 const { parseJsonBody } = require('../lib/validate');
 const { aiLyricBody } = require('../../shared/contracts.js');
 const { fail } = require('../lib/http-error');
@@ -15,7 +15,7 @@ const app = new Hono();
 // 词键，取词走 lyric-external.fetchByExtId 反查支路）；bv_/yt_ 轨道 id
 // 仍拒——它们没有可翻译词源，放行只会空耗一次上游调用再 404
 // 20 位上限的 bounded 形与共享无界 NETEASE_ID_RE 语义不同——直接用共享名防遮蔽
-const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, EXT_LYRIC_ID_RE } = require('../../shared/predicates.js');
+const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, EXT_LYRIC_ID_RE, YT_TRACK_ID_RE } = require('../../shared/predicates.js');
 // 翻译负载上限：千行级歌词多半是滚动歌词逐字拆分（字数标记），整单 AI 翻译
 // 既不经济也无必要——超量直接拒
 const MAX_LYRIC_LINES = 400;
@@ -272,8 +272,9 @@ app.post('/ai/lyric-translate', async (c) => {
   }
 });
 
-// POST /ai/lyric-verify {id, sourceTitle, sourceAuthor} —— 外部导入曲经
-// 网易云匹配取词时，核验配到的歌词与来源音视频是不是同一首歌。
+// POST /ai/lyric-verify {id, sourceTitle, sourceAuthor, trackId?} —— 外部
+// 导入曲经网易云匹配取词时，核验配到的歌词与来源音视频是不是同一首歌。
+// trackId 携 yt_ 轨道 id 时反解投稿自署本家进判定语境（声明证据分键）。
 // 「错歌词比没歌词更糟」：判不符时前端把歌词整组隐藏。
 // 判定按词源 id 落库（song_ai_verdict kind='lyric'）——同一错配不重复问模型
 app.post('/ai/lyric-verify', async (c) => {
@@ -286,17 +287,57 @@ app.post('/ai/lyric-verify', async (c) => {
   const sourceAuthor = String(body.sourceAuthor || '').trim();
   if (!sourceTitle) return fail(c, 400, '缺少 sourceTitle');
   const signal = c.req.raw.signal;
+  // yt_ 来源（前端携 trackId=来源轨道 id）先反解投稿自署本家——判官的
+  // 声明语境证据。解析必须在 vkey 之前：缓存键含声明位，先定 declMark
+  // 才能命中级联/下载链已落的声明语境判定行；AI 关时也照解析——判定
+  // 缓存查询同样吃这个键面。fail-soft——上游故障/超时只归「无声明」
+  // 不炸请求（8s 硬闸见 lyric-verify.resolveYtDeclared）；trackId 缺席
+  // 或非 yt_ 形态时旧路径逐位不动
+  const ytM = YT_TRACK_ID_RE.exec(String(body.trackId || ''));
+  const declared = ytM ? await resolveYtDeclared(ytM[1], signal) : null;
   // 键入参用未 trim 的原串——键函数内置 slice→lower→trim，与下载链
   // providerData 截断值产同键；先 trim 再传会让截断窗口错位。
   // sourceAuthor 缺省传 '' 而非 undefined——String(undefined) 会把字面量
-  // 'undefined' 写进 vkey 签名，与下载链的空串签名产不同键
-  const vkey = lyricVerdictKey(id, body.sourceTitle, body.sourceAuthor || '');
+  // 'undefined' 写进 vkey 签名，与下载链的空串签名产不同键。
+  // declMark 与 judgeInner declSeg 出场条件逐字对齐（declTitle||declAuthor）
+  // ——声明实参在场但题/名全空时键与 prompt 不劈叉
+  const vkey = lyricVerdictKey(id, body.sourceTitle, body.sourceAuthor || '', false,
+    Boolean(declared?.title || declared?.author));
+
+  // 署名闸重检（缓存早退与 inflight 命中两处共用；declared/id/signal 取
+  // 路由闭包，入参仅为已落库 ok）：已落库的放行判定可能是署名闸接线前
+  // 固化的错判（wholicoji 实案：声明本家「ポップしなないで」配到
+  // wholicoji 自署作曲条目，v2d3 键落 ok:1 被命中透出）——「ok ∧ 声明
+  // 在场 ∧ 网易词源 id」交集不直信，付一跳 lyric + 至多一跳 song_detail
+  // 把确定性闸重算一遍：命中否证压回 false（与判定闸同口径不落 verdict、
+  // 同款审计行），未命中原样透回。fail-soft：重检路故障/abort 归闸不
+  // 适用，传入判定透出不变（AI 是增强不是门禁）；缓存否决/无声明作者/
+  // extId 词源零上行原样透回（qq_ 在 L285 已 400 不入此分支）
+  const recheckCreditGate = async (ok) => {
+    if (!(ok && declared?.author && NETEASE_ID_BOUNDED_RE.test(id))) return ok;
+    let refuteSig = null;
+    try {
+      const { lrc } = await fetchLyricRaw(id, signal);
+      const lines = parseLrcLines(lrc);
+      const candidate = await resolveCreditGateCandidate({ id, lines, declared, signal });
+      refuteSig = composerCreditRefutes(lines, candidate?.artist, declared?.author);
+    } catch { /* 上游故障/abort 归不适用——已落库判定继续透出 */ }
+    if (refuteSig === null) return ok;
+    console.info(`[lyric-verify] 署名否证: 作曲「${sanitizePrompt(refuteSig).slice(0, 120)}」=候选艺人≠声明本家「${sanitizePrompt(declared?.author).slice(0, 120)}」`);
+    return false;
+  };
 
   // 已落库判定先查再闸：AI 关掉后缓存 verdict 照常生效（记忆不随开关
   // 旁路），只是不能再产新判定——未命中才 503
   const verdictOf = () => lyricAiRepo.getVerdict(vkey, 'lyric');
   const cached = verdictOf();
-  if (cached) return c.json({ code: 200, ok: !!cached.ok, cached: true });
+  if (cached) {
+    // 命中先过署名闸重检：被闸压回的判否是重算结论而非 verdict 记忆透出
+    // ——与判定闸同口径不落 verdict、不烙 cached 标记；未否证逐位早退
+    const ok = await recheckCreditGate(!!cached.ok);
+    if (cached.ok && !ok) return c.json({ code: 200, ok: false });
+    return c.json({ code: 200, ok, cached: true });
+  }
   if (!aiEnabled()) return fail(c, 503, 'AI 未配置', { enabled: false });
   // 缓存未命中才吃配额
   if (!rateLimit(c, 'ai-verify', 20)) return fail(c, 429, '请求过于频繁');
@@ -305,7 +346,14 @@ app.post('/ai/lyric-verify', async (c) => {
   while (inflightVerify.has(vkey)) {
     await inflightVerify.get(vkey).catch(() => {});
     const hit = verdictOf();
-    if (hit) return c.json({ code: 200, ok: !!hit.ok, cached: true });
+    if (hit) {
+      // 跟从者命中与缓存早退同口径过署名闸重检——并发同 vkey/异 trackId
+      // 携异声明撞同键时，首判落的放行不许绕过闸直透（重检故障同
+      // fail-soft 口径透出 hit 判定）
+      const ok = await recheckCreditGate(!!hit.ok);
+      if (hit.ok && !ok) return c.json({ code: 200, ok: false });
+      return c.json({ code: 200, ok, cached: true });
+    }
     // 在途者判定失败（不落库）则循环条件放行，由本次自行重试抢 gate
   }
   let release;
@@ -320,7 +368,14 @@ app.post('/ai/lyric-verify', async (c) => {
       // 没词可验——无词显示不算错配
       return c.json({ code: 200, ok: true, reason: 'no-lyric' });
     }
-    const ok = await judgeLyricLines({ vkey, lines, title: sourceTitle, author: sourceAuthor, signal });
+    // 署名否证闸的候选艺人惰性补料（wholicoji 实案病灶：song_match 绑错
+    // 网易条目时本链手里没有候选身份，闸够不着）——仅声明在场 + 词源为
+    // 网易条目 + 词内确有作曲署名行才付一跳 song_detail；extId 词源由
+    // 形态闸跳过（级联 verifyHit 自带 candidate）、无声明/无署名行零上行。
+    // 拿不到归 null 不传——闸对照轴不齐自动不适用
+    const candidate = await resolveCreditGateCandidate({ id, lines, declared, signal })
+      .catch(() => null);   // 补料自身抛错同归「无候选」——不连带牺牲本次判定
+    const ok = await judgeLyricLines({ vkey, lines, title: sourceTitle, author: sourceAuthor, candidate, signal, declared });
     if (ok === null) {
       // 模型没给判定 → 不缓存、不误伤，按「相符」放行
       return c.json({ code: 200, ok: true, inconclusive: true });

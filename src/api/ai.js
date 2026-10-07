@@ -28,7 +28,10 @@ export const aiApi = {
   translateLyric: (id, signal = null) =>
     http.post('/ai/lyric-translate', { id }, { signal, timeout: 300000 }),
 
-  // 核验配到的歌词是否属于来源音视频（外部导入曲专用）
-  verifyLyric: (id, sourceTitle, sourceAuthor, signal = null) =>
-    http.post('/ai/lyric-verify', { id, sourceTitle, sourceAuthor }, { signal, timeout: 30000 })
+  // 核验配到的歌词是否属于来源音视频（外部导入曲专用）。trackId 携 yt_
+  // 轨道 id 时服务端反解投稿自署本家作判定语境；缺席键不进 body——
+  // 与旧请求负载逐位相同。入参先归一成串：number 型 song.id 直发会被
+  // zod z.string() 拒成 400 静默丢 verify——防御性收口
+  verifyLyric: (id, sourceTitle, sourceAuthor, signal = null, trackId = null) =>
+    http.post('/ai/lyric-verify', { id, sourceTitle, sourceAuthor, trackId: String(trackId || '') || undefined }, { signal, timeout: 30000 })
 }

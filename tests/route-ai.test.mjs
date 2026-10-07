@@ -13,15 +13,24 @@ const require = createRequire(import.meta.url);
 // ── 桩：AI 客户端与词源上游 ──
 let aiOn = false;
 let aiAnswer = null;
+let aiImpl = null;    // 逐调用定制应答（如挂起造并发窗）——缺席回 aiAnswer
 const aiCalls = [];
 seed('../src/server/lib/ai.js', {
   aiEnabled: () => aiOn,
   aiModel: () => 'test-model',
-  askAiJson: async (args) => { aiCalls.push(args); return aiAnswer; },
+  askAiJson: async (args) => { aiCalls.push(args); return aiImpl ? aiImpl(args) : aiAnswer; },
 });
 let lyricPayload = { lrc: { lyric: '' }, tlyric: { lyric: '' } };
+let detailSongs = [];   // song_detail 反查应答（songs 数组）——署名闸供料桩
+let apiThrow = null;    // 'lyric'/'song_detail' → 该上游抛错（fail-soft 注入桩）
+const apiCalls = [];    // 记录上游调用 {name, params}——「未发 song_detail」断言靠它
 seed('../src/server/services/netease-api.js', {
-  callNeteaseApi: async () => ({ body: lyricPayload }),
+  callNeteaseApi: async (name, params) => {
+    apiCalls.push({ name, params });
+    if (name === apiThrow) throw new Error(`${name} upstream boom`);
+    if (name === 'song_detail') return { body: { songs: detailSongs } };
+    return { body: lyricPayload };
+  },
   apiModules: {},
 });
 // 外源词源反查桩：ytm_/lrclib_/kugou_ 词键的取词支路（真身在
@@ -32,11 +41,20 @@ seed('../src/server/services/lyric-external.js', {
   fetchExternalLyric: async () => null,
   fetchByExtId: async (id) => { extCalls.push(id); return extHit; },
 });
+// 自署本家反解桩：lyric-verify（经模块对象调 lib/youtube.resolveOriginalInfo）
+// 的 yt_ trackId 声明解析——钉录制桩隔离真身 fetchPlayer 上行面；
+// origImpl 缺席默认归 null=无声明
+let origImpl = null;
+const origCalls = [];
+seed('../src/server/lib/youtube.js', {
+  resolveOriginalInfo: async (args) => { origCalls.push(args); return origImpl ? origImpl(args) : null; },
+});
 
-let app, lyricAiRepo;
+let app, lyricAiRepo, lyricVerify;
 before(() => {
   app = require('../src/server/routes/ai.js');
   lyricAiRepo = require('../src/server/repositories/lyricAi.js');
+  lyricVerify = require('../src/server/services/lyric-verify.js');
 });
 after(() => { rmSync(process.env.DATA_DIR, { recursive: true, force: true }); });
 
@@ -206,6 +224,332 @@ test('ai：lyric-verify 收 ytm_ 词源 id——反查取词走判定链', async
   assert.equal(r.status, 200);
   assert.equal(r.body.ok, true);
   assert.equal(extCalls.at(-1), 'ytm_extvid0001');
+});
+
+test('ai：lyric-verify 携 yt_ trackId → 反解自署本家进判定语境；缺席/非 yt_ 逐位同旧', async () => {
+  aiOn = true;
+  // memoize 命中会绕过 origImpl 原位桩——用例前后清 videoId 级解析缓存
+  lyricVerify._clearDeclaredMemo();
+  origImpl = async ({ videoId }) => ({ videoId, title: 'Original Song', author: 'honkaP' });
+  try {
+    lyricPayload = { lrc: { lyric: '[00:01.00]verify line\n[00:02.00]other' }, tlyric: { lyric: '' } };
+    aiAnswer = { ok: true };
+    const before = origCalls.length;
+    const r = await json(await post('/ai/lyric-verify', {
+      id: '880020', sourceTitle: 'Cover 動画', sourceAuthor: 'utaite',
+      trackId: 'yt_abcdefghijk',
+    }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, true);
+    // 反解以 trackId 抽出的 videoId 发起
+    assert.equal(origCalls.length, before + 1);
+    assert.equal(origCalls.at(-1).videoId, 'abcdefghijk');
+    // 声明证据实锤进判官 prompt
+    assert.match(aiCalls.at(-1).user, /声明本家：Original Song — honkaP/);
+    // trackId 缺席/非 yt_ 形态：零反解调用——旧 body 行为逐位不动
+    const r2 = await json(await post('/ai/lyric-verify', {
+      id: '880021', sourceTitle: 'x', sourceAuthor: '',
+    }));
+    assert.equal(r2.status, 200);
+    const r3 = await json(await post('/ai/lyric-verify', {
+      id: '880022', sourceTitle: 'x', sourceAuthor: '', trackId: 'bv_BV1xx411c7mD',
+    }));
+    assert.equal(r3.status, 200);
+    assert.equal(origCalls.length, before + 1);
+    // AI 关也照解析——判定缓存键的声明位要先定才能查库（未命中才 503）
+    aiOn = false;
+    const r4 = await post('/ai/lyric-verify', {
+      id: '880023', sourceTitle: 'x', sourceAuthor: '', trackId: 'yt_zzzzzzzzzzz',
+    });
+    assert.equal(r4.status, 503);
+    assert.equal(origCalls.length, before + 2);
+  } finally { aiOn = true; origImpl = null; lyricVerify._clearDeclaredMemo(); }
+});
+
+// ── 署名否证闸的惰性 candidate 接线 ──
+// wholicoji 实案病灶：song_match 绑错网易条目时播放核验走本路由——手里没有
+// 候选条目身份，署名闸够不着。声明在场 + 网易词源 + 词内有「作曲:X」署名行
+// 才付一跳 song_detail 反查候选艺人喂闸；缺任一条件零反查（对照轴不齐时闸
+// 本就不适用，不该为它付上行）
+test('ai：lyric-verify 声明在场+网易词含作曲署名 → song_detail 反查喂闸判 false', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  origImpl = async ({ videoId }) => ({ videoId, title: '早く帰りたい', author: 'ポップしなないで' });
+  lyricPayload = { lrc: { lyric: '[00:01.00] 作曲 : wholicoji\n[00:02.00]行きたくない\n[00:03.00]帰りたい' }, tlyric: { lyric: '' } };
+  detailSongs = [{ name: '早く帰りたい', ar: [{ name: 'wholicoji' }] }];
+  aiAnswer = { ok: true };   // 模型即便放行——确定性闸必须在 AI 通道前截停
+  try {
+    const nApi = apiCalls.length;
+    const nAi = aiCalls.length;
+    const r = await json(await post('/ai/lyric-verify', {
+      id: '880030', sourceTitle: '早く帰りたい 歌ってみた', sourceAuthor: 'coverP',
+      trackId: 'yt_gatecred001',
+    }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, false);   // 作曲署名=候选艺人≠声明本家 → 闸判否
+    const det = apiCalls.slice(nApi).filter(x => x.name === 'song_detail');
+    assert.equal(det.length, 1);
+    assert.equal(det[0].params.ids, '880030');
+    assert.equal(aiCalls.length, nAi);   // 闸先截停——没烧模型
+  } finally { origImpl = null; detailSongs = []; lyricVerify._clearDeclaredMemo(); }
+});
+
+test('ai：lyric-verify 署名闸惰性面——无声明/无署名行/extId 词源不发 song_detail', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  detailSongs = [{ name: 'x', ar: [{ name: 'wholicoji' }] }];   // 误发反查也能应答——靠 apiCalls 钉「没发」
+  const credLrc = '[00:01.00] 作曲 : wholicoji\n[00:02.00]line\n[00:03.00]line2';
+  try {
+    // 词有署名行但无 trackId → declared 缺席：对照轴不齐零反查
+    lyricPayload = { lrc: { lyric: credLrc }, tlyric: { lyric: '' } };
+    aiAnswer = { ok: true };
+    let n = apiCalls.length;
+    const r1 = await json(await post('/ai/lyric-verify', { id: '880031', sourceTitle: 't', sourceAuthor: 'a' }));
+    assert.equal(r1.status, 200);
+    assert.ok(!apiCalls.slice(n).some(x => x.name === 'song_detail'), '无声明不应发 song_detail');
+    // 声明在场但词内无作曲署名行——预检短路不反查
+    origImpl = async () => ({ title: '本家', author: '本家P' });
+    lyricPayload = { lrc: { lyric: '[00:01.00]plain line\n[00:02.00]other' }, tlyric: { lyric: '' } };
+    n = apiCalls.length;
+    const r2 = await json(await post('/ai/lyric-verify', {
+      id: '880032', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_gatecred002',
+    }));
+    assert.equal(r2.status, 200);
+    assert.ok(!apiCalls.slice(n).some(x => x.name === 'song_detail'), '无署名行不应发 song_detail');
+    // 外源词源 id（ytm_）：级联 verifyHit 已自带 candidate——路由侧形态闸
+    // 跳过，声明在场+署名行齐备也只走 AI 判定
+    extHit = { lrc: credLrc, source: 'ytm', extId: 'ytm_credit01', synced: true };
+    n = apiCalls.length;
+    const r3 = await json(await post('/ai/lyric-verify', {
+      id: 'ytm_credit01', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_gatecred003',
+    }));
+    assert.equal(r3.status, 200);
+    assert.equal(r3.body.ok, true);   // candidate 缺席——闸不适用落回 AI 放行
+    assert.ok(!apiCalls.slice(n).some(x => x.name === 'song_detail'), 'extId 词源不应发 song_detail');
+    // 反查拿不到艺人（songs 空）→ candidate 不传、闸不适用，落回 AI 判定
+    lyricPayload = { lrc: { lyric: credLrc }, tlyric: { lyric: '' } };
+    detailSongs = [];
+    n = apiCalls.length;
+    const r4 = await json(await post('/ai/lyric-verify', {
+      id: '880033', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_gatecred004',
+    }));
+    assert.equal(r4.status, 200);
+    assert.equal(r4.body.ok, true);
+    assert.equal(apiCalls.slice(n).filter(x => x.name === 'song_detail').length, 1);   // 试过但拿不到→不传
+  } finally { origImpl = null; extHit = null; detailSongs = []; lyricVerify._clearDeclaredMemo(); }
+});
+
+// ── 缓存放行 verdict 的署名闸重检 ──
+// wholicoji 病灶的另一半：v2d3 键已固化 ok:1（署名闸接线前的 AI 放行错判），
+// verdictOf() 早退把闸短路永久透出。「声明在场 + 网易词源」交集的缓存 ok:1
+// 不早退——付一跳 lyric + 至多一跳 song_detail 重检确定性闸：命中否证压回
+// ok:false 且零 AI 重判；未命中否证信任已落库判定回 cached:true。其余命中
+// （无声明/extId/缓存否决）逐位不动原样早退零上行
+test('ai：lyric-verify 缓存 ok:1 逢声明在场+作曲署名=候选艺人≠本家 → 闸压回 ok:false', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  origImpl = async () => ({ title: '早く帰りたい', author: 'ポップしなないで' });
+  lyricPayload = { lrc: { lyric: '[00:01.00] 作曲 : wholicoji\n[00:02.00]行きたくない\n[00:03.00]帰りたい' }, tlyric: { lyric: '' } };
+  detailSongs = [{ name: '早く帰りたい', ar: [{ name: 'wholicoji' }] }];
+  aiAnswer = { ok: true };
+  // 预置声明语境（d3 盐位）下已落库的放行判定——模拟闸接线前固化的错判
+  const body = {
+    id: '880040', sourceTitle: '早く帰りたい 歌ってみた', sourceAuthor: 'coverP',
+    trackId: 'yt_gatecache01',
+  };
+  lyricAiRepo.upsertVerdict(
+    lyricVerify.lyricVerdictKey(body.id, body.sourceTitle, body.sourceAuthor, false, true),
+    'lyric', true, 'preset|decl:ポップしなないで');
+  try {
+    const nAi = aiCalls.length;
+    const nApi = apiCalls.length;
+    const r = await json(await post('/ai/lyric-verify', body));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, false);           // 固化放行被确定性闸压回
+    assert.equal(r.body.cached, undefined);   // 判否不落 verdict——非缓存透出
+    assert.equal(aiCalls.length, nAi);        // 闸截停不重判——零 AI 消耗
+    const ups = apiCalls.slice(nApi);
+    assert.equal(ups.filter(x => x.name === 'lyric').length, 1);        // 一跳词拉取
+    assert.equal(ups.filter(x => x.name === 'song_detail').length, 1);  // 至多一跳反查
+  } finally { origImpl = null; detailSongs = []; lyricVerify._clearDeclaredMemo(); }
+});
+
+test('ai：lyric-verify 缓存 ok:1 逢声明在场但署名=本家 → 闸不否证回 cached:true', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  origImpl = async () => ({ title: '早く帰りたい', author: 'ポップしなないで' });
+  // 署名归一后与声明本家同名——对照轴不否证（翻唱沿用原曲署名同理放行）
+  lyricPayload = { lrc: { lyric: '[00:01.00] 作曲 : ポップしなないで\n[00:02.00]行きたくない\n[00:03.00]帰りたい' }, tlyric: { lyric: '' } };
+  detailSongs = [{ name: '早く帰りたい', ar: [{ name: 'ポップしなないで' }] }];
+  const body = {
+    id: '880041', sourceTitle: '早く帰りたい 歌ってみた', sourceAuthor: 'coverP',
+    trackId: 'yt_gatecache02',
+  };
+  lyricAiRepo.upsertVerdict(
+    lyricVerify.lyricVerdictKey(body.id, body.sourceTitle, body.sourceAuthor, false, true),
+    'lyric', true, 'preset');
+  try {
+    const nApi = apiCalls.length;
+    const r = await json(await post('/ai/lyric-verify', body));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, true);
+    assert.equal(r.body.cached, true);   // 闸未否证——信任已落库放行判定
+    // 重检确实跑过：署名行在场 → 付过一跳反查，只是署名=本家不否证
+    assert.equal(apiCalls.slice(nApi).filter(x => x.name === 'song_detail').length, 1);
+  } finally { origImpl = null; detailSongs = []; lyricVerify._clearDeclaredMemo(); }
+});
+
+test('ai：lyric-verify 缓存命中逐位不动面——无声明/extId/缓存否决原样早退零上行', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  try {
+    // 无声明键（无 d3 盐位）预置放行——无 trackId 则 declared 缺席，闸不介入
+    lyricAiRepo.upsertVerdict(
+      lyricVerify.lyricVerdictKey('880042', 'Some Video', 'author', false, false),
+      'lyric', true, 'preset');
+    let n = apiCalls.length;
+    const r1 = await json(await post('/ai/lyric-verify', {
+      id: '880042', sourceTitle: 'Some Video', sourceAuthor: 'author',
+    }));
+    assert.equal(r1.status, 200);
+    assert.equal(r1.body.ok, true);
+    assert.equal(r1.body.cached, true);
+    assert.ok(!apiCalls.slice(n).some(x => x.name === 'lyric' || x.name === 'song_detail'),
+      '无声明缓存命中不应付词拉取/detail 反查');
+    // extId 词源 + 声明在场：形态闸排除非网易 id 仍早退——连 fetchByExtId 也不打
+    origImpl = async () => ({ title: '本家', author: '本家P' });
+    lyricAiRepo.upsertVerdict(
+      lyricVerify.lyricVerdictKey('ytm_gatecache1', 't', 'a', false, true),
+      'lyric', true, 'preset');
+    n = apiCalls.length;
+    const nExt = extCalls.length;
+    const r2 = await json(await post('/ai/lyric-verify', {
+      id: 'ytm_gatecache1', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_gatecache03',
+    }));
+    assert.equal(r2.status, 200);
+    assert.equal(r2.body.ok, true);
+    assert.equal(r2.body.cached, true);
+    assert.equal(extCalls.length, nExt);
+    assert.ok(!apiCalls.slice(n).some(x => x.name === 'lyric' || x.name === 'song_detail'),
+      'extId 缓存命中不应付词拉取/detail 反查');
+    // 缓存否决不掺闸语义——声明在场也原样早退 ok:false，不付重检上行
+    lyricAiRepo.upsertVerdict(
+      lyricVerify.lyricVerdictKey('880043', 't', 'a', false, true),
+      'lyric', false, 'preset');
+    n = apiCalls.length;
+    const r3 = await json(await post('/ai/lyric-verify', {
+      id: '880043', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_gatecache04',
+    }));
+    assert.equal(r3.status, 200);
+    assert.equal(r3.body.ok, false);
+    assert.equal(r3.body.cached, true);
+    assert.ok(!apiCalls.slice(n).some(x => x.name === 'lyric' || x.name === 'song_detail'),
+      '缓存否决不应付重检上行');
+  } finally { origImpl = null; lyricVerify._clearDeclaredMemo(); }
+});
+
+// ── inflight 命中回路的署名闸重检 ──
+// vkey 声明位只占「有无」不载声明内容——同 id/题/名、异 trackId 携异自署
+// 本家的两请求撞同键时，跟从者在 inflight 回路里吃到首发落的判定行。该
+// 命中与缓存早退同口径过署名闸重检——否则首发放行落库会被跟从者绕过闸直透
+test('ai：lyric-verify inflight 命中 ok:1 + 跟从者声明被署名否证 → 闸压回 ok:false', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  // 首发携「署名本人」声明（署名=声明本家，闸不否证→AI 放行落 ok:1）；
+  // 跟从者携第三方本家声明（署名=候选艺人≠本家→重检否证）
+  origImpl = async ({ videoId }) => videoId === 'gatelead001'
+    ? { videoId, title: '早く帰りたい', author: 'wholicoji' }
+    : { videoId, title: '早く帰りたい', author: 'ポップしなないで' };
+  lyricPayload = { lrc: { lyric: '[00:01.00] 作曲 : wholicoji\n[00:02.00]行きたくない\n[00:03.00]帰りたい' }, tlyric: { lyric: '' } };
+  detailSongs = [{ name: '早く帰りたい', ar: [{ name: 'wholicoji' }] }];
+  // 判官挂起造并发窗：首发占住 gate 进判官后跟从者才上路——钉死「走
+  // inflight 回路」而非首个 verdictOf 命中分支（verdict 此时尚未落库）。
+  // 判定落库先于 gate 释放（同步序列在 finally 之前），跟从者醒来必见 hit
+  let releaseAi;
+  const aiHold = new Promise(r => { releaseAi = r; });
+  aiImpl = async () => { await aiHold; return { ok: true }; };
+  const body = (trackId) => ({
+    id: '880050', sourceTitle: '早く帰りたい 歌ってみた', sourceAuthor: 'coverP', trackId,
+  });
+  const tick = () => new Promise(r => setImmediate(r));
+  try {
+    const pA = post('/ai/lyric-verify', body('yt_gatelead001'));
+    const nAi = aiCalls.length;
+    for (let i = 0; i < 200 && aiCalls.length === nAi; i++) await tick();
+    assert.ok(aiCalls.length > nAi, '首发应已挂进判官（gate 先于判官占用）');
+    const nApi = apiCalls.length;
+    const pB = post('/ai/lyric-verify', body('yt_gatefollow1'));
+    // 跟从者声明反解完成（origCalls 见其 videoId）后距泊入 gate 仅剩数个
+    // 微任务——首发仍持 gate，旋出让保其走 inflight 回路吃到落库判定
+    for (let i = 0; i < 200 && !origCalls.some(a => a.videoId === 'gatefollow1'); i++) await tick();
+    for (let i = 0; i < 50; i++) await tick();
+    releaseAi();
+    const [rA, rB] = await Promise.all([pA.then(json), pB.then(json)]);
+    assert.equal(rA.body.ok, true);            // 署名=声明本家不否证 → AI 放行落库
+    assert.equal(rB.body.ok, false);           // 跟从者命中 ok:1 仍被署名闸压回
+    assert.equal(rB.body.cached, undefined);   // 闸压回是重算结论——非缓存透出
+    const ups = apiCalls.slice(nApi);
+    assert.ok(ups.some(x => x.name === 'lyric'), '跟从者应自付重检词拉取');
+    assert.ok(ups.some(x => x.name === 'song_detail'), '跟从者应自付候选反查');
+  } finally { origImpl = null; aiImpl = null; detailSongs = []; lyricVerify._clearDeclaredMemo(); }
+});
+
+// ── 署名闸重检/补料的 fail-soft ──
+// 「AI 是增强不是门禁」同口径：重检路上游抛错归闸不适用——已落库放行
+// 透出语义不变；直判路径候选反查抛错归「无候选」——落回 judgeLyricLines
+// 正常判，不炸请求也不固化 inconclusive
+test('ai：lyric-verify 缓存 ok:1 重检遇 lyric/detail 抛错 → 透出已落库 ok:1', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  origImpl = async () => ({ title: '早く帰りたい', author: 'ポップしなないで' });
+  lyricPayload = { lrc: { lyric: '[00:01.00] 作曲 : wholicoji\n[00:02.00]行きたくない' }, tlyric: { lyric: '' } };
+  const preset = (id) => lyricAiRepo.upsertVerdict(
+    lyricVerify.lyricVerdictKey(id, 't', 'a', false, true), 'lyric', true, 'preset');
+  const body = (id, trackId) => ({ id, sourceTitle: 't', sourceAuthor: 'a', trackId });
+  try {
+    // lyric 拉取抛错：重检付不出上行——透出已落库 ok:1 而非 502/误否
+    preset('880051');
+    apiThrow = 'lyric';
+    let n = apiCalls.length;
+    let r = await json(await post('/ai/lyric-verify', body('880051', 'yt_failsoft001')));
+    assert.equal(r.status, 200);
+    assert.deepEqual([r.body.ok, r.body.cached], [true, true]);
+    assert.ok(apiCalls.slice(n).some(x => x.name === 'lyric'), '重检确已发起词拉取');
+    // song_detail 反查抛错：候选艺人缺席 → 闸不适用 → 透出已落库 ok:1
+    preset('880052');
+    apiThrow = 'song_detail';
+    n = apiCalls.length;
+    r = await json(await post('/ai/lyric-verify', body('880052', 'yt_failsoft002')));
+    assert.equal(r.status, 200);
+    assert.deepEqual([r.body.ok, r.body.cached], [true, true]);
+    const ups = apiCalls.slice(n);
+    assert.ok(ups.some(x => x.name === 'lyric') && ups.some(x => x.name === 'song_detail'),
+      '重检应走完 词拉取+候选反查 再归不适用');
+  } finally { origImpl = null; apiThrow = null; detailSongs = []; lyricVerify._clearDeclaredMemo(); }
+});
+
+test('ai：lyric-verify 直判路径 song_detail 抛错 → candidate=null 落回 AI 判定', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  origImpl = async () => ({ title: '本家', author: '本家P' });
+  lyricPayload = { lrc: { lyric: '[00:01.00] 作曲 : wholicoji\n[00:02.00]行きたくない' }, tlyric: { lyric: '' } };
+  apiThrow = 'song_detail';
+  aiAnswer = { ok: true };
+  try {
+    const n = apiCalls.length;
+    const nAi = aiCalls.length;
+    const r = await json(await post('/ai/lyric-verify', {
+      id: '880053', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_failsoft003',
+    }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, true);
+    assert.equal(r.body.inconclusive, undefined);   // 走完判定而非故障兜底放行
+    assert.ok(aiCalls.length > nAi, 'candidate 缺席应落回 judgeLyricLines 问模型');
+    assert.equal(apiCalls.slice(n).filter(x => x.name === 'song_detail').length, 1);
+    // 判定照常落库——补料故障不固化 inconclusive
+    assert.ok(lyricAiRepo.getVerdict(
+      lyricVerify.lyricVerdictKey('880053', 't', 'a', false, true), 'lyric'));
+  } finally { origImpl = null; apiThrow = null; detailSongs = []; lyricVerify._clearDeclaredMemo(); }
 });
 
 test('ai：fetchByExtId 查无词 → verify 按 no-lyric 放行、translate 404', async () => {
