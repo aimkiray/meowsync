@@ -651,3 +651,61 @@ test('ai：纯中文词仍 already-zh skip（判定在模型前——零 AI 消�
     else process.env.TRUST_PROXY = prevTp;
   }
 });
+
+// ── POST CSRF 纵深（F4）+ 纯文本词兜底取样（F1 收口）──────────────────
+
+test('ai：两处 POST 端点异源 Origin / cross-site 信号 → 403；无源非浏览器客户端照旧放行', async () => {
+  aiOn = true;
+  // 异源 Origin 双端点同拒——403 先于限流/解析/上游，不烧配额
+  for (const p of ['/ai/lyric-translate', '/ai/lyric-verify']) {
+    const r = await app.request(`http://t${p}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', origin: 'http://evil.example' },
+      body: JSON.stringify({ id: '880070', sourceTitle: 'x', sourceAuthor: 'a' }),
+    });
+    assert.equal(r.status, 403);
+    assert.equal((await r.json()).code, 403);
+  }
+  // Origin 缺席但 fetch 元数据报跨站 → 同拒（二级纵深）
+  const r2 = await app.request('http://t/ai/lyric-translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'sec-fetch-site': 'cross-site' },
+    body: JSON.stringify({ id: '880070' }),
+  });
+  assert.equal(r2.status, 403);
+  // 非浏览器客户端（无 Origin 无跨站元数据）照旧放行——CSRF 只拦跨站形态
+  lyricPayload = { lrc: { lyric: '[00:01.00]x' }, tlyric: { lyric: '' } };
+  aiAnswer = { ok: true };
+  const r3 = await json(await post('/ai/lyric-verify', {
+    id: '880070', sourceTitle: 'x', sourceAuthor: '',
+  }));
+  assert.equal(r3.status, 200);
+  assert.equal(r3.body.ok, true);
+});
+
+test('ai：lyric-verify 纯文本词兜底取样——有词文照判、真空仍 no-lyric', async () => {
+  aiOn = true;
+  // 无时戳有词文的纯文本词不再零核验（与 verifyHit 同口径）——剥标签行
+  // 仍有词文的进判定链；纯元行剥完真空才按「没词可验」放行
+  extHit = { lrc: '純文一\n純文二\n純文三', source: 'lrclib', extId: 'lrclib_plain01', synced: false };
+  aiAnswer = { ok: false };
+  try {
+    const r = await json(await post('/ai/lyric-verify', {
+      id: 'lrclib_plain01', sourceTitle: '某曲', sourceAuthor: 'a',
+    }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, false);
+    assert.equal(r.body.reason, undefined);
+    assert.match(aiCalls.at(-1).user, /純文一/);   // 词文进了判定抽样
+    // 剥完真空（纯元行）仍走 no-lyric 放行——没烧模型
+    extHit = { lrc: '[ti:某曲]\n[ar:某艺]', source: 'lrclib', extId: 'lrclib_plain02', synced: false };
+    const nAi = aiCalls.length;
+    const r2 = await json(await post('/ai/lyric-verify', {
+      id: 'lrclib_plain02', sourceTitle: '某曲', sourceAuthor: 'a',
+    }));
+    assert.equal(r2.status, 200);
+    assert.equal(r2.body.ok, true);
+    assert.equal(r2.body.reason, 'no-lyric');
+    assert.equal(aiCalls.length, nAi);
+  } finally { extHit = null; }
+});

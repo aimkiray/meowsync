@@ -1083,10 +1083,14 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
       let text = String(hit?.lrc || '');
       if (!hit || !text.trim()) return null;
       // 与嫁接词同款归属核验——词源键挂源内 extId（ytm_/lrclib_/kugou_
-      // 前缀，与网易云 id 空间隔离）；qq_ 走 grafted 支路取顶层签名
+      // 前缀，与网易云 id 空间隔离）；qq_ 走 grafted 支路取顶层签名。
+      // candidate 携级联命中条目的候选身份（hit.meta，{title,artist,album}
+      // 与核验侧同口径）——署名闸据此对 extId 词源可达（extId 无网易条目
+      // 可反查）；ytm 支路/缓存反查无 meta 的形态不传走原路径
       const ownership = await verifyDownloadOwnership({
         songId, lyricId: hit.extId, providerData,
-        grafted: !extM, lrc: text, signal
+        grafted: !extM, lrc: text, signal,
+        ...(hit.meta ? { candidate: hit.meta } : {}),
       });
       if (ownership === false) {
         console.info(`[download] ${songId} 外源歌词（${hit.source}）归属核验不符，跳过落盘`);

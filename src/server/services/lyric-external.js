@@ -85,7 +85,7 @@ const {
   titleVariantsOf, artistFromTitle, cleanQueryTitle, normKey, isPlaceholderAuthor,
 } = require('../../shared/title-variants.js');
 const { normToken } = require('./netease-score');
-const { parseLrcLines, judgeLyricLines, lyricVerdictKey, judgePoolPick } = require('./lyric-verify');
+const { parseLrcLines, plainTextLines, judgeLyricLines, lyricVerdictKey, judgePoolPick } = require('./lyric-verify');
 // 本家声明反解（投稿描述 original:/本家: 链接 → {title,author} 真身元数据）
 // ——经模块对象调用：测试面可就地桩，并行落地期缺席（undefined）按无
 // 声明 fail-soft 处理
@@ -686,13 +686,6 @@ async function kugouFetch({ title, artist, durationSec, strictTitle = false, ver
   return null;
 }
 
-// 纯文本词 → 判定抽样行：剥方括号段（[mm:ss] 时间戳、[ti:]/[ar:] 元行、
-// [re:]/[ve:] 词源烙记同剥）取词文——「没轴的文本词」也过 AI 归属核验。
-// 出参与 parseLrcLines 同构 {text}（judgeInner 只消费 .text）
-const plainTextLines = (lrc) => String(lrc || '').split('\n')
-  .map((l) => ({ text: l.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim() }))
-  .filter((l) => l.text);
-
 // ── 级联与缓存包装 ──
 // AI 归属核验：判「明显是别的歌」视同无词继续下一源；核验通道故障/判不定
 // 放行。无条件走 judgeLyricLines——它内部 getVerdict 缓存先行（命中即返不烧
@@ -714,7 +707,12 @@ async function verifyHit(hit, { title, artist, signal, pool, declared }) {
   // instrumental 声明词这类没词文的形态）才放行
   if (!lines.length) lines = plainTextLines(hit.lrc);
   if (!lines.length) return true;
-  const vkey = lyricVerdictKey(hit.extId, title || '', artist || '', pool?.length, Boolean(declared));
+  // declMark 与 judgeInner declSeg 出场条件逐字对齐（declTitle||declAuthor），
+  // 同 ai.js:305 / lyric-verify.js:484 的声明位口径——声明实参在场但题/名
+  // 全空时键与 prompt 不劈叉（本链 declaredNow 由 resolveDeclared 产出，
+  // title 非空才落值，此分叉实际不可达——纯对称收口）
+  const vkey = lyricVerdictKey(hit.extId, title || '', artist || '', pool?.length,
+    Boolean(declared?.title || declared?.author));
   const ok = await judgeLyricLines({
     vkey, lines, title: title || '', author: artist || '',
     candidate: { ...hit.meta, pool }, signal, declared,
@@ -912,6 +910,15 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
       // 验过不再二次烧 AI；YTM 支无逐候选通道，照旧过外层 verifyHit
       // （declaredNow 同透——yt_ 级联自首轮起已持自署证据）
       if (!hit.verified) {
+        // 外层核验同吃级联 deadline 闸（与 verify 闭包口径对齐）：词到手
+        // 已过期就不验不收——判否不收录、记截断续下一源，尾部归 truncated
+        // null 不落负缓存（过期词的核验结论没跑完，判死等同盲收外）。
+        // 丢命中留日志——同类判否都有 [lyric-ext] 行，静默丢会让截断病例无从回放
+        if (Date.now() > deadline) {
+          deadlineHit = true;
+          console.info(`[lyric-ext] ${name} 命中到手已过级联时限，弃收续下一源（${tag}）`);
+          continue;
+        }
         try {
           if (!(await verifyHit(hit, { title, artist, signal, declared: declaredNow }))) {
             console.info(`[lyric-ext] ${name} 词归属核验不符，继续下一源`);

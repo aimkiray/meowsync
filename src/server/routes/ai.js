@@ -1,6 +1,7 @@
 const { Hono } = require('hono');
 const lyricAiRepo = require('../repositories/lyricAi');
-const { parseLrcLines, lyricVerdictKey, judgeLyricLines, resolveYtDeclared, resolveCreditGateCandidate, composerCreditRefutes, sanitizePrompt } = require('../services/lyric-verify');
+const { parseLrcLines, plainTextLines, lyricVerdictKey, judgeLyricLines, resolveYtDeclared, resolveCreditGateCandidate, composerCreditRefutes, sanitizePrompt } = require('../services/lyric-verify');
+const { csrfOriginOk } = require('../lib/auth-gate');
 const { parseJsonBody } = require('../lib/validate');
 const { aiLyricBody } = require('../../shared/contracts.js');
 const { fail } = require('../lib/http-error');
@@ -85,6 +86,10 @@ async function fetchLyricRaw(id, signal) {
 // 结果按词源 id 永久落库：同一首歌在任何歌单/壳里重放零成本命中。
 // 幂等：缓存命中/官方译文直回都不消耗 AI 额度
 app.post('/ai/lyric-translate', async (c) => {
+  // 写请求 CSRF 纵深（与 downloads/match 同口径）：开放部署与
+  // DOWNLOAD_TOKEN 旁路不经 authGate，跨站裸 POST 会烧上游抓取+
+  // AI 配额+写缓存行——Origin 异源/Sec-Fetch-Site 跨站一律拒
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 16 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
@@ -272,6 +277,8 @@ app.post('/ai/lyric-translate', async (c) => {
 // 「错歌词比没歌词更糟」：判不符时前端把歌词整组隐藏。
 // 判定按词源 id 落库（song_ai_verdict kind='lyric'）——同一错配不重复问模型
 app.post('/ai/lyric-verify', async (c) => {
+  // 写请求 CSRF 纵深（与 /ai/lyric-translate 同口径）
+  if (!csrfOriginOk(c)) return fail(c, 403, 'Forbidden');
   const { data: body, error } = await parseJsonBody(c, aiLyricBody, 64 * 1024);
   if (error) return error;
   const id = String(body.id ?? '');
@@ -312,7 +319,10 @@ app.post('/ai/lyric-verify', async (c) => {
     let refuteSig = null;
     try {
       const { lrc } = await fetchLyricRaw(id, signal);
-      const lines = parseLrcLines(lrc);
+      // 与下方判定链同口径的纯文本兜底——无时戳词的裸署名行（'作曲：X'
+      // 不带方括号）同样要够得着闸，不然纯文本形态的已落库 ok 绕过重检
+      let lines = parseLrcLines(lrc);
+      if (!lines.length) lines = plainTextLines(lrc);
       const candidate = await resolveCreditGateCandidate({ id, lines, declared, signal });
       refuteSig = composerCreditRefutes(lines, candidate?.artist, declared?.author);
     } catch { /* 上游故障/abort 归不适用——已落库判定继续透出 */ }
@@ -357,16 +367,24 @@ app.post('/ai/lyric-verify', async (c) => {
   try {
     if (signal?.aborted) return c.body(null, 499);
     const { lrc } = await fetchLyricRaw(id, signal);
-    const lines = parseLrcLines(lrc);
+    // 纯文本词与真空词分开（与 verifyHit/verifyDownloadOwnership 同口径）：
+    // 剥标签行后仍有词文的照常过判定链，剥完真空（纯元行/空白）才按
+    // 「没词可验」放行
+    let lines = parseLrcLines(lrc);
+    if (!lines.length) lines = plainTextLines(lrc);
     if (!lines.length) {
       // 没词可验——无词显示不算错配
       return c.json({ code: 200, ok: true, reason: 'no-lyric' });
     }
     // 署名否证闸的候选艺人惰性补料（wholicoji 实案病灶：song_match 绑错
     // 网易条目时本链手里没有候选身份，闸够不着）——仅声明在场 + 词源为
-    // 网易条目 + 词内确有作曲署名行才付一跳 song_detail；extId 词源由
-    // 形态闸跳过（级联 verifyHit 自带 candidate）、无声明/无署名行零上行。
-    // 拿不到归 null 不传——闸对照轴不齐自动不适用
+    // 网易条目 + 词内确有作曲署名行才付一跳 song_detail；无声明/无署名行
+    // 零上行。
+    // 已知盲区如实记：本路由手里只有词源 id 没有候选 meta（fetchLyricRaw
+    // 只回词文），extId 词源（ytm_/lrclib_/kugou_）又没有网易条目可反查——
+    // 声明在场时署名闸对 extId 词源不适用。级联 verifyHit 自带 candidate、
+    // 下载链 verifyDownloadOwnership 有 candidate 形参可收口；本路由缺这
+    // 半供给，拿不到归 null 不传——闸对照轴不齐自动不适用
     const candidate = await resolveCreditGateCandidate({ id, lines, declared, signal })
       .catch(() => null);   // 补料自身抛错同归「无候选」——不连带牺牲本次判定
     const ok = await judgeLyricLines({ vkey, lines, title: sourceTitle, author: sourceAuthor, candidate, signal, declared });

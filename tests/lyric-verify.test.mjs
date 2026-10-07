@@ -548,8 +548,9 @@ test('verifyDownloadOwnership：无源签名/0 行词/纯网易云曲 → 放行
   reset();
   // providerData 缺 title（老镜像行）→ 无签名可核，放行
   assert.equal(await verifyDownloadOwnership({ songId: BV_ID, lyricId: '321', providerData: { bilibili: { bvid: 'BV1xx411c7mD' } }, lrc }), true);
-  // 纯文本词 parse 出 0 行——没东西可验
-  assert.equal(await verifyDownloadOwnership({ songId: BV_ID, lyricId: '321', providerData: PD, lrc: '没有时间戳的文本词' }), true);
+  // 剥标签行后真空的词（纯元行/空白）——没东西可验照放行；
+  // 无时戳但有词文的纯文本形态照进判定链，另有专钉
+  assert.equal(await verifyDownloadOwnership({ songId: BV_ID, lyricId: '321', providerData: PD, lrc: '[ti:某曲]\n[ar:某艺]\n   \n' }), true);
   // 网易云自身曲（非嫁接）无核验对象
   assert.equal(await verifyDownloadOwnership({ songId: '12345', lyricId: '12345', providerData: null, lrc }), true);
   assert.equal(askCalls, 0);
@@ -616,9 +617,10 @@ test('verifyDownloadOwnership：声明反解归 null/抛错/无 videoId → 无�
   assert.equal(r4, true);
   assert.equal(origCalls.length, 1);
   assert.equal(origCalls[0].videoId, 'wwwwwwwwwww');
-  // 0 行词先于反解放行——纯文本下载词没东西可判，省一跳声明解析
+  // 真空词先于反解放行——剥完只剩元行/空白的词没东西可判，省一跳
+  // 声明解析；无时戳但有词文的纯文本形态照解析照判（另见专钉）
   origCalls.length = 0;
-  assert.equal(await verifyDownloadOwnership({ songId: YT_ID, lyricId: '13', providerData: YT_PD, lrc: '无时间戳文本词' }), true);
+  assert.equal(await verifyDownloadOwnership({ songId: YT_ID, lyricId: '13', providerData: YT_PD, lrc: '[ti:x]\n[ar:y]\n' }), true);
   assert.equal(origCalls.length, 0);
   // bv_ 来源永不解 YT 声明
   origCalls.length = 0;
@@ -705,4 +707,74 @@ test('composerCreditNames：词头采样窗取作曲署名值——作词/编曲
   assert.deepEqual(composerCreditNames(parseLrcLines('[00:01.00]作詞 : wholicoji\n')), []);
   assert.deepEqual(composerCreditNames(lines), []);   // 无署名行
   assert.deepEqual(composerCreditNames(undefined), []);
+});
+
+// 纯文本词兜底取样（F1 收口）：无时间戳词曾是核验旁路——parseLrcLines
+// 零行即早退放行，「没轴的文本词」与「真空词」被混同。剥标签行仍有词文
+// 的纯文本进同一判定链（与级联 verifyHit 同口径）；剥完真空才走
+// 「没词可验」放行
+test('verifyDownloadOwnership：纯文本词兜底取样——错配判否、正确放行、真空仍早退', async () => {
+  reset();
+  const plain = '行きたくない\n帰りたい\n会いたくない';   // 无时戳有词文
+  aiScript = [{ ok: false }];
+  assert.equal(await verifyDownloadOwnership({ songId: BV_ID, lyricId: '321', providerData: PD, lrc: plain }), false);
+  assert.equal(askCalls, 1);                          // 没轴的词也真进了 AI
+  assert.match(lastAsk.user, /行きたくない/);          // 剥标签行的词文进了抽样
+  assert.equal(writes[0].vkey, lyricVerdictKey('321', '来源标题', 'UP主'));
+  // 正确词走同一链放行——纯文本进判定链不是单向判死
+  aiScript = [{ ok: true }];
+  assert.equal(await verifyDownloadOwnership({ songId: BV_ID, lyricId: '322', providerData: PD, lrc: plain }), true);
+  // 剥完真空（纯元行/纯 instrumental 标记）仍按「没词可验」早退——零 AI
+  const nAsk = askCalls;
+  assert.equal(await verifyDownloadOwnership({ songId: BV_ID, lyricId: '323', providerData: PD, lrc: '[ti:某曲]\n[ar:某艺]\n' }), true);
+  assert.equal(askCalls, nAsk);
+});
+
+// candidate 形参（F2 收口）：调用方已持候选条目身份（级联 hit.meta）时
+// 直用跳过 song_detail 反查——extId 词源（ytm_/lrclib_/kugou_）本无网易
+// 条目可反查，candidate 在手署名闸照常生效，走与「resolved 到网易
+// candidate」完全同一套判定链
+test('verifyDownloadOwnership：candidate 在手直用——extId 词源署名闸生效且零反查', async () => {
+  reset();
+  const credPlain = '作曲 : wholicoji\n行きたくない\n帰りたい';  // 纯文本带署名行
+  origImpl = async () => ({ title: '早く帰りたい', author: 'ポップしなないで' });
+  // ytm_ 词源 + 声明 + 词内自署作曲 + candidate 在手 → 确定性判否；
+  // 反查桩归相异艺人——若误发 song_detail 闸会拿到不同证据面（钉死零上行）
+  detailImpl = async () => ({ body: { songs: [{ ar: [{ name: '別人' }] }] } });
+  const r = await verifyDownloadOwnership({
+    songId: 'yt_gatecred101', lyricId: 'ytm_x1',
+    providerData: { youtube: { videoId: 'gatecred101', title: 'Y来源题', author: 'Y频道' } },
+    lrc: credPlain,
+    candidate: { title: '早く帰りたい', artist: 'wholicoji' },
+  });
+  assert.equal(r, false);
+  assert.equal(apiCalls.length, 0);    // candidate 在手——反查一跳不发
+  assert.equal(askCalls, 0);           // 闸截停不烧 AI
+  assert.equal(writes.length, 0);      // 闸否不落 verdict
+  // 同形缺 candidate：extId 形态闸天然不适用——落回 AI 判定（盲区钉死）
+  aiScript = [{ ok: true }];
+  const r2 = await verifyDownloadOwnership({
+    songId: 'yt_gatecred102', lyricId: 'ytm_x2',
+    providerData: { youtube: { videoId: 'gatecred102', title: 'Y来源题', author: 'Y频道' } },
+    lrc: credPlain,
+  });
+  assert.equal(r2, true);
+  assert.equal(apiCalls.length, 0);    // extId 仍不发反查
+  assert.equal(askCalls, 1);           // 落回 AI 判定路径
+});
+
+test('verifyDownloadOwnership：candidate 形参对网易 lyricId 同生效——跳反查直接过闸', async () => {
+  reset();
+  const credLrc = '[00:01.00] 作曲 : wholicoji\n[00:02.00]line one\n[00:03.00]line two\n';
+  origImpl = async () => ({ title: '早く帰りたい', author: 'ポップしなないで' });
+  detailImpl = async () => ({ body: { songs: [{ ar: [{ name: '別人' }] }] } });  // 若反查会拿到不同艺人
+  const r = await verifyDownloadOwnership({
+    songId: 'yt_gatecred103', lyricId: '8809',
+    providerData: { youtube: { videoId: 'gatecred103', title: 'Y来源题', author: 'Y频道' } },
+    lrc: credLrc,
+    candidate: { title: '早く帰りたい', artist: 'wholicoji' },
+  });
+  assert.equal(r, false);
+  assert.equal(apiCalls.length, 0);    // 在手候选优先——song_detail 不发
+  assert.equal(askCalls, 0);
 });

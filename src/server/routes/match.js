@@ -2,6 +2,7 @@ const { Hono } = require('hono');
 const { matchWithBudget, toMatchedJson } = require('../services/netease-match');
 const { rateLimit } = require('../lib/rate-limit');
 const { csrfOriginOk } = require('../lib/auth-gate');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 const { readJsonBody } = require('../lib/http-body');
 const { callNeteaseApi } = require('../services/netease-api');
 const { aiEnabled, aiModel } = require('../lib/ai');
@@ -119,7 +120,9 @@ app.post('/match/retry', async (c) => {
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[match] retry 失败:', e?.message || e);
-    return c.json({ code: 502, message: `重匹配失败: ${e?.message || '未知错误'}` }, 502);
+    // 裸异常消息直回会泄部署面信息（绝对路径里的用户名/目录布局）——
+    // 过 stripAbsolutePaths 再下发（console.error 记原文不受影响）
+    return c.json({ code: 502, message: `重匹配失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
