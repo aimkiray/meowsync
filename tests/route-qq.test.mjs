@@ -19,12 +19,13 @@ const TRACK = {
 };
 let resolvedInput = null;
 let pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+let pickStreamImpl = async () => pickStreamHit; // 可换抛错实现——路径剥离钉用
 seed('../src/server/lib/qq.js', {
   hasQqCookie: () => false,
   PLAY_LADDER: ['m800'], BEST_LADDER: ['flac'],
   SONGMID_RE: /^[0-9A-Za-z]{10,20}$/,
   getSongDetail: async (id) => ({ ...TRACK, mid: String(id) }),
-  pickStreamUrl: async () => pickStreamHit,
+  pickStreamUrl: async (...a) => pickStreamImpl(...a),
   getLyric: async () => ({ lyric: '[00:01.00]词', trans: '[00:01.00]译' }),
   // 与 lib/qq.js getPlaylist 真身同形（id/name/creator/cover/desc/songCount/
   // tracks/truncated）——路由显式透 truncated 契约字段，桩缺它会让该字段
@@ -86,6 +87,18 @@ test('qq：stream 非法 mid 400；命中 → 302 进 vault 令牌而非裸链',
   const streamVault = require('../src/server/lib/stream-vault.js');
   const entry = streamVault.resolve(loc.split('/audio-proxy/t/')[1]);
   assert.equal(entry.urls[0], 'https://stream.qqmusic.qq.com/x.m4a?u=1');
+});
+
+test('qq：stream 502 消息剥离绝对路径——不泄服务器文件系统布局', async () => {
+  pickStreamImpl = async () => {
+    throw new Error("ENOENT: no such file or directory, open '/data/meowsync/qq.cache'");
+  };
+  try {
+    const r = await json(await get(`/qq/stream?mid=${TRACK.mid}`));
+    assert.equal(r.status, 502);
+    assert.ok(!r.body.message.includes('/data/meowsync'), `路径泄漏: ${r.body.message}`);
+    assert.match(r.body.message, /<path>/);
+  } finally { pickStreamImpl = async () => pickStreamHit; }
 });
 
 test('qq：stream 无可用档 → 404', async () => {

@@ -1,5 +1,6 @@
 const { Hono } = require('hono');
 const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 const streamVault = require('../lib/stream-vault');
 const mediaCache = require('../services/media-cache');
 const { rateLimit } = require('../lib/rate-limit');
@@ -131,7 +132,7 @@ app.get('/bilibili/resolve', async (c) => {
     // 客户端已断连：静默 499，不写错误日志（正常断连不算服务端错误）
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[bilibili] resolve 失败:', e.message);
-    return c.json({ code: 502, message: `B 站解析失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `B 站解析失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
@@ -248,9 +249,122 @@ app.get('/bilibili/favlist', async (c) => {
     if ([-400, -403, -404].includes(code)) {
       return c.json({ code: 404, message: '收藏夹不存在或不可公开访问' }, 404);
     }
-    return c.json({ code: 502, message: `收藏夹获取失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `收藏夹获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
+
+// /bilibili/stream 上游解析段（view→playurl→cid 自愈→durl 反超→白名单
+// 预筛→分P 键段反解）收敛成纯数据产物：{usable, cacheTier, cacheMuxed,
+// pagePart, noAvc1}。并发同参请求（播放页音频+视频各一次、进度条重试
+// 叠放、多客户端同曲）此前各跑一遍最坏 5 跳扇出——按
+// (bvid, cid|p, kind, prefer) 键在途合流。共享链不吃调用方 signal
+// （首调用方断连不陪绑搭车者；每跳 biliFetch 的 15s 内部超时是自净
+// 上限），等待方 await 后自查自己的 signal 再消费结果
+const streamSetInflight = new Map();
+const resolveStreamSetShared = ({ bvid, cidParam, pageWanted, kind, prefer }) => {
+  const key = `${bvid}|${cidParam ? `c${cidParam}` : `p${pageWanted}`}|${kind}|${prefer || '-'}`;
+  let gate = streamSetInflight.get(key);
+  if (!gate) {
+    gate = resolveStreamSet({ bvid, cidParam, pageWanted, kind, prefer })
+      .finally(() => streamSetInflight.delete(key));
+    streamSetInflight.set(key, gate);
+  }
+  return gate;
+};
+
+async function resolveStreamSet({ bvid, cidParam, pageWanted, kind, prefer }) {
+  // 显式 cid 在位时实际播放内容由 cid 决定而非 ?p——mint 缓存键前要把
+  // cid 反解回真实分P 序（下方 pagePart），否则 ?p=1&cid=<P2的cid> 会
+  // 把 P2 字节写进 p1 键，正常 P1 请求吃到 P2 档
+  let cid = cidParam;
+  let cidExplicit = /^\d+$/.test(String(cidParam || ''));
+  if (!cidExplicit) {
+    const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`);
+    cid = pickCidFromView(view, pageWanted);
+  }
+  let playurl;
+  try {
+    playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`);
+  } catch (e) {
+    // cid 过期自愈：稿件被 UP 主换源/调 P 后库存 cid 失效——按 p 重查对应分P
+    // 的 cid（不能回落 view.cid——那是 P1，会把分P导入的曲静默拉回第一P）。
+    // 仅对「调用方传了合法数字 cid」自愈——刚查来的 cid 失败重试无意义。
+    // 新 cid 必须赋回——下方 durl 探测要复用同一 cid
+    if (!cidExplicit) throw e;
+    const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`);
+    cid = pickCidFromView(view, pageWanted);
+    cidExplicit = false; // 自愈后内容跟分P 序走——键段回到 p<pageWanted>
+    playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`);
+  }
+  // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
+  // audio-proxy 端口策略会拒——用同一校验器预筛
+  const streams = pickStreamList(playurl, kind, prefer);
+  // 匿名 DASH 在低热度稿封顶 480p——durl 合流档（fnval=1&qn=80）能反超到
+  // 720p，且它是恒 avc1 的完整 mp4（dash 无 avc1 的稿件也由它救活——
+  // 所以探测排在「无 avc1 判死」之前，判死交给最终 usable 为空）。
+  // 只在 avc1 最优低于 1080p 时多打这一跳；反超则只用合流组。
+  // 门挡必须按 avc1 档算而非列表首项——无 avc1 时 lib 兜底回全编码
+  // 列表，首项可能是 2160p hev1/av01，会挡住 durl 探测把纯非 avc1
+  // 稿件直接 404（avcBestH=0 时必然去探）
+  // durl 是分段数组——length>1 时各段是顺序拼接而非镜像，不能用
+  const avcBestH = streams.find(s => (s?.codecs || '').startsWith('avc1'))?.height || 0;
+  let durlUrls = [];
+  if (kind === 'video' && avcBestH < 1080) {
+    try {
+      const pd = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=1&qn=80&fourk=1`);
+      const durl = Array.isArray(pd.durl) ? pd.durl : [];
+      if (durl.length === 1 && (QN_HEIGHT[pd.quality] || 0) > avcBestH) {
+        // durl 的主链字段是 .url 而非 baseUrl——与 flatUrls 形态不同，不复用
+        durlUrls = [durl[0]?.url, ...(Array.isArray(durl[0]?.backup_url) ? durl[0].backup_url : [])]
+          .filter(u => typeof u === 'string' && u);
+      }
+    } catch {
+      // 合流档拉取失败不挡自适应主链
+    }
+  }
+  // 与 audio-proxy 放行业务对齐：归一化 + host 白名单（DNS/端口已由
+  // normalizeOutboundUrl 覆盖端口面，建连 IP 钉扎在代理层再查一次）。
+  // 换档只在同一字节实体内成立——跨档（durl vs dash m4s、不同分辨率
+  // dash 档）字节布局不同，播放中段换档会静默错乱：所以合流赢了就只用
+  // 合流镜像组，否则只用首选自适应档自己的镜像组（baseUrl/backup_url
+  // 是同字节镜像，组内换档安全）
+  const passesWhitelist = (u) => {
+    const checked = normalizeOutboundUrl(u);
+    return checked.ok && isAllowedHost(checked.url.hostname);
+  };
+  let usable = [...new Set(durlUrls)].filter(passesWhitelist);
+  // 缓存键材料随胜出集走：durl 合流整段 mp4（无档对象）→ muxed 直标；
+  // 自适应镜像组挂所在 tier 的 codecs/bandwidth 指纹
+  let cacheTier = null;
+  let cacheMuxed = usable.length > 0;
+  if (!usable.length) {
+    // dash 无 avc1 且 durl 没接住——hevc/av01 原样塞给 <video> 是黑屏，
+    // 按无流 404（与 resolve 的 hasVideo 口径一致）。此形态早退省掉
+    // 下方 pagePart 的 view 反查一跳
+    if (kind === 'video' && !streams.some(s => (s?.codecs || '').startsWith('avc1'))) {
+      return { usable: [], noAvc1: true };
+    }
+    // 顶档镜像全被白名单拒（mcdn 非标端口等）时按档降级——preferred 取
+    // 「首个有可过白名单 URL 的档」而非无条件首档，否则冷稿件整档 404。
+    // 到这里的 video 档必然全 avc1（无 avc1 上面已判死），无需再滤编码
+    const usableTier = (s) => flatUrls(s).map(x => x.url).filter(passesWhitelist);
+    const tier = streams.find(s => usableTier(s).length);
+    usable = tier ? [...new Set(usableTier(tier))] : [];
+    cacheTier = tier || null;
+  }
+  if (!usable.length) return { usable: [], noAvc1: false };
+  // 键的 page 成分必须跟内容走：显式 cid 请求经 view.pages 反解真实分P；
+  // 反解不出（cid 陈旧/上游抖动）用 cid 本身入键——宁可键不合并，绝不
+  // 让 P2 字节写进 p1 键错位喂出
+  let pagePart = `p${pageWanted}`;
+  if (cidExplicit) {
+    const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`).catch(() => null);
+    const idx = (Array.isArray(view?.pages) ? view.pages : [])
+      .findIndex(pg => String(pg?.cid) === String(cid));
+    pagePart = idx >= 0 ? `p${idx + 1}` : `c${cid}`;
+  }
+  return { usable, cacheTier, cacheMuxed, pagePart, noAvc1: false };
+}
 
 // 播放流地址：每次重解 playurl（CDN 签名 ~2h 过期），302 到 audio-proxy
 // 走统一代理（Referer 注入 + Range 透传 + SSRF 校验），不在此直接透流
@@ -267,126 +381,46 @@ app.get('/bilibili/stream', async (c) => {
   }
   try {
     const pageWanted = pickPageParam(`?p=${c.req.query('p') || 1}`);
-    let cid = c.req.query('cid');
-    // 显式 cid 在位时实际播放内容由 cid 决定而非 ?p——mint 缓存键前要把
-    // cid 反解回真实分P 序（下方 pagePart），否则 ?p=1&cid=<P2的cid> 会
-    // 把 P2 字节写进 p1 键，正常 P1 请求吃到 P2 档
-    let cidExplicit = /^\d+$/.test(String(cid || ''));
-    if (!cidExplicit) {
-      const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
-      cid = pickCidFromView(view, pageWanted);
-    }
-    let playurl;
-    try {
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`, c.req.raw.signal);
-    } catch (e) {
-      // cid 过期自愈：稿件被 UP 主换源/调 P 后库存 cid 失效——按 p 重查对应分P
-      // 的 cid（不能回落 view.cid——那是 P1，会把分P导入的曲静默拉回第一P）。
-      // 仅对「调用方传了合法数字 cid」自愈——刚查来的 cid 失败重试无意义。
-      // 新 cid 必须赋回——下方 durl 探测要复用同一 cid
-      if (!/^\d+$/.test(c.req.query('cid') || '')) throw e;
-      const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal);
-      cid = pickCidFromView(view, pageWanted);
-      cidExplicit = false; // 自愈后内容跟分P 序走——键段回到 p<pageWanted>
-      playurl = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=4048&fourk=1&qn=127`, c.req.raw.signal);
-    }
-    // 候选 CDN 回链按质量降序逐档铺开：mcdn 等边缘节点会带非标端口（:4483），
-    // audio-proxy 端口策略会拒——用同一校验器预筛
+    // 非数字 cid 视为未传——与解析段 cidExplicit 判定同口径（脏参数入键
+    // 会把 'cabc' 与真实 cid 键错开，语义上也确实不是合法 cid）
+    const rawCid = c.req.query('cid');
+    const cidParam = /^\d+$/.test(String(rawCid || '')) ? rawCid : '';
     // prefer=best 消耗的是运营者大会员轨——配了 DOWNLOAD_TOKEN 的部署里
     // 要求带令牌才放行，匿名访客按常规档处理（不报错，静默回落）。
-    // 已登录会话与令牌等效（c.get('user') 由 authGate 验过）
+    // 已登录会话与令牌等效（c.get('user') 由 authGate 验过）。
+    // 令牌门在合流键之前算——best 与常规档产不同字节实体，绝不能共用键
     const wantBest = c.req.query('prefer') === 'best';
     const token = process.env.DOWNLOAD_TOKEN || '';
     const prefer = wantBest && (!hasBiliCookie() || !token || c.get('user')
       || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
-    const streams = pickStreamList(playurl, kind, prefer);
-    // 匿名 DASH 在低热度稿封顶 480p——durl 合流档（fnval=1&qn=80）能反超到
-    // 720p，且它是恒 avc1 的完整 mp4（dash 无 avc1 的稿件也由它救活——
-    // 所以探测排在「无 avc1 判死」之前，判死交给最终 usable 为空）。
-    // 只在 avc1 最优低于 1080p 时多打这一跳；反超则只用合流组。
-    // 门挡必须按 avc1 档算而非列表首项——无 avc1 时 lib 兜底回全编码
-    // 列表，首项可能是 2160p hev1/av01，会挡住 durl 探测把纯非 avc1
-    // 稿件直接 404（avcBestH=0 时必然去探）
-    // durl 是分段数组——length>1 时各段是顺序拼接而非镜像，不能用
-    const avcBestH = streams.find(s => (s?.codecs || '').startsWith('avc1'))?.height || 0;
-    let durlUrls = [];
-    if (kind === 'video' && avcBestH < 1080) {
-      try {
-        const pd = await biliFetch(`/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=1&qn=80&fourk=1`, c.req.raw.signal);
-        const durl = Array.isArray(pd.durl) ? pd.durl : [];
-        if (durl.length === 1 && (QN_HEIGHT[pd.quality] || 0) > avcBestH) {
-          // durl 的主链字段是 .url 而非 baseUrl——与 flatUrls 形态不同，不复用
-          durlUrls = [durl[0]?.url, ...(Array.isArray(durl[0]?.backup_url) ? durl[0].backup_url : [])]
-            .filter(u => typeof u === 'string' && u);
-        }
-      } catch (e) {
-        if (c.req.raw.signal?.aborted) throw e;
-        // 合流档拉取失败不挡自适应主链
-      }
+    const set = await resolveStreamSetShared({ bvid, cidParam, pageWanted, kind, prefer });
+    // 搭车等待期间本客户端可能已断连——产物是共享的，写响应按自己的 signal 判
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    if (set.noAvc1) {
+      return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
     }
-    // 与 audio-proxy 放行业务对齐：归一化 + host 白名单（DNS/端口已由
-    // normalizeOutboundUrl 覆盖端口面，建连 IP 钉扎在代理层再查一次）。
-    // 换档只在同一字节实体内成立——跨档（durl vs dash m4s、不同分辨率
-    // dash 档）字节布局不同，播放中段换档会静默错乱：所以合流赢了就只用
-    // 合流镜像组，否则只用首选自适应档自己的镜像组（baseUrl/backup_url
-    // 是同字节镜像，组内换档安全）
-    const passesWhitelist = (u) => {
-      const checked = normalizeOutboundUrl(u);
-      return checked.ok && isAllowedHost(checked.url.hostname);
-    };
-    let usable = [...new Set(durlUrls)].filter(passesWhitelist);
-    // 缓存键材料随胜出集走：durl 合流整段 mp4（无档对象）→ muxed 直标；
-    // 自适应镜像组挂所在 tier 的 codecs/bandwidth 指纹
-    let cacheTier = null;
-    let cacheMuxed = usable.length > 0;
-    if (!usable.length) {
-      // dash 无 avc1 且 durl 没接住——hevc/av01 原样塞给 <video> 是黑屏，
-      // 按无流 404（与 resolve 的 hasVideo 口径一致）
-      if (kind === 'video' && !streams.some(s => (s?.codecs || '').startsWith('avc1'))) {
-        return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
-      }
-      // 顶档镜像全被白名单拒（mcdn 非标端口等）时按档降级——preferred 取
-      // 「首个有可过白名单 URL 的档」而非无条件首档，否则冷稿件整档 404。
-      // 到这里的 video 档必然全 avc1（无 avc1 上面已 404），无需再滤编码
-      const usableTier = (s) => flatUrls(s).map(x => x.url).filter(passesWhitelist);
-      const tier = streams.find(s => usableTier(s).length);
-      usable = tier ? [...new Set(usableTier(tier))] : [];
-      cacheTier = tier || null;
-    }
-    if (!usable.length) {
+    if (!set.usable.length) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
-    // 写响应前的终态断连检查——durl/view/playurl 多跳 await 期间客户端可能已走
-    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     // vault token 化——登录态 baseUrl 带 mid/uipk/deadline，不出进程；
     // cacheKey 挂字节实体指纹（codec+bandwidth+流 id）——签名过期照样
-    // 命中盘上档。键的 page 成分必须跟内容走：显式 cid 请求经 view.pages
-    // 反解真实分P；反解不出（cid 陈旧/上游抖动）用 cid 本身入键——宁可
-    // 键不合并，绝不让 P2 字节写进 p1 键错位喂出
-    let pagePart = `p${pageWanted}`;
-    if (cidExplicit) {
-      const view = await biliFetch(`/x/web-interface/view?bvid=${bvid}`, c.req.raw.signal)
-        .catch(() => null);
-      const idx = (Array.isArray(view?.pages) ? view.pages : [])
-        .findIndex(pg => String(pg?.cid) === String(cid));
-      pagePart = idx >= 0 ? `p${idx + 1}` : `c${cid}`;
-    }
-    const cacheKey = mediaCache.keyOf('bv', bvid, pagePart, kind === 'video' ? 'v' : 'a',
-      mediaCache.fingerprintOf(cacheTier?.mimeType || (cacheMuxed ? 'video/mp4' : ''),
-        cacheTier?.bandwidth ?? 0, cacheTier?.codecs, cacheTier?.id));
+    // 命中盘上档
+    const cacheKey = mediaCache.keyOf('bv', bvid, set.pagePart, kind === 'video' ? 'v' : 'a',
+      mediaCache.fingerprintOf(set.cacheTier?.mimeType || (set.cacheMuxed ? 'video/mp4' : ''),
+        set.cacheTier?.bandwidth ?? 0, set.cacheTier?.codecs, set.cacheTier?.id));
     const cacheMeta = {
-      muxed: cacheMuxed,
-      codec: cacheTier?.codecs || mediaCache.codecOf(cacheTier?.mimeType) || null,
-      br: cacheTier?.bandwidth ?? null,
-      h: cacheTier?.height || 0,
-      w: cacheTier?.width || 0,
+      muxed: set.cacheMuxed,
+      codec: set.cacheTier?.codecs || mediaCache.codecOf(set.cacheTier?.mimeType) || null,
+      br: set.cacheTier?.bandwidth ?? null,
+      h: set.cacheTier?.height || 0,
+      w: set.cacheTier?.width || 0,
     };
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(usable, { cacheKey, cacheMeta })}`, 302);
+    return c.redirect(`/audio-proxy/t/${streamVault.mint(set.usable, { cacheKey, cacheMeta })}`, 302);
   } catch (e) {
     // 客户端断连不算服务端错误（与 resolve/audio-proxy 同口径）
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[bilibili] stream 失败:', e.message);
-    return c.json({ code: 502, message: `B 站流地址获取失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `B 站流地址获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 

@@ -1,6 +1,7 @@
 const { Hono } = require('hono');
 const { fail } = require('../lib/http-error');
 const { tokenMatches } = require('../lib/token-eq');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 const { rateLimit } = require('../lib/rate-limit');
 const streamVault = require('../lib/stream-vault');
 const { matchWithBudget, toMatchedJson } = require('../services/netease-match');
@@ -88,7 +89,7 @@ app.get('/qq/resolve', async (c) => {
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] resolve 失败:', e.message);
-    return c.json({ code: 502, message: `QQ 音乐解析失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `QQ 音乐解析失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
@@ -121,7 +122,7 @@ app.get('/qq/stream', async (c) => {
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] stream 失败:', e.message);
-    return c.json({ code: 502, message: `QQ 音乐流地址获取失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `QQ 音乐流地址获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
@@ -138,7 +139,7 @@ app.get('/qq/lyric', async (c) => {
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] lyric 失败:', e.message);
-    return c.json({ code: 502, message: `QQ 歌词获取失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `QQ 歌词获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
@@ -155,7 +156,7 @@ app.get('/qq/search', async (c) => {
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] search 失败:', e.message);
-    return c.json({ code: 502, message: `QQ 音乐搜索失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `QQ 音乐搜索失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
@@ -180,7 +181,7 @@ app.get('/qq/playlist', async (c) => {
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] playlist 失败:', e.message);
-    return c.json({ code: 502, message: `QQ 歌单获取失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `QQ 歌单获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 

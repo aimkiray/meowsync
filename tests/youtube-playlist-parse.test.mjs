@@ -189,6 +189,37 @@ test('繁中/日文哨兵失效条目计 skipped', async () => {
   } finally { restore(); }
 });
 
+test('任意位置的裸 continuationCommand 不作翻页游标——只认已知续页槽位', async () => {
+  stubFetch(async () => jsonRes(wrapContents([
+    legacyItem('kJQP7kiw5Fk', '旧条目', '旧频道', '3:32'),
+    // 条目内嵌「继续观看」类非分页指令——旧兜底裸收会把它当翻页
+    // token，产出死循环续页请求
+    { playlistVideoRenderer: { videoId: 'abc123def45', isPlayable: true,
+        title: { simpleText: 'x' },
+        continuationEndpoint: { continuationCommand: { token: 'bogusTok' } } } },
+    { continuationCommand: { token: 'bogusTok2' } },
+  ])));
+  try {
+    const r = await fetchYtPlaylistPage({ listId: 'PLabcdefghijklmnop' });
+    assert.equal(r.items.length, 2);
+    assert.equal(r.continuation, null, '非续页槽位的裸 continuation 不收');
+  } finally { restore(); }
+});
+
+test('playlistVideoListContinuation 已知槽位兜底仍产出续页 token', async () => {
+  stubFetch(async () => jsonRes({
+    continuationContents: { playlistVideoListContinuation: {
+      items: [legacyItem('abc123def45', '续页条目', '频道', '1:00')],
+      continuations: [{ continuationEndpoint: { continuationCommand: { token: 'tokPLC' } } }],
+    } },
+  }));
+  try {
+    const r = await fetchYtPlaylistPage({ listId: 'PLx', continuation: 'tok0' });
+    assert.equal(r.items.length, 1);
+    assert.equal(r.continuation, 'tokPLC', 'plc 槽位内 continuation 是合法续页游标');
+  } finally { restore(); }
+});
+
 test('续页根 onResponseReceivedActions 兜底 + alert ERROR 抛 upstreamCode', async () => {
   stubFetch(async () => jsonRes({ onResponseReceivedActions: [
     { appendContinuationItemsAction: { continuationItems: [

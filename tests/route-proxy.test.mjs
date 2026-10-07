@@ -1,6 +1,6 @@
 // routes/proxy.js 冒烟：url 缺失 400 / 协议与端口策略 403 / 白名单外域 403 /
 // 上游成功透传形状（安全头+CSP sandbox）/ 上游 ≥400 透出 / 302 重定向逐跳重验 /
-// 畸形 Range 400 / vault token 失效 404。
+// 畸形 Range 400 / HEAD 探测透传（googlevideo 翻译 GET）/ vault token 失效 404。
 // net-guard 半桩：真 normalizeOutboundUrl/isProxyAllowedHost（策略面就是要测的），
 // resolvesToPublicIp 桩成 true（离网可跑——DNS/SSRF 真判定在 net-guard 自身覆盖）。
 // 上游 fetch 全桩，不打真网络。
@@ -26,7 +26,7 @@ let upstreamHandler = async () => new Response('audio-bytes', {
   headers: { 'content-type': 'audio/mp4', 'content-length': '11' },
 });
 globalThis.fetch = async (url, init) => {
-  fetchCalls.push({ url: String(url), headers: init?.headers || {} });
+  fetchCalls.push({ url: String(url), method: init?.method || 'GET', headers: init?.headers || {} });
   return upstreamHandler(url, init);
 };
 
@@ -94,6 +94,23 @@ test('proxy：畸形/多段 Range 400（multipart 不兼容面）', async () => 
     assert.equal(r.status, 400, range);
     await r.arrayBuffer();
   }
+});
+
+test('proxy：HEAD 探测——普通宿主透传 HEAD；googlevideo 翻成带 Range 的 GET', async () => {
+  const head = (url) => app.request(`http://t/audio-proxy?url=${encodeURIComponent(url)}`, { method: 'HEAD' });
+  // 普通白名单宿主：HEAD 原样透传（客户端只要头部，不白拉整段字节）
+  const r1 = await head('https://a.kuwo.cn/x.mp3');
+  assert.equal(r1.status, 200);
+  assert.equal(fetchCalls.at(-1).method, 'HEAD');
+
+  // googlevideo 签名链对裸 HEAD 记账会毒化该 URL 的后续 Range 请求——
+  // 翻成 GET 探测且照常注入 bytes=0-（与客户端真实首连同形）
+  const r2 = await head('https://r1---sn-abc.googlevideo.com/v.mp4');
+  assert.equal(r2.status, 200);
+  assert.equal(fetchCalls.at(-1).method, 'GET');
+  assert.equal(fetchCalls.at(-1).headers['Range'], 'bytes=0-');
+  // GET 翻译探测只要头：body 已 cancel 不回拉，下行无体
+  assert.equal(await r2.text(), '');
 });
 
 test('proxy：vault token 失效 404；有效 token 透传上游', async () => {

@@ -1,6 +1,7 @@
 const { Hono } = require('hono');
 const streamVault = require('../lib/stream-vault');
 const mediaCache = require('../services/media-cache');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const { resolveYoutubeStreams } = require('../services/youtube-resolve');
@@ -21,6 +22,25 @@ const { fetchPlayer, pickStreamList, fetchYtPlaylistPage } = require('../lib/you
 // watch?v= / youtu.be/ / shorts/ / embed/ / live/ / 本站 ?yt= 分享链 / 裸 11 位 id。
 // URL 形态优先，裸 id 最后（须含非数字——纯数字 11 位与网易云 id 撞型）
 const pickYouTubeId = extractYouTubeId;
+
+// /youtube/stream 在途单飞：同 (videoId, kind, prefer, retry) 并发取流共享
+// 一条 resolveYoutubeStreams 链——签名解析含 SABR 探测/形态升级最坏多跳
+// 扇出，播放页音频+视频双发与前端重试叠放是纯放大。共享链不吃调用方
+// signal（首调用方断连不陪绑搭车者；链内各跳带 YT_TIMEOUT_MS 自净上限），
+// 等待方 await 后自查自己的 signal 再消费结果。
+// retry=1（skipCache）必须入键：重试刻意旁路 gateCache 读——若与常规请求
+// 合流，重试会吃到它正要绕开的缓存误判
+const ytStreamInflight = new Map();
+const resolveStreamsShared = (videoId, { kind, prefer, skipCache }) => {
+  const key = `${videoId}|${kind}|${prefer || ''}|${skipCache ? 1 : 0}`;
+  let gate = ytStreamInflight.get(key);
+  if (!gate) {
+    gate = resolveYoutubeStreams(videoId, { kind, prefer, skipCache })
+      .finally(() => ytStreamInflight.delete(key));
+    ytStreamInflight.set(key, gate);
+  }
+  return gate;
+};
 
 // 歌名提取：YouTube 标题约定形如「Artist - Title (Official Video)」。
 // 先剥括号修饰串，再按 ' - ' 切——左侧是歌手；无分隔符时用频道名兜底
@@ -158,7 +178,7 @@ app.get('/youtube/resolve', async (c) => {
     // 客户端已断连：静默 499，不写错误日志（正常断连不算服务端错误）
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] resolve 失败:', e.message);
-    return c.json({ code: 502, message: `YouTube 解析失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `YouTube 解析失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
@@ -269,7 +289,7 @@ app.get('/youtube/playlist', async (c) => {
     if (e.upstreamCode === 'ALERT_ERROR' || /HTTP (400|404)/.test(e.message || '')) {
       return c.json({ code: 404, message: '歌单不存在或不可公开访问' }, 404);
     }
-    return c.json({ code: 502, message: `歌单获取失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `歌单获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 
@@ -288,9 +308,11 @@ app.get('/youtube/stream', async (c) => {
     // 闸控感知解析下沉 services/youtube-resolve.js：探测/VISIONOS 升级/
     // progressive 结转/白名单去重一份实现，解锁链共用同一判定
     // skipCache（?retry=1）：前端重试时旁路 gateCache 读——缓存的误判
-    // 不再把第二次请求钉死在同一个错误判定上（缓存仍照常写入新判定）
-    const { streams } = await resolveYoutubeStreams(videoId, {
-      kind, prefer: c.req.query('prefer'), signal: c.req.raw.signal,
+    // 不再把第二次请求钉死在同一个错误判定上（缓存仍照常写入新判定）。
+    // 经 ytStreamInflight 合流——共享链不带本请求 signal，断连由下方
+    // await 后的 signal 自查兜底
+    const { streams } = await resolveStreamsShared(videoId, {
+      kind, prefer: c.req.query('prefer'),
       skipCache: c.req.query('retry') === '1'
     });
 
@@ -321,7 +343,7 @@ app.get('/youtube/stream', async (c) => {
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] stream 失败:', e.message);
-    return c.json({ code: 502, message: `YouTube 流地址获取失败: ${e.message}` }, 502);
+    return c.json({ code: 502, message: `YouTube 流地址获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 

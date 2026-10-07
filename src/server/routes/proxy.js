@@ -104,6 +104,17 @@ async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta) {
       injectedRange = true;
     }
 
+    // HEAD 探测只透传给 HEAD 安全的宿主；googlevideo 签名链例外——上游
+    // 按请求形态记账，裸 HEAD 会毒化该 URL 的后续 Range 请求
+    // （services/youtube-resolve probeGated、netease-api getContentLength
+    // 的同源告警，两处都对 googlevideo 刻意避开裸 HEAD）。对它翻成 GET
+    // 取响应头：上方 Range 注入照旧生效（bytes=0- 正是客户端首连的真实
+    // 形态，且 HEAD-unfriendly 上游对带 Range 的 GET 才回正常头），body
+    // 在 send() 里立即 cancel 不拉字节——带宽语义与裸 HEAD 一致。
+    // 其余白名单宿主（126/kuwo/bili/qq CDN）无毒化记录，HEAD 原样透传
+    const headAsGet = c.req.method === 'HEAD'
+      && (hostname === 'googlevideo.com' || hostname.endsWith('.googlevideo.com'));
+
     // 超时仅覆盖连接+响应头阶段：AbortSignal 在 fetch resolve 后仍对 body 流生效，
     // 若使用 AbortSignal.timeout 会在 15s 时掐断正在传输的音频流。
     // 因此用 AbortController+setTimeout，拿到响应头后立即 clearTimeout；
@@ -130,6 +141,12 @@ async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta) {
     let upstream;
     try {
       upstream = await fetch(targetUrl, {
+        // HEAD 探测原样走 HEAD——客户端只要头部（Content-Length/类型探活），
+        // 发 GET 会把整段音频字节白拉回源（缓存未命中时纯烧带宽）。上游对
+        // HEAD 回无 body 响应：下方 body?.cancel() 的 ?. 与 send() 里
+        // c.body(null,...) 天然兼容；hono 对 HEAD 本就会剥 body，双保险。
+        // 例外是 headAsGet 命中的 HEAD 敏感宿主（googlevideo）——见上方注释
+        method: c.req.method === 'HEAD' && !headAsGet ? 'HEAD' : 'GET',
         headers: proxyHeaders,
         redirect: 'manual',
         signal: AbortSignal.any(signals),
@@ -203,6 +220,12 @@ async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta) {
     const status = (encoded || injectedRange) && upstream.status === 206 ? 200 : upstream.status;
     return { kind: 'ok', send: () => {
       let body = upstream.body;
+      // headAsGet 的 HEAD 翻译探测只要响应头——body 立即 cancel 释放
+      // socket，整段音频字节不回拉；body=null 同时天然跳过下方 tee 捕获
+      if (headAsGet) {
+        body?.cancel().catch(() => {});
+        body = null;
+      }
       // 旁路捕获：键在位 + 总量可判 + 非编码字节流才 tee——206 从
       // Content-Range `bytes s-e/total` 取偏移与总长（injectedRange 的
       // bytes=0- 天然落在同一条解析路），200 即 offset=0 全量；
@@ -234,7 +257,13 @@ async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta) {
 // 生产侧（routes/youtube、bilibili 档选择、unlock）负责只 mint 同实体候选。
 // 从上次成功位 idx 起绕行一圈：单候选条目行为与旧版逐跳管线完全一致；
 // 多候选时 4xx/断连换下一镜像，成功后把 idx 钉住，seek 的后续 Range 直吃
-// 可用镜像不再白探死链
+// 可用镜像不再白探死链。
+// 已知取舍——这里不做在途合流：同一 vault 条目/同一 cacheKey 的并发
+// 请求仍会各自打一条上游字节泵。字节流合流需要一条上流扇出到 N 个
+// 响应 socket（tee 多播 + 各消费方独立 abort/backpressure 语义 +
+// Range 起点各异的对账），复杂度与错误面远超收益——mediaCache 完整档
+// 供给已把「二次起放」压成零上游往返，剩余重复扇出只是首次冷取窗口内
+// 的并发，量级可接受
 async function proxyUpstream(c, entry) {
   const urls = entry.urls;
   // 完整字节已在盘上：连上游都不打——签名过期/被闸/离线都无所谓。
