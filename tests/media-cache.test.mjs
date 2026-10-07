@@ -156,6 +156,48 @@ test('teeStream：消费方 cancel → 半截区间落账，续补可接力到 c
   assert.equal(readFileSync(join(mc.CACHE_DIR, `${key}.bin`), 'utf8'), 'aaaabbbb');
 });
 
+test('beginCapture：写链异步化后 close 自 drain——不依赖 tap 的 await 即完整落盘', async () => {
+  const key = mc.keyOf('t', 'tee-drain');
+  const cap = mc.beginCapture(key, { contentType: 'audio/mp4', size: 6, startOffset: 0 });
+  assert.ok(cap);
+  // 不 await tap 直接 close——close 必须自带写链 drain（flush 语义），
+  // 否则 meta 记账区间指向截断档
+  const p1 = cap.tap(Buffer.from('abc'));
+  const p2 = cap.tap(Buffer.from('def'));
+  await cap.close();
+  await Promise.all([p1, p2]);
+  assert.equal(readFileSync(join(mc.CACHE_DIR, `${key}.bin`), 'utf8'), 'abcdef');
+  const res = await mc.serveComplete(fakeC(), key);
+  assert.equal(res.status, 200);
+  assert.equal(await bodyText(res), 'abcdef', '命中的是完整档而非截断档');
+});
+
+test('touchAccess：命中刷新不得回滚锁链窗口内落盘的 meta（lost update）', async () => {
+  const key = mc.keyOf('t', 'touch-lu');
+  await capture(key, { bytes: 'abcdefgh', size: 8 });
+  // cap2 的 close 把 extra 字段（br）写进 meta——先把它排进 key 的串行链
+  //（链上函数走微任务，此刻盘上仍是 v1 快照），再让 serveComplete 的
+  // touchAccess 带着 v1 旧快照排它后面。链内不重读 fresh meta 的话，
+  // touchAccess 落盘会把 close 写的字段整体回滚
+  const cap2 = mc.beginCapture(key, { contentType: 'audio/mp4', size: 8, startOffset: 0, br: 999000 });
+  assert.ok(cap2);
+  await cap2.tap(Buffer.from('abcdefgh'));
+  const p2 = cap2.close();
+  // 一个微任务跳：close() 内部的 writeChain.then→withKeyLock 入队先跑——
+  // 让 close2 的 meta 改写挂上链但还没执行（盘上仍是 v1）；此时
+  // serveComplete 的 lookup 读 v1、touchAccess 排到 close2 之后。顺序
+  // 错了钉不住回归（touchAccess 先落盘的话旧快照照样被 close2 覆盖）
+  await Promise.resolve();
+  const res = await mc.serveComplete(fakeC(), key); // 同步段即 touchAccess 入队
+  assert.equal(res.status, 200);
+  await p2;
+  await bodyText(res); // 消费响应流收 fd
+  await new Promise(r => setTimeout(r, 30)); // touchAccess 落盘窗口
+  const meta = JSON.parse(readFileSync(join(mc.CACHE_DIR, `${key}.json`), 'utf8'));
+  assert.equal(meta.br, 999000, 'close 写的字段被 touchAccess 旧快照回滚——lost update');
+  assert.ok(Date.now() - meta.lastAccessAt < 5000, '访问时点照常刷新');
+});
+
 test('findComplete：br 优选 / 键尾码率回落 / minBr 门槛 / codec 质量序', async () => {
   // 同前缀两档——高 br 赢
   await capture(mc.keyOf('t', 'sel', 'a', 'mp4a.40.2_131072'), { bytes: 'aaaa', size: 4, br: 131072 });

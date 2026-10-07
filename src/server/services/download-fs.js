@@ -122,8 +122,11 @@ function toPublicTask(task) {
   return {
     ...task,
     // completed 行但登记文件被外部删除 → filesIntact:false——前端据此不把
-    // 它当"已下载"展示（下载入口重新露出，点了会自愈重跑）
-    filesIntact: task.status !== 'completed' || taskFilesIntact(task),
+    // 它当"已下载"展示（下载入口重新露出，点了会自愈重跑）。轮询热路径走
+    // 缓存直读+后台异步探测（filesIntactCached）——逐行同步 stat 在挂载卷
+    // 上是事件循环 stall；冷 miss 先缺省（!==false 口径即「未知按在位」），
+    // 下一轮轮询见真值
+    filesIntact: task.status !== 'completed' || filesIntactCached(task),
     audioPath: rel(task.audioPath),
     lyricsPath: rel(task.lyricsPath),
     coverPath: rel(task.coverPath),
@@ -192,6 +195,79 @@ function taskFilesIntact(task) {
   if (intactCache.size > 4096) intactCache.clear();
   intactCache.set(task.id, { fp, result, at: Date.now() });
   return result;
+}
+
+// pathPresent 的异步版——filesIntact 后台探测专用，判读口径逐项对齐：
+// ENOENT/ENOTDIR 才判「不在」，其余 IO 错一律判「在」（反向判会把瞬时
+// IO 故障放大成重置重下，误报方向相反更安全）
+const pathPresentAsync = (p) => fs.promises.stat(p)
+  .then(() => true, (e) => e?.code !== 'ENOENT' && e?.code !== 'ENOTDIR');
+
+// toPublicTask 的 filesIntact 投影走「缓存直读 + 有界并发异步探测」：
+// 列表端点每轮对全行 completed 过 toPublicTask，逐行同步 statSync 在挂载卷
+// 上是每波数秒的事件循环 stall（2000 行 ×≤4 stat）——TTL 只降频不削峰。
+//   - 未过期命中：直返缓存值
+//   - 过期命中：先返陈旧值、探测排进小并发池后台刷新——「外部删文件」探测
+//     延迟上限从 TTL 变 TTL+一轮探测时长，字段口径不变（仍只在 false 时
+//     判幻影）
+//   - 冷 miss / 指纹漂移（行被重置改写过）：不拿响应线程换真值——返
+//     undefined（前端 filesIntact!==false 口径 = 未知按在位），探测结果
+//     下一轮轮询生效
+// 正确性调用方（收养 keepCompleted/status 幂等短路/补视频判定等）不许走
+// 这里——它们用 taskFilesIntact 拿当拍真值
+const INTACT_PROBE_CONCURRENCY = 8;
+const intactInflight = new Map(); // task.id -> fp（排队与在途统一按指纹去重）
+const intactQueue = [];
+let intactActive = 0;
+const pumpIntactQueue = () => {
+  while (intactActive < INTACT_PROBE_CONCURRENCY && intactQueue.length) {
+    const job = intactQueue.shift();
+    intactActive++;
+    job().catch(() => {}).finally(() => {
+      intactActive--;
+      pumpIntactQueue();
+    });
+  }
+};
+function enqueueIntactProbe(task, fp) {
+  if (intactInflight.get(task.id) === fp) return; // 同指纹探测已在途/在排
+  intactInflight.set(task.id, fp);
+  // 探测前快照登记字段——行对象若在排队期间被复写也不混进本次判读
+  const t = {
+    downloadAudio: task.downloadAudio,
+    audioPath: task.audioPath,
+    lyricsPath: task.lyricsPath,
+    coverPath: task.coverPath,
+    videoPath: task.videoPath
+  };
+  intactQueue.push(async () => {
+    try {
+      // 判读式与 taskFilesIntact 逐项同构：audio 段被 downloadAudio flag
+      // 门控（相位关闭时缺档不算不完整），lyrics/cover/video 只查「登记
+      // 过却被外删」
+      const result =
+        !(t.downloadAudio && !(t.audioPath && await pathPresentAsync(t.audioPath)))
+        && !(t.lyricsPath && !await pathPresentAsync(t.lyricsPath))
+        && !(t.coverPath && !await pathPresentAsync(t.coverPath))
+        && !(t.videoPath && !await pathPresentAsync(t.videoPath));
+      if (intactCache.size > 4096) intactCache.clear();
+      intactCache.set(task.id, { fp, result, at: Date.now() });
+    } finally {
+      intactInflight.delete(task.id);
+    }
+  });
+  pumpIntactQueue();
+}
+function filesIntactCached(task) {
+  const fp = `${task.audioPath}|${task.lyricsPath}|${task.coverPath}|${task.videoPath}`;
+  const hit = intactCache.get(task.id);
+  if (hit && hit.fp === fp) {
+    if (Date.now() - hit.at < INTACT_CACHE_TTL_MS) return hit.result;
+    enqueueIntactProbe(task, fp);
+    return hit.result; // 过期先返陈旧值——探测在飞，下轮轮询换新值
+  }
+  enqueueIntactProbe(task, fp);
+  return undefined;
 }
 
 // sanitizeFilename 是纯函数；兄弟扫描为每个任务重复消毒全歌单名字（O(N²) CPU）。

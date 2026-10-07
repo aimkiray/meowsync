@@ -79,6 +79,13 @@ function readMeta(key) {
 const isExpired = (meta) =>
   Date.now() - (meta.lastAccessAt || meta.updatedAt || meta.createdAt || 0) > TTL_MS;
 
+// fd 定位写的异步形态：tee 热路径不许用 writeSync——DATA_DIR 落挂载卷时
+// 单块同步写阻塞数十~数百 ms，多路并发代理流的逐块写入会叠成全事件循环
+// stall。fs.write 走 libuv 线程池，配合捕获内串行链保写序
+const writeAt = (fd, buf, off, len, pos) => new Promise((resolve, reject) => {
+  fs.write(fd, buf, off, len, pos, (e, written) => (e ? reject(e) : resolve(written)));
+});
+
 function lookup(key) {
   const meta = readMeta(key);
   if (!meta || isExpired(meta)) return null;
@@ -113,11 +120,20 @@ function withKeyLock(key, fn) {
   return p;
 }
 
-// 命中刷新 lastAccessAt（fire-and-forget：刷不进只影响 LRU/TTL 精度）
+// 命中刷新 lastAccessAt（fire-and-forget：刷不进只影响 LRU/TTL 精度）。
+// 链内必须重读 fresh meta、只改访问时点写回：调用方快照是 readMeta 的旧
+// 版——它到本锁的排队窗口里 close() 可能已把 ranges/muxed/codec/ino/
+// updatedAt 整段重写，拿旧快照回写就是 lost update 整体回滚。fresh 已
+// 不在（sweep/孤儿回收清掉）则跳过——不为一次访问刷新复活 meta
 function touchAccess(key, meta) {
-  meta.lastAccessAt = Date.now();
+  if (meta) meta.lastAccessAt = Date.now(); // 调用方快照同步刷新（语义保持）
   withKeyLock(key, () => {
-    try { fs.writeFileSync(metaPath(key), JSON.stringify(meta)); } catch { /* 无碍 */ }
+    try {
+      const fresh = readMeta(key);
+      if (!fresh) return;
+      fresh.lastAccessAt = Date.now();
+      fs.writeFileSync(metaPath(key), JSON.stringify(fresh));
+    } catch { /* 无碍 */ }
   }).catch(() => {});
 }
 
@@ -172,24 +188,48 @@ function beginCapture(key, opts = {}) {
   let pos = startOffset;
   let dead = false;
   let closed = false;
-  const tap = async (buf) => {
-    if (dead || closed || !buf || !buf.length) return;
-    try {
-      let off = 0;
-      while (off < buf.length) {
-        off += fs.writeSync(fd, buf, off, buf.length - off, pos + off);
+  // tap 写链：与 metaChains 同构的串行异步链——块在入队瞬间序记账 pos、
+  // 带着占位偏移排进链尾，链上写序 == 入队序，并发 tap 永不交叠错位
+  // （与旧 writeSync 严格同序）。时序语义钉死：
+  //   - tap 返回链尾 promise：调用方 await 即获「本块及之前各块已落盘」
+  //     的确定性；teeStream 的 pull 全程 await 顺带拿到慢盘背压——写不动
+  //     就不再读上游，内存不会因写盘追不上而膨胀
+  //   - 链内一步写失败置 dead + 就地关 fd，后续排队块直接跳写
+  //   - close() 先 drain 整条写链再做 inode 对账/落 meta——ranges 记账的
+  //     字节必须已在盘上可读，否则 meta 会指向截断档（flush 语义）
+  //   链内函数全 try 包裹保链永不 reject——断链会把后续 tap 的写静默吞
+  //   掉而 pos 照推进，close 就把没写的字节记成已写（complete 毒档）
+  let writeChain = Promise.resolve();
+  const tap = (buf) => {
+    if (dead || closed || !buf || !buf.length) return writeChain;
+    const at = pos;
+    pos += buf.length;
+    // 存进链尾的是吞错后的 promise——链上任何一环意外 reject 都会让后续
+    // tap 的写静默跳过而 pos 照推进（close 据此记账即毒档）；与
+    // withKeyLock 的吞错存链同构
+    const step = writeChain.then(async () => {
+      if (dead) return;
+      try {
+        let off = 0;
+        while (off < buf.length) {
+          off += await writeAt(fd, buf, off, buf.length - off, at + off);
+        }
+      } catch (e) {
+        dead = true;
+        try { fs.closeSync(fd); } catch { /* 已关 */ }
+        console.warn(`[media-cache] 捕获写失败，弃档 ${key}:`, e?.message || e);
       }
-      pos += buf.length;
-    } catch (e) {
-      dead = true;
-      try { fs.closeSync(fd); } catch { /* 已关 */ }
-      console.warn(`[media-cache] 捕获写失败，弃档 ${key}:`, e?.message || e);
-    }
+    });
+    writeChain = step.catch(() => {});
+    return step;
   };
+  let closePromise = null;
   const close = () => {
-    if (closed) return Promise.resolve();
+    if (closePromise) return closePromise;
     closed = true;
-    return withKeyLock(key, () => {
+    // 先等写链 drain 再落 meta——serveComplete/findComplete 只能经 meta 命中，
+    // drain 后才写的 meta 天然保证「记账区间 = 盘上可读字节」
+    closePromise = writeChain.then(() => withKeyLock(key, () => {
       try { fs.closeSync(fd); } catch { /* 已关 */ }
       // 弃档/零字节捕获不落 meta——空段无信息量还白占键位
       if (dead || pos <= startOffset) return;
@@ -221,7 +261,8 @@ function beginCapture(key, opts = {}) {
       } catch (e) {
         console.warn(`[media-cache] meta 写失败 ${key}:`, e?.message || e);
       }
-    });
+    }));
+    return closePromise;
   };
   return { tap, close };
 }

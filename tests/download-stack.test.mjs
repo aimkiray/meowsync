@@ -55,6 +55,68 @@ test('toPublicTask 不泄漏绝对路径', () => {
   assert.ok(!JSON.stringify(pub).includes(fs.DOWNLOAD_BASE_DIR), '公共投影不得含绝对根');
 });
 
+test('toPublicTask.filesIntact：冷 miss 不落同步 stat——缺省返回，后台探测后轮询见真值', async () => {
+  const aud = join(fs.DOWNLOAD_BASE_DIR, '880021', 'audio', 's-intact.mp3');
+  mkdirSync(dirname(aud), { recursive: true });
+  writeFileSync(aud, 'a');
+  const t = task({ id: 880021, status: 'completed', audioPath: aud, downloadLyrics: false });
+  // 冷 miss：投影路径不拿响应线程换真值——字段缺省（前端 !==false 口径即
+  // 「未知按在位」），有界并发池后台探测结果下一轮轮询生效
+  assert.equal(fs.toPublicTask(t).filesIntact, undefined);
+  await new Promise(r => setTimeout(r, 80));
+  assert.equal(fs.toPublicTask(t).filesIntact, true);
+  // 幻影行同路径：登记档不在盘——冷 miss 缺省，探测落 cache 后如实报缺
+  const ghost = task({
+    id: 880022, status: 'completed', downloadLyrics: false,
+    audioPath: join(fs.DOWNLOAD_BASE_DIR, '880021', 'audio', 'gone.mp3')
+  });
+  assert.equal(fs.toPublicTask(ghost).filesIntact, undefined);
+  await new Promise(r => setTimeout(r, 80));
+  assert.equal(fs.toPublicTask(ghost).filesIntact, false);
+});
+
+test('getTaskArtifactPath：文件级 symlink 拒供，目录级链接放行', () => {
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_flink', name: 'flink' });
+  const plDir = join(fs.DOWNLOAD_BASE_DIR, String(pl.id));
+  const outsideDir = join(dirname(fs.DOWNLOAD_BASE_DIR), 'flink-outside');
+  const outsideFile = join(outsideDir, 'real.mp3');
+  const linkLeaf = join(plDir, 'audio', 'leaf.mp3');
+  mkdirSync(dirname(linkLeaf), { recursive: true });
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(outsideFile, 'outside-bytes');
+  try {
+    symlinkSync(outsideFile, linkLeaf);
+  } catch {
+    return; // 平台不许建链接（Windows 未开开发者模式）——本用例无意义
+  }
+  const t = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 's-flink', songName: 'n', artist: 'a',
+    status: 'completed'
+  });
+  downloadTasksRepo.updateTask(t.id, { audioPath: linkLeaf });
+  assert.equal(dm.getTaskArtifactPath(pl.id, 's-flink', 'audio'), null,
+    '叶子是符号链接的登记档不得供出——existsSync 跟链真在也拒');
+
+  // 对照：目录级链接是支持的部署形态（audio/ 整目录指到挂载卷）——
+  // 链接目录下的真文件照常可寻址
+  const pl2 = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_dlink', name: 'dlink' });
+  const pl2Dir = join(fs.DOWNLOAD_BASE_DIR, String(pl2.id));
+  mkdirSync(pl2Dir, { recursive: true });
+  try {
+    symlinkSync(outsideDir, join(pl2Dir, 'audio'), 'dir');
+  } catch {
+    return;
+  }
+  const viaDir = join(pl2Dir, 'audio', 'real.mp3');
+  const t2 = downloadTasksRepo.createTask({
+    playlistId: pl2.id, queueId: null, songId: 's-dlink', songName: 'n', artist: 'a',
+    status: 'completed'
+  });
+  downloadTasksRepo.updateTask(t2.id, { audioPath: viaDir });
+  assert.equal(dm.getTaskArtifactPath(pl2.id, 's-dlink', 'audio'), viaDir,
+    '目录级链接（整卷重定向部署形态）下的真文件必须放行');
+});
+
 test('file-downloader→io 常量链：downloadCover 空 URL 走 fatalError 早退', async () => {
   // 空 URL 触发 fatalError 分支——若 io 未导出所需符号这里会 ReferenceError
   await assert.rejects(
@@ -271,6 +333,52 @@ test('getSongDownloadStatus：audioReady 跨歌单寻址且独立于全工件合
   writeFileSync(audA, 'a2');
   const st3 = await dm.getSongDownloadStatus(null, songId);
   assert.equal(st3.audioPlaylistId, plA.id, '双份在盘音频档取最新 completed_at 的歌单');
+});
+
+test('routes/downloads 写端点 CSRF：异源 Origin → 403（开放部署裸奔面收口）', async () => {
+  // 真路由真库：闸在任何业务判定之前，无需准备队列/任务行
+  const downloadsRoute = require('../src/server/routes/downloads.js');
+  const evil = { origin: 'https://evil.example' };
+  const start = await downloadsRoute.request('http://t/downloads/queues/1/start', {
+    method: 'POST', headers: evil,
+  });
+  assert.equal(start.status, 403);
+  const del = await downloadsRoute.request('http://t/downloads/queues/1', {
+    method: 'DELETE', headers: evil,
+  });
+  assert.equal(del.status, 403);
+  const mirror = await downloadsRoute.request('http://t/downloads/local/mirror', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...evil },
+    body: JSON.stringify({ localId: 'local_pl_csrf', name: 'x', tracks: [{ id: '1' }] }),
+  });
+  assert.equal(mirror.status, 403);
+  // 对照：无 Origin 的同请求过闸走到业务层（非 403——非浏览器客户端不受影响）
+  const noOrigin = await downloadsRoute.request('http://t/downloads/queues/1/start', { method: 'POST' });
+  assert.notEqual(noOrigin.status, 403);
+});
+
+test('routes/downloads 写端点限流：同 IP 第 31 次写 → 429（上游扇出+写盘收口）', async (t) => {
+  // TRUST_PROXY + 独用 XFF 隔离桶——csrf 用例的无 Origin 请求打的是 'local'
+  // 共享桶，不复用存量计数也不污染它（settings.test.mjs 写面限流同款隔离法）
+  const downloadsRoute = require('../src/server/routes/downloads.js');
+  const savedTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  t.after(() => {
+    if (savedTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = savedTp;
+  });
+  // '{}' 缺必填 playlistId → 恒 400 早退——探针不依赖 DB 队列行有无，
+  // 也不会真建队列/拉起下载协程；限流闸在 body 校验之前，每次命中都计数
+  const post = () => downloadsRoute.request('http://t/downloads/queues', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.88' },
+    body: '{}',
+  });
+  for (let i = 0; i < 30; i++) {
+    assert.equal((await post()).status, 400, `第 ${i + 1} 次写应在配额内`);
+  }
+  assert.equal((await post()).status, 429);
 });
 
 test('getSongDownloadStatus：纯视频档行不误报 audioReady（bv/yt 的 videoPath 不是音频工件）', async () => {
