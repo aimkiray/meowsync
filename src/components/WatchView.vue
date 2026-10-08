@@ -1534,8 +1534,10 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 蚀刻兜底板：画布上一格墨洗，纸面实白在饱和画布上断层；
+     note glyph 经画布白名单升 ink-86（图标 3:1 线） */
   color: var(--ink-64);
-  background: var(--paper);
+  background: var(--ink-06);
 }
 
 /* 外部导入曲视频模式：16:9 信箱（外部视频多为横屏，方形裁切会砍画面）；
@@ -1726,10 +1728,24 @@ export default {
 .watch-action { font-size: 12px; }
 
 /* ── 右栏：发丝线分栏的 tab 面板 ──
-   盒模型走模板工具类；本规则只剩栏界标尺 */
+   盒模型走模板工具类；本规则只剩 pane 面与栏界标尺 */
 
-/* 栏界羽化标尺：ink-30 细线、两端渐隐。移动基态转横（单列态栏界在上方）；
-   ≥901px 回竖版（见 min-width 块） */
+/* pane 统一面：栏收成「有界滚动面板」时在画布上叠一格墨洗——饱和青上
+   读作深半格的画布带、glitch 淡青上读作浅灰青分区；三块面板/tab 条/
+   页脚/工具条同属一纸，不再是画布上的散件。alpha 洗色双画布自适应
+   （实色纸面会断层）。pane 是有界滚动面的 affordance——单列整页滚态
+   本栏是无界文档流，整片墨洗只读作「稍微灰一点的大色块」：默认
+   transparent 收掉，两有界态（≤900∧min-height:600 视频分屏 / ≥901
+   栏内滚）在各自媒体块内重开 ink-06。
+   --watch-pane 供钉顶/钉底件把衬底复合出同一色（.watch-tabs/.lyric-tools）：
+   token 退 transparent 时复合层自动归画布色，钉条声明不用分态 */
+.watch-side {
+  --watch-pane: transparent;
+  background: var(--watch-pane);
+}
+
+/* 栏界羽化标尺：ink-30 细线、两端渐隐——pane 面加入后即 pane 的蚀刻缘。
+   移动基态转横（单列态栏界在上方）；≥901px 回竖版（见 min-width 块） */
 .watch-side::before {
   content: '';
   position: absolute;
@@ -1741,12 +1757,26 @@ export default {
   pointer-events: none;
 }
 
-/* 状态横幅：纸面发丝盒 + 等宽标签（warn:/error:）——居左栏沉浸键下方，宽与封面同轴 */
+/* pane 面字色补丁：10px/300 mono 眉题在墨洗面上 ink-86 跌至 ~4.48:1
+   （裸画布 ~4.96），升实墨。特异度战场：全局基础档 ink-64 (0,1,0)、
+   画布白名单 .app-shell .app-body .X 已升 ink-86 (0,3,0)——scoped 写
+   .watch-side .X 仅 (0,2,0)+[data-v] 平手落败；.app-shell .watch-side
+   前缀抬到 (0,4,0) 压过白名单（[data-v] 只钉末位元素，祖先链命中不靠
+   属性）。其余 ~4.48 命中件（queue-row-artist/duration、watch-empty、
+   watch-autoplay、非当前词行）保 ink-86——4.5 阈值噪声带内接受，只给
+   最小最细的字重补余量。无 pane 单列态本条同生效：画布上实墨更足，
+   眉题跨态一致不漂移 */
+.app-shell .watch-side .queue-head-tag,
+.app-shell .watch-side .queue-head-meta,
+.app-shell .watch-side .queue-sec { color: var(--ink); }
+
+/* 状态横幅：蚀刻发丝牌 + 戳记标签（warn:/error:）——居左栏沉浸键下方，
+   宽与封面同轴。墨洗底+实墨框=画布上的印版；纸面实填会读作画布上贴的补丁 */
 .watch-banner {
   margin-top: 14px;
   padding: 8px 10px;
   font-size: 11px;
-  background: var(--paper);
+  background: var(--ink-06);
   border: var(--hairline);
   color: var(--ink);
   flex-shrink: 0;
@@ -1758,11 +1788,16 @@ export default {
   text-align: left;
 }
 
+/* 危险戳记：墨红底+纸字反白——danger-ink 字色落在画布洗底上仅 ~2.1:1
+   （纸面时代的余量），戳记片回到 ~6:1 且是印单的危险戳语义 */
 .watch-banner-tag {
   font-family: var(--font-mono);
   font-weight: 300;
   letter-spacing: .05em;
-  color: var(--accent-danger-ink);
+  padding: 1px 5px;
+  margin-right: 2px;
+  background: var(--accent-danger-ink);
+  color: var(--paper);
 }
 
 .watch-tabs {
@@ -1774,8 +1809,13 @@ export default {
   position: sticky;
   top: var(--watch-top-h, 52px);
   z-index: 4;
-  /* 滚过内容不透字（同 .watch-top 的画布衬底） */
-  background: var(--view-canvas, var(--paper));
+  /* 滚过内容不透字：衬底须复合出 pane 同色（画布底+墨洗层）——
+     单铺透洗会让滚过的行透字，单铺画布又与 pane 身断层。token 退
+     transparent（无 pane 单列态）时渐变层自动归画布色，钉条无色差
+     免分态；fallback 取 transparent 由 .watch-side 显式声明控两态 */
+  background:
+    linear-gradient(var(--watch-pane, transparent), var(--watch-pane, transparent)),
+    var(--view-canvas, var(--paper));
   /* 基线降灰档：全局 .pg-tabs 底线是 --hairline 实墨，本区其余分隔件
      （queue-head 底线 / 行间分隔 / queue-sec 尾线 / queue-foot 顶隔）
      全走 --hairline-soft——scoped (0,2,0) 压全局 (0,1,0) 局部看齐。
@@ -1833,9 +1873,11 @@ export default {
 /* 相关行点击区已收进 .queue-row-main（行容器化以容纳行尾 + 键），cursor 由它提供 */
 
 .queue-row--dragging {
-  outline: 1.2px solid var(--accent-magenta-ink); /* 纸面指示线走深档（火烈鸟本色 ~2.3:1 过浅） */
+  outline: 1.2px solid var(--accent-magenta-ink); /* 指示线走深档（火烈鸟本色 ~2.3:1 过浅） */
   outline-offset: -4px;
-  background: var(--paper);
+  /* 抓住的行吃最深档墨洗（当前行 ink-10 同槽位——accent 轮廓环负责区分语义）；
+     纸面实白在画布/pane 上都是断层 */
+  background: var(--ink-10);
 }
 
 .watch-queue-thumb {
@@ -1851,8 +1893,10 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 蚀刻空槽：墨洗底 + 保留实墨框（与有封面的瓦同框才是一列格，
+     框降档会读成残缺）。note glyph 经画布白名单升 ink-86 */
   color: var(--ink-64);
-  background: var(--paper);
+  background: var(--ink-06);
 }
 
 /* 队列头右端模式对：底栏 ≤640 减负后 shuffle/模式在本页无落点——挂队列
@@ -1888,6 +1932,8 @@ export default {
 /* HC 下底色态被系统色抹平——透明 outline 被强制显色，反白态不留失 */
 @media (forced-colors: active) {
   .queue-mode-btn--on { outline: 1.2px solid transparent; }
+  /* banner-tag 实底戳记片同被抹平——透明 outline 保戳片形制（同上例） */
+  .watch-banner-tag { outline: 1.2px solid transparent; }
 }
 
 /* 队列页脚：发丝顶隔把操作/偏好收成一条栏，与行列表的记账线呼应。
@@ -1921,6 +1967,10 @@ export default {
 }
 .watch-autoplay:hover { background: var(--ink-06); }
 .watch-queue-foot--empty .watch-autoplay { margin: 0 auto; }
+/* 勾选盒随 pane 蚀刻——纸面实填的 14px 白块在画布上是噪点。
+   :not(:checked) 守卫：全局 .pg-check:checked 墨底态 (0,2,0) 与本规则
+   平特异、scoped 后载会压掉它，限定未勾选才透明 */
+.watch-autoplay .pg-check:not(:checked) { background: transparent; }
 
 /* 歌词行：当前行墨色加粗放大，其余 ink-64 */
 .watch-lyric-list {
@@ -1966,9 +2016,9 @@ export default {
   opacity: .9;
 }
 
-/* 歌词工具条：字号 / 时间校准两组，钉在歌词面板下缘（DOM 序在面板
+/* 歌词工具条：字号 / 时间校准 / 词务三组，钉在歌词面板下缘（DOM 序在面板
    之后——钉底与 watch-queue-foot 同约定：滚动体之外的常驻件）。
-   不设分隔线——watch 侧栏约定「静止零装饰」 */
+   顶缘发丝线与 queue-foot 同口径——面板脚线的记账线 */
 .lyric-tools {
   display: flex;
   align-items: center;
@@ -1977,6 +2027,7 @@ export default {
   /* ≤330px 视口两组 ~290px 放不下——换行而不裁右边组 */
   flex-wrap: wrap;
   padding: 4px 16px;
+  border-top: var(--hairline-soft);
   flex-shrink: 0;
 }
 .lyric-tools-group { display: flex; align-items: center; gap: 4px; }
@@ -2006,15 +2057,19 @@ export default {
 
 /* ≤900 单列整页滚态：工具条在 DOM 序上钉于词表末尾，随页流会被整张
    词表压到滚不可及——sticky 吸在滚动口（.watch-view）下沿随手可够，
-   滚到真末尾归位（与 watch-tabs 钉顶同一招的镜像）；画布衬底防滚过的
-   词行透字。分屏/宽屏态它由 flex 序钉在栏底、天然已在视野内——
-   sticky 无事可干（惰性的，不必关） */
+   滚到真末尾归位（与 watch-tabs 钉顶同一招的镜像）；衬底复合 pane
+   同色防滚过的词行透字。分屏/宽屏态它由 flex 序钉在栏底、天然已在
+   视野内——sticky 无事可干（惰性的，不必关） */
 @media (max-width: 900.98px) {
   .lyric-tools {
     position: sticky;
     bottom: 0;
     z-index: 3; /* 词行之上、tabs(4)/顶行(5) 之下 */
-    background: var(--view-canvas, var(--paper));
+    /* fallback 取 transparent 由 .watch-side 显式声明控两态——单列无 pane
+       态渐变层归画布色，钉条与页身无差 */
+    background:
+      linear-gradient(var(--watch-pane, transparent), var(--watch-pane, transparent)),
+      var(--view-canvas, var(--paper));
   }
 }
 
@@ -2034,8 +2089,10 @@ export default {
      压到内容高之下，溢出走 watch-view 页滚兜底而非撑破布局 */
   .watch-view--video .watch-layout { flex: 1; min-height: 0; }
   /* 侧栏收上行余量成定高列——没有 flex:1 则栏高随词表内容走，
-     面板体的 flex:1 失去参照，内滚无从谈起 */
-  .watch-view--video .watch-side { flex: 1; min-height: 0; }
+     面板体的 flex:1 失去参照，内滚无从谈起。
+     栏已成有界滚动面板——重开 pane 墨洗面（基态默认 transparent
+     只挂无界单列流，见 .watch-side 基态注） */
+  .watch-view--video .watch-side { flex: 1; min-height: 0; --watch-pane: var(--ink-06); }
   /* 三块面板体共一条内滚律：v-show 单显，可见的那块即歌词/队列/
      相关的滚动口；tabs/工具条/页脚都在滚动体外由 flex 序钉住
      （min-width:901 块同款结构）。overscroll chaining 截断已在
@@ -2138,6 +2195,10 @@ export default {
     width: min(100%, max(533px, calc((100dvh - var(--watch-reserved-h, 223px)) * 16 / 9)));
   }
   .watch-banner { width: min(46vh, 420px); }
+
+  /* 双栏内滚态栏是有界滚动面板——重开 pane 墨洗面（基态 transparent
+     只挂无界单列流，见 .watch-side 基态注） */
+  .watch-side { --watch-pane: var(--ink-06); }
 
   /* 栏界标尺回竖版（gap 24 → 栏内 padding-left 24：标尺两侧留白对称） */
   .watch-side::before {
