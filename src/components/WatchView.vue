@@ -136,23 +136,67 @@
       </div>
 
       <!-- ══ 右栏：待播 / 歌词 / 相关 ══ -->
-      <aside class="watch-side relative flex min-w-0 flex-col pt-2.5 wide:min-h-0 wide:pl-6 wide:pt-0" aria-label="待播与歌词">
+      <aside class="watch-side relative flex min-w-0 flex-col pt-2.5 wide:min-h-0 wide:pl-6 wide:pt-0" aria-label="待播、歌词与相关">
 
-        <div class="pg-tabs watch-tabs" role="tablist" aria-label="播放页侧栏面板">
-          <button
-            v-for="t in TABS"
-            :key="t.key"
-            :id="`watch-tab-${t.key}`"
-            class="pg-tab"
-            :class="{ 'pg-tab--active': tab === t.key }"
-            role="tab"
-            :aria-controls="`watch-panel-${t.key}`"
-            :aria-selected="tab === t.key"
-            :tabindex="tab === t.key ? 0 : -1"
-            @click="setTab(t.key)"
-            @keydown.left.prevent="moveTab(-1)"
-            @keydown.right.prevent="moveTab(1)"
-          >{{ t.label }}</button>
+        <!-- 刊头：tab 群 + 右段语境 meta 同钉一条——sticky 钉顶/衬底/底缘
+             耳语线全在 head 层承担，.watch-tabs 回归纯 tab 群。meta 必须
+             兄弟级：role=tablist 只许 tab 子项，混入会破坏可访问性树 -->
+        <div class="watch-side-head">
+          <div class="pg-tabs watch-tabs" role="tablist" aria-label="播放页侧栏面板">
+            <button
+              v-for="t in TABS"
+              :key="t.key"
+              :id="`watch-tab-${t.key}`"
+              class="pg-tab"
+              :class="{ 'pg-tab--active': tab === t.key }"
+              role="tab"
+              :aria-controls="`watch-panel-${t.key}`"
+              :aria-selected="tab === t.key"
+              :tabindex="tab === t.key ? 0 : -1"
+              @click="setTab(t.key)"
+              @keydown.left.prevent="moveTab(-1)"
+              @keydown.right.prevent="moveTab(1)"
+            >{{ t.label }}</button>
+          </div>
+          <!-- 右段语境 meta 随 tab 换写：队列=源名+规模+≤640 模式键 /
+               歌词=行数+校准读数 / 相关=艺人+规模 -->
+          <div class="watch-side-meta">
+            <template v-if="tab === 'queue'">
+              <!-- 归属歌单在库时源名可点回歌单页（原 queue-source--link 语义，
+                   自滚动体内的 queue-head 迁入刊头） -->
+              <button
+                v-if="queueOwner"
+                type="button"
+                class="queue-head-name"
+                @click="$emit('open-source')"
+                :title="`回到歌单 ${queueTitle}`"
+              >{{ queueTitle }}</button>
+              <span v-else class="queue-head-name queue-head-name--plain">{{ queueTitle }}</span>
+              <span v-if="queue.length" class="queue-head-meta">{{ queue.length }} 首<template v-if="queueTotalLabel"> · {{ queueTotalLabel }}</template></span>
+              <!-- ≤640 底栏减负收走 shuffle/模式键后，本页语义落点在刊头
+                   （YTM UP NEXT 头即置 shuffle/repeat——队列顺序控件归队列） -->
+              <span class="queue-modes">
+                <button
+                  type="button"
+                  class="queue-mode-btn"
+                  :class="{ 'queue-mode-btn--on': shuffleOn }"
+                  @click="$emit('toggle-shuffle')"
+                  :title="`随机播放${shuffleOn ? '（开）' : ''}`"
+                  :aria-pressed="shuffleOn"
+                  aria-label="随机播放"
+                ><PixelIcon name="shuffle" :size="14" /></button>
+                <button
+                  type="button"
+                  class="queue-mode-btn"
+                  @click="$emit('toggle-play-mode')"
+                  :title="`播放模式：${playModeText || '列表循环'}`"
+                  :aria-label="`切换播放模式，当前：${playModeText}`"
+                ><PixelIcon :name="playModeIcon" :size="13" /></button>
+              </span>
+            </template>
+            <span v-else-if="tab === 'lyrics' && currentSong" class="queue-head-meta">{{ lyrics.length }} 行 · 校准 {{ lyricOffsetLabel }}</span>
+            <span v-else-if="tab === 'related' && relatedSongs.length" class="queue-head-meta">{{ relatedHeadLabel }}</span>
+          </div>
         </div>
 
         <!-- 待播队列 -->
@@ -164,39 +208,8 @@
           class="watch-side-body"
           ref="queueContainer"
         >
-          <!-- 队列抬头（印单式）：mono 眉题 + 来源名 + 规模元信息。
-               归属歌单在库时名字可点回歌单页（原 queue-source--link 语义） -->
-          <div class="queue-head">
-            <span class="queue-head-tag">正在播放</span>
-            <button
-              v-if="queueOwner"
-              class="queue-head-name"
-              @click="$emit('open-source')"
-              :title="`回到歌单 ${queueTitle}`"
-            >{{ queueTitle }}</button>
-            <span v-else class="queue-head-name queue-head-name--plain">{{ queueTitle }}</span>
-            <span v-if="queue.length" class="queue-head-meta">{{ queue.length }} 首<template v-if="queueTotalLabel"> · {{ queueTotalLabel }}</template></span>
-            <!-- ≤640 底栏减负收走 shuffle/模式键后，本页语义落点即队列头
-                 （YTM UP NEXT 头即置 shuffle/repeat——队列顺序控件归队列面板） -->
-            <span class="queue-modes">
-              <button
-                type="button"
-                class="queue-mode-btn"
-                :class="{ 'queue-mode-btn--on': shuffleOn }"
-                @click="$emit('toggle-shuffle')"
-                :title="`随机播放${shuffleOn ? '（开）' : ''}`"
-                :aria-pressed="shuffleOn"
-                aria-label="随机播放"
-              ><PixelIcon name="shuffle" :size="14" /></button>
-              <button
-                type="button"
-                class="queue-mode-btn"
-                @click="$emit('toggle-play-mode')"
-                :title="`播放模式：${playModeText || '列表循环'}`"
-                :aria-label="`切换播放模式，当前：${playModeText}`"
-              ><PixelIcon :name="playModeIcon" :size="13" /></button>
-            </span>
-          </div>
+          <!-- 队列抬头已并入刊头右段（.watch-side-meta——源名/规模/≤640
+               模式键随迁）；「正在播放」眉题摘除——tab 自身即面板名代言 -->
           <div v-if="queue.length === 0" class="watch-empty">队列为空喵~</div>
           <template v-else>
             <!-- 虚拟滚动上沿 spacer：锚位+衬高，行区起点=全局下标 0 的位置 -->
@@ -401,7 +414,7 @@
           <div v-else-if="!relatedSongs.length" class="watch-empty">暂无相关推荐</div>
           <div
             v-else
-            v-for="song in relatedSongs"
+            v-for="(song, i) in relatedSongs"
             :key="song.id"
             class="queue-row watch-related-row"
           >
@@ -414,6 +427,7 @@
               @keydown.enter="$emit('play-song', song, relatedSongs)"
               @keydown.space.prevent="$emit('play-song', song, relatedSongs)"
             >
+              <span class="queue-row-index">{{ i + 1 }}</span>
               <img
                 v-if="songCoverUrl(song)"
                 :src="httpsCover(songThumbUrl(song, 80))"
@@ -766,6 +780,13 @@ export default {
         if (seq === relatedSeq) relatedLoading.value = false
       }
     }
+    // 刊头 meta「艺人 · N首」：relatedSongs 由当前曲首艺人名搜索得来
+    // （与 loadRelated 同一取法）——无艺人字段的源曲只报规模，不硬造归属
+    const relatedHeadLabel = computed(() => {
+      const artist = (props.currentSong?.ar || props.currentSong?.artists || [])[0]?.name
+      const n = relatedSongs.value.length
+      return artist ? `${artist} · ${n} 首` : `${n} 首`
+    })
 
     // 【序】immediate 挂载即跑——离开再进 watch 时按持久化 tab 补一次
     // centerCurrentRow/loadRelated（旧版只在「变化」时跑：related tab 重进
@@ -1404,6 +1425,7 @@ export default {
       startDrag,
       relatedSongs,
       relatedLoading,
+      relatedHeadLabel,
       shareSong,
       sourceUrl,
       sourceName,
@@ -1438,12 +1460,14 @@ export default {
    ——本层是唯一滚动器；≥901px 转双栏内滚，车道移交各栏 */
 .watch-view {
   scrollbar-gutter: stable;
-  /* 顶条钉高：watch-tabs 的 sticky top 与本条 height 同源（--topnav-h 先例） */
+  /* 顶条钉高：刊头 .watch-side-head 的 sticky top 与本条 height 同源
+     （--topnav-h 先例） */
   --watch-top-h: 52px;
-  /* pg-tab 实高（pad 10×2 + 12 字 + 1.2 底边 ≈ 38）——scroll-padding 同源 */
+  /* 刊头实高（pg-tab pad 10×2 + 12 字 + head 底缘 1.2 耳语线 ≈ 38）——
+     scroll-padding 同源 */
   --watch-tabs-h: 38px;
   /* 焦点滚达/scrollIntoView 的让位垫：移动单列态顶上有两层 sticky
-     （watch-top + watch-tabs），不让位时目标行会滚到钉条底下 */
+     （watch-top + 刊头 watch-side-head），不让位时目标行会滚到钉条底下 */
   scroll-padding-top: calc(var(--watch-top-h, 52px) + var(--watch-tabs-h, 38px));
   /* 宽屏布局槽距令牌（20→24→32，分档媒体块见下）：声明在本层而非
      .watch-layout——--watch-vpad 有两个兄弟消费端（.watch-layout 的
@@ -1737,11 +1761,15 @@ export default {
    本栏是无界文档流，整片墨洗只读作「稍微灰一点的大色块」：默认
    transparent 收掉，两有界态（≤900∧min-height:600 视频分屏 / ≥901
    栏内滚）在各自媒体块内重开 ink-06。
-   --watch-pane 供钉顶/钉底件把衬底复合出同一色（.watch-tabs/.lyric-tools）：
+   --watch-pane 供钉顶/钉底件把衬底复合出同一色（.watch-side-head/.lyric-tools）：
    token 退 transparent 时复合层自动归画布色，钉条声明不用分态 */
 .watch-side {
   --watch-pane: transparent;
   background: var(--watch-pane);
+  /* pane 内缘轴：刊头 tab 内补距 / 右段 meta 端距 / queue-sec 内缘 /
+     queue-foot·lyric-tools 框内 padding-inline 共用这一道 12px 轴——
+     行族（queue-row/related）不入轴：记账线语法自有 4–6px 纪律 */
+  --watch-pane-inset: 12px;
 }
 
 /* 栏界羽化标尺：ink-30 细线、两端渐隐——pane 面加入后即 pane 的蚀刻缘。
@@ -1766,7 +1794,6 @@ export default {
    watch-autoplay、非当前词行）保 ink-86——4.5 阈值噪声带内接受，只给
    最小最细的字重补余量。无 pane 单列态本条同生效：画布上实墨更足，
    眉题跨态一致不漂移 */
-.app-shell .watch-side .queue-head-tag,
 .app-shell .watch-side .queue-head-meta,
 .app-shell .watch-side .queue-sec { color: var(--ink); }
 
@@ -1799,33 +1826,62 @@ export default {
   background: var(--accent-danger-ink);
   color: var(--paper);
 }
+/* 分极：warn 是墨戳（中性警示非危险）——error 保 accent-danger-ink 红戳 */
+.watch-banner[role="status"] .watch-banner-tag { background: var(--ink); }
 
-.watch-tabs {
+/* 刊头：tab 群 + 右段语境 meta 的同一条钉头。
+   单列整页滚下随页流走会迫使深滚用户滚回顶——钉在顶条之下
+   （top 与 --watch-top-h 同源；宽屏块与移动视频分屏块内复位
+   static——有界/非滚动 scrollport 上 sticky 的 inset 约束仍生效，
+   不复位会被强压 32px）。
+   滚过内容不透字：衬底须复合出 pane 同色（画布底+墨洗层）——
+   单铺透洗会让滚过的行透字，单铺画布又与 pane 身断层。token 退
+   transparent（无 pane 单列态）时渐变层自动归画布色，钉条无色差
+   免分态；fallback 取 transparent 由 .watch-side 显式声明控两态。
+   底缘耳语线与 queue-foot 顶线/行分隔同口径（hairline-soft）——
+   tab 激活指示 ::after 的 bottom:-1px（全局）恰骑此线，不再另收 */
+.watch-side-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
   flex-shrink: 0;
-  /* 单列整页滚下 tabs 随页流走会迫使深滚用户滚回顶——钉在顶条之下
-     （top 与 --watch-top-h 同源；宽屏块与移动视频分屏块内复位
-     static——有界/非滚动 scrollport 上 sticky 的 inset 约束仍生效，
-     不复位会被强压 32px） */
   position: sticky;
   top: var(--watch-top-h, 52px);
   z-index: 4;
-  /* 滚过内容不透字：衬底须复合出 pane 同色（画布底+墨洗层）——
-     单铺透洗会让滚过的行透字，单铺画布又与 pane 身断层。token 退
-     transparent（无 pane 单列态）时渐变层自动归画布色，钉条无色差
-     免分态；fallback 取 transparent 由 .watch-side 显式声明控两态 */
+  border-bottom: var(--hairline-soft);
   background:
     linear-gradient(var(--watch-pane, transparent), var(--watch-pane, transparent)),
     var(--view-canvas, var(--paper));
-  /* 基线摘掉：tab 条与面板首件（queue-head 自带 soft 底线/词表/相关行）
-     改靠 pane 面 + 留白分界。全局 .pg-tabs 自带 --hairline 实墨底线——
-     须显式归 0（scoped (0,2,0) 压全局 (0,1,0)），只删行实墨线会复活 */
+}
+
+/* tabs 回归纯 tab 群：底线摘除——刊头界线由 head 的耳语线承担，全局
+   .pg-tabs 自带 --hairline 实墨底线须显式归 0（scoped (0,2,0) 压全局
+   (0,1,0)，只删行实墨线会复活） */
+.watch-tabs {
+  flex-shrink: 0;
   border-bottom: 0;
 }
 
-/* 全局 ::after 的 bottom:-1px 是骑基线位；基线摘掉后指示线会悬出条底缘，
-   归 0 让 2px 墨指示收进条内底缘（scoped [data-v] 追加后特异度足够） */
-.watch-tabs .pg-tab::after {
-  bottom: 0;
+/* tab 内补距收进 pane 内缘轴——特异度战场：glitch .pg-tab (0,3,0) 的
+   padding:6px 14px 会盖全局 (0,2,0)；scoped [data-v] 钉上 (0,3,0) 平手
+   后靠后载胜（.watch-action--on 同律）。glitch 下 pill margin 2px 使
+   文字落在轴 +2px——pill 组自身边距语言，接受这 2px */
+.watch-tabs .pg-tab { padding-inline: var(--watch-pane-inset, 12px); }
+
+/* 刊头右段语境 meta：右对齐单行，min-width:0 闸下源名（flex:1 +
+   ellipsis）先吃截断——901–1023 窄带侧栏 ~335–380px 下
+   tabs(~160)+modes(~48)+meta 不破行。右端距收 pane 内缘轴 */
+.watch-side-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+  /* 右端距走 padding 而非 margin——≤640 联排 modes 的外轮廓（outline）
+     画在盒外，须落在 meta 的 padding 盒内，margin 区会被 overflow:hidden 裁 */
+  padding-right: var(--watch-pane-inset, 12px);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 /* 移动基态：不限高不内滚（YTM 整页滚动语义——队列/歌词随页流）；
@@ -1876,6 +1932,10 @@ export default {
 }
 
 /* 相关行点击区已收进 .queue-row-main（行容器化以容纳行尾 + 键），cursor 由它提供 */
+/* 相关行没有 remove 键——补其占位（24px 键 + 6px 行 gap，与
+   .queue-row--current 同法）让时长列与队列行对轴。左缘 26px 差有意
+   保留：队列行的拖拽握把槽是 affordance 税，相关行不付 */
+.watch-related-row .queue-row-main { margin-right: 30px; }
 
 .queue-row--dragging {
   outline: 1.2px solid var(--accent-magenta-ink); /* 指示线走深档（火烈鸟本色 ~2.3:1 过浅） */
@@ -1904,15 +1964,17 @@ export default {
   background: var(--ink-06);
 }
 
-/* 队列头右端模式对：底栏 ≤640 减负后 shuffle/模式在本页无落点——挂队列
-   头是 YTM 语义位（队列顺序控件归队列面板；YTM 队列头即放 shuffle/
-   repeat）。≥641 由底栏承担，此处不渲染槽位 */
+/* 刊头右段模式对：底栏 ≤640 减负后 shuffle/模式在本页的落点（YTM UP
+   NEXT 头即置 shuffle/repeat）。联排器械化：外轮廓走 outline（不占
+   盒高保 24px 地板），格间发丝内隔——与 .lyric-tools-group 同纪律。
+   ≥641 由底栏承担，此处不渲染槽位 */
 .queue-modes { display: none; }
 @media (max-width: 640.98px) {
-  /* queue-head 是 baseline 对齐——按钮组转 flex 后须中线回正 */
-  .queue-modes { display: flex; gap: 4px; margin-left: auto; align-self: center; }
+  .queue-modes { display: flex; align-items: stretch; gap: 0; outline: var(--hairline); }
+  .queue-modes > * + * { border-left: var(--hairline-soft); }
 }
-/* 盒型镜像 .lyric-tool：24px 触控地板 + 发丝框 + ink-86 图形 */
+/* 盒型镜像 .lyric-tool：24px 触控地板 + ink-86 图形；边框摘除——
+   联排外轮廓由 .queue-modes 的 outline 承担，格间只留内隔线 */
 .queue-mode-btn {
   display: flex;
   align-items: center;
@@ -1920,7 +1982,7 @@ export default {
   min-width: 24px;
   min-height: 24px;
   padding: 3px;
-  border: var(--hairline);
+  border: 0;
   background: transparent;
   color: var(--ink-86);
   cursor: pointer;
@@ -1943,7 +2005,14 @@ export default {
 
 /* 队列页脚：发丝顶隔把操作/偏好收成一条栏，与行列表的记账线呼应。
    顶隔贴死末行底缘（margin 悬空会让线读成「最后一卡的下边框带间隙」）；
-   行间分隔靠 .queue-row + .queue-row 的 border-top 同口径 */
+   行间分隔靠 .queue-row + .queue-row 的 border-top 同口径。
+   与 .lyric-tools 同框纪律：padding 8px + 内缘轴、min-height 48——
+   框统一，控件档差不拉平（32px ghost 动作 vs 24px 器械键各守其档）。
+   ≤900 单列整页滚态有意不随 .lyric-tools 吸底（无 sticky bottom）——
+   三件套（存为/清空/自动播放）是低频一次性操作，词工具是随读随调的
+   仪器，常驻价值不同档；吸底还会常驻占去一行队列的可视高。钉底语义
+   只留在有界栏态（宽屏/视频分屏由 flex 序钉栏底），单列态坐列表
+   真尾随页流（模板注同记） */
 .watch-queue-foot {
   display: flex;
   align-items: center;
@@ -1952,7 +2021,8 @@ export default {
   flex-wrap: wrap;
   /* 宽屏钉在面板底缘（挂出滚动体后 flex 列默认 shrink 会把它压扁） */
   flex-shrink: 0;
-  padding: 10px 4px 12px;
+  padding: 8px var(--watch-pane-inset, 12px);
+  min-height: 48px;
   border-top: var(--hairline-soft);
 }
 /* 空队列只剩自动播放开关——去掉顶隔线并居中，不吊在角落 */
@@ -2023,7 +2093,8 @@ export default {
 
 /* 歌词工具条：字号 / 时间校准 / 词务三组，钉在歌词面板下缘（DOM 序在面板
    之后——钉底与 watch-queue-foot 同约定：滚动体之外的常驻件）。
-   顶缘发丝线与 queue-foot 同口径——面板脚线的记账线 */
+   顶缘发丝线与 queue-foot 同口径——面板脚线的记账线；两条注脚同框
+   （padding 8px + 内缘轴、min-height 48） */
 .lyric-tools {
   display: flex;
   align-items: center;
@@ -2031,18 +2102,30 @@ export default {
   gap: 6px 10px;
   /* ≤330px 视口两组 ~290px 放不下——换行而不裁右边组 */
   flex-wrap: wrap;
-  padding: 4px 16px;
+  padding: 8px var(--watch-pane-inset, 12px);
+  min-height: 48px;
   border-top: var(--hairline-soft);
   flex-shrink: 0;
 }
-.lyric-tools-group { display: flex; align-items: center; gap: 4px; }
+/* 组内键联排器械化：外轮廓走 outline（不占盒高，保 24px 地板），格间
+   发丝内隔线；组间 gap(6/10px) 仍在 .lyric-tools 上，不糊框 */
+.lyric-tools-group {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  outline: var(--hairline);
+}
+.lyric-tools-group > * + * { border-left: var(--hairline-soft); }
 .lyric-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 10px;
   line-height: 1;
   padding: 5px 7px;
   min-height: 24px; /* 触控地板与仓内 pg-icobtn--sm 同档（pad-block 5 凑整 24） */
   min-width: 24px;
-  border: var(--hairline);
+  border: 0; /* 单格边框摘除——联排外轮廓由组的 outline 承担，格间只留内隔线 */
   background: transparent;
   color: var(--ink-86);
   cursor: pointer;
@@ -2050,10 +2133,18 @@ export default {
 }
 .lyric-tool:hover:not(:disabled) { background: var(--ink-06); color: var(--ink); }
 .lyric-tool:disabled { opacity: .38; cursor: default; }
-/* 图标+文案混排键（歌词获取组）：PixelIcon 是 block 件，inline-flex 收平 */
-.lyric-tool--icon { display: inline-flex; align-items: center; gap: 3px; }
+/* 图标+文案混排键（歌词获取组）：PixelIcon 是 block 件——inline-flex
+   收平已在 .lyric-tool 基态，本类只留 3px 图字缝 */
+.lyric-tool--icon { gap: 3px; }
+/* 裸 span 读数升联排一格：flex 居中吃组内隔线（字号/校准值同款）——
+   字号 10px 显式同档，不然裸 span 继承 body 16px 夹在控件间形制分裂 */
 .lyric-tool-val {
-  font-size: 10px; /* 裸 span 继承 body 16px 会夹在 10px 控件间形制分裂——显式同档 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 7px;
+  min-height: 24px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--ink-86);
 }
@@ -2108,8 +2199,8 @@ export default {
     overflow-y: auto;
   }
   /* sticky 钉点是为整页滚设计的——有界栏内栏顶已是固定处，top:52
-     的 inset 约束反把 tabs 压出侧栏天然位；归 static 当固定头 */
-  .watch-view--video .watch-tabs { position: static; }
+     的 inset 约束反把刊头压出侧栏天然位；归 static 当固定头 */
+  .watch-view--video .watch-side-head { position: static; }
   /* 横幅与视频同宽——默认 min(64vw,320px) 吊在全宽播放器下读作孤儿条
      （≥901 块内同一条 width:100% 的 ≤900 镜像） */
   .watch-view--video .watch-main--video .watch-banner { width: 100%; }
@@ -2146,8 +2237,8 @@ export default {
   }
 
   /* sticky inset 约束在非滚动 scrollport 上仍生效——不显式复位，
-     tabs 会被 --watch-top-h(52px) 钉点从侧栏天然位（20px）强压 32px */
-  .watch-tabs { position: static; }
+     刊头会被 --watch-top-h(52px) 钉点从侧栏天然位（20px）强压 32px */
+  .watch-side-head { position: static; }
 
   /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
      （旧浏览器不认两关键字写法时回退到上行 stable）。
