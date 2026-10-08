@@ -2,8 +2,9 @@
 // 纯文本词（全行非有限 time）时露脸；busy 文案与 disabled 由
 // lyricFetching/songSwitching/loadingLyrics 透传；点击只发 emit（逻辑在
 // usePlayer 侧，见 use-player.spec.mjs 手动词务用例）。
-// 另钉顶行 ⋯ 溢出菜单：操作项全量收进 teleport 菜单（音画 radio 组/
-// 沉浸/分享/下载/回源），开合/焦点/条件闸断言见下方各 describe
+// 另钉媒体区 ⋯ 溢出菜单：触发键悬浮 .watch-cover-wrap 右上角（原钉顶行
+// 右缘压右栏刊头，已迁入）、操作项全量收进 teleport 菜单（音画 radio 组/
+// 沉浸/分享/下载/回源），落位/开合/焦点/条件闸断言见下方各 describe
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -234,6 +235,40 @@ describe('WatchView：⋯ 菜单开合与焦点', () => {
       expect(menuEl()).toBeNull()           // 不能只切态不关菜单
       expect(document.activeElement).toBe(trigger.element)
     } finally { prefVideoOn.value = prev } // 断言挂也归位，不污染后续用例
+  })
+})
+
+describe('WatchView：⋯ 触发键落位', () => {
+  const YT_SONG = {
+    id: 'yt_abcdefghijk', name: 'yt', ar: [{ name: 'a' }], al: {}, dt: 0,
+    youtube: { videoId: 'abcdefghijk', hasVideo: true },
+  }
+
+  it('钉在媒体区 wrap 直属末尾而非顶行（宽屏顶行压右栏刊头的修复钉）', () => {
+    const w = mountWatch({ tab: 'queue' })
+    expect(w.find('.watch-top .watch-actions-menu-btn').exists()).toBe(false)
+    // wrap 直属且在媒体分支（video/img/fallback）之后——三形态共用一枚
+    const wrap = w.find('.watch-cover-wrap')
+    const btn = wrap.find(':scope > .watch-actions-menu-btn')
+    expect(btn.exists()).toBe(true)
+    expect(btn.element).toBe(wrap.element.lastElementChild)
+  })
+
+  it('音频封面态不带 --video（常显）；视频态挂 --video、controlsVisible 驱动 --on', async () => {
+    const w0 = mountWatch({ tab: 'queue' })
+    expect(menuTrigger(w0).classes()).not.toContain('watch-actions-menu-btn--video')
+
+    const prev = prefVideoOn.value
+    try {
+      prefVideoOn.value = true
+      const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
+      await vi.waitFor(() => expect(w.find('video').exists()).toBe(true))
+      const btn = menuTrigger(w)
+      expect(btn.classes()).toContain('watch-actions-menu-btn--video')
+      // isPlaying=false → controlsVisible 暂停常显支=true → --on 亮键
+      expect(w.vm.controlsVisible).toBe(true)
+      expect(btn.classes()).toContain('watch-actions-menu-btn--on')
+    } finally { prefVideoOn.value = prev }
   })
 })
 

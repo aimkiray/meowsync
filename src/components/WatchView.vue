@@ -1,26 +1,15 @@
 <template>
-  <!-- YTM /watch 播放页：顶行 返回+操作，左栏 媒体本体，右栏 待播/歌词/相关
-       tab。走带/进度/音量/歌曲 meta 不重复渲染——底部播放条已覆盖 -->
+  <!-- YTM /watch 播放页：顶行返回键，左栏 媒体本体（⋯ 操作悬浮其右上角），
+       右栏 待播/歌词/相关 tab。走带/进度/音量/歌曲 meta 不重复渲染——
+       底部播放条已覆盖 -->
   <div ref="viewEl" class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" :class="{ 'watch-view--video': mediaVideoActive }" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
-    <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
+    <!-- 顶行只剩返回键（五键收进媒体区 ⋯ 菜单后不再两端锚）：移动态
+         sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
-      <!-- 操作全量收进 ⋯ 溢出菜单：顶行左=返回、右=触发键两端锚（YTM mweb
-           顶条同构），行内不再为五键横滚。菜单走 TopNav 同一份 pg-menu
-           方案：teleport 出 body、fixed 右缘对齐、下方放不下翻上、
-           开即焦首项、↑↓ 循环、Esc/外点/resize 关 -->
-      <button
-        ref="menuBtn"
-        class="pg-icobtn pg-icobtn--bare watch-actions-menu-btn"
-        title="更多操作"
-        aria-label="更多操作"
-        aria-haspopup="menu"
-        :aria-expanded="menuOpen"
-        aria-controls="watch-actions-menu"
-        @click="toggleMenu"
-      ><PixelIcon name="kebab" :size="18" /></button>
+    </div>
 
-      <Teleport to="body">
+    <Teleport to="body">
         <div
           v-if="menuOpen"
           id="watch-actions-menu"
@@ -89,8 +78,7 @@
             @auxclick="closeMenu()"
           ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
         </div>
-      </Teleport>
-    </div>
+    </Teleport>
 
     <!-- 槽距走 scoped 层令牌：横槽 --page-pad-x（≤640→12）、宽屏四边
          --watch-vpad 阶梯（纵分量喂 --watch-reserved-h）。侧列份额改 40%
@@ -157,10 +145,29 @@
             :class="{ 'playing-animation': isPlaying }"
           />
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
+          <!-- ⋯ 溢出菜单触发键：操作全量收进菜单，触发键悬浮媒体区右上角
+               （原钉顶行右缘——宽屏浮层态压右栏刊头，迁入 wrap；与右下全屏键
+               同族悬浮墨片，YTM/Spotify overflow 落位同款）。放 v-if/v-else
+               链外：视频/封面/兜底三形态共用。视频态随控制层同隐同现——
+               --on 走 controlsVisible 同一条信号线（戳醒+播放 2.6s 自隐、
+               暂停常显），不自造计时器；音频封面态常显。菜单走 TopNav
+               同一份 pg-menu 方案：teleport 出 body、fixed 右缘对齐触发键、
+               下方放不下翻上、开即焦首项、↑↓ 循环、Esc/外点/resize 关 -->
+          <button
+            ref="menuBtn"
+            class="watch-actions-menu-btn"
+            :class="{ 'watch-actions-menu-btn--video': mediaVideoActive, 'watch-actions-menu-btn--on': mediaVideoActive && controlsVisible }"
+            title="更多操作"
+            aria-label="更多操作"
+            aria-haspopup="menu"
+            :aria-expanded="menuOpen"
+            aria-controls="watch-actions-menu"
+            @click="toggleMenu"
+          ><PixelIcon name="kebab" :size="18" /></button>
         </div>
 
         <!-- 歌名/歌手·专辑·时长/操作键都不在本栏——meta 与底栏播放器重复、
-             操作键已并入顶行；左栏只剩媒体本体 + 横幅（YTM mweb 同款取舍） -->
+             操作键已收进媒体区 ⋯ 菜单；左栏只剩媒体本体 + 横幅（YTM mweb 同款取舍） -->
 
         <!-- 播放错误/警告在媒体下方——归属左栏信息区，不占右栏 tab 顶部 -->
         <div v-if="durationWarning" class="watch-banner" role="status"><span class="watch-banner-tag">warn:</span> {{ durationWarning }}</div>
@@ -1421,7 +1428,7 @@ export default {
     const sourceUrl = computed(() => songSourceUrl(props.currentSong))
     const sourceName = computed(() => songSourceName(props.currentSong) || '源站')
 
-    // ── 顶行 ⋯ 溢出菜单（TopNav ⋯ 菜单同一份 pg-menu 方案）──
+    // ── 媒体区 ⋯ 溢出菜单（TopNav ⋯ 菜单同一份 pg-menu 方案）──
     const menuBtn = ref(null)
     const menuOpen = ref(false)
     const menuPos = ref({})
@@ -1449,7 +1456,7 @@ export default {
       menuPos.value = {
         top: (rect.bottom + 4 + h <= window.innerHeight
           ? rect.bottom + 4 : Math.max(8, rect.top - h - 4)) + 'px',
-        // 右缘对齐触发键右缘——菜单从顶行右端向左展开
+        // 右缘对齐触发键右缘——菜单从 ⋯ 键右缘向左展开
         right: Math.max(8, window.innerWidth - rect.right) + 'px'
       }
       menuOpen.value = true
@@ -1599,7 +1606,7 @@ export default {
   scroll-padding-top: calc(var(--watch-top-h, 52px) + var(--watch-tabs-h, 38px));
   /* 宽屏布局槽距令牌（20→24→32，分档媒体块见下）：声明在本层而非
      .watch-layout——--watch-vpad 有两个兄弟消费端（.watch-layout 的
-     padding + .watch-top 的浮层槽距：返回键/操作键行的左缘就是视频左缘
+     padding + .watch-top 的浮层槽距：返回键行的左缘就是视频左缘
      对齐轴），挂子元素会让兄弟够不着。--watch-reserved-h 与其同域：
      自定义属性按已解析计算值向下继承，声明在共同祖先上后代看到的
      都是分档后的值——同域声明为与消费端同源可读，预算只此一处 */
@@ -1615,7 +1622,7 @@ export default {
 @media (min-width: 1150px) { .watch-view { --watch-vpad: 24px; } }
 @media (min-width: 1364px) { .watch-view { --watch-vpad: 32px; } }
 
-/* 浮层顶行：返回键钉左页角。
+/* 浮层顶行：只剩返回键钉左页角（⋯ 操作键已迁入媒体区）。
    移动基态入流 sticky——.watch-view 是真滚动器，absolute 会随内容滚走、
    深滚后失去唯一返回路径；宽屏态改回 absolute 不占流（栏内自滚）。
    pointer-events:none 带子让下方内容可点，仅按键自身接收点击 */
@@ -1632,14 +1639,9 @@ export default {
   /* 列向 flex 滚动器里内容一溢出，收缩全落到本项（min-content 仅 32px 键高），
      tabs 钉点下漏 20px 透字缝——与 .watch-tabs 同律禁缩；宽屏 absolute 出流后无效无碍 */
   flex-shrink: 0;
-  gap: 10px;
   /* 横槽吃 --page-pad-x 令牌：≤640 时内容区降到 12——返回键若不跟档，
      会与下方视频/封面的左缘错开 8px */
   padding: 0 var(--page-pad-x, 20px);
-  /* 行内横滚兜底退为纯保险：操作收进 ⋯ 菜单后行内只剩两枚键，实际不再
-     溢出（移动端滚动条全局隐藏——scrollbar-width 双保险防溢出时出轨道） */
-  overflow-x: auto;
-  scrollbar-width: none;
   /* sticky 钉顶时衬画布色——滚过的歌词/队列行不透字 */
   background: var(--view-canvas, var(--paper));
   pointer-events: none;
@@ -1706,10 +1708,15 @@ export default {
   touch-action: manipulation;
 }
 
+/* wrap 是媒体区悬浮件的定位锚：视频悬停控制层（inset:0）与右上 ⋯ 触发键
+   都钉在它上面——relative 原只在 --video 变体上声明，封面/兜底形态的
+   ⋯ 键同要锚住，提为基态共用 */
+.watch-cover-wrap { position: relative; }
+
 /* 视频态 wrap 移动基态占满栏宽：wrap 是 shrink-to-fit 的 flex 项，不给宽
    则视频 width:% 与 wrap 构成循环约束、退回片源内建宽；宽屏改由 min()
    公式贴视频盒（见 min-width 块——控制层 inset:0 锚 wrap，wrap 必须
-   精确包住画面）。relative 是悬停控制层（.watch-video-controls）的定位锚。
+   精确包住画面）。
    高帽 ~70dvh：横屏矮机上全宽视频（804×452）会把 tabs 顶到滚不可及——
    封面态早有 55svh 同款帽，视频态补上；124dvh 宽 ≈ 70dvh 高（×9/16）。
    三档递进：min() 不识的旧内核整条作废回退上行 100%（循环% 塌缩风险
@@ -1719,7 +1726,6 @@ export default {
   width: 100%;
   width: min(100%, 124vh);
   width: min(100%, 124dvh);
-  position: relative;
 }
 
 /* 视频悬停控制层：默认隐，JS --on 驱动露出（戳醒 2.6s 自隐，暂停常显；
@@ -1758,12 +1764,16 @@ export default {
   .watch-cover-wrap--video:focus-within :is(.watch-video-toggle, .watch-video-fs) {
     pointer-events: auto;
   }
+  .watch-cover-wrap--video:focus-within .watch-actions-menu-btn--video {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 /* 全屏下控件收掉时连光标一起隐——同沉浸页/流媒体播放器的 idle 手势 */
 .watch-cover-wrap--idle { cursor: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .watch-video-controls, .watch-video-toggle, .watch-video-fs { transition: none; }
+  .watch-video-controls, .watch-video-toggle, .watch-video-fs, .watch-actions-menu-btn { transition: none; }
 }
 
 /* 中央播放/暂停：半透明墨底圆形——像素风的方角体系里，圆形是「媒体
@@ -1783,9 +1793,10 @@ export default {
 }
 .watch-video-toggle:hover { background: rgba(0, 0, 0, .75); transform: scale(1.06); }
 /* 焦点环白描边在亮画面（MV 高光帧）下不可见——外圈补暗晕保证双底色可读；
-   box-shadow 随 border-radius 走，圆键得圆环 */
+   box-shadow 随 border-radius 走，圆键得圆环、方角键得方晕 */
 .watch-video-toggle:focus-visible,
-.watch-video-fs:focus-visible {
+.watch-video-fs:focus-visible,
+.watch-actions-menu-btn:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 2px;
   box-shadow: 0 0 0 4px rgba(0, 0, 0, .75);
@@ -1808,6 +1819,43 @@ export default {
   transition: background .15s ease;
 }
 .watch-video-fs:hover { background: rgba(0, 0, 0, .75); }
+
+/* ⋯ 溢出菜单触发键：媒体区右上角悬浮墨片——与右下全屏键同族（32px 方角
+   小键、rgba(0,0,0,.55) 深底、hover .75）、inset 同轴 10px。原钉顶行
+   右缘，宽屏浮层态压右栏刊头（tab 群），迁入 wrap 后顶行只剩返回键；
+   封面态压封面右上角（YTM/Spotify overflow 落位同款）。菜单体仍
+   teleport 出 body——顶层上下文与本键位置无关 */
+.watch-actions-menu-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.watch-actions-menu-btn:hover { background: rgba(0, 0, 0, .75); }
+/* 视频态随控制层同隐同现：--on 由 controlsVisible 驱动——与
+   .watch-video-controls--on 同一条信号线（戳醒/暂停常显/播放中 2.6s
+   自隐），不自造计时器；音频封面态无 --video 类、常显。键盘 Tab 由
+   wrap :has(:focus-visible) 兜底露出——opacity 0 的可聚焦键是键盘
+   陷阱（悬浮键族同律，见 .watch-video-controls 注） */
+.watch-actions-menu-btn--video {
+  opacity: 0;
+  pointer-events: none;
+  transition: background .15s ease, opacity .16s ease;
+}
+.watch-actions-menu-btn--video.watch-actions-menu-btn--on,
+.watch-cover-wrap--video:has(:focus-visible) .watch-actions-menu-btn--video {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 /* 元素全屏态：wrap 黑场居中，视频吃满屏（16:9 信箱由 object-fit:contain
    兜住，宽高 100% 只为占满容器）；悬停控制层此时仍在屏内可用。
@@ -1843,8 +1891,14 @@ export default {
   border: 0;
 }
 
+/* 全屏态藏 ⋯：菜单体 teleport 在 body——元素全屏的 top layer 只画 wrap
+   子树，fixed 菜单开出来不可见，留着是颗死键（canElementFs 藏键同律）。
+   全屏可用化要先把 teleport 目标收进 wrap */
+.watch-cover-wrap:fullscreen .watch-actions-menu-btn,
+.watch-cover-wrap:-webkit-full-screen .watch-actions-menu-btn { display: none; }
+
 /* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
-   与 .watch-top 返回键/操作键行的 padding 同源对齐（YTM watch 视频页
+   与 .watch-top 返回键行的 padding 同源对齐（YTM watch 视频页
    同款排法）。垂直方向仍走父级 safe center——栏内只剩媒体本体，
    居中语义不变 */
 .watch-main--video {
@@ -1853,11 +1907,6 @@ export default {
   align-items: flex-start;
   text-align: left;
 }
-
-/* ⋯ 触发键钉右缘：顶行左=返回、右=更多操作两端锚（YTM watch 顶条同构）。
-   盒型吃全局 pg-icobtn（32px，触屏 ≤768 由 hit-area 媒体块升 40——
-   52px 行高仍容得下）；本层只给右锚 */
-.watch-actions-menu-btn { margin-left: auto; }
 
 /* ⋯ 菜单本体盒模型全走全局 .pg-menu 族（teleport 出 body 后 fixed 定位、
    --z-menu(1000)>watch-top(5) 顶层上下文、min-width 160、max-height
