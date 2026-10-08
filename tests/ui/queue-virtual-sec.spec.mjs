@@ -72,7 +72,7 @@ const stubScrollport = (el, { viewH = 600 } = {}) => {
 }
 // 顶 spacer 锚的 rect 随 scrollTop 反向平移（真实布局里锚钉在列表起点）——
 // listTopOf 据此算出 0，scrollTop→行号换算才有意义。锚=首个 aria-hidden
-// 直属子（裸 [aria-hidden] 选择器会先命中 queue-head 里 PixelIcon 的 svg）
+// 直属子（递归裸 [aria-hidden] 选择器会先命中行内 PixelIcon 的 svg）
 const patchAnchorRect = (w, sc) => {
   const anchor = [...sc.children].find((el) => el.getAttribute('aria-hidden') === 'true')
   Object.defineProperty(anchor, 'getBoundingClientRect', {
