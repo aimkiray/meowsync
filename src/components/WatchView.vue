@@ -163,7 +163,7 @@
             :aria-expanded="menuOpen"
             aria-controls="watch-actions-menu"
             @click="toggleMenu"
-          ><PixelIcon name="kebab" :size="18" /></button>
+          ><PixelIcon name="more" :size="18" /></button>
         </div>
 
         <!-- 歌名/歌手·专辑·时长/操作键都不在本栏——meta 与底栏播放器重复、
