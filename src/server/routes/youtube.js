@@ -1,5 +1,8 @@
 const { Hono } = require('hono');
 const streamVault = require('../lib/stream-vault');
+// 外发 Location 必须拼回部署前缀——entryFetch 剥前缀后路由按根路径工作，
+// 裸 /audio-proxy/t/… 在 BASE_PATH 子目录部署下回客户端即 404
+const { withBasePath } = require('../lib/base-path');
 const mediaCache = require('../services/media-cache');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const { rateLimit } = require('../lib/rate-limit');
@@ -339,7 +342,7 @@ app.get('/youtube/stream', async (c) => {
       codec: mediaCache.codecOf(head.mimeType) || null,
       br: head.br ?? null,
     };
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(head.url, { cacheKey, cacheMeta })}`, 302);
+    return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(head.url, { cacheKey, cacheMeta })}`), 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[youtube] stream 失败:', e.message);

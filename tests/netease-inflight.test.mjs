@@ -86,6 +86,32 @@ test('等待方 abort 不杀共享链：aborted 调用方退出，陪绑者照�
   assert.equal(resolveCalls.length, 1);
 });
 
+// proxyOrigin 回链钉板：http 源命中代理面时 item.url = 裸 origin + 部署前缀 +
+// vault 链。BASE_PATH 子目录部署下漏拼前缀 → 客户端拿根链撞 base-外 404
+// （music.js requestOrigin 只产 proto://host，前缀必须服务端自己补）
+test('resolveSongUrls：proxyOrigin 回链随 BASE_PATH 带部署前缀', async () => {
+  resolveCalls.length = 0;
+  resolveImpl = async (info) => ({
+    url: `http://m701.music.126.net/${info.id}.mp3`, br: 320000, durationSec: 200,
+  });
+  const saved = { BASE_PATH: process.env.BASE_PATH, VITE_BASE_PATH: process.env.VITE_BASE_PATH };
+  try {
+    delete process.env.BASE_PATH;
+    delete process.env.VITE_BASE_PATH;
+    const plain = await resolveSongUrls([mkItem(7777)], { proxyOrigin: 'https://demo.example' });
+    assert.equal(plain[0].url, 'https://demo.example/audio-proxy/t/tok-stub');
+
+    process.env.BASE_PATH = '/music';
+    const prefixed = await resolveSongUrls([mkItem(7778)], { proxyOrigin: 'https://demo.example' });
+    assert.equal(prefixed[0].url, 'https://demo.example/music/audio-proxy/t/tok-stub');
+  } finally {
+    for (const k of ['BASE_PATH', 'VITE_BASE_PATH']) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+});
+
 test('unlockCache 满容逐最旧淘汰而非整表清空', async () => {
   resolveCalls.length = 0;
   resolveImpl = async (info) => ({

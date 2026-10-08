@@ -4,6 +4,9 @@ const { tokenMatches } = require('../lib/token-eq');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const { rateLimit } = require('../lib/rate-limit');
 const streamVault = require('../lib/stream-vault');
+// 外发 Location 必须拼回部署前缀——entryFetch 剥前缀后路由按根路径工作，
+// 裸 /audio-proxy/t/… 在 BASE_PATH 子目录部署下回客户端即 404
+const { withBasePath } = require('../lib/base-path');
 const { matchWithBudget, toMatchedJson } = require('../services/netease-match');
 const {
   hasQqCookie, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
@@ -118,7 +121,7 @@ app.get('/qq/stream', async (c) => {
       return c.json({ code: 404, message: '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）' }, 404);
     }
     // 经 vault 换 opaque token——purl 明文带 uin/vkey/guid，不进 Location/前端可见面
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(hit.url)}`, 302);
+    return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(hit.url)}`), 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] stream 失败:', e.message);

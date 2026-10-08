@@ -26,7 +26,7 @@ cp .env.example .env
 | VITE_API_BASE_URL | - | API 地址；生产单进程部署**留空**即自动同源 |
 | VITE_API_TIMEOUT | 10000 | API 请求超时（毫秒） |
 | VITE_API_PORT | 3101 | 开发模式下的后端端口 |
-| VITE_BASE_PATH | / | 应用基础路径（子目录部署；服务端会剥离前缀，compose 自动透传——裸机部署需同时设运行时 `BASE_PATH`） |
+| VITE_BASE_PATH | / | 应用基础路径（子目录部署；服务端剥离入站前缀，外发的 `/audio-proxy/t/<token>` vault 直链等同前缀下发；compose 自动透传——裸机部署需同时设运行时 `BASE_PATH`） |
 | VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌 |
 | VITE_DOWNLOAD_TOKEN | - | 与后端 `DOWNLOAD_TOKEN` 配对的前端内嵌令牌——构建期烘进 bundle = 对全体页面访客可见。**启用登录的部署不要设**；仅无登录 LAN 部署需要浏览器写权限时才显式配置（compose build arg 不自动回落 `DOWNLOAD_TOKEN`） |
 | VITE_PORT | 3100 | 开发服务器端口 |
