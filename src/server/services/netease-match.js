@@ -107,9 +107,11 @@ const origDeclLine = (sourceInfo) => {
 };
 async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
   const ans = await askAiJson({
-    // match 路径嵌在 25s resolve 预算内——AI 单次调用收窄到 10s，
-    // 慢端点（挂起/排队）不能独占整个预算让启发式链没机会跑
-    timeoutMs: 10000,
+    // 复核/再生/兜底三处的单发时限不写死——交 askAiJson 默认链治理
+    // （AI_TIMEOUT_MS env，默认 30s，见 lib/ai.js）。慢模型部署实测单发
+    // ~16s，10s 硬编码等于把整条 AI 复核层功能关闭；总时长纪律由
+    // matchWithBudget 的 budgetMs 总闸承担（耗尽 abort 在途调用），
+    // 不靠在每发上砍时限
     system: '你是歌词源匹配助手。判断候选歌曲与来源音/视频的歌词是否同一作品'
       + LYRIC_MATCH_CRITERIA
       + '只输出 JSON {"match":true|false}。',
@@ -131,7 +133,7 @@ async function aiExtractQueries(sourceInfo, signal) {
       + '提取不出返回 {"queries":[]}。只输出 JSON。',
     user: `标题：${cleanPrompt(sourceInfo.title)}\n作者/频道：${cleanPrompt(sourceInfo.author) || '未知'}`,
     maxTokens: 96,
-    timeoutMs: 10000,
+    // 单发时限同走 AI_TIMEOUT_MS env（见 aiConfirmMatch 头注）
     signal,
   });
   const raw = Array.isArray(ans?.queries) ? ans.queries : [];
@@ -170,7 +172,7 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
       + '都不符返回 {"match":0}，能确定返回 {"match":编号}。只输出 JSON。',
     user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s）${origDeclLine(sourceInfo)}\n候选：\n${desc}`,
     maxTokens: 32,
-    timeoutMs: 10000,
+    // 单发时限同走 AI_TIMEOUT_MS env（见 aiConfirmMatch 头注）
     signal,
   });
   // match:true（模型混用 confirm 形态）Number(true)=1 会假命中第 1 候选——
