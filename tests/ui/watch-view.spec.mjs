@@ -2,9 +2,9 @@
 // 纯文本词（全行非有限 time）时露脸；busy 文案与 disabled 由
 // lyricFetching/songSwitching/loadingLyrics 透传；点击只发 emit（逻辑在
 // usePlayer 侧，见 use-player.spec.mjs 手动词务用例）。
-// 另钉媒体区 ⋯ 溢出菜单：触发键悬浮 .watch-cover-wrap 右上角（原钉顶行
-// 右缘压右栏刊头，已迁入）、操作项全量收进 teleport 菜单（音画 radio 组/
-// 沉浸/分享/下载/回源），落位/开合/焦点/条件闸断言见下方各 describe
+// 另钉 ⋯ 溢出菜单：触发键常驻页头行 .watch-head 右端（舞台化后不再叠
+// 媒体角标），操作项全量收进 teleport 菜单（音画 radio 组/沉浸/分享/
+// 下载/回源），落位/开合/焦点/条件闸断言见下方各 describe
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -66,7 +66,7 @@ afterEach(() => {
 })
 
 // ⋯ 菜单 teleport 到 body——菜单/菜单项查询一律走 document；触发键在组件内
-const menuTrigger = (w) => w.find('.watch-actions-menu-btn')
+const menuTrigger = (w) => w.find('.watch-menu-btn')
 const openActionsMenu = async (w) => {
   await menuTrigger(w).trigger('click')
   await nextTick()
@@ -244,30 +244,29 @@ describe('WatchView：⋯ 触发键落位', () => {
     youtube: { videoId: 'abcdefghijk', hasVideo: true },
   }
 
-  it('钉在媒体区 wrap 直属末尾而非顶行（宽屏顶行压右栏刊头的修复钉）', () => {
+  it('常驻页头行 .watch-head 右端——全态可见、不叠媒体（舞台化后的固定触发位）', () => {
     const w = mountWatch({ tab: 'queue' })
-    expect(w.find('.watch-top .watch-actions-menu-btn').exists()).toBe(false)
-    // wrap 直属且在媒体分支（video/img/fallback）之后——三形态共用一枚
-    const wrap = w.find('.watch-cover-wrap')
-    const btn = wrap.find(':scope > .watch-actions-menu-btn')
+    const head = w.find('.watch-head')
+    expect(head.exists()).toBe(true)
+    const btn = head.find('.watch-menu-btn')
     expect(btn.exists()).toBe(true)
-    expect(btn.element).toBe(wrap.element.lastElementChild)
+    // 媒体区不再叠触发键——旧 wrap 角标位（三形态共用一枚）退役
+    expect(w.find('.watch-cover-wrap .watch-menu-btn').exists()).toBe(false)
+    // 返回键同处页头行（左右各一）
+    expect(head.find('.watch-back').exists()).toBe(true)
   })
 
-  it('音频封面态不带 --video（常显）；视频态挂 --video、controlsVisible 驱动 --on', async () => {
-    const w0 = mountWatch({ tab: 'queue' })
-    expect(menuTrigger(w0).classes()).not.toContain('watch-actions-menu-btn--video')
-
+  it('视频态仍驻页头、不随 controlsVisible 消隐（旧 --video/--on 键族退役）', async () => {
     const prev = prefVideoOn.value
     try {
       prefVideoOn.value = true
       const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
       await vi.waitFor(() => expect(w.find('video').exists()).toBe(true))
-      const btn = menuTrigger(w)
-      expect(btn.classes()).toContain('watch-actions-menu-btn--video')
-      // isPlaying=false → controlsVisible 暂停常显支=true → --on 亮键
-      expect(w.vm.controlsVisible).toBe(true)
-      expect(btn.classes()).toContain('watch-actions-menu-btn--on')
+      const btn = w.find('.watch-head .watch-menu-btn')
+      expect(btn.exists()).toBe(true)
+      // 键族修饰类不再挂——页头触发键常显，无模式变体
+      expect(btn.classes()).not.toContain('watch-menu-btn--video')
+      expect(btn.classes()).not.toContain('watch-menu-btn--on')
     } finally { prefVideoOn.value = prev }
   })
 })

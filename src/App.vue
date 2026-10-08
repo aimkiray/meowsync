@@ -928,6 +928,15 @@ export default {
       playPlaylist: (sh) => playPlaylist(sh),
     })
 
+    // Watch 沉浸舞台令牌层（style.css :root[data-stage="watch"]）：挂在
+    // <html> 上才能让 teleport 到 body 的菜单/对话框/toast 同走舞台令牌；
+    // 离场与卸载都摘除——页面之外是 print-grid 世界
+    watch(centerView, (v) => {
+      if (v === 'watch') document.documentElement.dataset.stage = 'watch'
+      else delete document.documentElement.dataset.stage
+    }, { immediate: true })
+    onBeforeUnmount(() => { delete document.documentElement.dataset.stage })
+
     // watch 顶行「下载」键的已下载态：探测挂在 App 侧而非 usePlayer——
     // 播放链的本地档探测在 usePlayer 内部有严格的调用序契约（同曲连点/
     // 兜底链各代精确计次），不往里塞第二路同端点调用。这里只在 watch

@@ -260,18 +260,6 @@
   background: rgba(45, 211, 190, .18);
   color: var(--accent-magenta-ink);
 }
-/* watch 刊头 tab 在 glitch 下的原生选中语言已是 tint 药丸——print 版的
-   墨线下划线是外来语，双指示（药丸+线）并存是 bug，摘除 */
-:root[data-theme="glitch-restoration"] .watch-tabs .pg-tab::after { display: none; }
-/* 下划线摘除后激活态全靠药丸——print 覆盖 .watch-tabs .pg-tab--active
-   （见下 ~950）的 transparent+ink 是给墨线语写的，药丸目前只靠
-   (0,3,0) 对 (0,2,0) 的一级差压住它；该覆盖一旦被加级（scoped 化/
-   .app-shell 前缀）药丸会无声消失。抬到 (0,4,0) 与 ::after 摘除条
-   同档钉死——声明值与上行 .pg-tab--active 同步，勿各自演化 */
-:root[data-theme="glitch-restoration"] .watch-tabs .pg-tab--active {
-  background: rgba(45, 211, 190, .18);
-  color: var(--accent-magenta-ink);
-}
 /* 悬浮层：menu/suggest/toast 收圆角 + 柔影；dialog 是独立档
    （8px 半径 + 更深 .18 影——规范 window≠dialog） */
 :root[data-theme="glitch-restoration"] .pg-menu,
@@ -331,7 +319,8 @@
 /* 规范：window chrome 文本禁选（header/footer/hint），正文保持可选 */
 :root[data-theme="glitch-restoration"] .topnav,
 :root[data-theme="glitch-restoration"] .pg-tabs,
-:root[data-theme="glitch-restoration"] .watch-top {
+:root[data-theme="glitch-restoration"] .watch-head,
+:root[data-theme="glitch-restoration"] .watch-tabs {
   user-select: none;
 }
 
@@ -448,6 +437,85 @@
      全局 .app-shell 的 .4s 视图换画布（后者非主题限定，一并豁免） */
   :root[data-theme="glitch-restoration"] body,
   .app-shell { transition: none; }
+}
+
+/* ── Watch 沉浸舞台（YTM 播放页语言）──
+   App.vue 在 centerView==='watch' 期间给 <html> 挂 data-stage="watch"，
+   整壳令牌在此重映成近黑舞台：页面/组件继续吃原令牌名，极性翻转全
+   收敛在这一层——teleport 到 body 的菜单/对话框/toast 同在 <html>
+   下继承。排在 glitch 主题块之后：同特异度后声明胜出，两个主题上
+   舞台都成立；不覆写 --font-*（glitch 的像素字体在舞台内保留） */
+:root[data-stage="watch"] {
+  color-scheme: dark;
+  --stage-bg: #0b0b0b;
+  --page: var(--stage-bg);
+  --paper: #181818; /* 抬升面：菜单/对话框/输入框 */
+  --ink: #f1f1f1;
+  --ink-86: rgba(255, 255, 255, .86);
+  --ink-64: rgba(255, 255, 255, .64);
+  --ink-30: rgba(255, 255, 255, .30);
+  --ink-10: rgba(255, 255, 255, .10);
+  --ink-06: rgba(255, 255, 255, .06);
+  --label-grey: #aaa;
+  --hairline-soft: 1px solid rgba(255, 255, 255, .10);
+  --hairline: 1px solid rgba(255, 255, 255, .22);
+  --scrim: rgba(0, 0, 0, .5);
+  --scrim-strong: rgba(0, 0, 0, .65);
+  /* 舞台反白档：本色火烈鸟在 #0b0b0b 上 ~6.4:1，直接达标 */
+  --accent-magenta-ink: #ff5470;
+  /* 墨面=白——on-ink 落在墨面上的色回到纸面同款深档（白上 ~5.7:1） */
+  --accent-magenta-on-ink: #d63a5c;
+  --accent-danger-ink: #ff7a72;
+  /* 绿（ok/完成态）亮档——#3ecf8e 在 #0b0b0b 上 ~9.9:1、#181818 上 ~8.9:1 */
+  --accent-green-ink: #3ecf8e;
+  /* Watch 页不吃 1440 内容帽：顶栏内列/底栏内列/主区体同轴放宽 */
+  --content-max: 2200px;
+}
+:root[data-stage="watch"] .app-shell {
+  --view-canvas: var(--stage-bg);
+  /* 舞台氛围层（.watch-ambient z-index:-1）要画在壳背景之上——
+     isolate 把它关进壳的层叠上下文，不透到 <body> 纸色下 */
+  isolation: isolate;
+}
+
+/* ── glitch × stage 交集修补 ──
+   glitch 主题里为亮纸面写的硬编码（execute 白字/ghost 浅块/spent 灰底/
+   红色蚀刻/slate vignette）翻上暗舞台后分极失守，逐件抬回舞台令牌 */
+/* execute 键实底在舞台= #ff5470 粉：白字 ~3.1:1 → 暗字 ~5.7:1。
+   ghost 变体不吃此条——其底色是透明/白 .10，ink 亮字才对；
+   danger 键（.fb-btn--danger）另走专线，不套暗字 */
+:root[data-theme="glitch-restoration"][data-stage="watch"] .ink-btn:not(.ink-btn--ghost):not(.fb-btn--danger),
+:root[data-theme="glitch-restoration"][data-stage="watch"] .ink-btn:not(.ink-btn--ghost):not(.fb-btn--danger):hover:not(:disabled) {
+  color: var(--paper);
+}
+/* spent 键浅灰实底+白字 → 弱墨底+中灰字（仍读作禁用） */
+:root[data-theme="glitch-restoration"][data-stage="watch"] .ink-btn:disabled {
+  background: var(--ink-10);
+  color: var(--ink-64);
+}
+/* ghost hover 的 #f3f5f7 浅块在暗台上是补丁、粉字 ~2.7:1 → 白 .10 洗 */
+:root[data-theme="glitch-restoration"][data-stage="watch"] .ink-btn--ghost:hover:not(:disabled) {
+  background: var(--ink-10);
+  color: var(--ink);
+  box-shadow: none;
+}
+/* danger 确认 hover 翻红底：白字 ~3.3:1 → 暗字 ~5:1 */
+:root[data-theme="glitch-restoration"][data-stage="watch"] .fb-btn--danger:hover:not(:disabled) {
+  color: var(--stage-bg);
+}
+/* error 蚀刻层 .08/.35 在暗底近隐形 → .14/.5；左缘加重仍走本色（暗上 ~5:1） */
+:root[data-theme="glitch-restoration"][data-stage="watch"] .app-shell .app-body .watch-banner[role="alert"],
+:root[data-theme="glitch-restoration"][data-stage="watch"] .fb-toast--error {
+  background: rgba(229, 72, 77, .14);
+  border-color: rgba(229, 72, 77, .5);
+}
+:root[data-theme="glitch-restoration"][data-stage="watch"] .app-shell .app-body .watch-banner[role="alert"] {
+  border-left-color: var(--accent-danger);
+}
+/* slate vignette 在暗舞台上=把氛围场再闷一层——拔 image 层留底色 */
+:root[data-theme="glitch-restoration"][data-stage="watch"] body,
+:root[data-theme="glitch-restoration"][data-stage="watch"] .app-shell {
+  background-image: none;
 }
 
 @tailwind base;
@@ -622,17 +690,13 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    仍靠「全局先、scoped 后」的顺序让反白态继续胜出——语义兼容。
    ⚠ 白名单机制：新增的「画布内 ink-64 次级文字/图标」类必须登记到下列，
    否则在彩布上静默不达标（新主题改画布色后尤甚）。 */
-.app-shell .app-body .watch-meta, .app-shell .app-body .watch-empty,
-.app-shell .app-body .watch-lyric-line:not(.watch-lyric-line--current),
-.app-shell .app-body .queue-row-artist, .app-shell .app-body .queue-row-duration,
-.app-shell .app-body .queue-head-meta, .app-shell .app-body .queue-sec,
 .app-shell .app-body .song-artist, .app-shell .app-body .song-duration, .app-shell .app-body .song-state-text,
 .app-shell .app-body .song-state-sub,
 .app-shell .app-body .panel-state-text, .app-shell .app-body .panel-state-sub,
 .app-shell .app-body .pl-meta, .app-shell .app-body .result-section-sub,
 .app-shell .app-body .grid-state-text, .app-shell .app-body .home-section-sub, .app-shell .app-body .home-state-text,
 .app-shell .app-body .watch-banner, .app-shell .app-body .watch-autoplay,
-.app-shell .app-body .watch-lyric-translation, .app-shell .app-body .playlist-hero-sub,
+.app-shell .app-body .playlist-hero-sub,
 .app-shell .app-body .song-result-index, .app-shell .app-body .song-result-meta, .app-shell .app-body .song-result-duration {
   color: var(--ink-86);
 }
@@ -726,8 +790,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 :root { --ctrl-h: 36px; --ctrl-h-sm: 32px; }
 
 /* 页缘横槽令牌：内容视图统一 padding-inline 源（song-list/home-feed/
-   playlist-grid/watch-layout 消费；≤640 降 12——此前仅 song-list 降，
-   home/grid/watch 滞留 20） */
+   playlist-grid 消费；≤640 降 12——此前仅 song-list 降，
+   home/grid 滞留 20；watch 舞台走自带 --watch-pad-x，不吃本令牌） */
 :root { --page-pad-x: 20px; }
 @media (max-width: 640.98px) { :root { --page-pad-x: 12px; } }
 
@@ -735,8 +799,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 :root { --content-max: 1440px; }
 
 /* 底栏总高令牌：三段阶梯 69.2/65.2/61.2（= 内列 pad4+件高+pad4 + 1.2
-   发丝线 + 进度溢位不增高）。watch 左栏视频高度预算消费——栏高变动时
-   此值与 BottomPlayer 媒体块成对维护 */
+   发丝线 + 进度溢位不增高）。栏高变动时此值与 BottomPlayer 媒体块成对维护 */
 :root { --player-bar-h: 69.2px; }
 @media (max-width: 768px) { :root { --player-bar-h: 65.2px; } }
 @media (max-width: 640.98px) { :root { --player-bar-h: 61.2px; } }
@@ -944,33 +1007,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   color: var(--paper);
 }
 
-/* watch 页 tab：下划线指示替代墨块——激活态墨色升档 + 600 字重 +
-   2px 墨线骑刊头（.watch-side-head）底缘耳语线（墨块在饱和画布上读作
-   色块，线条才是标尺语）；tab 间竖向发丝分隔摘掉，留白即边界 */
-.watch-tabs .pg-tab {
-  border-right: none;
-  position: relative;
-}
-.watch-tabs .pg-tab--active {
-  background: transparent;
-  color: var(--ink);
-  font-weight: 600;
-}
-.watch-tabs .pg-tab::after {
-  content: '';
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: -1px;
-  height: 2px;
-  background: var(--ink);
-  transform: scaleX(0);
-}
-.watch-tabs .pg-tab--active::after { transform: scaleX(1); }
-@media (prefers-reduced-motion: no-preference) {
-  .watch-tabs .pg-tab::after { transition: transform .2s var(--ease-ink); }
-}
-
 /* 芯片（24px 发丝小牌：标签/热搜/筛选——与小件档 icobtn--sm 同高） */
 .pg-chip {
   display: inline-flex;
@@ -1096,11 +1132,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 
 /* 滚动链截断：弹层/内滚容器滚到缘后不再链到文档——Android 防下拉刷新
    整页重载（弹窗状态全丢），iOS 防遮罩下橡皮筋。
-   覆盖全屏遮罩与所有自成滚动器的容器；watch-view 是移动态整页滚动器。
+   覆盖全屏遮罩与所有自成滚动器的容器；watch 面板体是其唯一内滚口。
    .app-shell 恒在滚动边界（overflow:hidden），contain 在其上截断内层
    向文档的传导，兜住清单外新增滚动器的漏挂 */
-.app-shell, .atp-overlay, .fb-overlay, .pg-menu, .atp-list, .watch-view,
-.watch-main, .watch-side-body, .playlist-scroll, .dql-scroll, .dtl-scroll,
+.app-shell, .atp-overlay, .fb-overlay, .pg-menu, .atp-list,
+.watch-side-body, .playlist-scroll, .dql-scroll, .dtl-scroll,
 .topnav-suggest, .song-rows, .home-feed, .playlist-grid-wrap,
 .fb-dialog-body, .rc-queue-list {
   overscroll-behavior: contain;
@@ -1114,11 +1150,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    （待播队列滚到底卡死即此形态）。spacer 高度由 useVirtualList 全权负责，
    浏览器锚定必须关闭——新消费方滚动容器登记在此（tests/virtual-scroll-
    anchor.test.mjs 钉着本清单）。
-   .watch-side-body=WatchView 队列栏内滚口（宽屏栏内滚/移动视频分屏，
-   歌词/相关面板同用此类——静态内容关了也无害）、.watch-view=单列整页
-   滚态的真滚动器、.song-rows=歌单行容器、.playlist-grid-wrap=搜索曲列
-   滑窗口。集中公共表而非散进各组件 scoped 块：四容器一处清单，与上条
-   overscroll 登记清单同位同律 */
+   .watch-side-body=WatchView 队列栏内滚口（全态唯一内滚口——歌词/相关
+   面板同用此类，静态内容关了也无害）、.watch-view=几何滚动根的页滚
+   兜底（沉浸舞台下恒有界不滚，登记保留作契约）、.song-rows=歌单行
+   容器、.playlist-grid-wrap=搜索曲列滑窗口。集中公共表而非散进各组件
+   scoped 块：四容器一处清单，与上条 overscroll 登记清单同位同律 */
 .watch-view, .watch-side-body, .song-rows, .playlist-grid-wrap {
   overflow-anchor: none;
 }
@@ -1316,14 +1352,12 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   flex-shrink: 0;
 }
 
-/* 「接下来」分节线：mono 眉题 + 尾随发丝线——印单的分栏刻痕。
-   内缘收 .watch-side 的 pane 轴令牌（--watch-pane-inset，唯一消费方
-   是 WatchView；令牌缺席时回落 12px 同值） */
+/* 「接下来」分节线：mono 眉题 + 尾随发丝线——印单的分栏刻痕 */
 .queue-sec {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px var(--watch-pane-inset, 12px) 4px;
+  padding: 8px 12px 4px;
   font-family: var(--font-mono);
   font-weight: 300;
   font-size: 10px;
