@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import { tmpDataDir } from './helpers.mjs';
 
 // song_match 缓存走真库——DATA_DIR 先指向临时目录再触发 db/client 装载
@@ -1332,4 +1333,45 @@ test('warnFail 静默 abort：预算/断连掐断的在途云搜不记噪声 war
     assert.equal(warns.length, 1);
     assert.match(warns[0], /风控/);
   } finally { console.warn = origWarn; }
+});
+
+// ── CJK 繁简异体折叠端到端（netease-score normToken 折叠面接入打分池）──
+// 实案：yt_ 曲「懐中道標 ver.EMA」（EMA，332s）应绑网易 id=668118
+// 「懐中道标/やなぎなぎ」（338s）——同作品原唱，词文相同。修复前
+// pairTitleScore 不折叠繁简 → title=0 → title<15 封顶灰区下，逐项
+// 复核根本轮不到；折叠后 50+0+10=60 灰区走复核放行收下
+
+test('繁简异体标题端到端：翻唱源「懐中道標」× 网易「懐中道标」灰区复核收下', async () => {
+  reset();
+  apiScript = [[song(668118, '懐中道标', 338000, 'やなぎなぎ')]];
+  aiScript = [{ match: true }];
+  const r = await matchNeteaseSong(['懐中道標'], 332, 't', null,
+    { title: '懐中道標 ver.EMA', author: 'EMA', artists: ['EMA'] });
+  assert.equal(r.song.id, 668118);
+  assert.equal(r.query, '懐中道標');       // 启发式串收下，非 ai: 前缀路径
+  assert.equal(r.score, 60);               // 50+0+10 灰区——修复前 title=0 总分 10
+  assert.equal(aiCalls.length, 1);         // 复核确实发起——修复前该候选进不了灰区池
+});
+
+// ── AI 单发超时与 retry 预算钉（fs 静态断言，同 virtual-scroll-anchor
+//    的文本钉法）──────────────────────────────────────────────────────
+// 复核/再生/兜底三处 askAiJson 曾写死 timeoutMs:10000——慢模型部署（实测
+// ~16s/发）下每发必超时，AI 复核层形同关闭。单发时限归 AI_TIMEOUT_MS env
+// 治理（lib/ai.js 默认 30s）：本文件不得再出现任何 timeoutMs 覆写；
+// 总时长纪律由 matchWithBudget 的 budgetMs 总闸承担。
+// /match/retry 是唯一拿到加宽预算的 matchWithBudget 调用方（55s——客户端
+// axios 60s 超时之下留头，推导见路由内注释）；yt/bv/qq resolve 单曲路径
+// 保持默认 25s（解析链要快，预算耗尽按无匹配回落）不跟进
+const matchImplSrc = readFileSync(
+  new URL('../src/server/services/netease-match.js', import.meta.url), 'utf8');
+const matchRouteSrc = readFileSync(
+  new URL('../src/server/routes/match.js', import.meta.url), 'utf8');
+
+test('netease-match.js 三处 AI 调用不写死 timeoutMs——归 env 治理', () => {
+  assert.doesNotMatch(matchImplSrc, /timeoutMs\s*:/);
+});
+
+test('/match/retry 显式传 55s 匹配预算（客户端 60s 超时之下留头）', () => {
+  // (?![\d_]) 边界锚：值尾巴再跟数字/下划线（如 550000）时拒绝前缀误命中
+  assert.match(matchRouteSrc, /budgetMs:\s*55_?000(?![\d_])/);
 });

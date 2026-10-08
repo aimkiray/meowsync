@@ -109,6 +109,17 @@ app.post('/match/retry', async (c) => {
       reqSignal: c.req.raw.signal,
       sourceInfo: { title, author, artists, trackId },
       skipCache: true, excludeIds,
+      // 单曲重匹配是用户显式触发——客户端 axios 超时 60s（src/api/music.js
+      // retryMatch），服务端预算取 55s 留 5s 头：覆盖「≤8 串云搜（~0.5s/串）
+      // + AI_CALL_BUDGET 内数发慢模型调用（实测 ~16s/发、单发上限走
+      // AI_TIMEOUT_MS 默认 30s；askAiJson 对不兼容 response_format 的
+      // 后端会裸重试一发，单发最坏 ~2× 该值——见 lib/ai.js:116-127）」
+      // 的典型路径；matchWithBudget 默认 25s 会在 AI 复核中途把整链
+      // abort 成空结果。最坏情形（数发 × ~2×30s 串行）预算照样先到点——
+      // 耗尽按无匹配回落，不超客户端时限。
+      // 其它 matchWithBudget 调用方（yt/bv/qq resolve 单曲路径）刻意不跟进：
+      // 解析链要快，AI 是增强不是门禁，25s 预算耗尽按无匹配回落即可
+      budgetMs: 55000,
     });
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     return c.json({
