@@ -5,59 +5,91 @@
     <!-- 顶行：移动态 sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
     <div class="watch-top">
       <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
-      <!-- 操作键与返回键同排：顶行即页工具栏，左栏只留媒体本体（YTM mweb
-           播放器页同款——顶条收 collapse+操作，画面区零干扰） -->
-      <div class="watch-actions">
-        <button class="ink-btn ink-btn--ghost ink-btn--sm watch-action" @click="$emit('open-fullscreen')" title="全屏歌词模式">
-          <PixelIcon name="fullscreen" :size="14" /> 沉浸
-        </button>
-        <!-- file_ 上传曲没有源站可分享链接（?song= 只收数字 id）——死链不亮 -->
-        <button v-if="!isFileTrackId(currentSong?.id)" class="ink-btn ink-btn--ghost ink-btn--sm watch-action" @click="shareSong" :disabled="!currentSong">
-          <PixelIcon name="share" :size="14" /> 分享歌曲
-        </button>
-        <!-- 下载到服务器：file_ 上传曲资产本就在服务端（无可下对象）不亮键。
-             busy/已下载态由 songDownloading/songDownloaded 透传——提交、镜像、
-             终态轮询全在 usePlayer 侧，切歌任务照跑、键面随曲换 -->
-        <button
-          v-if="currentSong && !isFileTrackId(currentSong.id)"
-          class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
-          :disabled="songDownloading || songDownloaded"
-          :title="songDownloaded ? '已下载到服务器' : '下载到服务器'"
-          @click="$emit('download-song')"
-        ><span v-if="songDownloading" class="pixel-loading" aria-hidden="true"></span><PixelIcon v-else :name="songDownloaded ? 'check' : 'download'" :size="14" /> {{ songDownloading ? '下载中…' : (songDownloaded ? '已下载' : '下载') }}</button>
-        <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）；
-             noreferrer 不给源站带去本站 Referer -->
-        <a
-          v-if="sourceUrl"
-          class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
-          :href="sourceUrl"
-          target="_blank"
-          rel="noopener noreferrer"
-          :title="`回源：在${sourceName}打开原页`"
-        ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
-        <!-- 音画切换对「可能有视频」的曲出现；关闭即只拉音频流省流量。
-             bv/yt 按 provider 存在性出键（与 mediaVideoKey 同律）——导入标记
-             可能被裁/老数据缺标，盘上躺着档的曲也要能切回音频、VIDEO_MODE=0
-             的用户也要有入口开视频重探；裸 bv_/yt_ id（缺对象老行）凭 id
-             形态同出键；file_ 仍按 hasVideo（上传曲的标记即工件真相，探测链
-             对它关闭）。bv/yt 都有在线流位可乐观放行（yt 经 YT_PROXY 恢复）——
-             残余「判无可放」情形（hasVideo=false 的 bv 稿且无档）靠 title
-             提示降级。
-             键面文案=目标动作（点此即切到所示模式），与 title 同向——态指示
-             留给 --on 反色承担。aria-pressed 撤掉改 aria-label：pressed 报
-             当前态、文案报目标态会把「音频·已按下」读成音频在场——label
-             自带「当前 X 模式」句补回态信息。title/aria-label/键面文案同出
-             setup 的 avToggle computed——三处串单源，改文案不漂移 -->
-        <button
-          v-if="currentSong?.bilibili?.bvid || currentSong?.youtube?.videoId
-            || currentSong?.file?.hasVideo || bvM || ytM"
-          class="ink-btn ink-btn--ghost ink-btn--sm watch-action"
-          :class="{ 'watch-action--on': videoOn }"
-          @click="videoOn = !videoOn"
-          :title="`切到${avToggle.action}`"
-          :aria-label="`音画切换，当前${avToggle.current}模式，切到${avToggle.action}`"
-        ><PixelIcon name="av-switch" :size="14" /> {{ avToggle.target }}</button>
-      </div>
+      <!-- 操作全量收进 ⋯ 溢出菜单：顶行左=返回、右=触发键两端锚（YTM mweb
+           顶条同构），行内不再为五键横滚。菜单走 TopNav 同一份 pg-menu
+           方案：teleport 出 body、fixed 右缘对齐、下方放不下翻上、
+           开即焦首项、↑↓ 循环、Esc/外点/resize 关 -->
+      <button
+        ref="menuBtn"
+        class="pg-icobtn pg-icobtn--bare watch-actions-menu-btn"
+        title="更多操作"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        aria-controls="watch-actions-menu"
+        @click="toggleMenu"
+      ><PixelIcon name="kebab" :size="18" /></button>
+
+      <Teleport to="body">
+        <div
+          v-if="menuOpen"
+          id="watch-actions-menu"
+          class="pg-menu watch-actions-menu"
+          role="menu"
+          aria-label="更多操作"
+          :style="menuPos"
+          @keydown="cycleMenuItems"
+        >
+          <!-- 音画模式组：原行内「音画切换」键改写为双 radio（TopNav 主题组
+               同式）——态指示由 aria-checked + ✓ 槽承担，键面即模式名。
+               出组闸同原出键复合条件（见 setup showAvGroup）；残余
+               「判无可放」（hasPlayableVideo=false）降级提示落目标项
+               title——字符串仍出自 avToggle 单源，不另造第二套文案 -->
+          <div v-if="showAvGroup" role="group" aria-label="音画模式">
+            <div class="pg-menu-head" role="presentation">音画模式</div>
+            <button
+              class="pg-menu-item"
+              role="menuitemradio"
+              :aria-checked="!videoOn"
+              :title="videoOn ? `切到${avToggle.action}` : undefined"
+              @click="pickAvMode(false)"
+            ><span class="watch-menu-check" aria-hidden="true"><PixelIcon v-if="!videoOn" name="check" :size="12" /></span>音频</button>
+            <button
+              class="pg-menu-item"
+              role="menuitemradio"
+              :aria-checked="videoOn"
+              :title="!videoOn ? `切到${avToggle.action}` : undefined"
+              @click="pickAvMode(true)"
+            ><span class="watch-menu-check" aria-hidden="true"><PixelIcon v-if="videoOn" name="check" :size="12" /></span>视频</button>
+          </div>
+          <button class="pg-menu-item" role="menuitem" title="全屏歌词模式" :disabled="!currentSong" @click="pickFullscreen">
+            <PixelIcon name="fullscreen" :size="14" /> 沉浸
+          </button>
+          <!-- file_ 上传曲没有源站可分享链接（?song= 只收数字 id）——死链不亮 -->
+          <button
+            v-if="!isFileTrackId(currentSong?.id)"
+            class="pg-menu-item"
+            role="menuitem"
+            :disabled="!currentSong"
+            @click="pickShare"
+          ><PixelIcon name="share" :size="14" /> 分享歌曲</button>
+          <!-- 下载到服务器：file_ 上传曲资产本就在服务端（无可下对象）不亮项。
+               busy/已下载三态键面照搬原行内键——提交、镜像、终态轮询全在
+               usePlayer 侧，切歌任务照跑、项面随曲换 -->
+          <button
+            v-if="currentSong && !isFileTrackId(currentSong.id)"
+            class="pg-menu-item"
+            role="menuitem"
+            :disabled="songDownloading || songDownloaded"
+            :title="songDownloaded ? '已下载到服务器' : '下载到服务器'"
+            @click="pickDownload"
+          ><span v-if="songDownloading" class="pixel-loading" aria-hidden="true"></span><PixelIcon v-else :name="songDownloaded ? 'check' : 'download'" :size="14" /> {{ songDownloading ? '下载中…' : (songDownloaded ? '已下载' : '下载') }}</button>
+          <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）——
+               click/auxclick 都关菜单（TopNav 控制器项同型）；noreferrer
+               不给源站带去本站 Referer -->
+          <a
+            v-if="sourceUrl"
+            class="pg-menu-item"
+            role="menuitem"
+            :href="sourceUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            :title="`回源：在${sourceName}打开原页`"
+            @click="closeMenu()"
+            @auxclick="closeMenu()"
+          ><PixelIcon name="external" :size="14" /> {{ sourceName }}</a>
+        </div>
+      </Teleport>
     </div>
 
     <!-- 槽距走 scoped 层令牌：横槽 --page-pad-x（≤640→12）、宽屏四边
@@ -477,6 +509,7 @@ import { formatTime } from '../lib/format'
 import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
 import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
+import { cycleMenuItems } from '../lib/focus-trap.js'
 
 // 已下载视频档的会话缓存（mediaVideoKey → 本地 URL）：离开再进 watch 时
 // 本地档即知即挂，不等探测 RTT。模块域共享——组件每次重挂 setup 全新，
@@ -1112,17 +1145,14 @@ export default {
         || (!props.currentSong?.bilibili && bvM.value)
         || (!props.currentSong?.youtube && ytM.value)
         || downloadedVideoUrl.value))
-    // 音画切换键面单源：target=键面目标态文案、current=aria-label「当前 X
-    // 模式」的态名、action=title 与 aria-label 共用的动作短串——三个槽位
-    // 同一分支族，合在一个 computed 里出，分写两版三元必漂移。残余
-    // 「判无可放」（hasPlayableVideo=false）落「需已下载视频档」降级支
-    const avToggle = computed(() => videoOn.value
-      ? { target: '音频', current: '视频', action: '纯音频（省流量）' }
-      : {
-        target: '视频',
-        current: '音频',
-        action: hasPlayableVideo.value ? '视频模式' : '视频模式（需已下载视频档）',
-      })
+    // 音画切换文案单源：action=「切到…」动作短串，供 ⋯ 菜单音画 radio 组里
+    // 目标项的 title（当前态项不给——点它不产生动作）。残余「判无可放」
+    // （hasPlayableVideo=false）落「需已下载视频档」降级支
+    const avToggle = computed(() => ({
+      action: videoOn.value
+        ? '纯音频（省流量）'
+        : (hasPlayableVideo.value ? '视频模式' : '视频模式（需已下载视频档）'),
+    }))
     // 关层重挂=天然重试点：failed 闩若来自限流/瞬时断流（层开关不动 URL，
     // watch(mediaVideoUrl) 不会自愈），复位让这次重挂真重试——流确实死了
     // 会再 error 回闩，代价一跳
@@ -1391,6 +1421,87 @@ export default {
     const sourceUrl = computed(() => songSourceUrl(props.currentSong))
     const sourceName = computed(() => songSourceName(props.currentSong) || '源站')
 
+    // ── 顶行 ⋯ 溢出菜单（TopNav ⋯ 菜单同一份 pg-menu 方案）──
+    const menuBtn = ref(null)
+    const menuOpen = ref(false)
+    const menuPos = ref({})
+    // 音画模式组出场闸：原行内切换键的复合条件原样保留——按 provider 存在性
+    // 出项（与 mediaVideoKey 同律：导入标记可能被裁/老数据缺标，盘上躺着档
+    // 的曲也要能切回音频、VIDEO_MODE=0 的用户也要有入口开视频重探）；裸
+    // bv_/yt_ id（缺对象老行）凭 id 形态同出；file_ 仍按 hasVideo。抽成
+    // computed 供模板 v-if 与 menuPos 行数估算共用
+    const showAvGroup = computed(() =>
+      !!(props.currentSong?.bilibili?.bvid || props.currentSong?.youtube?.videoId
+        || props.currentSong?.file?.hasVideo || bvM.value || ytM.value))
+
+    const toggleMenu = () => {
+      if (menuOpen.value) { closeMenu(); return }
+      const rect = menuBtn.value?.getBoundingClientRect?.()
+      if (!rect) return
+      // 菜单高按可见行数估（item≈39/head≈36——TopNav 同公式）：下方放不下翻到上方
+      const fileTrack = isFileTrackId(props.currentSong?.id)
+      const items = (showAvGroup.value ? 2 : 0)
+        + 1                                          // 沉浸恒在
+        + (fileTrack ? 0 : 1)                        // 分享（file_ 不出项）
+        + (props.currentSong && !fileTrack ? 1 : 0)  // 下载（同 file_ 闸）
+        + (sourceUrl.value ? 1 : 0)                  // 回源
+      const h = items * 39 + (showAvGroup.value ? 36 : 0) + 8
+      menuPos.value = {
+        top: (rect.bottom + 4 + h <= window.innerHeight
+          ? rect.bottom + 4 : Math.max(8, rect.top - h - 4)) + 'px',
+        // 右缘对齐触发键右缘——菜单从顶行右端向左展开
+        right: Math.max(8, window.innerWidth - rect.right) + 'px'
+      }
+      menuOpen.value = true
+      // 菜单 teleport 到 body 末尾——不主动移焦，键盘 Tab 会穿进菜单底下
+      // 的页面内容；开菜单即聚焦第一项（.pg-menu-item 均真实 button/a，
+      // 编程聚焦在鼠标点击后不出 :focus-visible 环，鼠标用户无感）
+      nextTick(() => document.querySelector('#watch-actions-menu .pg-menu-item')?.focus())
+    }
+
+    const closeMenu = (restoreFocus = false) => {
+      const was = menuOpen.value
+      menuOpen.value = false
+      if (restoreFocus && was) menuBtn.value?.focus({ preventScroll: true })
+    }
+
+    // 点选=执行+关菜单归还焦点（TopNav pickTheme 同型：无下一跳接管焦点，
+    // 与 Esc 同为解散语义——沉浸层挂载后自己收焦点，归还先行一步无碍）
+    const pickAvMode = (on) => { videoOn.value = on; closeMenu(true) }
+    const pickFullscreen = () => { emit('open-fullscreen'); closeMenu(true) }
+    const pickShare = () => { shareSong(); closeMenu(true) }
+    const pickDownload = () => { emit('download-song'); closeMenu(true) }
+
+    // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
+    const onMenuDocPointerDown = (e) => {
+      if (!(e.target instanceof Element)) return
+      if (!e.target.closest('.watch-actions-menu, .watch-actions-menu-btn')) closeMenu()
+    }
+    // Esc 解散菜单；焦点归还仅在焦点还在菜单/触发键内时进行——
+    // 用户已把焦点挪去别处时不得强拽（TopNav onMenuKeydown 同闸）。
+    // App onGlobalKeydown 已消费的 Esc 带 defaultPrevented 戳——同发按键
+    // 只收一层让位不双收；监听须挂 window 相位才读得到戳
+    const onMenuKeydown = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || !menuOpen.value) return
+      const ae = document.activeElement
+      closeMenu(ae === menuBtn.value || !!ae?.closest?.('#watch-actions-menu'))
+    }
+    // 直传 closeMenu 会把 Event 对象塞进 restoreFocus 形参（真事件源→真值
+    // →resize 时强拽焦点）——必须包箭头（PlaylistPanel closeOnScroll 同坑）
+    const onMenuResizeClose = () => closeMenu()
+
+    onMounted(() => {
+      document.addEventListener('pointerdown', onMenuDocPointerDown)
+      window.addEventListener('keydown', onMenuKeydown)
+      // 菜单位置按开时视口算死——resize 即过期，直接关（TopNav 同律）
+      window.addEventListener('resize', onMenuResizeClose)
+    })
+    onBeforeUnmount(() => {
+      document.removeEventListener('pointerdown', onMenuDocPointerDown)
+      window.removeEventListener('keydown', onMenuKeydown)
+      window.removeEventListener('resize', onMenuResizeClose)
+    })
+
     return {
       queueContainer,
       lyricContainer,
@@ -1453,6 +1564,17 @@ export default {
       hasPlayableVideo,
       avToggle,
       onMediaVideoError,
+      menuBtn,
+      menuOpen,
+      menuPos,
+      showAvGroup,
+      toggleMenu,
+      closeMenu,
+      pickAvMode,
+      pickFullscreen,
+      pickShare,
+      pickDownload,
+      cycleMenuItems,
       pauseLyricFollow,
       onWatchTouchStart
     }
@@ -1514,8 +1636,8 @@ export default {
   /* 横槽吃 --page-pad-x 令牌：≤640 时内容区降到 12——返回键若不跟档，
      会与下方视频/封面的左缘错开 8px */
   padding: 0 var(--page-pad-x, 20px);
-  /* 窄屏装不下「返回+四操作键」时行内横滚兜底（移动端滚动条全局隐藏，
-     桌面态本规则基本不触发——scrollbar-width 双保险防溢出时出轨道） */
+  /* 行内横滚兜底退为纯保险：操作收进 ⋯ 菜单后行内只剩两枚键，实际不再
+     溢出（移动端滚动条全局隐藏——scrollbar-width 双保险防溢出时出轨道） */
   overflow-x: auto;
   scrollbar-width: none;
   /* sticky 钉顶时衬画布色——滚过的歌词/队列行不透字 */
@@ -1732,30 +1854,32 @@ export default {
   text-align: left;
 }
 
-/* 音画切换的开启态：实心反色——与 pg-tab--active 同一语义。
-   双类升特：glitch 主题有 :root[data-theme] .ink-btn--ghost 全局重写
-   (0,3,0)，单类 scoped (0,2,0) 会被压——按下态在 glitch 下曾完全
-   不可见；双类 (0,3,0) 追平后 scoped 样式加载在后胜出 */
-.watch-action.watch-action--on {
-  background: var(--ink);
-  color: var(--paper);
-}
-/* 开启态 hover：ghost hover 只给 accent-ink 字色（纸面档）——墨底上
-   那是低对比泥色；按 pg-chip--on 法则保墨底、换 on-ink 亮 accent */
-.watch-action.watch-action--on:hover:not(:disabled) {
-  color: var(--accent-magenta-on-ink);
+/* ⋯ 触发键钉右缘：顶行左=返回、右=更多操作两端锚（YTM watch 顶条同构）。
+   盒型吃全局 pg-icobtn（32px，触屏 ≤768 由 hit-area 媒体块升 40——
+   52px 行高仍容得下）；本层只给右锚 */
+.watch-actions-menu-btn { margin-left: auto; }
+
+/* ⋯ 菜单本体盒模型全走全局 .pg-menu 族（teleport 出 body 后 fixed 定位、
+   --z-menu(1000)>watch-top(5) 顶层上下文、min-width 160、max-height
+   兜矮视口——样式在该族已齐）；本层只补组分隔与 ✓ 槽两件特件。
+   音画组与后续项的分隔：组内末项命中 .pg-menu-item:last-child 无底线，
+   组后还有项时由组级发丝线补上（topnav-menu 主题组同式；无后续项不画，
+   末缘不叠双线） */
+.watch-actions-menu [role="group"]:not(:last-child) {
+  border-bottom: var(--hairline-soft);
 }
 
-/* 操作键组在 .watch-top 行内（返回键后）——不再占左栏纵向空间；
-   nowrap：换行会撑破 52px 定高行，溢出交给行内横滚 */
-.watch-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: nowrap;
+/* 音画 radio 项 ✓ 槽定宽对齐——topnav-theme-check 同手法：无图标侧
+   空槽占位，让 音频/视频 两档文字左缘对齐 */
+.watch-menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
+  color: var(--accent-magenta-ink);
 }
-
-.watch-action { font-size: 12px; }
 
 /* ── 右栏：发丝线分栏的 tab 面板 ──
    盒模型走模板工具类；本规则只剩栏内缘轴令牌（栏界标尺见 ::before）。
@@ -1846,7 +1970,7 @@ export default {
 
 /* tab 内补距收进栏内缘轴——特异度战场：glitch .pg-tab (0,3,0) 的
    padding:6px 14px 会盖全局 (0,2,0)；scoped [data-v] 钉上 (0,3,0) 平手
-   后靠后载胜（.watch-action--on 同律）。glitch 下 pill margin 2px 使
+   后靠后载胜。glitch 下 pill margin 2px 使
    文字落在轴 +2px——pill 组自身边距语言，接受这 2px */
 .watch-tabs .pg-tab { padding-inline: var(--watch-pane-inset, 12px); }
 
@@ -1971,7 +2095,7 @@ export default {
   transition: color .5s var(--ease-ink), background .5s var(--ease-ink);
 }
 .queue-mode-btn:hover { background: var(--ink-06); color: var(--ink); }
-/* 开启态实心反色——watch-action--on/pg-tab--active 同一语义（底栏
+/* 开启态实心反色——pg-tab--active 同一语义（底栏
    transport--active 用 accent 墨字，发丝盒件的 print-grid 等价是墨底纸字） */
 .queue-mode-btn--on { background: var(--ink); color: var(--paper); }
 /* 开启态 hover 保墨底——基态 hover 的 ink-06 会把按下态洗回浅色（pg-chip--on 法则） */
