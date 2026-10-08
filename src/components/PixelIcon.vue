@@ -39,6 +39,7 @@ const ICONS = {
   'note': 'M11 2h7v5h-5v11h-1v1h-1v1H7v-1H6v-1H5v-4h1v-1h1v-1h4zm0 13h-1v-1H8v1H7v2h1v1h2v-1h1z',  // memory:music-note
   'share': 'M18 17v2H4v-2zM8 15V9H4V8h1V7h1V6h1V5h1V4h1V3h1V2h2v1h1v1h1v1h1v1h1v1h1v1h1v1h-4v6zm2-2h2V7h1V6h-1V5h-2v1H9v1h1z',  // memory:upload
   'kebab': 'M7 7H3V3h4m6 4H9V3h4m6 4h-4V3h4M7 13H3V9h4m6 4H9V9h4m6 4h-4V9h4M7 19H3v-4h4m6 4H9v-4h4m6 4h-4v-4h4Z',  // memory:apps
+  'more': 'M2 13h4V9H2Zm7 0h4V9H9Zm7 0h4v-4h-4Z',  // 手拼：横向三点 ⋯——memory 集 dots-horizontal 是 24 网格 2px 细点，字重太轻；取与 kebab 同径 4×4 块保字重一致，x=2/9/16 间距 3、左右各留 2，22 网格对中线对称（凑 4px 间距只剩 1px 边距显挤）
   'close': 'M16 17h-1v-1h-1v-1h-1v-1h-1v-1h-2v1H9v1H8v1H7v1H6v-1H5v-1h1v-1h1v-1h1v-1h1v-2H8V9H7V8H6V7H5V6h1V5h1v1h1v1h1v1h1v1h2V8h1V7h1V6h1V5h1v1h1v1h-1v1h-1v1h-1v1h-1v2h1v1h1v1h1v1h1v1h-1Z',  // memory:close
   'menu': 'M18 6H4V4h14m0 5H4V7h14m0 5H4v-2h14m0 5H4v-2h14m0 5H4v-2h14Z',  // memory:format-align-justify
   'playlist': 'M3 4h10v2H3zM3 8h10v2H3zM3 12h10v2H3zM3 16h6v2H3zM16 10h4v3h-2v6h-2v-9zM12 17h6v4h-6zM14 18v2h2v-2z',  // 像素歌单：左列表杠+右下音符（memory 集无 playlist 源——手拼，音符裁缩自 note 路径）
