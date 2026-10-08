@@ -1816,11 +1816,16 @@ export default {
   background:
     linear-gradient(var(--watch-pane, transparent), var(--watch-pane, transparent)),
     var(--view-canvas, var(--paper));
-  /* 基线降灰档：全局 .pg-tabs 底线是 --hairline 实墨，本区其余分隔件
-     （queue-head 底线 / 行间分隔 / queue-sec 尾线 / queue-foot 顶隔）
-     全走 --hairline-soft——scoped (0,2,0) 压全局 (0,1,0) 局部看齐。
-     ::after 的 2px 实墨激活指示不动：墨指示骑灰基座对比反更清 */
-  border-bottom: var(--hairline-soft);
+  /* 基线摘掉：tab 条与面板首件（queue-head 自带 soft 底线/词表/相关行）
+     改靠 pane 面 + 留白分界。全局 .pg-tabs 自带 --hairline 实墨底线——
+     须显式归 0（scoped (0,2,0) 压全局 (0,1,0)），只删行实墨线会复活 */
+  border-bottom: 0;
+}
+
+/* 全局 ::after 的 bottom:-1px 是骑基线位；基线摘掉后指示线会悬出条底缘，
+   归 0 让 2px 墨指示收进条内底缘（scoped [data-v] 追加后特异度足够） */
+.watch-tabs .pg-tab::after {
+  bottom: 0;
 }
 
 /* 移动基态：不限高不内滚（YTM 整页滚动语义——队列/歌词随页流）；
