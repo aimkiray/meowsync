@@ -1,13 +1,34 @@
 <template>
-  <!-- YTM /watch 播放页：顶行返回键，左栏 媒体本体（⋯ 操作悬浮其右上角），
-       右栏 待播/歌词/相关 tab。走带/进度/音量/歌曲 meta 不重复渲染——
-       底部播放条已覆盖 -->
-  <div ref="viewEl" class="watch-view relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden wide:overflow-y-hidden" :class="{ 'watch-view--video': mediaVideoActive }" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
-    <!-- 顶行只剩返回键（五键收进媒体区 ⋯ 菜单后不再两端锚）：移动态
-         sticky 钉顶（在流占一行），宽屏 absolute 浮层不占流 -->
-    <div class="watch-top">
-      <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
+  <!-- YTM /watch 沉浸舞台：近黑底 + 封面氛围场，左列媒体舞台、右列
+       待播/歌词/相关面板（无面板底）。页头行常显收 返回+⋯。
+       走带/进度/音量/歌曲 meta 不重复渲染——底部播放条已覆盖 -->
+  <div ref="viewEl" class="watch-view" :class="{ 'watch-view--video': mediaVideoActive }" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
+    <!-- 氛围场：当前封面小图高糊放大铺全屏（fixed+z-index:-1 画在
+         app-shell 底之上、内容之下——壳层 isolation:isolate 圈住）。
+         key 换 URL 即换元素，Transition 叠化；无封面只剩舞台底色 -->
+    <div class="watch-ambient" aria-hidden="true">
+      <Transition name="watch-ambient-fade">
+        <img v-if="ambientUrl" :key="ambientUrl" :src="ambientUrl" alt="" class="watch-ambient-img" />
+      </Transition>
+      <div class="watch-ambient-scrim"></div>
     </div>
+
+    <!-- 页头行：返回 + ⋯ 触发键。常显在流——替代旧 sticky 顶条与媒体角
+         浮键（操作可发现性）；菜单本体仍 teleport 出 body -->
+    <header class="watch-head">
+      <button type="button" class="watch-back" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
+      <button
+        ref="menuBtn"
+        type="button"
+        class="watch-menu-btn"
+        title="更多操作"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        aria-controls="watch-actions-menu"
+        @click="toggleMenu"
+      ><PixelIcon name="more" :size="18" /></button>
+    </header>
 
     <Teleport to="body">
         <div
@@ -80,12 +101,11 @@
         </div>
     </Teleport>
 
-    <!-- 槽距走 scoped 层令牌：横槽 --page-pad-x（≤640→12）、宽屏四边
-         --watch-vpad 阶梯（纵分量喂 --watch-reserved-h）。侧列份额改 40%
-         ——% 的分母是栏域实宽（vw 口径不扣页槽/栏缝，声明 38% 实占 ~41%） -->
-    <div class="watch-layout flex flex-col gap-4 pb-5 pt-3 wide:grid wide:min-h-0 wide:flex-1 wide:grid-cols-[minmax(0,1fr)_min(400px,40%)] wide:gap-6">
-      <!-- ══ 左栏 ══ -->
-      <div ref="mainColEl" class="watch-main flex min-w-0 flex-col items-center overflow-visible px-2 pt-2 text-center wide:justify-center wide:overflow-y-auto" :class="{ 'watch-main--video': mediaVideoActive }">
+    <!-- 舞台列（媒体）+ 面板列：宽屏双栏网格、移动纵排（盒模型与断点
+         全收 scoped 层——布局只有一处事实源） -->
+    <div class="watch-layout">
+      <!-- ══ 媒体舞台列 ══ -->
+      <div ref="mainColEl" class="watch-main" :class="{ 'watch-main--video': mediaVideoActive }">
         <div ref="coverWrapRef" class="watch-cover-wrap"
           :class="{ 'watch-cover-wrap--video': mediaVideoActive, 'watch-cover-wrap--idle': videoFullscreen && !controlsVisible }"
           @mousemove="pokeControls" @pointerdown="pokeControls">
@@ -145,65 +165,46 @@
             :class="{ 'playing-animation': isPlaying }"
           />
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
-          <!-- ⋯ 溢出菜单触发键：操作全量收进菜单，触发键悬浮媒体区右上角
-               （原钉顶行右缘——宽屏浮层态压右栏刊头，迁入 wrap；与右下全屏键
-               同族悬浮墨片，YTM/Spotify overflow 落位同款）。放 v-if/v-else
-               链外：视频/封面/兜底三形态共用。视频态随控制层同隐同现——
-               --on 走 controlsVisible 同一条信号线（戳醒+播放 2.6s 自隐、
-               暂停常显），不自造计时器；音频封面态常显。菜单走 TopNav
-               同一份 pg-menu 方案：teleport 出 body、fixed 右缘对齐触发键、
-               下方放不下翻上、开即焦首项、↑↓ 循环、Esc/外点/resize 关 -->
-          <button
-            ref="menuBtn"
-            class="watch-actions-menu-btn"
-            :class="{ 'watch-actions-menu-btn--video': mediaVideoActive, 'watch-actions-menu-btn--on': mediaVideoActive && controlsVisible }"
-            title="更多操作"
-            aria-label="更多操作"
-            aria-haspopup="menu"
-            :aria-expanded="menuOpen"
-            aria-controls="watch-actions-menu"
-            @click="toggleMenu"
-          ><PixelIcon name="more" :size="18" /></button>
         </div>
 
         <!-- 歌名/歌手·专辑·时长/操作键都不在本栏——meta 与底栏播放器重复、
-             操作键已收进媒体区 ⋯ 菜单；左栏只剩媒体本体 + 横幅（YTM mweb 同款取舍） -->
+             操作键已收进页头 ⋯ 菜单；本列只剩媒体本体 + 横幅（YTM mweb 同款取舍） -->
 
-        <!-- 播放错误/警告在媒体下方——归属左栏信息区，不占右栏 tab 顶部 -->
+        <!-- 播放错误/警告在媒体下方、与媒体同宽——归属舞台列信息区 -->
         <div v-if="durationWarning" class="watch-banner" role="status"><span class="watch-banner-tag">warn:</span> {{ durationWarning }}</div>
         <div v-if="playbackError" class="watch-banner" role="alert"><span class="watch-banner-tag">error:</span> {{ playbackError }}</div>
       </div>
 
-      <!-- ══ 右栏：待播 / 歌词 / 相关 ══ -->
-      <aside class="watch-side relative flex min-w-0 flex-col pt-2.5 wide:min-h-0 wide:pl-6 wide:pt-0" aria-label="待播、歌词与相关">
+      <!-- ══ 面板列：待播 / 歌词 / 相关（无面板底，行级高亮即可）══ -->
+      <aside class="watch-side" aria-label="待播、歌词与相关">
 
-        <!-- 刊头：tab 群 + 右段语境 meta 同钉一条——sticky 钉顶/衬底/底缘
-             耳语线全在 head 层承担，.watch-tabs 回归纯 tab 群。meta 必须
-             兄弟级：role=tablist 只许 tab 子项，混入会破坏可访问性树 -->
-        <div class="watch-side-head">
-          <div class="pg-tabs watch-tabs" role="tablist" aria-label="播放页侧栏面板">
-            <button
-              v-for="t in TABS"
-              :key="t.key"
-              :id="`watch-tab-${t.key}`"
-              class="pg-tab"
-              :class="{ 'pg-tab--active': tab === t.key }"
-              role="tab"
-              :aria-controls="`watch-panel-${t.key}`"
-              :aria-selected="tab === t.key"
-              :tabindex="tab === t.key ? 0 : -1"
-              @click="setTab(t.key)"
-              @keydown.left.prevent="moveTab(-1)"
-              @keydown.right.prevent="moveTab(1)"
-            >{{ t.label }}</button>
-          </div>
-          <!-- 右段语境 meta 随 tab 换写：队列=源名+规模 /
-               歌词=行数+校准读数 / 相关=艺人+规模
-               （≤640 模式键已迁至队列页脚 .watch-queue-foot） -->
-          <div class="watch-side-meta">
-            <template v-if="tab === 'queue'">
-              <!-- 归属歌单在库时源名可点回歌单页（原 queue-source--link 语义，
-                   自滚动体内的 queue-head 迁入刊头） -->
+        <!-- 满宽 tab 行：等宽三档 + 激活下划线；语境行是 tablist 的兄弟级
+             （role=tablist 只许 tab 子项） -->
+        <div class="watch-tabs" role="tablist" aria-label="播放页侧栏面板">
+          <button
+            v-for="t in TABS"
+            :key="t.key"
+            :id="`watch-tab-${t.key}`"
+            type="button"
+            class="watch-tab"
+            :class="{ 'watch-tab--active': tab === t.key }"
+            role="tab"
+            :aria-controls="`watch-panel-${t.key}`"
+            :aria-selected="tab === t.key"
+            :tabindex="tab === t.key ? 0 : -1"
+            @click="setTab(t.key)"
+            @keydown.left.prevent="moveTab(-1)"
+            @keydown.right.prevent="moveTab(1)"
+          >{{ t.label }}</button>
+        </div>
+        <!-- 语境行：队列=源名+规模 / 相关=艺人+规模；歌词不出行（校准读数
+             在歌词工具条） -->
+        <div v-if="tab !== 'lyrics'" class="watch-side-meta">
+          <template v-if="tab === 'queue'">
+            <!-- 无来源名（散曲/临时队列）不出「来自」段——meta 只剩规模读数 -->
+            <template v-if="queueTitle">
+              <span>来自</span>
+              <!-- 归属歌单在库时源名可点回歌单页（原 queue-source--link 语义） -->
               <button
                 v-if="queueOwner"
                 type="button"
@@ -212,11 +213,10 @@
                 :title="`回到歌单 ${queueTitle}`"
               >{{ queueTitle }}</button>
               <span v-else class="queue-head-name queue-head-name--plain">{{ queueTitle }}</span>
-              <span v-if="queue.length" class="queue-head-meta">{{ queue.length }} 首<template v-if="queueTotalLabel"> · {{ queueTotalLabel }}</template></span>
             </template>
-            <span v-else-if="tab === 'lyrics' && currentSong" class="queue-head-meta">{{ lyrics.length }} 行 · 校准 {{ lyricOffsetLabel }}</span>
-            <span v-else-if="tab === 'related' && relatedSongs.length" class="queue-head-meta">{{ relatedHeadLabel }}</span>
-          </div>
+            <span v-if="queue.length" class="queue-head-meta">{{ queue.length }} 首<template v-if="queueTotalLabel"> · {{ queueTotalLabel }}</template></span>
+          </template>
+          <span v-else-if="tab === 'related' && relatedSongs.length" class="queue-head-meta">{{ relatedHeadLabel }}</span>
         </div>
 
         <!-- 待播队列 -->
@@ -306,20 +306,21 @@
         </div>
 
         <!-- 队列页脚钉在面板底缘（YTM UP NEXT 同构）——不挂进滚动体，
-             千行队列时不必滚到底才够得着；空队列时只剩居中开关组。
-             移动单列态随页流、视觉位置与嵌在列表尾部相同；视频分屏态
-             侧栏是有界 flex 列，flex 序把它钉在栏底（同宽屏/歌词工具条） -->
+             千行队列时不必滚到底才够得着；面板列是有界 flex 列，
+             flex 序把它钉在栏底；空队列时只剩居中开关组 -->
         <div v-show="tab === 'queue'" class="watch-queue-foot" :class="{ 'watch-queue-foot--empty': !queue.length }">
           <template v-if="queue.length">
-            <button class="ink-btn ink-btn--ghost ink-btn--sm" @click="$emit('save-queue')" title="把当前队列存成新歌单">
-              <PixelIcon name="save" :size="12" /> 存为歌单
+            <button type="button" class="watch-foot-btn" @click="$emit('save-queue')" title="把当前队列存成新歌单" aria-label="存为歌单">
+              <PixelIcon name="save" :size="15" /><span class="watch-foot-btn-label">存为歌单</span>
             </button>
             <button
-              class="ink-btn ink-btn--ghost ink-btn--sm"
+              type="button"
+              class="watch-foot-btn"
               :disabled="queue.length < 2"
               @click="$emit('clear-queue')"
               title="清空队列（保留当前播放）"
-            >清空队列</button>
+              aria-label="清空队列"
+            ><PixelIcon name="close" :size="15" /><span class="watch-foot-btn-label">清空队列</span></button>
           </template>
           <!-- ≤640 底栏减负收走 shuffle/模式键后落点在此（YTM UP NEXT 的
                队列顺序控件归队列）。不套 queue.length 闸——空队列时
@@ -384,7 +385,7 @@
                 :key="index"
                 :data-lyric-index="index"
                 class="watch-lyric-line"
-                :class="{ 'watch-lyric-line--current': index === currentLyricIndex }"
+                :class="{ 'watch-lyric-line--current': index === currentLyricIndex, 'watch-lyric-line--past': index < currentLyricIndex }"
               >
                 <p>{{ lyric.text }}</p>
                 <p v-if="lyric.translation" class="watch-lyric-translation">{{ lyric.translation }}</p>
@@ -394,10 +395,8 @@
         </div>
 
         <!-- 歌词工具条：字号调节（本机偏好）+ 时间校准（按词源入库）。
-             DOM 序钉在歌词面板之后——宽屏/视频分屏态由 flex 序收在侧栏
-             底缘（队列页脚同款钉底约定，滚动体之外恒可见）；单列整页滚
-             态靠 sticky bottom 吸附在滚动口下沿——滚词恒可够到，不必
-             翻到全表末尾（低频校准件不抢钉顶，钉顶空间留给 tabs） -->
+             DOM 序钉在歌词面板之后——面板列是有界 flex 列，flex 序把它
+             收在栏底（队列页脚同款钉底约定，滚动体之外恒可见） -->
         <div v-if="tab === 'lyrics' && currentSong" class="lyric-tools">
           <div class="lyric-tools-group" role="group" aria-label="歌词字号">
             <button type="button" class="lyric-tool" :disabled="lyricFontSize <= LYRIC_FS_MIN"
@@ -581,11 +580,10 @@ export default {
     const mainColEl = ref(null)
     const relatedEl = ref(null)
 
-    // 离场滚动记忆：换页即整卸——单列页滚 .watch-view、宽屏左栏 .watch-main、
-    // 相关栏各自还位（移动视频分屏态 view 页滚恒为 0，related 栏体自滚、
-    // 照旧按键还位）。队列/歌词两栏不存：重挂即按当前行重居中（与切 tab
-    // 同律的 centerCurrentRow），存了也会被居中盖掉；view 页滚同理——
-    // queue/lyrics tab 下单列态 scrollIntoView 连滚整页，还位只留 related
+    // 离场滚动记忆：换页即整卸——view/主列/相关栏各自还位（舞台布局下
+    // view 与主列恒非滚动口、还位恒为 0；related 栏体自滚照旧按键还位）。
+    // 队列/歌词两栏不存：重挂即按当前行重居中（与切 tab
+    // 同律的 centerCurrentRow），存了也会被居中盖掉
     const scrollRestoreCancels = []
     onMounted(() => nextTick(() => {
       for (const [key, el] of [
@@ -606,14 +604,13 @@ export default {
     })
 
     // 待播队列真虚拟滚动：滑窗替代前缀窗——队列可达千曲规模（快照自
-    // filteredSongs），前缀窗滚到底全量同构。行高 55.5px 均匀（首行
-    // 少 1px 发丝边是常量误差，overscan 吸收）；「接下来」分节线的
-    // ~28px 非行高由下方归位块折回 spacer，不再是误差项。
-    // 快照语义不挂 resetWhen——队列替换/增删不回卷。双滚动根候选：
-    // ≥901px 栏内滚或移动视频分屏态（面板体 overflow-y:auto）的
-    // queueContainer 在前、<901px 整页滚的 viewEl 殿后——每帧按
-    // computed overflow 挑「此刻真会滚的」，breakpoint/分屏翻转
-    // 不用 matchMedia。
+    // filteredSongs），前缀窗滚到底全量同构。行高 56px 均匀（overscan
+    // 吸收常量误差）；「接下来」分节线的 ~28px 非行高由下方归位块折回
+    // spacer，不再是误差项。
+    // 快照语义不挂 resetWhen——队列替换/增删不回卷。滚动根候选：
+    // 面板体 queueContainer（新舞台布局下恒为内滚口）在前、viewEl
+    // 殿后作旧式页滚兜底——每帧按 computed overflow 挑「此刻真会滚的」，
+    // breakpoint 翻转不用 matchMedia。
     // overscan 12（基线 8 +4）：快滚惯性一帧可跳 >8 行（≈444px）越过
     // 窗沿露空白帧——每边多 4 行 DOM 吸掉，代价极小。
     // pinIndex=拖拽行：拖到窗外时行仍留 DOM（--dragging 与几何基准不丢）
@@ -647,7 +644,7 @@ export default {
       scrollToIndex: queueScrollToIndex, ensureVisible: queueEnsureVisible,
     } = useVirtualList({
       source: computed(() => props.queue),
-      rowHeight: 55.5,
+      rowHeight: 56,
       overscan: 12,
       scrollRoots: () => [queueContainer.value, viewEl.value],
       pinIndex: dragIndex,
@@ -673,6 +670,12 @@ export default {
     })
 
     const coverUrl = computed(() => songCoverUrl(props.currentSong))
+    // 氛围场底图：小尺寸封面高糊放大（舞台底色由它供给）——换曲叠化
+    // 由模板 :key + Transition 承担
+    const ambientUrl = computed(() => {
+      const u = songThumbUrl(props.currentSong, 200)
+      return u ? httpsCover(u) : ''
+    })
     const artistText = computed(() =>
       (props.currentSong?.ar || props.currentSong?.artists || [])
         .map(a => a?.name).filter(Boolean).join(', ') || '未知艺术家'
@@ -871,10 +874,9 @@ export default {
     })
 
     // 「容器自身即真滚动口」判定：computed overflow-y 为 auto/scroll
-    // （与 useVirtualList.pickScroller 同口径）。命中面=宽屏栏内滚的
-    // 侧栏体 + 移动视频分屏态（≤900.98 ∧ ≥600h 媒体块）的侧栏体——
-    // 比 matchMedia 宽判多覆盖分屏一种情况；单列整页滚态侧栏体不限高
-    // （overflow visible 哑盒、scrollTop 恒 0）不命中
+    // （与 useVirtualList.pickScroller 同口径）。舞台布局下面板体恒为
+    // 内滚口（所有断点形态都有界）；viewEl 页滚只剩兜底语义——不命中时
+    // scrollIntoView/页滚路径照旧工作
     const isScrollport = (el) => {
       if (!el || !el.getClientRects().length) return false
       const oy = getComputedStyle(el).overflowY
@@ -898,10 +900,10 @@ export default {
       scrollRowIntoCenter(lyricContainer.value,
         lyricContainer.value?.querySelector(`[data-lyric-index="${i}"]`), smooth)
     }
-    // 歌词自动跟随闸：歌词容器自身是滚动口（宽屏栏内滚/移动视频分屏的
-    // 侧栏体）时跟随只滚容器内部、不动整页——恒放行。单列整页滚才需要
-    // 几何闸：歌词区没压到视口中线（用户还停在封面/操作区，或词区偏离
-    // 正中）时不把整页拽过去。切 tab 是显式请求，centerCurrentRow 不走此闸
+    // 歌词自动跟随闸：歌词容器自身是滚动口（舞台布局恒如此）时跟随只
+    // 滚容器内部——恒放行。页滚兜底态才需要几何闸：歌词区没压到视口中线
+    // （用户还停在封面/操作区，或词区偏离正中）时不把整页拽过去。
+    // 切 tab 是显式请求，centerCurrentRow 不走此闸
     const lyricsFollowable = () => {
       const c = lyricContainer.value
       if (isScrollport(c)) return true
@@ -915,9 +917,9 @@ export default {
     }
     // 手动滑动后暂停自动跟随：手指滑动/滚轮期间及之后 4s 内不抢滚动——
     // 用户往回翻或往后看歌词时不被下一行拽回。判定走 isScrollport 而非
-    // 断点：歌词容器是自有滚动口时（宽屏栏内滚/移动视频分屏）只认栏内
-    // 滑动——分屏下在视频区滑不算碰词、不暂停；单列整页滚态整页都是
-    // 滚动器，任意处滑动都算（此判据兼容并取代原 wideMq 断点）。
+    // 断点：歌词容器是自有滚动口时（舞台布局恒如此）只认栏内滑动——
+    // 在视频区/队列栏滑不算碰词、不暂停；页滚兜底态整页都是滚动器，
+    // 任意处滑动都算。
     // 竖向位移 <10px 的 touchmove 视为轻点微漂、不暂停（真机点 A+/播放键常带
     // 1–2 个）；切到歌词 tab 是显式请求，清掉暂停。targetTouches 只读本页内
     // 触点——另根手指搭在页外（如底部播放条）时基线/探测仍配对同一根手指
@@ -940,7 +942,7 @@ export default {
         scrollLyricIntoCenter(props.currentLyricIndex, false)
       } else {
         // 当前行可能在滑窗外——直接按全局下标滚到位（scrollToIndex 自动
-        // 挑当前真滚动根：宽屏/分屏 queueContainer、单列 viewEl；越界 -1 内部已挡）
+        // 挑当前真滚动根：恒为面板体 queueContainer、viewEl 页滚兜底；越界 -1 内部已挡）
         queueScrollToIndex(currentQueueIndex.value, { align: 'center' })
       }
     }
@@ -1255,7 +1257,7 @@ export default {
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
       return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video', song.file.videoV) : ''
     })
-    // 音画开关翻转 = ≤900 分屏↔整页滚换轨：面板体从哑盒变滚动口（或反之），
+    // 音画开关翻转 = 舞台/分屏几何换轨（面板体恒为滚动口但可视窗骤变），
     // 词窗骤变但 scrollTop 不动——停在词表顶部等下一个 currentLyricIndex
     // 才回正，间奏空窗可达几十秒；按当前行重居中（centerCurrentRow 内部
     // 自动挑换轨后的真滚动根）
@@ -1482,7 +1484,7 @@ export default {
     // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
     const onMenuDocPointerDown = (e) => {
       if (!(e.target instanceof Element)) return
-      if (!e.target.closest('.watch-actions-menu, .watch-actions-menu-btn')) closeMenu()
+      if (!e.target.closest('.watch-actions-menu, .watch-menu-btn')) closeMenu()
     }
     // Esc 解散菜单；焦点归还仅在焦点还在菜单/触发键内时进行——
     // 用户已把焦点挪去别处时不得强拽（TopNav onMenuKeydown 同闸）。
@@ -1532,6 +1534,7 @@ export default {
       lyricOffsetLabel,
       dragIndex,
       coverUrl,
+      ambientUrl,
       artistText,
       songArtist,
       formatDuration,
@@ -1590,149 +1593,166 @@ export default {
 </script>
 
 <style scoped>
-/* 主区页内视图（青纸画布）——走带已移除（底栏承担），信息面板垂直居中 */
-/* 布局壳的盒模型已上模板工具类（mobile-first）：移动基态单列整页滚
-   ——本层是唯一滚动器；≥901px 转双栏内滚，车道移交各栏 */
-.watch-view {
-  scrollbar-gutter: stable;
-  /* 顶条钉高：刊头 .watch-side-head 的 sticky top 与本条 height 同源
-     （--topnav-h 先例） */
-  --watch-top-h: 52px;
-  /* 刊头实高（pg-tab pad 10×2 + 12 字 + head 底缘 1.2 耳语线 ≈ 38）——
-     scroll-padding 同源 */
-  --watch-tabs-h: 38px;
-  /* 焦点滚达/scrollIntoView 的让位垫：移动单列态顶上有两层 sticky
-     （watch-top + 刊头 watch-side-head），不让位时目标行会滚到钉条底下 */
-  scroll-padding-top: calc(var(--watch-top-h, 52px) + var(--watch-tabs-h, 38px));
-  /* 宽屏布局槽距令牌（20→24→32，分档媒体块见下）：声明在本层而非
-     .watch-layout——--watch-vpad 有两个兄弟消费端（.watch-layout 的
-     padding + .watch-top 的浮层槽距：返回键行的左缘就是视频左缘
-     对齐轴），挂子元素会让兄弟够不着。--watch-reserved-h 与其同域：
-     自定义属性按已解析计算值向下继承，声明在共同祖先上后代看到的
-     都是分档后的值——同域声明为与消费端同源可读，预算只此一处 */
-  --watch-vpad: 20px;
-  /* 视频高度预算的「非媒体区」构成：顶栏 + 底栏 + 布局纵槽×2 + 视频顶补距
-     56。四个分量全走令牌——此前 223 是手算硬编码，任一分量漂移即失真 */
-  --watch-reserved-h: calc(
-    var(--topnav-h, 57.2px) + var(--player-bar-h, 69.2px)
-    + 2 * var(--watch-vpad, 20px) + 56px
-  );
-}
-/* 后声明者胜同带宽叠档：1364 必须在 1150 之后（同为 min-width 同特异性） */
-@media (min-width: 1150px) { .watch-view { --watch-vpad: 24px; } }
-@media (min-width: 1364px) { .watch-view { --watch-vpad: 32px; } }
+/* ══ Watch 沉浸舞台（YTM 播放页语言）══
+   盒模型/断点全收本层（布局单一事实源）。全态有界：view 不滚、
+   面板体恒为内滚口——脚本的几何滚动根检测保留作页滚兜底 */
 
-/* 浮层顶行：只剩返回键钉左页角（⋯ 操作键已迁入媒体区）。
-   移动基态入流 sticky——.watch-view 是真滚动器，absolute 会随内容滚走、
-   深滚后失去唯一返回路径；宽屏态改回 absolute 不占流（栏内自滚）。
-   pointer-events:none 带子让下方内容可点，仅按键自身接收点击 */
-.watch-top {
-  position: sticky;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 5;
+.watch-view {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  /* 定高 52px（10 上 + 32 ink-btn--sm + 10 下）让 tabs 钉点有单一事实源 */
-  height: var(--watch-top-h, 52px);
-  /* 列向 flex 滚动器里内容一溢出，收缩全落到本项（min-content 仅 32px 键高），
-     tabs 钉点下漏 20px 透字缝——与 .watch-tabs 同律禁缩；宽屏 absolute 出流后无效无碍 */
-  flex-shrink: 0;
-  /* 横槽吃 --page-pad-x 令牌：≤640 时内容区降到 12——返回键若不跟档，
-     会与下方视频/封面的左缘错开 8px */
-  padding: 0 var(--page-pad-x, 20px);
-  /* sticky 钉顶时衬画布色——滚过的歌词/队列行不透字 */
-  background: var(--view-canvas, var(--paper));
+  flex-direction: column;
+  overflow: hidden;
+  --watch-pad-x: 12px;
+  padding-inline: var(--watch-pad-x);
+}
+@media (min-width: 641px) {
+  .watch-view { --watch-pad-x: clamp(16px, 2.2vw, 40px); }
+}
+
+/* ── 氛围场：封面小图高糊放大铺全屏 + 双层 scrim 压回舞台黑 ── */
+.watch-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1; /* app-shell isolation:isolate 圈住——画在壳底之上、内容之下 */
   pointer-events: none;
 }
-.watch-top > * { pointer-events: auto; }
-
-/* 布局槽距：移动基态横槽吃 --page-pad-x 令牌（≤640 降 12），纵槽 pt-3/pb-5
-   留模板；≥901 四边统一 --watch-vpad（声明在 .watch-view——与 .watch-top
-   的对齐轴同源；其纵分量经 --watch-reserved-h 回喂视频预算，垫厚一分
-   视频就少一分）。侧列份额 40% 的分母是栏域实宽；≥1150 向 YTM 36% 档升
-   （400 帽过早泄气，YTM 同带侧栏 ~500 宽——min(500,36%) 因 --content-max
-   1440 帽实际止于 ~487）。队列行六件（握把 28+序 ~14+缩略 30+信息+
-   duration ~30+remove 24+add 24，含缝 ~180 固宽）核对：vw=901 侧栏
-   =40%×(901-40-24)=~335 放得下（watch 态 ≥768 侧栏 display:none，
-   无 64 轨可扣）；行内信息列弹性截断 */
-.watch-layout {
-  padding-inline: var(--page-pad-x, 20px);
-}
-@media (min-width: 901px) {
-  .watch-layout { padding: var(--watch-vpad, 20px); }
-}
-@media (min-width: 1150px) {
-  .watch-layout { grid-template-columns: minmax(0, 1fr) min(500px, 36%); }
-}
-
-/* ── 左栏：封面 + 信息 + 操作 ──
-   盒模型走模板工具类；本规则只剩宽屏双车道（见 min-width 块） */
-
-.watch-cover {
-  /* width 里的 100% 对 shrink-to-fit 父级是循环%——fallback 分支塌成 42px。
-     min() 只留物理上限，收窄交给 max-width。移动基态按视口宽取小（单列）；
-     横屏矮机再受 55svh 高约束（svh 不可识别时整条作废、回退上行声明） */
-  width: min(64vw, 320px);
-  width: min(64vw, 320px, 55svh);
-  max-width: 100%;
-  aspect-ratio: 1;
+.watch-ambient-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border: var(--hairline);
-  image-rendering: pixelated;
+  filter: blur(80px) saturate(1.4);
+  transform: scale(1.25); /* 收糊化后漏出的未覆盖缘 */
+  opacity: .55;
+}
+.watch-ambient-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 50% 0%, transparent 40%, rgba(11, 11, 11, .55) 100%),
+    linear-gradient(to bottom, rgba(11, 11, 11, .35), var(--stage-bg, #0b0b0b) 85%);
+}
+.watch-ambient-fade-enter-active,
+.watch-ambient-fade-leave-active { transition: opacity .6s ease; }
+.watch-ambient-fade-enter-from,
+.watch-ambient-fade-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .watch-ambient-fade-enter-active,
+  .watch-ambient-fade-leave-active { transition: none; }
+}
+
+/* ── 页头行：返回 + ⋯ 触发键（常显在流 40px）── */
+.watch-head {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.watch-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px 0 8px;
+  margin-left: -8px; /* 图标键视觉左缘对到栏轴（视频左缘同轴） */
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.watch-back:hover { background: rgba(255, 255, 255, .08); }
+.watch-menu-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.watch-menu-btn:hover { background: rgba(255, 255, 255, .08); }
+.watch-back:focus-visible,
+.watch-menu-btn:focus-visible,
+.watch-video-toggle:focus-visible,
+.watch-video-fs:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, .75);
+}
+
+/* ── 布局：单列纵排为基态（移动有界），双栏态见底部媒体块 ── */
+.watch-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+.watch-main {
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.watch-main--video { align-items: flex-start; }
+
+/* 媒体盒：单列态封面 ≤28svh 方形居中、视频满宽 16:9；双栏态改容器单位 */
+.watch-cover-wrap {
+  position: relative; /* 控制层/全屏键的锚 */
+  flex-shrink: 0;
+  width: min(100%, 28svh);
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden; /* 收 media 圆角 */
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .5);
+}
+.watch-cover-wrap--video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  box-shadow: none;
+}
+.watch-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
-
+.watch-cover--video {
+  object-fit: contain;
+  background: #000;
+  touch-action: manipulation; /* 点画面=播放/暂停——禁双击缩放延迟 */
+}
 .watch-cover--fallback {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 蚀刻兜底板：画布上一格墨洗，纸面实白在饱和画布上断层；
-     note glyph 经画布白名单升 ink-86（图标 3:1 线） */
   color: var(--ink-64);
   background: var(--ink-06);
 }
 
-/* 外部导入曲视频模式：16:9 信箱（外部视频多为横屏，方形裁切会砍画面）；
-   image-rendering 像素化是封面的印刷效果，视频不该继承。
-   宽恒 100% 贴 wrap——视频盒的实际尺寸由 wrap 承担（移动基态 wrap=栏宽；
-   宽屏 wrap 按视口高换算公式，见 min-width 块） */
-.watch-cover--video {
-  width: min(100%, 1280px);
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
-  image-rendering: auto;
-  background: #000;
-  /* 点画面=播放/暂停——禁掉双击缩放手势带来的 ~300ms 点击延迟 */
-  touch-action: manipulation;
+/* ≤640 视频贴缘出血：负边距吃回页槽、去圆角。width 须一并加双槽——
+   width:100% 只够到栏盒，负边距会把右缘短口留在屏内（实测右缺 ~2×槽） */
+@media (max-width: 640.98px) {
+  .watch-cover-wrap--video {
+    width: calc(100% + 2 * var(--watch-pad-x));
+    margin-inline: calc(-1 * var(--watch-pad-x));
+    border-radius: 0;
+  }
 }
 
-/* wrap 是媒体区悬浮件的定位锚：视频悬停控制层（inset:0）与右上 ⋯ 触发键
-   都钉在它上面——relative 原只在 --video 变体上声明，封面/兜底形态的
-   ⋯ 键同要锚住，提为基态共用 */
-.watch-cover-wrap { position: relative; }
-
-/* 视频态 wrap 移动基态占满栏宽：wrap 是 shrink-to-fit 的 flex 项，不给宽
-   则视频 width:% 与 wrap 构成循环约束、退回片源内建宽；宽屏改由 min()
-   公式贴视频盒（见 min-width 块——控制层 inset:0 锚 wrap，wrap 必须
-   精确包住画面）。
-   高帽 ~70dvh：横屏矮机上全宽视频（804×452）会把 tabs 顶到滚不可及——
-   封面态早有 55svh 同款帽，视频态补上；124dvh 宽 ≈ 70dvh 高（×9/16）。
-   三档递进：min() 不识的旧内核整条作废回退上行 100%（循环% 塌缩风险
-   见 .watch-cover 注释——100% 那行是兜底不是冗余）；vh 档兜识 min
-   不识 dvh 的内核（Chrome 88–107/Safari<15.4） */
-.watch-cover-wrap--video {
-  width: 100%;
-  width: min(100%, 124vh);
-  width: min(100%, 124dvh);
-}
-
-/* 视频悬停控制层：默认隐，JS --on 驱动露出（戳醒 2.6s 自隐，暂停常显；
-   全屏/非全屏/触屏同律——CSS :hover 与 hover:none 都会让控件恒显压屏，
-   故全态移交 JS）；键盘 Tab 由 :has(:focus-visible) 兜底露出——透明度
-   为 0 的键可聚焦但不可见是键盘陷阱。层自身不吃指针，穿透到视频/行
-   背景，两枚子键各开 pointer-events */
+/* 视频悬停控制层：默认隐，JS --on 驱动露出（戳醒 2.6s 自隐，暂停常显）；
+   键盘 Tab 由 :has(:focus-visible) 兜底露出——透明可聚焦键是键盘陷阱 */
 .watch-video-controls {
   position: absolute;
   inset: 0;
@@ -1744,316 +1764,218 @@ export default {
   pointer-events: none;
 }
 .watch-video-controls--on,
-.watch-cover-wrap--video:has(:focus-visible) .watch-video-controls {
-  opacity: 1;
-}
-/* 子键 pointer-events 随可见性走：层隐（opacity 0）时键不可见也不可点——
-   否则静止画面上的点击会命中隐形全屏键；键盘焦点露出态同样恢复可点 */
+.watch-cover-wrap--video:has(:focus-visible) .watch-video-controls { opacity: 1; }
 .watch-video-controls :is(.watch-video-toggle, .watch-video-fs) { pointer-events: none; }
 .watch-video-controls--on :is(.watch-video-toggle, .watch-video-fs),
 .watch-cover-wrap--video:has(:focus-visible) :is(.watch-video-toggle, .watch-video-fs) {
   pointer-events: auto;
 }
-/* 键盘焦点露出用 :has(:focus-visible) 而非 :focus-within——鼠标点过的键
-   持 :focus 不持 :focus-visible：focus-within 会把控件钉成恒显（配合
-   cursor:none 形成「恒显控件+消失光标」的最坏组合）。range 拖杆点击
-   持 :focus-visible——焦点在可操作件上就该常显，语义正确。
-   无 :has 的老浏览器退 focus-within：宁恒显勿键盘陷阱 */
+/* 无 :has 的老内核退 focus-within：宁恒显勿键盘陷阱 */
 @supports not (selector(:has(:focus-visible))) {
   .watch-cover-wrap--video:focus-within .watch-video-controls { opacity: 1; }
-  .watch-cover-wrap--video:focus-within :is(.watch-video-toggle, .watch-video-fs) {
-    pointer-events: auto;
-  }
-  .watch-cover-wrap--video:focus-within .watch-actions-menu-btn--video {
-    opacity: 1;
-    pointer-events: auto;
-  }
+  .watch-cover-wrap--video:focus-within :is(.watch-video-toggle, .watch-video-fs) { pointer-events: auto; }
 }
-/* 全屏下控件收掉时连光标一起隐——同沉浸页/流媒体播放器的 idle 手势 */
+/* 全屏下控件收掉时连光标一起隐——流媒体播放器的 idle 手势 */
 .watch-cover-wrap--idle { cursor: none; }
-
 @media (prefers-reduced-motion: reduce) {
-  .watch-video-controls, .watch-video-toggle, .watch-video-fs, .watch-actions-menu-btn { transition: none; }
+  .watch-video-controls, .watch-video-toggle, .watch-video-fs { transition: none; }
 }
 
-/* 中央播放/暂停：半透明墨底圆形——像素风的方角体系里，圆形是「媒体
-   传输键」的跨站通用符（YouTube/Netflix 同款），特意破例 */
 .watch-video-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   border: 0;
   border-radius: 50%;
   background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   color: #fff;
   cursor: pointer;
-  transition: background .15s ease, transform .15s ease;
+  transition: background .15s, transform .15s;
 }
 .watch-video-toggle:hover { background: rgba(0, 0, 0, .75); transform: scale(1.06); }
-/* 焦点环白描边在亮画面（MV 高光帧）下不可见——外圈补暗晕保证双底色可读；
-   box-shadow 随 border-radius 走，圆键得圆环、方角键得方晕 */
-.watch-video-toggle:focus-visible,
-.watch-video-fs:focus-visible,
-.watch-actions-menu-btn:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(0, 0, 0, .75);
-}
-
-/* 右下全屏键：同款半透明墨底，方角小键贴视频下缘 */
 .watch-video-fs {
   position: absolute;
-  right: 10px;
-  bottom: 10px;
+  right: 12px;
+  bottom: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: 0;
+  border-radius: 50%;
   background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   color: #fff;
   cursor: pointer;
-  transition: background .15s ease;
+  transition: background .15s;
 }
 .watch-video-fs:hover { background: rgba(0, 0, 0, .75); }
 
-/* ⋯ 溢出菜单触发键：媒体区右上角悬浮墨片——与右下全屏键同族（32px 方角
-   小键、rgba(0,0,0,.55) 深底、hover .75）、inset 同轴 10px。原钉顶行
-   右缘，宽屏浮层态压右栏刊头（tab 群），迁入 wrap 后顶行只剩返回键；
-   封面态压封面右上角（YTM/Spotify overflow 落位同款）。菜单体仍
-   teleport 出 body——顶层上下文与本键位置无关 */
-.watch-actions-menu-btn {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  background: rgba(0, 0, 0, .55);
-  color: #fff;
-  cursor: pointer;
-  transition: background .15s ease;
-}
-.watch-actions-menu-btn:hover { background: rgba(0, 0, 0, .75); }
-/* 视频态随控制层同隐同现：--on 由 controlsVisible 驱动——与
-   .watch-video-controls--on 同一条信号线（戳醒/暂停常显/播放中 2.6s
-   自隐），不自造计时器；音频封面态无 --video 类、常显。键盘 Tab 由
-   wrap :has(:focus-visible) 兜底露出——opacity 0 的可聚焦键是键盘
-   陷阱（悬浮键族同律，见 .watch-video-controls 注） */
-.watch-actions-menu-btn--video {
-  opacity: 0;
-  pointer-events: none;
-  transition: background .15s ease, opacity .16s ease;
-}
-.watch-actions-menu-btn--video.watch-actions-menu-btn--on,
-.watch-cover-wrap--video:has(:focus-visible) .watch-actions-menu-btn--video {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* 元素全屏态：wrap 黑场居中，视频吃满屏（16:9 信箱由 object-fit:contain
-   兜住，宽高 100% 只为占满容器）；悬停控制层此时仍在屏内可用。
-   :-webkit-full-screen 是 Safari≤16.3 的旧伪类——不能并进 :fullscreen
-   选择器组（不识别的伪类会让整条规则作废），单列一份 */
+/* 元素全屏：wrap 黑场满屏居中（:-webkit-full-screen 单列——不识伪类会让
+   整条规则作废） */
 .watch-cover-wrap:fullscreen {
-  /* 宽高显式钉满屏：UA 全屏表（width:100%!important）在现代引擎已兜住，
-     显式声明是给没有这条 UA 规则的旧 WebKit 兜底——否则 wrap 的 min()
-     宽公式会把全屏画面卡在小屏预算里 */
   width: 100%;
   height: 100%;
+  border-radius: 0;
   background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.watch-cover-wrap:fullscreen .watch-cover--video {
-  width: 100%;
-  height: 100%;
-  border: 0; /* .watch-cover 的墨发丝框在纯黑场里只剩噪点 */
-}
+.watch-cover-wrap:fullscreen .watch-cover--video { width: 100%; height: 100%; }
 .watch-cover-wrap:-webkit-full-screen {
   width: 100%;
   height: 100%;
+  border-radius: 0;
   background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.watch-cover-wrap:-webkit-full-screen .watch-cover--video {
-  width: 100%;
-  height: 100%;
-  border: 0;
-}
+.watch-cover-wrap:-webkit-full-screen .watch-cover--video { width: 100%; height: 100%; }
 
-/* 全屏态藏 ⋯：菜单体 teleport 在 body——元素全屏的 top layer 只画 wrap
-   子树，fixed 菜单开出来不可见，留着是颗死键（canElementFs 藏键同律）。
-   全屏可用化要先把 teleport 目标收进 wrap */
-.watch-cover-wrap:fullscreen .watch-actions-menu-btn,
-.watch-cover-wrap:-webkit-full-screen .watch-actions-menu-btn { display: none; }
-
-/* 视频态整栏转左缘构图：剥 px-2 内补距让播放器左缘落在页缘 20px——
-   与 .watch-top 返回键行的 padding 同源对齐（YTM watch 视频页
-   同款排法）。垂直方向仍走父级 safe center——栏内只剩媒体本体，
-   居中语义不变 */
-.watch-main--video {
-  padding-left: 0;
-  padding-right: 0;
-  align-items: flex-start;
-  text-align: left;
-}
-
-/* ⋯ 菜单本体盒模型全走全局 .pg-menu 族（teleport 出 body 后 fixed 定位、
-   --z-menu(1000)>watch-top(5) 顶层上下文、min-width 160、max-height
-   兜矮视口——样式在该族已齐）；本层只补组分隔与 ✓ 槽两件特件。
-   音画组与后续项的分隔：组内末项命中 .pg-menu-item:last-child 无底线，
-   组后还有项时由组级发丝线补上（topnav-menu 主题组同式；无后续项不画，
-   末缘不叠双线） */
-.watch-actions-menu [role="group"]:not(:last-child) {
-  border-bottom: var(--hairline-soft);
-}
-
-/* 音画 radio 项 ✓ 槽定宽对齐——topnav-theme-check 同手法：无图标侧
-   空槽占位，让 音频/视频 两档文字左缘对齐 */
-.watch-menu-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--accent-magenta-ink);
-}
-
-/* ── 右栏：发丝线分栏的 tab 面板 ──
-   盒模型走模板工具类；本规则只剩栏内缘轴令牌（栏界标尺见 ::before）。
-   栏不铺面——面板群直接坐在画布上，钉顶刊头/钉底工具条以画布色衬底
-   防滚过内容透字（各自规则内单铺 --view-canvas） */
-
-.watch-side {
-  /* 栏内缘轴：刊头 tab 内补距 / 右段 meta 端距 / queue-sec 内缘 /
-     queue-foot·lyric-tools 框内 padding-inline 共用这一道 12px 轴——
-     行族（queue-row/related）不入轴：记账线语法自有 4–6px 纪律。
-     （令牌名里的 pane 是退役墨洗面的遗留，现只作排版轴语义保留） */
-  --watch-pane-inset: 12px;
-}
-
-/* 栏界羽化标尺：ink-30 细线、两端渐隐——画布上的蚀刻栏缘。
-   移动基态转横（单列态栏界在上方）；≥901px 回竖版（见 min-width 块） */
-.watch-side::before {
-  content: '';
-  position: absolute;
-  left: 24px;
-  right: 24px;
-  top: 0;
-  height: 1.2px;
-  background: linear-gradient(to right, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
-  pointer-events: none;
-}
-
-/* 状态横幅：蚀刻发丝牌 + 戳记标签（warn:/error:）——居左栏沉浸键下方，
-   宽与封面同轴。墨洗底+实墨框=画布上的印版；纸面实填会读作画布上贴的补丁 */
+/* 横幅：媒体下方的深色小片，宽与媒体同轴（双栏态改容器单位） */
 .watch-banner {
-  margin-top: 14px;
-  padding: 8px 10px;
-  font-size: 11px;
-  background: var(--ink-06);
-  border: var(--hairline);
-  color: var(--ink);
-  flex-shrink: 0;
-  /* 宽与封面同轴——移动基态跟随封面 min(64vw,320px[,55svh])：
-     横屏矮机上封面按 55svh 收缩，横幅不跟上就会比封面还宽 */
-  width: min(64vw, 320px);
-  width: min(64vw, 320px, 55svh);
+  margin-top: 12px;
+  width: min(100%, 36svh);
   max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .06);
+  font-size: 12px;
+  color: var(--ink-86);
   text-align: left;
 }
-
-/* 危险戳记：墨红底+纸字反白——danger-ink 字色落在画布洗底上仅 ~2.1:1
-   （纸面时代的余量），戳记片回到 ~6:1 且是印单的危险戳语义 */
+.watch-view--video .watch-banner { width: 100%; }
 .watch-banner-tag {
   font-family: var(--font-mono);
-  font-weight: 300;
-  letter-spacing: .05em;
+  font-size: 10px;
   padding: 1px 5px;
-  margin-right: 2px;
+  margin-right: 4px;
+  border-radius: 4px;
   background: var(--accent-danger-ink);
-  color: var(--paper);
+  color: var(--stage-bg, #0b0b0b);
 }
-/* 分极：warn 是墨戳（中性警示非危险）——error 保 accent-danger-ink 红戳 */
 .watch-banner[role="status"] .watch-banner-tag { background: var(--ink); }
 
-/* 刊头：tab 群 + 右段语境 meta 的同一条钉头。
-   单列整页滚下随页流走会迫使深滚用户滚回顶——钉在顶条之下
-   （top 与 --watch-top-h 同源；宽屏块与移动视频分屏块内复位
-   static——有界/非滚动 scrollport 上 sticky 的 inset 约束仍生效，
-   不复位会被强压 32px）。
-   滚过内容不透字：衬底单铺画布色（--view-canvas 随主题换纸，
-   缺省回落 paper）——半透明衬底会让滚过的行透字。
-   底缘耳语线与 queue-foot 顶线/行分隔同口径（hairline-soft）——
-   tab 激活指示 ::after 的 bottom:-1px（全局）恰骑此线，不再另收 */
-.watch-side-head {
+/* ── 面板列：无底——行级 hover/当前高亮即可 ── */
+.watch-side {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  flex-shrink: 0;
-  position: sticky;
-  top: var(--watch-top-h, 52px);
-  z-index: 4;
-  border-bottom: var(--hairline-soft);
-  background: var(--view-canvas, var(--paper));
+  flex-direction: column;
 }
-
-/* tabs 回归纯 tab 群：底线摘除——刊头界线由 head 的耳语线承担，全局
-   .pg-tabs 自带 --hairline 实墨底线须显式归 0（scoped (0,2,0) 压全局
-   (0,1,0)，只删行实墨线会复活） */
+/* tab 行：满宽等分三档，激活 = 墨字 + 2px 下划线 */
 .watch-tabs {
   flex-shrink: 0;
-  border-bottom: 0;
+  display: flex;
+  border-bottom: var(--hairline-soft);
+}
+.watch-tab {
+  flex: 1;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-64);
+  cursor: pointer;
+  transition: color .2s;
+}
+.watch-tab:hover { color: var(--ink); }
+.watch-tab--active { color: var(--ink); }
+.watch-tab::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--ink);
+  transform: scaleX(0);
+}
+.watch-tab--active::after { transform: scaleX(1); }
+@media (prefers-reduced-motion: no-preference) {
+  .watch-tab::after { transition: transform .2s var(--ease-ink); }
 }
 
-/* tab 内补距收进栏内缘轴——特异度战场：glitch .pg-tab (0,3,0) 的
-   padding:6px 14px 会盖全局 (0,2,0)；scoped [data-v] 钉上 (0,3,0) 平手
-   后靠后载胜。glitch 下 pill margin 2px 使
-   文字落在轴 +2px——pill 组自身边距语言，接受这 2px */
-.watch-tabs .pg-tab { padding-inline: var(--watch-pane-inset, 12px); }
-
-/* 刊头右段语境 meta：右对齐单行，min-width:0 闸下源名（flex:1 +
-   ellipsis）先吃截断——901–1023 窄带侧栏 ~335–380px 下
-   tabs(~160)+meta 不破行。右端距收栏内缘轴 */
+/* 语境行：队列=源名+规模 / 相关=艺人+规模（36px 矮行，歌词不出行） */
 .watch-side-meta {
+  flex-shrink: 0;
+  height: 36px;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
   min-width: 0;
-  padding-right: var(--watch-pane-inset, 12px);
+  font-size: 12px;
+  color: var(--ink-64);
   white-space: nowrap;
   overflow: hidden;
 }
+.watch-side-meta .queue-head-name { font-size: 12px; }
 
-/* 移动基态：不限高不内滚（YTM 整页滚动语义——队列/歌词随页流）；
-   ≥901px 回栏内滚（flex:1+min-height:0+overflow，见 min-width 块）。
-   例外：移动视频分屏态侧栏体也内滚（max-width:900.98 ∧ min-height:600
-   媒体块——上行视频钉住、下行面板体自滚） */
+/* 面板体：全态恒为内滚口（虚拟滑窗/歌词跟随的滚动根）；
+   container-type:size 让歌词 35cqh 内边距以面板高为参照 */
 .watch-side-body {
-  padding-top: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 4px;
+  container-type: size;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .2) transparent;
+  scrollbar-gutter: stable;
 }
 
 .watch-empty {
   text-align: center;
-  padding: 32px 16px;
-  font-size: 12px;
+  padding: 48px 16px;
+  font-size: 13px;
   color: var(--ink-64);
 }
 
-/* 拖拽把手悬停/聚焦/拖拽中才显形——常显是每行常驻的视觉噪音
-   （与 queue-row-remove/row-add-btn 同纪律），隐形态仍占位保对齐 */
+/* ── 队列/相关行族（YTM 密度：56px 行、40px 缩略）── */
+.watch-side-body .queue-row {
+  padding: 8px;
+  gap: 8px;
+  border-radius: 8px;
+}
+.watch-side-body .queue-row + .queue-row { border-top: none; }
+.watch-side-body .queue-row-main { gap: 10px; padding: 0; }
+.watch-side-body .queue-row--current { box-shadow: none; } /* accent 书脊退役——当前行=白 .10 块+等幅器 */
+/* 已播行只淡标题（缩略图/序号读数保持原亮） */
+.watch-side-body .queue-row--played { opacity: 1; }
+.watch-side-body .queue-row--played .queue-row-title { color: var(--ink-64); }
+.watch-side-body .queue-row-title { font-size: 14px; }
+.watch-side-body .queue-row-artist,
+.watch-side-body .queue-row-duration { font-size: 12px; }
+.watch-side-body .queue-row--dragging { background: var(--ink-10); }
+.watch-queue-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.watch-queue-thumb--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-64);
+  background: var(--ink-06);
+}
+
+/* 拖拽把手：悬停/聚焦/拖拽中才显形（触控恒显——同 remove/add 键纪律） */
 .watch-grip {
   flex-shrink: 0;
   width: 20px;
@@ -2064,7 +1986,7 @@ export default {
   background: none;
   border: none;
   padding: 0;
-  color: var(--ink-86);
+  color: var(--ink-64);
   cursor: grab;
   touch-action: none;
   opacity: 0;
@@ -2076,390 +1998,281 @@ export default {
 .queue-row--dragging .watch-grip,
 .watch-grip:focus-visible { opacity: 1; pointer-events: auto; }
 .watch-grip:hover { color: var(--ink); }
-.watch-grip:active { cursor: grabbing; color: var(--ink); } /* teal 画布上 -ink 档仅 2.17:1，拖拽态用实墨 */
-
-/* 触屏无 hover——把手常显（且升到实墨，半透明档不可见）；
-   宽 20→28px 够到 24px 触控地板外沿，也给拖拽一根能抓住的条 */
-@media (hover: none){
+.watch-grip:active { cursor: grabbing; color: var(--ink); }
+@media (hover: none) {
   .watch-grip { opacity: 1; pointer-events: auto; color: var(--ink); width: 28px; }
 }
 
-/* 相关行点击区已收进 .queue-row-main（行容器化以容纳行尾 + 键），cursor 由它提供 */
-/* 相关行没有 remove 键——补其占位（24px 键 + 6px 行 gap，与
-   .queue-row--current 同法）让时长列与队列行对轴。左缘 26px 差有意
-   保留：队列行的拖拽握把槽是 affordance 税，相关行不付 */
+/* 「接下来」分节线：12px 弱字 + 顶距，不画线 */
+.watch-side-body .queue-sec {
+  padding: 18px 8px 6px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.watch-side-body .queue-sec::after { content: none; }
+
+/* 相关行没有 remove 键——补其占位让时长列与队列行对轴 */
 .watch-related-row .queue-row-main { margin-right: 30px; }
 
-.queue-row--dragging {
-  outline: 1.2px solid var(--accent-magenta-ink); /* 指示线走深档（火烈鸟本色 ~2.3:1 过浅） */
-  outline-offset: -4px;
-  /* 抓住的行吃最深档墨洗（当前行 ink-10 同槽位——accent 轮廓环负责区分语义）；
-     纸面实白在画布上是断层 */
-  background: var(--ink-10);
-}
-
-.watch-queue-thumb {
-  width: 30px;
-  height: 30px;
-  object-fit: cover;
+/* ── 面板页脚（钉栏底）── */
+.watch-queue-foot,
+.lyric-tools {
   flex-shrink: 0;
-  border: var(--hairline);
-  image-rendering: pixelated;
-}
-
-.watch-queue-thumb--fallback {
   display: flex;
   align-items: center;
-  justify-content: center;
-  /* 蚀刻空槽：墨洗底 + 保留实墨框（与有封面的瓦同框才是一列格，
-     框降档会读成残缺）。note glyph 经画布白名单升 ink-86 */
-  color: var(--ink-64);
-  background: var(--ink-06);
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: var(--hairline-soft);
 }
+/* 空队列只剩偏好组——去线居中，不吊在角落 */
+.watch-queue-foot--empty { border-top: none; justify-content: center; }
 
-/* 队列页脚模式对：底栏 ≤640 减负后 shuffle/模式在本页的落点（YTM UP
-   NEXT 的队列顺序控件归队列）。居 .watch-autoplay 左邻成右端偏好
-   器械组；foot 的 align-items:center 兜住它与 ghost 键（~32px）
-   的高差。联排器械化：外轮廓走 outline（不占盒高保 24px 地板），
-   格间发丝内隔——与 .lyric-tools-group 同纪律。
-   ≥641 由底栏承担，此处不渲染槽位 */
+/* 幽灵胶囊键（页脚动作：存为歌单/清空队列） */
+.watch-foot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.watch-foot-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .08); }
+.watch-foot-btn:disabled { opacity: .45; cursor: default; }
+
+/* ≤640 底栏减负收走 shuffle/模式键后落点在此——圆胶囊联排组 */
 .queue-modes { display: none; }
 @media (max-width: 640.98px) {
-  .queue-modes { display: flex; align-items: stretch; gap: 0; outline: var(--hairline); }
-  .queue-modes > * + * { border-left: var(--hairline-soft); }
+  .queue-modes {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+  }
 }
-/* 盒型镜像 .lyric-tool：24px 触控地板 + ink-86 图形；边框摘除——
-   联排外轮廓由 .queue-modes 的 outline 承担，格间只留内隔线 */
 .queue-mode-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 24px;
-  min-height: 24px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 3px;
   border: 0;
+  border-radius: 50%;
   background: transparent;
   color: var(--ink-86);
   cursor: pointer;
-  transition: color .5s var(--ease-ink), background .5s var(--ease-ink);
 }
-.queue-mode-btn:hover { background: var(--ink-06); color: var(--ink); }
-/* 开启态实心反色——pg-tab--active 同一语义（底栏
-   transport--active 用 accent 墨字，发丝盒件的 print-grid 等价是墨底纸字） */
-.queue-mode-btn--on { background: var(--ink); color: var(--paper); }
-/* 开启态 hover 保墨底——基态 hover 的 ink-06 会把按下态洗回浅色（pg-chip--on 法则） */
-.queue-mode-btn--on:hover { background: var(--ink); color: var(--accent-magenta-on-ink); }
-/* 盒件内环（印刷签名——.lyric-tool 在全局内环名单，本件 scoped 补同款） */
-.queue-mode-btn:focus-visible { outline-offset: -4px; }
-/* HC 下底色态被系统色抹平——透明 outline 被强制显色，反白态不留失 */
-@media (forced-colors: active) {
-  .queue-mode-btn--on { outline: 1.2px solid transparent; }
-  /* banner-tag 实底戳记片同被抹平——透明 outline 保戳片形制（同上例） */
-  .watch-banner-tag { outline: 1.2px solid transparent; }
-}
+.queue-mode-btn:hover { background: rgba(255, 255, 255, .08); color: var(--ink); }
+.queue-mode-btn--on,
+.queue-mode-btn--on:hover { background: rgba(255, 255, 255, .9); color: #0b0b0b; }
 
-/* 队列页脚：发丝顶隔把操作/偏好收成一条栏，与行列表的记账线呼应。
-   顶隔贴死末行底缘（margin 悬空会让线读成「最后一卡的下边框带间隙」）；
-   行间分隔靠 .queue-row + .queue-row 的 border-top 同口径。
-   与 .lyric-tools 同框纪律：padding 8px + 内缘轴、min-height 48——
-   框统一，控件档差不拉平（32px ghost 动作 vs 24px 器械键各守其档）。
-   ≤900 单列整页滚态有意不随 .lyric-tools 吸底（无 sticky bottom）——
-   页脚件（存为/清空/≤640 模式/自动播放）是低频操作与偏好，词工具是
-   随读随调的仪器，常驻价值不同档；吸底还会常驻占去一行队列的可视高。
-   钉底语义只留在有界栏态（宽屏/视频分屏由 flex 序钉栏底），单列态
-   坐列表真尾随页流（模板注同记） */
-.watch-queue-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  /* 窄屏三件套（存为/清空/自动播放 label）放不下时换行，不硬裁 */
-  flex-wrap: wrap;
-  /* 宽屏钉在面板底缘（挂出滚动体后 flex 列默认 shrink 会把它压扁） */
-  flex-shrink: 0;
-  padding: 8px var(--watch-pane-inset, 12px);
-  min-height: 48px;
-  border-top: var(--hairline-soft);
-}
-/* 空队列只剩模式键（≤640）+自动播放开关——去掉顶隔线并居中，不吊在角落 */
-.watch-queue-foot--empty { border-top: none; justify-content: center; }
-
+/* 自动播放：原生 checkbox 语义保留，外观改拨片开关 */
 .watch-autoplay {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  padding: 4px 6px; /* 命中高 ~24.5——对齐仓内 24px 触控地板（lyric-tool 同档） */
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-86);
   cursor: pointer;
-  transition: background .12s;
 }
-.watch-autoplay:hover { background: var(--ink-06); }
-/* 空队列居中态只收基态 margin-left:auto——justify-content:center 把
-   [modes][autoplay] 当一对整体居中；若用 margin:0 auto 则 auto 边距
-   吸光自由空间把 autoplay 独置正中、modes 被挤到左缘角落 */
+/* 空队列居中态只收基态 margin-left:auto（否则 autoplay 独置正中、
+   modes 被挤回左缘角落） */
 .watch-queue-foot--empty .watch-autoplay { margin-left: 0; }
-/* 勾选盒随画布蚀刻——纸面实填的 14px 白块在画布上是噪点。
-   :not(:checked) 守卫：全局 .pg-check:checked 墨底态 (0,2,0) 与本规则
-   平特异、scoped 后载会压掉它，限定未勾选才透明 */
-.watch-autoplay .pg-check:not(:checked) { background: transparent; }
+.watch-autoplay .pg-check {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 32px;
+  height: 18px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .24);
+  position: relative;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background .15s;
+}
+.watch-autoplay .pg-check::after {
+  content: '';
+  position: absolute;
+  inset: 2px auto auto 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .15s;
+}
+.watch-autoplay .pg-check:checked { background: #f1f1f1; }
+.watch-autoplay .pg-check:checked::after {
+  content: ''; /* 盖全局 ✓ 字形 */
+  transform: translateX(14px);
+  background: #0b0b0b;
+}
+@media (prefers-reduced-motion: reduce) {
+  .watch-autoplay .pg-check, .watch-autoplay .pg-check::after { transition: none; }
+}
 
-/* 歌词行：当前行墨色加粗放大，其余 ink-64 */
+/* ── 歌词：左对齐大行，当前行白、过去行 .32、未到行 .45 ── */
 .watch-lyric-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 8px 0;
-}
-
-.watch-lyric-line {
-  text-align: center;
-  padding: 3px 4px;
+  gap: .9em;
   font-size: var(--lyric-fs, 18px);
-  color: var(--ink-64);
-  transition: color .25s, font-size .25s;
-  /* 长歌词（串烧/整张碟上千行）的屏外行跳布局/绘制；字号变档时 auto
-     记录的真实尺寸随之更新，scrollIntoView 会强制即时渲染目标行 */
+  /* 顶底大垫 ≈35% 面板高：让当前行能停进面板纵向中段
+     （svh 不识的老内核退 8em 常数档，再退 cqh 精确档） */
+  padding-block: 8em;
+  padding-block: 30svh;
+  padding-block: 35cqh;
+  padding-inline: 16px;
+}
+.watch-lyric-line {
+  font-size: 1em;
+  font-weight: 700;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, .45);
+  transition: color .3s;
+  /* 长歌词屏外行跳布局/绘制；scrollIntoView 会强制即时渲染目标行 */
   content-visibility: auto;
   contain-intrinsic-size: auto 30px;
 }
-
-/* 当前行三层强调：accent 深档字色（双主题都过纸面对比度线）+ 放一档
-   字号 + 行内三角界标。字号差拉大后普通行淡色与之层级清晰 */
-.watch-lyric-line--current {
-  color: var(--accent-magenta-ink);
-  font-weight: 700;
-  font-size: calc(var(--lyric-fs, 18px) + 4px);
-}
-/* 界标挂首个 <p> 的内联伪元素——随居中文字流两侧对称占位，不破坏居中 */
-.watch-lyric-line--current > p:first-child::before,
-.watch-lyric-line--current > p:first-child::after {
-  font-size: .8em;
-  font-weight: 400;
-}
-.watch-lyric-line--current > p:first-child::before { content: '▸'; margin-right: .5em; }
-.watch-lyric-line--current > p:first-child::after { content: '◂'; margin-left: .5em; }
-
+.watch-lyric-line--past { color: rgba(255, 255, 255, .32); }
+.watch-lyric-line--current { color: #fff; }
 .watch-lyric-translation {
-  /* opacity .75 叠在 ink-86 上画布对比度会跌破 3.5:1——升 .9 保读；
-     字号下限 9px——字号调到最小档时译文不比这更小 */
-  margin-top: 2px;
-  font-size: max(9px, calc(var(--lyric-fs, 18px) - 2px));
-  opacity: .9;
+  margin-top: .35em;
+  font-size: .72em;
+  font-weight: 500;
+  opacity: .6;
+}
+@media (prefers-reduced-motion: reduce) {
+  .watch-lyric-line { transition: none; }
 }
 
-/* 歌词工具条：字号 / 时间校准 / 词务三组，钉在歌词面板下缘（DOM 序在面板
-   之后——钉底与 watch-queue-foot 同约定：滚动体之外的常驻件）。
-   顶缘发丝线与 queue-foot 同口径——面板脚线的记账线；两条注脚同框
-   （padding 8px + 内缘轴、min-height 48） */
-.lyric-tools {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 10px;
-  /* ≤330px 视口两组 ~290px 放不下——换行而不裁右边组 */
-  flex-wrap: wrap;
-  padding: 8px var(--watch-pane-inset, 12px);
-  min-height: 48px;
-  border-top: var(--hairline-soft);
-  flex-shrink: 0;
-}
-/* 组内键联排器械化：外轮廓走 outline（不占盒高，保 24px 地板），格间
-   发丝内隔线；组间 gap(6/10px) 仍在 .lyric-tools 上，不糊框 */
+/* 歌词工具条：无盒联排紧凑键，组间 12px 呼吸缝 */
 .lyric-tools-group {
   display: flex;
-  align-items: stretch;
-  gap: 0;
-  outline: var(--hairline);
+  align-items: center;
+  gap: 2px;
 }
-.lyric-tools-group > * + * { border-left: var(--hairline-soft); }
 .lyric-tool {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
-  line-height: 1;
-  padding: 5px 7px;
-  min-height: 24px; /* 触控地板与仓内 pg-icobtn--sm 同档（pad-block 5 凑整 24） */
-  min-width: 24px;
-  border: 0; /* 单格边框摘除——联排外轮廓由组的 outline 承担，格间只留内隔线 */
+  min-height: 32px;
+  min-width: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
+  font-size: 12px;
+  line-height: 1;
   color: var(--ink-86);
   cursor: pointer;
-  transition: color .5s var(--ease-ink), background .5s var(--ease-ink);
+  transition: background .15s, color .15s;
 }
-.lyric-tool:hover:not(:disabled) { background: var(--ink-06); color: var(--ink); }
+.lyric-tool:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: var(--ink); }
 .lyric-tool:disabled { opacity: .38; cursor: default; }
-/* 图标+文案混排键（歌词获取组）：PixelIcon 是 block 件——inline-flex
-   收平已在 .lyric-tool 基态，本类只留 3px 图字缝 */
-.lyric-tool--icon { gap: 3px; }
-/* 裸 span 读数升联排一格：flex 居中吃组内隔线（字号/校准值同款）——
-   字号 10px 显式同档，不然裸 span 继承 body 16px 夹在控件间形制分裂 */
+/* 图标+文案混排键（歌词获取组） */
+.lyric-tool--icon { gap: 5px; }
 .lyric-tool-val {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 5px 7px;
-  min-height: 24px;
-  font-size: 10px;
+  padding: 4px 6px;
+  min-height: 32px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: var(--ink-86);
+  color: var(--ink-64);
 }
-/* 校准值键兼复位：按最大刻度 ±300.0s 预留宽，避免值跳变时整组位移 */
+/* 校准值键兼复位：按最大刻度预留宽，值跳变时整组不位移 */
 .lyric-tool-reset { min-width: 56px; }
 
-/* ≤900 单列整页滚态：工具条在 DOM 序上钉于词表末尾，随页流会被整张
-   词表压到滚不可及——sticky 吸在滚动口（.watch-view）下沿随手可够，
-   滚到真末尾归位（与 watch-tabs 钉顶同一招的镜像）；衬底单铺画布色
-   防滚过的词行透字。分屏/宽屏态它由 flex 序钉在栏底、天然已在
-   视野内——sticky 无事可干（惰性的，不必关） */
-@media (max-width: 900.98px) {
-  .lyric-tools {
-    position: sticky;
-    bottom: 0;
-    z-index: 3; /* 词行之上、tabs(4)/顶行(5) 之下 */
-    background: var(--view-canvas, var(--paper));
-  }
+/* ── ⋯ 菜单两件特件（盒模型全走全局 .pg-menu 族）── */
+/* 音画组与后续项的分隔：组内末项命中 .pg-menu-item:last-child 无底线，
+   组后还有项时由组级发丝线补上 */
+.watch-actions-menu [role="group"]:not(:last-child) {
+  border-bottom: var(--hairline-soft);
+}
+/* 音画 radio 项 ✓ 槽定宽对齐——无图标侧空槽占位，两档文字左缘对齐 */
+.watch-menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--accent-magenta-ink);
 }
 
-/* ── 移动视频态分屏（≤900 ∧ 高度 ≥600）：单列整页滚下，读词把画面顶出
-   屏、看画面又读不到词——改两行合成：上行 顶行+视频 钉住不动，下行
-   侧栏收成有界区（tabs 固定头 / 可见面板体自滚 / 队列页脚与歌词工具条
-   钉栏底），与 ≥901 栏内滚同构。高度门槛定 600 而非 480：视频有 300px
-   地板保护，480-600 带里词窗只剩 ~0-50px（空壳分屏不如退守）——600
-   起词窗 ≥~80px（2-3 行）分屏才真赢整页滚。watch-view 仍
-   overflow-y:auto：装不下的边角（横幅/极短窗）内容溢出后整页照旧能滚，
-   分屏是「理想态」不是「封死态」 */
-@media (max-width: 900.98px) and (min-height: 600px) {
-  /* 布局吃满顶行外的滚动口：watch-view 是定高列向滚动口（壳链
-     100dvh−顶栏−底栏，watch-top 占 52px），flex:1 让本项恒得
-     「滚动口−52px」——与手算 calc(100dvh−topnav−bar−52) 等价但随
-     chrome 令牌自动校准、不用挂 vh/dvh 双行兜底。min-height:0 允许
-     压到内容高之下，溢出走 watch-view 页滚兜底而非撑破布局 */
-  .watch-view--video .watch-layout { flex: 1; min-height: 0; }
-  /* 侧栏收上行余量成定高列——没有 flex:1 则栏高随词表内容走，
-     面板体的 flex:1 失去参照，内滚无从谈起 */
-  .watch-view--video .watch-side { flex: 1; min-height: 0; }
-  /* 三块面板体共一条内滚律：v-show 单显，可见的那块即歌词/队列/
-     相关的滚动口；tabs/工具条/页脚都在滚动体外由 flex 序钉住
-     （min-width:901 块同款结构）。overscroll chaining 截断已在
-     style.css 全局白名单（.watch-side-body 在列） */
-  .watch-view--video .watch-side-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-  /* sticky 钉点是为整页滚设计的——有界栏内栏顶已是固定处，top:52
-     的 inset 约束反把刊头压出侧栏天然位；归 static 当固定头 */
-  .watch-view--video .watch-side-head { position: static; }
-  /* 横幅与视频同宽——默认 min(64vw,320px) 吊在全宽播放器下读作孤儿条
-     （≥901 块内同一条 width:100% 的 ≤900 镜像） */
-  .watch-view--video .watch-main--video .watch-banner { width: 100%; }
-  /* 视频不饿死下行：在 124dvh 上限上再叠「视口高−非视频区预算」的
-     宽换算项——预算≈chrome（顶栏+底栏+顶行 178-215 + tabs ~38 +
-     工具条 ~32 ≈ 248-280）+ 槽距合计 ~66（layout pt/pb + gap +
-     侧栏顶补）+ 歌词窗地板 ~130 ≈ 480px；预算项绑定时词窗恒 ~130
-     （649-740 带），以下由 100% 栏宽绑定词窗随行高放大。max() 300px
-     地板兜住 600h 闸口边缘——地板与预算冲突时保视频（词窗缩到 ~80
-     仍可用），再矮门槛外本块不挂、整页滚接管。vh 行兜 dvh 不识的
-     老内核（同基态三档递进约定）。注：队列 tab 的页脚 ~55px 比工具条
-     ~32 厚——队列面板提前 ~23px 触底，同样随槽退化不破 */
-  .watch-view--video .watch-cover-wrap--video {
-    width: min(100%, 124vh, max(300px, calc((100vh - 480px) * 16 / 9)));
-    width: min(100%, 124dvh, max(300px, calc((100dvh - 480px) * 16 / 9)));
-  }
-}
-
-/* ── 宽屏增强（mobile-first 反转点 ≥901px，与模板 wide: 断点同源）──
-   双栏内滚态：本层不滚、左右栏各自管车道；此前移动基态曾在此犯
-   「flex:1+min-height:0 未解除 → 侧栏压成内滚细条」的错——
-   反转后限高只存在于宽屏态，单列从结构上不存在挤压路径 */
+/* ── 双栏态：宽屏（≥901）与窄屏矮窗（≤900.98∧<600h 横屏）──
+   舞台列 + 面板列；媒体盒换容器单位吃满列内剩余高宽 */
 @media (min-width: 901px) {
-  .watch-view { scrollbar-gutter: auto; }
-
-  /* 宽屏顶行回浮层不占流——栏内自滚，键位钉在各栏内容之上。
-     槽距吃 --watch-vpad 而非定值：左缘是视频/封面的对齐轴，vpad
-     升档（20→24→32）时顶行若不跟档，返回键会与媒体左缘错位 */
-  .watch-top {
-    position: absolute;
-    height: auto;
-    padding: var(--watch-vpad, 20px);
-    background: none;
+  .watch-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(340px, 30vw, 520px);
+    gap: clamp(24px, 2.5vw, 48px);
+    padding-bottom: 24px;
   }
-
-  /* sticky inset 约束在非滚动 scrollport 上仍生效——不显式复位，
-     刊头会被 --watch-top-h(52px) 钉点从侧栏天然位（20px）强压 32px */
-  .watch-side-head { position: static; }
-
-  /* 居中栏的单边 gutter 会把封面掰偏 ~5px——both-edges 双侧车道保真居中
-     （旧浏览器不认两关键字写法时回退到上行 stable）。
-     视频态是左缘构图：左车道反把播放器推离返回键左缘（经典滚动条 11px）——
-     只留右车道，播放器向左吃满到返回键轴（栏宽绑定时增宽 11px、右缘不动）。
-     safe center：内容超高时向上对称溢出，顶部封面被裁且无法滚达——
-     safe 让溢出改走底部（不支持 safe 的浏览器回退到上行 flex-start） */
+}
+@media (max-width: 900.98px) and (max-height: 599.98px) {
+  /* 页头退居舞台列顶行、面板跨两行吃满视高——264px 视图里多腾一整行列表 */
+  .watch-view {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) min(46vw, 420px);
+    grid-template-rows: 40px minmax(0, 1fr);
+    column-gap: 16px;
+  }
+  .watch-layout { display: contents; }
+  .watch-head { grid-column: 1; grid-row: 1; min-width: 0; }
+  .watch-main { grid-column: 1; grid-row: 2; min-width: 0; }
+  .watch-side { grid-column: 2; grid-row: 1 / -1; }
+  /* 矮窗面板收紧：语境行让位、tab 降 40px、页脚减垫——保 ≥3 列表行 */
+  .watch-side-meta { display: none; }
+  .watch-tab { height: 40px; }
+  .watch-queue-foot,
+  .lyric-tools { padding-block: 8px; }
+}
+@media (min-width: 901px), (max-width: 900.98px) and (max-height: 599.98px) {
   .watch-main {
-    /* safe 不识别的老内核（<Safari 17.6/<Chrome 115）：整条 safe 声明作废后
-       不能落回不安全 center——溢出时顶部会被裁且滚不到。先声明 flex-start
-       兜底：老内核退化为顶对齐+滚动，功能无损只是不居中 */
-    justify-content: flex-start;
-    justify-content: safe center;
-    scrollbar-gutter: stable;
-    scrollbar-gutter: stable both-edges;
-    /* 顶行是 absolute 浮层（返回键占 y≈20–52）：UA 焦点滚达/scrollIntoView
-       会把目标贴到滚动口顶缘——scroll-padding 给同款让位垫 */
-    scroll-padding-top: 56px;
+    /* 定尺寸查询容器：媒体按列内剩余空间取尺寸 */
+    container-type: size;
+    overflow: hidden; /* 横幅叠加超高不外溢 */
   }
-  .watch-main--video {
-    scrollbar-gutter: stable;
-    /* 顶补距只付给视频态：左缘构图的内容从 x=20 起、safe 退化 start 时
-       可滚顶缘会钻到返回键浮层下；封面态居中排布够不着左页角浮层，
-       白付 56px 还新增滚动回归带 */
-    padding-top: 56px;
+  .watch-cover-wrap { width: min(100cqw, 100cqh, 760px); }
+  .watch-cover-wrap--video { width: min(100cqw, 100cqh * 16 / 9); }
+  .watch-banner { width: min(100cqw, 100cqh, 760px); }
+  .watch-view--video .watch-banner { width: min(100cqw, 100cqh * 16 / 9); }
+}
+/* 容器单位缺席的老内核：回旧式视口高预算 */
+@supports not (width: 1cqh) {
+  @media (min-width: 901px), (max-width: 900.98px) and (max-height: 599.98px) {
+    .watch-cover-wrap { width: min(100%, 60svh, 760px); }
+    .watch-cover-wrap--video { width: min(100%, calc((100dvh - 260px) * 16 / 9)); }
   }
-  /* 横幅在视频态拉满栏宽——封面宽（min(46vh,420px)）吊在 ~976px
-     播放器下读作孤儿条；与视频左缘同轴对齐 */
-  .watch-main--video .watch-banner { width: 100%; }
+}
 
-  .watch-cover { width: min(46vh, 420px); }
-  /* 上条与 .watch-cover--video 基态同特异性 (0,1,0) 而源码序在后——不拦截
-     的话它会盖掉 --video 的 min(100%,1280px)、把视频元素压成封面宽；wrap
-     公式宽却仍在 → 控制层 inset:0 锚 wrap 时全屏键吊出画面盒。重声明
-     --video 基态同款值归位（实际尺寸仍由下行 wrap 公式承担） */
-  .watch-cover--video { width: min(100%, 1280px); }
-  /* 视频尺寸落在 wrap 上而非 video 元素：wrap 精确包住视频盒，悬停控制层
-     inset:0 才贴画面（wrap 恒 100% 栏宽时，高度约束生效、视频收窄，中央播放
-     键/右下全屏键会对到栏而非画面）。尺寸策略对齐 YTM watch 页：按视口高
-     预算收窄，非媒体区预算全走 --watch-reserved-h（顶栏+底栏+纵槽×2+顶补距
-     56 四令牌合成；基档值≈旧硬编码 223，纵槽升档时自动跟进。YTM 同款
-     --player-page-total-height-exclude-player 为 408px），但守 300px 最小
-     高度（300×16/9≈533 宽；YTM 300 / ytd 240）——预算低于地板时停止
-     压缩、左栏滚动补差（顶补距已让开返回键浮层），视频不再塌成小窗。
-     实际上限即左栏宽（1440 壳-边距-右栏≈976，不设额外封顶）；栏宽本身
-     <533 的窄断点带（901–1023 开栏）由 100% 先绑定、地板让位——宽度
-     饥荒时无法同时保高。vh 行是 dvh 不识别的老内核兜底 */
-  .watch-cover-wrap--video {
-    width: min(100%, max(533px, calc((100vh - var(--watch-reserved-h, 223px)) * 16 / 9)));
-    width: min(100%, max(533px, calc((100dvh - var(--watch-reserved-h, 223px)) * 16 / 9)));
+/* 紧凑页脚态（≤640 窄屏与矮窗横屏同收）：页脚动作键变 36px 圆图标键
+   保单行——文案进 title/aria-label；触控地板 ≥36px 同步罩 lyric 工具键 */
+@media (max-width: 640.98px), (max-width: 900.98px) and (max-height: 599.98px) {
+  .watch-foot-btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    justify-content: center;
   }
-  .watch-banner { width: min(46vh, 420px); }
-
-  /* 栏界标尺回竖版（gap 24 → 栏内 padding-left 24：标尺两侧留白对称） */
-  .watch-side::before {
-    left: 0;
-    right: auto;
-    top: 24px;
-    bottom: 24px;
-    width: 1.2px;
-    height: auto;
-    background: linear-gradient(to bottom, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
-  }
-
-  .watch-side-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    scrollbar-gutter: stable;
-  }
+  .watch-foot-btn-label { display: none; }
+  .watch-queue-foot { flex-wrap: nowrap; }
+  .lyric-tool, .lyric-tool-val { min-height: 36px; }
+  .queue-mode-btn { min-width: 36px; min-height: 36px; }
 }
 </style>

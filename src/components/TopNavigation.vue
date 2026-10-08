@@ -890,4 +890,18 @@ export default {
   .topnav { padding: 0 12px; }
   .topnav-search--open { padding: 0 12px; }
 }
+
+/* Watch 舞台态：纸面 masthead 改暗玻璃——半透明近黑底 + 背景糊化，
+   封面氛围场从顶栏透上来；底缘发丝线压到白 .08 软切线（全局
+   --hairline 在舞台令牌下是 .22，铬面要更弱一级）。scoped [data-v]
+   让本条天然压过 style.css 的 glitch .topnav 背景覆写 */
+:root[data-stage="watch"] .topnav {
+  background: rgba(11, 11, 11, .72);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-stage="watch"] .topnav { background: #141414; }
+}
 </style>

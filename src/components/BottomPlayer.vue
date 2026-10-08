@@ -527,4 +527,21 @@ export default {
   .transport { width: 44px; height: 44px; }
   .transport--play { width: 52px; height: 52px; }
 }
+
+/* Watch 舞台态：全局 --ink 已翻成亮色——本条自带「墨面纸字」极性，
+   局部把 --ink 拉回暗色玻璃面、--paper 钉白字，内部件零改动；暗玻璃
+   让封面氛围场透进底条。on-ink 深档是给「白墨面」备的——本条墨面
+   仍暗，回到浅色 accent 档 */
+:root[data-stage="watch"] .bottom-player {
+  --ink: rgba(24, 24, 24, .78);
+  --paper: #fff;
+  --label-grey: #aaa;
+  --accent-magenta-on-ink: var(--accent-magenta);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+  border-top: 1px solid rgba(255, 255, 255, .08);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-stage="watch"] .bottom-player { --ink: #141414; }
+}
 </style>

@@ -38,7 +38,7 @@ if (typeof Element !== 'undefined') {
   if (!Element.prototype.scrollTo) Element.prototype.scrollTo = () => {}
 }
 
-const ROW = 55.5   // WatchView useVirtualList rowHeight
+const ROW = 56     // WatchView useVirtualList rowHeight
 const SEC = 28     // QUEUE_SEC_FALLBACK（jsdom offsetHeight=0 → 恒走兜底）
 
 const songs = (n) => Array.from({ length: n }, (_, i) => ({
@@ -97,23 +97,23 @@ describe('dividerPadAdjust：分节线垫片归位（纯数学）', () => {
 
   it('线在窗内（start≤di<end）：垫片原样——线已随 DOM 渲染', () => {
     const r = dividerPadAdjust({ ...pads(10, 30, 100), start: 10, end: 30, dividerIndex: 15, dividerH: SEC })
-    expect(r).toEqual({ topPad: 555, bottomPad: 3885 })
+    expect(r).toEqual({ topPad: 560, bottomPad: 3920 })
   })
 
   it('线在窗上沿之上（di<start）：高度并进 topPad', () => {
     const r = dividerPadAdjust({ ...pads(10, 30, 100), start: 10, end: 30, dividerIndex: 5, dividerH: SEC })
-    expect(r).toEqual({ topPad: 555 + SEC, bottomPad: 3885 })
+    expect(r).toEqual({ topPad: 560 + SEC, bottomPad: 3920 })
   })
 
   it('线在窗下沿之下（di≥end）：高度并进 bottomPad', () => {
     const r = dividerPadAdjust({ ...pads(10, 30, 100), start: 10, end: 30, dividerIndex: 40, dividerH: SEC })
-    expect(r).toEqual({ topPad: 555, bottomPad: 3885 + SEC })
+    expect(r).toEqual({ topPad: 560, bottomPad: 3920 + SEC })
   })
 
   it('线缺席：di=-1（曲不在队/末行）与 dividerH=0 都不动垫片', () => {
     const base = { ...pads(10, 30, 100), start: 10, end: 30 }
-    expect(dividerPadAdjust({ ...base, dividerIndex: -1, dividerH: SEC })).toEqual({ topPad: 555, bottomPad: 3885 })
-    expect(dividerPadAdjust({ ...base, dividerIndex: 15, dividerH: 0 })).toEqual({ topPad: 555, bottomPad: 3885 })
+    expect(dividerPadAdjust({ ...base, dividerIndex: -1, dividerH: SEC })).toEqual({ topPad: 560, bottomPad: 3920 })
+    expect(dividerPadAdjust({ ...base, dividerIndex: 15, dividerH: 0 })).toEqual({ topPad: 560, bottomPad: 3920 })
   })
 
   it('不变式：任意窗位+线位下 垫片+行区+已渲线 合计恒 = total*rowH+secH', () => {
@@ -151,7 +151,7 @@ describe('dividerRowShift：分节线的行位偏移（纯数学）', () => {
 
 describe('WatchView 队列：.queue-sec 的滑窗归位（DOM 层）', () => {
   // 默认无滚动口（jsdom getClientRects=空）→ sc=null 走 viewport：
-  // viewH=window.innerHeight=768 → end=min(N, ceil(768/55.5)+overscan12)=26
+  // viewH=window.innerHeight=768 → end=min(N, ceil(768/56)+overscan12)=26
 
   it('线在窗内：.queue-sec 渲出，垫片不加补偿', async () => {
     const queue = songs(100)
@@ -160,7 +160,7 @@ describe('WatchView 队列：.queue-sec 的滑窗归位（DOM 层）', () => {
     expect(w.vm.queueSecIndex).toBe(5)
     expect(w.find('.queue-sec').exists()).toBe(true)
     expect(w.find('.queue-sec').text()).toContain('接下来 · 94 首')
-    expect(spacerHeights(w)).toEqual(['0px', `${(100 - 26) * ROW}px`]) // 0 / 4107px
+    expect(spacerHeights(w)).toEqual(['0px', `${(100 - 26) * ROW}px`]) // 0 / 4144px
   })
 
   it('线在窗下沿之下：线不渲，bottomPad 吃进 fallback 28', async () => {
@@ -169,7 +169,7 @@ describe('WatchView 队列：.queue-sec 的滑窗归位（DOM 层）', () => {
     await vi.waitFor(() => expect(w.vm.queueRows.length).toBe(26))
     expect(w.vm.queueSecIndex).toBe(60)
     expect(w.find('.queue-sec').exists()).toBe(false)
-    expect(spacerHeights(w)).toEqual(['0px', `${(100 - 26) * ROW + SEC}px`]) // 4135px
+    expect(spacerHeights(w)).toEqual(['0px', `${(100 - 26) * ROW + SEC}px`]) // 4172px
   })
 
   it('线在窗上沿之上：线不渲，topPad 吃进 fallback 28', async () => {
@@ -182,13 +182,13 @@ describe('WatchView 队列：.queue-sec 的滑窗归位（DOM 层）', () => {
     const sc = w.find('#watch-panel-queue').element
     stubScrollport(sc)
     patchAnchorRect(w, sc)
-    // scrollTop=1300 → first=floor(1300/55.5)=23 → start=23-12=11 > si=5
+    // scrollTop=1300 → first=floor(1300/56)=23 → start=23-12=11 > si=5
     await scrollTo(w, sc, 1300)
     expect(w.vm.queueStartIndex).toBe(11)
     expect(w.vm.queueSecIndex).toBe(5)
     expect(w.find('.queue-sec').exists()).toBe(false)
-    // end = min(100, ceil((1300+600)/55.5)+12) = 47 → bottom=(100-47)*55.5
-    expect(spacerHeights(w)).toEqual([`${11 * ROW + SEC}px`, `${(100 - 47) * ROW}px`]) // 638.5 / 2941.5
+    // end = min(100, ceil((1300+600)/56)+12) = 46 → bottom=(100-46)*56
+    expect(spacerHeights(w)).toEqual([`${11 * ROW + SEC}px`, `${(100 - 46) * ROW}px`]) // 644 / 3024
   })
 
   it('线缺席两态：当前曲不在队（ci=-1）与当前是末行（ci=total-1）都无线无补偿', async () => {
@@ -213,7 +213,7 @@ describe('WatchView 队列：.queue-sec 的滑窗归位（DOM 层）', () => {
     expect(w.vm.queueSecH).toBe(28) // jsdom offsetHeight=0 → fallback
     w.vm.bindQueueSec({ offsetHeight: 40 })
     await nextTick()
-    expect(spacerHeights(w)).toEqual(['0px', `${(100 - 26) * ROW + 40}px`]) // 4147px
+    expect(spacerHeights(w)).toEqual(['0px', `${(100 - 26) * ROW + 40}px`]) // 4184px
   })
 
   it('scrollToIndex/ensureVisible 落点含 sec：线下行 +secH、线上行不加、nearest 已在视口不滚', async () => {
@@ -225,21 +225,21 @@ describe('WatchView 队列：.queue-sec 的滑窗归位（DOM 层）', () => {
     stubScrollport(sc) // viewH=600
     patchAnchorRect(w, sc)
     await scrollTo(w, sc, 0)
-    // align:'start' —— 行 50 在线之下：50*55.5+28 = 2803
+    // align:'start' —— 行 50 在线之下：50*56+28 = 2828
     w.vm.queueScrollToIndex(50, { align: 'start' })
-    expect(sc.scrollTop).toBe(2803)
-    // 行 5 在线之上：5*55.5 = 277.5，不加 secH
+    expect(sc.scrollTop).toBe(2828)
+    // 行 5 在线之上：5*56 = 280，不加 secH
     w.vm.queueScrollToIndex(5, { align: 'start' })
-    expect(sc.scrollTop).toBe(277.5)
+    expect(sc.scrollTop).toBe(280)
     // nearest（ensureVisible 同路径）：行 30 在视口下沿之外 → 压到行底沿
-    // rowY=30*55.5+28=1693 → y=1693+55.5-600=1148.5
+    // rowY=30*56+28=1708 → y=1708+56-600=1164
     w.vm.queueScrollToIndex(30, { align: 'nearest' })
-    expect(sc.scrollTop).toBe(1148.5)
-    // 行 30 现在恰充满视口 [1148.5, 1748.5] —— 再 ensureVisible 不动
+    expect(sc.scrollTop).toBe(1164)
+    // 行 30 现在恰充满视口 [1164, 1764] —— 再 ensureVisible 不动
     w.vm.queueScrollToIndex(30, { align: 'nearest' })
-    expect(sc.scrollTop).toBe(1148.5)
-    // align:'center'：行 50 → 2803-(600-55.5)/2 = 2530.75
+    expect(sc.scrollTop).toBe(1164)
+    // align:'center'：行 50 → 2828-(600-56)/2 = 2556
     w.vm.queueScrollToIndex(50, { align: 'center' })
-    expect(sc.scrollTop).toBe(2530.75)
+    expect(sc.scrollTop).toBe(2556)
   })
 })
