@@ -158,8 +158,9 @@
               @keydown.right.prevent="moveTab(1)"
             >{{ t.label }}</button>
           </div>
-          <!-- 右段语境 meta 随 tab 换写：队列=源名+规模+≤640 模式键 /
-               歌词=行数+校准读数 / 相关=艺人+规模 -->
+          <!-- 右段语境 meta 随 tab 换写：队列=源名+规模 /
+               歌词=行数+校准读数 / 相关=艺人+规模
+               （≤640 模式键已迁至队列页脚 .watch-queue-foot） -->
           <div class="watch-side-meta">
             <template v-if="tab === 'queue'">
               <!-- 归属歌单在库时源名可点回歌单页（原 queue-source--link 语义，
@@ -173,26 +174,6 @@
               >{{ queueTitle }}</button>
               <span v-else class="queue-head-name queue-head-name--plain">{{ queueTitle }}</span>
               <span v-if="queue.length" class="queue-head-meta">{{ queue.length }} 首<template v-if="queueTotalLabel"> · {{ queueTotalLabel }}</template></span>
-              <!-- ≤640 底栏减负收走 shuffle/模式键后，本页语义落点在刊头
-                   （YTM UP NEXT 头即置 shuffle/repeat——队列顺序控件归队列） -->
-              <span class="queue-modes">
-                <button
-                  type="button"
-                  class="queue-mode-btn"
-                  :class="{ 'queue-mode-btn--on': shuffleOn }"
-                  @click="$emit('toggle-shuffle')"
-                  :title="`随机播放${shuffleOn ? '（开）' : ''}`"
-                  :aria-pressed="shuffleOn"
-                  aria-label="随机播放"
-                ><PixelIcon name="shuffle" :size="14" /></button>
-                <button
-                  type="button"
-                  class="queue-mode-btn"
-                  @click="$emit('toggle-play-mode')"
-                  :title="`播放模式：${playModeText || '列表循环'}`"
-                  :aria-label="`切换播放模式，当前：${playModeText}`"
-                ><PixelIcon :name="playModeIcon" :size="13" /></button>
-              </span>
             </template>
             <span v-else-if="tab === 'lyrics' && currentSong" class="queue-head-meta">{{ lyrics.length }} 行 · 校准 {{ lyricOffsetLabel }}</span>
             <span v-else-if="tab === 'related' && relatedSongs.length" class="queue-head-meta">{{ relatedHeadLabel }}</span>
@@ -208,8 +189,8 @@
           class="watch-side-body"
           ref="queueContainer"
         >
-          <!-- 队列抬头已并入刊头右段（.watch-side-meta——源名/规模/≤640
-               模式键随迁）；「正在播放」眉题摘除——tab 自身即面板名代言 -->
+          <!-- 队列抬头已并入刊头右段（.watch-side-meta——源名/规模）；
+               「正在播放」眉题摘除——tab 自身即面板名代言 -->
           <div v-if="queue.length === 0" class="watch-empty">队列为空喵~</div>
           <template v-else>
             <!-- 虚拟滚动上沿 spacer：锚位+衬高，行区起点=全局下标 0 的位置 -->
@@ -286,7 +267,7 @@
         </div>
 
         <!-- 队列页脚钉在面板底缘（YTM UP NEXT 同构）——不挂进滚动体，
-             千行队列时不必滚到底才够得着；空队列时只剩居中开关。
+             千行队列时不必滚到底才够得着；空队列时只剩居中开关组。
              移动单列态随页流、视觉位置与嵌在列表尾部相同；视频分屏态
              侧栏是有界 flex 列，flex 序把它钉在栏底（同宽屏/歌词工具条） -->
         <div v-show="tab === 'queue'" class="watch-queue-foot" :class="{ 'watch-queue-foot--empty': !queue.length }">
@@ -301,6 +282,31 @@
               title="清空队列（保留当前播放）"
             >清空队列</button>
           </template>
+          <!-- ≤640 底栏减负收走 shuffle/模式键后落点在此（YTM UP NEXT 的
+               队列顺序控件归队列）。不套 queue.length 闸——空队列时
+               repeat 模式键仍有意义；CSS 控 ≤640 才显形，≥641 由底栏承担。
+               位置在 autoplay 左邻：autoplay 的 margin-left:auto 把它顶在
+               右缘，modes 贴着它组成右端偏好器械组（shuffle/repeat 与
+               autoplay 同是持续性播放偏好，与左侧存为/清空的一次性
+               操作分群）——插到 autoplay 之后会让 autoplay 离开右缘锚位 -->
+          <span class="queue-modes">
+            <button
+              type="button"
+              class="queue-mode-btn"
+              :class="{ 'queue-mode-btn--on': shuffleOn }"
+              @click="$emit('toggle-shuffle')"
+              :title="`随机播放${shuffleOn ? '（开）' : ''}`"
+              :aria-pressed="shuffleOn"
+              aria-label="随机播放"
+            ><PixelIcon name="shuffle" :size="14" /></button>
+            <button
+              type="button"
+              class="queue-mode-btn"
+              @click="$emit('toggle-play-mode')"
+              :title="`播放模式：${playModeText || '列表循环'}`"
+              :aria-label="`切换播放模式，当前：${playModeText}`"
+            ><PixelIcon :name="playModeIcon" :size="13" /></button>
+          </span>
           <!-- YTM UP NEXT 底部：自动播放开关（语义全文进 title，label 保持短） -->
           <label class="watch-autoplay" title="队列播完接续相关歌曲">
             <input
@@ -1752,27 +1758,19 @@ export default {
 .watch-action { font-size: 12px; }
 
 /* ── 右栏：发丝线分栏的 tab 面板 ──
-   盒模型走模板工具类；本规则只剩 pane 面与栏界标尺 */
+   盒模型走模板工具类；本规则只剩栏内缘轴令牌（栏界标尺见 ::before）。
+   栏不铺面——面板群直接坐在画布上，钉顶刊头/钉底工具条以画布色衬底
+   防滚过内容透字（各自规则内单铺 --view-canvas） */
 
-/* pane 统一面：栏收成「有界滚动面板」时在画布上叠一格墨洗——饱和青上
-   读作深半格的画布带、glitch 淡青上读作浅灰青分区；三块面板/tab 条/
-   页脚/工具条同属一纸，不再是画布上的散件。alpha 洗色双画布自适应
-   （实色纸面会断层）。pane 是有界滚动面的 affordance——单列整页滚态
-   本栏是无界文档流，整片墨洗只读作「稍微灰一点的大色块」：默认
-   transparent 收掉，两有界态（≤900∧min-height:600 视频分屏 / ≥901
-   栏内滚）在各自媒体块内重开 ink-06。
-   --watch-pane 供钉顶/钉底件把衬底复合出同一色（.watch-side-head/.lyric-tools）：
-   token 退 transparent 时复合层自动归画布色，钉条声明不用分态 */
 .watch-side {
-  --watch-pane: transparent;
-  background: var(--watch-pane);
-  /* pane 内缘轴：刊头 tab 内补距 / 右段 meta 端距 / queue-sec 内缘 /
+  /* 栏内缘轴：刊头 tab 内补距 / 右段 meta 端距 / queue-sec 内缘 /
      queue-foot·lyric-tools 框内 padding-inline 共用这一道 12px 轴——
-     行族（queue-row/related）不入轴：记账线语法自有 4–6px 纪律 */
+     行族（queue-row/related）不入轴：记账线语法自有 4–6px 纪律。
+     （令牌名里的 pane 是退役墨洗面的遗留，现只作排版轴语义保留） */
   --watch-pane-inset: 12px;
 }
 
-/* 栏界羽化标尺：ink-30 细线、两端渐隐——pane 面加入后即 pane 的蚀刻缘。
+/* 栏界羽化标尺：ink-30 细线、两端渐隐——画布上的蚀刻栏缘。
    移动基态转横（单列态栏界在上方）；≥901px 回竖版（见 min-width 块） */
 .watch-side::before {
   content: '';
@@ -1784,18 +1782,6 @@ export default {
   background: linear-gradient(to right, transparent, var(--ink-30) 12%, var(--ink-30) 88%, transparent);
   pointer-events: none;
 }
-
-/* pane 面字色补丁：10px/300 mono 眉题在墨洗面上 ink-86 跌至 ~4.48:1
-   （裸画布 ~4.96），升实墨。特异度战场：全局基础档 ink-64 (0,1,0)、
-   画布白名单 .app-shell .app-body .X 已升 ink-86 (0,3,0)——scoped 写
-   .watch-side .X 仅 (0,2,0)+[data-v] 平手落败；.app-shell .watch-side
-   前缀抬到 (0,4,0) 压过白名单（[data-v] 只钉末位元素，祖先链命中不靠
-   属性）。其余 ~4.48 命中件（queue-row-artist/duration、watch-empty、
-   watch-autoplay、非当前词行）保 ink-86——4.5 阈值噪声带内接受，只给
-   最小最细的字重补余量。无 pane 单列态本条同生效：画布上实墨更足，
-   眉题跨态一致不漂移 */
-.app-shell .watch-side .queue-head-meta,
-.app-shell .watch-side .queue-sec { color: var(--ink); }
 
 /* 状态横幅：蚀刻发丝牌 + 戳记标签（warn:/error:）——居左栏沉浸键下方，
    宽与封面同轴。墨洗底+实墨框=画布上的印版；纸面实填会读作画布上贴的补丁 */
@@ -1834,10 +1820,8 @@ export default {
    （top 与 --watch-top-h 同源；宽屏块与移动视频分屏块内复位
    static——有界/非滚动 scrollport 上 sticky 的 inset 约束仍生效，
    不复位会被强压 32px）。
-   滚过内容不透字：衬底须复合出 pane 同色（画布底+墨洗层）——
-   单铺透洗会让滚过的行透字，单铺画布又与 pane 身断层。token 退
-   transparent（无 pane 单列态）时渐变层自动归画布色，钉条无色差
-   免分态；fallback 取 transparent 由 .watch-side 显式声明控两态。
+   滚过内容不透字：衬底单铺画布色（--view-canvas 随主题换纸，
+   缺省回落 paper）——半透明衬底会让滚过的行透字。
    底缘耳语线与 queue-foot 顶线/行分隔同口径（hairline-soft）——
    tab 激活指示 ::after 的 bottom:-1px（全局）恰骑此线，不再另收 */
 .watch-side-head {
@@ -1849,9 +1833,7 @@ export default {
   top: var(--watch-top-h, 52px);
   z-index: 4;
   border-bottom: var(--hairline-soft);
-  background:
-    linear-gradient(var(--watch-pane, transparent), var(--watch-pane, transparent)),
-    var(--view-canvas, var(--paper));
+  background: var(--view-canvas, var(--paper));
 }
 
 /* tabs 回归纯 tab 群：底线摘除——刊头界线由 head 的耳语线承担，全局
@@ -1862,7 +1844,7 @@ export default {
   border-bottom: 0;
 }
 
-/* tab 内补距收进 pane 内缘轴——特异度战场：glitch .pg-tab (0,3,0) 的
+/* tab 内补距收进栏内缘轴——特异度战场：glitch .pg-tab (0,3,0) 的
    padding:6px 14px 会盖全局 (0,2,0)；scoped [data-v] 钉上 (0,3,0) 平手
    后靠后载胜（.watch-action--on 同律）。glitch 下 pill margin 2px 使
    文字落在轴 +2px——pill 组自身边距语言，接受这 2px */
@@ -1870,15 +1852,13 @@ export default {
 
 /* 刊头右段语境 meta：右对齐单行，min-width:0 闸下源名（flex:1 +
    ellipsis）先吃截断——901–1023 窄带侧栏 ~335–380px 下
-   tabs(~160)+modes(~48)+meta 不破行。右端距收 pane 内缘轴 */
+   tabs(~160)+meta 不破行。右端距收栏内缘轴 */
 .watch-side-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
   min-width: 0;
-  /* 右端距走 padding 而非 margin——≤640 联排 modes 的外轮廓（outline）
-     画在盒外，须落在 meta 的 padding 盒内，margin 区会被 overflow:hidden 裁 */
   padding-right: var(--watch-pane-inset, 12px);
   white-space: nowrap;
   overflow: hidden;
@@ -1941,7 +1921,7 @@ export default {
   outline: 1.2px solid var(--accent-magenta-ink); /* 指示线走深档（火烈鸟本色 ~2.3:1 过浅） */
   outline-offset: -4px;
   /* 抓住的行吃最深档墨洗（当前行 ink-10 同槽位——accent 轮廓环负责区分语义）；
-     纸面实白在画布/pane 上都是断层 */
+     纸面实白在画布上是断层 */
   background: var(--ink-10);
 }
 
@@ -1964,9 +1944,11 @@ export default {
   background: var(--ink-06);
 }
 
-/* 刊头右段模式对：底栏 ≤640 减负后 shuffle/模式在本页的落点（YTM UP
-   NEXT 头即置 shuffle/repeat）。联排器械化：外轮廓走 outline（不占
-   盒高保 24px 地板），格间发丝内隔——与 .lyric-tools-group 同纪律。
+/* 队列页脚模式对：底栏 ≤640 减负后 shuffle/模式在本页的落点（YTM UP
+   NEXT 的队列顺序控件归队列）。居 .watch-autoplay 左邻成右端偏好
+   器械组；foot 的 align-items:center 兜住它与 ghost 键（~32px）
+   的高差。联排器械化：外轮廓走 outline（不占盒高保 24px 地板），
+   格间发丝内隔——与 .lyric-tools-group 同纪律。
    ≥641 由底栏承担，此处不渲染槽位 */
 .queue-modes { display: none; }
 @media (max-width: 640.98px) {
@@ -2009,10 +1991,10 @@ export default {
    与 .lyric-tools 同框纪律：padding 8px + 内缘轴、min-height 48——
    框统一，控件档差不拉平（32px ghost 动作 vs 24px 器械键各守其档）。
    ≤900 单列整页滚态有意不随 .lyric-tools 吸底（无 sticky bottom）——
-   三件套（存为/清空/自动播放）是低频一次性操作，词工具是随读随调的
-   仪器，常驻价值不同档；吸底还会常驻占去一行队列的可视高。钉底语义
-   只留在有界栏态（宽屏/视频分屏由 flex 序钉栏底），单列态坐列表
-   真尾随页流（模板注同记） */
+   页脚件（存为/清空/≤640 模式/自动播放）是低频操作与偏好，词工具是
+   随读随调的仪器，常驻价值不同档；吸底还会常驻占去一行队列的可视高。
+   钉底语义只留在有界栏态（宽屏/视频分屏由 flex 序钉栏底），单列态
+   坐列表真尾随页流（模板注同记） */
 .watch-queue-foot {
   display: flex;
   align-items: center;
@@ -2025,7 +2007,7 @@ export default {
   min-height: 48px;
   border-top: var(--hairline-soft);
 }
-/* 空队列只剩自动播放开关——去掉顶隔线并居中，不吊在角落 */
+/* 空队列只剩模式键（≤640）+自动播放开关——去掉顶隔线并居中，不吊在角落 */
 .watch-queue-foot--empty { border-top: none; justify-content: center; }
 
 .watch-autoplay {
@@ -2041,8 +2023,11 @@ export default {
   transition: background .12s;
 }
 .watch-autoplay:hover { background: var(--ink-06); }
-.watch-queue-foot--empty .watch-autoplay { margin: 0 auto; }
-/* 勾选盒随 pane 蚀刻——纸面实填的 14px 白块在画布上是噪点。
+/* 空队列居中态只收基态 margin-left:auto——justify-content:center 把
+   [modes][autoplay] 当一对整体居中；若用 margin:0 auto 则 auto 边距
+   吸光自由空间把 autoplay 独置正中、modes 被挤到左缘角落 */
+.watch-queue-foot--empty .watch-autoplay { margin-left: 0; }
+/* 勾选盒随画布蚀刻——纸面实填的 14px 白块在画布上是噪点。
    :not(:checked) 守卫：全局 .pg-check:checked 墨底态 (0,2,0) 与本规则
    平特异、scoped 后载会压掉它，限定未勾选才透明 */
 .watch-autoplay .pg-check:not(:checked) { background: transparent; }
@@ -2153,19 +2138,15 @@ export default {
 
 /* ≤900 单列整页滚态：工具条在 DOM 序上钉于词表末尾，随页流会被整张
    词表压到滚不可及——sticky 吸在滚动口（.watch-view）下沿随手可够，
-   滚到真末尾归位（与 watch-tabs 钉顶同一招的镜像）；衬底复合 pane
-   同色防滚过的词行透字。分屏/宽屏态它由 flex 序钉在栏底、天然已在
+   滚到真末尾归位（与 watch-tabs 钉顶同一招的镜像）；衬底单铺画布色
+   防滚过的词行透字。分屏/宽屏态它由 flex 序钉在栏底、天然已在
    视野内——sticky 无事可干（惰性的，不必关） */
 @media (max-width: 900.98px) {
   .lyric-tools {
     position: sticky;
     bottom: 0;
     z-index: 3; /* 词行之上、tabs(4)/顶行(5) 之下 */
-    /* fallback 取 transparent 由 .watch-side 显式声明控两态——单列无 pane
-       态渐变层归画布色，钉条与页身无差 */
-    background:
-      linear-gradient(var(--watch-pane, transparent), var(--watch-pane, transparent)),
-      var(--view-canvas, var(--paper));
+    background: var(--view-canvas, var(--paper));
   }
 }
 
@@ -2185,10 +2166,8 @@ export default {
      压到内容高之下，溢出走 watch-view 页滚兜底而非撑破布局 */
   .watch-view--video .watch-layout { flex: 1; min-height: 0; }
   /* 侧栏收上行余量成定高列——没有 flex:1 则栏高随词表内容走，
-     面板体的 flex:1 失去参照，内滚无从谈起。
-     栏已成有界滚动面板——重开 pane 墨洗面（基态默认 transparent
-     只挂无界单列流，见 .watch-side 基态注） */
-  .watch-view--video .watch-side { flex: 1; min-height: 0; --watch-pane: var(--ink-06); }
+     面板体的 flex:1 失去参照，内滚无从谈起 */
+  .watch-view--video .watch-side { flex: 1; min-height: 0; }
   /* 三块面板体共一条内滚律：v-show 单显，可见的那块即歌词/队列/
      相关的滚动口；tabs/工具条/页脚都在滚动体外由 flex 序钉住
      （min-width:901 块同款结构）。overscroll chaining 截断已在
@@ -2291,10 +2270,6 @@ export default {
     width: min(100%, max(533px, calc((100dvh - var(--watch-reserved-h, 223px)) * 16 / 9)));
   }
   .watch-banner { width: min(46vh, 420px); }
-
-  /* 双栏内滚态栏是有界滚动面板——重开 pane 墨洗面（基态 transparent
-     只挂无界单列流，见 .watch-side 基态注） */
-  .watch-side { --watch-pane: var(--ink-06); }
 
   /* 栏界标尺回竖版（gap 24 → 栏内 padding-left 24：标尺两侧留白对称） */
   .watch-side::before {
