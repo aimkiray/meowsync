@@ -183,6 +183,7 @@
 :root[data-theme="glitch-restoration"] .song-cover,
 :root[data-theme="glitch-restoration"] .song-result-cover,
 :root[data-theme="glitch-restoration"] .track-cover,
+:root[data-theme="glitch-restoration"] .watch-queue-thumb,
 :root[data-theme="glitch-restoration"] .pl-cover,
 :root[data-theme="glitch-restoration"] .dql-cover,
 :root[data-theme="glitch-restoration"] .dtr-cover { border-radius: 4px; }
@@ -337,7 +338,11 @@
   color: var(--accent-danger-ink);
   animation: .3s ease-in-out glitchShake;
 }
-:root[data-theme="glitch-restoration"] .watch-banner-tag { text-shadow: 0 0 12px rgba(229, 72, 77, .35); }
+/* banner-tag 是实底戳记片（默认主题同形）——圆角窗语下小半径归入控件族 */
+:root[data-theme="glitch-restoration"] .watch-banner-tag {
+  text-shadow: 0 0 12px rgba(229, 72, 77, .35);
+  border-radius: 3px;
+}
 :root[data-theme="glitch-restoration"] .fb-toast--error {
   background: rgba(229, 72, 77, .08);
   border-color: rgba(229, 72, 77, .35);
@@ -616,10 +621,12 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .app-shell .app-body .pg-label--dim, .app-shell .app-body .queue-row-index, .app-shell .app-body .song-row-index {
   color: var(--ink-86);
 }
-/* 画布上的图标键/把手：ink-64 在饱和底上 <3:1 图形线，升 ink-86 */
+/* 画布上的图标键/把手/兜底格 glyph：ink-64 在饱和底上 <3:1 图形线，升 ink-86
+   （*--fallback 是画布洗色上的蚀刻占位格——note glyph 同属图形线纪律） */
 .app-shell .app-body .queue-row-remove, .app-shell .app-body .row-add-btn,
 .app-shell .app-body .song-menu-btn, .app-shell .app-body .pl-action,
 .app-shell .app-body .dql-kebab, .app-shell .app-body .song-state-icon,
+.app-shell .app-body .watch-queue-thumb--fallback, .app-shell .app-body .watch-cover--fallback,
 .app-shell .app-body .pg-tab:not(.pg-tab--active) {
   color: var(--ink-86);
 }
