@@ -89,6 +89,21 @@ test('qq：stream 非法 mid 400；命中 → 302 进 vault 令牌而非裸链',
   assert.equal(entry.urls[0], 'https://stream.qqmusic.qq.com/x.m4a?u=1');
 });
 
+test('qq：stream 的 Location 在 BASE_PATH 子目录部署下带前缀', async () => {
+  // 服务端剥前缀后路由按根路径工作——外发链不拼回前缀的话客户端会拿
+  // /audio-proxy/t/… 根链撞上 entryFetch 的 base-外 404（线上回归钉）
+  const saved = process.env.BASE_PATH;
+  process.env.BASE_PATH = '/music';
+  try {
+    const r = await get(`/qq/stream?mid=${TRACK.mid}`);
+    assert.equal(r.status, 302);
+    assert.match(r.headers.get('location') || '', /^\/music\/audio-proxy\/t\//);
+  } finally {
+    if (saved === undefined) delete process.env.BASE_PATH;
+    else process.env.BASE_PATH = saved;
+  }
+});
+
 test('qq：stream 502 消息剥离绝对路径——不泄服务器文件系统布局', async () => {
   pickStreamImpl = async () => {
     throw new Error("ENOENT: no such file or directory, open '/data/meowsync/qq.cache'");

@@ -2,6 +2,9 @@ const http = require('http');
 const https = require('https');
 const { resolvesToPublicIp, normalizeOutboundUrl, makeGuardedLookup, isProxyAllowedHost } = require('../lib/net-guard');
 const streamVault = require('../lib/stream-vault');
+// 外发回链必须拼回部署前缀——entryFetch 剥前缀后 app 按根路径工作，
+// 裸 /audio-proxy/t/… 在 BASE_PATH 子目录部署下回客户端即 404
+const { withBasePath } = require('../lib/base-path');
 const { aiEnabled, askAiJson } = require('../lib/ai');
 const { callNeteaseApi, apiModules } = require('./netease');
 const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('./unlock');
@@ -467,8 +470,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           && (resolved.source === 'youtube' || resolved.source === 'qq' || isHttp);
         // 代理面统一经 vault token——解锁回链可能带上游凭据（qq purl uin/vkey、
         // googlevideo ip=），明文嵌进 JSON 等于把运营者凭据发给每个访客
+        // BASE_PATH 子目录部署：proxyOrigin 只是裸 origin（proto://host），
+        // vault 路径须过 withBasePath 补前缀，否则客户端拿到根链 404
         item.url = useProxy
-          ? `${proxyOrigin}/audio-proxy/t/${streamVault.mint(resolved.urls || resolved.url)}`
+          ? `${proxyOrigin}${withBasePath(`/audio-proxy/t/${streamVault.mint(resolved.urls || resolved.url)}`)}`
           : resolved.url;
         item.unblocked = true;
         item.unblockedSource = resolved.source;

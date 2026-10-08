@@ -42,14 +42,12 @@ const { isApiPath } = require('./src/server/lib/api-path');
 // isApiPath 公开判定、protectedWrite、SPA 兜底全部失真（API GET 被误判为静态
 // 资源 → 鉴权绕过）。故不用 basePath，改在 serve() fetch 入口剥前缀：
 // app 内所有中间件/路由/兜底看到的都是根相对路径，零改动兼容。
-// 归一化为 '/x' 形式（无尾斜杠，'/' 表根）
-const normalizeBasePath = (v) => {
-  const s = String(v || '').trim();
-  if (!s || s === '/') return '/';
-  const withSlash = s.startsWith('/') ? s : `/${s}`;
-  return withSlash.replace(/\/+$/, '') || '/';
-};
-const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || process.env.VITE_BASE_PATH);
+// 归一化与取值收敛进 lib/base-path.js——本入口剥前缀与外发 URL 拼前缀
+// （withBasePath）必须吃同一 env 源，两份私有 normalize 会漂移
+const { basePath } = require('./src/server/lib/base-path');
+// 启动快照：entryFetch 闭包/WS basePath 钉住启动时的前缀（env 运行期改动
+// 不构成已支持场景——前缀中途换向会让在途 vault 链整体失效）
+const BASE_PATH = basePath();
 
 // 中间件
 app.use('*', cors({
@@ -281,7 +279,7 @@ try {
 // autoCleanupIncoming 显式声明：多条路由故意不读 body（401/400 早退、纯触发型 POST
 // /downloads/queues/:id/start 等），未读完的 body 靠它自动 drain——若按性能建议
 // 关掉，所有不读 body 的请求都会泄漏 keep-alive socket
-// fetch 入口剥 BASE_PATH 前缀（见上方 normalizeBasePath 注释——不能用
+// fetch 入口剥 BASE_PATH 前缀（见上方 lib/base-path.js 引入处注释——不能用
 // app.basePath()）：前缀内请求重写为根相对路径再交 app；'/' 302 进 base；
 // /ping、/healthz 根级豁免（Docker HEALTHCHECK 与负载探针不认子路径）；
 // 其余 base 外路径一律 JSON 404——不用 HTML 兜底，探测方拿不到歧义 200

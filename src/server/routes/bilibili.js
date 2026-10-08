@@ -2,6 +2,9 @@ const { Hono } = require('hono');
 const { normalizeOutboundUrl, isProxyAllowedHost: isAllowedHost } = require('../lib/net-guard');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const streamVault = require('../lib/stream-vault');
+// 外发 Location 必须拼回部署前缀——entryFetch 剥前缀后路由按根路径工作，
+// 裸 /audio-proxy/t/… 在 BASE_PATH 子目录部署下回客户端即 404
+const { withBasePath } = require('../lib/base-path');
 const mediaCache = require('../services/media-cache');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
@@ -415,7 +418,7 @@ app.get('/bilibili/stream', async (c) => {
       h: set.cacheTier?.height || 0,
       w: set.cacheTier?.width || 0,
     };
-    return c.redirect(`/audio-proxy/t/${streamVault.mint(set.usable, { cacheKey, cacheMeta })}`, 302);
+    return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(set.usable, { cacheKey, cacheMeta })}`), 302);
   } catch (e) {
     // 客户端断连不算服务端错误（与 resolve/audio-proxy 同口径）
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
