@@ -179,6 +179,9 @@ if (hasDist) {
 // Hono 路由中静态路径（/audio-proxy、/healthz、/playlists、/downloads/*）优先级高于参数路由（/:apiName）
 app.route('/', require('./src/server/routes/auth'));
 app.route('/', require('./src/server/routes/proxy'));
+// 封面图代取（/img-proxy）：白名单图床经本端回源，YT 族换道 yt_proxy 出口——
+// 浏览器不再直连外链图床（直连不了 YouTube 的网络里封面裂图）
+app.route('/', require('./src/server/routes/img-proxy'));
 app.route('/', require('./src/server/routes/playlists'));
 app.route('/', require('./src/server/routes/downloads'));
 app.route('/', require('./src/server/routes/uploads'));

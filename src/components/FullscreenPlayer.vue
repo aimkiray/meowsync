@@ -99,7 +99,7 @@
 
         <img
           v-if="songCoverUrl(currentSong)"
-          :src="httpsCover(songCoverUrl(currentSong))"
+          :src="httpsCover(proxiedCoverUrl(songCoverUrl(currentSong)))"
           :alt="currentSong.name"
           class="fullscreen-player__cover"
           :class="{ 'playing-animation': isPlaying }"
@@ -149,7 +149,7 @@ import TextAliveLyricCanvas from './TextAliveLyricCanvas.vue'
 import PixelIcon from './PixelIcon.vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
-import { songCoverUrl } from '../lib/song'
+import { songCoverUrl, proxiedCoverUrl } from '../lib/song'
 import { trapTabKeydown } from '../lib/focus-trap'
 import { isConfirmOpen } from '../lib/feedback'
 

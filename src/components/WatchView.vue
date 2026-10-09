@@ -513,7 +513,7 @@ import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
-import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId } from '../lib/song'
+import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
 import { cycleMenuItems } from '../lib/focus-trap.js'
 
@@ -669,7 +669,9 @@ export default {
       return (s >= 0 ? '+' : '') + s.toFixed(1) + 's'
     })
 
-    const coverUrl = computed(() => songCoverUrl(props.currentSong))
+    // 大图位吃原始构图（不改走 songThumbUrl 的缩放/降档语法），但白名单
+    // 图床外链统一经服务端 /img-proxy 代取——包装幂等，file_/相对形直通
+    const coverUrl = computed(() => proxiedCoverUrl(songCoverUrl(props.currentSong)))
     // 氛围场底图：小尺寸封面高糊放大（舞台底色由它供给）——换曲叠化
     // 由模板 :key + Transition 承担
     const ambientUrl = computed(() => {

@@ -3,6 +3,7 @@
 import { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE, NETEASE_ID_RE, YT_ID_RE, FILE_TRACK_ID_RE,
   isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, isFileTrackId } from '../shared/predicates.js'
 import { resolveApiBaseUrl } from './api-base.js'
+import { isImgProxyHost } from '../shared/img-proxy-hosts.js'
 // 注意必须用 import + export 两段式：export {x} from 'y' 不绑本地作用域，
 // 本文件函数体（songSource 等）直接用谓词时裸 re-export 会 ReferenceError
 export { isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId, isFileTrackId }
@@ -55,37 +56,81 @@ export function songCoverUrl(song) {
   return song?.picUrl || song?.al?.picUrl || song?.album?.picUrl || ''
 }
 
+// 已是 /img-proxy 代理形判定：解析后看 pathname 结尾 /img-proxy 且带 url
+// 参数——不做裸 includes 子串判，内嵌片段（?next=/img-proxy?url=x）不该被
+// 误当已代理；相对形经占位基址解析兜底，畸形串判 false 走后续直通
+function isProxiedImgUrl(s) {
+  try {
+    const p = new URL(s, 'http://img-proxy.invalid')
+    return p.pathname.endsWith('/img-proxy') && p.searchParams.has('url')
+  } catch {
+    return false
+  }
+}
+
+// 白名单图床封面改走服务端 /img-proxy 代取（客户端直连 ytimg 等环境会裂图，
+// 与 /audio-proxy 同口径）。直通面刻意收窄：非 http(s)（data:/blob:/相对
+// 路径）、本服务工件（file_ 封面）、非标端口、userinfo、非白名单域全按原样
+// 返回——直连是服务端拒收时的唯一活路，凭据也不进我方 query/日志面。
+// 幂等：已代理形原样返回。node 无 DOM 时 resolveApiBaseUrl() 回 ''，
+// 产出相对形 /img-proxy?url=…（测试与同源部署均合法）
+export function proxiedCoverUrl(url) {
+  const s = String(url || '')
+  if (!s || isProxiedImgUrl(s)) return s
+  const base = resolveApiBaseUrl()
+  if (base && s.startsWith(base + '/')) return s         // 本服务工件（file_ 封面等）
+  if (s.startsWith('/') && !s.startsWith('//')) return s // 同源相对 URL 直通
+  let parsed
+  try {
+    parsed = new URL(s.startsWith('//') ? 'https:' + s : s) // 协议相对按 https 升格解析
+  } catch {
+    return s
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return s
+  if (parsed.port !== '') return s                 // 非标端口服务端必 403——留直连口径
+  if (parsed.username || parsed.password) return s // 凭据不进我方 query（日志卫生）
+  if (!isImgProxyHost(parsed.hostname)) return s   // 白名单外=浏览器直连旧行为
+  return `${base}/img-proxy?url=${encodeURIComponent(parsed.href)}`
+}
+
 // 封面按展示档位走 CDN 缩放：列表 30~48px 小位不该拉原始分辨率——
 // 网易原图动辄 600~3000px，每张解码位图 1~8MB，长歌单是 tab 内存头号
 // 驱动。按各站图片服务的缩放语法改写 URL；file_ 本地工件与未知域原样
-// 放行（服务端 file 端点无缩放通道，量也小）。
+// 放行（服务端 file 端点无缩放通道，量也小）。改写产物再经 proxiedCoverUrl
+// 包装——先改写后包装是契约：内嵌进 /img-proxy?url= 的必须是缩放形 URL
 export function coverSizeUrl(url, px = 96) {
   const s = String(url || '')
   if (!s) return ''
+  // 防腐化闸前置：已代理形原样返回——否则 hdslb @WxH 会拼到代理 path 上、
+  // 126 param 改写会啃 url= 编码内的明文域名片段，双包装同理拦截
+  if (isProxiedImgUrl(s)) return s
+  let sized = s
   // 网易云 p*.music.126.net：?param={w}y{h} 服务端裁剪缩放；
   // 上游偶发已带 param 的 URL——重复键是 first-wins 未定义，改写其值而非追加
   if (/music\.126\.net/i.test(s)) {
-    return /[?&]param=\d+y\d+/i.test(s)
+    sized = /[?&]param=\d+y\d+/i.test(s)
       ? s.replace(/([?&]param=)\d+y\d+/i, `$1${px}y${px}`)
       : `${s}${s.includes('?') ? '&' : '?'}param=${px}y${px}`
   }
   // B站 i*.hdslb.com：@ 后缀挂在 path 尾（在 query 之前），_1c 居中裁方；
   // .jpg 服务端转码兜底——裸 .webp 在老内核（pre-Big-Sur Safari）直接白图
-  if (/hdslb\.com/i.test(s)) {
-    if (/@\d+w_/.test(s)) return s
-    const qi = s.indexOf('?')
-    const path = qi === -1 ? s : s.slice(0, qi)
-    return `${path}@${px}w_${px}h_1c.jpg${qi === -1 ? '' : s.slice(qi)}`
+  else if (/hdslb\.com/i.test(s)) {
+    if (!/@\d+w_/.test(s)) {
+      const qi = s.indexOf('?')
+      const path = qi === -1 ? s : s.slice(0, qi)
+      sized = `${path}@${px}w_${px}h_1c.jpg${qi === -1 ? '' : s.slice(qi)}`
+    }
   }
   // YouTube i.ytimg.com：default/mq/hq/maxres 是固定档位名，降档到 mq
-  if (/i\.ytimg\.com/i.test(s)) {
-    return s.replace(/(?:maxres|sd|hq)default/i, 'mqdefault')
+  else if (/i\.ytimg\.com/i.test(s)) {
+    sized = s.replace(/(?:maxres|sd|hq)default/i, 'mqdefault')
   }
-  // QQ y.gtimg.cn：T002R{w}x{h} 尺寸嵌在路径段（p.qpic.cn 无公开缩放通道，放行）
-  if (/y\.gtimg\.cn/i.test(s)) {
-    return /T002R\d+x\d+/i.test(s) ? s.replace(/T002R\d+x\d+/i, `T002R${px}x${px}`) : s
+  // QQ y.gtimg.cn：T002R{w}x{h} 尺寸嵌在路径段（p.qpic.cn 无公开缩放通道，
+  // 不改写但仍在图床白名单——下游 proxiedCoverUrl 照样给它包代理）
+  else if (/y\.gtimg\.cn/i.test(s)) {
+    if (/T002R\d+x\d+/i.test(s)) sized = s.replace(/T002R\d+x\d+/i, `T002R${px}x${px}`)
   }
-  return s
+  return proxiedCoverUrl(sized)
 }
 
 /** 曲封面缩略图：songCoverUrl + coverSizeUrl 的合成，列表行/小卡统一走它 */
