@@ -8,8 +8,12 @@
 // 规则/正则只在这里维护一份——两处各写一份的漂移面正是本文件要消灭的。
 // ─────────────────────────────────────────────────────────────────────────
 
-// 归一化键：trim + 小写 + 空白折叠——变体去重、级联缓存键、匹配候选去重共用
-export const normKey = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+import { foldCjkCompat } from './text-norm.js';
+
+// 归一化键：trim + 小写 + 空白折叠 + CJK 异体折叠——变体去重、级联
+// 缓存键、匹配候选去重共用（懐中道標/懐中道标 同键）。只进比较面，
+// 不回显不落库
+export const normKey = (s) => foldCjkCompat(String(s || '').trim().toLowerCase().replace(/\s+/g, ' '));
 
 // 检索标题清理：视频站标题的「MV/官方/4K/字幕」类括弧装饰会稀释检索命中
 // ——只剥明显视频语境的括弧段；live/cover 这类版本限定词保留（剥了会
@@ -114,7 +118,9 @@ const SUBTITLE_TAG_RE = /\s*(?:CC字幕|中文字幕|字幕付き|歌詞付き|�
 // strictTitle 闸 + AI 核验兜
 const CAPS_HEAD_RE = /^[A-Z0-9&']{2,15}\s+((?!\p{Lu})\p{L}.*)$/u;
 // 艺人锚用归一分隔符字符集（与归一化剥除同族，加冒号/全角斜杠/波浪）
-const NAME_SEP_CH = String.raw`\s\-_·•、,，。&+＋/／\\'’"（）()【】\[\]:：~～|`;
+// 艺人名分隔字符集——titleVariantsOf 艺人锚规则与 lyric-external
+// normName 剥除面共用（导出供级联侧归一比对对齐同一分隔集）
+export const NAME_SEP_CH = String.raw`\s\-_·•、,，。&+＋/／\\'’"（）()【】\[\]:：~～|「」『』`;
 const NAME_SEP_RUN = new RegExp(`[${NAME_SEP_CH}]+`);
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -126,8 +132,14 @@ export function titleVariantsOf(title, artist = '') {
   // 单规则变体先全量收集（normKey 去重、保规则序）——席位在末尾拼装时
   // 再切，好给激进变体保底末位槽（见 return 前注释）
   const singles = [];
+  // 艺人锚/括弧规则剥缀会留 dangling 装饰角括号——'EMA『懐中道標』'
+  // 的艺人锚剥 'EMA『' 后残 '懐中道標』'。变体只喂检索词，落单角括号
+  // 稀释命中——收进席位前剥掉头尾游离 「」『』
+  const trimBrackets = (v) => String(v || '')
+    .replace(/^[「」『』]+/, '')
+    .replace(/[「」『』]+$/, '');
   const collect = (v) => {
-    const t = String(v || '').replace(/\s+/g, ' ').trim();
+    const t = trimBrackets(String(v || '').replace(/\s+/g, ' ')).trim();
     if (!t) return;
     const k = normKey(t);
     if (seen.has(k)) return;
@@ -184,7 +196,12 @@ export function titleVariantsOf(title, artist = '') {
     //    恒排规则最末：单变体序位最低，挤不进席时激进腿同效迭代兜底
     (s) => s.replace(CAPS_HEAD_RE, '$1'),
   ];
-  for (const r of rules) collect(r(base));
+  for (const r of rules) {
+    const v = r(base);
+    // 规则恒等输出不收集——否则 collect 的 trimBrackets 会把未命中的基座
+    // 剥出新变体（'「曲名』' 异形对不跨对收的形态会被剥出幻影 '曲名'）
+    if (v !== base) collect(v);
+  }
   // 激进变体：全规则迭代到不动点（≤3 趟）——'Xを歌いました ／ Y' 这类复合
   // 噪声要斜杠尾+歌系中缀双剥才出真名，单规则各剥一层产不出
   let agg = base;
@@ -193,8 +210,10 @@ export function titleVariantsOf(title, artist = '') {
     if (normKey(next) === normKey(agg)) break;
     agg = next;
   }
-  agg = String(agg || '').replace(/\s+/g, ' ').trim();
-  const aggOk = Boolean(agg) && !seen.has(normKey(agg));
+  // 迭代未改动基座时不产激进变体——同上单规则面，纯 trim 不出幻影变体
+  const aggTrim = trimBrackets(String(agg || '').replace(/\s+/g, ' ')).trim();
+  const aggOk = agg !== base && Boolean(aggTrim) && !seen.has(normKey(aggTrim));
+  agg = aggTrim;
   // 拼装：raw 永远占首（空基座也保形——级联按一次正常尝试消费）；激进
   // 变体保底末位槽——复合噪声正是它的设计目标病例形态（'【栏】A - B
   // (cover) ／ 演唱者' 这类标题单规则恰占满 3 席时，真名只有全剥才得出）。

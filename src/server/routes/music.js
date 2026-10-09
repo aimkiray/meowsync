@@ -1,5 +1,6 @@
 const { Hono } = require('hono');
 const { apiModules, callNeteaseApi, resolveSongUrls, needsUnlock, MAX_UNLOCK_ITEMS } = require('../services/netease-api');
+const { NETEASE_ID_RE } = require('../../shared/predicates.js');
 // 流式限长读取：Content-Length 只是声明值，chunked 请求必须读流按字节截断
 const { readParamsBody } = require('../lib/http-body');
 const { stripAbsolutePaths } = require('../lib/sanitize');
@@ -22,7 +23,6 @@ const ALLOWED_APIS = new Set([
   'song_url_v1',
   'song_detail',
   'lyric',
-  'lyric_new',
   'check_music',
   'album',
   'artists',
@@ -215,6 +215,11 @@ app.all('/:apiName', async (c) => {
       params[key] = String(v);
     }
   }
+  // lyric 的 id 只认网易云数字曲 id——非数字 id（abc / qq_ / ext 词源 id）
+  // 直拒 400，不该透给上游撞 460 噪声（客户端 qq_/ext 词源走自家路由）
+  if (apiName === 'lyric' && !NETEASE_ID_RE.test(String(params.id ?? ''))) {
+    return c.json({ code: 400, message: '非法 lyric id' }, 400);
+  }
   // 上游慢链路（千曲歌单 detail/track_all 常超 30s 默认）放宽到 120s，
   // 与 playlist-sync 同口径——否则 UI 加载大歌单必死且每次重试另起上游请求
   const upstreamOptions = ['playlist_detail', 'playlist_track_all'].includes(apiName)
@@ -243,14 +248,16 @@ app.all('/:apiName', async (c) => {
 
     return sendUpstreamResult(c, result);
   } catch (error) {
+    // 客户端主动断开优先判（resolveSongUrls 透传 signal 中止）：断连时
+    // 上游可能恰好 reject 一个 answer 形态的错误，先走 isUpstreamAnswer
+    // 会把它当正常 4xx/5xx 回写——响应已无法送达，按 499 语义返回
+    // 且不打 error 级日志（正常断流不是服务故障）
+    if (c.req.raw.signal?.aborted) {
+      return c.body(null, 499);
+    }
     // request() 对上游非 200 响应会 reject(answer)：还原真实状态码/body/cookie，而不是吞成 500
     if (isUpstreamAnswer(error)) {
       return sendUpstreamResult(c, error);
-    }
-    // 客户端主动断开（resolveSongUrls 透传 signal 中止）：响应已无法送达，
-    // 按 499 语义返回且不打 error 级日志（正常断流不是服务故障）
-    if (c.req.raw.signal?.aborted) {
-      return c.body(null, 499);
     }
     // 只记 message：AxiosError 直接 dump 会把 config.headers.Cookie
     // （客户端转发的登录态）写进服务日志

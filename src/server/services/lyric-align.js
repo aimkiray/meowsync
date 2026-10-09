@@ -18,6 +18,7 @@
 const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
 const { aiEnabled, askAiJson } = require('../lib/ai');
+const { cleanLrcLineText } = require('../../shared/lrc.js');
 
 // 帧宽 200ms：行级对齐 ±0.5s 精度足够，且 4min 歌 = 1200 帧 = 单行 prompt
 const FRAME_MS = 200;
@@ -278,15 +279,10 @@ async function llmAlignTimes({ envelope, onsets, durationMs, frameMs, lines, sig
 }
 
 // ── LRC 产出 ─────────────────────────────────────────────────────────────
-// 行文本净化与 routes/ai.js 翻译净化同口径：剥换行、成对/落单方括号
-// （会把幻影时间戳带进 LRC）、Cf 格式字符——歌词行是 UGC 不可信输入
-const cleanLine = (s) => String(s ?? '')
-  .replace(/[\r\n]+/g, ' ')
-  .replace(/\[[^\]]*\]/g, ' ')
-  .replace(/[\[\]]/g, ' ')
-  .replace(/\p{Cf}/gu, '')
-  .replace(/\s+/g, ' ')
-  .trim();
+// 行文本净化与 routes/ai.js 翻译净化同口径（共享 cleanLrcLineText）：
+// 剥换行、成对/落单方括号（会把幻影时间戳带进 LRC）、Cf 格式字符——
+// 歌词行是 UGC 不可信输入
+const cleanLine = cleanLrcLineText;
 
 function msToLrcTag(ms) {
   const t = Math.max(0, Math.round(ms));

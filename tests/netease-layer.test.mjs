@@ -22,7 +22,11 @@ test('端点表覆盖白名单且名称双向一致', () => {
     assert.ok(ENDPOINTS[name], `白名单端点 ${name} 缺实现`);
     assert.equal(typeof ENDPOINTS[name].handler, 'function');
   }
+  // lyric_new 定义保留但已摘除透传（无客户端消费，/lyric 的 id 校验同挡）；
+  // 白名单外端点路由层直回 404，天然不在鉴权面上
+  const NOT_PASSED_THROUGH = new Set(['lyric_new']);
   for (const name of Object.keys(ENDPOINTS)) {
+    if (NOT_PASSED_THROUGH.has(name)) continue;
     assert.ok(ALLOWED_APIS.has(name), `端点 ${name} 不在白名单——会成未鉴权面`);
   }
 });

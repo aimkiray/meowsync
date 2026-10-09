@@ -12,36 +12,14 @@ const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('..
 // 未配/非 YT 域一律 null 短路走原样
 const { ytAxiosProxyFor } = require('../lib/yt-proxy');
 
-// LRC 译文合并：同刻时间戳的译文行插到原文行后（标准合并格式）；
-// 译文无对应时间戳的孤儿行丢弃——贴错行比没译文更糟。
-// 键归一到毫秒：lrc [00:01.23] 与 trans [00:01.230] 精度/补零不同
-// 时严格字符串相等会静默丢整曲译文
-function lrcTsKey(tag) {
-  // [mm:ss.xxx] 与 [mm:ss:xx] 两种毫秒分隔都认（parseLrcLines 同口径）
-  const m = tag.match(/^\[(\d+):(\d+(?:[.:]\d+)?)\]$/);
-  if (!m) return null;
-  return Math.round((+m[1] * 60 + +m[2].replace(':', '.')) * 1000);
-}
-function mergeLrcTrans(lrc, trans) {
-  if (!trans || typeof trans !== 'string') return lrc;
-  const transMap = new Map();
-  for (const line of trans.split('\n')) {
-    const m = line.match(/^(\[[\d:.]+\])\s*(.+)$/);
-    const key = m && lrcTsKey(m[1]);
-    if (key != null) transMap.set(key, { tag: m[1], text: m[2] });
-  }
-  if (!transMap.size) return lrc;
-  return lrc.split('\n').map(line => {
-    const m = line.match(/^(\[[\d:.]+\])/);
-    const hit = m && transMap.get(lrcTsKey(m[1]));
-    if (!hit) return line;
-    // AI 译文缓存里未译行是「原文占位」（占住时间戳防邻行错贴）——
-    // 播放端 mergeTranslations 判同文不显示，落盘文件同理跳过，否则
-    // 未译行会落成同刻双行「原文+原文」
-    const srcText = line.slice(m[1].length).trim();
-    return hit.text.trim() === srcText ? line : `${line}\n${m[1]}${hit.text}`;
-  }).join('\n');
-}
+// LRC 译文合并：实现收敛在共享层 src/shared/lrc.js mergeLrcText——
+// 与播放面 mergeTranslations 同窗口（0.5s）同最近邻策略，毫秒级
+// 偏差的译文不再对不上键（旧实现按整毫秒键严格相等会静默丢译
+// 文）；同文行不重复贴（AI 译文未译行是原文占位），译文无对应
+// 时间戳的孤儿行照旧丢弃——贴错行比没译文更糟
+const { mergeLrcText } = require('../../shared/lrc.js');
+const mergeLrcTrans = (lrc, trans) =>
+  (trans && typeof trans === 'string' ? mergeLrcText(lrc, trans) : lrc);
 
 // 下载 URL 来自上游 API/歌单元数据（网易云/解锁源），不是直接用户输入——但明文 http 源站
 // 可被链路篡改成 302 到内网/云元数据地址，与 proxy.js 同一威胁模型：每跳都做公网校验

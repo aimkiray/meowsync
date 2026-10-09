@@ -148,6 +148,32 @@ test('ai：截断译文（模型缺键）透出但不落库——重播须重打
   assert.ok(aiCalls.length > before + 1, '截断未落库时重播应重打上游');
 });
 
+test('ai：模型回非字符串译文值（数字/对象）整条丢——不 String 化落库', async () => {
+  lyricPayload = {
+    lrc: { lyric: '[00:01.00]line one\n[00:02.00]line two\n[00:03.00]line three' },
+    tlyric: { lyric: '' },
+  };
+  // {t:{"0":123}} 与对象值——typeof 闸把它们滤成未译（回填原文占位），
+  // 不许把 '123'/'[object Object]' 写进下发词稿
+  aiAnswer = { t: { '0': 123, '1': { zh: '嵌套' }, '2': '第三行' } };
+  // ai-translate 按 clientIp 分桶（8/min）——独立 IP 不占共享桶
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  try {
+    const r = await json(await app.request('http://t/ai/lyric-translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '10.9.9.1' },
+      body: JSON.stringify({ id: '880011' }),
+    }));
+    assert.equal(r.status, 200);
+    assert.ok(!r.body.tlyric.includes('123'));
+    assert.ok(!r.body.tlyric.includes('[object'));
+    assert.match(r.body.tlyric, /\[00:03\.00\]第三行/);
+    // 非串值行按未译回填原文占位（占住时间戳防邻行错贴）
+    assert.match(r.body.tlyric, /\[00:01\.00\]line one/);
+  } finally { process.env.TRUST_PROXY = prevTp; }
+});
+
 test('ai：无歌词源 → 404 + skip 落库（重放不再打上游）', async () => {
   lyricPayload = { lrc: { lyric: '' }, tlyric: { lyric: '' } };
   const r = await post('/ai/lyric-translate', { id: '880003' });
@@ -156,6 +182,25 @@ test('ai：无歌词源 → 404 + skip 落库（重放不再打上游）', async
   const r2 = await json(await post('/ai/lyric-translate', { id: '880003' }));
   assert.equal(r2.status, 200);
   assert.equal(r2.body.cached, true);
+});
+
+test('ai：主词即占位声明（[99:00]纯音乐请欣赏）→ 无词 404，挂着的 tlyric 不透出', async () => {
+  lyricPayload = {
+    lrc: { lyric: '[99:00.00]纯音乐，请欣赏' },
+    // 占位主词的译文层没有语义——neteaseLyricBody 一并归空不透出，
+    // 不然译层可能被下游当成真词稿
+    tlyric: { lyric: '[99:00.00]instrumental, please enjoy' },
+  };
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  try {
+    const r = await app.request('http://t/ai/lyric-translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '10.9.9.2' },
+      body: JSON.stringify({ id: '880012' }),
+    });
+    assert.equal(r.status, 404);
+  } finally { process.env.TRUST_PROXY = prevTp; }
 });
 
 // ── verify 判定链 ──

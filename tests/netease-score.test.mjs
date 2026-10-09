@@ -66,9 +66,10 @@ test('scoreCandidate 反向钉：标题完全不同的繁简混合串仍 title=0
 });
 
 // CJK_FOLD 不外泄——表规模按源文本钉（与 netease-match.test.mjs 末尾的
-// fs 钉同法）：繁体正字补齐后条数不得萎缩回补表前水位
+// fs 钉同法）：繁体正字补齐后条数不得萎缩回补表前水位。表实体已收敛进
+// 共享层 text-norm.js（netease-score 仅再导出）——钉源跟着表走
 const scoreSrc = readFileSync(
-  new URL('../src/server/services/netease-score.js', import.meta.url), 'utf8');
+  new URL('../src/shared/text-norm.js', import.meta.url), 'utf8');
 const foldBlock = scoreSrc.match(
   /const CJK_FOLD = new Map\(Object\.entries\(\{([\s\S]*?)\}\)\)/)?.[1] || '';
 const foldPairs = foldBlock.match(/\p{sc=Han}:/gu) || [];

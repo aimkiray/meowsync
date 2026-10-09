@@ -1,5 +1,6 @@
 import api, { API_BASE_URL, downloadTokenHeaders } from './http.js'
 import { httpsCover } from '../lib/url.js'
+import { parseLrc, lrcOffsetSec, mergeTranslations as mergeLrcTranslations, neteaseLyricBody } from '../shared/lrc.js'
 
 const RETRY_COUNT = 3
 const RETRY_DELAY = 500
@@ -294,10 +295,14 @@ export const musicApi = {
     const data = unwrapBody(response)
     // 上游错误码不当「没词」归一——歌词空与上游拒词是两种结局
     assertCode200(data, '歌词')
-    const lyrics = parseLyrics(data.lrc?.lyric || '')
+    // 无词标记/纯占位词归一成空词——nolyric·uncollected 旗标或全文只剩
+    // 「纯音乐，请欣赏」式占位行的词不该进合并/展示（空词会触下游兜底；
+    // 归一口径收敛在共享层 neteaseLyricBody——占位主词连带不透 tlyric）
+    const { lrc: lrcText, tlyric: tlyricText } = neteaseLyricBody(data)
+    const lyrics = parseLyrics(lrcText)
     // 翻译文件常缺自己的 [offset:] 标签——用主歌词的 offset 兜底对齐，
     // 否则主词已偏移、翻译未偏移，0.5s 合并窗永远配不上对而全部丢弃
-    const translations = parseLyrics(data.tlyric?.lyric || '', getLrcOffsetSec(data.lrc?.lyric))
+    const translations = parseLyrics(tlyricText, getLrcOffsetSec(lrcText))
     return {
       lyrics: mergeTranslations(lyrics, translations)
     }
@@ -339,13 +344,15 @@ export const musicApi = {
 
   // 手动「生成滚动词」：POST /lyric-align——纯文本词行 + 已下载音频工件
   // （songId 寻址，服务端跨歌单查 download_tasks 的 completed 行）经
-  // ffmpeg 抽包络 + LLM 行首映射产滚动 LRC。ffmpeg 解码+AI 是重活，
-  // 超时放宽到 120s。错误不吞——调用方按 e.response.status 分诊文案
+  // ffmpeg 抽包络 + LLM 行首映射产滚动 LRC。服务端最坏路径=
+  // ALIGN_DEADLINE_MS 240s（ffmpeg 解码窗口）+ AI 行首映射——客户端
+  // 120s 会先死在等待里（服务端活儿没做完回包却被掐断），给 300s。
+  // 错误不吞——调用方按 e.response.status 分诊文案
   // （404 无已下载音频或无词 / 503 ffmpeg 缺席 / 429 限流 / 502 对齐失败）
   lyricAlign: async ({ songId, lines }, abortSignal = null) => {
     const response = await api.post('/lyric-align', { songId, lines }, {
       signal: abortSignal,
-      timeout: 120000
+      timeout: 300000
     })
     const data = unwrapBody(response)
     if (data.code !== 200) throw new Error(data.message || '歌词对齐失败')
@@ -681,55 +688,13 @@ async function saveStreamAsFile(url, fileName) {
   return { success: true, fileName: safeName }
 }
 
-// 歌词与翻译数组均按时间排序，双指针合并 O(n+m)
-function mergeTranslations(lyrics, translations) {
-  let j = 0
-  return lyrics.map(lyric => {
-    while (j < translations.length - 1 &&
-           Math.abs(translations[j + 1].time - lyric.time) <= Math.abs(translations[j].time - lyric.time)) {
-      j++
-    }
-    const translation = translations[j] && Math.abs(translations[j].time - lyric.time) < 0.5
-      ? translations[j].text
-      : ''
-    // AI 译文里未译行回填的是原文（占住时间戳防邻行错贴）——同文即未译不显示
-    return { ...lyric, translation: translation === lyric.text ? '' : translation }
-  })
-}
-
-// [offset:±ms] LRC 全局偏移：约定正值=歌词整体提前（显示时间 = 标签时间 - offset）。
-// 锚定行首——正文里恰好出现的 "[offset:xxx]" 不该污染全局时序。
-// 返回 null 表示文件未声明（调用方用主歌词的 offset 兜底）
-function getLrcOffsetSec(lyricText) {
-  if (!lyricText) return null
-  const offsetMatch = lyricText.match(/^\s*\[offset:\s*([+-]?\d+)\s*\]/im)
-  return offsetMatch ? parseInt(offsetMatch[1]) / 1000 : null
-}
-
-function parseLyrics(lyricText, fallbackOffsetSec = null) {
-  if (!lyricText) return []
-  const offsetSec = getLrcOffsetSec(lyricText) ?? fallbackOffsetSec ?? 0
-  // /g 是承重墙：matchAll 对非 global 正则直接 TypeError
-  const timeTag = /\[(\d+):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
-
-  const result = []
-  for (const line of lyricText.split('\n')) {
-    const tags = [...line.matchAll(timeTag)]
-    if (!tags.length) continue
-    // 多时间戳行（[t1][t2]text）= 同一文本在多个时间点出现——展开成多条；
-    // 文本=去掉所有行首时间戳与增强 LRC 行内 <mm:ss.xx> 标签
-    const text = line.replace(timeTag, '')
-      .replace(/<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g, '')
-      .trim()
-    if (!text) continue
-    for (const m of tags) {
-      const ms = m[3] ? parseInt(m[3].padEnd(3, '0')) : 0
-      const time = parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000 - offsetSec
-      result.push({ time: Math.max(0, time), text })
-    }
-  }
-  return result.sort((a, b) => a.time - b.time)
-}
+// LRC 解析/译文窗口合并的唯一真相源在 src/shared/lrc.js（服务端落盘
+// 合并与词性核验同消费一份——播放与落盘词序/时序口径不再漂移）。
+// 壳名保留：usePlayer 与既有测试以 parseLyrics/mergeTranslations 为契约
+const getLrcOffsetSec = lrcOffsetSec
+const parseLyrics = (lyricText, fallbackOffsetSec = null) =>
+  lyricText ? parseLrc(lyricText, fallbackOffsetSec) : []
+const mergeTranslations = mergeLrcTranslations
 
 // 供 AI 译文回填复用——loadLyrics 拿到 tlyric 后与主歌词按时间窗合并
 export { parseLyrics, mergeTranslations }

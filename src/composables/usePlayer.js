@@ -10,10 +10,12 @@ import { formatTime } from '../lib/format.js'
 import { toast } from '../lib/feedback.js'
 import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId, NETEASE_ID_RE, YT_TRACK_ID_RE, BV_TRACK_ID_RE, QQ_SONG_ID_RE } from '../lib/url.js'
-import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl, isUgcExternalTrack } from '../lib/song.js'
+import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl, isUgcExternalTrack, externalArtistName } from '../lib/song.js'
 import { applyMatchResult } from '../lib/external-songs.js'
 // MIRROR_PLAYLIST_ID_RE/isLikelyChineseLyric 未走 lib 转口（lib/url.js 转口表无它们）——直引共享层
 import { MIRROR_PLAYLIST_ID_RE, isLikelyChineseLyric } from '../shared/predicates.js'
+import { plainLyricLines } from '../shared/lrc.js'
+import { LYRIC_ALIGN_MAX_LINES, LYRIC_ALIGN_MAX_LINE_CHARS } from '../shared/contracts.js'
 import { SAVED_QUEUE_TRACK_CAP } from './usePlaylistLibrary.js'
 
 // html5 池是全局常驻的 <audio> 元素组——预垫节点未置 src 不占媒体缓冲区，
@@ -1132,11 +1134,43 @@ export function usePlayer({
     // 重载再发——同 id 同 signal 域里 currentPlayingId/abort 都分不开，后到者
     // 赢；无它时旧响应晚落地会覆盖新词）
     let lyricLoadSeq = 0
+    // 词务代次陈旧判定的单份组装——loadLyrics/手动获取/补轴三处同一份
+    // 语义（切断 signal + 曲 id 换号 + 加载代次失配）；postProcess 的
+    // ownsLyric 用的是 lyricProcSeq 另一张账，刻意不共用
+    const makeLyricStale = (song, signal, seq) => () =>
+      signal?.aborted || currentPlayingId !== song.id || seq !== lyricLoadSeq
+    // 「词文本 → 行集 + 是否滚动」单份口径：滚动解析（parseLyrics）出空集
+    // 则纯文本剥戳落成 time:Infinity 静态行（同步循环恒不匹配、渲染层照常
+    // 显行——「有字无轴」仍是可读词稿不是无词；补轴入口也靠这批非有限戳
+    // 行现身）。file_ 上传词与外源 hit 落地共用
+    const lyricRowsOf = (text) => {
+      const rows = parseLyrics(text || '')
+      return rows.length
+        ? { rows, synced: true }
+        : { rows: plainLyricLines(text), synced: false }
+    }
+    // 外源级联/匹配链的检索喂料单份组装（fetchApplyExternal/
+    // rematchLyricSource/rematchUnbound/manualFetchLyrics 四处共用）：
+    // provider 块（youtube/bilibili）的标题/作者优先，艺人缺省回退曲面
+    // ar/artists——qq_ 无 provider 块，ar 即曲库真实署名（具名轮要用）
+    const lyricSearchFeed = (song) => {
+      const ext = song?.youtube || song?.bilibili || null
+      const durationMs = song?.dt || song?.duration
+      return {
+        extTitle: ext?.title || '',
+        extAuthor: ext?.author || '',
+        extAuthorClean: ext?.authorClean || '',
+        name: song?.name || '',
+        artistsJoined: (song?.ar || song?.artists || [])
+          .map(a => a?.name).filter(Boolean).join('/'),
+        durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+      }
+    }
     const loadLyrics = async (song, signal = null) => {
       const mySeq = ++lyricLoadSeq
       // 新加载代接管词 UI 态：顺带清掉悬挂的手动锁——切歌/热重载时旧
       // 「获取歌词/生成滚动词」代可能仍在途（无 signal 自然跑完，外源
-      // 80s/对齐 120s 超时）；其 finally 按 mySeq===lyricLoadSeq 判已
+      // 80s/对齐 300s 超时）；其 finally 按 mySeq===lyricLoadSeq 判已
       // 失配不再碰锁，这里不清则 lyricFetching 卡 true，新曲工具条
       // 死锁到旧请求 settle 才放
       lyricFetching.value = false
@@ -1145,7 +1179,7 @@ export function usePlayer({
       // 终态各支 try/finally 照旧复位；stale 早退留给新代（或看门狗
       // 显式清）——本代被顶替时绝不能抢新代的旗
       loadingLyrics.value = true
-      const stale = () => signal?.aborted || currentPlayingId !== song.id || mySeq !== lyricLoadSeq
+      const stale = makeLyricStale(song, signal, mySeq)
       // file_ 曲：词源=用户上传的 .lrc 工件（file 端点 kind=lyrics）。无资产时 404 → 空词。
       // 词属主键用 song.id——file 词与曲同生死，offset 校准也挂它（song_lyric_meta 按 id 存）
       if (isFileTrackId(song?.id)) {
@@ -1159,9 +1193,15 @@ export function usePlayer({
           if (stale()) return
           lyricOffsetMs.value = meta?.offsetMs ?? 0
           lyricOwnerKey.value = song.id
-          lyrics.value = text ? parseLyrics(text) : []
-          currentLyricIndex.value = 0
-          if (lyrics.value.length > 0) startLyricSync()
+          // 上传的可能是纯文本词（无时间戳）——lyricRowsOf 兜底成
+          // time:Infinity 静态行（与外源 hit 落地同口径）：仍可读且
+          // 「生成滚动词」补轴入口靠非有限戳行现身；旧口径 parseLyrics
+          // 全空按无词处理把补轴入口永久锁死
+          const { rows, synced } = lyricRowsOf(text)
+          lyrics.value = rows
+          currentLyricIndex.value = synced ? 0 : -1
+          if (synced && rows.length) startLyricSync()
+          else stopLyricSync()
         } catch (error) {
           if (stale() || error.name === 'AbortError') return
           lyrics.value = []; currentLyricIndex.value = 0; lyricOwnerKey.value = null
@@ -1179,13 +1219,14 @@ export function usePlayer({
         lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
         lyricOwnerKey.value = null
         console.log('📝 加载外源歌词:', song.id)
-        const ext = song?.youtube || song?.bilibili || null
-        const durationMs = song.dt || song.duration
+        const feed = lyricSearchFeed(song)
+        // artist 缺省回退曲面艺人表：UGC 行 ar 本空（口径不变），qq_ 曲的
+        // ar 是曲库真实署名——具名轮检索要它
         const hit = await musicApi.getExternalLyric({
           id: song.id,
-          title: ext?.title || song.name || '',
-          artist: ext?.author || '',
-          durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+          title: feed.extTitle || feed.name,
+          artist: feed.extAuthor || feed.artistsJoined || '',
+          durationSec: feed.durationSec,
         }, signal).catch(() => null) // 级联全灭(404)/网络错同终态：照旧空词
         if (stale()) return
         await applyExternalLyricHit(song, hit, { signal, stale })
@@ -1230,9 +1271,9 @@ export function usePlayer({
       // postProcess 会走归属核验）。裸 qq_<mid> id（缺 provider 对象的老行）
       // 同样自解 mid——/qq/lyric 只吃 mid，不落网易云 /lyric 死路
       const qqMid = song?.qq?.mid || String(song?.id ?? '').match(QQ_SONG_ID_RE)?.[1] || null
+      // lyricId 恒非空——playSong 保证 song.id（旧 lyricId==null 早退是
+      // 不可达分支）：qq_ 支取 `qq_<mid>`，其余取 neteaseId ?? song.id
       let lyricId = qqMid ? `qq_${qqMid}` : (song?.neteaseId ?? song?.id)
-      // 非 stale 的早退出口须自清加载旗（顶部已置位，本代仍是新代无人接管）
-      if (lyricId == null) { loadingLyrics.value = false; return }
       lyricOffsetMs.value = 0 // meta 回包前先归零——旧曲校准值不挂新曲界面
       try {
         console.log('📝 加载歌词:', lyricId)
@@ -1242,7 +1283,14 @@ export function usePlayer({
         // qq 词源要等 fetch 后才知道是否回落，meta 延到词源定稿再查
         const metaPromise = qqMid ? null : downloadsApi.getSongMeta(lyricId).catch(() => null)
         let lyricsData = qqMid
-          ? await musicApi.getQQLyric(qqMid, signal).catch(() => null)
+          ? await musicApi.getQQLyric(qqMid, signal).catch((e) => {
+            // abort/取消穿透给外层分诊（切歌打断在途请求不是失败）；
+            // 其余故障降级空词照旧走回落链
+            if (e?.name === 'AbortError' || e?.name === 'CanceledError'
+                || e?.code === 'ERR_CANCELED') throw e
+            console.warn('QQ 歌词获取失败，回落兜底:', e?.message || e)
+            return null
+          })
           : await musicApi.getLyrics(lyricId, signal)
         // 切歌/取消/同曲再载后直接丢弃，不写回共享状态
         if (stale()) return
@@ -1251,12 +1299,20 @@ export function usePlayer({
           lyricsData = await musicApi.getLyrics(lyricId, signal)
           if (stale()) return
         }
+        // qq_ 链全灭（QQ 词空 + 无/空网易回落）：与下载链同口径接外源级联
+        // 兜底（服务端对 qq_ 曲库 id 按 AI 在位与否分保守/开放两态，不再走
+        // 宽检硬滤）。不触 rematchUnbound——那是 UGC 未绑定曲的首配面，
+        // qq_ 有自家权威词源不进匹配链
+        if (!lyricsData?.lyrics?.length && qqMid) {
+          await fetchApplyExternal(song, signal)
+          return
+        }
         // 绑后词空兜底：词源终态行集为空（含 qq→netease 回落后仍空）且曲
         // 是 UGC 形态（isUgcExternalTrack——与上方未绑定支同谓词）→ 再走
         // 一遍外源级联。曲绑上 neteaseId 后 !song.neteaseId 闸使外源支本
         // 不再进——若绑定的词源无词，本在显示的外源词（如首配前命中的纯
-        // 文本词）会永久消失：绑错=丢词。数字/qq_ 纯曲库 id 不进——外源
-        // 宽检对目录曲是误导通道（既有设计口径）。外源也空则 lyrics=[]
+        // 文本词）会永久消失：绑错=丢词。数字纯曲库 id 不进——外源宽检
+        // 对目录曲是误导通道（qq_ 词空由上方独立支接走）。外源也空则 lyrics=[]
         // 与现状同终态；rematchUnbound 的 neteaseId==null 闸天然防环——
         // 绑后兜底不回触首配
         if (!lyricsData?.lyrics?.length && isUgcExternalTrack(song)) {
@@ -1309,20 +1365,14 @@ export function usePlayer({
     // 区分「落地/被陈旧丢/被闸拦」出文案
     const applyExternalLyricHit = async (song, hit, { signal = null, stale = () => false, admit = null } = {}) => {
       // 纯文本→静态行：parseLyrics 只吃带时间戳的行，synced=false 的
-      // lrc 会全空——逐行落 time:Infinity：WatchView 照常渲行、同步循环
+      // lrc 会全空——plainLyricLines（共享层 lrc.js，先剥行首时间戳再判
+      // [tag:] 元行）逐行落 time:Infinity：WatchView 照常渲行、同步循环
       // 恒不匹配（currentLyricIndex 停 -1 不滚动）、TextAlive 画布滤非
       // 有限戳。「不滚动」正是无戳词的正确行为；synced lrc 解空时拿
-      // plain 兜底重切（先剥行首时间戳，不然戳串会进文本）
-      const plainRowsOf = (text) => (text || '').split('\n')
-        .map(l => l.replace(/^\s*(?:\[\d+:[^\]]*\]\s*)+/, '').trim())
-        // 行首 [tag:] 元行（ti/ar/offset/length…）不是词——剥完行首
-        // 时间戳后仍挂标签头的行整行滤掉；元行判定必须在剥戳之后
-        // （\w 含数字，先判会把 [0:05] 这类短戳词行误杀）
-        .filter(l => l && !/^\[[\w-]+:/.test(l))
-        .map(text => ({ time: Infinity, text }))
+      // plain 兜底重切
       let synced = !!hit?.synced
       let rows = synced ? parseLyrics(hit.lrc) : []
-      if (!rows.length) { synced = false; rows = plainRowsOf(hit?.plain || hit?.lrc) }
+      if (!rows.length) { synced = false; rows = plainLyricLines(hit?.plain || hit?.lrc) }
       // 词属主键挂 extId（ytm_/lrclib_/kugou_ 前缀）——meta 校准表与
       // verify/translate 白名单对该形态均已放开；extId 缺席降级到
       // song.id（词仍可见，校准行挂曲 id 不写串台）
@@ -1380,22 +1430,8 @@ export function usePlayer({
       map.set(key, val)
     }
     const aiLyricVerdicts = new Map()   // `${lyricId}|${title}|${author}` -> boolean
-    const aiLyricTranslations = new Map() // lyricId -> tlyric 字符串
+    const aiLyricTranslations = new Map() // `${lyricId}|${model}` -> tlyric 字符串
     let lyricProcSeq = 0 // 每次歌词落盘 +1；postProcess 捕获，ownsLyric 比对
-
-    // /ai/status 会话级挂账：postProcess 每过一份词都问一次「AI 开了
-    // 没」，而开关在同会话内不变（服务端配置项）——首问 Promise 挂账，
-    // 并发与后续共账只打一跳；失败销账重抛，下次重新探测不缓存错误
-    let aiStatusPromise = null
-    const getAiStatus = () => {
-      if (!aiStatusPromise) {
-        aiStatusPromise = aiApi.status().catch(e => {
-          aiStatusPromise = null
-          throw e
-        })
-      }
-      return aiStatusPromise
-    }
 
     // verify 判否后的自动换绑：判否等于「当前词源错配」的强信号，把该
     // neteaseId 否进 excludeIds 让服务端 /match/retry 换绑重跑。每曲每
@@ -1440,20 +1476,21 @@ export function usePlayer({
       rematchTried.set(key, freshVetoed)
       // provider 块可缺席（裸 id 过闸）：检索喂料回退 song.name/ar，与
       // rematchUnbound 同口径——缺了降级不致死，服务端按 id 前缀自解
-      const ext = song.youtube || song.bilibili || null
-      const durationMs = song.dt || song.duration
+      const feed = lyricSearchFeed(song)
       try {
         const matched = await musicApi.retryMatch({
           trackId: song.id,
-          title: ext?.title || song.name || '',
-          author: ext?.author || '',
+          title: feed.extTitle || feed.name,
+          author: feed.extAuthor,
           // provider 块从不存 artists 字段（external-songs.js 只落 author/
           // authorClean）——authorClean 是剥 ' - Topic'/'VEVO' 后的真艺人名，
           // 一并喂服务端打分器 sourceInfo.artists（YT Topic 频道场景 retry
           // 不再比首配更瞎）
-          artists: [ext?.author, ext?.authorClean].filter(Boolean),
-          durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
-          excludeIds: [...freshVetoed],
+          artists: [feed.extAuthor, feed.extAuthorClean].filter(Boolean),
+          durationSec: feed.durationSec,
+          // 判否累积集之外再并入菜单显式否决簿（与 rematchUnbound 同一张
+          // 账）——自动换绑不许复活用户显式解绑/换绑否掉的词源
+          excludeIds: [...new Set([...freshVetoed, ...(matchVetoedIds.get(key) ?? [])])],
         }, signal)
         // 空回包/同 id 早退：自动路径不解绑——与菜单显式纠错的不对称是
         // 刻意的。用户点「重新匹配」等于显式说「这不是」（强信号，空回包
@@ -1508,7 +1545,7 @@ export function usePlayer({
       const key = String(song.id)
       if (rematchUnboundTried.has(key)) return
       rematchUnboundTried.set(key, true)
-      const ext = song.youtube || song.bilibili || null
+      const feed = lyricSearchFeed(song)
       // 否决集 = 判否累积（rematchTried 同键域）∪ 菜单显式否决簿——
       // 解绑/换绑否掉的 id 不进候选（防自动首配复活用户纠正）
       const excludeIds = [...new Set([
@@ -1518,12 +1555,12 @@ export function usePlayer({
       try {
         const matched = await musicApi.retryMatch({
           trackId: song.id,
-          title: ext?.title || song.name || '',
-          author: ext?.author || '',
+          title: feed.extTitle || feed.name,
+          author: feed.extAuthor,
           // provider 块无 artists 字段（同 rematchLyricSource 口径）——
           // authorClean 是剥 ' - Topic'/'VEVO' 后的真艺人名，一并喂打分器
-          artists: [ext?.author, ext?.authorClean].filter(Boolean),
-          durationSec: Math.round((song.dt || song.duration || 0) / 1000) || undefined,
+          artists: [feed.extAuthor, feed.extAuthorClean].filter(Boolean),
+          durationSec: feed.durationSec || undefined,
           // 空集不捎字段——保持首配契约干净（有否决账才发 excludeIds）
           ...(excludeIds.length ? { excludeIds } : {}),
         }, signal)
@@ -1643,7 +1680,9 @@ export function usePlayer({
 
     const postProcessLyrics = async (song, lyricId, seq, signal = null) => {
       if (!lyrics.value.length) return
-      const st = await getAiStatus()
+      // 直调 aiApi.status()——它自带「只缓存成功」的会话 memoize 与
+      // invalidateStatus（SettingsPanel 改配置即失效），本层不再另挂第二份
+      const st = await aiApi.status()
       // 词属主复查：每个 await 后都可能已切歌/重载——写回前必须确认
       const ownsLyric = () => lyricProcSeq === seq
         && lyricOwnerKey.value === lyricId && currentPlayingId === song.id
@@ -1660,7 +1699,16 @@ export function usePlayer({
           : ((song?.qq || QQ_SONG_ID_RE.test(String(song?.id)))
               && String(lyricId) === String(song.neteaseId))
             ? { title: song.name, author: song.ar?.map(a => a.name).join(' ') || '' }
-            : null
+            // provider 块缺席的裸 bv_/yt_ 老行（isUgcExternalTrack 形态命
+            // 中）也可能经 hydrateMatchBinding 补绑吃上嫁接词——一样要验：
+            // 曲面元数据喂判定（externalArtistName 复剥 Topic/VEVO 后缀）
+            : isUgcExternalTrack(song)
+              ? {
+                title: song?.name || '',
+                author: externalArtistName(song)
+                  || (song?.ar || song?.artists || []).map(a => a?.name).filter(Boolean).join(' '),
+              }
+              : null
       if (ext?.title && ownsLyric()) {
         // 含模型维度——与服务端 vkey 同口径：换模型后旧判定不应再挡路
         const vkey = JSON.stringify([lyricId, ext.title, ext.author, st.model || ''])
@@ -1696,24 +1744,37 @@ export function usePlayer({
         }
       }
 
-      // ② 无官方译文 + 非中文语境 → 自动翻译（普通网易云外语曲同样受益）
-      //    AI 未配置时 503 会每首歌重发，这里直接早退省一跳
-      if (!st?.enabled || !ownsLyric() || !lyrics.value.length) return
+      // ② 无官方译文 + 非中文语境 → 自动翻译（普通网易云外语曲同样受益）。
+      //    AI 关时不再短路：服务端缓存查询先于 aiEnabled 闸——已落库译文
+      //    （含官方译文镜像）照常回，要新产译文才 503；会话缓存兜住「每
+      //    词源只问一次」，disabled 负结果同样落账不再重打
+      if (!ownsLyric() || !lyrics.value.length) return
       if (lyrics.value.some(l => l.translation)) return
       // 无时间戳的纯文本词不翻——译文靠时间戳回贴（mergeTranslations 0.5s
       // 合并窗），无戳行没有挂载点，打了也合不进
       if (!lyrics.value.some(l => Number.isFinite(l.time))) return
       if (lyricCjkDominant(lyrics.value)) return
+      // 缓存键含模型——与服务端 getCachedTranslation(id, aiModel()) 同口径：
+      // 换模型后旧译文不再命中重贴（verify vkey 早已同规）
+      const tkey = `${lyricId}|${st?.model || ''}`
       try {
-        let tlyric = aiLyricTranslations.get(lyricId)
+        let tlyric = aiLyricTranslations.get(tkey)
         let lines = null
         if (tlyric === undefined) {
-          const r = await aiApi.translateLyric(lyricId)
-          tlyric = r?.tlyric || null
-          lines = r?.lines
-          // 负结果也入会期缓存（skip 哨兵/already-zh/无词）——否则每播
-          // 一次同首歌都重打一次 translate；请求异常走 catch 不缓存
-          cacheSet(aiLyricTranslations, lyricId, tlyric)
+          try {
+            const r = await aiApi.translateLyric(lyricId)
+            tlyric = r?.tlyric || null
+            lines = r?.lines
+            // 负结果也入会期缓存（skip 哨兵/already-zh/无词）——否则每播
+            // 一次同首歌都重打一次 translate；请求异常走 catch 不缓存
+            cacheSet(aiLyricTranslations, tkey, tlyric)
+          } catch (e) {
+            // AI 未配置（503 enabled:false）是确定负结果——缓存 null 防每
+            // 播重打；其余通道故障不固化（恢复后重播要能重试）
+            if (e?.response?.data?.enabled === false) {
+              cacheSet(aiLyricTranslations, tkey, null)
+            } else { throw e }
+          }
         }
         if (!tlyric || !ownsLyric()) return
         // 服务端 tlyric 已回贴原时间戳并透传 [offset:] 标签——parse 后时序
@@ -1813,22 +1874,27 @@ export function usePlayer({
     const manualFetchLyrics = async () => {
       const song = currentSong.value
       if (!song || lyricFetching.value || songSwitching.value) return
+      // file_ 曲词源是上传的 .lrc 工件——外部级联里没有它的条目，换词
+      // 走重新上传（编辑弹窗换 .lrc 后 reloadLyrics 热重载），不打
+      // /lyric/external 白跑一条级联
+      if (isFileTrackId(song.id)) {
+        toast('本地上传曲的歌词来自上传的 .lrc 文件，请重新上传更换歌词', 'info')
+        return
+      }
       const mySeq = ++lyricLoadSeq
-      const stale = () => currentPlayingId !== song.id || mySeq !== lyricLoadSeq
+      const stale = makeLyricStale(song, null, mySeq)
       lyricFetching.value = true
       loadingLyrics.value = false // 本代接管词态——被挤掉的在途自动加载不再复位它
       try {
-        const ext = song.youtube || song.bilibili || null
-        const durationMs = song.dt || song.duration
         // 无 signal——与 reloadLyrics/换绑热重载同口径：写共享态靠
-        // stale 闸（切歌后回包落不了），请求本体让它自然跑完
+        // stale 闸（切歌后回包落不了），请求本体让它自然跑完。
+        // 手动链检索口径与自动链不同：song.name（用户手改过的名字）优先
+        const feed = lyricSearchFeed(song)
         const hit = await musicApi.getExternalLyric({
           id: song.id,
-          title: song.name || ext?.title || '',
-          artist: ext?.author
-            || (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/')
-            || '',
-          durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+          title: feed.name || feed.extTitle,
+          artist: feed.extAuthor || feed.artistsJoined || '',
+          durationSec: feed.durationSec,
         })
         if (stale()) return
         if (!hit) { // 404 已被 api 归一成 null——「外面确实没词」
@@ -1880,12 +1946,13 @@ export function usePlayer({
       if (!lyrics.value.length || !lyrics.value.every(l => !Number.isFinite(l.time))) return
       const rawLines = lyrics.value.map(l => l.text).filter(Boolean)
       if (!rawLines.length) return
-      // lyricAlignBody 契约上限：≤600 行、单行 ≤500 字——超限原样发只会
-      // 吃笼统 400；就地截断，成功文案补注对齐范围
-      const truncated = rawLines.length > 600 || rawLines.some(l => l.length > 500)
-      const lines = rawLines.map(t => t.slice(0, 500)).slice(0, 600)
+      // lyricAlignBody 契约上限（shared/contracts.js 同一份常量）：超限
+      // 原样发只会吃笼统 400；就地截断，成功文案补注对齐范围
+      const truncated = rawLines.length > LYRIC_ALIGN_MAX_LINES
+        || rawLines.some(l => l.length > LYRIC_ALIGN_MAX_LINE_CHARS)
+      const lines = rawLines.map(t => t.slice(0, LYRIC_ALIGN_MAX_LINE_CHARS)).slice(0, LYRIC_ALIGN_MAX_LINES)
       const mySeq = ++lyricLoadSeq
-      const stale = () => currentPlayingId !== song.id || mySeq !== lyricLoadSeq
+      const stale = makeLyricStale(song, null, mySeq)
       lyricFetching.value = true
       loadingLyrics.value = false
       try {

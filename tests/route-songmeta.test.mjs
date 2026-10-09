@@ -71,3 +71,16 @@ test('song-meta：id 白名单——非法字符 400', async () => {
   assert.equal((await app.request('http://t/song-meta/' + 'a'.repeat(65))).status, 400);
   assert.equal((await put('bad%20id', { offsetMs: 1 })).status, 400);
 });
+
+test('song-meta：词属主键全形收——ext 词源 id（lrclib_+120）/qq_/file_/bv_/yt_ 放行', async () => {
+  // 外源词属主键可比旧 64 字符通用正则长（EXT_LYRIC_ID_STRICT_RE 到
+  // lrclib_+120）——旧闸会把合法外源键 400 掉，校准写不进去
+  const longExt = 'lrclib_' + 'x'.repeat(120);
+  assert.equal((await app.request(`http://t/song-meta/${longExt}`)).status, 200);
+  for (const id of ['qq_0123456789ab', 'file_abcdef12', 'bv_BV1xx411c7mD', 'yt_dQw4w9WgXcQ']) {
+    assert.equal((await app.request(`http://t/song-meta/${id}`)).status, 200, id);
+  }
+  // 形态集合外的串仍拒：泛字母数字串、超 120 的 ext 后缀、路径形
+  assert.equal((await app.request('http://t/song-meta/notavalididform')).status, 400);
+  assert.equal((await app.request('http://t/song-meta/lrclib_' + 'x'.repeat(121))).status, 400);
+});

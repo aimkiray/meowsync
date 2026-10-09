@@ -595,6 +595,44 @@ describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', 
     expect(musicApi.getLyrics).toHaveBeenCalledWith(555, expect.anything())
   })
 
+  it('qq_ 裸 id 词源空且无 neteaseId：回落外源级联兜底，不进首配链', async () => {
+    const qq = song('qq_0034M8WL3V4oHC')
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(qq)
+    await player.playSong(qq)
+    expect(musicApi.getQQLyric).toHaveBeenCalledWith('0034M8WL3V4oHC', expect.anything())
+    expect(musicApi.getLyrics).not.toHaveBeenCalled()
+    // 与下载链同口径接外源级联；qq_ 无 provider 块，ar 即曲库真实署名
+    expect(musicApi.getExternalLyric).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'qq_0034M8WL3V4oHC', title: '歌qq_0034M8WL3V4oHC', artist: '艺人', durationSec: 200,
+      }), expect.anything())
+    // 不触 rematchUnbound——那是 UGC 未绑定曲的首配面，qq_ 有自家权威词源
+    expect(musicApi.retryMatch).not.toHaveBeenCalled()
+  })
+
+  it('file_ 上传词是纯文本（无时间戳）：剥戳落静态行不滚动，补轴入口可现身', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, text: async () => '第一段词\n第二段词',
+    })))
+    try {
+      const ft = song('file_abcd1234')
+      const { player } = makePlayer()
+      await player.playSong(ft)
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining('file_abcd1234'), expect.anything())
+      // 与外源 hit 纯文本落地同口径：time:Infinity 静态行——可读不滚动，
+      // 「生成滚动词」补轴入口靠非有限戳行现身（旧口径全空锁死入口）
+      expect(player.lyrics.value).toEqual([
+        { time: Infinity, text: '第一段词' },
+        { time: Infinity, text: '第二段词' },
+      ])
+      expect(player.currentLyricIndex.value).toBe(-1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('bv_ 裸 id 在线链全灭：兜底资格按形态命中，转下载续播本地档', async () => {
     const bv = song('bv_BV1xx411c7mD')
     const { player, deps } = makePlayer()
@@ -900,6 +938,34 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     const payload = musicApi.retryMatch.mock.calls[0][0]
     expect(payload).toMatchObject({ trackId: 'bv_BV1xx411c7mD', title: '视频标题', author: 'UP主' })
     expect(payload.excludeIds ?? []).not.toContain('lrclib_9')
+  })
+
+  it('裸 yt_ 老行（无 provider 块）绑后词源：核验材料回退曲面 name/ar', async () => {
+    const yt = song('yt_abcdefghijk', { neteaseId: 111 }) // 裸 id——youtube 块缺席
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '嫁接词' }] })
+    const { player } = makePlayer()
+    await player.playSong(yt)
+    // provider 块缺席不等于豁免核验——hydrateMatchBinding 补绑的嫁接词同
+    // 样过归属判定；材料回退 song.name + ar 拼名（裸 yt_ 的
+    // externalArtistName 回 null）
+    await vi.waitFor(() =>
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith(
+        111, '歌yt_abcdefghijk', '艺人', expect.anything(), 'yt_abcdefghijk'))
+  })
+
+  it('判否换绑并入菜单显式否决簿：已否词源不进 retryMatch 候选', async () => {
+    const { notifyLyricRematch } = await import('../../src/composables/usePlayer.js')
+    const bv = bvSong({ neteaseId: 111 })
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '词' }] })
+    const { player } = makePlayer()
+    await player.playSong(bv) // 111 词源过审（默认 verify ok:true）
+    // 行菜单换绑 111→555 并捎否 999（簿按 trackId 记账，正播同曲触发热重载）
+    notifyLyricRematch('bv_BV1xx411c7mD', 555, 999)
+    aiApi.verifyLyric.mockResolvedValue({ ok: false }) // 新词源 555 被判否
+    await vi.waitFor(() => expect(musicApi.retryMatch).toHaveBeenCalled())
+    // 判否累积集（555）∪ 菜单否决簿（999，String 记账）——显式否决不复活
+    expect(musicApi.retryMatch.mock.calls[0][0].excludeIds)
+      .toEqual(expect.arrayContaining([555, '999']))
   })
 
   it('notifyLyricRematch 在无正播曲（currentSong==null）时丢弃', async () => {
@@ -2298,15 +2364,16 @@ describe('usePlayer：L13 词同步计时器与 AI status 共账', () => {
     }
   })
 
-  it('aiApi.status 会话级共账：多曲后处理只问一次，失败销账可重试', async () => {
+  it('aiApi.status 会话级共账：后处理直调共享口，会话 memoize 在 api 层', async () => {
     aiApi.status.mockResolvedValue({ enabled: true })
     musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: 'x' }] })
     const { player } = makePlayer()
     await player.playSong(song(7))
     await player.playSong(song(8))
-    await vi.waitFor(() => expect(aiApi.status).toHaveBeenCalled())
-    await new Promise(r => setTimeout(r, 0))
-    expect(aiApi.status).toHaveBeenCalledTimes(1) // 两曲两批 postProcess 共一票
+    // usePlayer 不自持第二缓存——每批 postProcess 都直问 aiApi.status()；
+    // 「只缓存成功」的会话共账收敛在 api/ai.js 的 statusPromise 里
+    // （invalidateStatus 供设置页失效），桩层口径=每批一次调用
+    await vi.waitFor(() => expect(aiApi.status).toHaveBeenCalledTimes(2))
   })
 
   it('aiApi.status 首问失败销账重抛——下曲后处理重新探测', async () => {
