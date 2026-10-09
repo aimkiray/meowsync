@@ -368,7 +368,7 @@
               role="listitem"
             >
               <img
-                v-if="song.al?.picUrl"
+                v-if="coverSizeUrl(song.al?.picUrl, 80)"
                 class="asp-cover"
                 :src="httpsCover(coverSizeUrl(song.al.picUrl, 80))"
                 alt=""

@@ -5,7 +5,7 @@
     <div v-if="selectedPlaylist" class="playlist-hero">
       <div class="playlist-hero-cover-wrap pg-corners">
         <img
-          v-if="selectedPlaylist.coverImgUrl"
+          v-if="coverSizeUrl(selectedPlaylist.coverImgUrl, 240)"
           :src="httpsCover(coverSizeUrl(selectedPlaylist.coverImgUrl, 240))"
           :alt="selectedPlaylist.name"
           class="playlist-hero-cover"
@@ -157,7 +157,7 @@
             :class="{ 'playing-animation': isCurrent(song) && isPlaying }"
           >
             <img
-              v-if="songCoverUrl(song)"
+              v-if="songThumbUrl(song, 96)"
               :src="httpsCover(songThumbUrl(song, 96))"
               :alt="song.name"
               class="song-cover"

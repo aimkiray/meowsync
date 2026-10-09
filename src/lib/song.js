@@ -56,40 +56,70 @@ export function songCoverUrl(song) {
   return song?.picUrl || song?.al?.picUrl || song?.album?.picUrl || ''
 }
 
-// 已是 /img-proxy 代理形判定：解析后看 pathname 结尾 /img-proxy 且带 url
-// 参数——不做裸 includes 子串判，内嵌片段（?next=/img-proxy?url=x）不该被
-// 误当已代理；相对形经占位基址解析兜底，畸形串判 false 走后续直通
+// 占位基址解析兜底：让相对形也走 URL 语义判定；返回 null 的串连相对引用
+// 都不成立（'http://[::1' 类畸形）——proxiedCoverUrl 靠它分流 fail-closed
+// 空串与裸相对串透传两条路。基址 host 同时充当「入参本为相对形」的判据：
+// s 自带宿主时会顶掉它，没被顶掉说明 s 是按本页基址解析的相对引用
+const IMG_REF_BASE = new URL('http://img-proxy.invalid/')
+function parseImgRef(s) {
+  try { return new URL(s, IMG_REF_BASE) } catch { return null }
+}
+
+// 已是 /img-proxy 代理形判定：pathname 结尾 /img-proxy 且带 url 参数之外，
+// 宿主必须可信——只认相对形（host 恰是占位基址，按本页解析天然同源）与
+// `${API_BASE_URL}/` 前缀的绝对形（跨源 base 部署下自家服务的回环链）。
+// 其余同形（evil.example/img-proxy?url=x、//evil/…、带端口/凭据形）不再
+// 宿主盲判直通，交回主判定按非白名单归 ''——不做裸 includes 子串判，内嵌
+// 片段（?next=/img-proxy?url=x）本就不该被误当已代理。前缀绝对形必须保活：
+// coverSizeUrl 早退闸靠它挡 hdslb/126 子串改写腐蚀 url= 编码内明文
+function isProxiedImgParsed(p, s, base) {
+  if (!p.pathname.endsWith('/img-proxy') || !p.searchParams.has('url')) return false
+  if (p.host === IMG_REF_BASE.host) return true       // 相对形——宿主是占位基址
+  return base !== '' && s.startsWith(`${base}/`)      // 绝对形限本服务前缀
+}
+
 function isProxiedImgUrl(s) {
-  try {
-    const p = new URL(s, 'http://img-proxy.invalid')
-    return p.pathname.endsWith('/img-proxy') && p.searchParams.has('url')
-  } catch {
-    return false
-  }
+  const p = parseImgRef(s)
+  return p !== null && isProxiedImgParsed(p, s, resolveApiBaseUrl())
 }
 
 // 白名单图床封面改走服务端 /img-proxy 代取（客户端直连 ytimg 等环境会裂图，
-// 与 /audio-proxy 同口径）。直通面刻意收窄：非 http(s)（data:/blob:/相对
-// 路径）、本服务工件（file_ 封面）、非标端口、userinfo、非白名单域全按原样
-// 返回——直连是服务端拒收时的唯一活路，凭据也不进我方 query/日志面。
+// 与 /audio-proxy 同口径）。fail-closed：「页面不对外部源站发被动请求」不变
+// 式下，http(s) 非标端口 / userinfo / 非白名单域一律回 ''——宁可渲染端收
+// 占位图，也不放浏览器直连源站（凭据本就不进我方 query/日志面）。透传面只
+// 剩必同源或不外联的形态：非 http(s)（data:/blob:）、本服务工件（file_
+// 封面）、同源相对链、占位基址可解析的裸相对串；连占位基址都拒收的畸形串
+// 与反斜杠链（WHATWG 把 '\h'、'/\h' 升格成 //h 外联）同归 ''。
 // 幂等：已代理形原样返回。node 无 DOM 时 resolveApiBaseUrl() 回 ''，
 // 产出相对形 /img-proxy?url=…（测试与同源部署均合法）
 export function proxiedCoverUrl(url) {
-  const s = String(url || '')
-  if (!s || isProxiedImgUrl(s)) return s
+  // 首尾空白先剥——URL 解析器本就忽略外围空白，未剥前 '//host' 类升格判
+  // 会被空格前缀绕过（'  //evil.com' 浏览器照打外联）
+  const s = String(url || '').trim()
+  if (!s) return s
+  const probe = parseImgRef(s)
+  if (!probe) return ''                    // 占位基址都拒 = 非合法引用——fail-closed
   const base = resolveApiBaseUrl()
-  if (base && s.startsWith(base + '/')) return s         // 本服务工件（file_ 封面等）
-  if (s.startsWith('/') && !s.startsWith('//')) return s // 同源相对 URL 直通
+  // 幂等：已代理形逐字节原样——宿主闸后只认相对形与本服务前缀绝对形
+  if (isProxiedImgParsed(probe, s, base)) return s
+  if (base && s.startsWith(base + '/')) return s                     // 本服务工件（file_ 封面等）
+  // 同源相对 URL 直通；'/\h' 不放此支——反斜杠会被升格 //h 外联，落畸形口径
+  if (s.startsWith('/') && !s.startsWith('//') && !s.startsWith('/\\')) return s
   let parsed
   try {
     parsed = new URL(s.startsWith('//') ? 'https:' + s : s) // 协议相对按 https 升格解析
   } catch {
-    return s
+    // 裸相对串（'covers/x.jpg'）透传——probe 已证浏览器只按本页基址解析同源；
+    // 含 \ 的引用会被 WHATWG 升格成 //host 外联，同归空串
+    return s.includes('\\') ? '' : s
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return s
-  if (parsed.port !== '') return s                 // 非标端口服务端必 403——留直连口径
-  if (parsed.username || parsed.password) return s // 凭据不进我方 query（日志卫生）
-  if (!isImgProxyHost(parsed.hostname)) return s   // 白名单外=浏览器直连旧行为
+  // 非标端口全拒——口径刻意比服务端 net-guard 严：normalizeOutboundUrl 放行
+  // 跨 scheme 标准端口（https://h:80、http://h:443 仍属 {80,443} 上界），客户端
+  // 一并拒收属 fail-closed 口径差异，有意为之
+  if (parsed.port !== '') return ''
+  if (parsed.username || parsed.password) return '' // 凭据不外联亦不直通
+  if (!isImgProxyHost(parsed.hostname)) return ''   // 白名单外=不外联（零被动请求不变式）
   return `${base}/img-proxy?url=${encodeURIComponent(parsed.href)}`
 }
 

@@ -289,10 +289,12 @@ describe('AuthGate 可访问性（F4）', () => {
 
 // ── F3+F5：DownloadQueueList 可访问性 ──
 
+// 封面用图床白名单域（proxiedCoverUrl fail-closed 后非白名单 → '' →
+// 走的是 .dql-cover--fb 占位 div 而非 <img alt="">，用例钉的正是 img 形）
 const QUEUE = {
   id: 7, name: '周更歌单', status: 'running',
   failedTasks: 2, completedTasks: 1, totalTasks: 4,
-  coverImgUrl: 'https://img.test/cover.jpg',
+  coverImgUrl: 'https://i.ytimg.com/vi/x/hqdefault.jpg',
 }
 
 // GlitchText 挂载期裸调 matchMedia——jsdom 无此 API，用例只钉宿主标签，stub 掉

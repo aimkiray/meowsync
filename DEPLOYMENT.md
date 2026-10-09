@@ -128,9 +128,12 @@ Compose 构建时会自动从根目录 `.env` 读取 `VITE_API_BASE_URL`/`VITE_B
 > （`prefer=best`）。配置了 Cookie 且开启公网访问时，务必同时设
 > `DOWNLOAD_TOKEN`——`/bilibili/stream?prefer=best` 与 `/qq/stream?prefer=best`
 > 在该组合下要求 `x-download-token` 才放行高规格轨，匿名访客自动回落常规档
-> （播放链不受影响）。上游签名链（QQ purl uin、B 站 mid/uipk、googlevideo
-> ip=）一律经 `/audio-proxy/t/<token>` opaque 令牌回源，不出服务端进程——
-> 反向代理侧建议对 `/audio-proxy` 关闭 access_log 或剥离 query 落盘。
+> （播放链不受影响）。`/song_url` 下发的**一切**回链——网易官方直链、
+> 解锁源候选、上游签名链（QQ purl uin、B 站 mid/uipk、googlevideo ip=）
+> ——一律改写为 `/audio-proxy/t/<token>` opaque 令牌回源，源站串不出
+> 服务端进程；试听残片与代理白名单外候选不 mint，`url` 置空下发——
+> 明文链不落 JSON。反向代理侧建议对 `/audio-proxy` 关闭 access_log 或
+> 剥离 query 落盘。
 > `YT_COOKIE` 风险面不同且无令牌闸：公网部署下全体访客的取流/搜索/歌单
 > 导入都借用管理员登录态，滥用与高频风控直接记在该账号信誉上——公网
 > 部署务必配专用小号而非主号。
@@ -186,6 +189,25 @@ server {
 > IP 级限流的正确分桶前提：未设 TRUST_PROXY 时所有客户端共享反代出口 IP，
 > `with-nginx` profile 已回传 `X-Forwarded-For`，两个配置须成对出现，
 > 否则 `/ai/*`、`/downloads/*` 等按 IP 限流的接口会退化成全局单桶互相饿死。
+
+## 安全响应头与 CSP
+
+生产响应由服务端统一下发安全头（`nosniff` / `no-referrer` / `DENY` /
+`Permissions-Policy`；HTTPS 请求下加 HSTS），HTML 文档另带收紧为「零被动
+外联」的 CSP：`img-src`/`media-src`/`font-src`/`style-src` 只放行
+`'self'` 与 `data:`/`blob:`——字体已全量自托管进构建产物（Google Fonts
+外链移除，离线/隔离部署不再依赖 googleapis/gstatic），外部封面统一经
+`/img-proxy`、音频统一经 `/audio-proxy/t/` vault 链同源化，不再放行
+源站 `http:`/`https:` 字面量。唯一的宽口径是 `connect-src`
+（`'self'` + `http:`/`https:`/`ws:`/`wss:`）——给 `VITE_API_BASE_URL`
+跨源烘焙 API 与 `/remote` WebSocket 的兼容位；fetch/WS 是主动请求通道，
+不产生被动子资源。
+
+混合部署边界：页面由本服务供、API 却烘到跨源地址时，`media-src 'self'`
+会拦跨源 `<audio>`；`img-src 'self'` 同理会拦跨源 `/img-proxy` 封面链
+（`proxiedCoverUrl` 产出 `VITE_API_BASE_URL` 前缀的绝对形 URL）。应用只
+在响应**没有** CSP 头时才写入——反代侧预置
+自定义 CSP（nginx `add_header Content-Security-Policy …`）即整段覆盖。
 
 ## 公网部署与登录系统
 

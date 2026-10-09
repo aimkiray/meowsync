@@ -190,12 +190,13 @@ test('coverSizeUrl：四 provider 缩放语法 + 幂等 + 放行面', () => {
   // p.qpic.cn 无公开缩放通道不改写，但 qpic.cn 在白名单 → 代理形
   assert.equal(coverSizeUrl('https://p.qpic.cn/music_cover/x/150.jpg', 96),
     proxied('https://p.qpic.cn/music_cover/x/150.jpg'))
-  // 放行面：file_ 端点（相对形直通）/ data: / blob: / 非白名单域 / 空值
+  // 透传/fail-closed 面：file_ 端点（相对形）/ data: / blob: / 空值原样透传；
+  // 非白名单域归 ''——零被动外联不变式下不再留浏览器直连口径
   const fileCov = fileArtifactUrl('file_abc12345', 'cover', 7)
   assert.equal(coverSizeUrl(fileCov, 96), fileCov)
   assert.equal(coverSizeUrl('data:image/png;base64,AAA', 96), 'data:image/png;base64,AAA')
   assert.equal(coverSizeUrl('blob:https://x/abc', 96), 'blob:https://x/abc')
-  assert.equal(coverSizeUrl('https://example.com/x.jpg', 96), 'https://example.com/x.jpg')
+  assert.equal(coverSizeUrl('https://example.com/x.jpg', 96), '')
   assert.equal(coverSizeUrl('', 96), '')
   assert.equal(coverSizeUrl(null, 96), '')
   assert.equal(coverSizeUrl(undefined, 96), '')
@@ -216,30 +217,48 @@ test('proxiedCoverUrl：白名单包装/直通矩阵 + 幂等防腐化', () => {
   assert.equal(proxiedCoverUrl('https://a.kuwo.cn/x.jpg'), proxied('https://a.kuwo.cn/x.jpg'))
   // 协议相对按 https 升格后再判白名单与包装（url= 内是规范绝对形）
   assert.equal(proxiedCoverUrl('//p1.music.126.net/x.jpg'), proxied('https://p1.music.126.net/x.jpg'))
-  // 蹭名/尾挂/FQDN 尾点不命中白名单（与服务端剥尾点后回源同向收敛）
-  assert.equal(proxiedCoverUrl('https://xytimg.com/x.jpg'), 'https://xytimg.com/x.jpg')
-  assert.equal(proxiedCoverUrl('https://ytimg.com.evil.com/x.jpg'), 'https://ytimg.com.evil.com/x.jpg')
-  assert.equal(proxiedCoverUrl('https://i.ytimg.com./x'), 'https://i.ytimg.com./x')
-  // 直通面：非白名单 / 非 http(s) / 相对路径 / file_ 工件 / 非标端口 / userinfo / 空与畸形
-  assert.equal(proxiedCoverUrl('https://example.com/x.jpg'), 'https://example.com/x.jpg')
-  assert.equal(proxiedCoverUrl('https://foo.googleusercontent.com/x'), 'https://foo.googleusercontent.com/x')
+  // 蹭名/尾挂/FQDN 尾点不命中白名单（与服务端剥尾点后回源同向收敛）——
+  // fail-closed 后全归 ''：不放浏览器直连源站
+  assert.equal(proxiedCoverUrl('https://xytimg.com/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('https://ytimg.com.evil.com/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('https://i.ytimg.com./x'), '')
+  // fail-closed 收口：非白名单域（含协议相对升格后判出的）一律 ''；
+  // 非标端口/userinfo 同归 ''（服务端必拒 + 凭据不外联）
+  assert.equal(proxiedCoverUrl('https://example.com/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('https://foo.googleusercontent.com/x'), '')
+  assert.equal(proxiedCoverUrl('//example.com/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('https://example.com:8443/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('https://u:p@example.com/x.jpg'), '')
+  // 透传面只剩必同源/不外联形：非 http(s) / 同源相对 / file_ 工件 / 空与裸相对串
   assert.equal(proxiedCoverUrl('data:image/png;base64,AAA'), 'data:image/png;base64,AAA')
   assert.equal(proxiedCoverUrl('blob:https://x/abc'), 'blob:https://x/abc')
   assert.equal(proxiedCoverUrl('/downloads/songs/f/file?playlistId=local_uploads'),
     '/downloads/songs/f/file?playlistId=local_uploads')
   const fileCov = fileArtifactUrl('file_x', 'cover')
   assert.equal(proxiedCoverUrl(fileCov), fileCov)
-  assert.equal(proxiedCoverUrl('https://i.ytimg.com:8443/x'), 'https://i.ytimg.com:8443/x')
-  assert.equal(proxiedCoverUrl('https://u:p@i.ytimg.com/x'), 'https://u:p@i.ytimg.com/x')
+  assert.equal(proxiedCoverUrl('https://i.ytimg.com:8443/x'), '')
+  assert.equal(proxiedCoverUrl('https://u:p@i.ytimg.com/x'), '')
   assert.equal(proxiedCoverUrl(''), '')
   assert.equal(proxiedCoverUrl(null), '')
   assert.equal(proxiedCoverUrl(undefined), '')
   assert.equal(proxiedCoverUrl('not a url'), 'not a url')
-  // 幂等：已代理形（相对/绝对带端口）逐字节原样；双包装不嵌套
+  // isProxiedImgUrl 占位基址也解析失败的畸形串——既非相对引用亦非合法 URL，
+  // fail-closed 空串（旧版直通会把垃圾串留给浏览器拼基址）
+  assert.equal(proxiedCoverUrl('http://[::1'), '')
+  assert.equal(proxiedCoverUrl('https://'), '')
+  // 反斜杠升格面：WHATWG 解析把 '\host'、'/\host' 升成 //host 外联——同归 ''
+  assert.equal(proxiedCoverUrl('\\\\evil.com/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('/\\evil.com/x.jpg'), '')
+  // 幂等：已代理相对形逐字节原样；双包装不嵌套。宿主闸收紧后绝对形只认
+  // ${API_BASE_URL}/ 前缀（浏览器跨源 base 部署的回环链）——node 环境 base=''
+  // 下任何绝对同形都既非相对形也非前缀形，按非白名单口径归 '' 而非原样透出
   const wrapped = proxiedCoverUrl('https://i.ytimg.com/vi/x/hqdefault.jpg')
   assert.equal(proxiedCoverUrl(wrapped), wrapped)
   const abs = 'http://h:3101/img-proxy?url=' + encodeURIComponent('https://i.ytimg.com/x')
-  assert.equal(proxiedCoverUrl(abs), abs)
+  assert.equal(proxiedCoverUrl(abs), '')
+  // 伪造代理外观的外链同形不再直通：path 尾段 /img-proxy + url 参数不等于已代理
+  assert.equal(proxiedCoverUrl('https://evil.example/img-proxy?url=x'), '')
+  assert.equal(proxiedCoverUrl('//evil/img-proxy?url=x'), '')
   // 内嵌 /img-proxy?url= 片段 ≠ 已代理（解析 pathname 判，非裸子串）——
   // 白名单域 query 里带这串照样被包装
   assert.equal(proxiedCoverUrl('https://i.ytimg.com/x?next=/img-proxy?url=y'),
@@ -264,9 +283,10 @@ test('songThumbUrl：file_ 曲放行原图、provider 曲缩略后经代理、�
   const bv = { id: 'bv_BV1xx411c7mD', al: { picUrl: 'https://i0.hdslb.com/bfs/a.jpg' } }
   assert.equal(songThumbUrl(bv, 80),
     `/img-proxy?url=${encodeURIComponent('https://i0.hdslb.com/bfs/a.jpg@80w_80h_1c.jpg')}`)
-  // 非白名单域封面：缩略改写不命中 → 原样直通（浏览器直连旧行为）
+  // 非白名单域封面：缩略改写不命中且 fail-closed 归 ''——不再直通外联，
+  // 模板守卫以加工后值判空改收占位图
   const other = { id: '2', al: { picUrl: 'https://example.com/c.jpg' } }
-  assert.equal(songThumbUrl(other, 96), 'https://example.com/c.jpg')
+  assert.equal(songThumbUrl(other, 96), '')
   assert.equal(songThumbUrl(null, 96), '')
   assert.equal(songThumbUrl({ id: '1' }, 96), '') // 无封面字段
 })

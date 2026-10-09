@@ -2352,12 +2352,15 @@ export function usePlayer({
         const artists = (song.ar || song.artists || [])
           .map(a => a?.name).filter(Boolean).join(', ')
         const pic = songCoverUrl(song) // file_ 上传曲封面走 file 端点，不只认 al.picUrl
+        // 门控判加工后值：proxiedCoverUrl fail-closed 对非白名单/非标端口回 ''——
+        // 裸 pic 守卫会把空 artwork 或源站裸链塞进锁屏元数据（后者破零外联不变式）
+        const art = pic ? httpsCover(proxiedCoverUrl(pic)) : ''
         try {
           navigator.mediaSession.metadata = new MediaMetadata({
             title: song.name || '',
             artist: artists,
             album: song.al?.name || song.album?.name || '',
-            artwork: pic ? [{ src: httpsCover(proxiedCoverUrl(pic)), sizes: '512x512' }] : []
+            artwork: art ? [{ src: art, sizes: '512x512' }] : []
           })
         } catch { /* 旧浏览器 MediaMetadata 构造可能抛错，忽略 */ }
       } else {

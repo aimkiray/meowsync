@@ -261,7 +261,8 @@ function extOf(url) {
 // - 时长校验对所有源生效（provider 候选期已知 durationSec 直接比对，
 //   否则 size×br 估算——剪辑/错配文件一律拒收）；
 //   purpose='download' 走 DOWNLOAD_SOURCES 顺序且不经 /audio-proxy（直连源站）
-// - purpose='playback' 时：youtube/qq 命中经 proxyOrigin 拼 /audio-proxy 回链
+// - proxyOrigin 在场时回链经 return 前的发射 post-pass 统一 vault 化
+//   （/audio-proxy/t/<token>）——非解锁官方直链与解锁裸链同口径
 // - signal：客户端断开/超时由路由层透传进来，逐源检查即止血——否则一次
 //   客户端超时仍留整条解锁链在跑，重试只会叠加僵尸请求
 async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null, signal = null } = {}) {
@@ -364,18 +365,15 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           continue;
         }
 
-        // 会被包进 /audio-proxy 的回链必须过代理白名单预筛——否则产出
-        // "已解析却 403"的死链并缓存 60s。qq 源必须算在内：其 https purl
-        // 明文带 uin/vkey 且 vkey 绑本机 IP，不代理既是凭据泄露又必然 403；
-        // youtube 的 googlevideo ip= 同理必须代理。
+        // proxyOrigin 在场即过代理白名单预筛：发射收口（return 前 post-pass）
+        // 把一切回链统一 vault 化，名单外候选注定是"已解析却 403"的死链——
+        // 整条候选都须过，漏一条等于往 vault 里混一条空打一跳的死链或裸
+        // 凭据外发。qq 的 purl 明文带 uin/vkey、googlevideo 的 ip= 本就
+        // 必须代理；https 官方/解锁裸链现同口径（post-pass 统一 mint）。
         // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
         // 明文签名链进 JSON 等于把 uin/vkey/出口 IP 发给访客；进程内调用方
         // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
-        const willProxy = !!proxyOrigin
-          && (source === 'youtube' || source === 'qq' || checked.url.protocol === 'http:');
-        if (willProxy) {
-          // 多链场景整条都须过白名单——漏一条等于往 vault 里混一条
-          // 注定 403 的死链（代理逐试会空打一跳）或裸凭据外发
+        if (proxyOrigin) {
           for (let i = urls.length - 1; i >= 0; i--) {
             if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
           }
@@ -462,32 +460,27 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         throwIfAborted();
       }
       if (resolved) {
-        // 走代理的情形：youtube 的 googlevideo URL 带 ip= 绑定（浏览器直连
-        // 必然 403），或上游回 http 链（HTTPS 页面直连会被混合内容拦截）。
-        // 用归一化后的协议判定——原始串 startsWith 会被大写 scheme 绕过
-        const isHttp = resolved.url.toLowerCase().startsWith('http:');
-        const useProxy = !!proxyOrigin
-          && (resolved.source === 'youtube' || resolved.source === 'qq' || isHttp);
-        // 代理面统一经 vault token——解锁回链可能带上游凭据（qq purl uin/vkey、
-        // googlevideo ip=），明文嵌进 JSON 等于把运营者凭据发给每个访客
-        // BASE_PATH 子目录部署：proxyOrigin 只是裸 origin（proto://host），
-        // vault 路径须过 withBasePath 补前缀，否则客户端拿到根链 404
-        item.url = useProxy
-          ? `${proxyOrigin}${withBasePath(`/audio-proxy/t/${streamVault.mint(resolved.urls || resolved.url)}`)}`
-          : resolved.url;
+        // vault 化统一收在 return 前的发射 post-pass——此处只落原始回链。
+        // 镜像组经 item.urls 递交给 post-pass 做 mint(urls[])（保代理逐试
+        // failover 语义）；proxyOrigin 缺席时进程内调用方（file-downloader）
+        // 拿明文直链，urls 字段不落地避免污染其消费面
+        item.url = resolved.url;
+        if (proxyOrigin && Array.isArray(resolved.urls) && resolved.urls.length > 1) {
+          item.urls = resolved.urls;
+        }
         item.unblocked = true;
         item.unblockedSource = resolved.source;
         // 解锁文件的真实码率（item.br 仍是网易声明值）：下载端落盘后时长
         // 对账以它为分母，直接用声明值会把低码率解锁误判成剪辑
         item.unblockedBr = resolved.br;
-        item.usedAudioProxy = useProxy;
+        item.usedAudioProxy = false;
         item.freeTrialInfo = null;
         // 解锁回链的真实形态覆写试听片字段（type 影响前端下载扩展名、
         // time/size 影响展示与字节对账）——上游原值是残片/空链的元数据
         if (resolved.ext) item.type = resolved.ext;
         if (resolved.size) item.size = resolved.size;
         if (resolved.timeMs) item.time = resolved.timeMs;
-        console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${useProxy}${wasCached ? ' (cached)' : shared ? ' (shared)' : ''}`);
+        console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${!!proxyOrigin}${wasCached ? ' (cached)' : shared ? ' (shared)' : ''}`);
       } else {
         item.unlockFailed = true;
         // 试听片段/失效链不再下发——否则下载端会把 30s 残片当完整曲落盘并标 completed
@@ -511,6 +504,58 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
     }
   );
   await Promise.all(workers);
+
+  // 发射收口（不变式：浏览器不直连源站）——proxyOrigin 在场时一切回链
+  // 换 vault token：非解锁项的官方 music.126.net 直链与解锁分支的
+  // http/https 裸链同口径，源站 URL 不出服务端进程。镜像组经
+  // streamVault.mint(urls[]) 保候选逐试 failover；freeTrialInfo 试听档
+  // 不 mint（省 vault 容量）但试听残片链同样不落 JSON——置空 url，
+  // 客户端试听文案走 freeTrialInfo 字段判定（isUnavailableTrack 不吃 url）；
+  // 已代理项双保险跳过；归一化失败或候选含白名单外域 fail-closed 置
+  // url:null——下处死链比明文外发诚实。
+  // 进程内调用方（file-downloader）不传 proxyOrigin，本段整体跳过
+  if (proxyOrigin) {
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      // 镜像候选数组不得进 JSON（明文即破不变式）——先收进 src 再删字段，
+      // 对跳过项同样生效（belt-and-suspenders：上游若带 urls 字段也摘掉）
+      const src = Array.isArray(item.urls) && item.urls.length ? item.urls : null;
+      delete item.urls;
+      if (!item.url || item.usedAudioProxy) continue;
+      // 试听链不外泄：能带 freeTrialInfo 活到这里的只剩无 id 项（带 id 的
+      // 试听项必经解锁链——成功清 freeTrialInfo、失败已 url=null），置空
+      // 而非透传，DEPLOYMENT「一切回链 vault 化」口径不留豁免口
+      if (item.freeTrialInfo) {
+        item.url = null;
+        continue;
+      }
+      // 候选逐条过 normalizeOutboundUrl 再判白名单：裸 hostname 判会放进
+      // 坏协议/坏端口/带凭据候选（mint 进 vault 即烧死跳），FQDN 尾点
+      // （m701.music.126.net.）不先归一又会被 isProxyAllowedHost 误杀。
+      // 任一不过 → 整项 fail-closed；mint 入组用归一化后的形态
+      const candidates = src || [item.url];
+      const mintable = [];
+      let proxiable = true;
+      for (const u of candidates) {
+        const chk = typeof u === 'string' && u ? normalizeOutboundUrl(u) : null;
+        if (!chk?.ok || !isProxyAllowedHost(chk.url.hostname)) {
+          proxiable = false;
+          break;
+        }
+        mintable.push(chk.url.toString());
+      }
+      const token = proxiable ? streamVault.mint(mintable) : null;
+      if (!token) {
+        item.url = null;
+        console.warn(`[song_url] ${item.id} 回链不可代理，fail-closed 置空 url`);
+        continue;
+      }
+      // proxyOrigin 只是裸 origin（proto://host）：BASE_PATH 子目录部署
+      // 必须经 withBasePath 补前缀，否则客户端拿根相对链撞 base-外 404
+      item.url = `${proxyOrigin}${withBasePath(`/audio-proxy/t/${token}`)}`;
+      item.usedAudioProxy = true;
+    }
+  }
 
   return items;
 }

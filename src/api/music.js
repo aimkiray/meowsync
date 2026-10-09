@@ -249,29 +249,31 @@ export const musicApi = {
       .replace(/[\\/:*?"<>|]/g, '_')
 
     // 跨域 URL 的 download 属性会被浏览器忽略，需拉取为 blob 后触发本地下载。
-    // 解锁源 CDN（kuwo/googlevideo 等）基本不带 ACAO，fetch 会被 CORS 拒——
-    // 一律先走同源 /audio-proxy 中转（白名单域 http/https 都放、逐跳公网校验）；
-    // 白名单外目标或代理上游失败回退直连（官方 CDN 带 ACAO 的能直连成功，
-    // 无 ACAO 的也只是与代理相同的失败，不回退体验）。
-    // 服务端已 vault 化的回链（/audio-proxy/t/…）是成品同源地址——直接 fetch，
-    // 再包一层 ?url= 会得到代理套代理的坏链
-    const alreadyProxied = downloadData.url.includes('/audio-proxy/')
+    // /song_url 回链已在服务端 vault 化（/audio-proxy/t/… 成品同源地址）——
+    // 直接 fetch，再包一层 ?url= 会得到代理套代理的坏链；未 vault 化的边缘
+    // 形态（旧服务端/无 proxyOrigin 回链）防御性包 ?url= 同源壳，保留为
+    // 调试/兼容通道。fail-closed：代理链失败只透错误——直连源站回退已删
+    // （「浏览器不对源站发被动请求」整站不变式；无 ACAO 的 CDN 直连本就
+    // 是与代理相同的失败，回退无体验收益）。
+    // credentials=same-origin：/audio-proxy 固定回 ACAO:*，include 在跨源
+    // 部署下硬冲突必败；vault 链是 PUBLIC_GET 无需凭据，同源下仍带 cookie
+    // 兼容 auth-gate 收编的 ?url= 兜底
+    // [/?] 双形态都算已代理：/t/<token>（vault 链）与 ?url=（旧壳/调试通道）——
+    // 防未来 vault→query 形态漂移时套出代理包代理的双包坏链
+    const alreadyProxied = /\/audio-proxy[/?]/.test(downloadData.url)
     const proxyUrl = alreadyProxied ? downloadData.url
       : `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(downloadData.url)}`
-    let blobResponse = await fetch(proxyUrl, {
-      credentials: 'include',
+    const blobResponse = await fetch(proxyUrl, {
+      credentials: 'same-origin',
       signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS)
-    }).catch(() => null)
-    if (!blobResponse || !blobResponse.ok) {
-      // CDN 直连必须 omit——上游普遍只回 ACAO:*，credentialed 请求会被浏览器拦
-      blobResponse = await fetch(downloadData.url, {
-        credentials: 'omit',
-        signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS)
-      }).catch(error => {
-        throw new Error(`下载失败: ${error.message || '网络错误'}`)
-      })
+    })
+    if (!blobResponse.ok) {
+      // 服务端错误体是 {code,message}——「请求太频繁」/「stream token expired」
+      // 这类具体原因上屏好过裸状态码（与 saveStreamAsFile 同口径）。
+      // 不带「下载失败:」前缀——toast 层（useServerDownloads）固定补前缀，防双显
+      const msg = await blobResponse.json().then(d => d?.message).catch(() => null)
+      throw new Error(msg || `HTTP ${blobResponse.status}`)
     }
-    if (!blobResponse.ok) throw new Error(`下载失败: HTTP ${blobResponse.status}`)
     const blob = await blobResponse.blob()
     const objectUrl = URL.createObjectURL(blob)
 
@@ -660,9 +662,9 @@ async function saveStreamAsFile(url, fileName) {
   })
   if (!resp.ok) {
     // 服务端错误体是 {code,message}——「该视频没有可代理的音频流」这类
-    // 具体原因上屏好过裸状态码
+    // 具体原因上屏好过裸状态码。不带「下载失败:」前缀——toast 层固定补，防双显
     const msg = await resp.json().then(d => d?.message).catch(() => null)
-    throw new Error(msg || `下载失败: HTTP ${resp.status}`)
+    throw new Error(msg || `HTTP ${resp.status}`)
   }
   const blob = await resp.blob()
   const ct = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
