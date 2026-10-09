@@ -92,11 +92,18 @@ export const aiTestBody = z.looseObject({
   model: z.string().max(500).optional()
 });
 
+// /lyric-align 歌词行上限的唯一真相源：schema 校验、路由层取词截断、
+// 客户端发送前截断（usePlayer alignCurrentLyrics）、下载链纯文本补轴
+// 截断（file-downloader alignPlainLrc）共用同一份数——单行 ≤500 字、
+// 行数 ≤600，超了原样发只会吃笼统 400
+export const LYRIC_ALIGN_MAX_LINE_CHARS = 500;
+export const LYRIC_ALIGN_MAX_LINES = 600;
+
 // POST /lyric-align：音频定位（audioPath 直指或 songId 查 download_tasks）
 // 与歌词行来源（lines 直传或 songId 拉词源）的组合判定在路由层——
 // schema 只收形状与上限
 export const lyricAlignBody = z.looseObject({
   songId: z.union([z.string().min(1).max(120), z.number().int().positive()]).optional(),
   audioPath: z.string().min(1).max(1000).optional(),
-  lines: z.array(z.string().max(500)).max(600).optional()
+  lines: z.array(z.string().max(LYRIC_ALIGN_MAX_LINE_CHARS)).max(LYRIC_ALIGN_MAX_LINES).optional()
 });

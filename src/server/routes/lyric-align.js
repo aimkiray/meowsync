@@ -1,15 +1,17 @@
 const { Hono } = require('hono');
 const path = require('path');
+const fs = require('fs');
 const { createHash } = require('crypto');
 const { parseJsonBody } = require('../lib/validate');
-const { lyricAlignBody } = require('../../shared/contracts.js');
+const { lyricAlignBody, LYRIC_ALIGN_MAX_LINES, LYRIC_ALIGN_MAX_LINE_CHARS } = require('../../shared/contracts.js');
 const { fail } = require('../lib/http-error');
 const { rateLimit } = require('../lib/rate-limit');
 const { csrfOriginOk } = require('../lib/auth-gate');
 const { alignAudioToLrc } = require('../services/lyric-align');
 const { isUnderDownloadDir, pathPresent } = require('../services/download-fs');
 const downloadTasksRepo = require('../repositories/downloadTasks');
-const { parseLrcLines } = require('../services/lyric-verify');
+const { parseLrcLines, plainTextLines } = require('../services/lyric-verify');
+const { neteaseLyricBody } = require('../../shared/lrc.js');
 const { callNeteaseApi } = require('../services/netease-api');
 const {
   NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, FILE_TRACK_ID_RE,
@@ -19,7 +21,7 @@ const app = new Hono();
 
 // 歌词行上限：与 ai.js 翻译上限同量级——超长多半是逐字滚动歌词拆分，
 // 整单对齐既不经济也无必要；songId 拉词源路径超限时截断（不全单拒掉）
-const MAX_ALIGN_LINES = 600;
+const MAX_ALIGN_LINES = LYRIC_ALIGN_MAX_LINES;
 // 同 (音频,行集) 在途去重：并发重复提交共享首个对齐结果而非再烧一遍
 // ffmpeg+AI（与 routes/ai.js 的 inflight 门同思路；值直接载 payload——
 // 对齐结果不落库，无「重查缓存」可等）
@@ -34,7 +36,14 @@ function resolveDownloadedAudio(songId) {
   for (const t of downloadTasksRepo.listTasksBySongId(songId)) {
     if (t.status !== 'completed') continue;
     const cand = t.audioPath || (FILE_TRACK_ID_RE.test(t.songId) ? t.videoPath : null);
-    if (cand && isUnderDownloadDir(cand) && pathPresent(cand)) return cand;
+    if (!cand || !isUnderDownloadDir(cand) || !pathPresent(cand)) continue;
+    // 叶子符号链接拒供（同 getTaskArtifactPath 口径）：isUnderDownloadDir
+    // 只验链接路径自身，跟链会把下载根外的文件喂给 ffmpeg；lstat 竞态
+    // 消失/不可读按不存在收敛
+    try {
+      if (fs.lstatSync(cand).isSymbolicLink()) continue;
+    } catch { continue; }
+    return cand;
   }
   return null;
 }
@@ -55,11 +64,18 @@ async function fetchLyricLines(songId, signal) {
     }
   } else {
     const res = await callNeteaseApi('lyric', { id: songId }, { signal });
-    lrc = res.body?.lrc?.lyric || '';
+    // nolyric/uncollected/纯占位词归一成空——与 routes/ai.js fetchLyricRaw、
+    // 下载链 neteaseLyricOf、客户端 getLyrics 同口径（共享层 neteaseLyricBody）
+    lrc = neteaseLyricBody(res.body).lrc;
   }
-  // 与 lines 直传同口径截：单行 ≤500（schema 上限）、总数 ≤600 截断记
-  // truncated——词源拉取没有 schema 闸，不截会让上游畸形词稿烧穿 AI 配额
-  const parsed = parseLrcLines(lrc).map(l => l.text.slice(0, 500));
+  // 无戳纯文本词兜底：本端点的职责就是给「没轴的词」补轴——parseLrcLines
+  // 解不出时间戳就剥行取词文行（与 verifyHit/verifyDownloadOwnership 同
+  // 口径），剥完真空才算真无词（旧口径纯文本词走 songId 路径必 404）
+  let rows = parseLrcLines(lrc);
+  if (!rows.length) rows = plainTextLines(lrc);
+  // 与 lines 直传同口径截：单行/总数上限即 schema 同一份常量——词源拉取
+  // 没有 schema 闸，不截会让上游畸形词稿烧穿 AI 配额
+  const parsed = rows.map(l => l.text.slice(0, LYRIC_ALIGN_MAX_LINE_CHARS));
   return { lines: parsed.slice(0, MAX_ALIGN_LINES), truncated: parsed.length > MAX_ALIGN_LINES };
 }
 
@@ -84,6 +100,12 @@ app.post('/lyric-align', async (c) => {
     const p = path.resolve(String(body.audioPath));
     if (!isUnderDownloadDir(p)) return fail(c, 400, 'audioPath 必须在下载目录内');
     if (!pathPresent(p)) return fail(c, 404, '音频文件不存在');
+    // 叶子符号链接按不存在拒供（同 getTaskArtifactPath 口径——
+    // isUnderDownloadDir 只验链接路径自身，跟链会把下载根外的文件
+    // 喂给 ffmpeg）；lstat 竞态消失/不可读同归 404
+    try {
+      if (fs.lstatSync(p).isSymbolicLink()) return fail(c, 404, '音频文件不存在');
+    } catch { return fail(c, 404, '音频文件不存在'); }
     audioPath = p;
   } else if (songId) {
     audioPath = resolveDownloadedAudio(songId);
@@ -123,9 +145,11 @@ app.post('/lyric-align', async (c) => {
   }
   if (signal?.aborted) return c.body(null, 499);
 
-  // 在途去重键：音频路径+行集签名（同曲重提交/双击共享首个结果）
+  // 在途去重键：音频路径+行集签名（同曲重提交/双击共享首个结果）——
+  // 两段间用 \0 真分隔：无分隔的拼接哈希在不同切分下会撞键
+  // （"ab","c" 与 "a","bc" 同串），错搭车会拿到别份对齐结果
   const key = createHash('sha1')
-    .update(audioPath).update('')
+    .update(audioPath).update('\0')
     .update(lines.join('\n'))
     .digest('hex').slice(0, 16);
   while (inflightAlign.has(key)) {

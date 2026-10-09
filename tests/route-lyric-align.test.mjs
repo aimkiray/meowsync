@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { seed, tmpDataDir } from './helpers.mjs';
 
@@ -216,4 +216,83 @@ test('lyric-align e2e：songId 有任务但词源无词 → 404', async (t) => {
   lyricBody = { lrc: { lyric: '' }, tlyric: { lyric: '' } };
   const r = await post({ songId: '880102' });
   assert.equal(r.status, 404);
+});
+
+test('lyric-align：songId 词源是占位/无词标记 → neteaseLyricBody 归空 → 404', async () => {
+  // 占位词（'纯音乐，请欣赏' 式）与 nolyric 旗标同走缺词归一——不该被
+  // plainTextLines 剥出占位行当词源喂给对齐
+  const fakeAudio = join(DOWNLOAD_BASE_DIR, '907/audio/ph.bin');
+  mkdirSync(join(fakeAudio, '..'), { recursive: true });
+  writeFileSync(fakeAudio, Buffer.alloc(64));
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_align_ph', name: 'ph' });
+  const task = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: '880105', songName: '占位', artist: 'a',
+  });
+  downloadTasksRepo.updateTask(task.id, { status: 'completed', audioPath: fakeAudio });
+  try {
+    lyricBody = {
+      lrc: { lyric: '[99:00.00]纯音乐，请欣赏' },
+      tlyric: { lyric: '[99:00.00]instrumental' },
+    };
+    const r1 = await post({ songId: '880105' });
+    assert.equal(r1.status, 404);
+    lyricBody = { nolyric: true, lrc: { lyric: '[00:01.00]不该到的词' }, tlyric: {} };
+    const r2 = await post({ songId: '880105' });
+    assert.equal(r2.status, 404);
+  } finally {
+    lyricBody = { lrc: { lyric: '' }, tlyric: { lyric: '' } };
+  }
+});
+
+// ── 纯文本词兜底与叶子符号链接（alignImpl 桩免 ffmpeg）────────────────────
+
+test('lyric-align：songId 词源是纯文本 → plainTextLines 兜底进对齐而非 404', async () => {
+  // 无时间戳词走 songId 路径旧口径 parseLrcLines 空集即 404——本端点职责
+  // 就是给「没轴的词」补轴；桩 align 直收行集断言它真被喂到
+  const fakeAudio = join(DOWNLOAD_BASE_DIR, '905/audio/pt.bin');
+  mkdirSync(join(fakeAudio, '..'), { recursive: true });
+  writeFileSync(fakeAudio, Buffer.alloc(64));
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_align_pt', name: 'pt' });
+  const task = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: '880103', songName: '纯文', artist: 'a',
+  });
+  downloadTasksRepo.updateTask(task.id, { status: 'completed', audioPath: fakeAudio });
+  lyricBody = { lrc: { lyric: '作词：某人\n第一段词文\n第二段词文' }, tlyric: { lyric: '' } };
+  let gotLines = null;
+  alignImpl = async ({ lines }) => {
+    gotLines = lines;
+    return { lrc: lines.map((t, i) => `[00:0${i}.00]${t}`).join('\n'), alignedBy: 'llm' };
+  };
+  try {
+    const r = await json(await post({ songId: '880103' }));
+    assert.equal(r.status, 200);
+    // 剥戳/剥元行后词文行进对齐——「作词：某人」无方括号形态照样收
+    // （plainTextLines 只滤 [tag:] 元行，署名行留给对齐引擎自行处理）
+    assert.deepEqual(gotLines, ['作词：某人', '第一段词文', '第二段词文']);
+    assert.match(r.body.lrc, /第二段词文/);
+  } finally {
+    alignImpl = null;
+    lyricBody = { lrc: { lyric: '' }, tlyric: { lyric: '' } };
+  }
+});
+
+test('lyric-align：叶子符号链接拒供——audioPath 直链与任务行两种入口都 404', async () => {
+  // 链接路径自身在下载目录内但指向目录外真身——isUnderDownloadDir 只验
+  // 链接路径；lstat 叶子链接即拒（目录级部署符号链接不受影响）
+  const outside = join(process.env.DATA_DIR, 'outside.wav');
+  writeFileSync(outside, Buffer.alloc(64));
+  const link = join(DOWNLOAD_BASE_DIR, '906/audio/link.wav');
+  mkdirSync(join(link, '..'), { recursive: true });
+  symlinkSync(outside, link);
+  // audioPath 分支：按不存在归 404（不给「存在但不可用」的信号差）
+  const r1 = await post({ audioPath: link, lines: ['a'] });
+  assert.equal(r1.status, 404);
+  // songId 分支：任务行的 audioPath 是叶子链接 → 跳过该任务行 → 404
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_align_ln', name: 'ln' });
+  const task = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: '880104', songName: '链接', artist: 'a',
+  });
+  downloadTasksRepo.updateTask(task.id, { status: 'completed', audioPath: link });
+  const r2 = await post({ songId: '880104', lines: ['a'] });
+  assert.equal(r2.status, 404);
 });

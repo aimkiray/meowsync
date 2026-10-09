@@ -7,6 +7,7 @@
 // 机器与拉流的机器不同 IP）。
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('./net-guard');
 const { SONGMID_RE, pickQqFromUrl } = require('../../shared/predicates.js');
+const { isInstrumentalPlaceholder } = require('../../shared/lrc.js');
 const { createHash } = require('crypto');
 const { Agent } = require('undici');
 
@@ -470,23 +471,23 @@ async function getPlaylist(disstid, extraSignal, maxTracks = 1000) {
 // 歌词：base64 LRC + base64 翻译；纯音乐占位词按无词处理
 async function getLyric(mid, extraSignal) {
   const body = await fcg(`/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${encodeURIComponent(mid)}&format=json&g_tk=5381&platform=yqq&needNewCode=0`, extraSignal);
-  if (body?.code !== 0 && body?.retcode !== 0) {
+  // body 缺席（非 JSON/空体）无业务码可读——与传输层错误同归（bizCode
+  // 留 undefined），不当「确定无词」固化
+  if (body == null) throw new Error('qq 歌词响应体为空');
+  if (body.code !== 0 && body.retcode !== 0) {
     // 业务码（-1901/-1301 无词等）打标——下载链据此映射 NO_LYRICS 判缺词跳过，
     // 传输层错误照旧抛走重试
-    const err = new Error(`qq 歌词 code=${body?.code ?? body?.retcode}`);
-    err.bizCode = body?.code ?? body?.retcode;
+    const err = new Error(`qq 歌词 code=${body.code ?? body.retcode}`);
+    err.bizCode = body.code ?? body.retcode;
     throw err;
   }
-  const dec = (s) => {
-    try { return s ? Buffer.from(s, 'base64').toString('utf8') : ''; } catch { return ''; }
-  };
-  const lyric = dec(body?.lyric);
-  const trans = dec(body?.trans);
-  // 剥掉 [ti:]/[ar:] 等标签头再探占位词——歌名含 instrumental 会误伤；
-  // 窗口放宽到 800 字符防超长头把标记词挤出切片
-  const stripped = lyric.replace(/\[[^\]\n]{1,120}\]/g, ' ');
-  const empty = /纯音乐|没有填词|instrumental/i.test(stripped.slice(0, 800));
-  return { lyric: empty ? '' : lyric, trans };
+  // Buffer.from(base64) 对畸形输入不抛错（非法字符静默跳过）——
+  // 不需要 try/catch
+  const lyric = body.lyric ? Buffer.from(String(body.lyric), 'base64').toString('utf8') : '';
+  const trans = body.trans ? Buffer.from(String(body.trans), 'base64').toString('utf8') : '';
+  // 整词占位（'纯音乐，请欣赏'/没有填词/instrumental 式声明）归一无词——
+  // 判定收敛在共享层（与网易侧 nolyric 旗标同语义，元标签行不占位）
+  return { lyric: isInstrumentalPlaceholder(lyric) ? '' : lyric, trans };
 }
 
 // ── 字段归一：新旧两套命名（songmid/songname/... vs mid/name/singer[]）→ 统一形态

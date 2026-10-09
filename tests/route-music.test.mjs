@@ -12,13 +12,15 @@ import { seed, tmpDataDir } from './helpers.mjs';
 process.env.DATA_DIR = tmpDataDir('meowsync-route-music-');
 const require = createRequire(import.meta.url);
 
-// ── 桩：网易云上游——callNeteaseApi 录制入参，回固定 200 信封 ──
+// ── 桩：网易云上游——callNeteaseApi 录制入参，默认回固定 200 信封；
+// upstreamImpl 可例内替换（模拟上游 reject answer / 在途断连组合）
 const apiCalls = [];
+let upstreamImpl = async (name) => ({ status: 200, body: { code: 200, echoed: name }, cookie: [] });
 seed('../src/server/services/netease-api.js', {
   apiModules: { search: {}, lyric: {} },
   callNeteaseApi: async (name, params) => {
     apiCalls.push({ name, params });
-    return { status: 200, body: { code: 200, echoed: name }, cookie: [] };
+    return upstreamImpl(name, params);
   },
   resolveSongUrls: async () => {},
   needsUnlock: () => false,
@@ -76,4 +78,49 @@ test('music：GET 只读不挂 CSRF 闸——异源 Origin 照常过上游', asy
   });
   assert.equal(r.status, 200);
   assert.equal(apiCalls.length, 1);
+});
+
+test('music：/lyric 的 id 只收网易云数字——abc 400 不打上游；数字 id 放行', async () => {
+  apiCalls.length = 0;
+  const bad = await req('/lyric?id=abc');
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).code, 400);
+  // qq_/ext 词源 id 同拒——它们走自家路由不是 passthrough
+  assert.equal((await req('/lyric?id=qq_0123456789ab')).status, 400);
+  assert.equal((await req('/lyric?id=lrclib_55')).status, 400);
+  assert.equal(apiCalls.length, 0);
+  const ok = await req('/lyric?id=2731319524');
+  assert.equal(ok.status, 200);
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].params.id, '2731319524');
+});
+
+test('music：lyric_new 移出 passthrough 白名单 → 404', async () => {
+  apiCalls.length = 0;
+  assert.equal((await req('/lyric_new?id=1')).status, 404);
+  assert.equal(apiCalls.length, 0);
+});
+
+test('music：断连优先于上游 answer 透传——aborted 时 upstream answer 归一 499', async () => {
+  apiCalls.length = 0;
+  const ac = new AbortController();
+  const saved = upstreamImpl;
+  upstreamImpl = async () => {
+    ac.abort();                                    // 在途断连
+    throw { status: 502, body: { code: 502 } };    // 上游 answer 形态（非 Error）
+  };
+  try {
+    // aborted 判必须先于 isUpstreamAnswer——否则断连请求会拿到 502 假错
+    const r = await req('/search?keywords=x', { signal: ac.signal });
+    assert.equal(r.status, 499);
+  } finally {
+    upstreamImpl = saved;
+  }
+  // 对照：未断连的同型 answer 照常透传上游状态码
+  upstreamImpl = async () => { throw { status: 502, body: { code: 502 } }; };
+  try {
+    assert.equal((await req('/search?keywords=y')).status, 502);
+  } finally {
+    upstreamImpl = saved;
+  }
 });

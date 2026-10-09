@@ -778,3 +778,25 @@ test('verifyDownloadOwnership：candidate 形参对网易 lyricId 同生效—�
   assert.equal(apiCalls.length, 0);    // 在手候选优先——song_detail 不发
   assert.equal(askCalls, 0);
 });
+
+test('resolveYtDeclared：memo 有界——FIFO 挤出 + 过期读即弃重查上游', async () => {
+  reset();
+  const { resolveYtDeclared } = require('../src/server/services/lyric-verify.js');
+  origImpl = async ({ videoId }) => ({ title: `T-${videoId}`, author: 'A' });
+  // DECLARED_MEMO_CAP=500：505 条入册后队首 5 条已被挤出——重查 v0 真打上游
+  for (let i = 0; i < 505; i++) await resolveYtDeclared(`cap${i}`);
+  assert.equal(origCalls.length, 505);
+  await resolveYtDeclared('cap0');
+  assert.equal(origCalls.length, 506);  // 队首已挤出 → 真查
+  await resolveYtDeclared('cap504');
+  assert.equal(origCalls.length, 506);  // 队尾在帽内 → memo 命中不重查
+  // 过期条目读即弃：时钟拨过 DECLARED_MEMO_MS 后同 id 重查上游
+  const realNow = Date.now;
+  try {
+    await resolveYtDeclared('exp1');
+    const n = origCalls.length;
+    Date.now = () => realNow() + 61000;
+    await resolveYtDeclared('exp1');
+    assert.equal(origCalls.length, n + 1); // 过期不命中——真查
+  } finally { Date.now = realNow; }
+});

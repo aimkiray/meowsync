@@ -33,5 +33,8 @@ export const aiApi = {
   // 与旧请求负载逐位相同。入参先归一成串：number 型 song.id 直发会被
   // zod z.string() 拒成 400 静默丢 verify——防御性收口
   verifyLyric: (id, sourceTitle, sourceAuthor, signal = null, trackId = null) =>
-    http.post('/ai/lyric-verify', { id, sourceTitle, sourceAuthor, trackId: String(trackId || '') || undefined }, { signal, timeout: 30000 })
+    // 服务端前置链（yt_ 声明反解 + 词文拉取 + 署名闸重检可各烧一条上游跳）
+    // 之后才是 ≤30s 的 AI 判定——30s 前端超时会把仍在跑的合法核验掐成
+    // 「通道故障放行」，给到 45s
+    http.post('/ai/lyric-verify', { id, sourceTitle, sourceAuthor, trackId: String(trackId || '') || undefined }, { signal, timeout: 45000 })
 }

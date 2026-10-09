@@ -11,31 +11,25 @@ const { BV_TRACK_ID_RE, YT_TRACK_ID_RE, YT_ID_RE, NETEASE_ID_BOUNDED_RE } = requ
 // （lyric-external.test.mjs 钉 ytLib.resolveOriginalInfo = stub）才能
 // 接管；解构会把真身定死在 require 时、绕开桩层直打真实上行
 const ytLib = require('../lib/youtube');
+// LRC 解析唯一真相源（与前端 parseLyrics、落盘合并同一实现）——
+// 核验侧只消费 {tag, text}：判定签名与持久化 vkey 都吃文本不吃
+// 时间值，共享层附带的偏移/排序语义不碰任何已落键
+const { parseLrcTagged, plainLyricLines } = require('../../shared/lrc.js');
 
-// 与前端 parseLyrics 同口径的 LRC 行解析（服务端无 ESM 共享）：
-// 返回 [{tag, text}]——tag 保留原始时间戳串，翻译重建时原样回贴
+// 与共享层 parseLrcTagged 同口径，收敛为本域形状 [{tag, text}]——
+// tag 保留原始时间戳串（含方括号），翻译重建时原样回贴；空文本
+// 戳行不产词条
 function parseLrcLines(lrc) {
-  const out = [];
-  const tagRe = /\[(\d+):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
-  for (const line of String(lrc || '').split('\n')) {
-    const tags = [...line.matchAll(tagRe)];
-    if (!tags.length) continue;
-    const text = line.replace(tagRe, '')
-      .replace(/<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g, '')
-      .trim();
-    if (!text) continue;
-    for (const t of tags) out.push({ tag: t[0], text });
-  }
-  return out;
+  return parseLrcTagged(lrc)
+    .filter((r) => r.text)
+    .map(({ tag, text }) => ({ tag, text }));
 }
 
-// 纯文本词 → 判定抽样行：剥方括号段（[mm:ss] 时间戳、[ti:]/[ar:] 元行、
-// [re:]/[ve:] 词源烙记同剥）取词文——「没轴的文本词」也过 AI 归属核验。
-// 出参与 parseLrcLines 同构 {text}（judgeInner/composerCreditNames 只消费
-// .text）。级联 verifyHit 与下载链 verifyDownloadOwnership 共用同一口径
-const plainTextLines = (lrc) => String(lrc || '').split('\n')
-  .map((l) => ({ text: l.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim() }))
-  .filter((l) => l.text);
+// 纯文本词 → 判定抽样行：剥行首时间戳与 [tag:] 元行取词文——「没轴的
+// 文本词」也过 AI 归属核验。出参与 parseLrcLines 同构 {text}
+// （judgeInner/composerCreditNames 只消费 .text）。级联 verifyHit 与
+// 下载链 verifyDownloadOwnership 共用同一口径
+const plainTextLines = (lrc) => plainLyricLines(lrc).map((l) => ({ text: l.text }));
 
 // 进 prompt 的输入剥换行/方括号——标题作者与歌词原文都是不可信输入，
 // 去掉结构字符至少让注入不能伪造消息边界/键控协议
@@ -80,7 +74,7 @@ function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor, poolMark, declMark)
 // vkey 级单飞：路由层 inflightVerify 只管 HTTP 调用方，file-downloader 的
 // 并发下载任务直调本函数——同一 vkey 的两个任务不内聚会各烧一次 AI、
 // 且模型非确定下可能一个落词一个 NO_LYRICS。共享 promise 不吃调用方
-// signal（首调用方 abort 不该让搭车者陪绑），10s 默认超时是自净上限
+// signal（首调用方 abort 不该让搭车者陪绑），AI_TIMEOUT_MS 上游超时是自净上限
 const judgeInflight = new Map();
 
 // ── 确定性署名否证闸 ──
@@ -394,11 +388,17 @@ async function judgePoolPick({ title, author, pool, signal, declared }) {
 // 链外——整个函数体收进 try/catch，fail-soft 归 null 不漏同步抛
 const DECLARED_RESOLVE_MS = 8000;
 const DECLARED_MEMO_MS = 60000;
+// 容量帽（FIFO 挤出——Map 键序=插入序）：进程级 memo 不设界会让
+// 每首 yt_ 的反解条目随会话只涨不消；读命中顺手清过期条目
+const DECLARED_MEMO_CAP = 500;
 const declaredMemo = new Map();   // videoId -> {res, at}（res 含 null 负结果）
 function resolveYtDeclared(videoId, signal) {
   try {
     const hit = declaredMemo.get(videoId);
-    if (hit && Date.now() - hit.at < DECLARED_MEMO_MS) return Promise.resolve(hit.res);
+    if (hit) {
+      if (Date.now() - hit.at < DECLARED_MEMO_MS) return Promise.resolve(hit.res);
+      declaredMemo.delete(videoId); // 过期即弃——不留在表里占位
+    }
     const inner = signal
       ? AbortSignal.any([AbortSignal.timeout(DECLARED_RESOLVE_MS), signal])
       : AbortSignal.timeout(DECLARED_RESOLVE_MS);
@@ -413,7 +413,13 @@ function resolveYtDeclared(videoId, signal) {
       ? { title: String(r.title).trim(), author: String(r.author || '').trim() }
       : null))
       .catch(() => null)
-      .then((res) => { declaredMemo.set(videoId, { res, at: Date.now() }); return res; });
+      .then((res) => {
+        if (declaredMemo.size >= DECLARED_MEMO_CAP && !declaredMemo.has(videoId)) {
+          declaredMemo.delete(declaredMemo.keys().next().value);
+        }
+        declaredMemo.set(videoId, { res, at: Date.now() });
+        return res;
+      });
   } catch {
     return Promise.resolve(null);
   }

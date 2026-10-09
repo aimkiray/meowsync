@@ -33,6 +33,8 @@ const { alignAudioToLrc } = require('./lyric-align');
 // 流地址宿主与 routes/qq.js 共用 lib/qq.js 的 QQ_STREAM_HOST_OK（sip 可能回
 // 裸 IP——后缀判定天然拒绝）
 const { QQ_SONG_ID_RE: QQ_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
+const { mergeLrcText, neteaseLyricBody } = require('../../shared/lrc.js');
+const { LYRIC_ALIGN_MAX_LINES, LYRIC_ALIGN_MAX_LINE_CHARS } = require('../../shared/contracts.js');
 // RS01/F000=null：FLAC/Hi-Res 是 VBR，无固定码率可算——download-manager 的
 // durationLooksTruncated 对 falsy br 短路跳过，完整性由 streamToFile 的
 // content-length 对账兜底
@@ -895,41 +897,17 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
   }
 }
 
-// LRC 行时间戳 → 毫秒键归一：与 download-io.lrcTsKey 同口径（[mm:ss.xx]/
-// [mm:ss:xx] 都认，毫秒归一防精度写法差丢行）——本文件的多层级合并要
-// 键函数本体，io 层未导出
-function lrcTsMs(tag) {
-  const m = String(tag || '').match(/^\[(\d+):(\d+(?:[.:]\d+)?)\]$/);
-  if (!m) return null;
-  return Math.round((+m[1] * 60 + +m[2].replace(':', '.')) * 1000);
-}
+// 多层行合并（罗马音/译文双层落盘）：实现收敛在共享层 mergeLrcText——
+// 每层独立对齐面、逐原词行后按入参序贴齐；同文跳过与播放面
+// mergeTranslations 同口径（AI 译文缓存的原文占位行不落盘成双），
+// 且同用 0.5s 最近邻窗（旧实现整毫秒键严格相等会静默丢译文）
+const mergeLrcLayers = (lrc, ...layers) => mergeLrcText(lrc, ...layers);
 
-// 多层同刻行合并（罗马音/译文双层落盘）：mergeLrcTrans 只支持单层——
-// 链式叠用会让第一层已插入的译行又被第二层贴（同刻原行/译行共享一键，
-// 产出 o,R,T,R 四行重复）。这里每层独立 ts→text 表，逐原词行后按入参
-// 序贴齐；同文跳过与 mergeLrcTrans 同口径（AI 译文缓存的原文占位行
-// 不落盘成双）
-function mergeLrcLayers(lrc, ...layers) {
-  const maps = layers.map(layer => {
-    const m = new Map();
-    for (const line of String(layer || '').split('\n')) {
-      const lm = line.match(/^(\[[\d:.]+\])\s*(.+)$/);
-      const key = lm && lrcTsMs(lm[1]);
-      if (key != null) m.set(key, lm[2]);
-    }
-    return m;
-  }).filter(m => m.size > 0);
-  if (!maps.length) return lrc;
-  return String(lrc || '').split('\n').map(line => {
-    const lm = line.match(/^(\[[\d:.]+\])/);
-    const key = lm && lrcTsMs(lm[1]);
-    if (key == null) return line;
-    const srcText = line.slice(lm[1].length).trim();
-    const extras = maps.map(m => m.get(key))
-      .filter(t => typeof t === 'string' && t.trim() && t.trim() !== srcText);
-    return extras.length ? `${line}\n${extras.map(t => `${lm[1]}${t}`).join('\n')}` : line;
-  }).join('\n');
-}
+// 网易 lyric 回包的词文提取（qq 合成包同构适用）：nolyric/uncollected
+// 旗标与纯占位词（'纯音乐，请欣赏' 式整词占位）归一成空——归一口径
+// 收敛在共享层 neteaseLyricBody；空词让外源级联兜底照常接管，占位串
+// 不落盘也不判「已取词」
+const neteaseLyricOf = (body) => neteaseLyricBody(body).lrc;
 
 // 外源词兜底相位的本曲上下文：按 songId 跨歌单扫任务行（与 routes/
 // lyric-align 的 resolveDownloadedAudio 同款寻址，但不卡 completed——
@@ -1003,10 +981,11 @@ async function probeMediaDurationSec(mediaPath, signal) {
 // 调用方照旧落纯文本（有词好过没词）。任务级取消（外层 signal）穿透不降级
 const PLAIN_ALIGN_BUDGET_MS = 90000;
 async function alignPlainLrc(audioPath, plainText, signal) {
-  // 与路由口径齐（lyricAlignBody/MAX_ALIGN_LINES）：单行 ≤500 截断、
-  // 行数 ≤600 截断——外源纯文本是 UGC 不可信输入，不截会烧穿对齐预算
+  // 与路由口径齐（lyricAlignBody 同一份上限常量）：单行超字截断、
+  // 行数超限截断——外源纯文本是 UGC 不可信输入，不截会烧穿对齐预算
   const lines = String(plainText || '').split('\n')
-    .map(l => l.trim().slice(0, 500)).filter(Boolean).slice(0, 600);
+    .map(l => l.trim().slice(0, LYRIC_ALIGN_MAX_LINE_CHARS)).filter(Boolean)
+    .slice(0, LYRIC_ALIGN_MAX_LINES);
   if (!lines.length) return null;
   const alignSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(PLAIN_ALIGN_BUDGET_MS)])
@@ -1140,17 +1119,17 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
     // qq 词源缺词时回落已匹配的网易云词源（与播放链同口径）——嫁接词过
     // 下方同一个归属核验（来源即 QQ 曲自身的名/艺人快照）
     let qqGrafted = false;
-    if (qqLm && !response?.body?.lrc?.lyric
+    if (qqLm && !neteaseLyricOf(response?.body)
         && NETEASE_ID_RE.test(String(providerData?.neteaseId ?? ''))) {
       const fb = await callNeteaseApi('lyric', { id: String(providerData.neteaseId) }, { signal })
         .catch(() => null);
-      if (fb?.body?.code === 200 && fb.body.lrc?.lyric) {
+      if (fb?.body?.code === 200 && neteaseLyricOf(fb.body)) {
         response = fb;
         lyricId = String(providerData.neteaseId);
         qqGrafted = true;
       }
     }
-    if (qqDefinitiveEmpty && !response?.body?.lrc?.lyric) {
+    if (qqDefinitiveEmpty && !neteaseLyricOf(response?.body)) {
       // qq 自家词确定性缺 + 回落也空——外源级联再接一手才判缺词
       const ext = await externalLyricHit();
       if (ext) return ext;
@@ -1168,10 +1147,12 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
       throw new Error('无法获取歌词');
     }
 
-    const lrc = response.body.lrc;
-    if (!lrc || typeof lrc.lyric !== 'string' || !lrc.lyric) {
-      // code 契约而非消息串匹配——下游按 NO_LYRICS 判定"缺词不算失败"；
-      // 非字符串 lyric 是上游畸形数据，与缺词同待遇（确定性，不该重试）。
+    // 词文提取走 neteaseLyricOf：nolyric/uncollected 旗标与纯占位词
+    // 一律归缺词；非字符串 lyric 是上游畸形数据，与缺词同待遇
+    // （确定性，不该重试——code 契约而非消息串匹配，下游按 NO_LYRICS
+    // 判定"缺词不算失败"）
+    const lrcText = neteaseLyricOf(response.body);
+    if (!lrcText) {
       // 外源曲（qq_ 词空非 bizCode 形态 / bv_·yt_ 有匹配但网易词空）先吃
       // 外源级联一手，仍空才定缺词
       if (extM || qqM0) {
@@ -1188,7 +1169,7 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
     // 已落库判定不随 aiEnabled 旁路；AI 关只影响新判定的来源
     if (extM || qqGrafted) {
       const ownership = await verifyDownloadOwnership({
-        songId, lyricId, providerData, grafted: qqGrafted, lrc: lrc.lyric, signal
+        songId, lyricId, providerData, grafted: qqGrafted, lrc: lrcText, signal
       });
       if (ownership === false) {
         console.info(`[download] ${songId} 歌词归属核验不符，跳过落盘`);
@@ -1210,7 +1191,7 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
     const trans = (response.body.tlyric?.lyric || response.body.trans)
       || lyricAiRepo.getCachedTranslation(lyricId)?.tlyric || '';
     const roma = response.body.romalrc?.lyric || '';
-    const lyricText = mergeLrcLayers(lrc.lyric, roma, trans);
+    const lyricText = mergeLrcLayers(lrcText, roma, trans);
 
     return writeLrcFile(lyricText);
   } catch (error) {
