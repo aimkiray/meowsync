@@ -124,3 +124,31 @@ test('proxy：vault token 失效 404；有效 token 透传上游', async () => {
   assert.equal(await res.text(), 'audio-bytes');
   assert.equal(fetchCalls.at(-1).url, 'https://a.kuwo.cn/vaulted.mp3');
 });
+
+// vault 化 126 链的 Range 透传钉板：客户端 seek 发 bytes=100-199，
+// 代理须原样带上游并把 206 + Content-Range 透出（injectedRange 不介入——
+// 客户端自带 Range）。覆盖 post-pass 收口后的主播放路径
+test('proxy：vault 126 链带 Range GET → 上游收 Range，回 206 + Content-Range', async () => {
+  upstreamHandler = async () => new Response('x'.repeat(100), {
+    status: 206,
+    headers: {
+      'content-type': 'audio/mp4',
+      'content-range': 'bytes 100-199/1000',
+      'accept-ranges': 'bytes',
+      'content-length': '100',
+    },
+  });
+  try {
+    const token = streamVault.mint('https://m701.music.126.net/vaulted.mp3');
+    const res = await get(`/audio-proxy/t/${token}`, { headers: { range: 'bytes=100-199' } });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get('content-range'), 'bytes 100-199/1000');
+    assert.equal(await res.text(), 'x'.repeat(100));
+    assert.equal(fetchCalls.at(-1).url, 'https://m701.music.126.net/vaulted.mp3');
+    assert.equal(fetchCalls.at(-1).headers['Range'], 'bytes=100-199');
+  } finally {
+    upstreamHandler = async () => new Response('audio-bytes', {
+      status: 200, headers: { 'content-type': 'audio/mp4' },
+    });
+  }
+});

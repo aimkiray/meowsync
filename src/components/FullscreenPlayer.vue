@@ -98,7 +98,7 @@
         </div>
 
         <img
-          v-if="songCoverUrl(currentSong)"
+          v-if="proxiedCoverUrl(songCoverUrl(currentSong))"
           :src="httpsCover(proxiedCoverUrl(songCoverUrl(currentSong)))"
           :alt="currentSong.name"
           class="fullscreen-player__cover"
@@ -338,6 +338,7 @@ export default {
       formatTime,
       httpsCover,
       songCoverUrl,
+      proxiedCoverUrl,
       seekToPosition,
       nudgeSeek,
       onProgressPointerDown,

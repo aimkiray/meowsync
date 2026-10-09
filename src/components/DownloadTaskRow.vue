@@ -4,7 +4,7 @@
     <div class="dtr-cover">
       <!-- alt 留空：封面与紧邻的 .dtr-name 同源文本——命名会让 SR 把歌名报两遍 -->
       <img
-        v-if="task.coverUrl"
+        v-if="coverSrc"
         :src="coverSrc"
         alt=""
         class="dtr-cover-img"
@@ -99,8 +99,10 @@ const props = defineProps({
 defineEmits(['retry-task', 'delete-task'])
 
 // coverPath 是服务器相对路径（无对应文件路由），当 img src 只会 404——不兜底。
-// coverUrl 是上游 http 明文 CDN 地址：HTTPS 部署下被动混合内容
-// 会被浏览器拦截，显式升级 https（*.music.126.net 均支持 TLS）
+// coverUrl 是上游图床 CDN 链：coverSizeUrl 先按图床语法缩放改写，再经
+// proxiedCoverUrl 包装——白名单域出同源 /img-proxy 链（跨源部署带 apiBase
+// 前缀），非白名单/畸形 fail-closed 归 ''（v-if 挡 <img> 显占位）；httpsCover
+// 仅兜底残留的 http 明文直通形升级
 const coverSrc = computed(() => httpsCover(coverSizeUrl(props.task.coverUrl, 96)))
 const statusLabel = computed(() => taskStatusMeta(props.task.status).label)
 const chipTierClass = computed(() => statusChipClass(taskStatusMeta(props.task.status).tier))

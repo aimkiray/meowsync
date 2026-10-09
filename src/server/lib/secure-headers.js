@@ -21,24 +21,32 @@ function secureHeaders() {
       h.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
     }
     // CSP 只加在 HTML 文档（index.html/SPA 兜底），JSON API 不需要。
-    // script-src 的 sha256 对应 index.html 内联主题+字体翻转脚本——改那段
+    // script-src 的 sha256 对应 index.html 内联主题恢复脚本——改那段
     // 脚本必须同步重算（node -e "crypto…update(脚本体)"），否则首帧被掐死；
     // 同理 index.html 里任何 onload/on* 内联处理器都会被本指令拒执
     const type = h.get('content-type') || '';
+    // !has 判即是逃逸口：反代预置自定义 CSP 时本表整段不写入（混合部署
+    // 边界见 DEPLOYMENT.md「安全响应头与 CSP」——跨源烘焙 API +
+    // media-src 'self' 会拦跨源 <audio>，需由反代下发放宽表覆盖）
     if (type.includes('text/html') && !h.has('Content-Security-Policy')) {
       h.set('Content-Security-Policy', [
         "default-src 'self'",
-        "script-src 'self' 'sha256-vpTmUE2u7N3JRUoytqzyaqhplbVzDyuIp3nr6+OBOBE='",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", // :style 绑定 + 内联启动样式 + 字体表
-        // http: 必须保留——HTTP 部署（自托管常态）下网易图床/解锁源 CDN 的
-        // http 封面与直链若被 CSP 掐死会全灭；https 页面里浏览器本就自动升级
-        // 被动 http 资源，放开 http: 不实质削弱 https 部署的防线
-        "img-src 'self' http: https: data: blob:",  // 封面直链上游 CDN
+        "script-src 'self' 'sha256-pADVm4OreZWjbx4BMy3eguDHGUp6u17ELX/GgnIjmfQ='",
+        "style-src 'self' 'unsafe-inline'", // :style 绑定 + index.html 内联启动样式（字族表已自托管进 vite 管线）
+        // 零被动外联口径：img/media/font 不再放行 http:/https: 源站字面量——
+        // 外部封面统一经 /img-proxy 同源化（非白名单域客户端侧已 fail-closed），
+        // 音频走 /audio-proxy vault 链，字体全量自托管（googleapis/gstatic 移除）
+        "img-src 'self' data: blob:",       // 自定义封面 data: 直传 + blob 余量
         // data: 是 Howler 的 unlock 占位 wav（data:audio/wav;base64,…）——
         // 缺它 audio pool 预热被掐报 "pool exhausted"
-        "media-src 'self' blob: data: http: https:", // <audio> 同源 + blob/data + 上游直链兜底
-        "font-src 'self' data: https://fonts.gstatic.com",
-        "connect-src 'self' http: https: wss: ws:", // API 同源 + 跨域 http(s) 部署 + dev ws
+        "media-src 'self' blob: data:",     // <audio> 同源 vault 链 + blob/data
+        // data: 留位——vite 会把 <4KB 的 woff2 烘成 data:font/woff2 内联进 CSS
+        "font-src 'self' data:",
+        // connect-src 保留 http:/https:/ws:/wss: 四协议宽口径：
+        // VITE_API_BASE_URL 可烘焙任意跨源 API 地址（跨源部署兼容位），
+        // ws:/wss: 同义留给 /remote 遥控与 dev server。connect 是 fetch/WS
+        // 主动请求通道，不产生被动子资源加载——不触碰不变式语义
+        "connect-src 'self' http: https: ws: wss:",
         "object-src 'none'",
         "base-uri 'none'",
         "frame-ancestors 'none'",

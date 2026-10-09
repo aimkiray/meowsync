@@ -1,6 +1,7 @@
 // RemoteController 接收端封面还原：host 把 file_ 工件封面剥成 apiBase
 // 相对路径上线（协议见 shared/protocol.js 注释），本端用自身
-// resolveApiBaseUrl 拼回；外部 http(s) 链原样透传。顺带钉 connect 幂等。
+// resolveApiBaseUrl 拼回；外部 http(s) 链经 proxiedCoverUrl 收编——白名单
+// 域包成 /img-proxy 形，非白名单 fail-closed 出占位图。顺带钉 connect 幂等。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -35,7 +36,7 @@ beforeEach(() => { sockets.length = 0 })
 afterEach(() => { wrapper?.unmount(); wrapper = null })
 
 describe('RemoteController：封面 apiBase 相对路径还原', () => {
-  it('/downloads 相对路径用本端 apiBase 拼回；外部 http(s) 链原样', async () => {
+  it('/downloads 相对路径用本端 apiBase 拼回；白名单外链收编为 /img-proxy 形', async () => {
     wrapper = mountCtl()
     const ws = sockets.at(-1)
     ws.open()
@@ -48,11 +49,14 @@ describe('RemoteController：封面 apiBase 相对路径还原', () => {
     expect(img.attributes('src'))
       .toBe(`${resolveApiBaseUrl()}/downloads/songs/file_abc/file?kind=cover`)
 
+    // 白名单外链不再透传直连：songThumbUrl 先把 i.ytimg.com 降档
+    // hq→mq，再由 proxiedCoverUrl 包成 /img-proxy?url= 同源形——
+    // 封面渲染链路钉全链包装形（非白名单域在此 fail-closed 出占位图）
     feedState(ws, { currentSong: { id: 2, name: 'n',
-      al: { picUrl: 'https://cdn.example/p.jpg' }, ar: [] } })
+      al: { picUrl: 'https://i.ytimg.com/vi/x/hqdefault.jpg' }, ar: [] } })
     await nextTick()
     expect(wrapper.find('img.rc-cover').attributes('src'))
-      .toBe('https://cdn.example/p.jpg')
+      .toBe(`${resolveApiBaseUrl()}/img-proxy?url=${encodeURIComponent('https://i.ytimg.com/vi/x/mqdefault.jpg')}`)
   })
 
   it('connect 幂等：在途 socket 被 detach+close 收编，迟到 close 不再叠连', async () => {

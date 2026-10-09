@@ -41,7 +41,7 @@
         >
           <div class="pl-cover-wrap">
             <img
-              v-if="playlist.coverImgUrl"
+              v-if="coverSizeUrl(playlist.coverImgUrl, 96)"
               :src="httpsCover(coverSizeUrl(playlist.coverImgUrl, 96))"
               :alt="playlist.name"
               class="pl-cover"

@@ -48,7 +48,7 @@
         >
           <div class="grid-card-cover">
             <img
-              v-if="pl.coverImgUrl"
+              v-if="coverSizeUrl(pl.coverImgUrl, 320)"
               :src="httpsCover(coverSizeUrl(pl.coverImgUrl, 320))"
               :alt="pl.name"
               loading="lazy"
@@ -84,7 +84,7 @@
         >
           <div class="grid-card-cover">
             <img
-              v-if="al.picUrl"
+              v-if="coverSizeUrl(al.picUrl, 320)"
               :src="httpsCover(coverSizeUrl(al.picUrl, 320))"
               :alt="al.name"
               loading="lazy"

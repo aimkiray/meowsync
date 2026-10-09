@@ -49,7 +49,7 @@
               <span class="song-result-index-play"><PixelIcon name="play" :size="16" /></span>
             </span>
             <img
-              v-if="songCoverUrl(song)"
+              v-if="songThumbUrl(song, 96)"
               :src="httpsCover(songThumbUrl(song, 96))"
               :alt="song.name"
               class="song-result-cover"
@@ -108,7 +108,7 @@
             >
             <div class="grid-card-cover">
               <img
-                v-if="playlist.coverImgUrl"
+                v-if="coverSizeUrl(playlist.coverImgUrl, 320)"
                 :src="httpsCover(coverSizeUrl(playlist.coverImgUrl, 320))"
                 :alt="playlist.name"
                 loading="lazy"

@@ -266,7 +266,7 @@
                     <template v-else>{{ queueStartIndex + i + 1 }}</template>
                   </span>
                   <img
-                    v-if="songCoverUrl(song)"
+                    v-if="songThumbUrl(song, 80)"
                     :src="httpsCover(songThumbUrl(song, 80))"
                     :alt="song.name"
                     class="watch-queue-thumb"
@@ -473,7 +473,7 @@
             >
               <span class="queue-row-index">{{ i + 1 }}</span>
               <img
-                v-if="songCoverUrl(song)"
+                v-if="songThumbUrl(song, 80)"
                 :src="httpsCover(songThumbUrl(song, 80))"
                 :alt="song.name"
                 class="watch-queue-thumb"
