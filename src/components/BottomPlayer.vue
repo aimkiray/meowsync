@@ -82,7 +82,7 @@
             :disabled="!currentSong"
             :aria-label="songSwitching ? '切换歌曲中' : (isPlaying ? '暂停' : '播放')"
             :title="songSwitching ? '切换歌曲中…' : (isPlaying ? '暂停' : '播放')"
-          ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 26 : 32" /></button>
+          ><PixelIcon :name="isPlaying ? 'pause' : 'play'" :size="isPlaying ? 26 : 32" :class="{ 'transport--play__icon-shift': !isPlaying }" /></button>
           <button
             @click="$emit('next')"
             class="transport"
@@ -365,7 +365,7 @@ export default {
   gap: 16px;
   /* 横槽移到外层 .bottom-player（style.css 同款 max(16px,env)，全档生效）——
      内列居中到 --content-max 后，≥1472 与顶栏/侧栏内容同轴（原为内槽 16px
-     错位：内列盒含槽，对齐基准偏半槽）。竖向 padding 4 + 播放键 60/56/52
+     错位：内列盒含槽，对齐基准偏半槽）。竖向 padding 4+4 + 播放键 60/56/52
      （桌面/phone/compact 三档）+ 发丝线 1.2 = 栏高 69.2/65.2/61.2——与
      style.css :root 的 --player-bar-h 令牌梯成对维护（watch 视频预算消费） */
   padding: 4px 0;
@@ -439,10 +439,41 @@ export default {
 .transport:hover:not(:disabled) { color: var(--accent-magenta-on-ink); }
 .transport:disabled { opacity: .45; cursor: default; }
 .transport--active { color: var(--accent-magenta-on-ink); }
+/* 播放=主键：实心纸盘反白——pg-icobtn--pressed 同极性语言（纸底墨字
+   即主态），实心圆先例 watch-video-toggle / fullscreen --primary。
+   盒尺寸纹丝不动：栏高=竖槽 4 + 键盒 60/56/52 + 发丝线 钉死
+   （.player-inner 注），盘只在盒内画——border 归零让位内槽，
+   4px padding + content-box clip 把纸色收进内容盒 → 盘径=盒−8
+   （52/48/44，三档同式不随档调槽）；盘永不溢出盒——bp-progress
+   命中带底沿钉 y=3、键顶 y≈4 仅 1px 净空，外溢即被带抢点击。
+   字形 -ink（PixelIcon fill=currentColor），watch 舞台态 --ink
+   翻暗玻璃仍深、glitch 走 var——极性天然成立，均无需特判 */
 .transport--play {
   width: 60px;
   height: 60px;
+  border-width: 0;
+  border-radius: 50%;
+  padding: 4px;
+  background: var(--paper);
+  background-clip: content-box;
+  color: var(--ink);
+  transition: color .2s, opacity .15s, transform .15s;
 }
+/* 主键 hover=形体放大（watch-video-toggle 同款 1.06）替换纯变色——
+   accent-on-ink 是墨面浅档（#fc8eac），落纸盘低对比如洗白，字形保墨色 */
+.transport--play:hover:not(:disabled) {
+  color: var(--ink);
+  transform: scale(1.06);
+}
+/* 放大缓动收 reduce 门——watch-video-toggle 同口径 transition:none
+   （全局无 transform 覆盖，各件自收门） */
+@media (prefers-reduced-motion: reduce) {
+  .transport--play { transition: none; }
+}
+/* 光学补偿：play 三角的质量心偏 bbox 中心左 ~0.67 viewBox 单位（32px 下
+   ~1px），居中摆在圆盘上可察觉偏左——右移 1px 配平；pause 双柱对称不需。
+   transform 落在图标内层元素，与键体 hover 的 scale(1.06) 互不干扰 */
+.transport--play__icon-shift { transform: translateX(1px); }
 
 /* 切换中：不换字形，整键灰化。busy≠disabled——仍可按（togglePlay 内有
    howl 守卫），用 progress 光标区分于死键；opacity .15s 柔化瞬闪 */
