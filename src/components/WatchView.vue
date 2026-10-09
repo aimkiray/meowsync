@@ -2214,27 +2214,21 @@ export default {
 }
 
 /* ── 双栏态：宽屏（≥901）与窄屏矮窗（≤900.98∧<600h 横屏）──
-   舞台列 + 面板列；媒体盒换容器单位吃满列内剩余高宽 */
+   舞台列 + 面板列；页头退居舞台列顶行、面板跨两行吃满视高——
+   ⋯ 键不再悬在面板上压出 40px 空行（两态同一摆放模型） */
 @media (min-width: 901px) {
-  .watch-layout {
-    display: grid;
+  .watch-view {
     grid-template-columns: minmax(0, 1fr) clamp(340px, 30vw, 520px);
-    gap: clamp(24px, 2.5vw, 48px);
-    padding-bottom: 24px;
+    column-gap: clamp(24px, 2.5vw, 48px);
+    padding-bottom: 24px; /* layout 透明化后底垫移到网格本体 */
   }
 }
 @media (max-width: 900.98px) and (max-height: 599.98px) {
-  /* 页头退居舞台列顶行、面板跨两行吃满视高——264px 视图里多腾一整行列表 */
+  /* 264px 视图里多腾一整行列表 */
   .watch-view {
-    display: grid;
     grid-template-columns: minmax(0, 1fr) min(46vw, 420px);
-    grid-template-rows: 40px minmax(0, 1fr);
     column-gap: 16px;
   }
-  .watch-layout { display: contents; }
-  .watch-head { grid-column: 1; grid-row: 1; min-width: 0; }
-  .watch-main { grid-column: 1; grid-row: 2; min-width: 0; }
-  .watch-side { grid-column: 2; grid-row: 1 / -1; }
   /* 矮窗面板收紧：语境行让位、tab 降 40px、页脚减垫——保 ≥3 列表行 */
   .watch-side-meta { display: none; }
   .watch-tab { height: 40px; }
@@ -2242,6 +2236,14 @@ export default {
   .lyric-tools { padding-block: 8px; }
 }
 @media (min-width: 901px), (max-width: 900.98px) and (max-height: 599.98px) {
+  .watch-view {
+    display: grid;
+    grid-template-rows: 40px minmax(0, 1fr);
+  }
+  .watch-layout { display: contents; }
+  .watch-head { grid-column: 1; grid-row: 1; min-width: 0; }
+  .watch-main { grid-column: 1; grid-row: 2; min-width: 0; }
+  .watch-side { grid-column: 2; grid-row: 1 / -1; }
   .watch-main {
     /* 定尺寸查询容器：媒体按列内剩余空间取尺寸 */
     container-type: size;
