@@ -2254,6 +2254,11 @@ export default {
   .watch-banner { width: min(100cqw, 100cqh, 760px); }
   .watch-view--video .watch-banner { width: min(100cqw, 100cqh * 16 / 9); }
 }
+@media (min-width: 901px) {
+  /* 宽屏面板让位页头行（顶缘与媒体列行 2 对齐、底缘吃 24px 底垫）——
+     须晚于合并态的 1/-1 跨行规则才生效；矮窗态不动，仍跨两行吃满视高 */
+  .watch-side { grid-row: 2; }
+}
 /* 容器单位缺席的老内核：回旧式视口高预算 */
 @supports not (width: 1cqh) {
   @media (min-width: 901px), (max-width: 900.98px) and (max-height: 599.98px) {
