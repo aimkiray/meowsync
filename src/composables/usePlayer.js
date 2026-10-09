@@ -47,13 +47,14 @@ if (typeof Audio !== 'undefined' && typeof Howler._releaseHtml5Audio === 'functi
 // 许动 App.vue——跨组件通知走模块级单槽回调）。单槽而非订阅者集：usePlayer
 // 仅 App 一处实例化，后注册覆盖旧槽即够；测试多次实例化也只有最新一只
 // 响应，跨实例不串话。载荷捎词源 id（null=菜单侧解绑：用户显式否决错配
-// 且无更准替代）与被换下/解绑的旧词源 id（vetoedId——进 matchVetoedIds
-// 否决簿，供 rematchUnbound 并入 excludeIds 防它复活）：正播的曲对象与
-// 菜单侧写过的对象不一定是同一引用（搜索队列/快照来源不同），播放器侧
-// 那份要单独补写
+// 且无更准替代）、被换下/解绑的旧词源 id（vetoedId——进 matchVetoedIds
+// 否决簿，供 rematchUnbound 并入 excludeIds 防它复活）与命中的 matched
+// 回包本体（第 4 参可缺省——命中时正播侧曲对象经 applyMatchResult 整组
+// 重建 name/al/证据，与菜单侧口径齐）：正播的曲对象与菜单侧写过的对象
+// 不一定是同一引用（搜索队列/快照来源不同），播放器侧那份要单独补写
 let lyricRematchHandler = null
-export const notifyLyricRematch = (trackId, neteaseId, vetoedId) => {
-  lyricRematchHandler?.(trackId, neteaseId, vetoedId)
+export const notifyLyricRematch = (trackId, neteaseId, vetoedId, matched) => {
+  lyricRematchHandler?.(trackId, neteaseId, vetoedId, matched)
 }
 
 // 遥控 seek 的「已播完」销账口（上行 notifyLyricRematch 同款模块级单槽）：
@@ -1477,6 +1478,9 @@ export function usePlayer({
       // provider 块可缺席（裸 id 过闸）：检索喂料回退 song.name/ar，与
       // rematchUnbound 同口径——缺了降级不致死，服务端按 id 前缀自解
       const feed = lyricSearchFeed(song)
+      // 判否累积集之外再并入菜单显式否决簿（与 rematchUnbound 同一张
+      // 账）——自动换绑不许复活用户显式解绑/换绑否掉的词源
+      const excludeIds = [...new Set([...freshVetoed, ...(matchVetoedIds.get(key) ?? [])])]
       try {
         const matched = await musicApi.retryMatch({
           trackId: song.id,
@@ -1488,14 +1492,30 @@ export function usePlayer({
           // 不再比首配更瞎）
           artists: [feed.extAuthor, feed.extAuthorClean].filter(Boolean),
           durationSec: feed.durationSec,
-          // 判否累积集之外再并入菜单显式否决簿（与 rematchUnbound 同一张
-          // 账）——自动换绑不许复活用户显式解绑/换绑否掉的词源
-          excludeIds: [...new Set([...freshVetoed, ...(matchVetoedIds.get(key) ?? [])])],
+          excludeIds,
         }, signal)
-        // 空回包/同 id 早退：自动路径不解绑——与菜单显式纠错的不对称是
-        // 刻意的。用户点「重新匹配」等于显式说「这不是」（强信号，空回包
-        // 即解绑）；verify 判否是弱信号（inconclusive/误报都可能），
-        // 「没找到更准的」不该替用户摘掉现有绑定——只换不修
+        // 完成型 miss（matched===null——异常走 catch 不进这里）且本次外发
+        // 的 excludeIds 含当前绑定 id（RTT 窗内被别路改绑则不含，显式选择
+        // 优先不动它）：镜像服务端负行终态——判否词源不再留绑。客户端不
+        // 解绑的话本地 raw_json 残绑会让每会话重走「词闪→藏→retry」振荡；
+        // applyMatchResult(null) 顺带把错配烘进的 name/al 洗回 provider 态。
+        // 写回+落盘不因 stale 弃写（持久属性，与下方换绑同口径）；仍正播且
+        // 未 abort 则热重载走未绑定支接外源兜底（外源再全灭时 rematchUnbound
+        // 首配兜底自带否决集接续）。静默无 toast——「疑似不匹配已隐藏」
+        // 提示先行已解释，后台自愈不配打扰；console.info 留痕
+        if (matched === null) {
+          const boundVetoed = song.neteaseId != null
+            && excludeIds.some(id => String(id) === String(song.neteaseId))
+          if (!boundVetoed) return
+          applyMatchResult(song, null)
+          savePlaylistsToStorage()
+          console.info('词源判否后重匹配未命中，已解除错配绑定:', song.id)
+          if (currentPlayingId !== song.id || signal?.aborted) return
+          void loadLyrics(song, signal)
+          return
+        }
+        // 同 id 命中回包早退：服务端把现绑定原样送回——不写不重载；
+        // 其余空回包形态（undefined/空对象）同归不写
         if (!matched?.id || String(matched.id) === String(song.neteaseId)) return
         // 换绑走共享修复器整组重建 name/al/证据（不只换 neteaseId）——
         // 错配的专辑身份是持久化元信息残留，要连根修。写回曲对象+显式
@@ -1512,11 +1532,13 @@ export function usePlayer({
         toast('词源已自动重匹配', 'success')
         await loadLyrics(song, signal)
       } catch (e) {
-        // abort（切歌打断在途请求）不消费额度——槽位是本曲「下次播放再试」
-        // 的机会，RTT 窗内切歌不该烧掉它；其它错误保留占位防每播一次
-        // 刷 match-retry 限流桶
+        // abort（切歌打断在途请求）与 429 限流不消费额度——前者是本曲
+        // 「下次播放再试」的机会，后者是「稍后再试」语义（烧槽位会让
+        // 限流期的一单永不自愈）；与 rematchUnbound/hydrateMatchBinding
+        // 同口径。其它错误保留占位防每播一次刷 match-retry 限流桶
         if (signal?.aborted || e?.code === 'ERR_CANCELED'
-            || e?.name === 'AbortError' || e?.name === 'CanceledError') {
+            || e?.name === 'AbortError' || e?.name === 'CanceledError'
+            || e?.response?.status === 429) {
           rematchTried.delete(key)
         }
       }
@@ -1633,10 +1655,17 @@ export function usePlayer({
       // match=null（无正绑/负缓存行）不留痕；RTT 窗内被别路补绑
       // （菜单换绑等）也不覆写——用户显式选择优先
       if (!match?.id || song.neteaseId != null) return
-      // 显式否决簿闸（与 rematchUnbound 并入 excludeIds 同一张账）：
-      // 菜单解绑/换绑否掉的 id 不许被水合静默绑回——服务端 retry 传输
-      // 失败不落负行、旧正行存活时读口会原样送回
-      if (matchVetoedIds.get(key)?.has(String(match.id))) return
+      // 否决闸对两簿取并集（与 rematchUnbound 组 excludeIds 同一张账）：
+      // matchVetoedIds 只记菜单显式否决，判否否决记 rematchTried——判否
+      // 触发的镜像解绑（rematchLyricSource miss 支）后 neteaseId==null
+      // 使本读口变可达，服务端正行残存窗口（mergeVetoed fail-soft 没落
+      // 账/旧服务端无否决簿）会把刚判否的词源原样送回，漏查判否簿等于
+      // 水合复活刚否决的绑定。rematchTried 按 lyricId 原类型记账
+      // （neteaseId 多为数字），比对两侧归一 String
+      const matchId = String(match.id)
+      const vetoed = matchVetoedIds.get(key)?.has(matchId)
+        || [...(rematchTried.get(key) ?? [])].some(id => String(id) === matchId)
+      if (vetoed) return
       // 写回段与读段分 try：applyMatchResult/落盘的缺陷不许静默吞成
       // 「请求失败」——后台自愈不打扰用户照旧，但留 warn 可查
       try {
@@ -1652,7 +1681,7 @@ export function usePlayer({
     // 它下次播放时由 rematchUnbound 消费）；正播同曲才把新词源 id 补写进
     // 本侧曲对象并重载词——非当前曲的改动留给下次播放的 loadLyrics 自然
     // 消费
-    const onLyricRematch = (trackId, neteaseId, vetoedId) => {
+    const onLyricRematch = (trackId, neteaseId, vetoedId, matched) => {
       if (vetoedId != null) {
         const key = String(trackId)
         let vetoed = matchVetoedIds.get(key)
@@ -1663,8 +1692,17 @@ export function usePlayer({
       // neteaseId=null 是菜单侧解绑信号（用户显式否决错配且无更准替代）：
       // 清绑与换绑同一收口。本侧对象与菜单侧写过的对象不一定是同一引用
       // ——补写后显式落盘（同 rematchLyricSource：savePlaylistsToStorage
-      // 是显式调用制，只变异不落盘会丢「关页前最后一次换绑/解绑」）
-      currentSong.value.neteaseId = neteaseId ?? null
+      // 是显式调用制，只变异不落盘会丢「关页前最后一次换绑/解绑」）。
+      // matched 为对象（菜单侧换绑命中回包捎来——matchedBy/score 是同层
+      // 平铺字段）时经 applyMatchResult 整组重建 name/al/证据，而非只补
+      // neteaseId：异引用对象的错配元信息残留要连根修，与菜单侧口径齐；
+      // matched 缺席（解绑或旧调用方不捎第 4 参）维持裸写原口径
+      if (matched && typeof matched === 'object') {
+        applyMatchResult(currentSong.value, matched,
+          { matchedBy: matched.matchedBy, matchScore: matched.score })
+      } else {
+        currentSong.value.neteaseId = neteaseId ?? null
+      }
       savePlaylistsToStorage()
       void loadLyrics(currentSong.value)
     }
@@ -1865,9 +1903,11 @@ export function usePlayer({
     const EXTERNAL_LYRIC_SOURCE_NAME = { ytm: 'YouTube Music', lrclib: 'LRCLIB', kugou: '酷狗' }
 
     // 「获取歌词/重新获取」手动闸（watch 歌词工具条）：自动外源支的静默
-    // 兜底（404/网络错同归空词）在手动路径改成显式终态文案。检索口径与
-    // 自动链不同——song.name（SongFormDialog 手改过的名字）优先于
-    // ext.title 原始视频标题，ar 补 artist 缺省。
+    // 兜底（404/网络错同归空词）在手动路径改成显式终态文案。检索料序按
+    // song.custom 位分家——custom=true 才是「SongFormDialog 手改过名」
+    // 的真信号，手改曲 song.name 优先；非 custom 一律 provider 原标题
+    // （ext.title）优先——错绑烘进 name 的 matched 残留名是污染不是用户
+    // 意图，不再当查询料。ar 补 artist 缺省。
     // ++lyricLoadSeq 升号挤掉在途自动加载（其晚到回包走 stale 丢弃，
     // finally 见 stale 不复位 loadingLyrics——本代接管后自己清）；
     // 本代被切歌/重进顶替时（currentPlayingId 换号或 seq 再升）静默不写
@@ -1888,11 +1928,12 @@ export function usePlayer({
       try {
         // 无 signal——与 reloadLyrics/换绑热重载同口径：写共享态靠
         // stale 闸（切歌后回包落不了），请求本体让它自然跑完。
-        // 手动链检索口径与自动链不同：song.name（用户手改过的名字）优先
+        // 检索料序按 custom 位分家（头注）：custom 曲保留「手改名优先」
+        // 设计意图；非 custom 取 provider 原标题，extTitle 缺席回退 name
         const feed = lyricSearchFeed(song)
         const hit = await musicApi.getExternalLyric({
           id: song.id,
-          title: feed.name || feed.extTitle,
+          title: song.custom ? (feed.name || feed.extTitle) : (feed.extTitle || feed.name),
           artist: feed.extAuthor || feed.artistsJoined || '',
           durationSec: feed.durationSec,
         })

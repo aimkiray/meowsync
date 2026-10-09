@@ -207,6 +207,8 @@ function migrateLegacyTables(database) {
   addColumnIfMissing(database, 'song_match', 'score', 'INTEGER');
   addColumnIfMissing(database, 'song_match', 'model', "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(database, 'song_match', 'updated_at', "TEXT NOT NULL DEFAULT ''");
+  // 否决簿列后加：老库补 DEFAULT '[]'——旧行否决簿空，行为零漂移
+  addColumnIfMissing(database, 'song_match', 'vetoed_json', "TEXT NOT NULL DEFAULT '[]'");
 
   // upsertPlaylist 依赖 ON CONFLICT(netease_playlist_id)——老库若没有该唯一
   // 约束，导入/刷新会永久报 "ON CONFLICT clause does not match"。约束缺失时
@@ -403,14 +405,18 @@ function initSchema(database) {
     -- 外部源→网易云匹配缓存：track_id 是 bv_/yt_/qq_ 客户端曲目 id。
     -- netease_id NULL=负缓存（读查询判 7d TTL）；model 键控 AI 参与结果
     -- （''=纯启发式永命中，AI 结果只在同模型下复用）。正向行只存 id——
-    -- 命中时经 song_detail 回水化出完整投影
+    -- 命中时经 song_detail 回水化出完整投影。
+    -- vetoed_json=跨会话否决簿 [{id,m,t}]：判否过的 (源,候选) 对不再经
+    -- 任何路径复活（乒乓振荡修复）——m 记写入时匹配模型（''=无 AI 期
+    -- 永生效，换模后旧否决不参与过滤），t 供 cap 50 FIFO 挤出
     CREATE TABLE IF NOT EXISTS song_match (
       track_id TEXT PRIMARY KEY,
       netease_id TEXT,
       matched_by TEXT,
       score INTEGER,
       model TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT ''
+      updated_at TEXT NOT NULL DEFAULT '',
+      vetoed_json TEXT NOT NULL DEFAULT '[]'
     );
 
     -- AI 判定结果缓存（歌词归属核验等）：ok=0/1，kind 区分判定类型。

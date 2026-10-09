@@ -1,6 +1,7 @@
 // routes/match.js GET /match/state 冒烟：song_match 绑定态只读取口——
 // 正绑 song_detail 回水化出 matched 投影 / 回水化失败退裸 id 壳 /
-// 负行·无行 match:null / 读侧模型键控与 cachedMatch 同口径 / trackId 校验。
+// 负行·无行 match:null / 读侧模型键控与 cachedMatch 同口径 / 否决簿过滤 /
+// trackId 校验；POST /match/retry 只钉「excludeIds 先落账再匹配」时序。
 // 真库（临时 DATA_DIR）写读 song_match 行；匹配引擎整模块走 helpers 种子面
 //（本路由只消费其 toMatchedJson 投影与 retry 的 matchWithBudget），
 // 上游 song_detail 与 AI 启用态全桩。
@@ -32,8 +33,10 @@ seed('../src/server/services/netease-api.js', {
     return { body: { songs: detailSongs } };
   },
 });
-// 本文件不驱动 POST /match/retry——种子面只需满足路由 require 接线
-seedMatchModule([], () => async () => ({ song: null }));
+// retry 用例要钉「落账先于匹配运行」——impl 置可变桩，用例内重赋后生效；
+// 其余路径只要 {song:null} 满足路由 require 接线
+let retryImpl = async () => ({ song: null });
+seedMatchModule([], () => (...args) => retryImpl(...args));
 
 let app, songMatchRepo;
 before(() => {
@@ -44,6 +47,11 @@ after(() => { rmSync(process.env.DATA_DIR, { recursive: true, force: true }); })
 
 const get = (path, headers) => app.request(`http://t${path}`, { headers });
 const json = async (res) => ({ status: res.status, body: await res.json() });
+const postRetry = (body) => app.request('http://t/match/retry', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body),
+});
 
 test('match-state：正绑行 → song_detail 回水化出完整 match 投影', async () => {
   detailSongs = [{ id: 2068956580, name: '少女レイ', ar: [{ name: 'みきとP' }], al: { name: 'アルバムX' } }];
@@ -131,4 +139,57 @@ test('match-state：非法/缺席 trackId → 400；异源 Origin 不拦（GET �
   detailSongs = [{ id: 555, name: 'N', ar: [], al: {} }];
   const r = await get('/match/state?trackId=yt_CSRFOK', { origin: 'http://evil.example' });
   assert.equal(r.status, 200);
+});
+
+// ── 跨会话否决簿（vetoed_json）────────────────────────────────────
+// 被否正行不下发（水合复活面堵死）；异模条目在 '' 读面不生效；
+// retry 入口落账先于匹配运行——abort/预算耗尽否决也留下
+
+test('match-state：被否正行 → match:null；异模否决不挡、未否正行照下', async () => {
+  // '' 条目永生效（无 AI 期否决）——被否 id 按未命中回
+  songMatchRepo.upsertMatch('yt_VETO1', '424242', 'q', 80, '');
+  songMatchRepo.mergeVetoed('yt_VETO1', ['424242'], '');
+  const r1 = await json(await get('/match/state?trackId=yt_VETO1'));
+  assert.equal(r1.status, 200);
+  assert.equal(r1.body.match, null);
+  // 异模条目在 '' 读面不生效——正行照下（换模重判是新判定窗口）
+  songMatchRepo.upsertMatch('yt_VETO2', '555666', 'q', 80, '');
+  songMatchRepo.mergeVetoed('yt_VETO2', ['555666'], 'm-other');
+  detailSongs = [{ id: 555666, name: 'N', ar: [], al: {} }];
+  const r2 = await json(await get('/match/state?trackId=yt_VETO2'));
+  assert.equal(r2.body.match.id, 555666);
+  // 簿外 id 的正行不受否决簿存在本身影响
+  songMatchRepo.upsertMatch('yt_VETO3', '777', 'q', 80, '');
+  songMatchRepo.mergeVetoed('yt_VETO3', ['999'], '');
+  detailSongs = [{ id: 777, name: 'N2', ar: [], al: {} }];
+  const r3 = await json(await get('/match/state?trackId=yt_VETO3'));
+  assert.equal(r3.body.match.id, 777);
+});
+
+test('match-retry：excludeIds 先落账——matchWithBudget 被调时否决已可见', async () => {
+  let seenAtCall = null;
+  retryImpl = async () => {
+    // 匹配运行时点的读面：入口落账必须先于它——先于预算/abort 任何结局
+    seenAtCall = songMatchRepo.getVetoedIds('yt_VETOENTRY', '');
+    return { song: null };
+  };
+  try {
+    const res = await postRetry({
+      trackId: 'yt_VETOENTRY', title: 'x', author: 'a',
+      candidates: ['x'], excludeIds: ['42', 7],     // 数字 id 同落账
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(body.matched, null);
+    assert.ok(seenAtCall.has('42') && seenAtCall.has('7'));   // 运行前已落账
+    assert.ok(songMatchRepo.getVetoedIds('yt_VETOENTRY', '').has('42'));
+  } finally { retryImpl = async () => ({ song: null }); }
+});
+
+test('match-retry：材料缺席注定 400 的请求不落否决账', async () => {
+  // 落账点在 queries 400 校验之后——脏请求（无 title/candidates）不得
+  // 往簿里灌 excludeIds，连 stub 行都不该产
+  const res = await postRetry({ trackId: 'yt_VETO400', excludeIds: ['42'] });
+  assert.equal(res.status, 400);
+  assert.equal(songMatchRepo.getMatchRow('yt_VETO400'), undefined);
 });

@@ -20,7 +20,8 @@ const app = new Hono();
 //
 // POST /match/retry —— 错配纠正口：客户端拿持久化的 provider 字段重建
 // sourceInfo（不回源重取——视频可能已删/慢，纠错不该被上游可用性绑架），
-// excludeIds 并入请求级否决集重跑匹配，命中即 upsert 覆写 song_match 行
+// excludeIds 先落账进持久否决簿（vetoed_json，跨会话不再复活）再并入
+// 本次运行否决集重跑匹配，命中即 upsert 覆写 song_match 行
 // （正负缓存都刷——纠正前的错配/负缓存不能挡纠正结果）
 
 // trackId 形闸：本文件局部口径（非共享谓词，也不指 songmeta.js 的
@@ -44,8 +45,14 @@ app.get('/match/state', async (c) => {
   // 读侧模型键与写侧 cachedMatch 同口径（AI 此刻不可用等价纯启发式 ''）——
   // 回的就是「匹配管线现在会认的那行」：跨模型的 AI 判定行、异模负行
   // 读出来都是谎言（管线根本不会采纳它），按未命中回 match:null
-  const row = songMatchRepo.getMatch(trackId, aiEnabled() ? (aiModel() || '') : '');
+  const model = aiEnabled() ? (aiModel() || '') : '';
+  const row = songMatchRepo.getMatch(trackId, model);
   if (!row || row.netease_id == null) {
+    return c.json({ code: 200, match: null });
+  }
+  // 被否正行不下发——本地解绑后靠本端点水合复活的通路要堵（模型键与
+  // 读侧同口径）：客户端拿 match:null 走解绑终态而不是复活错配
+  if (songMatchRepo.getVetoedIds(trackId, model).has(String(row.netease_id))) {
     return c.json({ code: 200, match: null });
   }
   // 正行只存 netease_id——song_detail 单跳回水化出 matched 投影（与
@@ -92,8 +99,6 @@ app.post('/match/retry', async (c) => {
   const candidates = [...new Set(strList(body?.candidates, 5, 200))];
   const durationSec = Number.isFinite(body?.durationSec)
     ? Math.min(Math.max(body.durationSec, 0), 86400) : 0;
-  // excludeIds 并入 vetoedIds：「不是这首」的纠错信号请求级生效，
-  // 与 AI 否决同规则——不持久化否决本身（缓存行会被命中结果覆写）
   const excludeIds = (Array.isArray(body?.excludeIds) ? body.excludeIds : [])
     .filter(x => ['string', 'number'].includes(typeof x))
     .slice(0, 50).map(String);
@@ -102,6 +107,17 @@ app.post('/match/retry', async (c) => {
     : [...new Set([author ? `${author} ${title}` : '', title].filter(Boolean))];
   if (!queries.length) {
     return c.json({ code: 400, message: '缺少匹配材料（title 或 candidates）' }, 400);
+  }
+  // excludeIds 并入 vetoedIds：「不是这首」的纠错信号与 AI 否决同规则。
+  // 且先于匹配运行落账进持久否决簿——请求 abort/预算耗尽也把否决留下
+  // （堵「传输失败不落负行→被否 id 下会话复活」的残面）；落账失败
+  // fail-soft 不挡 retry——否决账是增强不是门禁。
+  // 落账点在材料 400 校验之后：注定被拒的请求不该污染否决簿
+  try {
+    songMatchRepo.mergeVetoed(trackId, excludeIds,
+      aiEnabled() ? (aiModel() || '') : '');
+  } catch (e) {
+    console.warn('[match] veto 落账失败:', e?.message || e);
   }
   try {
     const { song, query, score } = await matchWithBudget({
