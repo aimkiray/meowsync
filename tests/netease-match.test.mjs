@@ -1375,3 +1375,90 @@ test('/match/retry 显式传 55s 匹配预算（客户端 60s 超时之下留头
   // (?![\d_]) 边界锚：值尾巴再跟数字/下划线（如 550000）时拒绝前缀误命中
   assert.match(matchRouteSrc, /budgetMs:\s*55_?000(?![\d_])/);
 });
+
+// ── 跨会话否决簿（song_match.vetoed_json，真库）──────────────────────
+// 「(源,候选) 判否不经任何路径复活」从单次运行升级为跨会话：持久簿进
+// 候选种子（与 opts.excludeIds/AI 否决同闸）、被否正行 cachedMatch 按
+// miss 重搜、完成型 miss 负行条件化（未否决正行不摘除）、完成型运行
+// 落账本轮否决
+
+test('否决簿：持久否决进候选池被挡——被否 id 不收、灰池次优补上', async () => {
+  reset();
+  songMatchRepo.mergeVetoed('bv_V1', ['1'], '');    // '' 条目永生效
+  const info = { title: '明日之歌', author: '某人', artists: ['某人'], trackId: 'bv_V1' };
+  apiScript = [[song(1, '明日之歌', 200000, '无关A'),   // 灰区 top——持久簿挡下
+    song(2, '明日之歌', 210000, '无关B')]];             // 同池次优收下
+  aiScript = [{ match: true }];
+  const r = await matchNeteaseSong(['明日之歌'], 200, 't', null, info);
+  assert.equal(r.song.id, 2);
+  assert.ok(r.vetoedIds.includes('1'));            // 返回面透出种子否决集
+  assert.equal(aiCalls.length, 1);                 // 只对未否候选复核
+});
+
+test('否决簿：被否正行的 cachedMatch → miss 走全链重搜出替代', async () => {
+  reset();
+  // model='' 正行对任何读面都命中——但 id 已被否，不当缓存发还
+  songMatchRepo.upsertMatch('bv_V2', '9', '旧配', 60, '');
+  songMatchRepo.mergeVetoed('bv_V2', ['9'], 'stub');
+  const info = { title: '明日之歌', author: '某人', artists: ['某人'], trackId: 'bv_V2' };
+  apiScript = [[song(2, '明日之歌', 200000, '无关A')]];
+  aiScript = [{ match: true }];
+  const r = await matchWithBudget({
+    candidates: ['明日之歌'], durationSec: 200, tag: 't', sourceInfo: info, budgetMs: 5000,
+  });
+  assert.equal(r.song.id, 2);                                   // 重搜出替代而非回旧绑
+  assert.equal(apiCalls.filter(x => x.name === 'cloudsearch').length, 1);  // 全链真跑了
+});
+
+test('否决簿：完成型 miss 条件化负行——未否决正行不摘除、被否正行落负行', async () => {
+  reset();
+  // 臂一：skipCache 纠错口（菜单 retry 未捎否决）+ 干净 miss——服务端
+  // 存的未否决正行不摘除（上游抽风期不摘用户没否决的绑定）
+  songMatchRepo.upsertMatch('bv_V3', '9', '旧配', 60, '');
+  apiScript = [[]];
+  const r1 = await matchWithBudget({
+    candidates: ['X'], durationSec: 0, tag: 't', skipCache: true,
+    sourceInfo: { title: 'X', author: 'A', trackId: 'bv_V3' }, budgetMs: 5000,
+  });
+  assert.equal(r1.song, null);
+  assert.equal(songMatchRepo.getMatchRow('bv_V3').netease_id, '9');
+  // 臂二：跨模正行——getMatch 读不命中（'m-old' 行对 'stub' 面）但
+  // getMatchRow 见得到：任何形态的未否决正行都挡负行覆写
+  songMatchRepo.upsertMatch('bv_V3B', '8', '旧配', 60, 'm-old');
+  apiScript = [[]];
+  const r1b = await matchWithBudget({
+    candidates: ['X'], durationSec: 0, tag: 't',
+    sourceInfo: { title: 'X', author: 'A', trackId: 'bv_V3B' }, budgetMs: 5000,
+  });
+  assert.equal(r1b.song, null);
+  const rowV3B = songMatchRepo.getMatchRow('bv_V3B');
+  assert.equal(rowV3B.netease_id, '8');
+  assert.equal(rowV3B.model, 'm-old');          // 行原样未动
+  // 臂三：正行被否（请求否决）+ miss → 负行覆写
+  songMatchRepo.upsertMatch('bv_V4', '9', '旧配', 60, '');
+  apiScript = [[]];
+  const r2 = await matchWithBudget({
+    candidates: ['X'], durationSec: 0, tag: 't', excludeIds: ['9'],
+    sourceInfo: { title: 'X', author: 'A', trackId: 'bv_V4' }, budgetMs: 5000,
+  });
+  assert.equal(r2.song, null);
+  assert.equal(songMatchRepo.getMatchRow('bv_V4').netease_id, null);   // 负行落账
+  assert.ok(songMatchRepo.getVetoedIds('bv_V4', 'stub').has('9'));    // 请求否决同落簿
+});
+
+test('否决簿：完成型运行落账本轮 AI 否决——跨会话可见', async () => {
+  reset();
+  // 灰区复核否决 → vetoedIds 随返回透出并落账； searchedAny 的干净 miss
+  // 下服务端无正行，负行照原语义落（对照 bv_V3 的「有正行不摘」）
+  const info = { title: '明日之歌', author: '某人', artists: ['某人'], trackId: 'bv_V5' };
+  apiScript = [[song(1, '明日之歌', 200000, '无关A')]];   // 70 灰区
+  aiScript = [{ match: false }, { queries: [] }, { match: 0 }];
+  const r = await matchWithBudget({
+    candidates: ['明日之歌'], durationSec: 200, tag: 't', sourceInfo: info, budgetMs: 5000,
+  });
+  assert.equal(r.song, null);
+  assert.ok(r.vetoedIds.includes('1'));
+  // AI 期落账记 m='stub'——同模读面生效（换模后旧否决不参与过滤）
+  assert.ok(songMatchRepo.getVetoedIds('bv_V5', 'stub').has('1'));
+  assert.ok(!songMatchRepo.getVetoedIds('bv_V5', '').has('1'));
+});

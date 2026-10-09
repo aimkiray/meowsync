@@ -43,74 +43,88 @@ const pickAlbumCover = (providerCover, matchedPicUrl, overlap) =>
 
 // 专辑身份重建：id+name+picUrl 是一组绑死的展示身份——艺人重合才整组吃
 // matched.al（吃了 name 却留别家 al.id 是更隐蔽的脏数据）；否则回
-// provider 态（name=provider 原标题兜底，封面走 provider 链）
+// provider 态（name=provider 原标题兜底，封面走 provider 链）。
+// pic_str 是上游专辑对象的图链双生字段（local-mirror.js 读 al.picUrl ||
+// pic_str 当封面、download-manager 同口径兜底）——applyMatchResult 走
+// {...oldAl, ...rebuilt} 合入，不显式给值会让旧匹配烘进的 pic_str 在
+// 「不重合洗白」后仍残留。无重合不采匹配专辑图链任何字段；重合时 matched
+// 侧双生字段同闸采纳（picUrl 空壳专辑靠它兜底封面）
 const buildAlbum = ({ overlap, matchedAl, titleFallback, providerCover }) => ({
   id: overlap ? (matchedAl?.id ?? null) : null,
   name: (overlap ? matchedAl?.name : null) || titleFallback || '',
   picUrl: pickAlbumCover(providerCover, matchedAl?.picUrl, overlap),
+  pic_str: overlap ? (matchedAl?.pic_str ?? null) : null,
 })
 
-// B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；歌曲名优先吃
-// 网易云匹配（双语词源的正主），封面/演唱者归视频自己的（导入的是
-// 「这个视频」——封面就该是视频封面，matched 只作缺省兜底）；
-// bilibili 字段挂播放所需的源信息（bvid/cid/hasVideo），neteaseId 仅作歌词源
-export const buildBilibiliSong = (data) => ({
-  id: `bv_${data.bvid}${(data.page || 1) > 1 ? `_p${data.page}` : ''}`,
-  name: data.matched?.name || data.songName || data.title,
-  ar: data.owner ? [{ name: data.owner }] : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'Bilibili' }]),
-  // 专辑身份过艺人重合闸：owner 与 matched.ar 无交集时 al 回 title/cover
-  // 链——词源照绑（宽松侧），同名异曲的专辑/封面不进曲对象（保守侧）
-  al: buildAlbum({
-    overlap: artistsOverlap(data.matched?.ar, [data.owner]),
-    matchedAl: data.matched?.al,
-    titleFallback: data.title, providerCover: data.cover,
-  }),
-  dt: (data.duration || 0) * 1000,
-  bilibili: {
-    bvid: data.bvid, cid: data.cid, page: data.page || 1,
-    hasVideo: !!data.hasVideo,
-    // 下载口径独立于浏览器直放口径——纯非 avc1 稿件（4K 独占 hev1/av01）
-    // 无在线流可放但下载链可合流进 mp4，入口不能跟着 hasVideo 一起灭
-    hasDownloadableVideo: !!data.hasDownloadableVideo,
-    title: data.title,
-    // 封面持久化进 providerData——bv_ 封面不能由 bvid 推导（yt_ 可以），
-    // 存量加载自愈/口径偏离修正都要靠它
-    cover: data.cover || '',
-    author: data.owner || '', matchedBy: data.matchedBy || null,
-    // 匹配分透传（诊断用——/match/retry 纠错与排查错配时要看证据强弱）
-    matchScore: data.matchScore ?? null
-  },
-  neteaseId: data.matched?.id || null
-})
+// B 站导入曲对象：id 用 bv_ 前缀与网易云数值 id 隔离；演唱者/封面/展示名
+// 归视频自己的（导入的是「这个视频」），matched 只在艺人重合时进展示位、
+// 否则作缺省兜底；bilibili 字段挂播放所需的源信息（bvid/cid/hasVideo），
+// neteaseId 仅作歌词源
+export const buildBilibiliSong = (data) => {
+  // 展示名与专辑身份同一道闸（与 applyMatchResult 同构——重叠源数组
+  // 一处算两处用，防 name/al 判面漂移）：owner ∩ matched.ar 为空时
+  // name 回提取名/原标题、al 回 title/cover 链——词源照借（宽松侧），
+  // 同名异曲的曲名/专辑/封面不烘进曲对象（保守侧）
+  const overlap = artistsOverlap(data.matched?.ar, [data.owner])
+  return {
+    id: `bv_${data.bvid}${(data.page || 1) > 1 ? `_p${data.page}` : ''}`,
+    name: (overlap ? data.matched?.name : null) || data.songName || data.title,
+    ar: data.owner ? [{ name: data.owner }] : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'Bilibili' }]),
+    al: buildAlbum({
+      overlap,
+      matchedAl: data.matched?.al,
+      titleFallback: data.title, providerCover: data.cover,
+    }),
+    dt: (data.duration || 0) * 1000,
+    bilibili: {
+      bvid: data.bvid, cid: data.cid, page: data.page || 1,
+      hasVideo: !!data.hasVideo,
+      // 下载口径独立于浏览器直放口径——纯非 avc1 稿件（4K 独占 hev1/av01）
+      // 无在线流可放但下载链可合流进 mp4，入口不能跟着 hasVideo 一起灭
+      hasDownloadableVideo: !!data.hasDownloadableVideo,
+      title: data.title,
+      // 封面持久化进 providerData——bv_ 封面不能由 bvid 推导（yt_ 可以），
+      // 存量加载自愈/口径偏离修正都要靠它
+      cover: data.cover || '',
+      author: data.owner || '', matchedBy: data.matchedBy || null,
+      // 匹配分透传（诊断用——/match/retry 纠错与排查错配时要看证据强弱）
+      matchScore: data.matchScore ?? null
+    },
+    neteaseId: data.matched?.id || null
+  }
+}
 
 // YouTube 导入曲对象：id 用 yt_ 前缀与 bv_/网易云数值隔离；youtube 字段
 // 挂播放源（videoId/hasVideo），neteaseId 仍仅作歌词源。封面走 ytimg
 // 视频缩略图优先（导入的是「这个视频」），matched 网易云封面作缺省兜底
-export const buildYouTubeSong = (data) => ({
-  id: `yt_${data.videoId}`,
-  name: data.matched?.name || data.songName || data.title,
-  // 演唱者归真实频道名（authorClean 已剥 ' - Topic'/'VEVO'）——不是匹配到
-  // 的网易云艺人；频道名被整体剥光（如恰叫 'VEVO'）时退回匹配艺人再兜 'YouTube'
-  ar: data.authorClean ? [{ name: data.authorClean }] : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'YouTube' }]),
-  // 专辑身份过艺人重合闸（与 buildBilibiliSong 同口径）：频道名/净名与
-  // matched.ar 无交集时 al 回 title/cover 链——同名异曲错配的专辑名/
-  // 封面不烘进曲对象
-  al: buildAlbum({
-    overlap: artistsOverlap(data.matched?.ar, [data.author, data.authorClean]),
-    matchedAl: data.matched?.al,
-    titleFallback: data.title, providerCover: data.cover,
-  }),
-  dt: (data.duration || 0) * 1000,
-  youtube: {
-    videoId: data.videoId, hasVideo: !!data.hasVideo,
-    hasDownloadableVideo: !!data.hasDownloadableVideo,
-    // authorClean 持久化：存量自愈/行内展示不必再剥 ' - Topic'/'VEVO'
-    title: data.title, author: data.author, authorClean: data.authorClean || null,
-    matchedBy: data.matchedBy || null,
-    matchScore: data.matchScore ?? null
-  },
-  neteaseId: data.matched?.id || null
-})
+export const buildYouTubeSong = (data) => {
+  // 展示名与专辑身份同一道闸（与 buildBilibiliSong 同口径，重叠源数组
+  // 一处算两处用）：频道名/净名 ∩ matched.ar 为空时 name 回提取名/
+  // 原标题、al 回 title/cover 链——同名异曲错配的展示身份不烘进曲对象
+  const overlap = artistsOverlap(data.matched?.ar, [data.author, data.authorClean])
+  return {
+    id: `yt_${data.videoId}`,
+    name: (overlap ? data.matched?.name : null) || data.songName || data.title,
+    // 演唱者归真实频道名（authorClean 已剥 ' - Topic'/'VEVO'）——不是匹配到
+    // 的网易云艺人；频道名被整体剥光（如恰叫 'VEVO'）时退回匹配艺人再兜 'YouTube'
+    ar: data.authorClean ? [{ name: data.authorClean }] : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'YouTube' }]),
+    al: buildAlbum({
+      overlap,
+      matchedAl: data.matched?.al,
+      titleFallback: data.title, providerCover: data.cover,
+    }),
+    dt: (data.duration || 0) * 1000,
+    youtube: {
+      videoId: data.videoId, hasVideo: !!data.hasVideo,
+      hasDownloadableVideo: !!data.hasDownloadableVideo,
+      // authorClean 持久化：存量自愈/行内展示不必再剥 ' - Topic'/'VEVO'
+      title: data.title, author: data.author, authorClean: data.authorClean || null,
+      matchedBy: data.matchedBy || null,
+      matchScore: data.matchScore ?? null
+    },
+    neteaseId: data.matched?.id || null
+  }
+}
 
 // QQ 导入曲对象：id 用 qq_<songmid> 前缀。与 bv/yt 的关键差异是 QQ 自带
 // 真实元数据（name/artists/album/duration/cover 就是正主而非提取的噪声
@@ -151,9 +165,10 @@ export const buildQQSong = (data) => ({
 // 口径与构造期同构（builder 同款优先级重建派生字段，幂等）：
 // - 词源绑定宽松：neteaseId 恒按本次结果覆写（matched=null 即解绑）——
 //   词源只是嫁接物，错了判否链还能再纠
-// - 展示身份保守：song.al 只在「匹配艺人 ∩ 上传者」重合时吃 matched.al
-//   （翻唱曲绑别家词源可以，显示别家专辑不行）；name 吃匹配名、否则回
-//   provider 原标题；ar 不动——真实上传者本就是对的
+// - 展示身份保守：song.name/al 只在「匹配艺人 ∩ 上传者」重合时吃
+//   matched.name/matched.al（翻唱曲绑别家词源可以，把别家曲名/专辑挂上
+//   展示位不行）；不重合/解绑回 provider 原标题；ar 不动——真实上传者
+//   本就是对的
 // - matched=null（显式纠错后无替代）：解绑——name/al/匹配证据全回
 //   provider 态。用户显式说「这不是」，留错绑不如没绑
 // - qq_ 曲的 name/ar/al 是 QQ 自带权威元数据（builder 即 provider
@@ -181,8 +196,12 @@ export const applyMatchResult = (song, matched, extras = {}) => {
 
   const provTitle = yt?.title || bv?.title || ''
   const overlap = artistsOverlap(matched?.ar, [yt?.author, yt?.authorClean, bv?.author])
-  if (matched?.name) song.name = matched.name
-  else if (provTitle) song.name = provTitle // 解绑/无名匹配 → 回 provider 原标题
+  // name 与 al 同一道闸：翻唱借词源（艺人不重合）不改展示身份——历史
+  // 脏名（旧错配烘进 raw_json 的 matched.name）经本闸自愈回 provider；
+  // 解绑/无名匹配同回落。裸 id 行（无 provider 块）provTitle 空则
+  // name 不动——无原料不治（已知残面）
+  if (overlap && matched?.name) song.name = matched.name
+  else if (provTitle) song.name = provTitle
 
   // al 可能是缺失/非对象形态（旧持久化行/上游简化对象）——重建而非修补
   const rebuilt = buildAlbum({

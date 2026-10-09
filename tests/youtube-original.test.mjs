@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 // effectiveValue；命中缓存种子后真 settings 不装载，repositories/getDb
 // 整条链根本不进进程
 seed('../src/server/lib/settings.js', { effectiveValue: () => null });
-const { parseOriginalRef, resolveOriginalInfo } = require('../src/server/lib/youtube.js');
+const { parseOriginalRef, resolveOriginalInfo, _clearOriginalMemo } = require('../src/server/lib/youtube.js');
 
 // ── parseOriginalRef：标记词×链接的行级矩阵 ─────────────────────────
 // 行内含本家标记词且含 YouTube 链接 → 首个非自指 videoId；否则 null
@@ -172,6 +172,8 @@ let players = {};
 const fetchCalls = [];   // 每次 fetch 记的 videoId（player 端点）/url 原文（其它）
 const stubFetch = () => {
   fetchCalls.length = 0;
+  // 进程级 origMemo 跨用例残留会污染 fetch 计数断言——与 fetch 桩同步清
+  _clearOriginalMemo();
   globalThis.fetch = async (url, opt) => {
     let vid = null;
     try { vid = JSON.parse(opt?.body || '{}')?.videoId ?? null; } catch { /* 非 player 调用 */ }
@@ -215,6 +217,7 @@ test('resolveOriginalInfo：描述缺席补 self 跳；无声明零回本家跳'
 
     // self 描述无本家链 → 解析即止，不白打第二跳
     fetchCalls.length = 0;
+    _clearOriginalMemo();   // 前半程结果已入簿——同 videoId 换场景要先清
     players = { selfid00001: playerBody({ shortDescription: '只是歌词而已' }) };
     assert.equal(await resolveOriginalInfo({ videoId: 'selfid00001' }), null);
     assert.deepEqual(playerFetches(), ['selfid00001']);
@@ -236,7 +239,9 @@ test('resolveOriginalInfo：fail-soft——任一环节失败/缺字段归 null 
     players = { selfid00001: new Error('闸控') };
     assert.equal(await resolveOriginalInfo({ videoId: 'selfid00001' }), null);
 
-    // 本家跳失败 → null（不向上冒）
+    // 本家跳失败 → null（不向上冒）。同 videoId 换场景先清 memo——
+    // 上一步的 null 在 TTL 内会被当稳定事实命中
+    _clearOriginalMemo();
     players = {
       selfid00001: playerBody({ shortDescription: 'original:https://youtu.be/hcjyRnPbCWc' }),
       hcjyRnPbCWc: new Error('不可播放: LOGIN_REQUIRED'),
@@ -244,6 +249,7 @@ test('resolveOriginalInfo：fail-soft——任一环节失败/缺字段归 null 
     assert.equal(await resolveOriginalInfo({ videoId: 'selfid00001' }), null);
 
     // 本家 player 缺 title → null
+    _clearOriginalMemo();
     players = {
       selfid00001: playerBody({ shortDescription: 'original:https://youtu.be/hcjyRnPbCWc' }),
       hcjyRnPbCWc: playerBody({ title: '', author: '某人' }),
@@ -272,5 +278,125 @@ test('resolveOriginalInfo：文本形态经 self 跳取描述——不再回本�
     const r = await resolveOriginalInfo({ videoId: 'selfid00001' });
     assert.deepEqual(r, { title: 'Moonlight', author: 'shima' });
     assert.deepEqual(playerFetches(), ['selfid00001']);   // 只有 self 一跳
+  } finally { restore(); }
+});
+
+// ── resolveOriginalInfo 进程 memo（F4：全链共享一次解析）────────────
+// 正结果 6h / null 10min 分档 TTL、cap 500 FIFO、存 promise 并发单飞、
+// 带 description 写穿（绕读缓存、算完写回）。TTL 断言拨 Date.now 不真等
+
+test('resolveOriginalInfo memo：同 videoId 二次调不重打；并发首调单飞', async () => {
+  stubFetch();
+  try {
+    players = { selfid00001: playerBody({ shortDescription: '本家：shima - Moonlight' }) };
+    const r1 = await resolveOriginalInfo({ videoId: 'selfid00001' });
+    assert.deepEqual(r1, { title: 'Moonlight', author: 'shima' });
+    const n = fetchCalls.length;
+    assert.deepEqual(await resolveOriginalInfo({ videoId: 'selfid00001' }), r1);
+    assert.equal(fetchCalls.length, n);          // memo 命中——零回源
+    // 存 promise 而非落地值：并发首调共享同一条 p，不各打一跳
+    _clearOriginalMemo(); fetchCalls.length = 0;
+    const [a, b] = await Promise.all([
+      resolveOriginalInfo({ videoId: 'selfid00001' }),
+      resolveOriginalInfo({ videoId: 'selfid00001' }),
+    ]);
+    assert.deepEqual(a, b);
+    assert.deepEqual(playerFetches(), ['selfid00001']);   // 一跳两人分
+  } finally { restore(); }
+});
+
+test('resolveOriginalInfo memo：null 结果 TTL 内不重打、过期重打；正结果挺过 null 窗', async () => {
+  stubFetch();
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    players = { vid00000001: playerBody({ shortDescription: '没有声明' }) };
+    assert.equal(await resolveOriginalInfo({ videoId: 'vid00000001' }), null);
+    const n1 = fetchCalls.length;
+    assert.equal(await resolveOriginalInfo({ videoId: 'vid00000001' }), null);
+    assert.equal(fetchCalls.length, n1);          // null TTL 内不重打
+    offset = 11 * 60e3;                            // 过 null 窗（10min）
+    assert.equal(await resolveOriginalInfo({ videoId: 'vid00000001' }), null);
+    assert.ok(fetchCalls.length > n1);             // 过期重打
+    // 正结果：>10min 仍命中——6h 窗远未到，不被 null 窗误逐
+    players = { vid00000002: playerBody({ shortDescription: '本家：shima - Moonlight' }) };
+    assert.deepEqual(await resolveOriginalInfo({ videoId: 'vid00000002' }),
+      { title: 'Moonlight', author: 'shima' });
+    const n2 = fetchCalls.length;
+    offset = 60 * 60e3;                            // +1h（>null窗、<6h窗）
+    assert.deepEqual(await resolveOriginalInfo({ videoId: 'vid00000002' }),
+      { title: 'Moonlight', author: 'shima' });
+    assert.equal(fetchCalls.length, n2);
+  } finally { Date.now = realNow; restore(); }
+});
+
+test('resolveOriginalInfo memo：带 description 写穿——不吃缓存、算完写回', async () => {
+  stubFetch();
+  try {
+    // 旧缓存（null）在场：desc 是一手新料——绕开它直算，结果写回共享
+    players = { selfid00001: playerBody({ shortDescription: '没有声明' }) };
+    assert.equal(await resolveOriginalInfo({ videoId: 'selfid00001' }), null);
+    const r = await resolveOriginalInfo({
+      videoId: 'selfid00001', description: '本家：shima - Moonlight',
+    });
+    assert.deepEqual(r, { title: 'Moonlight', author: 'shima' });  // 没吃旧 null
+    const n = fetchCalls.length;
+    // 写回生效：后续 desc-less 吃到刚写回的结果，不再回源
+    assert.deepEqual(await resolveOriginalInfo({ videoId: 'selfid00001' }),
+      { title: 'Moonlight', author: 'shima' });
+    assert.equal(fetchCalls.length, n);
+  } finally { restore(); }
+});
+
+test('resolveOriginalInfo memo：cap=500 FIFO 挤出最旧；_clearOriginalMemo 清后重打', async () => {
+  stubFetch();
+  try {
+    // 文本声明调用零回源批量填簿——501 条把首条挤出
+    const vid = (i) => `vid${String(i).padStart(8, '0')}`;
+    for (let i = 0; i <= 500; i++) {
+      await resolveOriginalInfo({ videoId: vid(i), description: '本家：A - B' });
+    }
+    assert.equal(fetchCalls.length, 0);             // 写穿批零回源
+    // 首条已挤出 → desc-less 走回源（self 跳全灭归 null）
+    assert.equal(await resolveOriginalInfo({ videoId: vid(0) }), null);
+    const n = fetchCalls.length;
+    assert.ok(n > 0);
+    // 末条仍在簿 → memo 命中零回源
+    assert.deepEqual(await resolveOriginalInfo({ videoId: vid(500) }),
+      { title: 'B', author: 'A' });
+    assert.equal(fetchCalls.length, n);
+    // 测试钩清后重打
+    _clearOriginalMemo();
+    assert.equal(await resolveOriginalInfo({ videoId: vid(500) }), null);
+    assert.ok(fetchCalls.length > n);
+  } finally { restore(); }
+});
+
+test('resolveOriginalInfo memo：调用方 signal 不烙进共享 promise——abort 不固化伪 null', async () => {
+  // 病灶原形：共享 promise 吃首调用方 signal，任一方 abort 经 Once catch
+  // 归 null 被 ORIG_MEMO_NULL_MS 固化成 10min 伪 null——搭车者与后续
+  // 调用方全被传染（getVisitorData/ytStreamInflight 同款口径的反面）
+  stubFetch();
+  try {
+    players = { vid00000004: playerBody({ shortDescription: '本家：shima - Moonlight' }) };
+    // 入场即 abort 的调用方：按「await 后自查 signal」旧契约归 null，
+    // 且不白起共享计算（连簿都不碰——fetch 零跳）
+    const ac = new AbortController();
+    ac.abort();
+    assert.equal(await resolveOriginalInfo({ videoId: 'vid00000004', signal: ac.signal }), null);
+    assert.equal(fetchCalls.length, 0);
+    // 无 abort 的第二调用方拿到真解析——不被首调用方的 abort 传染伪 null
+    assert.deepEqual(await resolveOriginalInfo({ videoId: 'vid00000004' }),
+      { title: 'Moonlight', author: 'shima' });
+    // 在途 abort 同口径：共享计算跑完落簿（真值留簿），本调用方归 null
+    _clearOriginalMemo(); fetchCalls.length = 0;
+    const ac2 = new AbortController();
+    const p1 = resolveOriginalInfo({ videoId: 'vid00000004', signal: ac2.signal });
+    ac2.abort();
+    assert.equal(await p1, null);
+    assert.deepEqual(playerFetches(), ['vid00000004']);   // 共享计算真跑过
+    assert.deepEqual(await resolveOriginalInfo({ videoId: 'vid00000004' }),
+      { title: 'Moonlight', author: 'shima' });
   } finally { restore(); }
 });

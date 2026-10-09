@@ -1108,9 +1108,11 @@ export default {
           emit('song-meta-updated', song)
           toast(`词源已重匹配为《${matched.name || matched.id}》`, 'success')
           // 菜单侧对象与正播对象不一定是同一引用（搜索/快照来源不同）——
-          // 通知里捎上新词源 id，播放器侧幂等补写；prevId 同捎记否（换绑
-          // 即对旧词源的否决）——自动首配兜底不得把它复活送回
-          notifyLyricRematch(song.id, matched.id, prevId)
+          // 通知捎上新词源 id 与 matched 本体，播放器侧对正播对象整组
+          // applyMatchResult 幂等重建（name/al 随 matched 走，只补
+          // neteaseId 会留脏）；prevId 同捎记否（换绑即对旧词源的
+          // 否决）——自动首配兜底不得把它复活送回
+          notifyLyricRematch(song.id, matched.id, prevId, matched)
         } else {
           // 用户显式否决后的空回包按解绑处理而非「没找到」败象：词源与
           // 派生字段回 provider 态——「这不是」是强信号，留错绑不如没绑
@@ -1119,8 +1121,9 @@ export default {
           emit('song-meta-updated', song)
           toast(hadBinding ? '已解除错配，暂无更准的词源' : '没找到更准的匹配', 'info')
           // 解绑信号：正播曲清绑+热重载词；prevId 进否决簿——否则外源
-          // 兜底触发的自动首配会把刚否决的确定性高分原样送回，反噬纠正
-          notifyLyricRematch(song.id, null, prevId)
+          // 兜底触发的自动首配会把刚否决的确定性高分原样送回，反噬纠正。
+          // 第 4 参 null=无新词源可重建，播放器侧走清绑路径
+          notifyLyricRematch(song.id, null, prevId, null)
         }
       } catch (e) {
         toast(`重新匹配失败：${apiErrorMessage(e)}`, 'error')

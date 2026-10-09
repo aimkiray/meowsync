@@ -212,15 +212,43 @@ const trackIdOf = (sourceInfo) => {
   return (typeof t === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(t)) ? t : null;
 };
 
-async function cachedMatch(trackId, signal) {
-  // 当前生效模型与写侧同口径：AI 此刻不可用 → 本次运行等价纯启发式
-  // （model=''），只认 '' 键控的行——否则「配了模型名但 AI 关着」的部署里
-  // 启发式负行永远读不回来，负缓存形同虚设
-  const row = songMatchRepo.getMatch(trackId, aiEnabled() ? (aiModel() || '') : '');
+// 读侧/写侧共用的模型键：AI 此刻不可用 → 本次运行等价纯启发式
+// （model=''），只认 '' 键控的行——否则「配了模型名但 AI 关着」的部署里
+// 启发式负行永远读不回来，负缓存形同虚设。否决簿 m 过滤同口径
+const matchModel = () => (aiEnabled() ? (aiModel() || '') : '');
+
+// 否决簿读写均 fail-soft：否决账是增强不是门禁——DB 抖动不该炸匹配
+// （与 writeMatchCache 内 try/catch 同哲学）
+const loadVetoedIds = (trackId, model) => {
+  try { return songMatchRepo.getVetoedIds(trackId, model); }
+  catch (e) {
+    console.warn('[match] vetoed 读取失败:', e?.message || e);
+    return new Set();
+  }
+};
+const persistVetoed = (trackId, ids, model) => {
+  try { songMatchRepo.mergeVetoed(trackId, ids, model); }
+  catch (e) { console.warn('[match] vetoed 落账失败:', e?.message || e); }
+};
+// 写时否决集 = 持久簿 ∪ 请求否决 ∪ 本轮运行否决——三路同账。落账后的
+// 重读把并发会话的 merge 也并进来（better-sqlite3 同步单写者，读到即终态）
+const vetoedSetForWrite = (trackId, model, excludeIds, runVetoedIds) => {
+  const s = loadVetoedIds(trackId, model);
+  for (const id of (excludeIds || [])) if (id != null) s.add(String(id));
+  for (const id of (runVetoedIds || [])) if (id != null) s.add(String(id));
+  return s;
+};
+
+async function cachedMatch(trackId, signal, vetoedSet = null) {
+  const row = songMatchRepo.getMatch(trackId, matchModel());
   if (!row) return null;
   if (row.netease_id == null) {
     return { song: null, query: row.matched_by || null, score: row.score ?? null, cached: true };
   }
+  // 被否正行不当命中——按 miss 走全链重跑：重跑带着否决簿能配出替代
+  // 词源（不是负缓存语义——行本身不动，覆写与否由 writeMatchCache 判）。
+  // 删单重导/歌单重导与 retry 同闸，被否绑定不经缓存读面复活
+  if (vetoedSet?.has(String(row.netease_id))) return null;
   const rawId = String(row.netease_id);
   const bare = { id: /^\d+$/.test(rawId) ? Number(rawId) : rawId };
   let song = bare;
@@ -232,11 +260,19 @@ async function cachedMatch(trackId, signal) {
   return { song, query: row.matched_by || null, score: row.score ?? null, cached: true };
 }
 
-function writeMatchCache(trackId, r) {
+function writeMatchCache(trackId, r, vetoedSet = null) {
   // 全灭=传输故障而非「搜过没中」——负缓存会把 7d 内的重试全部短路成
   // 无词源；任一云搜 resolve（含空集）才算真搜过，可落负行。正命中永远写
   if (!r?.song && !r?.searchedAny) return;
   try {
+    // 完成型 miss 落负行是条件化的：服务端存未否决正行时不写——否则
+    // 上游抽风期（searchedAny 的干净 miss）会把用户没否决的绑定摘掉。
+    // getMatchRow 读原始行不套 getMatch 命中条件：跨模/陈旧正行同样是
+    // 客户端手上的绑定，不摘；无行/正行 id ∈ 否决集才照原语义覆写
+    if (!r?.song) {
+      const prev = songMatchRepo.getMatchRow(trackId);
+      if (prev?.netease_id != null && !vetoedSet?.has(String(prev.netease_id))) return;
+    }
     songMatchRepo.upsertMatch(trackId,
       r?.song?.id != null ? String(r.song.id) : null,
       r?.query || '', Number.isFinite(r?.score) ? Math.round(r.score) : null,
@@ -337,8 +373,9 @@ function expandSearchQueries(candidates, sourceInfo, variantKeys = null) {
 //   时经 sourceInfo.description（或补一跳 player）惰性解析——触发点提前
 //   到首个收单决断前（让证据先于决断到场），全灭路径兜底位仍解析。
 //   AI 未配置时语义与宽松启发式一致
-// opts={excludeIds}：请求级预置否决集（/match/retry 纠错口）——并入
-//   vetoedIds，与 AI 否决同规则永不复活
+// opts={excludeIds}：请求级预置否决集（/match/retry 纠错口）——与持久
+//   否决簿（song_match.vetoed_json）同种子进 vetoedIds，与 AI 否决
+//   同规则永不复活。返回值各出口带 vetoedIds 供上层落账/负行判定
 async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal = null, sourceInfo = null, opts = null) {
   // 输入 candidates 常带 UGC 噪声——漏斗层统一展开标题变体（去重、cap 8、
   // 剥行首占位作者 token），展开后的列表同时进 srcBaseTitles 打分参照面。
@@ -363,6 +400,13 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   const declClearedIds = new Set();
   const rejectedMarkerIds = new Set(); // 标类硬拒——连 AI 兜底池都开除
   let searchedAny = false; // 任一云搜 resolve（空集也算搜过）——全灭=传输故障
+  // 持久否决簿 ∪ 请求级 excludeIds 同种子——跨会话账（retry 入口/完成型
+  // 运行落账的 vetoed_json）与当次纠错请求同规则：被否 id 不经任何路径
+  // 复活（含后续串与 AI 兜底池）。trackId 缺席=游离调用方，无簿可读
+  const vetoTrackId = trackIdOf(sourceInfo);
+  if (vetoTrackId) {
+    for (const id of loadVetoedIds(vetoTrackId, matchModel())) vetoedIds.add(id);
+  }
   for (const id of (Array.isArray(opts?.excludeIds) ? opts.excludeIds : [])) {
     if (id != null) vetoedIds.add(String(id));
   }
@@ -669,7 +713,9 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       const hit = await searchOnce(q, origDerivedKeys.has(normKey(q)) ? derivedSeenIds : null);
       // searchOnce 内各收单点已过同款 acceptOrHold——此处同决策兜底：
       // 能回到主循环的 hit 在判面上必是即刻收单形态，待定则继续下一串
-      if (hit && acceptOrHold(hit)) return { ...hit, ai: aiTouched, searchedAny };
+      if (hit && acceptOrHold(hit)) {
+        return { ...hit, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
+      }
     } catch (e) {
       warnFail(q, e);
     }
@@ -687,7 +733,9 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     try {
       const hit = await searchOnce(q, derivedSeenIds);
       // 派生串自身收单即终态——acceptOrHold 在派生面恒放行（同判面兜底）
-      if (hit && acceptOrHold(hit)) return { ...hit, ai: aiTouched, searchedAny };
+      if (hit && acceptOrHold(hit)) {
+        return { ...hit, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
+      }
     } catch (e) {
       warnFail(q, e);
     }
@@ -697,7 +745,7 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   // 收单——它就是全程最优的可收命中，先于 AI 再生/兜底回补（不另烧额度）。
   // 回补同守 veto 不变量：判定途中被挑战否决的 id 不经任何路径复活
   if (heldHit && !vetoedIds.has(String(heldHit.song.id))) {
-    return { ...heldHit, ai: aiTouched, searchedAny };
+    return { ...heldHit, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
   }
   // 启发式链全灭 → ①AI 再生干净查询词补一轮（脏标题串搜不到正主时
   // 唯一把正主装进候选池的路），产出仍过打分池/否决闸——且再生轮命中
@@ -728,7 +776,7 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
           }
         }
         console.info(`[${tag}] AI 再生查询命中「${q}」: ${songDesc(hit.song)} ← ${sourceInfo.title}`);
-        return { song: hit.song, query: `ai:regen:${q}`, score: hit.score, ai: aiTouched, searchedAny };
+        return { song: hit.song, query: `ai:regen:${q}`, score: hit.score, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
       } catch (e) {
         warnFail(q, e);
       }
@@ -742,10 +790,10 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       .catch(() => null);
     if (pick) {
       console.info(`[${tag}] AI 兜底命中: ${songDesc(pick)} ← ${sourceInfo.title}`);
-      return { song: pick, query: 'ai:pick', score: scoreById.get(pick.id) ?? null, ai: aiTouched, searchedAny };
+      return { song: pick, query: 'ai:pick', score: scoreById.get(pick.id) ?? null, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
     }
   }
-  return { song: null, query: null, score: null, ai: aiTouched, searchedAny };
+  return { song: null, query: null, score: null, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
 }
 
 // 归一 matched 投影：三路由 resolve/批量导入共用同一下发形态
@@ -767,7 +815,11 @@ function toMatchedJson(song) {
 async function matchWithBudget({ candidates, durationSec, tag, reqSignal, sourceInfo, budgetMs = 25000, skipCache = false, excludeIds = null }) {
   const trackId = trackIdOf(sourceInfo);
   if (trackId && !skipCache) {
-    const hit = await cachedMatch(trackId, reqSignal).catch(() => null);
+    // 先载否决簿 ∪ 请求否决：被否正行不当命中（cachedMatch 内判），
+    // miss 走全链——请求级排除的 id 不经缓存读面送回
+    const vetoedSet = loadVetoedIds(trackId, matchModel());
+    for (const id of (excludeIds || [])) if (id != null) vetoedSet.add(String(id));
+    const hit = await cachedMatch(trackId, reqSignal, vetoedSet).catch(() => null);
     if (hit) return hit;
   }
   const budgetCtrl = new AbortController();
@@ -786,9 +838,16 @@ async function matchWithBudget({ candidates, durationSec, tag, reqSignal, source
         { excludeIds }),
       budget,
     ]);
-    // 预算/断连掐断的半截判定不缓存；全灭=传输故障的「空结果」由
-    // writeMatchCache 内 searchedAny 闸再拦一道——负缓存尤其毒，一次抖动固化 7 天
-    if (trackId && !budgetCtrl.signal.aborted && !reqSignal?.aborted) writeMatchCache(trackId, r);
+    // 预算/断连掐断的半截判定不缓存也不落账；全灭=传输故障的「空结果」由
+    // writeMatchCache 内 searchedAny 闸再拦一道——负缓存尤其毒，一次抖动固化 7 天。
+    // 完成型运行先落否决账（本轮 AI/声明否决 ∪ 请求 excludeIds 无差别）
+    // 再写行——写侧条件化负行要看到「正行已被否」的终态账
+    if (trackId && !budgetCtrl.signal.aborted && !reqSignal?.aborted) {
+      const model = matchModel();
+      persistVetoed(trackId, [...(r?.vetoedIds || []), ...(excludeIds || [])], model);
+      writeMatchCache(trackId, r,
+        vetoedSetForWrite(trackId, model, excludeIds, r?.vetoedIds));
+    }
     return r;
   } finally {
     clearTimeout(budgetTimer); // match 抛错也收——unref 兜底不保险，泄漏的 timer 会空 abort
@@ -809,12 +868,20 @@ async function matchTracksPool(tracks, { signal, budgetMs, concurrency, tag, can
       const t = tracks[cursor++];
       const info = infoOf(t);
       const trackId = trackIdOf(info);
-      let r = trackId ? await cachedMatch(trackId, matchSignal).catch(() => null) : null;
+      // 批量池逐曲先载否决簿——歌单重导/删单重导不把被否正行当缓存命中
+      // 发还；完成型运行同构落账+条件化负行（每曲至多一条 UPDATE）
+      const model = trackId ? matchModel() : '';
+      const vetoedSet = trackId ? loadVetoedIds(trackId, model) : null;
+      let r = trackId ? await cachedMatch(trackId, matchSignal, vetoedSet).catch(() => null) : null;
       if (!r) {
         r = await matchNeteaseSong(
           candidatesOf(t), durationOf(t), tag, matchSignal, info)
           .catch(() => ({ song: null }));
-        if (trackId && !matchSignal.aborted) writeMatchCache(trackId, r);
+        if (trackId && !matchSignal.aborted) {
+          persistVetoed(trackId, r?.vetoedIds || [], model);
+          writeMatchCache(trackId, r,
+            vetoedSetForWrite(trackId, model, null, r?.vetoedIds));
+        }
       }
       const matched = r?.song;
       if (matched && !matchSignal.aborted) {

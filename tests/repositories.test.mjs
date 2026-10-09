@@ -8,13 +8,14 @@ import { tmpDataDir } from './helpers.mjs';
 process.env.DATA_DIR = tmpDataDir('meowsync-test-');
 const require = createRequire(import.meta.url);
 
-let songMetaRepo, lyricAiRepo, playlistsRepo, downloadQueuesRepo, downloadTasksRepo;
+let songMetaRepo, lyricAiRepo, playlistsRepo, downloadQueuesRepo, downloadTasksRepo, songMatchRepo;
 before(() => {
   songMetaRepo = require('../src/server/repositories/songLyricMeta.js');
   lyricAiRepo = require('../src/server/repositories/lyricAi.js');
   playlistsRepo = require('../src/server/repositories/playlists.js');
   downloadQueuesRepo = require('../src/server/repositories/downloadQueues.js');
   downloadTasksRepo = require('../src/server/repositories/downloadTasks.js');
+  songMatchRepo = require('../src/server/repositories/songMatch.js');
 });
 
 test('songLyricMeta：0/缺省行语义一致、upsert 覆盖、delete 归零', () => {
@@ -106,4 +107,137 @@ test('downloadTasks.countTasksByQueueAndStatus：脏 status 键不污染结果�
   assert.deepEqual(counts, { pending: 0, downloading: 0, completed: 1, failed: 0 });
   assert.equal(Object.hasOwn(counts, 'constructor'), false);
   assert.equal(Object.getPrototypeOf(counts), Object.prototype);
+});
+
+// ── songMatch 跨会话否决簿（vetoed_json）──────────────────────────
+// 「(源,候选) 判否不经任何路径复活」的持久账：条目 [{id,m,t}]、m 键控
+// 过滤（'' 永生效）、cap 50 按 t 降序挤出、stub 行不作缓存命中、
+// upsert/updated_at 语义不受否决簿污染
+
+test('songMatch 否决簿：merge→getVetoedIds 往返、model 键控过滤、复否不增条目', () => {
+  songMatchRepo.mergeVetoed('vm_1', ['100', '200'], 'm1');
+  songMatchRepo.mergeVetoed('vm_1', [300], '');            // 数字 id 归一成 String
+  // currentModel='m1'：'' 与 m1 条目都生效
+  assert.deepEqual([...songMatchRepo.getVetoedIds('vm_1', 'm1')].sort(), ['100', '200', '300']);
+  // currentModel=''：仅 '' 条目生效——m1 否决换模后不参与过滤（verdict 同口径）
+  assert.deepEqual([...songMatchRepo.getVetoedIds('vm_1', '')], ['300']);
+  assert.deepEqual([...songMatchRepo.getVetoedIds('vm_1', 'other')], ['300']);
+  // 同 (id,m) 复否只刷 t 不增条目；'' 到来同化同 id 异模影子——簿内
+  // 同 id 至多一条生效条目（'' 覆盖全模型；影子凭新 t 会在 cap 截断时
+  // 把 '' 永生效条目先挤出，换模后否决整组蒸散）
+  songMatchRepo.mergeVetoed('vm_1', ['100'], 'm1');
+  songMatchRepo.mergeVetoed('vm_1', ['100'], '');          // '' 吞并 (100,m1)
+  const entries = JSON.parse(songMatchRepo.getMatchRow('vm_1').vetoed_json);
+  assert.equal(entries.filter(e => e.id === '100').length, 1);
+  assert.equal(entries.find(e => e.id === '100').m, '');
+  assert.equal(entries.length, 3);   // (100,'') (200,m1) (300,'')
+  // 吞并后 '100' 在任何模型键下都生效（'' 语义）
+  assert.ok(songMatchRepo.getVetoedIds('vm_1', 'other').has('100'));
+});
+
+test('songMatch 否决簿：cap=50 按 t 降序截断——最旧挤出', () => {
+  // t 粒度是 epoch 秒：拨 Date.now 保证先后两批否决的时间戳可分辨
+  const realNow = Date.now;
+  try {
+    songMatchRepo.mergeVetoed('vm_cap', ['stale'], '');
+    Date.now = () => realNow() + 60_000;
+    songMatchRepo.mergeVetoed('vm_cap',
+      Array.from({ length: 50 }, (_, i) => `f${i}`), '');
+    const ids = songMatchRepo.getVetoedIds('vm_cap', '');
+    assert.equal(ids.size, 50);
+    assert.ok(ids.has('f0') && ids.has('f49'));
+    assert.ok(!ids.has('stale'));   // 最旧被挤出
+  } finally { Date.now = realNow; }
+});
+
+test('songMatch：stub 行不命中 getMatch、mergeVetoed 不刷 updated_at、空集不落账', () => {
+  // 空集落账=纯写放大——连 stub 行都不产
+  songMatchRepo.mergeVetoed('vm_empty', [], '');
+  assert.equal(songMatchRepo.getMatchRow('vm_empty'), undefined);
+  // 无匹配史纯否决账 → stub 行（netease_id NULL + updated_at=''）：
+  // '' 不过负行 freshness 闸，任何模型键下 getMatch 都不命中
+  songMatchRepo.mergeVetoed('vm_stub', ['9'], '');
+  const stub = songMatchRepo.getMatchRow('vm_stub');
+  assert.equal(stub.netease_id, null);
+  assert.equal(stub.updated_at, '');
+  assert.equal(songMatchRepo.getMatch('vm_stub', ''), undefined);
+  assert.equal(songMatchRepo.getMatch('vm_stub', 'm1'), undefined);
+  // mergeVetoed 只动 vetoed_json——updated_at 绝不刷（负行 TTL 靠它计时）
+  const { getDb } = require('../src/server/db/client.js');
+  getDb().prepare("UPDATE song_match SET updated_at = '2000-01-01 00:00:00' WHERE track_id = 'vm_stub'").run();
+  songMatchRepo.mergeVetoed('vm_stub', ['10'], '');
+  assert.equal(songMatchRepo.getMatchRow('vm_stub').updated_at, '2000-01-01 00:00:00');
+});
+
+test('songMatch：upsert 正/负行覆写后 vetoed_json 保留；坏 JSON 归空集', () => {
+  songMatchRepo.mergeVetoed('vm_keep', ['7'], '');
+  songMatchRepo.upsertMatch('vm_keep', '12345', 'q', 80, 'm1');
+  assert.ok(songMatchRepo.getVetoedIds('vm_keep', '').has('7'));   // 正行覆写不动簿
+  songMatchRepo.upsertMatch('vm_keep', null, 'q2', null, '');
+  assert.ok(songMatchRepo.getVetoedIds('vm_keep', '').has('7'));   // 负行覆写同保留
+  // 新行 INSERT 走 DEFAULT '[]'
+  songMatchRepo.upsertMatch('vm_fresh', '1', 'q', 1, '');
+  assert.equal(JSON.parse(songMatchRepo.getMatchRow('vm_fresh').vetoed_json).length, 0);
+  // 坏 JSON 归空簿不炸；mergeVetoed 遇脏重开一簿
+  const { getDb } = require('../src/server/db/client.js');
+  getDb().prepare("UPDATE song_match SET vetoed_json = 'not-json' WHERE track_id = 'vm_fresh'").run();
+  assert.equal(songMatchRepo.getVetoedIds('vm_fresh', '').size, 0);
+  songMatchRepo.mergeVetoed('vm_fresh', ['2'], '');
+  assert.ok(songMatchRepo.getVetoedIds('vm_fresh', '').has('2'));
+});
+
+test('songMatch 否决簿：空模条目吞并异模影子——同 id 至多一条生效条目（双向序）', () => {
+  // 病灶原形：(id,'') 在簿再落 (id,'m1') 会 push 冗余影子（带新 t），
+  // cap 按 t 降序截断时 '' 永生效条目反被先挤出——换模后该否决蒸散
+  const realNow = Date.now;
+  try {
+    // 序一：(id,'') 在簿再落 (id,'m1')——被吸收为 '' 复否刷 t，影子不增生
+    songMatchRepo.mergeVetoed('vm_sh1', ['A'], '');
+    Date.now = () => realNow() + 60_000;
+    songMatchRepo.mergeVetoed('vm_sh1', ['A'], 'm1');
+    const e1 = JSON.parse(songMatchRepo.getMatchRow('vm_sh1').vetoed_json);
+    assert.deepEqual(e1.map(x => [x.id, x.m]), [['A', '']]);
+    // 吸收的复否语义不落——'' 条目的 t 刷到本次否决时点
+    assert.equal(e1[0].t, Math.floor((realNow() + 60_000) / 1000));
+    // 序二：先 (id,'m1') 后 (id,'')——'' 到来同化掉同 id 的 m≠'' 条目
+    songMatchRepo.mergeVetoed('vm_sh2', ['B'], 'm1');
+    songMatchRepo.mergeVetoed('vm_sh2', ['B'], '');
+    const e2 = JSON.parse(songMatchRepo.getMatchRow('vm_sh2').vetoed_json);
+    assert.deepEqual(e2.map(x => [x.id, x.m]), [['B', '']]);
+    // '' 生效面不挑模型键——被吸收方不留残渣
+    assert.ok(songMatchRepo.getVetoedIds('vm_sh1', 'whatever').has('A'));
+    assert.ok(songMatchRepo.getVetoedIds('vm_sh2', 'whatever').has('B'));
+  } finally { Date.now = realNow; }
+});
+
+test('songMatch 否决簿：mergeVetoed 读侧回滤畸形条目——缺 id/t 的脏条不占 cap 位', () => {
+  // 成形 JSON 但条目畸形（缺 id/缺 t/非对象）：读侧回滤与 getVetoedIds
+  // 「缺 id 不生效」同口径——脏条不进合并集、不占 cap 位，重写即清出簿
+  const { getDb } = require('../src/server/db/client.js');
+  songMatchRepo.mergeVetoed('vm_dirty', ['1'], '');
+  getDb().prepare("UPDATE song_match SET vetoed_json = ? WHERE track_id = 'vm_dirty'").run(JSON.stringify([
+    { id: '1', m: '', t: 1 },        // 健全条目保留
+    { m: '', t: 2 },                 // 缺 id
+    { id: '2', m: '' },              // 缺 t
+    'junk',                          // 非对象
+    { id: '3', m: '', t: 5 },        // 健全条目保留
+  ]));
+  songMatchRepo.mergeVetoed('vm_dirty', ['9'], '');
+  const entries = JSON.parse(songMatchRepo.getMatchRow('vm_dirty').vetoed_json);
+  assert.deepEqual(entries.map(x => x.id).sort(), ['1', '3', '9']);
+});
+
+test('songMatch：mergeVetoed 落在既有正行上——netease_id/matched_by/score/model/updated_at 全不动', () => {
+  // 否决落账只动 vetoed_json：正行身份列与负行 TTL 计时列都不该被
+  // merge 触碰（updated_at 刷了会搅浑负行 freshness 语义）
+  const { getDb } = require('../src/server/db/client.js');
+  songMatchRepo.upsertMatch('vm_pos', '777', 'q-src', 88, 'm1');
+  const q = getDb().prepare('SELECT * FROM song_match WHERE track_id = ?');
+  const before = q.get('vm_pos');
+  songMatchRepo.mergeVetoed('vm_pos', ['9'], 'm1');
+  const after = q.get('vm_pos');
+  for (const k of ['netease_id', 'matched_by', 'score', 'model', 'updated_at']) {
+    assert.equal(after[k], before[k], `${k} 不该被否决落账触碰`);
+  }
+  assert.ok(songMatchRepo.getVetoedIds('vm_pos', 'm1').has('9'));   // 簿照落
 });

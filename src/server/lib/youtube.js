@@ -421,7 +421,7 @@ function parseOriginalRef(description, selfVideoId) {
 // 形态再一跳取本家 {title,author}，文本形态声明已内联 author/title——
 // 零回本家跳、返回不带 videoId。全链 fail-soft——本家证据是增强不是
 // 门禁，任何一环失败（异常/超时/缺字段）按「无声明」交回，不抛
-async function resolveOriginalInfo({ videoId, description, signal }) {
+async function resolveOriginalInfoOnce({ videoId, description, signal }) {
   try {
     const desc = typeof description === 'string'
       ? description
@@ -441,6 +441,56 @@ async function resolveOriginalInfo({ videoId, description, signal }) {
     return null;
   }
 }
+
+// 进程级 memo（lyric-verify declaredMemo 同款思路提升到库层）：verify/
+// match/级联三条链曾各自回源反解同一 videoId——全链共享一次解析。
+// 存 promise 而非落地值：并发首调天然单飞去重（await 同一 p 不各打一跳）。
+// TTL 按落地值分档——正结果 6h（本家出处几乎不翻转）/ null 10min
+// （短窗防「一次抽风固化失败」）；cap 500 FIFO 挤出（Map 键序=插入序）。
+// 调用方带 description 时绕过读缓存、算完写回——import 期短描述是一手
+// 新料，不让旧缓存挡住当日解析。signal 不进键：结果是 videoId 级事实
+const ORIG_MEMO_OK_MS = 6 * 3600e3;
+const ORIG_MEMO_NULL_MS = 10 * 60e3;
+const ORIG_MEMO_CAP = 500;
+const origMemo = new Map();   // videoId -> {p:Promise<res|null>, at}
+async function resolveOriginalInfo({ videoId, description, signal }) {
+  // 调用方已断连不进场——Once 时代 abort 归 null 的契约收在本函数边界；
+  // 早退也避免为死调用方白烧上游跳数（更不占簿位）
+  if (signal?.aborted) return null;
+  if (typeof description !== 'string') {
+    const hit = origMemo.get(videoId);
+    if (hit) {
+      const res = await hit.p.catch(() => undefined);
+      // 命中即单飞——在途与落地同一条 promise；过期/异常即弃不占位
+      if (res !== undefined
+        && Date.now() - hit.at < (res ? ORIG_MEMO_OK_MS : ORIG_MEMO_NULL_MS)) {
+        return res;
+      }
+      // 身份闸：await 期间带 description 的写通路可能已覆盖上新鲜条目
+      // ——过期清理只删自己读到的这条，别把别人的热条目误逐
+      if (origMemo.get(videoId) === hit) origMemo.delete(videoId);
+    }
+  }
+  // 共享计算不吃调用方 signal——首调用方的 8s 闸（lyric-verify）/55s
+  // 预算（match）/级联 deadline 烙进共享 promise 会让搭车者陪绑，且任一方
+  // abort 经 Once catch 归 null 会被 ORIG_MEMO_NULL_MS 固化成 10min 伪
+  // null（声明挑战旁路病灶放大）。链内各跳本有 timedSignal 自净超时；
+  // 带 description 的写穿路同口径。等待方 await 后自查自己的 signal 再
+  // 消费结果——getVisitorData(:95-102) 与 routes/youtube.js
+  // ytStreamInflight(:30-46) 同款先例
+  const p = resolveOriginalInfoOnce({ videoId, description, signal: null });
+  if (origMemo.size >= ORIG_MEMO_CAP && !origMemo.has(videoId)) {
+    origMemo.delete(origMemo.keys().next().value);   // 写前挤最旧（FIFO）
+  }
+  origMemo.set(videoId, { p, at: Date.now() });
+  const res = await p;   // Once fail-soft 归 null 不抛——await 安全
+  // 等待期间本调用方断连：abort 归 null 的原契约只落在消费侧——结果真值
+  // 已落簿（videoId 级事实），后续调用方照吃不浪费这趟回源
+  if (signal?.aborted) return null;
+  return res;
+}
+// 测试钩（_clearDeclaredMemo 先例）：memoize 跨用例残留会污染 fetch 计数断言
+const _clearOriginalMemo = () => origMemo.clear();
 
 // 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
 // spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强。
@@ -788,4 +838,4 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   };
 }
 
-module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, parseOriginalRef, resolveOriginalInfo, YT_TIMEOUT_MS };
+module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, parseOriginalRef, resolveOriginalInfo, _clearOriginalMemo, YT_TIMEOUT_MS };

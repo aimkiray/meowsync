@@ -1,7 +1,7 @@
 // external-songs.js：三 builder 的艺人重合闸 + applyMatchResult 修复器。
-// 口径「词源绑定宽松 / 展示身份保守」：neteaseId 恒按结果覆写，matched.al
-// 身份字段（id/name/picUrl）只在「匹配艺人 ∩ 上传者」重合时采纳——
-// 同名异曲错配（如 cover 曲绑到别家专辑）不该把脏元信息烘进曲对象
+// 口径「词源绑定宽松 / 展示身份保守」：neteaseId 恒按结果覆写，matched 的
+// 展示身份字段（name、al.id/name/picUrl）只在「匹配艺人 ∩ 上传者」重合时
+// 采纳——同名异曲错配（如 cover 曲绑到别家专辑）不该把脏元信息烘进曲对象
 import { describe, it, expect, vi } from 'vitest'
 
 // external-songs.js 只在 MEDIA_IMPORT_SPECS 的惰性 resolve 转发表里用到
@@ -66,6 +66,23 @@ describe('builder：导入期艺人重合闸', () => {
     expect(s.neteaseId).toBe(2)
   })
 
+  it('yt_ 艺人不重合 → name 不吃 matched.name，回提取名 songName', () => {
+    // matched.name 与 songName 取不同值以区分口径——借词源不改展示身份
+    const s = buildYouTubeSong(ytData({
+      matched: { id: 390558, name: '别家同名曲', ar: [{ name: '别人' }] },
+    }))
+    expect(s.neteaseId).toBe(390558)
+    expect(s.name).toBe('乐园')
+  })
+
+  it('bv_ 艺人不重合 → name 不吃 matched.name，回提取名 songName', () => {
+    const s = buildBilibiliSong(bvData({
+      matched: { id: 2, name: '别家同名曲', ar: [{ name: '别人' }] },
+    }))
+    expect(s.neteaseId).toBe(2)
+    expect(s.name).toBe('乐园')
+  })
+
   it('bv_ owner 命中 → al 吃 matched（多艺人条目任一命中即重合）', () => {
     const s = buildBilibiliSong(bvData({
       matched: { id: 2, name: '乐园', ar: [{ name: '无关' }, { name: ' UP主 ' }],
@@ -110,7 +127,10 @@ describe('applyMatchResult：重匹配修复器', () => {
   // 回退原料在库，修复靠它）
   const dirtyYt = () => ({
     id: 'yt_abcdefghijk', name: '乐园', ar: [{ name: 'EMA' }],
-    al: { id: 1, name: '10乐园', picUrl: 'http://n/dirty.jpg' },
+    // pic_str 是上游专辑对象的图链双生字段（local-mirror 读它当封面兜底）——
+    // 旧错配把它烘进了持久化行，修复期 {...oldAl, ...rebuilt} 合并时
+    // rebuilt 不显式给值就会残留，与 picUrl 同闸洗
+    al: { id: 1, name: '10乐园', picUrl: 'http://n/dirty.jpg', pic_str: 'http://n/dirty-str.jpg' },
     dt: 210000, neteaseId: 390558,
     youtube: { videoId: 'abcdefghijk', title: 'EMA - 乐园(粤)', author: 'EMA', authorClean: 'EMA' },
   })
@@ -119,7 +139,7 @@ describe('applyMatchResult：重匹配修复器', () => {
     const s = dirtyYt()
     const r = applyMatchResult(s,
       { id: 222, name: '对的歌', ar: [{ name: 'EMA' }],
-        al: { id: 9, name: '对的专辑', picUrl: 'http://n/9.jpg' } },
+        al: { id: 9, name: '对的专辑', picUrl: 'http://n/9.jpg', pic_str: 'http://n/9-str.jpg' } },
       { matchedBy: 'q', matchScore: 92 })
     expect(r).toBe(s) // 就地改写返回同一引用
     expect(s.neteaseId).toBe(222)
@@ -128,23 +148,48 @@ describe('applyMatchResult：重匹配修复器', () => {
     expect(s.al.name).toBe('对的专辑')
     // provider 封面优先：重合也不吃 matched.picUrl
     expect(s.al.picUrl).toBe('https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg')
+    // 图链双生字段同闸：重合时采纳 matched 侧 pic_str 而非残留旧值
+    expect(s.al.pic_str).toBe('http://n/9-str.jpg')
     expect(s.youtube.matchedBy).toBe('q')
     expect(s.youtube.matchScore).toBe(92)
     expect(s.ar).toEqual([{ name: 'EMA' }]) // 上传者不动
   })
 
-  it('命中但艺人不重合（翻唱借词源）：词源换绑，al 回 provider 态', () => {
+  it('命中但艺人不重合（翻唱借词源）：词源换绑，name/al 回 provider 态', () => {
     const s = dirtyYt()
     applyMatchResult(s,
       { id: 555, name: '乐园', ar: [{ name: 'Random Forest 随机森林' }],
         al: { id: 7, name: '别家专辑', picUrl: 'http://n/o.jpg' } })
     expect(s.neteaseId).toBe(555)            // 词源可借
-    expect(s.al.name).toBe('EMA - 乐园(粤)')  // 展示身份不借
+    // 展示身份不借：夹具 name='乐园' 是旧错配烘进的脏名，经闸自愈回
+    // provider 原标题（存量污染 lazy 修复点）
+    expect(s.name).toBe('EMA - 乐园(粤)')
+    expect(s.al.name).toBe('EMA - 乐园(粤)')
     expect(s.al.id).toBeNull()
     expect(s.al.picUrl).toBe('https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg')
+    // pic_str 同闸洗白：无重合不采匹配专辑图链任何字段——rebuilt 显式
+    // 给 null 压掉 {...oldAl} 烘进的脏值，否则 local-mirror 拿它当封面
+    expect(s.al.pic_str).toBeNull()
     // extras 缺省置 null——比残留旧匹配证据诚实
     expect(s.youtube.matchedBy).toBeNull()
     expect(s.youtube.matchScore).toBeNull()
+  })
+
+  it('艺人重合但 matched.name 缺席：name 回 provider 提取名/原标题', () => {
+    // 构造期：songName 兜底（matched 无名可吃，回提取名而非标题噪声）
+    const built = buildYouTubeSong(ytData({
+      matched: { id: 9, ar: [{ name: 'EMA' }] },
+    }))
+    expect(built.name).toBe('乐园')
+    expect(built.neteaseId).toBe(9)
+    // 修复期：provTitle 兜底；al 是独立字段，重合面照吃 matched.al
+    const s = dirtyYt()
+    applyMatchResult(s,
+      { id: 9, ar: [{ name: 'EMA' }], al: { id: 9, name: '对的专辑', picUrl: 'http://n/9.jpg' } })
+    expect(s.name).toBe('EMA - 乐园(粤)')
+    expect(s.neteaseId).toBe(9)
+    expect(s.al.id).toBe(9)
+    expect(s.al.name).toBe('对的专辑')
   })
 
   it('matched=null 解绑：neteaseId/name/al/证据全回 provider 态', () => {
@@ -157,6 +202,7 @@ describe('applyMatchResult：重匹配修复器', () => {
     expect(s.al).toMatchObject({
       id: null, name: 'EMA - 乐园(粤)',
       picUrl: 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg',
+      pic_str: null, // 解绑同洗图链双生字段——脏 pic_str 不残留
     })
     expect(s.youtube.matchedBy).toBeNull()
     expect(s.youtube.matchScore).toBeNull()
