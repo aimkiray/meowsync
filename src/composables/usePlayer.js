@@ -10,7 +10,7 @@ import { formatTime } from '../lib/format.js'
 import { toast } from '../lib/feedback.js'
 import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId, NETEASE_ID_RE, YT_TRACK_ID_RE, BV_TRACK_ID_RE, QQ_SONG_ID_RE } from '../lib/url.js'
-import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl, isUgcExternalTrack, externalArtistName } from '../lib/song.js'
+import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl, isUgcExternalTrack, externalArtistName, proxiedCoverUrl } from '../lib/song.js'
 import { applyMatchResult } from '../lib/external-songs.js'
 // MIRROR_PLAYLIST_ID_RE/isLikelyChineseLyric 未走 lib 转口（lib/url.js 转口表无它们）——直引共享层
 import { MIRROR_PLAYLIST_ID_RE, isLikelyChineseLyric } from '../shared/predicates.js'
@@ -2357,7 +2357,7 @@ export function usePlayer({
             title: song.name || '',
             artist: artists,
             album: song.al?.name || song.album?.name || '',
-            artwork: pic ? [{ src: httpsCover(pic), sizes: '512x512' }] : []
+            artwork: pic ? [{ src: httpsCover(proxiedCoverUrl(pic)), sizes: '512x512' }] : []
           })
         } catch { /* 旧浏览器 MediaMetadata 构造可能抛错，忽略 */ }
       } else {

@@ -3,7 +3,7 @@
 // /:apiName 网关背后是 ALLOWED_APIS 白名单 + 自研端点表（apiModules，
 // 17 名）——反向枚举黑名单必漏，只有正向判定可靠。
 const PREFIXES = [
-  '/downloads', '/playlists', '/audio-proxy', '/remote',
+  '/downloads', '/playlists', '/audio-proxy', '/img-proxy', '/remote',
   '/ping', '/healthz', '/bilibili', '/youtube', '/qq',
   '/song-meta', '/ai', '/auth', '/uploads', '/settings', '/match', '/lyric-align',
   '/sync'

@@ -6,7 +6,7 @@ import {
   songSource, songSourceName,
   songSourceUrl, externalArtistName, externalCoverUrl, applyTrackOverrides,
   isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
-  slimTrack
+  proxiedCoverUrl, slimTrack
 } from '../src/lib/song.js'
 
 // song.js 导出面烟测——本文件曾藏「export {x} from 'y' 不绑本地作用域，
@@ -154,57 +154,129 @@ test('node 环境契约：resolveApiBaseUrl 回落空串，裸值调用不炸', 
 })
 
 test('coverSizeUrl：四 provider 缩放语法 + 幂等 + 放行面', () => {
+  // 白名单图床域的产出恒为 /img-proxy 包装形（node 无 DOM → apiBase='' 相对形），
+  // 且 url= 解码后必须是已完成缩放改写的产物——先改写后包装是契约
+  const proxied = (u) => `/img-proxy?url=${encodeURIComponent(u)}`
   // 网易云 ?param={w}y{h}
   assert.equal(coverSizeUrl('http://p1.music.126.net/a/b.jpg', 96),
-    'http://p1.music.126.net/a/b.jpg?param=96y96')
+    proxied('http://p1.music.126.net/a/b.jpg?param=96y96'))
   assert.equal(coverSizeUrl('https://p2.music.126.net/a/b.jpg?x=1', 96),
-    'https://p2.music.126.net/a/b.jpg?x=1&param=96y96')
+    proxied('https://p2.music.126.net/a/b.jpg?x=1&param=96y96'))
   // 已带 param 改写值而非追加（first-wins 未定义语义兜底）
   assert.equal(coverSizeUrl('https://p1.music.126.net/a/b.jpg?param=200y200', 96),
-    'https://p1.music.126.net/a/b.jpg?param=96y96')
-  // 协议相对与大小写域
+    proxied('https://p1.music.126.net/a/b.jpg?param=96y96'))
+  // 协议相对按 https 升格解析后命中白名单；大写域经 URL 归一小写进 url=
   assert.equal(coverSizeUrl('//p1.MUSIC.126.NET/x.jpg', 80),
-    '//p1.MUSIC.126.NET/x.jpg?param=80y80')
-  // B站 @ 后缀挂 path（query 之前）；已缩放幂等
+    proxied('https://p1.music.126.net/x.jpg?param=80y80'))
+  // B站 @ 后缀挂 path（query 之前）；CDN 缩放幂等（已缩放形不改写再包装）
   assert.equal(coverSizeUrl('https://i0.hdslb.com/bfs/archive/x.jpg', 96),
-    'https://i0.hdslb.com/bfs/archive/x.jpg@96w_96h_1c.jpg')
+    proxied('https://i0.hdslb.com/bfs/archive/x.jpg@96w_96h_1c.jpg'))
   assert.equal(coverSizeUrl('https://i0.hdslb.com/bfs/archive/x.jpg?f=1', 96),
-    'https://i0.hdslb.com/bfs/archive/x.jpg@96w_96h_1c.jpg?f=1')
+    proxied('https://i0.hdslb.com/bfs/archive/x.jpg@96w_96h_1c.jpg?f=1'))
   assert.equal(coverSizeUrl('https://i0.hdslb.com/bfs/archive/x.jpg@300w_300h_1c.jpg', 96),
-    'https://i0.hdslb.com/bfs/archive/x.jpg@300w_300h_1c.jpg')
-  // YouTube 档位名归一到 mq；mq/default 幂等
+    proxied('https://i0.hdslb.com/bfs/archive/x.jpg@300w_300h_1c.jpg'))
+  // YouTube 档位名归一到 mq；mq/default 幂等——降档发生在包装前
   assert.equal(coverSizeUrl('https://i.ytimg.com/vi/a/hqdefault.jpg', 96),
-    'https://i.ytimg.com/vi/a/mqdefault.jpg')
+    proxied('https://i.ytimg.com/vi/a/mqdefault.jpg'))
   assert.equal(coverSizeUrl('https://i.ytimg.com/vi/a/maxresdefault.jpg', 96),
-    'https://i.ytimg.com/vi/a/mqdefault.jpg')
+    proxied('https://i.ytimg.com/vi/a/mqdefault.jpg'))
   assert.equal(coverSizeUrl('https://i.ytimg.com/vi/a/mqdefault.jpg', 96),
-    'https://i.ytimg.com/vi/a/mqdefault.jpg')
-  // QQ T002R 段 px 随行；非 T002R（T001R/qpic）放行
+    proxied('https://i.ytimg.com/vi/a/mqdefault.jpg'))
+  // QQ T002R 段 px 随行；T001R 不改写但仍在白名单——照样进代理
   assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 240),
-    'https://y.gtimg.cn/music/photo_new/T002R240x240M000x.jpg')
+    proxied('https://y.gtimg.cn/music/photo_new/T002R240x240M000x.jpg'))
   assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T001R300x300M000x.jpg', 96),
-    'https://y.gtimg.cn/music/photo_new/T001R300x300M000x.jpg')
-  // 放行面：file_ 端点 / data: / blob: / 未知域 / 空值
+    proxied('https://y.gtimg.cn/music/photo_new/T001R300x300M000x.jpg'))
+  // p.qpic.cn 无公开缩放通道不改写，但 qpic.cn 在白名单 → 代理形
+  assert.equal(coverSizeUrl('https://p.qpic.cn/music_cover/x/150.jpg', 96),
+    proxied('https://p.qpic.cn/music_cover/x/150.jpg'))
+  // 放行面：file_ 端点（相对形直通）/ data: / blob: / 非白名单域 / 空值
   const fileCov = fileArtifactUrl('file_abc12345', 'cover', 7)
   assert.equal(coverSizeUrl(fileCov, 96), fileCov)
   assert.equal(coverSizeUrl('data:image/png;base64,AAA', 96), 'data:image/png;base64,AAA')
-  assert.equal(coverSizeUrl('https://p.qpic.cn/music_cover/x/150.jpg', 96),
-    'https://p.qpic.cn/music_cover/x/150.jpg')
+  assert.equal(coverSizeUrl('blob:https://x/abc', 96), 'blob:https://x/abc')
+  assert.equal(coverSizeUrl('https://example.com/x.jpg', 96), 'https://example.com/x.jpg')
   assert.equal(coverSizeUrl('', 96), '')
   assert.equal(coverSizeUrl(null, 96), '')
   assert.equal(coverSizeUrl(undefined, 96), '')
 })
 
-test('songThumbUrl：file_ 曲放行原图、provider 曲走缩略、空曲空串', () => {
-  // file_ 上传封面没有服务端缩放通道——原样经 file 端点出（量小）
+test('proxiedCoverUrl：白名单包装/直通矩阵 + 幂等防腐化', () => {
+  const proxied = (u) => `/img-proxy?url=${encodeURIComponent(u)}`
+  // 白名单域全包：ytimg/hdslb/126/gtimg/qpic/ggpht/kuwo；http 明文也包
+  //（服务端允许 http 回源——HTTP 部署下明文回链是合法面）
+  assert.equal(proxiedCoverUrl('https://i.ytimg.com/vi/x/hqdefault.jpg'),
+    proxied('https://i.ytimg.com/vi/x/hqdefault.jpg'))
+  assert.equal(proxiedCoverUrl('http://i0.hdslb.com/x.jpg'), proxied('http://i0.hdslb.com/x.jpg'))
+  assert.equal(proxiedCoverUrl('https://p1.music.126.net/a.jpg'), proxied('https://p1.music.126.net/a.jpg'))
+  assert.equal(proxiedCoverUrl('https://y.gtimg.cn/m/T002R300x300M000x.jpg'),
+    proxied('https://y.gtimg.cn/m/T002R300x300M000x.jpg'))
+  assert.equal(proxiedCoverUrl('https://p.qpic.cn/x/150.jpg'), proxied('https://p.qpic.cn/x/150.jpg'))
+  assert.equal(proxiedCoverUrl('https://yt3.ggpht.com/a.jpg'), proxied('https://yt3.ggpht.com/a.jpg'))
+  assert.equal(proxiedCoverUrl('https://a.kuwo.cn/x.jpg'), proxied('https://a.kuwo.cn/x.jpg'))
+  // 协议相对按 https 升格后再判白名单与包装（url= 内是规范绝对形）
+  assert.equal(proxiedCoverUrl('//p1.music.126.net/x.jpg'), proxied('https://p1.music.126.net/x.jpg'))
+  // 蹭名/尾挂/FQDN 尾点不命中白名单（与服务端剥尾点后回源同向收敛）
+  assert.equal(proxiedCoverUrl('https://xytimg.com/x.jpg'), 'https://xytimg.com/x.jpg')
+  assert.equal(proxiedCoverUrl('https://ytimg.com.evil.com/x.jpg'), 'https://ytimg.com.evil.com/x.jpg')
+  assert.equal(proxiedCoverUrl('https://i.ytimg.com./x'), 'https://i.ytimg.com./x')
+  // 直通面：非白名单 / 非 http(s) / 相对路径 / file_ 工件 / 非标端口 / userinfo / 空与畸形
+  assert.equal(proxiedCoverUrl('https://example.com/x.jpg'), 'https://example.com/x.jpg')
+  assert.equal(proxiedCoverUrl('https://foo.googleusercontent.com/x'), 'https://foo.googleusercontent.com/x')
+  assert.equal(proxiedCoverUrl('data:image/png;base64,AAA'), 'data:image/png;base64,AAA')
+  assert.equal(proxiedCoverUrl('blob:https://x/abc'), 'blob:https://x/abc')
+  assert.equal(proxiedCoverUrl('/downloads/songs/f/file?playlistId=local_uploads'),
+    '/downloads/songs/f/file?playlistId=local_uploads')
+  const fileCov = fileArtifactUrl('file_x', 'cover')
+  assert.equal(proxiedCoverUrl(fileCov), fileCov)
+  assert.equal(proxiedCoverUrl('https://i.ytimg.com:8443/x'), 'https://i.ytimg.com:8443/x')
+  assert.equal(proxiedCoverUrl('https://u:p@i.ytimg.com/x'), 'https://u:p@i.ytimg.com/x')
+  assert.equal(proxiedCoverUrl(''), '')
+  assert.equal(proxiedCoverUrl(null), '')
+  assert.equal(proxiedCoverUrl(undefined), '')
+  assert.equal(proxiedCoverUrl('not a url'), 'not a url')
+  // 幂等：已代理形（相对/绝对带端口）逐字节原样；双包装不嵌套
+  const wrapped = proxiedCoverUrl('https://i.ytimg.com/vi/x/hqdefault.jpg')
+  assert.equal(proxiedCoverUrl(wrapped), wrapped)
+  const abs = 'http://h:3101/img-proxy?url=' + encodeURIComponent('https://i.ytimg.com/x')
+  assert.equal(proxiedCoverUrl(abs), abs)
+  // 内嵌 /img-proxy?url= 片段 ≠ 已代理（解析 pathname 判，非裸子串）——
+  // 白名单域 query 里带这串照样被包装
+  assert.equal(proxiedCoverUrl('https://i.ytimg.com/x?next=/img-proxy?url=y'),
+    proxied('https://i.ytimg.com/x?next=/img-proxy?url=y'))
+  // coverSizeUrl 防腐化闸：已代理形逐字节原样——编码内明文 hdslb.com/126.net
+  // 不喂 @WxH/param 改写（否则后缀拼到代理 path 上产死链）
+  const proxiedHdslb = proxied('https://i0.hdslb.com/bfs/archive/x.jpg')
+  assert.equal(coverSizeUrl(proxiedHdslb, 96), proxiedHdslb)
+  const proxied126 = proxied('https://p1.music.126.net/a.jpg')
+  assert.equal(coverSizeUrl(proxied126, 96), proxied126)
+})
+
+test('songThumbUrl：file_ 曲放行原图、provider 曲缩略后经代理、空曲空串', () => {
+  // file_ 上传封面没有服务端缩放通道——原样经 file 端点出（量小）；
+  // 同源相对 URL 不落 /img-proxy 包装
   assert.equal(songThumbUrl(FILE_OBJ, 96), fileArtifactUrl('file_abc12345', 'cover', 3))
-  // provider 曲按 al.picUrl 走对应 CDN 语法
+  // provider 曲按 al.picUrl 走对应 CDN 语法，白名单域再经代理包装
+  //（songThumbUrl 代码未动——包装是 coverSizeUrl 管线内生的）
   const ne = { id: '1', al: { picUrl: 'https://p1.music.126.net/abc/x.jpg' } }
-  assert.equal(songThumbUrl(ne, 96), 'https://p1.music.126.net/abc/x.jpg?param=96y96')
+  assert.equal(songThumbUrl(ne, 96),
+    `/img-proxy?url=${encodeURIComponent('https://p1.music.126.net/abc/x.jpg?param=96y96')}`)
   const bv = { id: 'bv_BV1xx411c7mD', al: { picUrl: 'https://i0.hdslb.com/bfs/a.jpg' } }
-  assert.equal(songThumbUrl(bv, 80), 'https://i0.hdslb.com/bfs/a.jpg@80w_80h_1c.jpg')
+  assert.equal(songThumbUrl(bv, 80),
+    `/img-proxy?url=${encodeURIComponent('https://i0.hdslb.com/bfs/a.jpg@80w_80h_1c.jpg')}`)
+  // 非白名单域封面：缩略改写不命中 → 原样直通（浏览器直连旧行为）
+  const other = { id: '2', al: { picUrl: 'https://example.com/c.jpg' } }
+  assert.equal(songThumbUrl(other, 96), 'https://example.com/c.jpg')
   assert.equal(songThumbUrl(null, 96), '')
   assert.equal(songThumbUrl({ id: '1' }, 96), '') // 无封面字段
+})
+
+test('songCoverUrl：恒回原始 URL——持久化/同步载荷基线不被包装', () => {
+  // 展示侧包装归 coverSizeUrl/proxiedCoverUrl；songCoverUrl 原值必须干净，
+  // 它同时喂 saved_queue.coverImgUrl/serializeRemoteSong 等持久化写入位
+  const raw = 'https://p1.music.126.net/abc/x.jpg'
+  assert.equal(songCoverUrl({ id: '1', al: { picUrl: raw } }), raw)
+  assert.ok(!songCoverUrl({ id: '1', al: { picUrl: raw } }).includes('/img-proxy'))
 })
 
 // ── slimTrack：localStorage 持久化投影——白名单字段缺失=刷新后功能退化 ──
