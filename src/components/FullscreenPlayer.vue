@@ -21,7 +21,6 @@
       :duration="duration"
       :is-playing="isPlaying"
       :lyric-mode="lyricMode"
-      :interaction-mode="interactionMode"
       :lyric-offset-ms="lyricOffsetMs"
     />
 
@@ -46,15 +45,6 @@
             @click="$emit('update:lyric-mode', lyricMode === 'original' ? 'translation' : 'original')"
           >
             {{ lyricMode === 'original' ? '原文' : '译文' }}
-          </button>
-          <button
-            class="fullscreen-player__topbar-button"
-            :aria-pressed="interactionMode === 'pointer'"
-            aria-label="切换歌词自动/鼠标交互"
-            title="切换歌词自动/鼠标交互"
-            @click="$emit('update:interaction-mode', interactionMode === 'auto' ? 'pointer' : 'auto')"
-          >
-            {{ interactionMode === 'auto' ? '自动' : '鼠标' }}
           </button>
           <button class="fullscreen-player__topbar-button fullscreen-player__close" @click="$emit('close')">退出</button>
         </div>
@@ -193,13 +183,9 @@ export default {
     lyricMode: {
       type: String,
       default: 'original'
-    },
-    interactionMode: {
-      type: String,
-      default: 'auto'
     }
   },
-  emits: ['close', 'toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:lyric-mode', 'update:interaction-mode'],
+  emits: ['close', 'toggle-play', 'previous-song', 'next-song', 'seek-to', 'update-volume', 'update:lyric-mode'],
   setup(props, { emit }) {
 
     // 进度条拖拽状态：按下期间 UI 播放在这里走，不跟随 props.currentTime 抢
@@ -281,7 +267,7 @@ export default {
 
     // aria-modal 契约：Tab/Shift+Tab 把焦点钳在层内首尾互跳——共享实现
     // lib/focus-trap.js（SongFormDialog/确认框/App 弹层同源）。本层可聚焦集
-    // 天然闭合：顶栏三键+播控三键+音量 range+进度滑杆。挂在根上吃冒泡的
+    // 天然闭合：顶栏两键+播控三键+音量 range+进度滑杆。挂在根上吃冒泡的
     // Tab——子键（滑杆/按钮）自己不拦 Tab，不钳则逃出遮罩落到下层控件；
     // 根外焦点（落 body/层外）的事件不经根——由 handleKeydown 在 window 侧补网
     const onDialogKeydown = (e) => trapTabKeydown(e)
@@ -658,7 +644,7 @@ export default {
   color: white;
 }
 
-/* 顶栏三键与播放键同族底色（control-button 粉 tint），退出键同档。
+/* 顶栏两键与播放键同族底色（control-button 粉 tint），退出键同档。
    全局 reset 剥光 padding 后命中盒只剩字形高 ~20px——退出是触屏唯一
    关闭路径（无 Esc/下滑手势），补内距到 40px 档 */
 .fullscreen-player__topbar-button {

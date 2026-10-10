@@ -45,10 +45,6 @@ export default {
       type: String,
       default: 'original'
     },
-    interactionMode: {
-      type: String,
-      default: 'auto'
-    },
     // 歌词时间校准（ms，正=提前）：等效把渲染时钟拨快 offset——
     // 与 startLyricSync 里 seek()+offset/1000 同一约定
     lyricOffsetMs: {
@@ -89,15 +85,9 @@ export default {
       manager.update(lyricClockMs())
     }
 
-    const syncInteractionMode = () => {
-      if (!manager) return
-      manager.setInteractionMode(props.interactionMode)
-    }
-
     onMounted(() => {
       if (!container.value) return
       manager = new CanvasManager(container.value)
-      syncInteractionMode()
       syncLyrics()
     })
 
@@ -112,7 +102,6 @@ export default {
     // 校准值变化即时重同步——暂停/全屏中调节也要生效，不能等下一个播放 tick
     watch(() => props.lyricOffsetMs, syncPosition)
     watch(() => props.isPlaying, syncPosition)
-    watch(() => props.interactionMode, syncInteractionMode)
 
     return {
       container

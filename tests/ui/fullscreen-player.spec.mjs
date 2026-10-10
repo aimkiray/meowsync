@@ -20,7 +20,6 @@ const mountPlayer = (props = {}) => mount(FullscreenPlayer, {
     volume: 80,
     lyrics: [],
     lyricMode: 'original',
-    interactionMode: 'auto',
     ...props,
   },
   global: {
@@ -89,7 +88,7 @@ describe('FullscreenPlayer：dialog 语义与焦点闭环', () => {
     const focusables = [...root.querySelectorAll(
       'a[href], button:not([disabled]), input:not([disabled]), ' +
       'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
-    // 可聚焦集自证闭合：首=顶栏模式键、末=进度滑杆（DOM 序即 Tab 序）
+    // 可聚焦集自证闭合：首=顶栏歌词键、末=进度滑杆（DOM 序即 Tab 序）
     const first = focusables[0]
     const last = focusables.at(-1)
     expect(first.className).toContain('fullscreen-player__topbar-button')
@@ -282,20 +281,16 @@ describe('FullscreenPlayer：进度滑杆（BottomPlayer 同契约）', () => {
 })
 
 describe('FullscreenPlayer：控件语义', () => {
-  it('顶栏模式键 aria-pressed 随态翻转', async () => {
-    wrapper = mountPlayer({ lyricMode: 'translation', interactionMode: 'pointer' })
-    const [lyricBtn, modeBtn] = wrapper.findAll('.fullscreen-player__topbar-button')
+  it('顶栏歌词键 aria-pressed 随态翻转', async () => {
+    wrapper = mountPlayer({ lyricMode: 'translation' })
+    const lyricBtn = wrapper.find('.fullscreen-player__topbar-button')
     expect(lyricBtn.attributes('aria-pressed')).toBe('true')
-    expect(modeBtn.attributes('aria-pressed')).toBe('true')
 
     await lyricBtn.trigger('click')
-    await modeBtn.trigger('click')
     expect(wrapper.emitted('update:lyric-mode')[0]).toEqual(['original']) // translation→original
-    expect(wrapper.emitted('update:interaction-mode')[0]).toEqual(['auto'])
 
-    await wrapper.setProps({ lyricMode: 'original', interactionMode: 'auto' })
+    await wrapper.setProps({ lyricMode: 'original' })
     expect(lyricBtn.attributes('aria-pressed')).toBe('false')
-    expect(modeBtn.attributes('aria-pressed')).toBe('false')
   })
 
   it('TextAlive 画布宿主 aria-hidden——读屏词走 DOM 词列不吃画布噪音', () => {
