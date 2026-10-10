@@ -159,7 +159,7 @@ app.all('/:apiName', async (c) => {
     return c.json({ code: 404, message: `API '${apiName}' not found` }, 404);
   }
 
-  // song_url 系一次入站可扇出 ≤20 首 × 4 源试错 + AI 规整——另设更严桶。
+  // song_url 系一次入站可扇出 ≤20 首 × 2 源试错 + AI 规整——另设更严桶。
   // 30/min：每播放一首歌=1-2 拍（含换码率重试），10/min 会在快速切歌/
   // 本地下载 ~10 首起即误伤正常用户
   if (['song_url', 'song_url_v1'].includes(apiName)

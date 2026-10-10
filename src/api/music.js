@@ -180,7 +180,7 @@ export const musicApi = {
 
       try {
         const response = await withRetry(() =>
-          // 解锁链最坏路径（4 源串行试错+HEAD 探测）远超 10s 默认超时——
+          // 解锁链最坏路径（2 源串行试错+HEAD 探测）远超 10s 默认超时——
           // 客户端先断会让服务端继续跑僵尸链，必须给足窗口
           api.get('/song_url', {
             params: { id, br, purpose: 'playback' },

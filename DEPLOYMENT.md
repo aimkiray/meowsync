@@ -51,7 +51,7 @@ cp .env.example .env
 | AI_MODEL | - | 可选：模型名（如 `deepseek-v4.1-flash`）。启用后：解锁检索元数据规整、B 站/YouTube 匹配复核与兜底、外部曲歌词归属核验、无译文歌词自动中文翻译 |
 | AI_TIMEOUT_MS | 30000 | AI 单次请求超时（毫秒） |
 | BILI_COOKIE | - | 可选：B 站登录 Cookie（`SESSDATA=…; bili_jct=…`）。杜比/Hi-Res 音轨只对登录账号下发（Hi-Res 通常需大会员）；不配则 B 站下载回落最高码率 AAC |
-| QQ_COOKIE | - | 可选：QQ 音乐登录 Cookie（`uin=…; qm_keyst=…`）。无损/Hi-Res 与 VIP 档只对登录账号下发，不配则匿名态仅常规档。同时充当网易云灰曲的解锁兜底源（cookie 带 refresh_token（QQ 态常为 `psrf_qqrefresh_token`）时临期自动续期，新凭据写运行时变量 `NEW_QQ_COOKIE`，重启后回落 `QQ_COOKIE`——长期运行建议落回 .env）。**务必用小号**（账号风控有先例）；QQ 源对服务器 IP 有地域风控，海外机房部署基本不可用 |
+| QQ_COOKIE | - | 可选：QQ 音乐登录 Cookie（`uin=…; qm_keyst=…`）。无损/Hi-Res 与 VIP 档只对登录账号下发，不配则匿名态仅常规档。仅服务 QQ 侧曲库（qq_ 曲目取流/歌单导入），不作网易云灰曲的解锁源。cookie 带 refresh_token（QQ 态常为 `psrf_qqrefresh_token`）时临期自动续期，新凭据写运行时变量 `NEW_QQ_COOKIE`，重启后回落 `QQ_COOKIE`——长期运行建议落回 .env。**务必用小号**（账号风控有先例）；QQ 源对服务器 IP 有地域风控，海外机房部署基本不可用 |
 | YT_COOKIE | - | 可选：YouTube 登录 Cookie（浏览器导出整串，形如 `SID=…; SAPISID=…; __Secure-3PAPISID=…`）。匿名 Innertube 全形态会被反机器人墙拦（「请登录，以便我们确认你不是聊天机器人」→ /stream 502），配上后取流/搜索/歌单导入的 youtubei 请求改带登录态 WEB 档绕行；串里需含 `SAPISID`/`__Secure-1PAPISID`/`__Secure-3PAPISID` 之一才会附 `SAPISID*HASH` 签名头，否则只发裸 Cookie。仅用于 youtubei 请求头，不出进程。**强烈建议用小号**——cookie 即完整登录凭据 |
 | YT_PROXY | - | 可选：YouTube 出站代理（`http://[user:pass@]host:port`，仅 http/https，如 `http://127.0.0.1:12091`）。YouTube 族域（youtubei/googlevideo）请求改走指定出口绕 IP 级风控——数据中心 IP 被 googlevideo 限速/拒连时换出口；与 `YT_COOKIE` 正交可叠加（Cookie 给登录态、代理换出口 IP）。URL 内嵌凭据仅作服务端上游拨号，不出进程、不回显前端 |
 | NODE_ENV | development | 环境标识（服务代码不直读，但 **Vite 构建期会读 `.env` 里的它**——`development` 会把生产 bundle 烘成开发态，故 `.env` 不要放此变量；镜像与 compose 已内置 `production`） |

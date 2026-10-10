@@ -833,7 +833,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       throw fatalError('无法获取歌曲信息');
     }
     // signal 透传进解锁链：任务取消/排空时逐源中止——否则已 abort 的任务
-    // 仍要把整条解锁链（song_detail + 4源试错 + HEAD 探测，最坏分钟级）
+    // 仍要把整条解锁链（song_detail + 2 源试错 + HEAD 探测，最坏分钟级）
     // 跑完才在下方 throwIfAborted 被发现
     await resolveSongUrls(items, { purpose: 'download', signal });
 

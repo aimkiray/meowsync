@@ -103,9 +103,9 @@ function withTimeout(promise, ms, label) {
 // services/netease/{crypto,request,endpoints}.js，替代 NeteaseCloudMusicApi）
 
 // 单请求内解锁扇出的硬上限：song_url 接受逗号分隔多 id，逐项又会并发跑
-// 4 源 × match() 出站请求——无界扇出会把服务端 FD/上游配额打爆
+// 2 源 × match() 出站请求——无界扇出会把服务端 FD/上游配额打爆
 const MAX_UNLOCK_ITEMS = 20;
-// 解锁并发池：每项的 4 源串行试错，但项与项之间限 4 并发——瞬时起几十条
+// 解锁并发池：每项的 2 源串行试错，但项与项之间限 4 并发——瞬时起几十条
 // match() 链会耗尽 socket，且各源站对突发并发的容忍度低
 const UNLOCK_CONCURRENCY = 4;
 // 解锁结果短缓存：60s 窗口吸收"点歌→超时→重试→换码率重试"的重复链
@@ -368,10 +368,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         // proxyOrigin 在场即过代理白名单预筛：发射收口（return 前 post-pass）
         // 把一切回链统一 vault 化，名单外候选注定是"已解析却 403"的死链——
         // 整条候选都须过，漏一条等于往 vault 里混一条空打一跳的死链或裸
-        // 凭据外发。qq 的 purl 明文带 uin/vkey、googlevideo 的 ip= 本就
-        // 必须代理；https 官方/解锁裸链现同口径（post-pass 统一 mint）。
+        // 凭据外发。googlevideo 的 ip= 绑定签名链本就必须代理；https
+        // 官方/解锁裸链现同口径（post-pass 统一 mint）。
         // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
-        // 明文签名链进 JSON 等于把 uin/vkey/出口 IP 发给访客；进程内调用方
+        // 明文签名链进 JSON 等于把链内签名/出口 IP 发给访客；进程内调用方
         // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
         if (proxyOrigin) {
           for (let i = urls.length - 1; i >= 0; i--) {
@@ -387,7 +387,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         }
 
         // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
-        // 候选期已知秒数的源（youtube/qq）直接比对原始时长；
+        // 候选期已知秒数的源（youtube）直接比对原始时长；
         // 其余按 size×br 估算（unm range 探测已随库删除，回落 HEAD）
         let estMs = null;
         let sizeBytes = null;
@@ -416,7 +416,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           url: urls[0], urls, br: unblocked.br || null, source,
           // 真实文件形态写回：试听片的 time/size/type 透给下载端会
           // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件。
-          // size 优先 provider/HEAD 实测值；youtube/qq 无 size 但知道
+          // size 优先 provider/HEAD 实测值；youtube 无 size 但知道
           // br+durationSec——按 br×时长估值（标称码率，量级对即可，
           // 至少比残片字节数更接近真相）
           ext: extOf(checked.url),
@@ -491,7 +491,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
     return item;
   };
 
-  // 有限并发池代替裸 Promise.all：逐项内部已是 4 源串行试错
+  // 有限并发池代替裸 Promise.all：逐项内部已是 2 源串行试错
   const queue = [...unlockTargets];
   const workers = Array.from(
     { length: Math.min(UNLOCK_CONCURRENCY, queue.length) },
