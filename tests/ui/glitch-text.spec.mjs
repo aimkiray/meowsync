@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import GlitchText from '../../src/components/GlitchText.vue'
-import { setTheme } from '../../src/lib/theme.js'
+import { setTheme, glitchBurst } from '../../src/lib/theme.js'
 import { prefGlitchMotion } from '../../src/lib/prefs.js'
 import { LS_KEYS } from '../../src/lib/storage.js'
 
@@ -143,5 +143,51 @@ describe('GlitchText 减动豁免', () => {
     const { prefGlitchMotion: fresh } = await import('../../src/lib/prefs.js')
     expect(fresh.value).toBe(true)
     expect(hasMotionAttr()).toBe(true)
+  })
+})
+
+// 替身符按源字符脚本分流：Han 表意文字→HAN_POOL（经典乱码签名池），
+// 其余（拉丁/假名/谚文等）→共享 POOL。Math.random 恒 0 取池首元——
+// '烫'/'▓' 分别是两池首元的字面量钉板（HAN_POOL/POOL 未导出，钉首元即
+// 钉路由；首元若改需同步改断言）
+describe('GlitchText 腐蚀分流', () => {
+  beforeEach(() => setTheme('glitch-restoration'))
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    setTheme('default')
+  })
+
+  it('burst 全 scramble：汉字键→HAN_POOL 首元、拉丁键→POOL 首元', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    // '漢a'：漢=CJK 独立 token（0:0），a=Latin token（1:0）
+    const w = mount(GlitchText, { props: { text: '漢a' } })
+    glitchBurst() // 共享世代 +1 → watch(glitchGen) 触发全字符 scramble
+    await nextTick() // watch flush:pre——世代变更落地为 corrupt 写入
+    expect(w.vm.corrupt.get('0:0')).toBe('烫') // '漢' → HAN_POOL[0]
+    expect(w.vm.corrupt.get('1:0')).toBe('▓') // 'a' → POOL[0]
+    w.unmount() // active=true 起了 interval + burst 回净表——收掉
+  })
+
+  it('astral 汉字路由进 HAN_POOL——判据 astral 段（20000–2FA1F）钉板', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    // '𠮷a'：𠮷=U+20BB7（Ext B）——tokenizer 的 CJK astral 段命中
+    // 产单字 token（0:0），a=Latin token（1:0）
+    const w = mount(GlitchText, { props: { text: '𠮷a' } })
+    glitchBurst()
+    await nextTick()
+    expect(w.vm.corrupt.get('0:0')).toBe('烫') // '𠮷' → HAN astral 段 → HAN_POOL[0]
+    expect(w.vm.corrupt.get('1:0')).toBe('▓') // 'a' → POOL[0]
+    w.unmount() // active=true 起了 interval + burst 回净表——收掉
+  })
+
+  it('tick 主路径同走分流（interval 驱动）', () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const w = mount(GlitchText, { props: { text: '漢a' } })
+    vi.advanceTimersByTime(1100) // 首个 tick——随机=0 命中 clean[0]='漢'
+    expect(w.vm.corrupt.get('0:0')).toBe('烫')
+    expect(w.vm.corrupt.size).toBe(1) // 封顶 ceil(2/6)=1——只腐蚀一键
+    w.unmount()
   })
 })

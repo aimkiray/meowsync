@@ -29,6 +29,23 @@ import { prefGlitchMotion } from '../lib/prefs.js'
 // Noto Sans SC 非像素字形——质感更杂，对「损坏」语义反而是加分
 const POOL = [...'▓░▒ﾂﾎﾃﾄﾅﾌﾑﾒﾓﾘﾚﾖﾊﾋﾍﾐﾕﾗﾆﾇ℮†‡ΓŘ®₥§¤¥šмλθτþÐÑØÅЯИƧγÿýξ∑縺繝€∆ⅯﾉﾙΞë|+×01345!$']
 
+// 汉字专用经典乱码签名池：烫=MSVC 调试栈 0xCC 未初始化内存读出、
+// 屯=0xCD 屏障字节、锟斤拷=U+FFFD 串过 GBK 的残骸、锘=BOM 遗骸，
+// 其余为 UTF-8→GBK 整串错读的真实残片——重复项即权重，签名刻意
+// 压过泛残片。仅 Han 表意文字走此池（「中文」窄口径：假名/谚文
+// 仍走共享池，混排文本乱得更杂）
+const HAN_POOL = [...'烫烫烫烫屯屯屯屯锟斤拷锟斤拷锟斤拷锘锘浣犲ソ娴嬭瘯鏄鐨鎴戜滑鍙戝ぇ瀹闂ㄨ瘯鐮佸織榧犺阿鐢熸妸鍚庡湴鍧戝潃鍧\uFFFD']
+// Han 窄判据：表意文字三区+扩展 A+兼容区——不含假名/谚文/全角标点；
+// astral 段（U+20000–U+2FA1F）实覆盖扩展 B–F/I 及兼容增补区
+// （tokenizer 的 CJK 是分行类判据，口径比本判据宽，各司其职不复用）
+const HAN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]|[\u{20000}-\u{2FA1F}]/u
+
+// 替身符按源脚本分流：Han→经典乱码签名池，其余→共享池
+const pickFor = (ch) => {
+  const pool = HAN.test(ch) ? HAN_POOL : POOL
+  return pool[Math.random() * pool.length | 0]
+}
+
 export default {
   name: 'GlitchText',
   props: { text: { type: String, required: true } },
@@ -79,12 +96,12 @@ export default {
       const clean = []
       let total = 0
       words.value.forEach((word, wi) =>
-        word.chars.forEach((_, ci) => { total++; if (!corrupt.value.has(keyOf(wi, ci))) clean.push(keyOf(wi, ci)) })
+        word.chars.forEach((ch, ci) => { total++; if (!corrupt.value.has(keyOf(wi, ci))) clean.push({ k: keyOf(wi, ci), ch }) })
       )
       // 短文本并发腐蚀封顶 ~1/6（至少 1 个）——4 字标题不会近半句皆替身
       if (clean.length && corrupt.value.size < Math.max(1, Math.ceil(total / 6))) {
-        const i = clean[Math.random() * clean.length | 0]
-        corrupt.value.set(i, POOL[Math.random() * POOL.length | 0])
+        const { k, ch } = clean[Math.random() * clean.length | 0]
+        corrupt.value.set(k, pickFor(ch))
       }
       // 每代随机恢复 2-3 个存量——稳态来回腐蚀而非单向累积
       glitched.slice(0, 2 + (Math.random() * 2 | 0)).forEach(k => corrupt.value.delete(k))
@@ -95,8 +112,8 @@ export default {
     let burstTimer = 0
     function burst() {
       words.value.forEach((word, wi) =>
-        word.chars.forEach((_, ci) =>
-          corrupt.value.set(keyOf(wi, ci), POOL[Math.random() * POOL.length | 0])
+        word.chars.forEach((ch, ci) =>
+          corrupt.value.set(keyOf(wi, ci), pickFor(ch))
         )
       )
       clearTimeout(burstTimer)
