@@ -168,11 +168,10 @@
         </div>
 
         <!-- 歌名/歌手·专辑·时长/操作键都不在本栏——meta 与底栏播放器重复、
-             操作键已收进页头 ⋯ 菜单；本列只剩媒体本体 + 横幅（YTM mweb 同款取舍） -->
-
-        <!-- 播放错误/警告在媒体下方、与媒体同宽——归属舞台列信息区 -->
-        <div v-if="durationWarning" class="watch-banner" role="status"><span class="watch-banner-tag">warn:</span> {{ durationWarning }}</div>
-        <div v-if="playbackError" class="watch-banner" role="alert"><span class="watch-banner-tag">error:</span> {{ playbackError }}</div>
+             操作键已收进页头 ⋯ 菜单；本列只剩媒体本体（YTM mweb 同款取舍）。
+             播放错误/时长警告走全局 toast（setup 侧 watcher 接入）——旧行内
+             横幅在桌面容器裁口（container-type:size + overflow:hidden）下
+             被切半，改走 FeedbackHost 气泡 -->
       </div>
 
       <!-- ══ 面板列：待播 / 歌词 / 相关（无面板底，行级高亮即可）══ -->
@@ -874,6 +873,12 @@ export default {
       lyricCenteredFor = props.currentSong?.id
       nextTick(() => centerCurrentRow())
     })
+
+    // 播放错误/时长警告：行内横幅改走全局 toast——事件语义只在值落地时
+    // 弹一次（不加 immediate：重挂载的残留状态不重复弹）。warn 无对应
+    // feedback 类型，归 'info'
+    watch(() => props.playbackError, v => { if (v) toast(v, 'error') })
+    watch(() => props.durationWarning, v => { if (v) toast(v, 'info') })
 
     // 「容器自身即真滚动口」判定：computed overflow-y 为 auto/scroll
     // （与 useVirtualList.pickScroller 同口径）。舞台布局下面板体恒为
@@ -1844,30 +1849,6 @@ export default {
 }
 .watch-cover-wrap:-webkit-full-screen .watch-cover--video { width: 100%; height: 100%; }
 
-/* 横幅：媒体下方的深色小片，宽与媒体同轴（双栏态改容器单位） */
-.watch-banner {
-  margin-top: 12px;
-  width: min(100%, 36svh);
-  max-width: 100%;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, .06);
-  font-size: 12px;
-  color: var(--ink-86);
-  text-align: left;
-}
-.watch-view--video .watch-banner { width: 100%; }
-.watch-banner-tag {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 1px 5px;
-  margin-right: 4px;
-  border-radius: 4px;
-  background: var(--accent-danger-ink);
-  color: var(--stage-bg, #0b0b0b);
-}
-.watch-banner[role="status"] .watch-banner-tag { background: var(--ink); }
-
 /* ── 面板列：无底——行级 hover/当前高亮即可 ── */
 .watch-side {
   flex: 1;
@@ -2251,12 +2232,10 @@ export default {
   .watch-main {
     /* 定尺寸查询容器：媒体按列内剩余空间取尺寸 */
     container-type: size;
-    overflow: hidden; /* 横幅叠加超高不外溢 */
+    overflow: hidden; /* 媒体超高不外溢 */
   }
   .watch-cover-wrap { width: min(100cqw, 100cqh, 760px); }
   .watch-cover-wrap--video { width: min(100cqw, 100cqh * 16 / 9); }
-  .watch-banner { width: min(100cqw, 100cqh, 760px); }
-  .watch-view--video .watch-banner { width: min(100cqw, 100cqh * 16 / 9); }
 }
 @media (min-width: 901px) {
   /* 宽屏面板让位页头行（顶缘与媒体列行 2 对齐、底缘吃 24px 底垫）——

@@ -2383,7 +2383,8 @@ export function usePlayer({
     })
 
     watch(autoplayOn, () => savePlayerStateToStorage())
-    // 播放错误是行内 banner（不经 toast）——补进 glitch 张力表盘，
+    // 播放错误在 watch 视图走 toast（toast('error') 内已推表盘）——
+    // 此 watcher 兜非 watch 视图落地时的 glitch 信号：
     // 错误出现瞬间全屏腐蚀字符同代闪回（其他主题零成本 no-op）
     watch(playbackError, v => { if (v) glitchBurst() })
 

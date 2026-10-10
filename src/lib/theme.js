@@ -49,8 +49,9 @@ export const currentTheme = readonly(stored)
    所有 GlitchText 实例读到同值并触发一次 burst 全 scramble，
    短暂闪回后回净（corruption 是张力不是装饰纹理）。
    覆盖边界：反馈服务错误（toast error / danger confirm）经
-   feedback.js 接入；播放错误（watch-banner 行内态）经
-   App.vue 的 watch(playbackError) 接入；下载轮询出的行内失败
+   feedback.js 接入；播放错误经 usePlayer 的 watch(playbackError)
+   接入——WatchView 侧 error toast 同拍再 +1，同代合并为一发
+   burst；下载轮询出的行内失败
    是「状态」而非「事件」，不推表盘。 */
 const gen = ref(0)
 export const glitchGen = readonly(gen)

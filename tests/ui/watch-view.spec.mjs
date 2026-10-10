@@ -34,6 +34,7 @@ import PixelIcon from '../../src/components/PixelIcon.vue'
 import { musicApi } from '../../src/api/music.js'
 import { downloadsApi } from '../../src/api/downloads.js'
 import { prefVideoOn } from '../../src/lib/prefs.js'
+import { toast } from '../../src/lib/feedback.js'
 
 // jsdom 缺口补丁：matchMedia（歌词跟随 watcher）、scrollIntoView/scrollTo
 // （行居中）在生产浏览器都有，这里只保证存在不报错
@@ -477,5 +478,30 @@ describe('WatchView：音画组降级支（hasPlayableVideo=false 残余形）',
       expect(video).toBeTruthy()
       expect(video.getAttribute('title')).toBe('切到视频模式（需已下载视频档）')
     } finally { prefVideoOn.value = prev } // 归位
+  })
+})
+
+describe('WatchView：播放错误/时长警告走全局 toast', () => {
+  // 行内 banner 退役（桌面容器裁口下被切半）——prop 落地即弹一次；
+  // 清空是状态复位不追弹，挂载残留不重复弹（无 immediate）
+  it('playbackError 落地弹 error toast，清空不追弹', async () => {
+    const w = mountWatch({ tab: 'queue' })
+    expect(toast).not.toHaveBeenCalled()
+    await w.setProps({ playbackError: '音频加载失败，点击播放键或重新点歌可重试' })
+    expect(toast).toHaveBeenCalledWith('音频加载失败，点击播放键或重新点歌可重试', 'error')
+    await w.setProps({ playbackError: '' })
+    expect(toast).toHaveBeenCalledTimes(1)
+  })
+
+  it('durationWarning 落地弹 info toast（feedback 无 warn 类型）', async () => {
+    const w = mountWatch({ tab: 'queue' })
+    await w.setProps({ durationWarning: '在线源仍在下载——完成后可重播' })
+    expect(toast).toHaveBeenCalledWith('在线源仍在下载——完成后可重播', 'info')
+    expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'error')
+  })
+
+  it('挂载即带残留值不弹（横幅是状态语义，toast 是事件语义）', () => {
+    mountWatch({ tab: 'queue', playbackError: '残留错误', durationWarning: '残留警告' })
+    expect(toast).not.toHaveBeenCalled()
   })
 })
