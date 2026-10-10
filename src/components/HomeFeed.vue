@@ -3,7 +3,7 @@
        货架全部由本地播放历史派生，零网络请求。页脚版本戳收版（print-grid 签名） -->
   <div ref="feedEl" class="home-feed">
     <header class="home-head">
-      <p class="pg-label">home · discover</p>
+      <p class="pg-label">discover</p>
       <h2 class="home-title" data-nosnippet><GlitchText text="发现音乐" /></h2>
     </header>
 
