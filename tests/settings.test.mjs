@@ -135,15 +135,57 @@ test('settings.aiKeyBoundTo：env 密钥绑定其配置网关 origin', () => {
   assert.equal(settings.aiKeyBoundTo('http://gw-a:8317/v2'), 'sk-env-key');
   // override URL 异源——env 密钥不随行（改址即泄 Bearer 的通道）
   assert.equal(settings.aiKeyBoundTo('https://attacker.example'), null);
-  // DB 覆盖密钥是管理员显式入值——绑定豁免
+  // Override key is bound too — anchored at the effective ai_base_url
+  // (env fallback here): same-origin draft released, cross-origin withheld
   repo.set('ai_api_key', 'sk-db-key');
-  assert.equal(settings.aiKeyBoundTo('https://attacker.example'), 'sk-db-key');
+  assert.equal(settings.aiKeyBoundTo('http://gw-a:8317/v9'), 'sk-db-key');
+  assert.equal(settings.aiKeyBoundTo('https://attacker.example'), null);
   repo.del('ai_api_key');
   // aiConfig 聚合后同口径：异源 override 使 env 密钥缺席 → AI 停用而非泄露
   repo.set('ai_base_url', 'https://attacker.example');
   assert.equal(settings.aiConfig().apiKey, null);
   assert.equal(aiLib.aiEnabled(), false);
   repo.del('ai_base_url');
+});
+
+test('settings.aiKeyBoundTo：override 密钥绑已生效 base_url 的 origin', () => {
+  // Exfil pin: an admin-stored key pairs with the admin-stored gateway —
+  // a caller draft URL pointing elsewhere must not carry it (the ai-test
+  // channel used to release override keys unconditionally).
+  repo.set('ai_base_url', 'http://db-gw:8317/v1');
+  repo.set('ai_api_key', 'sk-db-key');
+  try {
+    // Same-origin draft (same gateway, other path) → stored key released
+    assert.equal(settings.aiKeyBoundTo('http://db-gw:8317/v2'), 'sk-db-key');
+    // Cross-origin draft → withheld (core regression pin)
+    assert.equal(settings.aiKeyBoundTo('https://attacker.example/x'), null);
+    assert.equal(settings.aiKeyBoundTo('http://db-gw:9999/v1'), null); // port change = cross-origin
+    assert.equal(settings.aiKeyBoundTo('https://db-gw:8317/v1'), null); // scheme flip = cross-origin
+    // Real request path is inherently safe: aiConfig pairs the key with
+    // the very address it is bound to
+    assert.equal(settings.aiConfig().baseUrl, 'http://db-gw:8317/v1');
+    assert.equal(settings.aiConfig().apiKey, 'sk-db-key');
+    assert.equal(aiLib.aiEnabled(), false); // model still missing — key alone does not enable
+    // Key survives its base_url being re-pointed only toward the new
+    // effective address, never toward a caller-chosen one
+    repo.set('ai_base_url', 'https://db-gw2.example');
+    assert.equal(settings.aiKeyBoundTo('https://db-gw2.example/v1'), 'sk-db-key');
+    assert.equal(settings.aiKeyBoundTo('http://db-gw:8317/v1'), null); // old anchor no longer releases
+  } finally {
+    repo.del('ai_base_url');
+    repo.del('ai_api_key');
+  }
+});
+
+test('settings.aiKeyBoundTo：override 密钥无生效 base_url 时不放行', () => {
+  // No configured gateway = no binding anchor — the stored key must not
+  // follow a draft URL into the void
+  repo.set('ai_api_key', 'sk-orphan');
+  try {
+    assert.equal(settings.aiKeyBoundTo('http://anything.example'), null);
+  } finally {
+    repo.del('ai_api_key');
+  }
 });
 
 test('settings.persistRenewedQqCookie：续期按来源归位，在飞改动不被旧值盖掉', () => {
@@ -323,12 +365,15 @@ test('POST /settings/ai-test：密钥回落过 origin 绑定 + 上游形态映�
   });
   assert.equal((await res.json()).reason, 'bad-url');
 
-  // 草稿 URL 异源 + env 密钥在位 → key-bound（区分「没配」与「绑定扣下」）
+  // Same cross-origin draft with no stored key at all → 'incomplete'
+  // (pins the keyWithheld branch both ways: withheld vs never configured)
+  delete process.env.AI_API_KEY;
   res = await settingsRoute.request('http://t/settings/ai-test', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ baseUrl: 'https://attacker.example' }),
   });
-  assert.equal((await res.json()).reason, 'key-bound');
+  assert.equal((await res.json()).reason, 'incomplete');
+  process.env.AI_API_KEY = 'sk-env';
 
   // 含非法字符的草稿 key → bad-key，不触达上游、不回显值
   res = await settingsRoute.request('http://t/settings/ai-test', {
@@ -338,6 +383,49 @@ test('POST /settings/ai-test：密钥回落过 origin 绑定 + 上游形态映�
   body = await res.json();
   assert.equal(body.reason, 'bad-key');
   assert.equal(body.message.includes('sk-a'), false); // 错误文案不携密钥
+});
+
+test('POST /settings/ai-test：override 密钥异源 draft 不外发（凭据外泄回归钉）', async (t) => {
+  // Admin stored key+gateway via the settings layer — a caller draft URL to
+  // an arbitrary host must surface 'key-bound' with zero upstream fetch.
+  // Dedicated XFF bucket: the shared 'local' ai-test quota is near spent.
+  const savedTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  t.after(() => {
+    if (savedTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = savedTp;
+    globalThis.fetch = realFetch;
+    repo.del('ai_base_url');
+    repo.del('ai_api_key');
+  });
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, auth: init?.headers?.Authorization });
+    return {
+      ok: true, status: 200,
+      body: Readable.toWeb(Readable.from([Buffer.from(JSON.stringify({ data: [{ id: 'm1' }] }))])),
+    };
+  };
+  repo.set('ai_base_url', 'http://db-gw:8317/v1');
+  repo.set('ai_api_key', 'sk-db-key');
+  const post = (payload) => settingsRoute.request('http://t/settings/ai-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.88' },
+    body: JSON.stringify(payload),
+  });
+  // Cross-origin draft + stored override key → withheld, no upstream call
+  let res = await post({ baseUrl: 'https://attacker.example/x' });
+  let body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.reason, 'key-bound');
+  assert.equal(calls.length, 0);
+  // Same-origin draft → stored key rides to its configured gateway
+  res = await post({ baseUrl: 'http://db-gw:8317/v2' });
+  body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(calls.at(-1).url, 'http://db-gw:8317/v2/models');
+  assert.equal(calls.at(-1).auth, 'Bearer sk-db-key');
 });
 
 test('POST /settings/ai-test：上游非 2xx 与异常形态', async (t) => {

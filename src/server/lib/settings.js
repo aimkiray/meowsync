@@ -117,16 +117,23 @@ function effective(key) {
 const effectiveValue = (key) => effective(key).value;
 
 const sameOrigin = (a, b) => {
-  try { return new URL(a).origin === new URL(b).origin } catch { return false }
+  // Opaque origins ('null') never match — two javascript:/file: URLs share
+  // origin 'null' but must not count as same-origin for key release
+  // (unreachable today: every caller URL passed write-time http(s) checks)
+  try { const o = new URL(a).origin; return o !== 'null' && o === new URL(b).origin } catch { return false }
 };
 
 // 按值去重——坏值热改换新要重新告警，同一坏值不重复刷日志（值不落日志）
 let warnedUnsafeKey = '';
 
-// 密钥↔网关绑定：env AI_API_KEY 只发往 env AI_BASE_URL 的同源地址——
-// 覆盖层（会话可写）把 base_url 指到别站时 env 密钥不随行，否则
-// PUT 一次改址即把 Bearer 泄到陌生主机。override 层密钥是管理员
-// 显式入值的，绑定豁免。返回 null = 该址不可携带生效密钥
+// Key↔gateway origin binding: a stored key is only released to the origin
+// it was configured for. env AI_API_KEY binds to env AI_BASE_URL; an
+// override-layer key binds to the currently effective ai_base_url
+// (override > env fallback — re-resolved at call time, not frozen at the
+// moment the key was stored). A caller-supplied draft URL pointing
+// elsewhere (ai-test) gets no stored key of either source — otherwise a
+// single POST would exfiltrate the Bearer to an arbitrary host.
+// Returns null = this address may not carry the effective key.
 function aiKeyBoundTo(url) {
   if (!url) return null;
   const k = effective('ai_api_key');
@@ -140,8 +147,16 @@ function aiKeyBoundTo(url) {
     }
     return null;
   }
-  if (k.source === 'override') return k.value;
-  return sameOrigin((process.env.AI_BASE_URL || '').trim(), url) ? k.value : null;
+  // Binding anchor per key source: an override key travels only to the
+  // currently effective ai_base_url — it deliberately follows an admin
+  // repoint. A settings writer could therefore redirect that key, but
+  // write access already owns the whole config domain, so this residual
+  // surface is accepted. The env key stays pinned to env AI_BASE_URL
+  // precisely so an override repoint cannot drag it to a new host.
+  const anchor = k.source === 'override'
+    ? effectiveValue('ai_base_url')
+    : (process.env.AI_BASE_URL || '').trim();
+  return sameOrigin(anchor, url) ? k.value : null;
 }
 
 // AI 配置聚合（lib/ai.js 消费）：timeout 沿用 ai.js 原解析口径——
