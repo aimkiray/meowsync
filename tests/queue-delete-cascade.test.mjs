@@ -28,7 +28,7 @@ seed('../src/server/services/file-downloader.js', {
   downloadCover: hangUntilAbort
 });
 
-let app, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, downloadFs, locks;
+let app, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, downloadFs, locks, dm;
 before(() => {
   app = require('../src/server/routes/downloads.js');
   tasksRepo = require('../src/server/repositories/downloadTasks.js');
@@ -37,9 +37,14 @@ before(() => {
   playlistTracksRepo = require('../src/server/repositories/playlistTracks.js');
   downloadFs = require('../src/server/services/download-fs.js');
   locks = require('../src/server/lib/deletion-locks.js');
+  dm = require('../src/server/services/download-manager.js');
 });
 
 const del = (queueId) => app.request(`http://t/downloads/queues/${queueId}`, { method: 'DELETE' });
+
+// 级联的文件清扫是 detached 异步任务（DELETE 响应不再等 fs unlink）——
+// 断言盘上文件消失前必须先排空在途清扫，否则断言快过线程池一拍
+const drainCleanups = () => Promise.all([...dm.pendingFileCleanups]);
 
 // 种一张歌单 + 一个 completed 任务 + 盘上文件；queueId 缺省 = standalone 单曲任务
 function seedDownload(neteaseId, { queue = true } = {}) {
@@ -75,6 +80,7 @@ test('删除队列级联清空歌单足迹：任务/队列/歌单行与盘上文
   assert.equal(queuesRepo.findQueueById(queue.id), null);
   assert.equal(tasksRepo.listTasksByPlaylist(pl.id).length, 0);
   assert.equal(playlistsRepo.findPlaylistById(pl.id), null);
+  await drainCleanups();
   assert.equal(existsSync(audioPath), false);
   assert.equal(existsSync(soloPath), false);
   // 空目录骨架也收掉
