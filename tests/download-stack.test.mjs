@@ -262,6 +262,43 @@ test('deleteTask 端到端：行删后文件删、空骨架剪净', () => {
   assert.equal(readdirSync(fs.DOWNLOAD_BASE_DIR).includes(String(pl.id)), false);
 });
 
+test('deletePlaylistDownloadedFiles 端到端：deletedFiles 返回异步批删的真实计数', async () => {
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_batchdel', name: 'batchdel' });
+  const plDir = join(fs.DOWNLOAD_BASE_DIR, String(pl.id));
+  // 两条 completed 行各带 audio+lyrics——deletedFiles 是响应载荷，必须等到
+  // 异步批删真实 unlink 完才计数（detached 会返回 0/undefined），钉 4
+  const gone = [];
+  for (const sid of ['s-bd1', 's-bd2']) {
+    const t = downloadTasksRepo.createTask({
+      playlistId: pl.id, queueId: null, songId: sid, songName: 'n', artist: 'a',
+      status: 'completed'
+    });
+    const audio = join(plDir, 'audio', `${sid}.mp3`);
+    const lyrics = join(plDir, 'lyrics', `${sid}.lrc`);
+    mkdirSync(dirname(audio), { recursive: true });
+    mkdirSync(dirname(lyrics), { recursive: true });
+    writeFileSync(audio, 'a');
+    writeFileSync(lyrics, 'l');
+    downloadTasksRepo.updateTask(t.id, { audioPath: audio, lyricsPath: lyrics });
+    gone.push(audio, lyrics);
+  }
+  // 对照：pending 行的登记路径是待续跑任务的已完成分段——只收终态行，不删
+  const pending = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 's-bd3', songName: 'n', artist: 'a',
+    status: 'pending'
+  });
+  const pendingSeg = join(plDir, 'audio', 's-bd3.mp3');
+  writeFileSync(pendingSeg, 'seg');
+  downloadTasksRepo.updateTask(pending.id, { audioPath: pendingSeg });
+
+  const res = await dm.deletePlaylistDownloadedFiles(pl.id);
+  assert.equal(res.deletedSongs, 2);
+  assert.equal(res.deletedFiles, 4, '响应载荷的 deletedFiles 须是 await 后的真实 unlink 数');
+  for (const p of gone) assert.ok(!existsSync(p), `${p} 应已删`);
+  assert.ok(existsSync(pendingSeg), 'pending 行的登记分段不许删');
+  assert.ok(existsSync(plDir), 'audio/ 还有 pending 分段——歌单根骨架不剪');
+});
+
 test('getSongDownloadStatus：videoReady 跨歌单寻址且最新完成工件优先', async () => {
   const songId = 'yt_crossplvid';
   // 歌单 A 持视频档（老档），歌单 B 同曲只有音频——无 playlistId 的

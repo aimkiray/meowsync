@@ -1894,7 +1894,11 @@ async function deletePlaylistDownloadedFiles(playlistId) {
   const allPaths = [...new Set(
     downloadedTasks.flatMap(t => [t.audioPath, t.lyricsPath, t.coverPath, t.videoPath])
   )];
-  const deletedFiles = deleteFiles(allPaths);
+  // 批删走 fs.promises + 有界并发（deleteFilesAsync）：N 首歌 ~4N 次串行同步
+  // unlink 在挂载卷上每 op 一个 RTT，会把事件循环摁死在请求路径（级联清扫
+  // 同型同量级）。与级联的 detached 不同——deletedFiles 是本端点响应载荷，
+  // 必须 await 拿真实计数；目录剪枝仍同步（个位数 op）
+  const deletedFiles = await deleteFilesAsync(allPaths);
   pruneEmptyPlaylistDirs(resolvedPlaylistId); // 与 deleteTask 同口径剪空骨架
 
   return {
