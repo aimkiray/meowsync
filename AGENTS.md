@@ -23,3 +23,7 @@
 
 1. 父代理勘察定方案 → 2. 并行派发实现代理（按域）→ 3. 父代理集成验证+审 diff
 → 4. 分域提交 → 5. 并行派发只读复审 → 6. should-fix 派子代理收口 → 7. 汇报
+
+## 依赖备注
+
+- `package.json` overrides 把 `@vue/compiler-core` 的 `entities` 钉在 `6.0.1`（只收编译器这一支，不锁全树）：entities@7 在模块加载期调用 `atob`，在 vitest 0.34 + jsdom 环境下会无限递归；待 vitest 升级后此 pin 可摘除
