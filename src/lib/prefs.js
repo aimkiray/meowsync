@@ -54,6 +54,27 @@ export const clampLyricFs = (raw) => Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MI
 export const prefLyricFontSize = ref(clampLyricFs(safeGetLs(LS_KEYS.LYRIC_FONT_SIZE)))
 watch(prefLyricFontSize, v => { if (!lyricFsRemoteGate.isApplying()) safeSetLs(LS_KEYS.LYRIC_FONT_SIZE, String(v)) })
 
+// 故障动效豁免：'1' 显式强制开，其余/absent 跟随系统——读判据 === '1' 是
+// opt-in（与 VIDEO_MODE 的 !== '0' opt-out 方向相反）：默认不该越过 a11y
+// 系统闸，脏值保守回落跟随而非擅自开动效。本键不同步（设备级豁免不跨端
+// 复制），故无 remoteApplyGate/applyRemote 回填函数
+export const prefGlitchMotion = ref(safeGetLs(LS_KEYS.GLITCH_MOTION) === '1')
+// DOM 侧豁免闸：<html> 挂 data-glitch-motion=强制开，是 style.css 减动块里
+// 两条 .char-glitch 规则的 :not() 豁免锚。JS 判据与 CSS 豁免同生同灭——
+// 缺 JS 则 active=false 不产 .char-glitch 节点；缺 CSS 则替身生成却被
+// reduce 媒体块压回不可见。document 守卫守叶模块无 DOM 可 import 不变量
+const applyGlitchMotionAttr = (on) => {
+  if (typeof document === 'undefined') return
+  const root = document.documentElement
+  if (on) root.setAttribute('data-glitch-motion', '')
+  else root.removeAttribute('data-glitch-motion')
+}
+watch(prefGlitchMotion, v => {
+  safeSetLs(LS_KEYS.GLITCH_MOTION, v ? '1' : '0')
+  applyGlitchMotionAttr(v)
+})
+applyGlitchMotionAttr(prefGlitchMotion.value)
+
 // 多端同步远端落地（订阅在同步侧 sync.js initSync 注册）：LS 已被引擎
 // 写好，这里只灌内存 ref；watcher 落盘由各键自己的远端应用窗跳过
 export function applyRemoteVideoPref() {

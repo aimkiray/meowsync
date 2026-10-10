@@ -13,6 +13,11 @@ export const LS_KEYS = {
   VIDEO_MODE: 'meowsync-bili-video',
   LYRIC_FONT_SIZE: 'meowsync-lyric-fs',
   WATCH_TAB: 'meowsync-watch-tab',
+  // 故障动效减动豁免（glitch 字符腐蚀）：'1'=强制开，其余/absent=跟随系统。
+  // 设备级 a11y 豁免——显式不进 sync.js 的 SYNC_LS_KEYS：减动豁免绑的是
+  // 本机用户的感官需求，跨端 LWW 复制会把一台设备的豁免静默传染到所有登录端。
+  // 钉板：tests/ui/sync.spec.mjs「非白名单键」用例
+  GLITCH_MOTION: 'meowsync-glitch-motion',
   // 多端同步引擎（lib/sync.js）内部簿记：seq 域交付水位线 / doc 级
   // LWW 写戳表。只登记键名，不进同步白名单——簿记自身不产生同步内容
   SYNC_SINCE: 'meowsync-sync-since',

@@ -1,7 +1,7 @@
 <template>
   <!-- 字符腐蚀签名件（glitch-restoration 主题）：DOM 文本保持原文，
        替身符走 data-glitch 伪元素——屏幕阅读器读到的是干净文本。
-       仅 glitch 主题激活且非 reduced-motion 时 tick；其余状态静态透传。
+       仅 glitch 主题激活且（非 reduced-motion 或用户强制豁免）时 tick；其余状态静态透传。
        data-glitched 读共享计数（theme.js glitchGen）——错误事件触发
        burst 时全屏所有实例同代同闪，规范语义是共享叙事计数 -->
   <span class="glitch-text" :data-glitched="active && glitchGen ? String(glitchGen) : undefined">
@@ -21,6 +21,7 @@
 <script>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { currentTheme, glitchGen } from '../lib/theme.js'
+import { prefGlitchMotion } from '../lib/prefs.js'
 
 // mojibake 字形池：半角片假名/西里尔/希腊/shade 方块(▓░▒)/数字——形近真字，
 // 替换读起来是「腐蚀」而非乱码（取自 glitch-restoration-ui skill）。
@@ -61,7 +62,10 @@ export default {
     })
     const keyOf = (wi, ci) => `${wi}:${ci}` // 字符串 key——杜绝长词串位碰撞
     const corrupt = ref(new Map()) // keyOf(wi,ci) → 替身字形
-    const reduced = ref(false)
+    const mqMatches = ref(false) // 系统 reduce 闸镜像（matchMedia 挂载期接线）
+    // 用户「强制开启」无视系统 reduce——设备级豁免位（prefs.js 同步写
+    // <html>[data-glitch-motion]，CSS 侧豁免锚同生同灭）
+    const reduced = computed(() => mqMatches.value && !prefGlitchMotion.value)
 
     const active = computed(() =>
       currentTheme.value === 'glitch-restoration' && !reduced.value
@@ -118,10 +122,10 @@ export default {
     // 可见性——隐藏期间 interval 照跑，届时需补 onDeactivated 停表
 
     let mq
-    const onMq = e => { reduced.value = e.matches }
+    const onMq = e => { mqMatches.value = e.matches }
     onMounted(() => {
       mq = matchMedia('(prefers-reduced-motion: reduce)')
-      reduced.value = mq.matches
+      mqMatches.value = mq.matches
       mq.addEventListener('change', onMq)
     })
     onBeforeUnmount(() => { stop(); mq?.removeEventListener('change', onMq) })
