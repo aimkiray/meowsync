@@ -544,7 +544,7 @@ describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', 
     await player.playSong(bv)
     expect(musicApi.getSongUrl).not.toHaveBeenCalled()
     // cid 缺省留给服务端 view 自愈；分P 序号从 _pN 段还原
-    expect(musicApi.bilibiliStreamUrl).toHaveBeenCalledWith('BV1xx411c7mD', 'audio', undefined, 3)
+    expect(musicApi.bilibiliStreamUrl).toHaveBeenCalledWith('BV1xx411c7mD', 'audio', undefined, 3, '', 0)
     expect(howls[0].opts.src).toEqual(['https://x/bili'])
   })
 
@@ -553,7 +553,7 @@ describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', 
     const { player } = makePlayer()
     await player.playSong(qq)
     expect(musicApi.getSongUrl).not.toHaveBeenCalled()
-    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined)
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
     expect(howls[0].opts.src).toEqual(['https://x/qq'])
   })
 

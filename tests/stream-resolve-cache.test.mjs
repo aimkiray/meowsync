@@ -295,3 +295,201 @@ test('qq/stream：null hit（无权限）不缓存——下一发照常重解', 
     assert.equal(qqCalls, 2, '负结果不固化');
   } finally { qqImpl = saved; }
 });
+
+// ---------- 复审增补：retry 旁路三源补齐 / 键分离钉板 / LRU 读触 ----------
+
+test('createTtlCache：get 命中挪尾——读热键满容存活（FIFO→真 LRU）', () => {
+  const c = createTtlCache({ max: 3, ttlMs: 1000 });
+  c.set('a', 1); c.set('b', 2); c.set('c', 3);
+  assert.equal(c.get('a'), 1); // 读热 a——挪尾后淘汰序变 b → c → a
+  c.set('d', 4);               // 满容——只读不挪尾的 FIFO 会误杀热键 a
+  assert.equal(c.get('b'), undefined, 'b 应被满容淘汰');
+  assert.equal(c.get('a'), 1, 'a 读触挪尾存活');
+  assert.equal(c.get('c'), 3);
+  assert.equal(c.get('d'), 4);
+});
+
+test('createTtlCache：get 挪尾不刷 expiresAt——读触不延寿', () => {
+  const realNow = Date.now;
+  let t = 1000;
+  Date.now = () => t;
+  try {
+    const c = createTtlCache({ max: 4, ttlMs: 100 });
+    c.set('k', 'v');
+    t += 90;
+    assert.equal(c.get('k'), 'v', '临期命中挪尾');
+    t += 20; // 110ms 过线——读触若顺手刷 TTL 这里仍活
+    assert.equal(c.get('k'), undefined, '读触不延寿——死签名不能靠命中续命');
+  } finally { Date.now = realNow; }
+});
+
+test('bilibili/stream：retry=1 绕过读照常写——重试产物治愈常规键', async () => {
+  biliCalls.length = 0;
+  const bvid = 'BV1xx411c7mF';
+  const path = `/bilibili/stream?bvid=${bvid}&p=1`;
+  // 首发常规请求写入产物（cos 镜像组）
+  assert.equal((await biliApp.request(`http://t${path}`)).status, 302);
+  const after1 = biliCalls.length;
+  const saved = biliFetchImpl;
+  biliFetchImpl = async (p) => {
+    if (p.includes('/x/web-interface/view')) return VIEW;
+    if (p.includes('/x/player/playurl')) return {
+      dash: {
+        audio: [{
+          id: 30280, mimeType: 'audio/mp4', codecs: 'mp4a.40.5', bandwidth: 129024,
+          baseUrl: 'https://upos-sz-mirrorbkup.bilivideo.com/a.m4s',
+        }],
+        video: [],
+      },
+    };
+    throw new Error(`unexpected upstream ${p}`);
+  };
+  try {
+    // retry=1：绕过读（上游再扇出），照常写——产物换成 bkup 镜像组
+    assert.equal((await biliApp.request(`http://t${path}&retry=1`)).status, 302);
+    assert.ok(biliCalls.length > after1, 'retry=1 不吃缓存——照常重解');
+    const after2 = biliCalls.length;
+    const { status, urls } = await servedUrls(biliApp, path);
+    assert.equal(status, 302);
+    assert.ok(urls?.[0]?.includes('mirrorbkup'),
+      `应吃 retry 写回的产物，实际 ${urls?.[0]}`);
+    assert.equal(biliCalls.length, after2, '第三发吃正缓存不重解');
+  } finally { biliFetchImpl = saved; }
+});
+
+test('qq/stream：retry=1 绕过读照常写——重试产物治愈常规键', async () => {
+  qqCalls = 0;
+  const mid = 'qqDDDDD00004';
+  assert.equal((await qqApp.request(`http://t/qq/stream?mid=${mid}`)).status, 302);
+  assert.equal(qqCalls, 1);
+  const saved = qqImpl;
+  qqImpl = async () => ({ url: 'https://ws.stream.qqmusic.qq.com/y.m4a?vkey=k2&uin=0', tier: 'M800' });
+  try {
+    // retry=1：绕过读（vkey 再取一次），照常写——产物换成 vkey=k2
+    assert.equal((await qqApp.request(`http://t/qq/stream?mid=${mid}&retry=1`)).status, 302);
+    assert.equal(qqCalls, 2, 'retry=1 不吃缓存——照常重取 vkey');
+    const { status, urls } = await servedUrls(qqApp, `/qq/stream?mid=${mid}`);
+    assert.equal(status, 302);
+    assert.ok(urls?.[0]?.includes('vkey=k2'), `应吃 retry 写回的产物，实际 ${urls?.[0]}`);
+    assert.equal(qqCalls, 2, '第三发吃正缓存不重解');
+  } finally { qqImpl = saved; }
+});
+
+test('bilibili/stream：prefer=best 与常规档不共键——令牌门后终值分键', async () => {
+  biliCalls.length = 0;
+  const bvid = 'BV1xx411c7mG';
+  const path = `/bilibili/stream?bvid=${bvid}&p=1`;
+  assert.equal((await biliApp.request(`http://t${path}`)).status, 302);
+  const after1 = biliCalls.length;
+  assert.equal((await biliApp.request(`http://t${path}&prefer=best`)).status, 302);
+  assert.ok(biliCalls.length > after1, 'best 与常规档是不同字节实体——分键重解');
+  const after2 = biliCalls.length;
+  assert.equal((await biliApp.request(`http://t${path}&prefer=best`)).status, 302);
+  assert.equal(biliCalls.length, after2, '同 best 键复访命中');
+});
+
+test('qq/stream：mmid 段缺失与有值不共键', async () => {
+  qqCalls = 0;
+  const mid = 'qqEEEEE00005';
+  assert.equal((await qqApp.request(`http://t/qq/stream?mid=${mid}`)).status, 302);
+  assert.equal((await qqApp.request(`http://t/qq/stream?mid=${mid}&mmid=mm1234567890`)).status, 302);
+  assert.equal(qqCalls, 2, 'mediaMid 不同是不同选链扇出——分键');
+  assert.equal((await qqApp.request(`http://t/qq/stream?mid=${mid}&mmid=mm1234567890`)).status, 302);
+  assert.equal(qqCalls, 2, '同 mmid 键复访命中');
+});
+
+test('youtube/stream：kind=video 与 audio 不共键', async () => {
+  ytCalls = 0;
+  const v = 'CACHEEEEEE5';
+  assert.equal((await ytApp.request(`http://t/youtube/stream?v=${v}`)).status, 302);
+  assert.equal((await ytApp.request(`http://t/youtube/stream?v=${v}&kind=video`)).status, 302);
+  assert.equal(ytCalls, 2, '不同字节实体各自解析');
+  assert.equal((await ytApp.request(`http://t/youtube/stream?v=${v}&kind=video`)).status, 302);
+  assert.equal(ytCalls, 2, '同 video 键复访命中');
+});
+
+test('youtube/stream：prefer 归一——垃圾值与空值共键', async () => {
+  ytCalls = 0;
+  const v = 'CACHEFFFFF6';
+  assert.equal((await ytApp.request(`http://t/youtube/stream?v=${v}`)).status, 302);
+  assert.equal(ytCalls, 1);
+  assert.equal((await ytApp.request(`http://t/youtube/stream?v=${v}&prefer=garbage`)).status, 302);
+  assert.equal(ytCalls, 1, 'lib 只认 best——垃圾值归一为空，不白占键基数');
+});
+
+test('bilibili/stream：显式 cid 折叠共键——?cid=X 与 ?cid=X&p=9 命中同档', async () => {
+  biliCalls.length = 0;
+  const bvid = 'BV1xx411c7mH';
+  assert.equal((await biliApp.request(`http://t/bilibili/stream?bvid=${bvid}&cid=222`)).status, 302);
+  const after1 = biliCalls.length;
+  // cid 在位时播放内容只由 cid 决定——?p 是死参数，折叠键形下复访必须命中
+  assert.equal((await biliApp.request(`http://t/bilibili/stream?bvid=${bvid}&cid=222&p=9`)).status, 302);
+  assert.equal(biliCalls.length, after1, 'cid 优先于 p——同 cid 复访不重解');
+});
+
+test('缓存产物只读契约：freeze 的桩产物命中后被消费方触碰不炸', async () => {
+  // 深冻辅助——把上游桩对象整棵 freeze：下游任何原位变异（push/sort/
+  // 字段改写）在 freeze 面上 TypeError，只读消费应安然通过
+  const deepFreeze = (o) => {
+    if (o && typeof o === 'object' && !Object.isFrozen(o)) {
+      for (const v of Object.values(o)) deepFreeze(v);
+      Object.freeze(o);
+    }
+    return o;
+  };
+
+  // yt：freeze resolve 产物本体+streams 数组+流条目
+  ytCalls = 0;
+  const v = 'CACHEGGGGG7';
+  const savedYt = ytImpl;
+  ytImpl = async () => deepFreeze({
+    streams: [{
+      url: 'https://rr1---sn-abcde.googlevideo.com/videoplayback?itag=251&expire=999',
+      mimeType: 'audio/webm; codecs="opus"', br: 140000,
+    }],
+  });
+  try {
+    assert.equal((await ytApp.request(`http://t/youtube/stream?v=${v}`)).status, 302);
+    assert.equal((await ytApp.request(`http://t/youtube/stream?v=${v}`)).status, 302);
+    assert.equal(ytCalls, 1, 'freeze 产物缓存命中——下游只读不炸');
+  } finally { ytImpl = savedYt; }
+
+  // qq：freeze pickStreamUrl 命中对象
+  qqCalls = 0;
+  const mid = 'qqFFFFF00006';
+  const savedQq = qqImpl;
+  qqImpl = async () => deepFreeze({ url: 'https://ws.stream.qqmusic.qq.com/z.m4a?vkey=k3&uin=0', tier: 'M800' });
+  try {
+    assert.equal((await qqApp.request(`http://t/qq/stream?mid=${mid}`)).status, 302);
+    assert.equal((await qqApp.request(`http://t/qq/stream?mid=${mid}`)).status, 302);
+    assert.equal(qqCalls, 1, 'freeze hit 缓存命中——下游只读不炸');
+  } finally { qqImpl = savedQq; }
+
+  // bv：缓存产物的 cacheTier 直接引用上游 dash 条目——深冻上游响应，
+  // 命中链若对它做原位变异立刻炸
+  biliCalls.length = 0;
+  const bvid = 'BV1xx411c7mJ';
+  const savedBv = biliFetchImpl;
+  biliFetchImpl = async (p) => {
+    if (p.includes('/x/web-interface/view')) return deepFreeze({
+      bvid, cid: 111, pages: [{ cid: 111, page: 1 }, { cid: 222, page: 2 }],
+    });
+    if (p.includes('/x/player/playurl')) return deepFreeze({
+      dash: {
+        audio: [{
+          id: 30280, mimeType: 'audio/mp4', codecs: 'mp4a.40.5', bandwidth: 129024,
+          baseUrl: 'https://upos-sz-mirrorcos.bilivideo.com/a.m4s',
+        }],
+        video: [],
+      },
+    });
+    throw new Error(`unexpected upstream ${p}`);
+  };
+  try {
+    const path = `/bilibili/stream?bvid=${bvid}&p=1`;
+    assert.equal((await biliApp.request(`http://t${path}`)).status, 302);
+    const after1 = biliCalls.length;
+    assert.equal((await biliApp.request(`http://t${path}`)).status, 302);
+    assert.equal(biliCalls.length, after1, 'freeze 上游产物缓存命中——下游只读不炸');
+  } finally { biliFetchImpl = savedBv; }
+});

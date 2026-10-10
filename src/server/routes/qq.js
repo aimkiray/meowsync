@@ -46,10 +46,17 @@ const trackJson = (t) => ({
 // 有成品直接出，不进共享链。prefer 用令牌门之后的终值——best（VIP/
 // 无损档）与常规档产不同字节实体，绝不共键（bilibili 令牌门同口径）
 const qqResolveCache = createTtlCache({ max: 256, ttlMs: 10 * 60_000 });
-const pickStream = (mid, mediaMid, prefer, extraSignal) => {
+// skipCache（?retry=1）：绕过读、照常写（治愈写——重试取到的新 vkey 落回
+// 常规键治好可能已死的旧档，yt/bili 同口径）。lib 侧 pickStreamInflight
+// 合流键不含 retry 位：在途产物本来就是新解，合流无陈腐面——与 yt/bili
+// 的「retry 入 inflight 键」不矛盾，那里防的是链内二级缓存判定（gateCache）
+// 与键面同构，qq 链内没有可绕的内层判定
+const pickStream = (mid, mediaMid, prefer, extraSignal, skipCache) => {
   const cacheKey = `${mid}|${mediaMid}|${prefer || ''}`;
-  const hit = qqResolveCache.get(cacheKey);
-  if (hit) return hit;
+  if (!skipCache) {
+    const hit = qqResolveCache.get(cacheKey);
+    if (hit) return hit;
+  }
   return pickStreamUrl(mid, {
     mediaMid, signal: extraSignal,
     ladder: prefer === 'best' ? BEST_LADDER : PLAY_LADDER,
@@ -133,7 +140,10 @@ app.get('/qq/stream', async (c) => {
   const prefer = wantBest && (!hasQqCookie() || !token || c.get('user')
     || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
   try {
-    const hit = await pickStream(mid, mmid, prefer, c.req.raw.signal);
+    // ?retry=1 旁路正缓存读（治愈写照常在 pickStream 内落常规键）——
+    // 前端 _streamRetried 重试不再吃到同一份死档
+    const hit = await pickStream(mid, mmid, prefer, c.req.raw.signal,
+      c.req.query('retry') === '1');
     if (!hit) {
       return c.json({ code: 404, message: '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）' }, 404);
     }

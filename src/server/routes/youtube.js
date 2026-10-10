@@ -335,8 +335,11 @@ app.get('/youtube/stream', async (c) => {
     // 不再把第二次请求钉死在同一个错误判定上（缓存仍照常写入新判定）。
     // 经 ytStreamInflight 合流——共享链不带本请求 signal，断连由下方
     // await 后的 signal 自查兜底
+    // prefer 归一后再入键与传 resolve：lib 只认 'best'（pickStreamList 的
+    // 位标志），垃圾值与空值产同一批候选——原样入键只会白占键基数
+    const prefer = c.req.query('prefer') === 'best' ? 'best' : '';
     const { streams } = await resolveStreamsShared(videoId, {
-      kind, prefer: c.req.query('prefer'),
+      kind, prefer,
       skipCache: c.req.query('retry') === '1'
     });
 

@@ -484,11 +484,14 @@ export const musicApi = {
   // 流地址：服务端每次重解 playurl（CDN 签名会过期）再 302 进 /audio-proxy，
   // 前端拿到的总是新鲜地址——直接塞给 <audio>/<video>/Howler 即可。
   // kind=video 下匿名低热度稿可能被 durl 合流档反超（服务端内部比高）
-  bilibiliStreamUrl: (bvid, kind = 'audio', cid = null, page = 1, prefer = '') => {
+  bilibiliStreamUrl: (bvid, kind = 'audio', cid = null, page = 1, prefer = '', retry = 0) => {
     const params = new URLSearchParams({ bvid, kind })
     if (cid) params.set('cid', cid)
     if (page > 1) params.set('p', page)
     if (prefer) params.set('prefer', prefer)
+    // 重试标记：旁路服务端流解析正缓存读（服务端仍照常写回治愈旧档），
+    // 不是无意义地重放同一份死产物——与 youtubeStreamUrl 同口径
+    if (retry > 0) params.set('retry', '1')
     return `${API_BASE_URL}/bilibili/stream?${params}`
   },
 
@@ -563,10 +566,12 @@ export const musicApi = {
   // 流地址：服务端每次重取 vkey（签名 ~22h 过期且绑 IP）再 302 进
   // /audio-proxy。prefer=best 走 RS01/F000 无损档梯（需 QQ_COOKIE 登录态），
   // 播放默认匿名稳态档（M800/M500/C400 逐档回落）
-  qqStreamUrl: (mid, prefer = '', mmid = '') => {
+  qqStreamUrl: (mid, prefer = '', mmid = '', retry = 0) => {
     const params = new URLSearchParams({ mid })
     if (mmid) params.set('mmid', mmid)
     if (prefer) params.set('prefer', prefer)
+    // 重试标记：旁路服务端 vkey 正缓存读（照常写回治愈）——同 yt/bv 口径
+    if (retry > 0) params.set('retry', '1')
     return `${API_BASE_URL}/qq/stream?${params}`
   },
 

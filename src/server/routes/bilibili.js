@@ -261,23 +261,32 @@ app.get('/bilibili/favlist', async (c) => {
 // 预筛→分P 键段反解）收敛成纯数据产物：{usable, cacheTier, cacheMuxed,
 // pagePart, noAvc1}。并发同参请求（播放页音频+视频各一次、进度条重试
 // 叠放、多客户端同曲）此前各跑一遍最坏 5 跳扇出——按
-// (bvid, cid|p, kind, prefer) 键在途合流。共享链不吃调用方 signal
-// （首调用方断连不陪绑搭车者；每跳 biliFetch 的 15s 内部超时是自净
-// 上限），等待方 await 后自查自己的 signal 再消费结果
+// (bvid, c<cid>|p<page>, kind, prefer, retry) 键在途合流。共享链不吃
+// 调用方 signal（首调用方断连不陪绑搭车者；每跳 biliFetch 的 15s 内部
+// 超时是自净上限），等待方 await 后自查自己的 signal 再消费结果。
+// retry=1（skipCache）照 yt 口径入 inflight 键——本侧链内无二级缓存
+// 可绕（在途产物本就是新解，合流无陈腐面），分键保的是与 yt 同构的
+// 键面语义：重试永不搭常规请求的便车
 const streamSetInflight = new Map();
 // 解析产物短 TTL 正缓存：playurl 签名 ~2h 寿命，10min 复用把客户端冷跳/
 // 重复 open 的多跳扇出（view+playurl+cid 自愈+durl 探测最坏 5 跳）打成
 // 一次内存读。命中先于 inflight 检查：已有成品不搭车、不等在途链
 const biliResolveCache = createTtlCache({ max: 256, ttlMs: 10 * 60_000 });
-const resolveStreamSetShared = ({ bvid, cidParam, pageWanted, kind, prefer }) => {
-  const key = `${bvid}|${cidParam ? `c${cidParam}` : `p${pageWanted}`}|${kind}|${prefer || '-'}`;
-  // 正缓存键按请求参数原样排（cidParam/pageWanted 各占一段）——与
-  // inflight 的 c<cid>/p<page> 折叠段不同源：合流只管并发复用，缓存管
-  // 跨请求复用，cid 显式请求的产物本就按真实分P 算 pagePart，分键各自正确。
-  // prefer 用令牌门之后的终值——best 与常规档是不同字节实体，绝不共键
-  const cacheKey = `${bvid}|${cidParam}|${pageWanted}|${kind}|${prefer || ''}`;
-  const hit = biliResolveCache.get(cacheKey);
-  if (hit) return hit;
+const resolveStreamSetShared = ({ bvid, cidParam, pageWanted, kind, prefer, skipCache }) => {
+  // inflight 键与正缓存键共用同一折叠段：显式 cid 在位时播放内容只由 cid
+  // 决定（?p 是死参数）——?cid=X 与 ?cid=X&p=9 产物本就相同理应共键，
+  // 裸双段拆键会让复访永不命中。prefer 用令牌门之后的终值——best 与
+  // 常规档是不同字节实体，绝不共键
+  const fold = `${bvid}|${cidParam ? `c${cidParam}` : `p${pageWanted}`}|${kind}|${prefer || ''}`;
+  // retry 位进 inflight 键尾保键面语义（重试不搭常规链便车——yt 同构），
+  // 不进 cacheKey：写钉死常规段治愈写——重试解出的新产物落在常规键上
+  // 才能治好可能已死的旧档；写进 |1 段是死写（retry 永不读缓存）
+  const key = `${fold}|${skipCache ? 1 : 0}`;
+  const cacheKey = fold;
+  if (!skipCache) {
+    const hit = biliResolveCache.get(cacheKey);
+    if (hit) return hit;
+  }
   let gate = streamSetInflight.get(key);
   if (!gate) {
     gate = resolveStreamSet({ bvid, cidParam, pageWanted, kind, prefer })
@@ -416,7 +425,11 @@ app.get('/bilibili/stream', async (c) => {
     const token = process.env.DOWNLOAD_TOKEN || '';
     const prefer = wantBest && (!hasBiliCookie() || !token || c.get('user')
       || tokenMatches(c.req.header('x-download-token'), token)) ? 'best' : '';
-    const set = await resolveStreamSetShared({ bvid, cidParam, pageWanted, kind, prefer });
+    // skipCache（?retry=1）：前端 _streamRetried 重试旁路正缓存读——缓存的
+    // 死档（形态合法但上游 403/吊销）不再把重试钉在同一份产物上；写仍落
+    // 常规键治愈旧档（yt/qq 同口径）
+    const set = await resolveStreamSetShared({ bvid, cidParam, pageWanted, kind, prefer,
+      skipCache: c.req.query('retry') === '1' });
     // 搭车等待期间本客户端可能已断连——产物是共享的，写响应按自己的 signal 判
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     if (set.noAvc1) {

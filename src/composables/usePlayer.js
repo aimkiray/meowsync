@@ -860,17 +860,20 @@ export function usePlayer({
           ? { url: downloadsApi.songFileUrl(localPlId, song.id, 'audio') }
           : isFileTrackId(song.id)
             ? { url: fileArtifactUrl(song.id) }
+            // _streamRetried 重试统一带 retry=1 尾参：旁路服务端流解析正
+            // 缓存读（yt 还旁路 gateCache 闸控判定缓存——缓存的误判/死档不
+            // 再把重试钉在同一份产物上），强制重解拿新产物；服务端照常写回
+            // 常规键治愈旧档——三源同口径
             : song.bilibili || bvM
             ? { url: musicApi.bilibiliStreamUrl(song.bilibili?.bvid || bvM?.[1], 'audio',
-                song.bilibili?.cid, song.bilibili?.page || +bvM?.[2] || 1) }
-            // _streamRetried 重试带 retry=1：旁路服务端 gateCache 的闸控判定
-            // 缓存（30min 判定可能误判），强制重探拿新候选而非重放死链；首试
-            // 与 bv/qq 同口径不带参
+                song.bilibili?.cid, song.bilibili?.page || +bvM?.[2] || 1,
+                '', options._streamRetried ? 1 : 0) }
             : song.youtube || ytM
               ? { url: musicApi.youtubeStreamUrl(song.youtube?.videoId || ytM?.[1],
                   'audio', '', options._streamRetried ? 1 : 0) }
             : song.qq || qqM
-              ? { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '', song.qq?.mediaMid) }
+              ? { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '',
+                  song.qq?.mediaMid, options._streamRetried ? 1 : 0) }
               : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消

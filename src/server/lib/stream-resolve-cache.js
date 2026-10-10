@@ -17,6 +17,12 @@ function createTtlCache({ max = 256, ttlMs = 60000 } = {}) {
         map.delete(key);
         return undefined;
       }
+      // 命中挪尾成真 LRU——只读不挪会退化成 FIFO：热键照样按插入序被
+      // 满容淘汰（gateCache/stream-vault resolve 同款 touch）。不刷
+      // expiresAt——签名 URL 寿命钉死在写入时刻，读触延寿等于给死签名
+      // 续期，超期放出的产物代理回源才 403
+      map.delete(key);
+      map.set(key, e);
       return e.value;
     },
     set(key, value) {

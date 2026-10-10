@@ -1099,10 +1099,10 @@ export default {
     const mediaVideoFailed = ref(false)
     // 瞬时断流自愈：每 mediaVideoKey 至多两次延迟复位重试——复位重挂即
     // 真重试，真死链会再 error 回闩且不再排新计时（上界=2，防重试循环）。
-    // mediaStreamRetry 戳喂进 yt 支在线 URL 的 retry 参数（旁路服务端
-    // gateCache 闸控判定缓存——与 usePlayer 音频链 _streamRetried 同口径）；
-    // bv/file 链 URL 不带它，重挂本身即服务端重解。切歌（key 换）清零，
-    // 新源拿满重试预算
+    // mediaStreamRetry 戳喂进 bv/yt 支在线 URL 的 retry 参数（旁路服务端
+    // 流解析正缓存读，yt 还旁路 gateCache 闸控判定缓存——与 usePlayer 音频链
+    // _streamRetried 同口径）；file 链 URL 带 videoV 版本戳本来就换源。
+    // 切歌（key 换）清零，新源拿满重试预算
     const mediaStreamRetry = ref(0)
     let mediaRetryTimer = null
     let mediaRetriedKey = null
@@ -1238,9 +1238,11 @@ export default {
       // （收藏夹导入 hasVideo:true 同律），本地档仍由 videoReady 探测兜真值
       if (b?.bvid || bv) {
         if (!dlProbeSettled.value) return ''
+        // mediaStreamRetry 戳带 retry=1 旁路服务端流解析正缓存读——缓存的
+        // 死档不再钉住复位重挂（与 yt 支/usePlayer 音频链 _streamRetried 同口径）
         return downloadedVideoUrl.value
           || ((b?.bvid ? b.hasVideo : bv)
-            ? musicApi.bilibiliStreamUrl(b?.bvid || bv?.[1], 'video', b?.cid, b?.page || +bv?.[2] || 1)
+            ? musicApi.bilibiliStreamUrl(b?.bvid || bv?.[1], 'video', b?.cid, b?.page || +bv?.[2] || 1, '', mediaStreamRetry.value)
             : '')
       }
       const y = song?.youtube
@@ -1297,9 +1299,9 @@ export default {
       // 每 key 至多两次（mediaRetriedKey 戳+计数），死链回闩后不再自愈。
       // 预算口径按挂载计：另一 key 也报过 error 才重置单槽戳——
       // A→B(error)→A 给 A 新预算，A→B(干净)→A 不重置，防重试循环。
-      // 序数戳 mediaStreamRetry++：yt 支 URL 带 retry=1 旁路服务端闸控判定
-      // 缓存（SABR 探测无定论按未闸放行，mediaVideoUrl 的 yt 支消费它）；
-      // bv/file 支 URL 不带戳——重挂本身即服务端重解 playurl
+      // 序数戳 mediaStreamRetry++：bv/yt 支 URL 同带 retry=1 旁路服务端正
+      // 缓存读——bv 流解析正缓存死档、yt gateCache 闸控判定（SABR 探测无定论
+      // 按未闸放行）都不再钉住重挂；file 支 URL 带 videoV 版本戳本来就换源
       if (mediaRetriedKey !== mediaVideoKey.value) {
         mediaRetriedKey = mediaVideoKey.value
         mediaRetryN = 0
