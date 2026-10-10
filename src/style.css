@@ -433,8 +433,11 @@
   opacity: .92;
 }
 @media (prefers-reduced-motion: reduce) {
-  :root[data-theme="glitch-restoration"] .char-glitch { visibility: visible; }
-  :root[data-theme="glitch-restoration"] .char-glitch::after { content: none; }
+  /* 豁免锚：<html>[data-glitch-motion]=用户「强制开启」——仅豁免字符腐蚀；
+     下方 body/app-shell 过渡仍守系统闸。:not() 必须挂 :root 复合选择器
+     （属性在 <html>）——挂 .char-glitch 上恒匹配→豁免成死代码 */
+  :root[data-theme="glitch-restoration"]:not([data-glitch-motion]) .char-glitch { visibility: visible; }
+  :root[data-theme="glitch-restoration"]:not([data-glitch-motion]) .char-glitch::after { content: none; }
   /* 色温渐变收 reduce 门：glitch body 的 .8s 主题渐变 +
      全局 .app-shell 的 .4s 视图换画布（后者非主题限定，一并豁免） */
   :root[data-theme="glitch-restoration"] body,

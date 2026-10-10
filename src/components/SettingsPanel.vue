@@ -130,6 +130,13 @@
               @click="prefVideoOn = !prefVideoOn"
             >{{ prefVideoOn ? '开' : '关' }}</button>
           </div>
+          <div class="settings-row settings-row--flat" role="group" aria-label="故障动效">
+            <span class="settings-label">故障动效</span>
+            <span class="settings-themes">
+              <button class="pg-chip" :class="{ 'pg-chip--on': !prefGlitchMotion }" :aria-pressed="!prefGlitchMotion" @click="prefGlitchMotion = false">跟随系统</button>
+              <button class="pg-chip" :class="{ 'pg-chip--on': prefGlitchMotion }" :aria-pressed="prefGlitchMotion" @click="prefGlitchMotion = true">强制开启</button>
+            </span>
+          </div>
           <div class="settings-row settings-row--flat" role="group" aria-label="歌词字号">
             <span class="settings-label">歌词字号</span>
             <span class="settings-stepper">
@@ -152,7 +159,7 @@ import { apiErrorMessage } from '../api/http.js'
 import { toast } from '../lib/feedback.js'
 import { refreshServerCaps } from '../lib/caps.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
-import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs.js'
+import { prefVideoOn, prefLyricFontSize, prefGlitchMotion, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs.js'
 
 export default {
   name: 'SettingsPanel',
@@ -322,7 +329,7 @@ export default {
       srcText, secretPlaceholder, cookiePlaceholder, cookieState,
       saveAi, saveCookie, clearOverride, testAi,
       THEMES, currentTheme, setTheme,
-      prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX,
+      prefVideoOn, prefLyricFontSize, prefGlitchMotion, LYRIC_FS_MIN, LYRIC_FS_MAX,
     }
   }
 }

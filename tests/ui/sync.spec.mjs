@@ -149,6 +149,10 @@ describe('sync 引擎：推送', () => {
     writeJSON(LS_KEYS.THEME === 'x' ? 'x' : 'unrelated', 'y')
     initSync()
     writeJSON('still-unrelated', { b: 2 })
+    // 钉板：GLITCH_MOTION 是设备级减动豁免键——显式非白名单（storage.js
+    // 注释），裸写+脏标记不得进推送链；本键入白名单即红（私有 Set 唯一行为钉板）
+    localStorage.setItem(LS_KEYS.GLITCH_MOTION, '1')
+    notifyStorageWrite(LS_KEYS.GLITCH_MOTION)
     await vi.advanceTimersByTimeAsync(4000)
     expect(syncApi.push).not.toHaveBeenCalled()
   })
