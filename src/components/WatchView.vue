@@ -63,7 +63,7 @@
             ><span class="watch-menu-check" aria-hidden="true"><PixelIcon v-if="videoOn" name="check" :size="12" /></span>视频</button>
           </div>
           <button class="pg-menu-item" role="menuitem" title="全屏歌词模式" :disabled="!currentSong" @click="pickFullscreen">
-            <PixelIcon name="aspect" :size="14" /> 沉浸
+            <PixelIcon name="flask" :size="14" /> 沉浸
           </button>
           <!-- file_ 上传曲没有源站可分享链接（?song= 只收数字 id）——死链不亮 -->
           <button
