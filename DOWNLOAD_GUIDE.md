@@ -16,7 +16,7 @@
 
 ```bash
 # 启动后端 API 服务器（端口 3101）
-node netease-api-server.js
+node server.js
 
 # 启动前端开发服务器（端口 3100）
 npm run dev

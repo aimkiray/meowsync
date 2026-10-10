@@ -140,7 +140,7 @@ function main() {
   console.log('🚀 正在启动服务...\n');
 
   // 启动后端API服务器
-  startProcess(['netease-api-server.js'], 'API', 'cyan');
+  startProcess(['server.js'], 'API', 'cyan');
 
   // 启动前端开发服务器（直接调 vite 入口，不经 npm，便于信号直达）
   const viteBin = path.join(__dirname, 'node_modules', 'vite', 'bin', 'vite.js');

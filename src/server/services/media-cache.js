@@ -8,7 +8,7 @@
 //     coverage==size 才置 complete，命中门槛只看 complete
 //   - 并发写同 key 不同区间安全：fd 定位写天然不交叠，meta 读改写经
 //     per-key promise 链串行化
-//   - 本模块不碰任何对外网络；sweep 定时器由入口文件（netease-api-server.js）挂
+//   - 本模块不碰任何对外网络；sweep 定时器由入口文件（server.js）挂
 const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');

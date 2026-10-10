@@ -3,7 +3,7 @@
 // 用法：node scripts/reset-password.mjs <username> [newpassword]
 //   密码省略时交互读入（关 echo）——argv 里的明文会落 shell 历史、ps cmdline、
 //   CI 日志，脱困场景下恰恰最不可能清理；argv 兼容保留但打 stderr 警告。
-// DATA_DIR 经 .env/环境变量取（与 netease-api-server.js 同口径），默认 ./data。
+// DATA_DIR 经 .env/环境变量取（与 server.js 同口径），默认 ./data。
 // 顺便吊销该用户全部会话——密码重置的标准语义，防止旧会话继续存活。
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';

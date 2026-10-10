@@ -1,7 +1,7 @@
 // 部署子路径（BASE_PATH / VITE_BASE_PATH）单一解析点 + 外发 URL 拼前缀收口。
 //
 // 契约：服务端对外发的 URL（302 Location、JSON 里回给客户端取数的链）都必须
-// 经 withBasePath() 拼回前缀——entryFetch（netease-api-server.js）在 fetch 入口
+// 经 withBasePath() 拼回前缀——entryFetch（server.js）在 fetch 入口
 // 把 ${BASE_PATH}/x 剥成 /x 再交路由，app 内路由/服务一律按根相对路径工作。
 // 剥前缀（入口）与拼前缀（外发）吃同一个 env 源才不会漂移——曾各自私有
 // normalize 是两份实现互相漂的温床（lib/env.js 头注同款教训）。

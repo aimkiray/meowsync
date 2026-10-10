@@ -46,7 +46,7 @@ ENV NODE_ENV=production \
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=frontend /app/dist ./dist
-COPY package.json netease-api-server.js ./
+COPY package.json server.js ./
 COPY src/server ./src/server
 COPY src/shared ./src/shared
 
@@ -66,4 +66,4 @@ EXPOSE 3002
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:'+(process.env.API_PORT||process.env.PORT||3002)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["node", "netease-api-server.js"]
+CMD ["node", "server.js"]

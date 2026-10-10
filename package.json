@@ -2,7 +2,7 @@
   "name": "meowsync-player",
   "version": "1.0.0",
   "description": "复古网易云音乐播放器",
-  "main": "netease-api-server.js",
+  "main": "server.js",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
@@ -12,7 +12,7 @@
     "postbuild": "node scripts/compress-dist.mjs",
     "preview": "vite preview",
     "start": "node start.js",
-    "start:api": "node netease-api-server.js",
+    "start:api": "node server.js",
     "start:frontend": "vite",
     "build:prod": "vite build --mode production",
     "postbuild:prod": "node scripts/compress-dist.mjs",

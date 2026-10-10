@@ -8,7 +8,7 @@
 // 时序分层：updatedAt=客户端钟只当 LWW 判优；交付水位线走服务端单调
 // seq（pull 的 since 是 seq 域）——两侧时钟域不混用。
 // 门禁：两端点都在 authGate 后（登录态数据）；push 另加 csrfOriginOk 纵深
-// + protectedWrite 前缀集（netease-api-server.js）；两端点各有独立限流桶。
+// + protectedWrite 前缀集（server.js）；两端点各有独立限流桶。
 const { Hono } = require('hono');
 const { csrfOriginOk, sessionTokenFromCookie } = require('../lib/auth-gate');
 const { rateLimit } = require('../lib/rate-limit');

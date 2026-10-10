@@ -7,7 +7,7 @@
 MeowSync 采用**单进程全栈架构**：
 
 - 前端：Vue 3 SPA，Vite 构建为 `dist/`
-- 后端：Hono（`netease-api-server.js`），同端口提供 API、WebSocket 遥控（`/remote`）、音频代理（`/audio-proxy`）以及前端静态资源与 SPA fallback
+- 后端：Hono（`server.js`），同端口提供 API、WebSocket 遥控（`/remote`）、音频代理（`/audio-proxy`）以及前端静态资源与 SPA fallback
 - 生产环境只需运行 **一个 Node.js 进程**，对外暴露 **一个端口（默认 3101）**
 - 下载管理功能使用 SQLite（`better-sqlite3`）持久化队列/任务，音频/歌词/封面写入 `DATA_DIR`（默认 `./data`）下的 `downloads/`
 
@@ -78,7 +78,7 @@ npm start          # 同时启动 Vite(3100) 与后端(3101)
 
 ```bash
 npm run build:prod
-NODE_ENV=production node netease-api-server.js
+NODE_ENV=production node server.js
 # 访问 http://localhost:3101
 ```
 
@@ -89,7 +89,7 @@ NODE_ENV=production node netease-api-server.js
 module.exports = {
   apps: [{
     name: 'meowsync',
-    script: 'netease-api-server.js',
+    script: 'server.js',
     env: {
       NODE_ENV: 'production',
       API_PORT: 3101,

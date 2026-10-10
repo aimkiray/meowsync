@@ -140,7 +140,7 @@ http://<主机>:3101/?mode=controller        # 手机遥控端
 
 ```bash
 npm run build
-NODE_ENV=production node netease-api-server.js
+NODE_ENV=production node server.js
 ```
 
 前端产物 `dist/` 由同进程托管，应用与 API 均在 `API_PORT`（默认 **3101**）提供服务。
@@ -192,7 +192,7 @@ docker run -d -p 3101:3002 -v meowsync-data:/app/data meowsync
 meowsync/
 ├── index.html                  # SPA 入口（含首帧前主题恢复内联脚本）
 ├── start.js                    # 开发一键启动（前端 + API 双进程）
-├── netease-api-server.js       # 生产单进程入口（API + WS + 静态托管）
+├── server.js                   # 生产单进程入口（API + WS + 静态托管）
 ├── src/
 │   ├── api/                    # 前端 API 客户端封装
 │   ├── components/             # Vue 组件（TopNavigation/WatchView/SongList 等）
