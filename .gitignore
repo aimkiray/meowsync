@@ -1,6 +1,7 @@
 node_modules
 .env
 .claude/
+.impeccable/
 dist/
 data/
 *.sqlite
