@@ -95,14 +95,16 @@ test('bilibili/stream：cid 反解不出——c<cid> 键段，宁可不合并绝
 });
 
 test('bilibili/stream：显式 cid 过期自愈——内容回到 p<pageWanted>，键同口径', async () => {
-  deadCids.add('222');
+  // 正缓存按请求参数记忆上次成品——用上面用例没缓存过的 cid，
+  // 同键复用会吃到缓存命中而到不了自愈链
+  deadCids.add('444');
   try {
     assert.equal(
-      await mintedKey(biliApp, '/bilibili/stream?bvid=BV1xx411c7mD&p=1&cid=222'),
+      await mintedKey(biliApp, '/bilibili/stream?bvid=BV1xx411c7mD&p=1&cid=444'),
       'bv_BV1xx411c7mD_p1_a_mp4a.40.5_129024_i30280'
     );
   } finally {
-    deadCids.delete('222');
+    deadCids.delete('444');
   }
 });
 

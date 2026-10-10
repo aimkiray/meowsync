@@ -84,9 +84,11 @@ test('bilibili/stream：kind 不同不合流——音频/视频是不同字节�
   reset();
   let release;
   biliViewGate = new Promise(r => { release = r; });
+  // 正缓存是进程级 Map、跨用例存活——与上一条同 bvid 会吃到它的缓存命中，
+  // 测「不合流」必须换没缓存过的键（桩对任意 BVID_RE 合法 bvid 回同一 VIEW）
   const [r1, r2] = [
-    biliApp.request('http://t/bilibili/stream?bvid=BV1xx411c7mD&p=1'),
-    biliApp.request('http://t/bilibili/stream?bvid=BV1xx411c7mD&p=1&kind=video'),
+    biliApp.request('http://t/bilibili/stream?bvid=BV1xx411c7mE&p=1'),
+    biliApp.request('http://t/bilibili/stream?bvid=BV1xx411c7mE&p=1&kind=video'),
   ];
   await new Promise(r => setTimeout(r, 10));
   release();
@@ -143,7 +145,9 @@ test('错误透出路径剥离：youtube stream 502 不泄绝对路径', async (
   reset();
   ytImpl = async () => { throw new Error("ENOENT open '/data/meowsync/secret'"); };
   try {
-    const res = await ytApp.request('http://t/youtube/stream?v=ABCDEFGHIJK');
+    // 换未缓存过的 videoId——上面合流用例已把 ABCDEFGHIJK 写进正缓存，
+    // 同键会吃到 302 命中而到不了桩的错误面
+    const res = await ytApp.request('http://t/youtube/stream?v=ZZZZZZZZZZ1');
     assert.equal(res.status, 502);
     const body = await res.json();
     assert.ok(!body.message.includes('/data/meowsync'), `路径泄漏: ${body.message}`);
