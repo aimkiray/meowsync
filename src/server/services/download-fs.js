@@ -152,6 +152,35 @@ function deleteFiles(filePaths) {
   return deletedFiles;
 }
 
+// deleteFiles 的异步版：歌单级联的批量 unlink 挪到 detached 协程后改走
+// fs.promises——N 首歌 ~4N 次串行同步 unlink 在挂载卷上每个 op 一个 RTT，
+// 会把事件循环摁死在请求路径上。口径与同步版逐项一致：下载根外路径跳过、
+// 单文件失败吞掉不中断（ENOENT=本就不在，等同 existsSync 门；EPERM=在途
+// 流持有）、返回实删数。有界并发：一次性铺开全部 unlink 会打满 libuv
+// 线程池/fd
+const DELETE_FILE_CONCURRENCY = 8;
+async function deleteFilesAsync(filePaths) {
+  const candidates = filePaths.filter(Boolean).filter(isUnderDownloadDir);
+  let deletedFiles = 0;
+  let cursor = 0;
+  const worker = async () => {
+    // 读下标与 cursor++ 之间无 await——单线程下并发 worker 不会抢同一元素
+    while (cursor < candidates.length) {
+      const filePath = candidates[cursor++];
+      try {
+        await fs.promises.unlink(filePath);
+        deletedFiles += 1;
+      } catch {
+        // 单文件失败跳过不中断批量删除（同 deleteFiles 口径）
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(DELETE_FILE_CONCURRENCY, candidates.length) }, worker)
+  );
+  return deletedFiles;
+}
+
 // songId 来自上游元数据，直接拼路径（消歧后缀/covers 文件名）必须消毒——
 // '../' 之类可逃出 covers/ 甚至 DOWNLOAD_BASE_DIR；纯数字也截断防 ENAMETOOLONG
 const getSafeSongId = (task) => {
@@ -327,6 +356,7 @@ module.exports = {
   sanitizeErrorMessage,
   toPublicTask,
   deleteFiles,
+  deleteFilesAsync,
   getSafeSongId,
   pathPresent,
   taskFilesIntact,

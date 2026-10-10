@@ -3,6 +3,7 @@ const { fail } = require('../lib/http-error');
 const { tokenMatches } = require('../lib/token-eq');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const { rateLimit } = require('../lib/rate-limit');
+const { createTtlCache } = require('../lib/stream-resolve-cache');
 const streamVault = require('../lib/stream-vault');
 // 外发 Location 必须拼回部署前缀——entryFetch 剥前缀后路由按根路径工作，
 // 裸 /audio-proxy/t/… 在 BASE_PATH 子目录部署下回客户端即 404
@@ -38,12 +39,28 @@ const trackJson = (t) => ({
 
 // vkey 档梯挑选：与 file-downloader 共用 lib/qq.js 的 pickStreamUrl
 // （midurlinfo 逐档 purl 为空即无权限；sip 逐条过 normalizeOutboundUrl+
-// QQ_STREAM_HOST_OK——sip 可能回裸 IP 条目，后缀判定天然拒绝自动降级）
-const pickStream = (mid, mediaMid, prefer, extraSignal) =>
-  pickStreamUrl(mid, {
+// QQ_STREAM_HOST_OK——sip 可能回裸 IP 条目，后缀判定天然拒绝自动降级）。
+// 短 TTL 正缓存叠在 lib 的 pickStreamInflight 单飞之上：inflight 只挡
+// 并发重复，正缓存挡「下一次播放重取」——vkey ~22h 寿命，10min 复用把
+// 客户端冷跳/重复 open 的 vkey 回源打成一次内存读。命中先于 inflight：
+// 有成品直接出，不进共享链。prefer 用令牌门之后的终值——best（VIP/
+// 无损档）与常规档产不同字节实体，绝不共键（bilibili 令牌门同口径）
+const qqResolveCache = createTtlCache({ max: 256, ttlMs: 10 * 60_000 });
+const pickStream = (mid, mediaMid, prefer, extraSignal) => {
+  const cacheKey = `${mid}|${mediaMid}|${prefer || ''}`;
+  const hit = qqResolveCache.get(cacheKey);
+  if (hit) return hit;
+  return pickStreamUrl(mid, {
     mediaMid, signal: extraSignal,
     ladder: prefer === 'best' ? BEST_LADDER : PLAY_LADDER,
+  }).then((h) => {
+    // 只缓存非空 hit——null（无权限/地域限制）不写，负结果不固化；
+    // 等待方 abort 穿透（pickStreamUrl 抛 'aborted'）同样不写，
+    // 与共享链「产物归未断连的搭车者」同口径
+    if (h) qqResolveCache.set(cacheKey, h);
+    return h;
   });
+};
 
 // 凭据状态透出（MA provider status 同款只读事实）：前端据此调整 VIP 曲的
 // 可播性判定——配了 VIP cookie 的部署里 payPlay 曲实际可播。只回布尔

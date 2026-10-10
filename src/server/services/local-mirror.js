@@ -22,8 +22,8 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
     // 本地命名空间永远查不到墓碑；留着它作纵深无害。真正的复活防线是下方
     // 行 id 复查，其成立押在一条承重不变量上：
     //   deletePlaylistCascade 的行删 db.transaction() 提交 → finally 释放
-    //   deletingPlaylists 锁之间永不许插 await（当前 cleanupPlaylistFilesAndDirs
-    //   同步收尾）。一旦该段出现挂起点，本事务可在「旧行已删、锁未放」的
+    //   deletingPlaylists 锁之间永不许插 await（文件清扫已异步化为分离
+    //   Promise.resolve().then 调度——不占同步段，不变量仍成立）。一旦该段出现挂起点，本事务可在「旧行已删、锁未放」的
     //   窗口里以新本地 id 复活行且复查放行——本检查随之整体失效
     if (isNeteasePlaylistDeleting(localId)) throw httpError(409, '该歌单正在删除中');
     const row = playlistsRepo.upsertPlaylist({

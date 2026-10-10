@@ -15,7 +15,7 @@ const {
   DOWNLOAD_BASE_DIR, isExternalSongId, durationLooksTruncated,
   drainWithTimeout, DRAIN_TIMEOUT_MS, providerDataOf, retryDelayMs,
   isUnderDownloadDir, sanitizeErrorMessage, toPublicTask, deleteFiles,
-  taskFilesIntact, taskLockKeys, pathPresent,
+  deleteFilesAsync, taskFilesIntact, taskLockKeys, pathPresent,
 } = require('./download-fs');
 
 // 运行中队列的控制器集合：queueId -> { paused, cancelled, abort, done }
@@ -55,8 +55,10 @@ let shuttingDown = false;
 // 漏网条目也无害：taskId 是 AUTOINCREMENT 不复用，到期自然失效，另有 >1024 惰性清扫兜底
 const retryAfter = new Map();
 
-
-
+// deletePlaylistCascade 的 detached 文件清扫在途集：响应不再等 fs（见级联
+// 尾注），这些 promise 在响应后仍飞——透出给测试排空用（断言盘上文件消失
+// 前先 await 它），生产路径不读此集合
+const pendingFileCleanups = new Set();
 
 // 仅查本地、绝不触发远端导入：GET/DELETE 等读/删操作不允许产生写副作用
 function findExistingPlaylistId(playlistId) {
@@ -2027,6 +2029,16 @@ function cleanupPlaylistFilesAndDirs(playlistId, filePaths) {
   pruneEmptyPlaylistDirs(playlistId);
 }
 
+// 异步版——仅供 deletePlaylistCascade 的 detached 清扫调用：批删走
+// fs.promises + 有界并发（deleteFilesAsync），不再把 ~4N 次串行同步
+// unlink 摁在请求路径的事件循环上；目录剪枝仍同步（个位数 op）。
+// 其余调用方留在同步版：reapOrphanFiles 是同步函数，其 try/catch
+// 也兜不住异步 rejection
+async function cleanupPlaylistFilesAndDirsAsync(playlistId, filePaths) {
+  await deleteFilesAsync(filePaths);
+  pruneEmptyPlaylistDirs(playlistId);
+}
+
 // 歌单删除的完整级联：deletingPlaylists 锁必须持到 playlist 行级联删除之后才释放——
 // 否则锁释放到行删除之间的窗口里 downloadSingleSong/createDownloadQueue 可过检查
 // 建新行，行随即被级联删掉，在途流成孤儿。路由只调本函数，不单独调 deletePlaylist
@@ -2082,8 +2094,16 @@ async function deletePlaylistCascade(playlistId) {
       return playlistsRepo.deletePlaylist(playlistId);
     })();
     for (const id of taskIds) retryAfter.delete(id);
-    // 行删提交后再清文件与目录骨架（见 deletePlaylistFiles 尾注）
-    cleanupPlaylistFilesAndDirs(playlistId, allPendingFiles);
+    // 行删提交后清文件与目录骨架（见 deletePlaylistFiles 尾注）——detached
+    // 异步清扫：DELETE 响应不再等 ~4N 次串行同步 unlink（挂载卷上每 op 一个
+    // RTT，会摁死事件循环）。调度仍紧跟事务提交、本段不插 await——「行先删、
+    // 文件后删」与「提交→放锁无挂起点」（local-mirror 复查不变量）均保持；
+    // 清扫失败只记日志，孤儿文件由启动期 reapOrphanFiles 兜底
+    const cleanup = Promise.resolve()
+      .then(() => cleanupPlaylistFilesAndDirsAsync(playlistId, allPendingFiles))
+      .catch(e => { try { console.warn('[downloads] 歌单文件清扫失败:', e?.message || e) } catch {} })
+      .finally(() => pendingFileCleanups.delete(cleanup));
+    pendingFileCleanups.add(cleanup);
     return deleted;
   } finally {
     deletingPlaylists.delete(playlistId);
@@ -2525,7 +2545,10 @@ module.exports = {
   shutdownAll,
   isShuttingDown: () => shuttingDown,
   // 测试缝：剪目录的持锁闸只有 activePaths 可注入才能确定性地打——
-  // 生产路径照常走 deleteTask/deleteSongFiles/deletePlaylistDownloadedFiles
+  // 生产路径照常走 deleteTask/deleteSongFiles/deletePlaylistDownloadedFiles；
+  // pendingFileCleanups 同理：detached 清扫在响应后仍飞，断言盘上文件
+  // 消失前先排空它
   pruneEmptyPlaylistDirs,
-  activePaths
+  activePaths,
+  pendingFileCleanups
 };

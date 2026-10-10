@@ -9,6 +9,7 @@ const mediaCache = require('../services/media-cache');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const { tokenMatches } = require('../lib/token-eq');
+const { createTtlCache } = require('../lib/stream-resolve-cache');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
@@ -264,11 +265,30 @@ app.get('/bilibili/favlist', async (c) => {
 // （首调用方断连不陪绑搭车者；每跳 biliFetch 的 15s 内部超时是自净
 // 上限），等待方 await 后自查自己的 signal 再消费结果
 const streamSetInflight = new Map();
+// 解析产物短 TTL 正缓存：playurl 签名 ~2h 寿命，10min 复用把客户端冷跳/
+// 重复 open 的多跳扇出（view+playurl+cid 自愈+durl 探测最坏 5 跳）打成
+// 一次内存读。命中先于 inflight 检查：已有成品不搭车、不等在途链
+const biliResolveCache = createTtlCache({ max: 256, ttlMs: 10 * 60_000 });
 const resolveStreamSetShared = ({ bvid, cidParam, pageWanted, kind, prefer }) => {
   const key = `${bvid}|${cidParam ? `c${cidParam}` : `p${pageWanted}`}|${kind}|${prefer || '-'}`;
+  // 正缓存键按请求参数原样排（cidParam/pageWanted 各占一段）——与
+  // inflight 的 c<cid>/p<page> 折叠段不同源：合流只管并发复用，缓存管
+  // 跨请求复用，cid 显式请求的产物本就按真实分P 算 pagePart，分键各自正确。
+  // prefer 用令牌门之后的终值——best 与常规档是不同字节实体，绝不共键
+  const cacheKey = `${bvid}|${cidParam}|${pageWanted}|${kind}|${prefer || ''}`;
+  const hit = biliResolveCache.get(cacheKey);
+  if (hit) return hit;
   let gate = streamSetInflight.get(key);
   if (!gate) {
     gate = resolveStreamSet({ bvid, cidParam, pageWanted, kind, prefer })
+      .then((set) => {
+        // 只缓存可播成品：noAvc1/空 usable 的 404 形态不写——cid 自愈
+        // 与上游抖动留重试余地，一次抖动不该把「无流」钉满 TTL
+        if (set && !set.noAvc1 && set.usable?.length) {
+          biliResolveCache.set(cacheKey, set);
+        }
+        return set;
+      })
       .finally(() => streamSetInflight.delete(key));
     streamSetInflight.set(key, gate);
   }

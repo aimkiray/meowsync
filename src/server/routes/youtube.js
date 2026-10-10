@@ -8,6 +8,7 @@ const { stripAbsolutePaths } = require('../lib/sanitize');
 const { rateLimit } = require('../lib/rate-limit');
 const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const { resolveYoutubeStreams } = require('../services/youtube-resolve');
+const { createTtlCache } = require('../lib/stream-resolve-cache');
 const { extractYouTubeId, extractYouTubePlaylistId, YT_ID_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
@@ -34,11 +35,31 @@ const pickYouTubeId = extractYouTubeId;
 // retry=1（skipCache）必须入键：重试刻意旁路 gateCache 读——若与常规请求
 // 合流，重试会吃到它正要绕开的缓存误判
 const ytStreamInflight = new Map();
+// 解析产物短 TTL 正缓存：googlevideo 签名 ~6h 寿命，10min 复用让客户端
+// 上一曲/下一曲冷跳与 ExoPlayer 重复 open 吃到上次产物，不再各付一遍
+// player+SABR 探测扇出（预热请求打满缓存、真实播放命中才真降延迟）。
+// 命中先于 inflight 检查：已有成品不搭车、不等在途链
+const ytResolveCache = createTtlCache({ max: 256, ttlMs: 10 * 60_000 });
 const resolveStreamsShared = (videoId, { kind, prefer, skipCache }) => {
   const key = `${videoId}|${kind}|${prefer || ''}|${skipCache ? 1 : 0}`;
+  // 正缓存键把 retry 段钉 0：retry=1 绕过读、照常写（gateCache「缓存仍
+  // 照常写入新判定」同口径）——重试解出的新产物落在常规键上才能治好
+  // 可能已死的旧档；写进 |1 段是死写（retry 永不读缓存）
+  const cacheKey = `${videoId}|${kind}|${prefer || ''}|0`;
+  if (!skipCache) {
+    const hit = ytResolveCache.get(cacheKey);
+    if (hit) return hit;
+  }
   let gate = ytStreamInflight.get(key);
   if (!gate) {
     gate = resolveYoutubeStreams(videoId, { kind, prefer, skipCache })
+      .then((res) => {
+        // 只缓存可播成品——空 streams 在路由层就是 404，负结果不写
+        // （bilibili 侧 noAvc1/空 usable 同口径），reject 自然不写，
+        // 一次上游抖动不该把「无流」钉满 TTL
+        if (res?.streams?.length) ytResolveCache.set(cacheKey, res);
+        return res;
+      })
       .finally(() => ytStreamInflight.delete(key));
     ytStreamInflight.set(key, gate);
   }

@@ -109,7 +109,9 @@ test('qq：stream 502 消息剥离绝对路径——不泄服务器文件系统�
     throw new Error("ENOENT: no such file or directory, open '/data/meowsync/qq.cache'");
   };
   try {
-    const r = await json(await get(`/qq/stream?mid=${TRACK.mid}`));
+    // 换没缓存过的 mid——上面的 302 用例已把 TRACK.mid 写进正缓存，
+    // 同键会吃到缓存命中而到不了桩的错误面
+    const r = await json(await get('/qq/stream?mid=001ERRxxx23456'));
     assert.equal(r.status, 502);
     assert.ok(!r.body.message.includes('/data/meowsync'), `路径泄漏: ${r.body.message}`);
     assert.match(r.body.message, /<path>/);
@@ -118,7 +120,8 @@ test('qq：stream 502 消息剥离绝对路径——不泄服务器文件系统�
 
 test('qq：stream 无可用档 → 404', async () => {
   pickStreamHit = null;
-  const r = await get(`/qq/stream?mid=${TRACK.mid}`);
+  // 同上——null 不缓存，但也得用没被 302 用例写过的键
+  const r = await get('/qq/stream?mid=001NILxxx23456');
   assert.equal(r.status, 404);
   pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
 });
