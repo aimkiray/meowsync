@@ -27,7 +27,7 @@ cp .env.example .env
 | VITE_API_TIMEOUT | 10000 | API 请求超时（毫秒） |
 | VITE_API_PORT | 3101 | 开发模式下的后端端口 |
 | VITE_BASE_PATH | / | 应用基础路径（子目录部署；服务端剥离入站前缀，外发的 `/audio-proxy/t/<token>` vault 直链等同前缀下发；compose 自动透传——裸机部署需同时设运行时 `BASE_PATH`） |
-| VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌 |
+| VITE_REMOTE_TOKEN | - | 与后端 `REMOTE_TOKEN` 配对的遥控令牌——构建期烘进 bundle = 对全体页面访客可见。**启用登录的部署不要设**（浏览器遥控端由会话 cookie 鉴权兜底）；仅无登录 LAN 部署需要浏览器遥控权限时才显式配置 |
 | VITE_DOWNLOAD_TOKEN | - | 与后端 `DOWNLOAD_TOKEN` 配对的前端内嵌令牌——构建期烘进 bundle = 对全体页面访客可见。**启用登录的部署不要设**；仅无登录 LAN 部署需要浏览器写权限时才显式配置（compose build arg 不自动回落 `DOWNLOAD_TOKEN`） |
 | VITE_PORT | 3100 | 开发服务器端口 |
 | VITE_OPEN_BROWSER | true（Linux 下恒不打开） | 启动时自动打开浏览器，设为 `false` 关闭 |
@@ -45,6 +45,7 @@ cp .env.example .env
 | CORS_ORIGINS | localhost 开发源 | 逗号分隔的允许来源；同源请求始终放行 |
 | REMOTE_TOKEN | - | 可选：设置后 `/remote` WebSocket 须带令牌（子协议 `remote.<token>` 优先，`?token=` 兼容兜底）。公网/共享网络部署务必配置——未设且未启用登录时任何可达客户端都能接管主机端（启用登录后由会话 cookie 鉴权兜底） |
 | DOWNLOAD_TOKEN | - | 可选：非 GET 的 `/downloads`、`/playlists`、`/song-meta`、`/ai`、`/uploads`、`/settings` 请求须带 `x-download-token`（脚本/服务对服务旁路凭据）。**启用登录后浏览器不再需要它**——会话 cookie 等效放行；`VITE_DOWNLOAD_TOKEN` 仅保留给无登录老部署 |
+| SETUP_TOKEN | - | 可选：设置后 `POST /auth/setup` 须携带匹配的 `x-setup-token` 头——给空 `users` 表「先到先得」接管窗口上闸；未设置保持 LAN 友好默认（空表对任何可达者开放）。公网初始化建议配置，仍推荐先 loopback 建号再开放端口 |
 | TRUST_PROXY | - | 可信反代跳数：`1`/`true` = 单层反代；多级链（CDN→nginx→应用）填实际跳数。采信 `X-Forwarded-Proto/Host`，并按跳数从 XFF 右起取真实客户端 IP 做限流分桶 |
 | AI_BASE_URL | - | 可选：OpenAI 兼容接口根地址（如本地 CLIProxyAPI `http://127.0.0.1:8317/v1`）。与 `AI_API_KEY`、`AI_MODEL` 三项全配才启用 AI 辅助 |
 | AI_API_KEY | - | 可选：OpenAI 兼容接口的 Bearer key |
@@ -60,6 +61,8 @@ cp .env.example .env
 > `app_settings` 表存覆盖值，DB 优先于 env，留空回落 env，改动即刻生效无需重启。
 > 密钥类字段只回显存在性与尾标；env 的 `AI_API_KEY` 只发往 `AI_BASE_URL` 同源
 > 地址——改 Base URL 需同时填覆盖 Key。
+> 注意 `app_settings` 内 cookie/AI key 为**明文落库**——`DATA_DIR`（含 SQLite）
+> 与 `.env` 属同一敏感级，备份/挂载权限按同等机密管理。
 
 ## 部署步骤
 
@@ -220,14 +223,16 @@ server {
 - `users` 表为空 = **登录未启用**：全部放行（局域网自用兼容路径，与
   `DOWNLOAD_TOKEN`「未配即开放」同口径）
 - 首个管理员经 **`POST /auth/setup`** 创建（页面打开即自动进建号页）——
-  一次性，`users` 非空后该端点恒 409
+  一次性，`users` 非空后该端点恒 409（已配 `SETUP_TOKEN` 时缺/错令牌先 403）
 - 登录得 `HttpOnly` + `SameSite=Lax` cookie（HTTPS 下自动加 `Secure`）；
   服务端只存 token 的 SHA-256——数据库泄露不等于会话泄露
 - 会话 = 14 天空闲滑动过期 + 90 天绝对上限；过期行每小时清扫
 - 密码 KDF：Node ≥24.7 用内置 `crypto.argon2`（Argon2id），旧版回落 `scrypt`；
   PHC 自描述串，参数升档后登录时透明重哈希
-- 登录端点双键限流（per-IP 20 次/10min + per-account 8 次/10min），
-  用户不存在也跑完整 KDF——「用户不存在」与「密码错误」时序不可区分
+- 登录端点双键限流（per-IP 20 次/10min 记全量尝试 + 同 IP 同账号失败
+  8 次/10min 只记失败——成功不计且退一拍，账号锁只闸失败路径、正确密码
+  随时可验过），用户不存在也跑完整 KDF——「用户不存在」与「密码错误」
+  时序不可区分
 - 写请求带 `Origin` 头时强制同源/`CORS_ORIGINS` 白名单（cookie 会话的 CSRF 纵深）
 
 ### 公网部署步骤（推荐顺序）
@@ -251,6 +256,21 @@ docker rm -f meowsync && docker run -d --name meowsync -p 3101:3002 \
 
 compose 用户等价做法：先把 `ports` 改成 `"127.0.0.1:3101:3002"` 起服务
 完成建号，再改回公网映射 `docker compose up -d --force-recreate`。
+
+> 若 `.env` 配了 `SETUP_TOKEN`：建号请求须携带匹配的 `x-setup-token`
+> 头，而浏览器建号页没有注入通道（开了页面也只会得 403）——此时建号
+> **必须走 CLI**，与上面第二步的浏览器建号互斥（二选一；loopback
+> 绑定照做，只是建号动作换成 curl）：
+>
+> ```bash
+> curl -X POST http://127.0.0.1:3101/auth/setup \
+>   -H 'x-setup-token: <token>' \
+>   -H 'Content-Type: application/json' \
+>   -d '{"username":"admin","password":"..."}'
+> ```
+>
+> 建号成功后 `SETUP_TOKEN` 即可从 `.env` 摘除——`users` 非空后该端点
+> 恒 409，令牌只在空表窗口内有意义。
 
 建号完成后继续：
 

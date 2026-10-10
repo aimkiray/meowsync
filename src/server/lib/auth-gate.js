@@ -5,6 +5,7 @@
 const { isApiPath } = require('./api-path');
 const { corsOrigins, trustProxyEnabled } = require('./env');
 const { fail } = require('./http-error');
+const { rateLimit } = require('./rate-limit');
 const usersRepo = require('../repositories/users');
 const sessionsRepo = require('../repositories/sessions');
 const { tokenMatches } = require('./token-eq');
@@ -64,6 +65,13 @@ async function authGate(c, next) {
   // 发口令）。懒读 env 而非启动快照——与 env.js 「不拿陈值」承诺同口径
   if (tokenMatches(c.req.header('x-download-token'), process.env.DOWNLOAD_TOKEN)) {
     return next();
+  }
+  // 提供了旁路头但错配——per-IP 失败记账：旁路猜测此前零成本（对照 WS
+  // 未认证握手 20/min 收紧桶，30/min 对齐量级）。未带头不记账：无凭据
+  // 请求走下方正常 401 面，不吃这个桶
+  if (c.req.header('x-download-token') !== undefined
+    && !rateLimit(c, 'dl-token', 30)) {
+    return fail(c, 429, 'Too Many Requests');
   }
   // x-ms-auth 标记：前端拦截器只认本头踢门——上游透传的裸 401 不误触发登出
   c.header('X-Ms-Auth', 'required');

@@ -8,6 +8,7 @@ const { fail } = require('../lib/http-error');
 const { parseJsonBody } = require('../lib/validate');
 const { authCredentialsBody } = require('../../shared/contracts.js');
 const { rateLimit, rateLimitByKey, refundByKey } = require('../lib/rate-limit');
+const { tokenMatches } = require('../lib/token-eq');
 const { trustProxyEnabled, clientIp } = require('../lib/env');
 // CSRF 判定与 authGate 同一份实现——login/setup/logout 是公开路由，
 // authGate 的写请求 Origin 校验不会覆盖 /auth/*，必须各自显式调用；
@@ -69,6 +70,13 @@ app.post('/auth/setup', async (c) => {
   if (!rateLimit(c, 'auth-setup', 5)) {
     return fail(c, 429, '请求太频繁，稍后再试');
   }
+  // SETUP_TOKEN（opt-in）：设置后建号必须携带匹配的 x-setup-token 头——
+  // 给公网新实例的「空 users 表先到先得」窗口上闸；未设置保持 LAN 友好
+  // 默认。猜测本身吃上面 5/min 的 auth-setup IP 桶，不设独立计数
+  if (process.env.SETUP_TOKEN
+    && !tokenMatches(c.req.header('x-setup-token'), process.env.SETUP_TOKEN)) {
+    return fail(c, 403, '缺少或错误的 x-setup-token');
+  }
   const { data: body, error } = await parseJsonBody(c, authCredentialsBody, 8 * 1024);
   if (error) return error;
   if (usersRepo.countUsers() > 0) {
@@ -103,12 +111,15 @@ app.post('/auth/login', async (c) => {
   }
   const { data: body, error } = await parseJsonBody(c, authCredentialsBody, 8 * 1024);
   if (error) return error;
-  // 双键限流：per-IP 防扫多号，per-account 防换 IP 喷单号
-  if (!rateLimitByKey(`auth-login:ip:${clientIp(c)}`, 20, 10 * 60 * 1000)
-    || !rateLimitByKey(`auth-login:acct:${body.username.trim().toLowerCase()}`, 8, 10 * 60 * 1000)) {
+  // 双键限流：per-IP 前置记全量尝试（无差别喷洒的硬墙，20/10min）；
+  // acct+ip 复合键只做失败记账——见下方失败分支。复合键把账号锁限定在
+  // (ip, 账号) 对上：单 IP 喷错密只会自锁本 IP 对该号的失败预算，
+  // 「某账号全局永远无法新登录」的 DoS 不再成立
+  const ip = clientIp(c);
+  const acctKey = `auth-login:acct:${ip}:${body.username.trim().toLowerCase()}`;
+  if (!rateLimitByKey(`auth-login:ip:${ip}`, 20, 10 * 60 * 1000)) {
     return fail(c, 429, '尝试太频繁，请 10 分钟后再试');
   }
-  const acctKey = `auth-login:acct:${body.username.trim().toLowerCase()}`;
   const user = usersRepo.findAuthByUsername(body.username.trim());
   // a2id 哈希在无 crypto.argon2 的运行时（<24.7）根本无法验证——如实回 503
   // 给可操作的指引，而不是报「密码错误」让用户反复重试。
@@ -123,11 +134,16 @@ app.post('/auth/login', async (c) => {
   const stored = user ? user.passwordHash : await getDummyHash();
   const ok = await verifyPassword(body.password, stored);
   if (!user || !ok) {
-    console.warn(`[auth] 登录失败 user=${body.username} ip=${clientIp(c)}`);
-    return fail(c, 401, '用户名或密码错误');
+    console.warn(`[auth] 登录失败 user=${body.username} ip=${ip}`);
+    // 失败才消费 acct+ip 配额（rateLimitByKey 返回 false = 桶已满——
+    // 这次失败不再记账、改答 429）。正确密码永不进本分支：账号锁只闸
+    // 失败路径，对「能验过的人」恒透明——DoS 面被 verify 兜底吃掉
+    return rateLimitByKey(acctKey, 8, 10 * 60 * 1000)
+      ? fail(c, 401, '用户名或密码错误')
+      : fail(c, 429, '尝试太频繁，请 10 分钟后再试');
   }
-  // 成功的登录把账号桶这一拍退回——爆破防御针对的是失败尝试，
-  // 合法用户不该被 8 次/10min 自锁（cookie 反复失效场景）
+  // 成功登录不计账，并退一拍宽恕最近一次失败——爆破防御针对的是失败
+  // 尝试，长期自用设备的偶发错密不累积成自锁（cookie 反复失效场景）
   refundByKey(acctKey);
   // 参数落后基线的旧 hash 透明升档
   if (needsRehash(user.passwordHash)) {

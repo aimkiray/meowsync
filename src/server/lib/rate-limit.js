@@ -58,9 +58,10 @@ function rateLimitByKey(key, limit, windowMs = 60000) {
   return true;
 }
 
-// 成功回退一记：rateLimitByKey 先计后验（含成功请求）——登录成功把
-// 账号桶的最新一拍退回，防「反复失会话的合法用户 8 次登录即自锁」；
-// 只退 acct 桶，IP 桶保持全量计数（20/10min 对单人是宽上限）
+// 成功宽恕一拍：成功路径不记 acct 账（rateLimitByKey 只在失败分支调用）——
+// 登录成功后由本函数退一拍，宽恕账号桶里最近一次失败，防「反复失会话的
+// 合法用户 8 次登录即自锁」；只退 acct 桶，IP 桶保持全量计数（20/10min
+// 对单人是宽上限）
 function refundByKey(key) {
   const entry = keyBuckets.get(key);
   if (!entry || !entry.hits.length) return;

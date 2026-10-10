@@ -122,6 +122,37 @@ test('authGate：x-download-token 旁路——配对放行，错配/缺失 401',
   }
 });
 
+test('authGate：x-download-token 连错 30 次触发 429——旁路猜测的 per-IP 失败记账', async () => {
+  ensureAuthEnabled();
+  process.env.DOWNLOAD_TOKEN = 'dt-rate-probe';
+  // TRUST_PROXY + 独占 XFF：用独立 IP 起新桶，与其它用例的 'local' 桶隔离
+  process.env.TRUST_PROXY = '1';
+  try {
+    const bad = { 'x-download-token': 'dt-wrong', 'x-forwarded-for': '10.77.7.7' };
+    // 错配 1-30：记满 30/min 失败预算，仍回 401
+    for (let i = 0; i < 30; i++) {
+      const r = await api('/downloads/probe', { headers: bad });
+      assert.equal(r.status, 401, `failure #${i + 1}`);
+    }
+    // 第 31 次：桶满——猜测面收紧成 429
+    const over = await api('/downloads/probe', { headers: bad });
+    assert.equal(over.status, 429);
+    // 正确令牌不吃失败桶——同 IP 上依然放行
+    const ok = await api('/downloads/probe', {
+      headers: { 'x-download-token': 'dt-rate-probe', 'x-forwarded-for': '10.77.7.7' },
+    });
+    assert.equal(ok.status, 200);
+    // 未提供头不记账——同 IP 无头请求仍走正常 401 面而非 429
+    const none = await api('/downloads/probe', {
+      headers: { 'x-forwarded-for': '10.77.7.7' },
+    });
+    assert.equal(none.status, 401);
+  } finally {
+    delete process.env.DOWNLOAD_TOKEN;
+    delete process.env.TRUST_PROXY;
+  }
+});
+
 test('authGate：公开前缀与非 API GET 始终放行（登录页可渲染）', async () => {
   ensureAuthEnabled();
   assert.equal((await api('/auth/status')).status, 200);

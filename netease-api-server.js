@@ -54,6 +54,9 @@ app.use('*', cors({
   // origin 函数形态每请求执行——懒读 env 快照见上方注释
   origin: (origin) => (origin && corsOriginsFn().includes(origin)) ? origin : null,
   credentials: true,
+  // 跨源部署（VITE_API_BASE_URL 异源）时浏览器 JS 需读到 x-ms-auth 响应头——
+  // authGate 用它标记「未登录 401」踢门；不暴露则跨源读不到，会话过期信号丢失
+  exposeHeaders: ['X-Ms-Auth'],
 }));
 
 // 安全响应头（/audio-proxy 响应跳过——它的 ACAO:*/CSP:sandbox 已就位）
@@ -349,8 +352,31 @@ if (!process.env.REMOTE_TOKEN && !authReady && onAllInterfaces) {
 // （首启建号是设计行为），任何先到者都能接管管理员。启动时大声提示——
 // 公网部署的正确姿势是先本机完成 setup 再开放监听
 if (!authReady && onAllInterfaces) {
-  console.warn('[auth] 登录体系未初始化：对外监听时任何人都能执行 /auth/setup 抢建管理员。'
-    + '公网部署请先以 HOST=127.0.0.1 启动 → 本机浏览器完成 /auth/setup → 再改回开放端口重启');
+  console.warn('[auth] 登录体系未初始化：对外监听时未授权方可尝试 /auth/setup 抢建管理员。'
+    + (process.env.SETUP_TOKEN
+      ? 'SETUP_TOKEN 已配置——/auth/setup 须携带匹配的 x-setup-token 头，接管窗口已上闸'
+      : '公网部署请先以 HOST=127.0.0.1 启动 → 本机浏览器完成 /auth/setup → 再改回开放端口重启；'
+        + '或配置 SETUP_TOKEN 给初始化上闸（setup 须带匹配的 x-setup-token 头）'));
+}
+
+// 令牌卫生告警：REMOTE_TOKEN/DOWNLOAD_TOKEN 含 RFC7230 token 字符集外字符
+// 时，浏览器遥控端会把令牌拼进 ?token= WS URL 兜底（凭据落进反代
+// access_log/浏览器历史）——字符集判定与 src/composables/useRemoteControl.js
+// 的 tokenSafeForProto 同一份正则需要同步漂移；<20 字符视为强度不足
+// （SETUP_TOKEN 走请求头无字符集约束，只查强度）
+const TOKEN_SAFE_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+for (const name of ['REMOTE_TOKEN', 'DOWNLOAD_TOKEN']) {
+  const v = process.env[name];
+  if (v && !TOKEN_SAFE_RE.test(v)) {
+    console.warn(`[config] ${name} 含 RFC7230 字符集外字符——客户端将走 ?token= URL 兜底，`
+      + '凭据会落进反代 access_log；建议改用 [A-Za-z0-9._~-] 字符集');
+  }
+}
+for (const name of ['REMOTE_TOKEN', 'DOWNLOAD_TOKEN', 'SETUP_TOKEN']) {
+  const v = process.env[name];
+  if (v && v.length < 20) {
+    console.warn(`[config] ${name} 长度不足 20 字符——令牌强度过低，建议 openssl rand -hex 32 生成`);
+  }
 }
 
 // 优雅停机：SIGTERM/SIGINT 后停止接收新连接；空闲 keep-alive 立即回收，
