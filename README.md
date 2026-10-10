@@ -1,292 +1,253 @@
 # MeowSync
 
-一个基于Vue 3构建的像素风格网易云音乐播放器，经典复古设计。
+自托管多源音乐播放器：聚合网易云音乐、QQ 音乐、YouTube、Bilibili 的歌单与单曲，支持本地上传、外源歌词管线与 AI 辅助，像素复古 UI。单进程交付——一个 Node.js 进程同时托管前端页面、API 与 WebSocket 遥控。
 
 ## 功能特性
 
-- **歌单搜索与管理** - 搜索网易云音乐歌单，支持ID/URL直接添加
-- **URL参数加载** - 通过URL参数直接加载指定歌单，支持单个或多个歌单
-- **完整音乐播放** - 播放、暂停、上一首、下一首、随机播放
-- **实时歌词显示** - 同步显示歌词和翻译，支持滚动定位
-- **像素风主题** - 绿色荧光配色，像素风格
-- **响应式设计** - 桌面端和移动端适配
-- **音量与进度控制** - 可调节音量和播放进度
-- **大列表渐进渲染** - 千曲歌单/待播队列/任务列表按需扩窗，滚动加载
-- **VIP歌曲过滤** - 可选择隐藏VIP歌曲
-- **歌单收藏** - 本地保存喜爱的歌单
-- **下载管理** - 歌单/单曲下载到服务端（音频+歌词+封面），队列管理与进度跟踪，详见 [DOWNLOAD_GUIDE.md](DOWNLOAD_GUIDE.md)
+### 音乐源与导入
+- **四源聚合** - 网易云/QQ/YouTube/Bilibili 歌单、单曲、B 站收藏夹统一进歌单库
+- **统一搜索框** - 关键词、数字 ID、各源分享链接同一入口自动分流（见「导入与搜索」）
+- **URL 参数导入** - 分享链参数直接加载歌单/单曲/外部源内容（见「URL 参数」）
+- **本地上传** - 音频/视频/封面/歌词四类资产上传为 `file_` 本地曲
+
+### 播放与歌词
+- **watch 沉浸页** - YTM 式三 tab（待播/歌词/相关）；B 站/YouTube 曲支持音画切换
+- **歌词管线** - 词源自动匹配 + 外源兜底 + AI 核验/翻译 + 手动校准（见「歌词管线」）
+- **全屏歌词层** - 字号调节与 ±0.5s 时间校准（服务端持久化）
+- **历史与队列** - 播放历史、歌单历史；待播队列可存为歌单
+- **渐进渲染** - 千曲歌单/队列虚拟列表按需扩窗，滚动加载
+
+### 下载与缓存
+- **服务端下载** - 歌单/单曲下载音频+歌词+封面（可选视频），队列管控/收养/级联清理
+- **媒体缓存** - 音频字节缓存命中直喂盘文件；封面经 img-proxy 同源代取
+- **零源站外联** - `img-src`/`media-src` 收敛到 `'self'`，页面不直连源站取媒体
+
+### 多端与遥控
+- **多端同步** - localStorage 文档级 LWW 同步引擎（`/sync`），失败退避重试不阻塞本地
+- **WebSocket 遥控** - `?mode=host|controller` 用手机遥控播放（`REMOTE_TOKEN` 鉴权）
+- **登录系统** - `/auth/setup` 首启建号；空用户表 = 未启用登录，全放行
+
+### 界面主题
+- **双主题** - retro（默认）/ glitch（glitch-restoration），GlitchText 字符腐蚀特效
+- **像素复古风** - Fusion Pixel 像素字族自托管，响应式适配桌面与移动端
 
 ## 技术栈
 
-- **前端框架**: Vue 3 (Composition API)
-- **构建工具**: Vite
-- **样式框架**: TailwindCSS
-- **音频播放**: Howler.js
-- **HTTP客户端**: Axios
-- **后端API**: 自研 NetEase 客户端（weapi/eapi 加密通道）+ Hono（单进程托管前端静态资源）
-- **实时通信**: WebSocket（远程遥控 host/controller）
-- **字体**: Fusion Pixel
+- **前端**: Vue 3 (Composition API) + Vite + TailwindCSS + Howler.js
+- **服务端**: Hono 4 单进程（API + WebSocket `/remote` + 静态托管 + SPA fallback）+ better-sqlite3 + ws
+- **音乐数据**: 自研 NetEase 客户端（weapi/eapi 加密通道）+ Bilibili/YouTube/QQ 各源解析层
+- **共享层**: `src/shared/` 前后端同一份谓词/协议/契约（服务端 `require` ESM 复用）
+- **测试**: node:test（服务端/共享层）+ Vitest + @vue/test-utils（组件）+ `tsc --noEmit` 类型检查
 
 ## 快速开始
 
 ### 环境要求
-- Node.js `^20.19.0 || >=22.12.0`（与 package.json engines 一致；CJS 里 `require` ESM 共享模块需要此下限，推荐 Dockerfile 同款 24.x）
-- npm 包管理器
+- Node.js `^20.19.0 || >=22.12.0`（CJS 里 `require` ESM 共享模块需要此下限，推荐 24.x）
+- npm
 
-### 安装依赖
+### 安装与启动
 ```bash
+git clone https://github.com/aimkiray/meowsync.git
+cd meowsync
 npm install
+cp .env.example .env   # 可选：默认值即可开发
+npm start              # 一键同启前端(3100) + API(3101)
 ```
 
-### 配置环境变量
+也可分别启动：
 ```bash
-# 复制环境变量模板
-cp .env.example .env
-
-# 编辑 .env 文件，根据需要修改配置
-# 开发环境通常使用默认配置即可
+npm run dev        # 前端开发服务器（端口 3100）
+npm run start:api  # API 服务器（端口 3101）
 ```
 
-### 启动开发服务器
-
-#### 方式一：一键启动（推荐）
+### 构建与验证
 ```bash
-# 同时启动前端和后端服务
-npm start
-```
+npm run build      # 生产构建 → dist/
+npm run preview    # 预览构建产物
 
-#### 方式二：分别启动
-```bash
-# 启动前端开发服务器 (端口: 3100)
-npm run dev
-
-# 启动网易云音乐API服务器 (端口: 3101)
-npm run start:api
-```
-
-### 构建生产版本
-```bash
-# 生产构建（vite build 默认即 production mode）
-npm run build
-
-# 显式 --mode production，与上等价
-npm run build:prod
-```
-
-### 预览生产版本
-```bash
-npm run preview
-```
-
-## 项目结构
-
-```
-meowsync/
-├── src/
-│   ├── api/
-│   │   └── music.js              # 音乐API接口封装
-│   ├── components/               # Vue组件
-│   ├── composables/              # 组合式函数
-│   ├── lib/                      # 共享工具（含服务端补丁/初始化逻辑）
-│   ├── server/                   # 服务端路由与 WebSocket（routes/、ws/）
-│   ├── fonts/                    # Fusion Pixel字体文件
-│   ├── App.vue                   # 主应用组件
-│   ├── main.js                   # 应用入口
-│   └── style.css                 # 全局样式
-├── netease-api-server.js         # 单进程服务入口（API + WebSocket + 静态托管）
-├── start.js                      # 开发环境一键启动脚本
-├── Dockerfile                    # 三阶段构建（前端构建 → 生产依赖 → 运行时）
-├── docker-compose.yml            # Compose 编排（可选 with-nginx 反代 profile）
-├── nginx.conf                    # Nginx 反代完整主配置（含 WS Upgrade 头）
-├── package.json                  # 项目配置和依赖
-├── vite.config.js                # Vite构建配置
-├── tailwind.config.js            # TailwindCSS配置
-├── postcss.config.js             # PostCSS配置
-└── README.md                     # 项目说明文档
+npm test             # 服务端与共享层测试（node --test tests/）
+npm run test:ui      # 组件测试（vitest run）
+npm run typecheck    # 类型检查（tsc --noEmit）
 ```
 
 ## 使用说明
 
-### 基本操作
-1. **添加歌单**: 点击"发现歌单"标签，搜索或直接输入歌单ID/URL
-2. **浏览歌单**: 在"我的歌单"中查看已添加的歌单
-3. **播放音乐**: 点击歌单进入歌曲列表，点击歌曲开始播放
-4. **查看歌词**: 播放时右侧自动显示同步歌词
-5. **播放控制**: 使用底部播放器控制音乐播放
+### 导入与搜索
 
-### URL参数功能
-- **直接加载歌单**: 通过URL参数直接加载指定歌单，无需手动搜索添加
-- **单个歌单**: `http://localhost:3100/?playlist=歌单ID`
-- **多个歌单**: `http://localhost:3100/?playlists=歌单ID1,歌单ID2,歌单ID3`
-- **支持格式**: 支持逗号(`,`)或竖线(`|`)分隔多个歌单ID
-- **智能加载**: URL参数优先级高于默认设置，确保指定歌单正确加载
-- **防重复**: 自动过滤重复的歌单ID，避免重复添加
+顶栏搜索框统一接受以下形态，回车自动分流：
 
-#### URL参数示例
+| 输入形态 | 示例 | 去向 |
+|---|---|---|
+| 关键词 | 曲名/艺人/专辑（带输入建议） | 搜索结果页 |
+| 纯数字 id / `?id=`、`?playlist=` 链接 | `2829883282` | 网易云歌单 |
+| 含 song 的链接 | `music.163.com/song?id=N`、本站 `?song=N` | 网易云单曲 |
+| BV 号 / av 号 / B 站链接 | `BV1xx...`、`av170001`、`b23.tv/...` | B 站视频 |
+| B 站收藏夹 | `favlist?fid=N`、`medialist/play/mlN`、裸 `mlN` | 收藏夹整单导入 |
+| YouTube 视频链 | `watch?v=`、`youtu.be/`、`shorts/` | YouTube 视频 |
+| YouTube 歌单链 | `/playlist?list=`、`PL`/`UU`/`RD` 前缀裸 listId | YouTube 歌单 |
+| QQ 链接 | `y.qq.com`、`c.y.qq.com`、`qqmusic://`、`songmid=` | QQ 单曲 |
+| QQ 歌单链 | `/playlist/N`、`taoge.html?id=N`、`disstid` | QQ 歌单 |
+| `qq:` 前缀 | `qq:关键词`、`qq:<链接或 mid>` | QQ 曲库搜索 / 直解 |
+
+> 裸 11 位 YouTube videoId 与裸 QQ songmid 和搜索词天然歧义，按关键词处理——要直解请贴完整链接或用 `?yt=`/`?qq=` 分享形态。
+
+### URL 参数
+
+| 参数 | 取值 | 说明 |
+|---|---|---|
+| `playlist` / `playlists` | 数字 id；多个用 `,` 或 `|` 分隔 | 网易云歌单（自动去重） |
+| `song` | 数字 id | 网易云单曲 |
+| `bili`（伴生 `p`） | BV 号 / av 号 / 收藏夹 URL / `mlN`；`p=N` 选分 P | B 站视频或收藏夹 |
+| `yt` | 11 位 videoId 或歌单链接 | YouTube 视频/歌单 |
+| `qq` | songmid | QQ 单曲 |
+| `qqpl` | disstid 数字 | QQ 歌单 |
+| `mix` | `名字~id1,id2,...` | 本地歌单内容分享链 |
+| `view` / `pl` | `view` ∈ `home`/`songs`/`search`/`watch`/`downloads`/`settings` | 导航持久态（`pl`：songs 记歌单、downloads 记预选） |
+| `mode` / `token` | `mode=host`/`controller`（`remote` 为 controller 别名） | WebSocket 遥控与令牌兜底 |
+
+分享族参数（前 7 行）为一次性消费：进导入链后自动从地址栏摘除，刷新不重复劫持；`view`/`pl`/`mode` 持久保留在 URL，可分享/收藏。
+
 ```
-# 加载单个歌单
-http://localhost:3100/?playlist=2829883282
-
-# 加载多个歌单（逗号分隔）
-http://localhost:3100/?playlists=2829883282,6725496800,123456789
-
-# 加载多个歌单（竖线分隔）
-http://localhost:3100/?playlists=2829883282|6725496800|123456789
+http://localhost:3100/?playlists=2829883282,6725496800
+http://localhost:3100/?bili=BV1xx411c7mD&p=3
+http://localhost:3100/?view=downloads&pl=12345
+http://<主机>:3101/?mode=controller        # 手机遥控端
 ```
 
-### 高级功能
-- **渐进渲染**: 大歌单按需扩窗渲染，滚到底自动加载下一批
-- **搜索深挖**: 单曲搜索结果可点「加载更多歌曲」翻页（cloudsearch 服务端分页）
-- **VIP过滤**: 点击"隐藏VIP"按钮过滤付费歌曲
-- **随机播放**: 启用随机模式体验不同的音乐
-- **歌单管理**: 长按歌单可以删除不需要的歌单
+### 歌词管线
+
+- 曲库曲自动匹配词源并持久绑定；外部曲（`yt_`/`bv_`/`qq_`）先尝试回绑曲库词源
+- 无词源时走外源级联：`yt_` 先 YouTube Music 本家，再 LRCLIB，最后酷狗兜底
+- AI 辅助（可选）：整池消歧 + 词文归属核验拦截同题异曲，另提供歌词翻译——OpenAI 兼容接口，`AI_BASE_URL`/`AI_API_KEY`/`AI_MODEL` 三项全配才启用
+- 错配纠正走「重配」：否决名单持久入库，被否条目跨会话不再复活
+- 歌词工具条支持手动重新获取；纯文本词可按已下载音频 AI 打轴生成滚动词
+- 时间校准 ±0.5s 按词源入库持久化
+
+### 下载与上传
+
+- 歌单/单曲可下载到服务端：音频 + 歌词 + 封面，B 站/YouTube 曲可选视频
+- 下载队列支持并发管控、暂停/恢复、失败重试与进度跟踪；任务 SQLite 持久化，重启自动收养
+- VIP/灰曲走自研解锁层（pyncmd/YouTube 源）兜底，仍可能失败
+- 删除歌单级联清理任务与文件；孤儿文件自动收割
+- 「上传」把本地音频/视频/封面/歌词登记为 `file_` 曲，归入内置上传歌单
+- 细节见 [DOWNLOAD_GUIDE.md](DOWNLOAD_GUIDE.md)
 
 ## 部署指南
 
 ### 本地部署
 
-#### 开发环境部署
+开发环境见「快速开始」。生产单进程：
+
 ```bash
-# 克隆项目
-git clone https://github.com/aimkiray/meowsync.git
-cd meowsync
-
-# 安装依赖
-npm install
-
-# 启动开发服务器
-npm start
-```
-
-#### 生产环境部署（单进程）
-```bash
-# 构建生产版本
-npm run build:prod
-
-# 启动后端（自动托管 dist 静态资源 + SPA fallback）
+npm run build
 NODE_ENV=production node netease-api-server.js
 ```
-应用与 API 均在 **3101** 端口提供访问（`API_PORT` 可覆盖）。
 
-### Docker部署
+前端产物 `dist/` 由同进程托管，应用与 API 均在 `API_PORT`（默认 **3101**）提供服务。
 
-#### 使用Docker Compose（推荐）
+### Docker 部署
+
 ```bash
-# 仓库已含 docker-compose.yml，直接构建并启动
+# Compose（推荐）：对外默认 3101
 docker compose up -d --build
 
 # 可选：附带 nginx 反代（80 端口，使用仓库内 nginx.conf）
 docker compose --profile with-nginx up -d --build
-```
 
-#### 手动Docker部署
-```bash
-# 构建镜像
+# 手动 docker run
 docker build -t meowsync .
-
-# 运行容器（单端口，前端+API+WebSocket 同进程）
-# -v 挂载数据目录，持久化 SQLite 数据库与下载文件。
-# 容器以 uid 1001 运行，推荐命名卷；bind mount 需先 chown -R 1001:1001 ./data
 docker run -d -p 3101:3002 -v meowsync-data:/app/data meowsync
 ```
 
+> **容器端口是 3002 不是 3101**：镜像内置 `API_PORT=3002` + `EXPOSE 3002`，`-p` 右段必须写 3002；用 `-e API_PORT=` 覆盖端口时映射右段须同步改。容器以 uid 1001 运行，推荐命名卷；bind mount 需先 `chown -R 1001:1001 ./data`。
+
 > **公网暴露前必读**：`/auth/setup` 在空用户表时对任何可达者开放——
-> 直接公网发布会被先到者建号接管。先绑 `127.0.0.1:3101`（或内网）完成
+> 直接公网发布会被先到者建号接管。先绑 `127.0.0.1`（或内网）完成
 > 管理员初始化再放开端口；完整流程与 TLS/反代配置见
 > `DEPLOYMENT.md`「公网部署与登录系统」。局域网自用不受影响
 > （空表 = 未启用登录，全放行）。
 
 > **注意**：本项目依赖服务端代理播放与 WebSocket 遥控，需 Node.js 运行时，不适用于纯静态托管平台（Vercel/Netlify）。请使用 Docker 或 VPS 部署。
 
-### 环境变量配置
+### 环境变量速览
 
-#### 前端环境变量（构建期）
-```bash
-# VITE_API_BASE_URL=                      # 可选：默认留空自动推断（dev=主机:3101，prod=同源）
-VITE_API_TIMEOUT=10000
-VITE_BASE_PATH=/
-VITE_REMOTE_TOKEN=                        # 与后端 REMOTE_TOKEN 配对（可选）
+`.env.example` 是唯一权威全集（含 AI/各源 Cookie/出站代理/数据目录等可选项），此处只列关键变量：
+
+| 变量 | 语境 | 说明 |
+|---|---|---|
+| `API_PORT` | 运行期 | 服务端口（开发默认 3101，容器内 3002）；`PORT` 仅在其未设时兜底 |
+| `HOST` | 运行期 | 绑定地址；`0.0.0.0` 全接口，`127.0.0.1` 仅本机 |
+| `CORS_ORIGINS` | 运行期 | 跨域 + WebSocket Origin 白名单，逗号分隔 |
+| `REMOTE_TOKEN` | 运行期 | `/remote` 遥控令牌；公网部署务必配置（前端构建侧配 `VITE_REMOTE_TOKEN`） |
+| `DOWNLOAD_TOKEN` | 运行期 | 下载/歌单/AI 等写接口令牌；启用登录后退化为服务间旁路 |
+| `TRUST_PROXY` | 运行期 | 反代后设 `1`（或实际跳数），采信 `X-Forwarded-*` |
+| `VITE_API_BASE_URL` | 构建期 | API 地址显式覆盖；默认留空自动推断，仅分离部署时需要 |
+
+> 不要把 `NODE_ENV` 写进 `.env`——Vite 构建期会读它，`development`
+> 值会把生产 bundle 烘成开发态；服务进程请用启动命令/PM2/Docker 注入。
+
+## 项目结构
+
+```
+meowsync/
+├── index.html                  # SPA 入口（含首帧前主题恢复内联脚本）
+├── start.js                    # 开发一键启动（前端 + API 双进程）
+├── netease-api-server.js       # 生产单进程入口（API + WS + 静态托管）
+├── src/
+│   ├── api/                    # 前端 API 客户端封装
+│   ├── components/             # Vue 组件（TopNavigation/WatchView/SongList 等）
+│   ├── composables/            # 组合式函数（usePlayer/useRemoteControl 等）
+│   ├── lib/                    # 前端工具（share-params/navUrl/sync/theme 等）
+│   ├── shared/                 # 前后端共享谓词/协议/契约
+│   ├── server/
+│   │   ├── routes/             # Hono 路由 17 枚（music/qq/youtube/bilibili/downloads 等）
+│   │   ├── services/           # 业务服务（netease/unlock/lyric-*/download-*/media-cache）
+│   │   ├── repositories/       # SQLite 仓储层
+│   │   ├── lib/                # 服务端工具（auth-gate/net-guard/stream-vault 等）
+│   │   ├── ws/                 # 遥控 WebSocket（remote.js）
+│   │   └── db/                 # better-sqlite3 连接
+│   └── fonts/                  # 自托管字族（Fusion Pixel 等 woff2）
+├── scripts/                    # compress-dist / fetch-fonts / reset-password
+├── tests/                      # node:test 服务端与共享层测试
+├── public/ · dist/             # 静态资产与构建产物
+├── Dockerfile                  # 三阶段构建（EXPOSE 3002，uid 1001）
+├── docker-compose.yml          # Compose 编排（可选 with-nginx profile）
+├── nginx.conf                  # Nginx 反代主配置（含 WS Upgrade 头）
+├── vite/tailwind/postcss/tsconfig/vitest 配置文件
+├── .env.example                # 环境变量权威全集
+└── DEPLOYMENT.md · DOWNLOAD_GUIDE.md · PRODUCT.md
 ```
 
-#### 后端环境变量（运行期）
-```bash
-API_PORT=3101
-# PORT=                                   # 备用端口变量（仅 API_PORT 未设时生效，PaaS 常用）
-HOST=0.0.0.0
-CORS_ORIGINS=http://localhost:3101        # 逗号分隔多个来源；留空 = 同源
-REMOTE_TOKEN=                             # 可选：/remote WebSocket 访问令牌
-TRUST_PROXY=                              # 可选：设为 1 时采信 X-Forwarded-* 头
-# DATA_DIR=                               # 可选：SQLite/下载文件根目录（默认 ./data，容器内 /app/data）
-# DOWNLOAD_DIR=                           # 可选：下载文件目录（默认 <DATA_DIR>/downloads）
-```
+## 文档
 
-> 注意：不要把 `NODE_ENV` 写进 `.env`——Vite 构建期会读它，`development`
-> 值会把生产 bundle 烘成开发态；服务进程请用启动命令/PM2/Docker 注入
->（`npm run build` 已对 `import.meta.env.PROD`/`DEV` 做了 build 态钉死兜底）。
+- [DEPLOYMENT.md](DEPLOYMENT.md) - 完整部署指南（环境变量全集、公网部署与登录系统、Nginx/TLS、故障排除）
+- [DOWNLOAD_GUIDE.md](DOWNLOAD_GUIDE.md) - 下载功能详解（队列机制、解锁层、文件布局）
+- [PRODUCT.md](PRODUCT.md) - 产品定位与设计文档
 
-## 配置说明
+## 注意事项与已知限制
 
-### API配置
-项目内置自研 NetEase 客户端提供音乐数据（网易云 weapi/eapi 双通道，替代原 NeteaseCloudMusicApi 依赖），支持：
-- 歌单搜索和详情获取
-- 歌曲URL获取和播放
-- 歌词获取和显示
-- 多种音质支持
-
-### 样式自定义
-可以在以下文件中自定义样式：
-- `src/style.css` - 像素主题样式
-- `tailwind.config.js` - TailwindCSS配置
-- CSS变量定义在`:root`中，可轻松修改配色方案
-
-## 开发指南
-
-### 核心组件
-- **播放器核心**: 基于Howler.js的音频播放管理
-- **歌词同步**: 实时歌词解析和滚动定位
-- **状态管理**: Vue 3 Composition API响应式状态
-- **本地存储**: 歌单收藏和播放历史本地保存
-
-## 注意事项
-
-- 本项目仅供学习和个人使用
-- 音乐资源来自网易云音乐，请遵守相关版权规定
-- 部分歌曲可能因版权限制无法播放
-- 建议在良好的网络环境下使用以获得最佳体验
-
-## 详细部署文档
-
-如需了解更详细的部署配置信息，请查看 [DEPLOYMENT.md](./DEPLOYMENT.md) 文档，其中包含：
-- 完整的环境变量配置说明
-- 多种部署方式的详细步骤
-- Nginx配置示例
-- Docker部署配置
-- 故障排除指南
-- 性能优化建议
-
-## 已知问题
-
-- 某些VIP歌曲可能无法正常播放
+- 本项目仅供学习与个人使用；音乐资源来自网易云音乐/QQ 音乐/YouTube/Bilibili，请遵守各源站版权规定
+- VIP/灰曲虽有自研解锁层兜底，解锁后仍可能失败；部分歌曲因版权限制无法播放
+- 外源歌词（LRCLIB/酷狗/YouTube Music）可用性随上游波动
 - 网络不稳定时可能出现加载延迟
-- 移动端浏览器可能存在音频播放限制
+- 移动端浏览器存在音频自动播放限制，首次播放可能需手动触发
 
 ## 开源协议
 
-MIT License
+[MIT License](LICENSE)
 
 ## 贡献指南
 
-欢迎提交Issue和Pull Request！
+欢迎提交 Issue 和 Pull Request！
 
-### 贡献方式
 1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
+2. 创建特性分支（`git checkout -b feature/AmazingFeature`）
+3. 提交更改（`git commit -m 'Add some AmazingFeature'`）
+4. 推送到分支（`git push origin feature/AmazingFeature`）
 5. 开启 Pull Request
+
+提交前请跑通 `npm test`、`npm run test:ui` 与 `npm run typecheck`。
 
 ## 联系方式
 
-如有问题或建议，欢迎通过以下方式联系：
 - 提交 [GitHub Issue](https://github.com/aimkiray/meowsync/issues)
-- 发送邮件至项目维护者
