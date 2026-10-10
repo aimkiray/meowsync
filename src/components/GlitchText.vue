@@ -22,7 +22,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { currentTheme, glitchGen } from '../lib/theme.js'
 
-// mojibake 字形池：半角片假名/西里尔/希腊/制表符/数字——形近真字，
+// mojibake 字形池：半角片假名/西里尔/希腊/shade 方块(▓░▒)/数字——形近真字，
 // 替换读起来是「腐蚀」而非乱码（取自 glitch-restoration-ui skill）。
 // 注意：多数替身符在 Fusion Pixel 的 unicode-range 外，会回落
 // Noto Sans SC 非像素字形——质感更杂，对「损坏」语义反而是加分
@@ -35,7 +35,9 @@ export default {
     // 按「断行单元」分词：字素簇粒度（Intl.Segmenter——ZWJ emoji/肤色修饰/
     // 组合符保持整簇，腐蚀不落半字符）；CJK 系（汉字/假名/谚文/注音/增补
     // 平面）逐字独立 token 可字间断行，长东亚标题不被 nowrap 顶住溢出；
-    // 空白符（含全角空格）不入腐蚀池，记为前 token 的 gap 原样渲染
+    // 空白符（含全角空格）不入腐蚀池：累加进前 token 的 gap 原样渲染；
+    // 行首无前 token 时落成 chars 为空的 gap-only token——渲染空
+    // .glitch-word + gap 文本保空白，空 chars 不产生 corruptible 键
     const CJK = /[\u2E80-\u2FDF\u3005-\u303B\u3040-\u30FF\u31A0-\u31BF\u31C0-\u31EF\u31F0-\u31FF\u3100-\u312F\u3130-\u318F\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF\u1100-\u11FF\uFF66-\uFF9F\uFF01-\uFF65\uFFE0-\uFFE6]|[\u{20000}-\u{2FA1F}]/u
     const grapheme = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
     const words = computed(() => {
@@ -45,7 +47,8 @@ export default {
       for (const { segment } of grapheme.segment(props.text)) {
         if (/^\s$/u.test(segment)) {
           flush()
-          if (out.length) out[out.length - 1].gap = segment
+          if (out.length) out[out.length - 1].gap = (out[out.length - 1].gap || '') + segment
+          else out.push({ chars: [], gap: segment }) // 行首空白：gap-only token
         } else if (CJK.test(segment)) {
           flush()
           out.push({ chars: [segment], gap: null })
