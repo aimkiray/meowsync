@@ -21,9 +21,12 @@
 <script>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { currentTheme, glitchGen } from '../lib/theme.js'
-import { corruptGlyphFor } from '../lib/glitch-glyphs.js'
 
-// 替身池按书写系统分池（hanzi/kana/hangul/latin-leet/fallback）——lib/glitch-glyphs.js
+// mojibake 字形池：半角片假名/西里尔/希腊/制表符/数字——形近真字，
+// 替换读起来是「腐蚀」而非乱码（取自 glitch-restoration-ui skill）。
+// 注意：多数替身符在 Fusion Pixel 的 unicode-range 外，会回落
+// Noto Sans SC 非像素字形——质感更杂，对「损坏」语义反而是加分
+const POOL = [...'▓░▒ﾂﾎﾃﾄﾅﾌﾑﾒﾓﾘﾚﾖﾊﾋﾍﾐﾕﾗﾆﾇ℮†‡ΓŘ®₥§¤¥šмλθτþÐÑØÅЯИƧγÿýξ∑縺繝€∆ⅯﾉﾙΞë|+×01345!$']
 
 export default {
   name: 'GlitchText',
@@ -69,12 +72,12 @@ export default {
       const clean = []
       let total = 0
       words.value.forEach((word, wi) =>
-        word.chars.forEach((ch, ci) => { total++; if (!corrupt.value.has(keyOf(wi, ci))) clean.push([keyOf(wi, ci), ch]) })
+        word.chars.forEach((_, ci) => { total++; if (!corrupt.value.has(keyOf(wi, ci))) clean.push(keyOf(wi, ci)) })
       )
       // 短文本并发腐蚀封顶 ~1/6（至少 1 个）——4 字标题不会近半句皆替身
       if (clean.length && corrupt.value.size < Math.max(1, Math.ceil(total / 6))) {
-        const [k, ch] = clean[Math.random() * clean.length | 0]
-        corrupt.value.set(k, corruptGlyphFor(ch))
+        const i = clean[Math.random() * clean.length | 0]
+        corrupt.value.set(i, POOL[Math.random() * POOL.length | 0])
       }
       // 每代随机恢复 2-3 个存量——稳态来回腐蚀而非单向累积
       glitched.slice(0, 2 + (Math.random() * 2 | 0)).forEach(k => corrupt.value.delete(k))
@@ -85,8 +88,8 @@ export default {
     let burstTimer = 0
     function burst() {
       words.value.forEach((word, wi) =>
-        word.chars.forEach((ch, ci) =>
-          corrupt.value.set(keyOf(wi, ci), corruptGlyphFor(ch))
+        word.chars.forEach((_, ci) =>
+          corrupt.value.set(keyOf(wi, ci), POOL[Math.random() * POOL.length | 0])
         )
       )
       clearTimeout(burstTimer)
