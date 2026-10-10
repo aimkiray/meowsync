@@ -105,15 +105,22 @@ export function proxiedCoverUrl(url) {
   if (base && s.startsWith(base + '/')) return s                     // 本服务工件（file_ 封面等）
   // 同源相对 URL 直通；'/\h' 不放此支——反斜杠会被升格 //h 外联，落畸形口径
   if (s.startsWith('/') && !s.startsWith('//') && !s.startsWith('/\\')) return s
+  // '//host/x' 协议相对引用恒指外联宿主——不再升格白名单，与异 scheme 同拒
+  if (s.startsWith('//')) return ''
   let parsed
   try {
-    parsed = new URL(s.startsWith('//') ? 'https:' + s : s) // 协议相对按 https 升格解析
+    parsed = new URL(s)
   } catch {
     // 裸相对串（'covers/x.jpg'）透传——probe 已证浏览器只按本页基址解析同源；
     // 含 \ 的引用会被 WHATWG 升格成 //host 外联，同归空串
     return s.includes('\\') ? '' : s
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return s
+  // Non-http(s)：只放 data:/blob:（CSP img-src 已放 data: 的既有语义保持）；
+  // javascript:/vbscript:/file: 等异 scheme 一律归 ''——img 渲染上下文里
+  // 它们不是合法封面来源，透传只留注入/探测面
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return (parsed.protocol === 'data:' || parsed.protocol === 'blob:') ? s : ''
+  }
   // 非标端口全拒——口径刻意比服务端 net-guard 严：normalizeOutboundUrl 放行
   // 跨 scheme 标准端口（https://h:80、http://h:443 仍属 {80,443} 上界），客户端
   // 一并拒收属 fail-closed 口径差异，有意为之

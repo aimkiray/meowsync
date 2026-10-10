@@ -12,6 +12,8 @@ process.env.DATA_DIR = tmpDataDir('meowsync-remote-ws-');
 const require = createRequire(import.meta.url);
 
 const http = require('http');
+const net = require('net');
+const crypto = require('crypto');
 const { WebSocket, WebSocketServer } = require('ws'); // eslint-disable-line no-unused-vars
 const { attachRemoteControl, revokeConnections } = require('../src/server/ws/remote.js');
 const { MSG_TYPES, REMOTE_LIMITS } = require('../src/shared/protocol.js');
@@ -450,6 +452,49 @@ test('remote：第 33 个 controller 握手 503；close 后容量释放', async 
   const over = await tryConnect('');
   assert.equal(over.code, 503);
   for (const ws of conns) await closeWs(ws);
+});
+
+test('remote：host 候选并发上限 8——第 9 个 role=host 握手 503', async () => {
+  // 顶替 UX 下活跃 host 恒为 1，但被顶替的旧 host 在对端不应答 close 帧时
+  // 挂 CLOSING 直到 5s 强拆——raw socket 完成 101 握手后装死不回 close，
+  // 把 8 个候选同时按住再验第 9 个撞 MAX_HOST_CANDIDATES
+  const srv8 = http.createServer((req, res) => res.end('ok'));
+  const remote8 = attachRemoteControl(srv8, { allowedOrigins: [], token: '' });
+  await new Promise(r => srv8.listen(0, '127.0.0.1', r));
+  const port = srv8.address().port;
+  const fakeHost = () => new Promise((resolve, reject) => {
+    const sock = net.connect(port, '127.0.0.1');
+    let buf = '';
+    sock.on('connect', () => {
+      sock.write(
+        `GET /remote?role=host HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+        `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\n` +
+        `Sec-WebSocket-Version: 13\r\n\r\n`);
+    });
+    // 读到 101 响应头即算占位成功；之后服务端发的 close/state 帧全不应答
+    sock.on('data', (d) => {
+      buf += d.toString('latin1');
+      if (buf.includes('\r\n\r\n')) resolve(sock);
+    });
+    sock.on('error', reject);
+  });
+  const fakes = [];
+  try {
+    for (let i = 0; i < 8; i++) fakes.push(await fakeHost());
+    // 8 个候选在册（7 个 CLOSING 顶替残 + 1 个活跃）——第 9 个 503
+    const over = await new Promise((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/remote?role=host`);
+      ws.once('open', () => resolve(ws));
+      ws.once('error', (e) => resolve({ code: Number(String(e.message).match(/\d{3}/)?.[0]) || 0 }));
+    });
+    assert.equal(over.code, 503);
+  } finally {
+    for (const s of fakes) s.destroy();
+    remote8.close();
+    await new Promise(r => srv8.close(r));
+  }
 });
 
 test('remote：remote.close() 终止在册客户端并可重复调用', async () => {

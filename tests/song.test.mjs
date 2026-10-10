@@ -165,9 +165,9 @@ test('coverSizeUrl：四 provider 缩放语法 + 幂等 + 放行面', () => {
   // 已带 param 改写值而非追加（first-wins 未定义语义兜底）
   assert.equal(coverSizeUrl('https://p1.music.126.net/a/b.jpg?param=200y200', 96),
     proxied('https://p1.music.126.net/a/b.jpg?param=96y96'))
-  // 协议相对按 https 升格解析后命中白名单；大写域经 URL 归一小写进 url=
-  assert.equal(coverSizeUrl('//p1.MUSIC.126.NET/x.jpg', 80),
-    proxied('https://p1.music.126.net/x.jpg?param=80y80'))
+  // 协议相对引用一律归 ''（新口径：不再升格 https 判白名单——'//host/x'
+  // 恒指外联宿主，与异 scheme 同拒）
+  assert.equal(coverSizeUrl('//p1.MUSIC.126.NET/x.jpg', 80), '')
   // B站 @ 后缀挂 path（query 之前）；CDN 缩放幂等（已缩放形不改写再包装）
   assert.equal(coverSizeUrl('https://i0.hdslb.com/bfs/archive/x.jpg', 96),
     proxied('https://i0.hdslb.com/bfs/archive/x.jpg@96w_96h_1c.jpg'))
@@ -215,8 +215,9 @@ test('proxiedCoverUrl：白名单包装/直通矩阵 + 幂等防腐化', () => {
   assert.equal(proxiedCoverUrl('https://p.qpic.cn/x/150.jpg'), proxied('https://p.qpic.cn/x/150.jpg'))
   assert.equal(proxiedCoverUrl('https://yt3.ggpht.com/a.jpg'), proxied('https://yt3.ggpht.com/a.jpg'))
   assert.equal(proxiedCoverUrl('https://a.kuwo.cn/x.jpg'), proxied('https://a.kuwo.cn/x.jpg'))
-  // 协议相对按 https 升格后再判白名单与包装（url= 内是规范绝对形）
-  assert.equal(proxiedCoverUrl('//p1.music.126.net/x.jpg'), proxied('https://p1.music.126.net/x.jpg'))
+  // 协议相对 '//host/x' 恒拒——白名单宿主也不升格（外联宿主即拒）
+  assert.equal(proxiedCoverUrl('//p1.music.126.net/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('//i.ytimg.com/vi/x/hqdefault.jpg'), '')
   // 蹭名/尾挂/FQDN 尾点不命中白名单（与服务端剥尾点后回源同向收敛）——
   // fail-closed 后全归 ''：不放浏览器直连源站
   assert.equal(proxiedCoverUrl('https://xytimg.com/x.jpg'), '')
@@ -229,9 +230,18 @@ test('proxiedCoverUrl：白名单包装/直通矩阵 + 幂等防腐化', () => {
   assert.equal(proxiedCoverUrl('//example.com/x.jpg'), '')
   assert.equal(proxiedCoverUrl('https://example.com:8443/x.jpg'), '')
   assert.equal(proxiedCoverUrl('https://u:p@example.com/x.jpg'), '')
-  // 透传面只剩必同源/不外联形：非 http(s) / 同源相对 / file_ 工件 / 空与裸相对串
+  // 透传面只剩必同源/不外联形：data:/blob: / 同源相对 / file_ 工件 / 空与裸相对串
   assert.equal(proxiedCoverUrl('data:image/png;base64,AAA'), 'data:image/png;base64,AAA')
   assert.equal(proxiedCoverUrl('blob:https://x/abc'), 'blob:https://x/abc')
+  // 异 scheme 全拒——javascript:/vbscript:/file:/mailto: 在 img 上下文不是
+  // 合法封面来源（旧版透传留注入/探测面）
+  assert.equal(proxiedCoverUrl('javascript:alert(1)'), '')
+  assert.equal(proxiedCoverUrl('vbscript:msgbox(1)'), '')
+  assert.equal(proxiedCoverUrl('file:///etc/passwd'), '')
+  assert.equal(proxiedCoverUrl('mailto:a@b.c'), '')
+  assert.equal(proxiedCoverUrl(' JAVASCRIPT:alert(1) '), '') // 大小写+外围空白归一后同拒
+  // data: 大小写 scheme 经 URL 解析归一小写——照样放行
+  assert.equal(proxiedCoverUrl('DATA:image/png;base64,AAA'), 'DATA:image/png;base64,AAA')
   assert.equal(proxiedCoverUrl('/downloads/songs/f/file?playlistId=local_uploads'),
     '/downloads/songs/f/file?playlistId=local_uploads')
   const fileCov = fileArtifactUrl('file_x', 'cover')

@@ -25,33 +25,33 @@ export const downloadsApi = {
   },
 
   getQueue: (id) => {
-    return http.get(`/downloads/queues/${id}`);
+    return http.get(`/downloads/queues/${encodeURIComponent(id)}`);
   },
 
   startQueue: (id) => {
-    return http.post(`/downloads/queues/${id}/start`);
+    return http.post(`/downloads/queues/${encodeURIComponent(id)}/start`);
   },
 
   pauseQueue: (id) => {
-    return http.post(`/downloads/queues/${id}/pause`);
+    return http.post(`/downloads/queues/${encodeURIComponent(id)}/pause`);
   },
 
   resumeQueue: (id) => {
-    return http.post(`/downloads/queues/${id}/resume`);
+    return http.post(`/downloads/queues/${encodeURIComponent(id)}/resume`);
   },
 
   cancelQueue: (id) => {
-    return http.post(`/downloads/queues/${id}/cancel`);
+    return http.post(`/downloads/queues/${encodeURIComponent(id)}/cancel`);
   },
 
   retryQueue: (id) => {
-    return http.post(`/downloads/queues/${id}/retry`);
+    return http.post(`/downloads/queues/${encodeURIComponent(id)}/retry`);
   },
 
   deleteQueue: (id) => {
     // 队列删除已升级为歌单级联：最坏要等两轮排空（首轮+重扫各 ~30s）再加
     // 文件清理——60s 贴边会让客户端先报"失败"而服务端实际删完，重试 404
-    return http.delete(`/downloads/queues/${id}`, {
+    return http.delete(`/downloads/queues/${encodeURIComponent(id)}`, {
       timeout: 90000
     });
   },
@@ -64,20 +64,20 @@ export const downloadsApi = {
 
   retryTask: (id) => {
     // 重试即提交即返回（后台协程跑），终态由任务轮询确认
-    return http.post(`/downloads/tasks/${id}/retry`);
+    return http.post(`/downloads/tasks/${encodeURIComponent(id)}/retry`);
   },
 
   // 删除单条任务（行+盘上文件）。服务端语义：进行中任务 409 拒删——
   // standalone 行先删文件后删，下载页"未入队单曲"分节的删除入口走这里
   deleteTask: (id) => {
-    return http.delete(`/downloads/tasks/${id}`);
+    return http.delete(`/downloads/tasks/${encodeURIComponent(id)}`);
   },
 
   // 提交单曲下载到服务器（返回 pending/completed 任务行，不阻塞等下载完成——
   // 终态用 getSongDownloadStatus 轮询；completed 行是幂等短路返回）。
   // 超时仍要给足：歌单未导入时服务端先走两次上游往返才提交任务
   downloadSongToServer: (playlistId, songId, options = {}) => {
-    return http.post(`/downloads/songs/${songId}`, {
+    return http.post(`/downloads/songs/${encodeURIComponent(songId)}`, {
       playlistId,
       bitrate: options.bitrate || 320000,
       downloadAudio: options.downloadAudio !== false,
@@ -90,7 +90,7 @@ export const downloadsApi = {
   // 查询歌曲下载状态；signal 可选——播放链探测随切歌 abort（未 abort 的
   // 结果也会被各调用方的 seq/stale 闸丢弃，abort 只是省一跳）
   getSongDownloadStatus: (playlistId, songId, signal) => {
-    return http.get(`/downloads/songs/${songId}/status`, {
+    return http.get(`/downloads/songs/${encodeURIComponent(songId)}/status`, {
       params: { playlistId },
       signal
     });
@@ -109,14 +109,14 @@ export const downloadsApi = {
 
   // 删除已下载的歌曲
   deleteSongDownload: (playlistId, songId) => {
-    return http.delete(`/downloads/songs/${songId}`, {
+    return http.delete(`/downloads/songs/${encodeURIComponent(songId)}`, {
       params: { playlistId }
     });
   },
 
   // 删除歌单全部已下载歌曲（排空在途下载可能耗数秒，给足超时）
   deletePlaylistDownloads: (playlistId) => {
-    return http.delete(`/downloads/playlists/${playlistId}/files`, {
+    return http.delete(`/downloads/playlists/${encodeURIComponent(playlistId)}/files`, {
       timeout: 60000
     });
   },
@@ -198,7 +198,7 @@ export const downloadsApi = {
   // 快速下载歌单（建队列 + 启动即返回，后台跑）；歌单未导入时同样要先走上游
   // 导入（detail+tracks 两次往返），超时后重试会撞"已有进行中队列"的 409——给 60s
   quickDownloadPlaylist: (playlistId, options = {}) => {
-    return http.post(`/downloads/playlists/${playlistId}/quick`, {
+    return http.post(`/downloads/playlists/${encodeURIComponent(playlistId)}/quick`, {
       bitrate: options.bitrate || 320000,
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,

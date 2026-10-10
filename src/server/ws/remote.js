@@ -12,6 +12,11 @@ const sessionsRepo = require('../repositories/sessions');
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_PAYLOAD_BYTES = REMOTE_LIMITS.MAX_PAYLOAD_BYTES;
 const MAX_CONTROLLERS = REMOTE_LIMITS.MAX_CONTROLLERS;
+// role=host connections never enter `controllers`, so without a dedicated
+// cap they bypass MAX_CONTROLLERS entirely. Replaced hosts linger in CLOSING
+// until the peer honours the close frame (5s force-terminate below), so the
+// cap counts every live host candidate, not just the active one
+const MAX_HOST_CANDIDATES = 8;
 // 状态帧（host→server→controllers 广播）与控制帧（controller→server）
 // 分开封顶：广播帧限定出向扇出体积，控制帧合法载荷 ≤ ~200B 用 1KB 小顶
 const MAX_STATE_BYTES = REMOTE_LIMITS.MAX_STATE_PAYLOAD_BYTES;
@@ -36,6 +41,10 @@ let attachSeq = 0;
 
 let hostSocket = null;
 const controllers = new Set();
+// All live role=host sockets (the active one plus replaced candidates still
+// draining) — hostSocket only tracks the active one; the set backs the
+// MAX_HOST_CANDIDATES upgrade gate
+const hostSockets = new Set();
 // 最近一份消毒后的 state_update 快照：新 controller 入会优先回它，
 // 不为每人再打扰 host 要 REQUEST_STATE（上行 200msg/s 面下每新客一次
 // 请求都是放大点）。产出它的 host 断线即清——陈快照会让新客看到僵尸状态
@@ -335,9 +344,12 @@ function attachRemoteControl(server, options = {}) {
 
       // controller 容量上限在升级阶段拒——handleUpgrade 后再踢仍会完成握手，
       // 观感是"连上即断"，提前拒语义更准确。注意判定必须与 connection 阶段
-      // 一致：非 'host' 一律计入 controller 容量（role=x 不得绕过上限）
-      if (url.searchParams.get('role') !== 'host'
-        && controllers.size >= MAX_CONTROLLERS) {
+      // 一致：非 'host' 一律计入 controller 容量（role=x 不得绕过上限）；
+      // 'host' 走自己的候选上限——单 host 顶替 UX 保留，但并发候选封顶
+      const upgradeRole = url.searchParams.get('role');
+      if (upgradeRole === 'host'
+        ? hostSockets.size >= MAX_HOST_CANDIDATES
+        : controllers.size >= MAX_CONTROLLERS) {
         rejectUpgrade(socket, 503, 'Service Unavailable');
         return;
       }
@@ -416,6 +428,7 @@ function attachRemoteControl(server, options = {}) {
     const role = url.searchParams.get('role') || 'controller';
 
     if (role === 'host') {
+      hostSockets.add(ws); // live candidate accounting for MAX_HOST_CANDIDATES
       // Only one host allowed at a time——任何鉴权者带 ?role=host 都可顶替
       // 现 host（「第二个窗口夺权」是有意保留的 UX，不加 force 闸——闸了
       // 合法第二窗口也接管不了）。被踢端客户端侧自愈：降级成 controller
@@ -474,6 +487,7 @@ function attachRemoteControl(server, options = {}) {
       });
 
       ws.on('close', () => {
+        hostSockets.delete(ws);
         // 仅当关闭的是当前 host 时才通知（被顶替的旧 host 不触发广播）
         if (hostSocket === ws) {
           hostSocket = null;
