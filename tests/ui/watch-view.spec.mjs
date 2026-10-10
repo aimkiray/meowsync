@@ -319,16 +319,16 @@ describe('WatchView：⋯菜单下载项', () => {
 })
 
 describe('WatchView：⋯菜单沉浸项', () => {
-  // 与底栏沉浸键同字形（同开 FullscreenPlayer）——钉键名防回退成只表
+  // 与底栏沉浸键同字形（同开 FullscreenPlayer）——钉 aspect 键名防回退成只表
   // 「缩放」的 expand；path 非空顺带钉住 ICONS 注册
-  it('渲染 fullscreen 图标，点击发 open-fullscreen 并关菜单', async () => {
+  it('渲染 aspect 图标，点击发 open-fullscreen 并关菜单', async () => {
     const w = mountWatch({ tab: 'queue' })
     await openActionsMenu(w)
     const el = document.querySelector('#watch-actions-menu [title="全屏歌词模式"]')
     expect(el).toBeTruthy()
     // findComponent 跨 teleport 仍认组件树——按 DOM 归属过滤出菜单里那枚
     const icon = w.findAllComponents(PixelIcon).find(c => el.contains(c.element))
-    expect(icon.props('name')).toBe('fullscreen')
+    expect(icon.props('name')).toBe('aspect')
     expect(el.querySelector('svg path').getAttribute('d')).toBeTruthy()
     await clickEl(el)
     expect(w.emitted('open-fullscreen')).toHaveLength(1)
