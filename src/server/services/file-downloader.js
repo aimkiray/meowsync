@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { pipeline } = require('stream/promises');
 const { spawn, spawnSync } = require('child_process');
 const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
 // 字节流原语（fetchStream/streamToFile/fatalError 等）在 download-io.js——
@@ -15,6 +16,10 @@ const { fetchPlayer: ytFetchPlayer, fetchPlayerWith: ytFetchPlayerWith, pickStre
 const lyricAiRepo = require('../repositories/lyricAi');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 const { pathPresent, isUnderDownloadDir } = require('./download-fs');
+// 封面宿主白名单与 download-manager.deriveCoverUrl 同一闸（CJS require(ESM)）：
+// 派生点闸只能管住新落库的 cover_url——存量脏行在 downloadCover 消费点
+// 仍要再过一次同款判定
+const { isImgProxyHost } = require('../../shared/img-proxy-hosts.js');
 const { verifyDownloadOwnership } = require('./lyric-verify');
 // 外源滚动词级联（YTM→LRCLIB→酷狗）：bv_/yt_ 未匹配网易云词源 / qq_ 词空
 // 回落也空时的兜底——命中走与嫁接词同款的归属核验→译文合并→.part 落盘
@@ -62,18 +67,27 @@ const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADD
 // 走 206 通道绕开；B 站 CDN 带上也无副作用（其防盗链只认 Referer/UA）
 const RANGE_ALL = { Range: 'bytes=0-' };
 
-// 播放缓存档 → 下载工件的搬运：异步 copyFile——GB 级档用 copyFileSync
-// 会把事件循环摁住秒级 stall。先落 .part 再 rename 与 streamToFile 同口径
-// （崩溃不留半截最终工件）；COPYFILE_FICLONE 在 APFS/btrfs 等 CoW 文件
-// 系统上是瞬时克隆，不支持（ENOTSUP/ENOSYS 等）回落普通拷贝
+// 播放缓存档 → 下载工件的搬运：流式管线——GB 级档用 copyFileSync 会把
+// 事件循环摁住秒级 stall。先落 .part 再 rename 与 streamToFile 同口径
+// （崩溃不留半截最终工件）。.part 写与 streamToFile 同闸 O_NOFOLLOW：
+// 预埋的符号链接不能把拷贝引到下载树外——ELOOP 落下方共享 catch；
+// copyFile 只收路径表达不了 O_NOFOLLOW，FICLONE 瞬时克隆随之放弃
 async function copyCachedFile(src, dest) {
   const partPath = `${dest}.part`;
   try {
+    const partFd = fs.openSync(partPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+    // fd 是裸数字无 GC——createWriteStream 构造期抛错要手动收
+    let writer;
     try {
-      await fs.promises.copyFile(src, partPath, fs.constants.COPYFILE_FICLONE);
-    } catch {
-      await fs.promises.copyFile(src, partPath);
+      writer = fs.createWriteStream(partPath, { fd: partFd, autoClose: true });
+    } catch (e) {
+      try { fs.closeSync(partFd); } catch { /* already closed */ }
+      throw e;
     }
+    // pipeline 任一端出错都销毁两侧——writer autoClose 收 fd；src 读不了
+    // （缓存档被并发清）也走同路径清 .part
+    await pipeline(fs.createReadStream(src), writer);
     fs.renameSync(partPath, dest);
   } catch (e) {
     removePartial(partPath);
@@ -1025,7 +1039,15 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       const partPath = `${outputPath}.part`;
       try {
-        fs.writeFileSync(partPath, lyricText, 'utf-8');
+        // .part 写与 streamToFile 同闸 O_NOFOLLOW：预埋符号链接不能把词文
+        // 引到下载树外——ELOOP 落共享 catch 走 errnoToFatal（在 FATAL_ERRNOS 册）
+        const fd = fs.openSync(partPath,
+          fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+        try {
+          fs.writeFileSync(fd, lyricText, 'utf-8');
+        } finally {
+          fs.closeSync(fd); // fd 是裸数字无 GC——写成败两路都必须收
+        }
         fs.renameSync(partPath, outputPath);
       } catch (writeError) {
         removePartial(partPath); // 写一半失败不留孤儿 .lrc.part
@@ -1213,6 +1235,16 @@ async function downloadCover(coverUrl, outputPath, signal) {
     if (!coverUrl) {
       throw fatalError('封面链接不存在');
     }
+    // 消费端闸与 download-manager.deriveCoverUrl 同款：派生闸落地前已
+    // 入库的任务行可能带脏 cover_url——按「无封面」收敛而非回源任意
+    // 宿主（http(s) + 图床白名单，fatal 不重试）
+    let parsedCover = null;
+    try { parsedCover = new URL(coverUrl); } catch { /* 非法 URL → 按无封面 */ }
+    if (!parsedCover
+      || (parsedCover.protocol !== 'http:' && parsedCover.protocol !== 'https:')
+      || !isImgProxyHost(parsedCover.hostname)) {
+      throw fatalError('封面地址不在图床白名单');
+    }
 
     throwIfAborted(signal);
     const finalPath = pathWithExt(outputPath, extFromUrl(coverUrl, COVER_EXTS, 'jpg'));
@@ -1222,12 +1254,15 @@ async function downloadCover(coverUrl, outputPath, signal) {
     // 非浏览器形态、一旦收紧即 403——与 proxy.js 对 BILI_CDN_HOSTS 注头
     // 同口径，对 hdslb 封面附 UA+Referer；其他图床（ytimg/126/gtimg）
     // 不查防盗链，不附带
-    let coverHost = '';
-    try { coverHost = new URL(coverUrl).hostname; } catch { /* 下行 fetchStream 会给 BAD_URL */ }
+    const coverHost = parsedCover.hostname; // 上方已 parse 且过白名单
     const coverHeaders = (coverHost === 'hdslb.com' || coverHost.endsWith('.hdslb.com'))
       ? BILI_PUBLIC_HEADERS : undefined;
 
-    const response = await fetchStream(coverUrl, { timeout: 60000, signal, headers: coverHeaders });
+    // 白名单谓词下传逐跳重验：入口闸只管首发 URL——封面图床若 302 到
+    // 白名单外宿主（重定向投毒回源任意域），fetchStream 每跳同闸拦下
+    const response = await fetchStream(coverUrl, {
+      timeout: 60000, signal, headers: coverHeaders, allowedHost: isImgProxyHost
+    });
     if (response.status !== 200) {
       response.data.destroy();
       throw fatalError(`上游返回 ${response.status}`);

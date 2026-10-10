@@ -84,6 +84,9 @@ async function postChat(body, timeoutMs, signal) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
+    // Same posture as ai-test: never follow redirects silently — a 3xx lands
+    // on the !res.ok path below and degrades AI instead of re-targeting
+    redirect: 'manual',
     signal: AbortSignal.any(signals),
   });
   return res;

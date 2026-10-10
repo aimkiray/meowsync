@@ -54,6 +54,17 @@ const NETEASE_COOKIE_KEYS = new Set([
   'ntes_kaola_ad', 'sDeviceId', 'WM_NI', 'WM_NIKE', 'WM_TID'
 ]);
 
+// Upstream→client Set-Cookie whitelist: only well-known NetEase cookie key
+// families may pass through. NETEASE_COOKIE_KEYS covers the client→upstream
+// direction only — downstream-only keys (_ntes_nuid/_ntes_nnid/WNMCID/
+// JSESSIONID-WYYY/…) are absent there, so a separate family regex is kept.
+// ms_session stays explicitly rejected on top of the whitelist exclusion.
+const UPSTREAM_COOKIE_ALLOW_RE = /^(?:MUSIC_[UA](?:_[A-Z]+)?|__csrf|__remember_me|NMTID|NTES_PASSPORT|P_INFO|ntes_kaola_ad|sDeviceId|WM_[A-Z_]*|_ntes_n[un]id|WNMCID|WEVNSM|JSESSIONID-WYYY|_iuqxldmzr_|os|osver|channel|appver|deviceId)=/;
+// Upstream-controlled Set-Cookie bytes must not grow a response unboundedly:
+// per-cookie value cap plus a total count cap
+const MAX_SET_COOKIE_VALUE_LEN = 4096;
+const MAX_SET_COOKIE_COUNT = 20;
+
 // 由请求推导对外访问源
 // x-forwarded-* 头仅在 TRUST_PROXY=1/true 时采信——否则客户端可伪造该头，污染下发给前端的 audio-proxy 地址
 // c.req.url 由 @hono/node-server 基于 Host 头与 socket 加密状态构建（Host 是客户端实际拨号的地址）
@@ -75,9 +86,20 @@ function sendUpstreamResult(c, answer) {
   // 滤掉与本站会话同名的项——上游若下发 ms_session=xxx 会覆盖客户端的
   // 有效会话 cookie（造不出合法 token，但能把用户踢回登录页）
   if (Array.isArray(answer.cookie)) {
+    let appended = 0;
     for (const cookieStr of answer.cookie) {
-      if (/^ms_session=/i.test(String(cookieStr).trim())) continue;
+      if (appended >= MAX_SET_COOKIE_COUNT) break;
+      const s = String(cookieStr).trim();
+      // Explicit reject kept on top of the whitelist — this name colliding
+      // with our session cookie is the concrete attack being defended
+      if (/^ms_session=/i.test(s)) continue;
+      if (!UPSTREAM_COOKIE_ALLOW_RE.test(s)) continue;
+      // Value = between the first '=' and the first ';' (attributes excluded)
+      const semi = s.indexOf(';');
+      const value = s.slice(s.indexOf('=') + 1, semi === -1 ? undefined : semi);
+      if (value.length > MAX_SET_COOKIE_VALUE_LEN) continue;
       c.header('Set-Cookie', cookieStr, { append: true });
+      appended++;
     }
   }
   // 上游 4xx/5xx 状态透传为 HTTP 状态码（301 等非错误码仍返回 200，错误细节在 body.code）

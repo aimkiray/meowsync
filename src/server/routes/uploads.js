@@ -110,7 +110,23 @@ async function streamRequestBody(c, outputPath, maxBytes) {
   // .part 名带随机段：同 songId 并发/重试不共享残片（inflight 锁已挡并发，
   // 随机段是纵深——锁失效路径下也不互相 truncate）
   const partPath = `${outputPath}.${crypto.randomBytes(4).toString('hex')}.part`;
-  const ws = fs.createWriteStream(partPath);
+  // O_NOFOLLOW on the .part write (same posture as download-io streamToFile):
+  // a planted symlink must not redirect the upload outside the download tree —
+  // ELOOP surfaces through the existing error path
+  let ws;
+  try {
+    const fd = fs.openSync(partPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+    try {
+      ws = fs.createWriteStream(partPath, { fd, autoClose: true });
+    } catch (e) {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+      throw e;
+    }
+  } catch (e) {
+    // 同步 open/建流的 ENOSPC 与写路径同待遇——绕过映射会落 handleError 的 500
+    throw e?.code === 'ENOSPC' ? httpError(507, '磁盘空间不足') : e;
+  }
   // ws 'error' 全程要有人接：无监听时 ENOSPC/EIO 直接 uncaughtException 杀进程。
   // 必须用 on 不用 once——对已 error/destroy 的流再 write/end 会再发 'error'，
   // once 摘除后第二次 error 无监听照样杀进程。errP settle 后再 reject 是 no-op，

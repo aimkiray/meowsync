@@ -101,6 +101,50 @@ test('music：lyric_new 移出 passthrough 白名单 → 404', async () => {
   assert.equal(apiCalls.length, 0);
 });
 
+test('music：Set-Cookie 白名单透传——ms_session/异键/超长值滤掉，网易已知键过', async () => {
+  apiCalls.length = 0;
+  const saved = upstreamImpl;
+  upstreamImpl = async () => ({
+    status: 200,
+    body: { code: 200 },
+    cookie: [
+      'MUSIC_U=abc; Path=/; HttpOnly',
+      'ms_session=hijack; Path=/',                    // 撞本站会话名——显式拒
+      'MS_SESSION=also-bad; Path=/',                  // 大小写变体同拒
+      'EVIL_KEY=x; Path=/',                           // 白名单外键族
+      `NMTID=${'v'.repeat(5000)}; Path=/`,            // 值超 4096 → 滤
+      '__csrf=token123; Path=/',
+      'WM_NI=xx; Path=/',
+      '_ntes_nuid=nu; Path=/',                        // 下行独有键（回带白名单外）
+    ],
+  });
+  try {
+    const r = await req('/search?keywords=x');
+    assert.equal(r.status, 200);
+    const setCookies = r.headers.getSetCookie();
+    const keys = setCookies.map(s => s.split('=', 1)[0]);
+    assert.deepEqual(keys.sort(), ['MUSIC_U', 'WM_NI', '_ntes_nuid', '__csrf'].sort());
+  } finally {
+    upstreamImpl = saved;
+  }
+});
+
+test('music：Set-Cookie 总条数封顶 20', async () => {
+  const saved = upstreamImpl;
+  upstreamImpl = async () => ({
+    status: 200,
+    body: { code: 200 },
+    cookie: Array.from({ length: 25 }, (_, i) => `WM_TID=v${i}; Path=/`),
+  });
+  try {
+    const r = await req('/search?keywords=x');
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.getSetCookie().length, 20);
+  } finally {
+    upstreamImpl = saved;
+  }
+});
+
 test('music：断连优先于上游 answer 透传——aborted 时 upstream answer 归一 499', async () => {
   apiCalls.length = 0;
   const ac = new AbortController();

@@ -299,8 +299,15 @@ app.get('/downloads/songs/:songId/file', async (c) => {
     // 删掉旧文件 body 仍是旧 inode 的完整字节，响应始终自洽
     let fd;
     try {
-      fd = fs.openSync(filePath, 'r');
-    } catch {
+      // O_NOFOLLOW closes the lstat→open race in getTaskArtifactPath: a leaf
+      // swapped to a symlink between the check and this open throws ELOOP —
+      // mapped to the same 404 as a missing file, never a 500
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    } catch (e) {
+      // 「此刻拿不到」类 errno 归 404（ELOOP 即 O_NOFOLLOW 拦下的换链）；
+      // EMFILE/ENOMEM 等资源病是服务端故障信号——也归 404 会把事故谎报成
+      // "文件不存在"，抛给外层 handleError 如实归 500
+      if (!['ENOENT', 'ENOTDIR', 'ELOOP', 'EACCES'].includes(e?.code)) throw e;
       return fail(c, 404, '文件不存在或尚未下载完成');
     }
     const closeFd = () => { try { fs.closeSync(fd); } catch { /* 已关 */ } };
@@ -313,6 +320,12 @@ app.get('/downloads/songs/:songId/file', async (c) => {
     let headers;
     try {
       const stat = fs.fstatSync(fd);
+      // Same-fd regular-file check: a directory/other non-file that reached
+      // this point must not be streamed — converges on the existing 404
+      if (!stat.isFile()) {
+        closeFd();
+        return fail(c, 404, '文件不存在或尚未下载完成');
+      }
       const ext = path.extname(filePath).slice(1).toLowerCase();
       // webm 二义：上传白名单里它同时是 audio/video 扩展——kind=video 优先判
       // 视频，否则 <video> 拿到 audio/webm 会按音轨播（有画面的上传视频丢画面）

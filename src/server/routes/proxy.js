@@ -22,6 +22,49 @@ const isAllowedHost = isProxyAllowedHost;
 const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
 const MAX_REDIRECTS = 5;
 const UPSTREAM_TIMEOUT_MS = 15000;
+// 裸 ?url= 是全站唯一「任意人可让服务器代发大流量」的端点（api/music.js
+// 对非 vault 化上游 URL 的兜底通道，不能下线）：白名单内任意 URL → 无界
+// 转发在开放部署下就是带宽放大开放中转，给响应转发加传输字节上限。
+// 512MiB 对超长无损单曲（~300MiB 级）仍宽裕。
+// 上限只罩裸 ?url= 路径：vault /t/:token 不设此闸——token 是服务端 mint
+// 的能力凭证（TTL+per-IP 限流已兜底），且它承载 WatchView 的 B 站/YouTube
+// 视频流，1080p 长录播合法超 512MiB，同闸会误伤正常播放
+const MAX_AUDIO_PROXY_BYTES = 512 * 1024 * 1024;
+
+// 转发字节计数闸：media-cache teeStream 同款 reader 包装——pull 逐块累计
+// 已转发量，超限先 cancel 上游流（销掉 socket，源端停止产字节）再把本流
+// error 掉，响应已发字节自然截断。不能用 close() 静默收尾：上游声明的
+// Content-Length 已透给客户端，截短残档会被当完整响应消费
+function capStreamBytes(body, maxBytes, tag) {
+  const reader = body.getReader();
+  let sent = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        sent += value?.byteLength || 0;
+        if (sent > maxBytes) {
+          try { await reader.cancel(); } catch { /* 已断 */ }
+          // 触发留痕一行：cap 是异常路径不是常态，tag 带上游宿主便于定位
+          console.warn(`[audio-proxy] byte cap hit${tag ? ` ${tag}` : ''}`);
+          controller.error(new Error('audio proxy byte cap exceeded'));
+          return;
+        }
+        controller.enqueue(value);
+      } catch (e) {
+        try { await reader.cancel(); } catch { /* 已断 */ }
+        try { controller.error(e); } catch { /* 已关 */ }
+      }
+    },
+    async cancel() {
+      try { await reader.cancel(); } catch { /* 已断 */ }
+    }
+  });
+}
 
 // 单候选逐跳回源：白名单→公网IP→钉扎建连→302 手动跟随（每跳重验）。
 // 返回结构化结果而非直接回客户端——候选链调度层据 kind 决定换档/透出：
@@ -30,8 +73,9 @@ const UPSTREAM_TIMEOUT_MS = 15000;
 //   {kind:'reject', send}  该候选被拒（校验失败/上游 ≥400/请求抛错）——调度层可换档
 // send(c) 是真正写响应的闭包——推迟到「这是最终结论」时才执行，换档候选的
 // 上游 body 在返回前已 cancel，不会挂着悬空 socket
-// cacheKey 在位时 ok 响应旁路落盘（见下方 tee 分支）
-async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta) {
+// cacheKey 在位时 ok 响应旁路落盘（见下方 tee 分支）；byteCap >0 时给转发
+// 流加传输字节上限——只裸 ?url= 入口携带（vault 不设闸，见路由处注释）
+async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta, byteCap) {
   const clientRange = c.req.header('range');
   // 多段 Range（bytes=0-1,3-5）上游会回 multipart/byteranges——与透传的
   // 单段 Content-Range 语义不兼容，浏览器请求也绝不会产生它，直接拒绝。
@@ -244,6 +288,11 @@ async function fetchCandidate(c, firstUrl, cacheKey, cacheMeta) {
         });
         if (capture) body = mediaCache.teeStream(body, capture);
       }
+      // 出站字节上限（byteCap 只由裸 ?url= 入口携带，vault 无此闸）收在
+      // 最外层（tee 之下）：cap 计数在 tee 外——触发时越界块已被 tee 落盘
+      // 才从响应丢弃，缓存区间至多比客户端实收多记一块，但记下的永远只是
+      // 上游真值字节，绝不虚报（裸口无 cacheKey，两者目前本不同框）
+      if (body && byteCap) body = capStreamBytes(body, byteCap, hostname);
       return c.body(body, status, resHeaders);
     } };
   }
@@ -280,7 +329,7 @@ async function proxyUpstream(c, entry) {
   let lastReject = null;
   for (let n = 0; n < urls.length; n++) {
     const i = (start + n) % urls.length;
-    const r = await fetchCandidate(c, urls[i], entry.cacheKey, entry.cacheMeta);
+    const r = await fetchCandidate(c, urls[i], entry.cacheKey, entry.cacheMeta, entry.byteCap);
     if (r.kind === 'halt') return r.send();
     if (r.kind === 'ok') {
       entry.idx = i;
@@ -300,7 +349,10 @@ app.get('/audio-proxy', async (c) => {
   }
   const targetUrl = c.req.query('url');
   if (!targetUrl) return c.json({ code: 400, message: 'missing url' }, 400);
-  return proxyUpstream(c, { urls: [targetUrl], idx: 0 });
+  // byteCap 只挂裸口 entry：开放中转面要传输字节上限；vault 入口不设——
+  // 服务端 mint 的 token 是能力凭证（TTL+per-IP 限流兜底），且承载
+  // WatchView 的 B 站/YouTube 视频流可合法超 512MiB
+  return proxyUpstream(c, { urls: [targetUrl], idx: 0, byteCap: MAX_AUDIO_PROXY_BYTES });
 });
 
 // vault 入口：上游签名 URL 经 stream-vault 换成 opaque token——QQ purl 的
@@ -316,3 +368,7 @@ app.get('/audio-proxy/t/:token', async (c) => {
 });
 
 module.exports = app;
+// 测试缝：字节闸需在小 maxBytes 下直驱 ReadableStream 断言截断语义——
+// 512MiB 常量没法在测试里真打满（music.js 同款附加导出形态）
+module.exports.MAX_AUDIO_PROXY_BYTES = MAX_AUDIO_PROXY_BYTES;
+module.exports.capStreamBytes = capStreamBytes;

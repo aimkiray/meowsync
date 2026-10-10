@@ -144,7 +144,10 @@ async function request(uri, data, { crypto: mode = 'eapi', cookie, timeoutMs = D
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(form).toString(),
-      redirect: 'follow',
+      // Fixed-domain upstream has no legitimate redirect semantics — never
+      // follow silently; a 3xx arrives verbatim and is forced into the error
+      // path below instead of being re-targeted cross-origin
+      redirect: 'manual',
       signal: AbortSignal.any([
         AbortSignal.timeout(timeoutMs),
         ...(signal ? [signal] : []),
@@ -165,6 +168,10 @@ async function request(uri, data, { crypto: mode = 'eapi', cookie, timeoutMs = D
     if (body && typeof body === 'object' && SPECIAL_BODY_CODES.has(body.code)) {
       answer.status = 200;
     }
+    // A real 3xx (redirect:'manual' above) must not be laundered into success
+    // by a body-level code — {code:302} on an HTTP 302 would otherwise hit
+    // SPECIAL_BODY_CODES and map to 200
+    if (res.status >= 300 && res.status < 400) answer.status = res.status;
     if (!(answer.status > 100 && answer.status < 600)) answer.status = 400;
   } catch (e) {
     // 网络/超时错误对齐上游 502 envelope；msg 放 err.message 而非 Error 对象

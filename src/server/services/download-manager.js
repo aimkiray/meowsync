@@ -9,6 +9,8 @@ const fileDownloader = require('./file-downloader');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
 const { FILE_TRACK_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
+// 封面 URL 宿主白名单：与 img-proxy 回源闸共用同一张图床表（CJS require(ESM)）
+const { isImgProxyHost } = require('../../shared/img-proxy-hosts.js');
 const { deletingPlaylists, deletingQueues, deletingNeteasePlaylists, isNeteasePlaylistDeleting, markNeteasePlaylistDeleted } = require('../lib/deletion-locks');
 // 路径/fs/纯计算助手已抽到 download-fs.js（DOWNLOAD_BASE_DIR 唯一来源也在那）
 const {
@@ -98,6 +100,24 @@ async function resolvePlaylistId(playlistId) {
     return imported.id;
   }
   throw httpError(404, '歌单不存在');
+}
+
+// 封面 URL 派生闸：al.picUrl/pic_str 是图链双生字段（api 投影/local-mirror
+// 同口径），都来自客户端可控的镜像 raw_json（/downloads/local/mirror 对 al
+// 整对象原样放行）——只放行图床白名单宿主的 http(s) URL，其余一律派生为
+// null（封面相位裁掉）。net-guard 只挡私网/非标端口，「任意公网 URL 回源 +
+// /file?kind=cover 读回」仍是受限 SSRF；闸放派生点而非投影点，存量
+// raw_json 脏行同口径收敛。downloadCover 的 hdslb Referer 交互不受影响：
+// hdslb 本在白名单内，非白名单域根本到不了那一层
+function deriveCoverUrl(album) {
+  for (const raw of [album?.picUrl, album?.pic_str]) {
+    if (!raw) continue;
+    let parsed;
+    try { parsed = new URL(String(raw)); } catch { continue; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+    if (isImgProxyHost(parsed.hostname)) return String(raw);
+  }
+  return null;
 }
 
 // 防路径逃逸：任务记录的文件路径来自 DB，只允许删除 DOWNLOAD_BASE_DIR 内的文件
@@ -317,7 +337,7 @@ async function createDownloadQueue(playlistId, options = {}) {
       const album = track.al || track.album || {};
       const artistName = artists.filter(Boolean).map(a => a.name).join(', ') || '未知艺术家';
       const albumName = album.name || '未知专辑';
-      const coverUrl = album.picUrl || album.pic_str || null;
+      const coverUrl = deriveCoverUrl(album);
 
       downloadTasksRepo.createTask({
         playlistId: resolvedPlaylistId,
@@ -1502,7 +1522,7 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
   const album = track.al || track.album || {};
   const artistName = artists.filter(Boolean).map(a => a.name).join(', ') || '未知艺术家';
   const albumName = album.name || '未知专辑';
-  const coverUrl = album.picUrl || album.pic_str || null;
+  const coverUrl = deriveCoverUrl(album);
 
   // 任务查询覆盖全部任务（含队列任务）：同一首歌经队列下载过就不再重复下载；
   // 队列拥有的任务不能代跑——standalone 执行会往别的队列写计数

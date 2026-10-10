@@ -125,6 +125,33 @@ test('file-downloader→io 常量链：downloadCover 空 URL 走 fatalError 早�
   );
 });
 
+test('file-downloader：downloadCover 非白名单/异 scheme coverUrl 按无封面 fatal 拒取', async () => {
+  // 消费点兜底闸（与 download-manager.deriveCoverUrl 同款 isImgProxyHost）：
+  // 修复前落库的脏 cover_url 行不得回源任意宿主——异 scheme、非白名单域、
+  // 非法 URL 全部 fatal 拒（上层把封面相位按「无封面」收敛，不重试）
+  for (const bad of [
+    'https://evil.example/c.jpg',
+    'file:///etc/passwd',
+    'javascript:alert(1)',
+    'not-a-url',
+    // 点边界三形态：尾挂（白名单域作中段）、前缀蹭名、形似 126.net 的非名单域
+    'https://ytimg.com.evil.example/x',
+    'https://xytimg.com/x',
+    'https://evil-126.net/x',
+  ]) {
+    const err = await fd.downloadCover(bad, join(fs.DOWNLOAD_BASE_DIR, 't', 'covers', 'x.jpg'), null)
+      .then(() => null, (e) => e);
+    assert.equal(err?.fatal, true, `${bad} 应 fatal 拒取`);
+    assert.match(err?.message || '', /白名单/);
+  }
+  // 白名单域过入口闸：用非标端口让下游 normalizeOutboundUrl 确定性快拒
+  // （不打真网络）——能拿到「端口不受支持」说明闸没拦宿主
+  const okErr = await fd.downloadCover('https://i.ytimg.com:8443/vi/x/hqdefault.jpg',
+    join(fs.DOWNLOAD_BASE_DIR, 't', 'covers', 'y.jpg'), null).then(() => null, (e) => e);
+  assert.ok(okErr, '白名单域名应放行到取流阶段');
+  assert.ok(!/白名单/.test(okErr.message || ''), '白名单域名不得被入口闸误拒');
+});
+
 test('download-manager 对上层的 re-export 面完整', () => {
   for (const name of ['providerDataOf', 'toPublicTask', 'createDownloadQueue', 'shutdownAll']) {
     assert.equal(typeof dm[name], 'function', `download-manager 应透出 ${name}`);

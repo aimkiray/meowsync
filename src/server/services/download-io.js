@@ -148,7 +148,7 @@ function hasNonIdentityEncoding(headers) {
 
 // 手动逐跳跟随重定向：axios maxRedirects 内部跟随、每跳不再过校验，
 // 302→http://169.254.169.254 之类的重定向投毒必须逐跳拦截
-async function fetchStream(rawUrl, { timeout, signal, headers }) {
+async function fetchStream(rawUrl, { timeout, signal, headers, allowedHost }) {
   let url = rawUrl;
   // 整次请求（含全部重定向跳）共享一张 pin 表：URL 阶段 checkHostPublic 与
   // 实际建连是两次独立解析（TOCTOU），socket 层 lookup 强制每次建连只能落
@@ -166,6 +166,12 @@ async function fetchStream(rawUrl, { timeout, signal, headers }) {
       throw fatalError(checked.reason);
     }
     const parsed = checked.url;
+    // 可选的逐跳宿主谓词：默认不带即现状零扰动；调用方给了（封面图床
+    // 白名单）每跳都要重验——入口闸只管首发 URL，302 跳出名单的重定向
+    // 投毒（ytimg→任意域）在此收口，判 fatal 不重试
+    if (allowedHost && !allowedHost(parsed.hostname)) {
+      throw fatalError('下载地址宿主不在白名单');
+    }
     // YouTube 族命中 yt_proxy 时整跳换道：本机公网校验与 socket 钉扎都只对
     // 「本机直连」有意义——代理通道下目标 DNS 在代理端解析，本机答案（墙内
     // 对 googlevideo 常是污染的 fake-IP/私网结果）无关且会拦死走代理的
@@ -331,8 +337,21 @@ async function streamToFile(response, outputPath, { maxBytes, onProgress, maxTot
       }
     });
 
+    // O_NOFOLLOW on the .part write: a symlink planted at partPath must not
+    // redirect the write outside the download tree — ELOOP lands in the
+    // shared catch below (FATAL_ERRNOS already lists it → deterministic)
+    const partFd = fs.openSync(partPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+    // fd 是裸数字无 GC——createWriteStream 构造期抛错要手动收
+    let writer;
+    try {
+      writer = fs.createWriteStream(partPath, { fd: partFd, autoClose: true });
+    } catch (e) {
+      try { fs.closeSync(partFd); } catch { /* already closed */ }
+      throw e;
+    }
     // pipeline 任一端出错都会销毁两侧流（abort 时 axios 流 reject → writer 同步销毁）
-    await pipeline(response.data, fs.createWriteStream(partPath));
+    await pipeline(response.data, writer);
 
     const stats = fs.statSync(partPath);
     if (stats.size === 0) {
