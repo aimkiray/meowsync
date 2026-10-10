@@ -423,7 +423,6 @@
       :lyric-offset-ms="lyricOffsetMs"
       :song-switching="songSwitching"
       :lyric-mode="fullscreenLyricMode"
-      :interaction-mode="fullscreenInteractionMode"
       @close="closeFullscreenPlayer"
       @toggle-play="togglePlay"
       @previous-song="previousSong"
@@ -431,7 +430,6 @@
       @seek-to="seekTo"
       @update-volume="updateVolume"
       @update:lyric-mode="fullscreenLyricMode = $event"
-      @update:interaction-mode="fullscreenInteractionMode = $event"
     />
   </div>
 </template>
@@ -545,7 +543,6 @@ export default {
     watch(() => authState.setupDismissed, v => { if (v) markDirty(LS_KEYS.SETUP_DISMISSED) })
     const playingPlaylistId = ref(null) // 快照所属歌单 id——持久化恢复用它而非浏览态 id
     const fullscreenLyricMode = ref('original')
-    const fullscreenInteractionMode = ref('auto')
     let restorePlayerState = null
 
     // YTM 式布局状态：主区视图（首页/歌曲/搜索结果/下载管理）+ 两个按需抽屉
@@ -893,7 +890,7 @@ export default {
       userPlaylists, selectedPlaylist,
       selectPlaylist, savePlaylistsToStorage,
       filteredSongs,
-      showVipSongs, fullscreenLyricMode, fullscreenInteractionMode,
+      showVipSongs, fullscreenLyricMode,
       recordPlayHistory, recordPlaylistHistory,
       // nav 域（useSearchNav）实例化在本 composable 之后——全部惰性转发
       enterWatch: () => enterWatch(),
@@ -1176,8 +1173,7 @@ export default {
     watch([
       showVipSongs,
       isFullscreenPlayerOpen,
-      fullscreenLyricMode,
-      fullscreenInteractionMode
+      fullscreenLyricMode
     ], () => {
       savePlayerStateToStorage()
     })
@@ -1338,7 +1334,6 @@ export default {
       volume,
       isFullscreenPlayerOpen,
       fullscreenLyricMode,
-      fullscreenInteractionMode,
       durationWarning,
       playbackError,
       loadingLyrics,

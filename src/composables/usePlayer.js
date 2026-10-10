@@ -76,7 +76,7 @@ export const notifyRemoteSeek = () => {
 //   gates / playingPlaylistId — 竞态闸与队列归属（库域同持）
 //   userPlaylists / selectedPlaylist / selectPlaylist / savePlaylistsToStorage — 库域
 //   filteredSongs — App computed（当前歌单可见曲集，播放上下文快照源）
-//   showVipSongs / fullscreenLyricMode / fullscreenInteractionMode — UI 偏好（存档写回）
+//   showVipSongs / fullscreenLyricMode — UI 偏好（存档写回）
 //   recordPlayHistory / recordPlaylistHistory — useHomeFeed
 //   nav — useSearchNav 惰性转发（nav 实例化在本 composable 之后，必须 thunk）：
 //     enterWatch / openWatchSong / selectPlaylistAndShow / setSidebarOpen / getSearchSongResults
@@ -86,7 +86,7 @@ export function usePlayer({
   userPlaylists, selectedPlaylist,
   selectPlaylist, savePlaylistsToStorage,
   filteredSongs,
-  showVipSongs, fullscreenLyricMode, fullscreenInteractionMode,
+  showVipSongs, fullscreenLyricMode,
   recordPlayHistory, recordPlaylistHistory,
   enterWatch, openWatchSong, selectPlaylistAndShow,
   setSidebarOpen, getSearchSongResults,
@@ -183,8 +183,7 @@ export function usePlayer({
         showVipSongs: showVipSongs.value,
         autoplayOn: autoplayOn.value,
         isFullscreenPlayerOpen: isFullscreenPlayerOpen.value,
-        fullscreenLyricMode: fullscreenLyricMode.value,
-        fullscreenInteractionMode: fullscreenInteractionMode.value
+        fullscreenLyricMode: fullscreenLyricMode.value
       }
       // 无正播曲且有远端续播挂账：恢复位四字段照账写——否则此刻的本地
       // 存档会以 currentSongId:null 把远端续播位整文抹掉（还广播空值）
@@ -233,7 +232,6 @@ export function usePlayer({
       if (typeof savedState.showVipSongs === 'boolean') showVipSongs.value = savedState.showVipSongs
       if (typeof savedState.autoplayOn === 'boolean') autoplayOn.value = savedState.autoplayOn
       if (typeof savedState.fullscreenLyricMode === 'string') fullscreenLyricMode.value = savedState.fullscreenLyricMode
-      if (typeof savedState.fullscreenInteractionMode === 'string') fullscreenInteractionMode.value = savedState.fullscreenInteractionMode
     }
 
     const restorePlaybackState = async (savedState) => {

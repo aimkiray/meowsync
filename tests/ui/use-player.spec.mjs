@@ -113,7 +113,6 @@ function makePlayer({ songs = [] } = {}) {
     filteredSongs: ref(songs),
     showVipSongs: ref(true),
     fullscreenLyricMode: ref('lyric'),
-    fullscreenInteractionMode: ref('drag'),
     recordPlayHistory: vi.fn(),
     recordPlaylistHistory: vi.fn(),
     enterWatch: vi.fn(), openWatchSong: vi.fn(), selectPlaylistAndShow: vi.fn(),

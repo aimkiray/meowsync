@@ -40,8 +40,6 @@ export class CanvasManager {
     this._space = 160
     this._speed = AUTO_DRIFT_SPEED
     this._position = 0
-    this._isOver = false
-    this._interactionMode = 'auto'
     this._lyrics = []
     this._activeLyricIndex = -1
     this._lastUpdateTime = 0
@@ -61,19 +59,13 @@ export class CanvasManager {
     this._can.className = 'textalive-local-canvas'
     this._container.append(this._can)
 
-    this._handleMove = (event) => this._move(event)
-    this._handleLeave = () => this._leave()
     this._handleResize = () => this.resize()
 
-    window.addEventListener('mousemove', this._handleMove)
-    window.addEventListener('mouseleave', this._handleLeave)
     window.addEventListener('resize', this._handleResize)
 
     if ('ontouchstart' in window) {
       this._space *= 0.5
       this._speed *= TOUCH_DRIFT_SPEED_MULTIPLIER
-      window.addEventListener('touchmove', this._handleMove, { passive: true })
-      window.addEventListener('touchend', this._handleLeave)
     }
 
     // 容器尺寸变化不一定伴随 window resize（全屏开关、布局变化等），
@@ -114,11 +106,6 @@ export class CanvasManager {
     })
   }
 
-  setInteractionMode(mode) {
-    this._interactionMode = mode === 'pointer' ? 'pointer' : 'auto'
-    this._isOver = false
-  }
-
   update(position) {
     if (!this._ctx) return
     // NaN/Infinity 参与相机插值后 _px/_py 永久变成 NaN，之后所有帧都无法恢复，
@@ -127,55 +114,46 @@ export class CanvasManager {
       position = this._position
     }
 
-    if (this._interactionMode !== 'pointer') {
-      this._isOver = false
+    const now = performance.now()
+    if (!this._lastUpdateTime) this._lastUpdateTime = now
+    const dt = Math.min((now - this._lastUpdateTime) / 1000, MAX_DELTA_SECONDS)
+    this._lastUpdateTime = now
+
+    if (now >= this._nextDriftChange) {
+      this._driftAngle = this._driftTargetAngle
+      this._driftTargetAngle = Math.random() * Math.PI * 2
+      this._nextDriftChange = now + DRIFT_DIRECTION_CHANGE_MIN_MS + Math.random() * (DRIFT_DIRECTION_CHANGE_MAX_MS - DRIFT_DIRECTION_CHANGE_MIN_MS)
     }
 
-    if (!this._isOver) {
-      const now = performance.now()
-      if (!this._lastUpdateTime) this._lastUpdateTime = now
-      const dt = Math.min((now - this._lastUpdateTime) / 1000, MAX_DELTA_SECONDS)
-      this._lastUpdateTime = now
+    let angleDiff = this._driftTargetAngle - this._driftAngle
+    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
+    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
+    const maxRotation = DRIFT_ROTATION_RATE * dt
+    this._driftAngle += Math.max(-maxRotation, Math.min(maxRotation, angleDiff))
 
-      if (now >= this._nextDriftChange) {
-        this._driftAngle = this._driftTargetAngle
-        this._driftTargetAngle = Math.random() * Math.PI * 2
-        this._nextDriftChange = now + DRIFT_DIRECTION_CHANGE_MIN_MS + Math.random() * (DRIFT_DIRECTION_CHANGE_MAX_MS - DRIFT_DIRECTION_CHANGE_MIN_MS)
-      }
+    // 触屏设备 _speed 已按 TOUCH_DRIFT_SPEED_MULTIPLIER 折半（构造器），
+    // 这里必须读实例值而非常量，否则触屏漂移与桌面同速
+    this._px += Math.cos(this._driftAngle) * this._speed * dt
+    this._py += Math.sin(this._driftAngle) * this._speed * dt
 
-      let angleDiff = this._driftTargetAngle - this._driftAngle
-      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
-      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
-      const maxRotation = DRIFT_ROTATION_RATE * dt
-      this._driftAngle += Math.max(-maxRotation, Math.min(maxRotation, angleDiff))
-
-      // 触屏设备 _speed 已按 TOUCH_DRIFT_SPEED_MULTIPLIER 折半（构造器），
-      // 这里必须读实例值而非常量，否则触屏漂移与桌面同速
-      this._px += Math.cos(this._driftAngle) * this._speed * dt
-      this._py += Math.sin(this._driftAngle) * this._speed * dt
-
-      // 相机弹簧牵引：越出安全区的量按指数平滑回拉（~2.5/s 收敛），
-      // 视觉上是被轻轻推回而非硬拽；冲出屏幕硬边才瞬时钳制兜底
-      if (this._focusCell) {
-        const space = this._space
-        const pad = space * VIEW_MARGIN_CELLS
-        const fx = this._px + this._focusCell.x * space + space / 2
-        const fy = this._py + this._focusCell.y * space + space / 2
-        const ease = 1 - Math.exp(-dt * 2.5)
-        this._px += (clamp(fx, pad, this._stw - pad) - fx) * ease
-        this._py += (clamp(fy, pad, this._sth - pad) - fy) * ease
-        // 硬边钳制限速：focus 落在深屏外（兜底落位允许部分出屏）时
-        // 全额瞬时校正会造成瞬移，单帧最多回拉 MAX_SNAP_CELLS 格
-        const edge = space * 0.3
-        const maxSnap = space * MAX_SNAP_CELLS
-        const hx = this._px + this._focusCell.x * space + space / 2
-        const hy = this._py + this._focusCell.y * space + space / 2
-        this._px += clamp(clamp(hx, edge, this._stw - edge) - hx, -maxSnap, maxSnap)
-        this._py += clamp(clamp(hy, edge, this._sth - edge) - hy, -maxSnap, maxSnap)
-      }
-
-      this._mouseX = this._stw / 2
-      this._mouseY = this._sth / 2
+    // 相机弹簧牵引：越出安全区的量按指数平滑回拉（~2.5/s 收敛），
+    // 视觉上是被轻轻推回而非硬拽；冲出屏幕硬边才瞬时钳制兜底
+    if (this._focusCell) {
+      const space = this._space
+      const pad = space * VIEW_MARGIN_CELLS
+      const fx = this._px + this._focusCell.x * space + space / 2
+      const fy = this._py + this._focusCell.y * space + space / 2
+      const ease = 1 - Math.exp(-dt * 2.5)
+      this._px += (clamp(fx, pad, this._stw - pad) - fx) * ease
+      this._py += (clamp(fy, pad, this._sth - pad) - fy) * ease
+      // 硬边钳制限速：focus 落在深屏外（兜底落位允许部分出屏）时
+      // 全额瞬时校正会造成瞬移，单帧最多回拉 MAX_SNAP_CELLS 格
+      const edge = space * 0.3
+      const maxSnap = space * MAX_SNAP_CELLS
+      const hx = this._px + this._focusCell.x * space + space / 2
+      const hy = this._py + this._focusCell.y * space + space / 2
+      this._px += clamp(clamp(hx, edge, this._stw - edge) - hx, -maxSnap, maxSnap)
+      this._py += clamp(clamp(hy, edge, this._sth - edge) - hy, -maxSnap, maxSnap)
     }
 
     // 先更新 position 再绘制：否则本帧用的是上一帧的时间戳（seek 后首帧画旧位置）
@@ -202,39 +180,9 @@ export class CanvasManager {
 
   destroy() {
     if (!this._ctx) return
-    window.removeEventListener('mousemove', this._handleMove)
-    window.removeEventListener('mouseleave', this._handleLeave)
     window.removeEventListener('resize', this._handleResize)
-    window.removeEventListener('touchmove', this._handleMove)
-    window.removeEventListener('touchend', this._handleLeave)
     this._resizeObserver?.disconnect()
     this._can.remove()
-  }
-
-  _move(event) {
-    if (this._interactionMode !== 'pointer') {
-      return
-    }
-
-    let mx = 0
-    let my = 0
-
-    if (event.touches?.length) {
-      mx = event.touches[0].clientX
-      my = event.touches[0].clientY
-    } else {
-      mx = event.clientX
-      my = event.clientY
-    }
-
-    const rect = this._container.getBoundingClientRect()
-    this._mouseX = mx - rect.left
-    this._mouseY = my - rect.top
-    this._isOver = this._mouseX >= 0 && this._mouseX <= this._stw && this._mouseY >= 0 && this._mouseY <= this._sth
-  }
-
-  _leave() {
-    this._isOver = false
   }
 
   _drawBg() {
@@ -462,9 +410,7 @@ export class CanvasManager {
         // 落位闸放宽到 persist 期：seek 落进句中/淡出窗的块也能补放，
         // 否则残句永久缺块（revealProgress 已满，放置即完整呈现）
         if (position <= lyric.endTime + LYRIC_PERSIST_MS) {
-          // Number.isFinite 才能挡住 undefined（Number.isNaN(undefined) 为 false 会放行）
-          if (Number.isFinite(this._mouseX) && !lyric.isDraw &&
-              position >= (lyric._placeRetryAt || 0)) {
+          if (!lyric.isDraw && position >= (lyric._placeRetryAt || 0)) {
             const state = lineStateOf(lyric)
 
             // 链尾失效检测：尾块被回退 seek 重置（tailIndex >= i）或已出存续窗时，
@@ -488,16 +434,16 @@ export class CanvasManager {
             }
 
             const dir = state.dir
-            // 行轴是单向延伸的（→↓↘），以焦点为锚点会让长句尾部探出屏幕。
-            // 锚点沿行轴反推半个"行长"（非块长），让整句大致以焦点为中心展开；
+            // 行轴是单向延伸的（→↓↘），以屏中心为锚点会让长句尾部探出屏幕。
+            // 锚点沿行轴反推半个"行长"（非块长），让整句大致以屏中心为中心展开；
             // 链式候选不受影响（tailX 已是精确链尾）
             const backstep = Math.min(Math.floor((lyric.lineLength || lyric.glyphs.length) / 2), 8)
-            const nx = Math.floor((-this._px + this._mouseX) / space) - dir.x * backstep
-            const ny = Math.floor((-this._py + this._mouseY) / space) - dir.y * backstep
+            const nx = Math.floor((-this._px + this._stw / 2) / space) - dir.x * backstep
+            const ny = Math.floor((-this._py + this._sth / 2) / space) - dir.y * backstep
 
             // 链式候选优先：同句下一块从上一块链尾延伸。先直行，
             // 碰壁（占位/靠边）就换方向在同点续排——字链长出折线；
-            // 另有小概率主动拐弯增加随机感。全败退回焦点散布
+            // 另有小概率主动拐弯增加随机感。全败退回屏心散布
             const candidates = []
             const altDirs = LINE_DIRECTIONS.filter(d => d !== dir)
             for (let k = altDirs.length - 1; k > 0; k--) {
