@@ -26,7 +26,7 @@ const ICONS = {
   'vol-mute': 'M12 7h2v1h1v1h2V8h1V7h2v2h-1v1h-1v2h1v1h1v2h-2v-1h-1v-1h-2v1h-1v1h-2v-2h1v-1h1v-2h-1V9h-1zM6 8V7h1V6h1V5h1V4h1V3h1v16h-1v-1H9v-1H8v-1H7v-1H6v-1H2V8zm1 2H4v2h3v1h1v1h1V8H8v1H7z',  // memory:volume-mute
   'vol-low': 'M6 8h4V7h1V6h1V5h1V4h1V3h1v16h-1v-1h-1v-1h-1v-1h-1v-1h-1v-1H6zm2 2v2h3v1h1v1h1V8h-1v1h-1v1z',  // memory:volume-low
   'expand': 'M7 10H5V9h1V8h2v1H7m4 1H9V9h1V8h2v1h-1m4 1h-2V9h1V8h2v1h-1m0 5h-1v-2h1v-1h1v2h-1m4 6H3v-1H2V4h1V3h16v1h1v14h-1m-1-1V5H4v12h10v-1h1v-1h1v2Z',  // memory:relative-scale
-  'fullscreen': 'M2 2h4v3h1v1h1v1h1v2h-2v-1h-1v-1h-1v-1H2V2Zm18 0h-4v3h-1v1h-1v1h-1v2h2v-1h1v-1h1v-1h3V2ZM2 20h4v-3h1v-1h1v-1h1v-2h-2v1h-1v1h-1v1H2v4Zm18 0h-4v-3h-1v-1h-1v-1h-1v-2h2v1h1v1h1v1h3v4Z',  // 手拼：⤢ 四向外扩角箭（L 角头+对角阶梯尾，中 4×4 留空）——全屏最普适记号；memory 集无 fullscreen/maximize glyph，aspect-ratio 闭盒形会撞 expand/plus/save 盒族；与 expand（窗口+单斜箭，resize 义）靠四角散射 vs 闭盒轮廓区分
+  'aspect': 'M17 10h-2V8h-2V6h4M9 16H5v-4h2v2h2m10 5H3v-1H2V4h1V3h16v1h1v14h-1m-1-1V5H4v12Z',  // memory:aspect-ratio——全屏歌词（沉浸模式）入口字形：闭盒+对角外张双箭头表「画面铺幅」，盖过 expand 的 resize 义
   'search': 'M19 20h-1v-1h-1v-1h-1v-1h-1v-1h-1v-1h-1v-1h-2v1H6v-1H4v-1H3v-2H2V6h1V4h1V3h2V2h5v1h2v1h1v2h1v5h-1v2h1v1h1v1h1v1h1v1h1v1h1v1h-1m-8-6v-1h1v-1h1V6h-1V5h-1V4H6v1H5v1H4v5h1v1h1v1Z',  // memory:search
   'download': 'M18 17v2H4v-2zM14 2v6h4v1h-1v1h-1v1h-1v1h-1v1h-1v1h-1v1h-2v-1H9v-1H8v-1H7v-1H6v-1H5V9H4V8h4V2zm-2 2h-2v6H9v1h1v1h2v-1h1v-1h-1z',  // memory:download
   'save': 'M2 3h1V2h13v1h1v1h1v1h1v1h1v13h-1v1H3v-1H2zm16 4h-1V6h-1V5h-1v4H6V4H4v14h2v-5h10v5h2zm-7-3v3h2V4zm3 14v-3H8v3z',  // memory:floppy-disk
