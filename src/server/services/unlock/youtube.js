@@ -8,7 +8,9 @@ const { innertubeSearch } = require('../../lib/youtube');
 const { resolveYoutubeStreams } = require('../youtube-resolve');
 const { pickByDuration } = require('./match');
 const { aiEnabled, askAiJson, aiModel } = require('../../lib/ai');
-const { getVerdict, upsertVerdict } = require('../../repositories/lyricAi');
+const { getVerdict, upsertVerdict, deleteUnlockVerdicts } = require('../../repositories/lyricAi');
+// 源级熔断记账——authRejected 是 IP 信誉证据而非候选死活
+const sourceHealth = require('./health');
 
 // 进 prompt 的字段剥换行/方括号/控制符——候选标题/频道名是第三方数据，
 // C0/C1 控制符（ANSI 转义等）原样进日志与 verdict detail 列，一并剥除
@@ -94,7 +96,7 @@ async function aiRankCandidates(info, usable, signal) {
   // 先例）；10s timeoutMs 是内层自净上限。搭车者用自己的 signal 决定吃不吃结果
   const fkey = `${sid}:${unjudged.map(c => c.videoId).join(',')}`;
   if (!inflightRank.has(fkey)) {
-    inflightRank.set(fkey, (async () => {
+    const p = (async () => {
       const desc = unjudged.map((c, i) =>
         `${i + 1}. ${cleanField(c.title)} — ${cleanField(c.owner)}（${c.durationSec || '?'}s）`).join('\n');
       const ans = await askAiJson({
@@ -111,7 +113,11 @@ async function aiRankCandidates(info, usable, signal) {
       // 合法整数（pick:true 曾被转成 1 把未认可候选写成批准 verdict）
       return Number.isInteger(ans?.pick) && ans.pick >= 0 && ans.pick <= unjudged.length
         ? ans : null;
-    })().catch(() => null).finally(() => inflightRank.delete(fkey)));
+    })().catch(() => null)
+      // 身份守卫同 unlockInflight 口径：forgetSong 外部清键后旧链仍在途——
+      // finally 只逐自身，防误删后注册的同键 gate（回调异步触发，越 TDZ）
+      .finally(() => { if (inflightRank.get(fkey) === p) inflightRank.delete(fkey); });
+    inflightRank.set(fkey, p);
   }
   const ans = await inflightRank.get(fkey);
   if (signal?.aborted || ans == null) return pass([...approved, ...unjudged, ...dead]);
@@ -132,6 +138,8 @@ async function aiRankCandidates(info, usable, signal) {
 /**
  * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
  * @returns {{url: string, urls: string[], br: number|null, durationSec: number|null}|null}
+ * @throws 候选含 authRejected 证据（authSeen>0 全灭）时抛带 err.authRejected/
+ *         err.authCounted 的 Error——编排层据此归 authwall 且不重复记连败
  */
 async function resolve(info, { signal, purpose } = {}) {
   // 无真实元数据（song_detail 缺失）时 keyword 为空/裸 id——搜索会
@@ -147,6 +155,8 @@ async function resolve(info, { signal, purpose } = {}) {
     return null;
   }
   let failed = 0;
+  let authSeen = 0;
+  let wallSeen = false;
   for (const cand of ordered) {
     if (signal?.aborted) throw new Error('aborted');
     try {
@@ -185,14 +195,46 @@ async function resolve(info, { signal, purpose } = {}) {
       failed += 1;
       markDead(info, cand);
     } catch (e) {
+      // abort 重抛先于记账——裸 authRejected 透出由编排层单记，此路径绝不可挂 authCounted
       if (signal?.aborted) throw e;
       failed += 1;
+      if (e?.authRejected) {
+        authSeen += 1;
+        // 不进死簿：bot 墙下候选没死，死簿 n>=2 还会把健康视频永久写成
+        // ok=0 verdict——墙期证据污染判定记忆是本事故次生伤。连败到阈
+        // 即整源停打：剩余候选继续跑只是给风控喂信号
+        if (sourceHealth.noteAuthRejected('youtube')) { wallSeen = true; break; }
+        continue;
+      }
       markDead(info, cand);
       // 单候选不可播放（地区锁/年龄门）换下一个候选
     }
   }
   if (failed) console.info(`[unlock] ${info.id} youtube: ${failed}/${ordered.length} 候选取流失败`);
+  // authwall 透出：回 null 会被编排层记成 nomatch 丢真因——抛 authRejected
+  // 错让 cls=authwall；单发（1 候选会员专享）也抛，盖不盖章由 health
+  // 连败判据独立决定，与本抛错解耦
+  if (authSeen > 0) {
+    const err = new Error(`Innertube 凭据被拒（${authSeen}/${ordered.length} 候选${wallSeen ? '，源已熔断' : ''}）`);
+    err.authRejected = true;
+    err.authCounted = true;   // [canonical MARKER] 连败已在逐候选处记账，防编排层双计
+    throw err;
+  }
   return null;
 }
 
-module.exports = { resolve, aiRankCandidates };
+// 按曲清解锁负状态（手动重试 = hard retry）：死簿/全否冷却/在途判定单飞
+// 按曲前缀清——共享 promise 仍在飞的无法取消，但新 resolve 不再搭车；
+// 持久 verdict（ok=0 否决与 ok=1 批准）整组删——批准侧虽可惜但
+// 「候选是好是坏」在墙期采集的证据本就不可信，重新判定代价只是一次 AI 调用。
+// DB 不可用不阻塞重试链。
+function forgetSong(songId) {
+  const sid = String(songId);
+  const prefix = `${sid}:`;
+  for (const k of deadCands.keys()) if (k.startsWith(prefix)) deadCands.delete(k);
+  rejectedAt.delete(sid);
+  for (const k of inflightRank.keys()) if (k.startsWith(prefix)) inflightRank.delete(k);
+  try { deleteUnlockVerdicts(sid); } catch { /* DB 不可用不阻塞重试 */ }
+}
+
+module.exports = { resolve, aiRankCandidates, forgetSong };
