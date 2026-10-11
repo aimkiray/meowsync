@@ -36,10 +36,29 @@ const plainTextLines = (lrc) => plainLyricLines(lrc).map((l) => ({ text: l.text 
 const sanitizePrompt = (s) => String(s || '')
   .replace(/[\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim();
 
+// 来源发布日合法性窗（chrono-guard 规格 §3.1 同式——不为 3 行函数建共享
+// 依赖，A/B/C 各消费文件就地实现）：下限 2000-01-01——YT 2005/B 站 2009
+// 上线前不存在真发布日，再早必脏；上限 now+24h 容忍时钟偏差——超界的
+// 「未来发布日」按未知处理不构成证据。isoDay 展示统一 UTC 日粒度
+// （YYYY-MM-DD，不受服务器 TZ 影响，测试可钉）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+// 候选侧（网易条目 publishTime）只滤明显脏数据——未来上架日是合法证据
+// （首发预售条目对现存视频本就不可能，嫌疑判面天然覆盖），不设业务上限；
+// 只夹 Date 值域——t >= 8.64e15（约 ±10 万年）时 new Date(t).toISOString()
+// 抛 RangeError，超此必脏数据按无日期处理（与 sanePublishMs 的窗语义同族）
+const candPubMsOf = (s) => {
+  const t = Number(s?.publishTime);
+  return Number.isFinite(t) && t > 0 && t <= 8640000000000000 ? t : 0;
+};
+
 // 判定对象是「(词源, 来源视频, 模型) 三元组」而非词源本身：同一 neteaseId
 // 可能被不同视频匹配到，A 视频的错配不能污染 B 视频的正常取用；换模型后
 // 旧判定自动失效重判（避免旧模型的误判被永久固化）
-function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor, poolMark, declMark) {
+function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor, poolMark, declMark, chronoMark) {
   // sig 输入在键函数内单边收口（slice 口径 = mirror 投影的 300/120）——
   // 播放链传全量、下载链传投影截断值，两侧对同一首歌必须产同一个键。
   // 必须先 slice 后 trim：trim(raw)[0:300] ≠ trim(raw[0:300])——前导空白
@@ -65,8 +84,16 @@ function lyricVerdictKey(lyricId, sourceTitle, sourceAuthor, poolMark, declMark)
   // 语境落的判定不复用。routes/ai.js 与
   // verifyDownloadOwnership 现亦携 declared（yt_ 来源反解成功时产
   // d3 键，与级联同键复用）；无声明键面逐位不动，存量判定记忆存续
+  // 时间位：判定语境携来源发布日证据（publishedAt→judgeInner pubSeg 进
+  // prompt）时盐尾再并 'c1'（v2c1/v4d3c1）——chronoMark 只锚源侧：
+  // 候选 publishTime 是条目身份面（lyricId 已在键内）且要到 song_detail
+  // 才能取，若进键会把「查键」变成「先付上行」，破坏缓存命中零上行
+  // 纪律。chronoMark 由调用方以 srcPubMs > 0 携入，与 judgeInner 的
+  // pubSeg 出场条件逐字对齐（declMark 同款对齐纪律——日期实参在场即
+  // 分键，无日期语境落的旧判定不能被携日期重判吃到：本案形态的无
+  // 日期假 ok 不会被携证据重判的旧键复用）；无日期键面逐位不动
   const sig = createHash('sha1')
-    .update(`${poolMark ? 'v4' : 'v2'}${declMark ? 'd3' : ''}|${String(sourceTitle).slice(0, 300).toLowerCase().trim()}|${String(sourceAuthor).slice(0, 120).toLowerCase().trim()}`)
+    .update(`${poolMark ? 'v4' : 'v2'}${declMark ? 'd3' : ''}${chronoMark ? 'c1' : ''}|${String(sourceTitle).slice(0, 300).toLowerCase().trim()}|${String(sourceAuthor).slice(0, 120).toLowerCase().trim()}`)
     .digest('hex').slice(0, 12);
   return `${lyricId}@${aiModel()}@${sig}`;
 }
@@ -133,17 +160,25 @@ function composerCreditRefutes(lines, candArtist, declAuthor) {
   return null;
 }
 
-// 署名闸对照轴的惰性补料（routes/ai.js 播放链与下方 verifyDownloadOwnership
-// 共用）：播放/下载链手里本没有候选条目身份（级联 verifyHit 自带 meta 不走
-// 此路）——声明在场 + 词源是网易条目 id + 词内确有作曲署名行，三条件齐备
-// 才付一跳 song_detail 反查候选艺人；任一缺席即归 null（无声明/无署名行/
-// 外源词源的主路径零上行零成本，extId/qq_ 由形态闸天然跳过）。反查只为闸
-// 供料：拿到艺人产 {artist} 进 judgeLyricLines 的 candidate，拿不到/上游故
-// 障同归 null——闸自动不适用，不落回旧的「宁放行」语义外任何变化
-async function resolveCreditGateCandidate({ id, lines, declared, signal }) {
+// 署名闸对照轴 + 候选上架日的惰性补料（routes/ai.js 播放链与下方
+// verifyDownloadOwnership 共用）：播放/下载链手里本没有候选条目身份
+// （级联 verifyHit 自带 meta 不走此路）——满足任一触发位才付一跳
+// song_detail 反查；两触发位全缺即归 null（无声明/无署名行/无日期语境/
+// 外源词源的主路径零上行零成本，extId/qq_ 由形态闸天然跳过）。
+// 双触发位：
+//   wantArtist——声明在场 + 词内确有作曲署名行：署名否证闸要候选艺人
+//     （wholicoji 实案病灶的三条件齐备才付跳）；
+//   wantDates——源侧发布日在场（调用方 srcPubMs>0、vkey c1 位已锚）：
+//     时间轴要候选上架日对照——本案形态正是无声明曲，只锚声明位会让
+//     候选日期永远装不进判定语境。
+// song_detail 同跳提取 publishTime 与艺人——署名闸要艺人、时间轴要上架
+// 日，一跳双供；反查只为证据供料：拿到什么进什么（{artist?, publishTime?}
+// 全缺归 null），拿不到/上游故障同归 null——闸/日期轴自动不适用，不落
+// 回旧的「宁放行」语义外任何变化
+async function resolveCreditGateCandidate({ id, lines, declared, signal, wantDates = false }) {
   if (!NETEASE_ID_BOUNDED_RE.test(String(id))) return null;
-  if (!normCreditName(declared?.author)) return null;
-  if (!composerCreditNames(lines).length) return null;
+  const wantArtist = normCreditName(declared?.author) && composerCreditNames(lines).length;
+  if (!wantArtist && !wantDates) return null;
   try {
     // 惰性 require：仅闸供料路径才拉起 netease 上行层——顶载会把 API
     // 依赖面挂进 lyric-verify 的全部引用方（含只消费解析面的调用链）
@@ -152,7 +187,9 @@ async function resolveCreditGateCandidate({ id, lines, declared, signal }) {
     const s = res?.body?.songs?.[0];
     const ar = Array.isArray(s?.ar || s?.artists) ? (s.ar || s.artists) : [];
     const artist = ar.map(a => a?.name).filter(Boolean).join('/');
-    return artist ? { artist } : null;
+    const publishTime = candPubMsOf(s) || undefined;
+    if (!artist && !publishTime) return null;
+    return { artist: artist || undefined, publishTime };
   } catch {
     return null;
   }
@@ -169,8 +206,12 @@ async function resolveCreditGateCandidate({ id, lines, declared, signal }) {
 // declared（可选）= 级联声明轮反解出的「投稿描述自署本家」{title,author}
 // ——语境证据而非判定身份：进 prompt；「有无声明」由调用方在 lyricVerdictKey
 // 的 declMark 位携进 vkey 盐尾分键（内容不进签名料——声明随来源视频走，
-// 键面已含来源题/名；与 verifyDownloadOwnership 的键约定不污染）
-async function judgeLyricLines({ vkey, lines, title, author, candidate, signal, declared }) {
+// 键面已含来源题/名；与 verifyDownloadOwnership 的键约定不污染）；
+// publishedAt（可选）= 源发布日 epoch ms——同构的语境证据：「源侧日期
+// 有无」由调用方在 vkey 的 c1 位携进盐尾分键（chronoMark 与 pubSeg 出场
+// 条件逐字对齐，srcPubMs>0 即分键）；候选上架日不进键——经 candidate
+// .publishTime 携进 prompt（条目身份面已在 lyricId 内）
+async function judgeLyricLines({ vkey, lines, title, author, candidate, signal, declared, publishedAt }) {
   // 署名否证闸先于缓存命中/abort/单飞/AI——同键下已固化的 AI 抖动
   // 错判也被确定性证据压回（判否不落 verdict，重算即得）
   const refuteSig = composerCreditRefutes(lines, candidate?.artist, declared?.author);
@@ -187,13 +228,13 @@ async function judgeLyricLines({ vkey, lines, title, author, candidate, signal, 
     // 搭车者用自己的 signal 决定吃不吃结果——返回前复查
     return signal?.aborted ? null : shared;
   }
-  const p = judgeInner(vkey, lines, title, author, candidate, declared)
+  const p = judgeInner(vkey, lines, title, author, candidate, declared, publishedAt)
     .finally(() => judgeInflight.delete(vkey));
   judgeInflight.set(vkey, p);
   return p;
 }
 
-async function judgeInner(vkey, lines, title, author, candidate, declared) {
+async function judgeInner(vkey, lines, title, author, candidate, declared, publishedAt) {
 
   const sourceTitle = sanitizePrompt(title).slice(0, 500);
   const sourceAuthor = sanitizePrompt(author).slice(0, 200);
@@ -208,8 +249,19 @@ async function judgeInner(vkey, lines, title, author, candidate, declared) {
   const candTitle = sanitizePrompt(candidate?.title).slice(0, 200);
   const candArtist = sanitizePrompt(candidate?.artist).slice(0, 120);
   const candAlbum = sanitizePrompt(candidate?.album).slice(0, 200);
-  const candSeg = (candTitle || candArtist || candAlbum)
-    ? `\n候选条目：标题 ${candTitle || '未知'} / 艺人 ${candArtist || '未知'} / 专辑 ${candAlbum || '未知'}`
+  // 时间证据段（chrono-guard）：源侧发布日成 pubSeg 单独出行（插
+  // declSeg 后）；候选侧上架日并入候选条目行尾（/ 上架 YYYY-MM-DD）——
+  // wantDates 补料形态下 publishTime 可能是唯一到手的候选字段，故
+  // candSeg 出场条件加 || candPubDay（日期-only 候选也产段，缺席槽位
+  // 填「未知」同身份字段惯例）。候选 publishTime 只过 finite>0——未来
+  // 上架日是合法嫌疑证据，不夹源侧上限
+  const srcPubMs = sanePublishMs(publishedAt);
+  const srcPubDay = srcPubMs ? isoDay(srcPubMs) : '';
+  const pubSeg = srcPubDay ? `\n来源发布日：${srcPubDay}` : '';
+  const candPubMs = candPubMsOf(candidate);
+  const candPubDay = candPubMs ? isoDay(candPubMs) : '';
+  const candSeg = (candTitle || candArtist || candAlbum || candPubDay)
+    ? `\n候选条目：标题 ${candTitle || '未知'} / 艺人 ${candArtist || '未知'} / 专辑 ${candAlbum || '未知'}${candPubDay ? ` / 上架 ${candPubDay}` : ''}`
     : '';
   const candGuide = candSeg
     ? '若候选条目标题/艺人与来源明显不同且歌词内容语言/主题也不符，判 false；'
@@ -260,6 +312,19 @@ async function judgeInner(vkey, lines, title, author, candidate, declared) {
       + '候选无署名行不适用此条。编曲/译词署名不作否证。'
     : '';
 
+  // 时间证据条款（chrono-guard）：双侧日期轴任一在场才注入——「上架」
+  // 是曲库数字上架/再压盘日而非歌曲诞生日（审计 9/9 旗标全是压盘误报的
+  // 教训），明言单独不构成否证；只有「候选是来源发布之后才首次发表的
+  // 独立新作条目」这一真倒挂形态才是否决证据（本案：翻唱投稿比所谓
+  // 「原曲」首发单曲早 4 年，时间上不可能采用其词）。日期是 AI 判定
+  // 语境证据而非机械闸——candSeg 只有日期字段也照常产段出场
+  const chronoGuide = (pubSeg || (candSeg && candPubDay))
+    ? '日期证据：「上架」是曲库数字上架/再压盘日而非歌曲诞生日——老条目上架晚于'
+      + '来源发布日数年仍可能是同曲，单独不构成否证；但候选若为来源发布之后才首次'
+      + '发表的独立新作条目（无关艺人的首发单曲/新歌），来源投稿不可能采用该词——'
+      + '结合词文与条目身份判 false。'
+    : '';
+
   // 抽样而非全文：首 4 行抓歌名植入（很多歌词开头点题），中段 6 行看主题；
   // 同文行（多时间戳副歌展开）去重，不浪费采样位
   const seenSample = new Set();
@@ -284,16 +349,18 @@ async function judgeInner(vkey, lines, title, author, candidate, declared) {
       + candGuide
       + poolGuide
       + declGuide
+      + chronoGuide
       + '只输出 JSON {"ok":true|false}',
-    user: `来源标题：${sourceTitle}\n来源作者/频道：${sourceAuthor || '未知'}${declSeg}${candSeg}${poolSeg}\n歌词抽样：\n${sample.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
+    user: `来源标题：${sourceTitle}\n来源作者/频道：${sourceAuthor || '未知'}${declSeg}${pubSeg}${candSeg}${poolSeg}\n歌词抽样：\n${sample.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
     maxTokens: 64,
   });
   if (ans == null || typeof ans.ok !== 'boolean') return null;
-  // detail 是人读审计列——来源题外烙声明语境位：vkey 的 'd3' 盐位机器
-  // 可判但行内审计看不到，decl:<自署题/名> 让「该判定携自署证据落下」
-  // 可回放（无声明行的 detail 逐位不动）
+  // detail 是人读审计列——来源题外烙声明/时间语境位：vkey 的 'd3'/'c1'
+  // 盐位机器可判但行内审计看不到，decl:<自署题/名> 与 pub:<源发布日>
+  // 让「该判定携自署/日期证据落下」可回放（无对应段的 detail 逐位不动）
   lyricAiRepo.upsertVerdict(vkey, 'lyric', ans.ok,
-    sourceTitle.slice(0, 200) + (declSeg ? `|decl:${declTitle || declAuthor}` : ''));
+    sourceTitle.slice(0, 200) + (declSeg ? `|decl:${declTitle || declAuthor}` : '')
+      + (pubSeg ? `|pub:${srcPubDay}` : ''));
   return ans.ok;
 }
 
@@ -424,9 +491,70 @@ function resolveYtDeclared(videoId, signal) {
     return Promise.resolve(null);
   }
 }
-// 测试钩子：memoize 命中会绕过 ytLib.resolveOriginalInfo 原位覆写桩——
-// 用例间不清缓存会把前例的解析结果带进后例
-const _clearDeclaredMemo = () => declaredMemo.clear();
+// yt_ 来源发布日的惰性解析（下载链 verifyDownloadOwnership 与 routes/ai.js
+// 播放链共用入口）——resolveYtDeclared 的时间轴镜像：microformat 发布日
+// 反解 epoch ms，作「时间倒挂嫌疑」的源侧证据进判定语境（pubSeg/c1 位）。
+// 纪律与 resolveYtDeclared 逐条同构，理由照录：
+// fail-soft——上游故障/超时/无日期/导出缺席（旧桩面无 resolvePublishedAt
+// 时 ?. 调归 undefined）一律归 null，调用方按「无日期证据」走旧路径
+// （日期是增强不是门禁——abort 被 impl 吞成 null 也合语义：归「无日期」
+// 后下游 signal?.aborted 闸照常截停）。
+// 双层限时同款：resolvePublishedAt 内部共享计算恒 signal:null（memo 纪律
+// ——搭车者不陪绑），链内各跳本有 timedSignal 自净超时（多形态轮替叠加
+// 可上分钟级）；这里再压 8s 硬闸并经 AbortSignal.any 合进内层 signal——
+// race 超时只释放本侧等待方，底层 fetch 靠自带超时自净，落地真值仍焐热
+// basicsMemo（对后续 match/verify 的惰性消费是红利，不算空烧）。
+// videoId 级短 TTL memoize（独立 pubMemo 簿）：vkey 的 c1 语境位吃「源侧
+// 日期有无」——解析成败抖动会把同曲键面劈成 v2/v2c1 两键（持久 verdict
+// 不复用、同一判定语境下的判否记忆被旁路）；播放链每次 verify 也不必
+// 先付一跳 YT 上行才查到缓存判定。存落地结果不是 promise 半成品；负结果
+// （无日期/超时/故障/abort 归 null）同入缓存——视频发布日一分钟内不
+// 翻转，该窗内「无日期」按稳定事实记。命中跳过 race——signal 语义在
+// 命中时不适用（上游零调用无泄漏）。
+// AbortSignal.any 对 truthy 非 signal 入参会同步 TypeError 抛在 .catch
+// 链外——整个函数体收进 try/catch，fail-soft 归 null 不漏同步抛
+const PUBDATE_RESOLVE_MS = 8000;
+const PUBDATE_MEMO_MS = 60000;
+// 容量帽与 declaredMemo 同口径（FIFO 挤出——Map 键序=插入序）
+const PUBDATE_MEMO_CAP = 500;
+const pubMemo = new Map();   // videoId -> {res, at}（res 含 null 负结果）
+function resolveYtPublishDate(videoId, signal) {
+  try {
+    const hit = pubMemo.get(videoId);
+    if (hit) {
+      if (Date.now() - hit.at < PUBDATE_MEMO_MS) return Promise.resolve(hit.res);
+      pubMemo.delete(videoId); // 过期即弃——不留在表里占位
+    }
+    const inner = signal
+      ? AbortSignal.any([AbortSignal.timeout(PUBDATE_RESOLVE_MS), signal])
+      : AbortSignal.timeout(PUBDATE_RESOLVE_MS);
+    const TIMEOUT = {};
+    return Promise.race([
+      Promise.resolve().then(() => ytLib.resolvePublishedAt?.({ videoId, signal: inner })),
+      new Promise((res) => {
+        const t = setTimeout(() => res(TIMEOUT), PUBDATE_RESOLVE_MS);
+        t.unref?.();
+      }),
+    ]).then((r) => {
+      // 落地值过源侧合法性窗——impl 归 null/脏值/超时同归「无日期」负结果
+      const ms = r && r !== TIMEOUT ? sanePublishMs(r) : 0;
+      return ms || null;
+    })
+      .catch(() => null)
+      .then((res) => {
+        if (pubMemo.size >= PUBDATE_MEMO_CAP && !pubMemo.has(videoId)) {
+          pubMemo.delete(pubMemo.keys().next().value);
+        }
+        pubMemo.set(videoId, { res, at: Date.now() });
+        return res;
+      });
+  } catch {
+    return Promise.resolve(null);
+  }
+}
+// 测试钩子：videoId 级事实 memo（声明+发布日）两簿同清——memoize 命中
+// 会绕过 ytLib 原位覆写桩，用例间不清缓存会把前例的解析结果带进后例
+const _clearDeclaredMemo = () => { declaredMemo.clear(); pubMemo.clear(); };
 
 // 下载链归属核验的决策收敛点（file-downloader 在落盘前调）：
 // 1) 源签名按 songId 前缀正则选取——畸形 providerData 的 bilibili/youtube
@@ -466,6 +594,30 @@ async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted,
     const declared = ytM
       ? await resolveYtDeclared(YT_ID_RE.test(pdVid) ? pdVid : ytM[1], signal)
       : null;
+    // 源发布日（vkey c1 语境位）与 declared 同位同纪律解析——缓存键的
+    // 时间位落定后才能查到「日期语境」已落的判定行。只向网易条目词源
+    // 供证据：extId 词源（ytm_/lrclib_/kugou_）无候选日期对照轴，级联
+    // verifyHit 也无此语境，两侧同键面才互命中；bv_ 吃 providerData 持久
+    // 字段（无服务端惰性解析），yt_ 持久缺席回退惰性反解（与 declared
+    // 同 videoId 回落口径：快照 videoId 缺席/畸形回落 ytM[1]）
+    const srcPubMs = NETEASE_ID_BOUNDED_RE.test(String(lyricId))
+      ? (sanePublishMs(extSrc?.publishedAt)
+        || (ytM ? (await resolveYtPublishDate(YT_ID_RE.test(pdVid) ? pdVid : ytM[1], signal)) || 0 : 0))
+      : 0;
+    // 刻意不传 poolMark——下载链手里没有检索候选池可比对，盲审口径独立
+    // 存续：级联内 pool 语境判否落的 v4 行与本链 v2 行互不命中；声明位
+    // 同口径——级联无池+声明语境落的 v2d3 行与本链产同键复用。declMark
+    // 与 judgeInner declSeg 出场条件逐字对齐（declTitle||declAuthor）——
+    // 声明实参在场但题/名全空（消毒后无段可产）时键与 prompt 不劈叉；
+    // chronoMark 同纪律携 srcPubMs>0——与 judgeInner pubSeg 出场条件逐字
+    // 对齐，携日期语境的判定与无日期旧键分家互不命中。
+    // vkey/缓存查询先于候选补料——与 routes/ai.js 播放链同序（那边
+    // getVerdict 命中早退在 resolveCreditGateCandidate 之前）：命中路径
+    // 不消费候选上架日则不为它付上行（wantDates &&= !cached）——缓存
+    // 命中零上行纪律；未命中逐位同旧
+    const vkey = lyricVerdictKey(lyricId, extSrc.title, extSrc.author || '', false,
+      Boolean(declared?.title || declared?.author), srcPubMs > 0);
+    const cached = lyricAiRepo.getVerdict(vkey, 'lyric');
     // 署名闸候选艺人补料 + 闸判定都先于本函数的一切短路（verdict 缓存命中
     // 与 !aiEnabled 放行）：闸的语义是确定性证据压过已固化判定——光把反查
     // 提前不够，judgeLyricLines 里的同款闸够不着本函数自己的 cached/AI 关
@@ -474,30 +626,27 @@ async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted,
     // 声明）时 composerCreditRefutes 前置归 null，零成本不适用。
     // 候选身份双通道：调用方在手（级联命中的 hit.meta）直用——extId 词源
     // 没有网易条目可反查，candidate 在手署名闸照常生效；缺省才走
-    // song_detail 惰性补料（网易 lyricId 可反查的那半）
+    // song_detail 惰性补料（网易 lyricId 可反查的那半）。双触发位：
+    //   wantArtist（署名闸要艺人）——声明+署名行齐备即付跳，缓存命中照跑
+    //     （闸仍先于透传判定，压实放行错判）；
+    //   wantDates（时间轴要上架日）——srcPubMs>0 且缓存未命中才付跳：
+    //     命中时取回的 publishTime 零消费，白付一跳（route 链同纪律）
     const cand = candidate
-      || await resolveCreditGateCandidate({ id: lyricId, lines, declared, signal });
+      || await resolveCreditGateCandidate({ id: lyricId, lines, declared, signal,
+        wantDates: srcPubMs > 0 && !cached });
     const refuteSig = composerCreditRefutes(lines, cand?.artist, declared?.author);
     if (refuteSig !== null) {
       console.info(`[lyric-verify] 署名否证: 作曲「${sanitizePrompt(refuteSig).slice(0, 120)}」=候选艺人≠声明本家「${sanitizePrompt(declared?.author).slice(0, 120)}」`);
       return false;
     }
-    // 刻意不传 poolMark——下载链手里没有检索候选池可比对，盲审口径独立
-    // 存续：级联内 pool 语境判否落的 v4 行与本链 v2 行互不命中；声明位
-    // 同口径——级联无池+声明语境落的 v2d3 行与本链产同键复用。declMark
-    // 与 judgeInner declSeg 出场条件逐字对齐（declTitle||declAuthor）——
-    // 声明实参在场但题/名全空（消毒后无段可产）时键与 prompt 不劈叉
-    const vkey = lyricVerdictKey(lyricId, extSrc.title, extSrc.author || '', false,
-      Boolean(declared?.title || declared?.author));
-    const cached = lyricAiRepo.getVerdict(vkey, 'lyric');
     if (cached) return !!cached.ok;
     // AI 关只挡新判定——已落库判定行上面已查（记忆不随开关旁路）
     if (!aiEnabled()) return true;
-    return await judgeLyricLines({ vkey, lines, title: extSrc.title, author: extSrc.author || '', candidate: cand, signal, declared });
+    return await judgeLyricLines({ vkey, lines, title: extSrc.title, author: extSrc.author || '', candidate: cand, signal, declared, publishedAt: srcPubMs || undefined });
   } catch (e) {
     if (e?.aborted || signal?.aborted) throw e?.aborted ? e : Object.assign(new Error('已取消'), { aborted: true });
     return null;
   }
 }
 
-module.exports = { parseLrcLines, plainTextLines, lyricVerdictKey, judgeLyricLines, judgePoolPick, verifyDownloadOwnership, resolveYtDeclared, resolveCreditGateCandidate, composerCreditNames, composerCreditRefutes, sanitizePrompt, _clearDeclaredMemo };
+module.exports = { parseLrcLines, plainTextLines, lyricVerdictKey, judgeLyricLines, judgePoolPick, verifyDownloadOwnership, resolveYtDeclared, resolveYtPublishDate, resolveCreditGateCandidate, composerCreditNames, composerCreditRefutes, sanitizePrompt, _clearDeclaredMemo };

@@ -26,11 +26,16 @@ seed('../src/server/repositories/lyricAi.js', {
 });
 // 自署本家反解桩：lyric-verify 经模块对象调 lib/youtube.resolveOriginalInfo
 // （与 lyric-external.test.mjs 的 ytLib 原位覆写同口径）——钉录制桩隔离
-// 真身 fetchPlayer 上行面；origImpl 缺席默认归 null=无声明
+// 真身 fetchPlayer 上行面；origImpl 缺席默认归 null=无声明。
+// resolvePublishedAt 同款录制桩：chrono-guard 的源发布日惰性反解经
+// ytLib.resolvePublishedAt?.() 打到这里；pubImpl 缺席默认归 null=无日期
 let origImpl = null;
 const origCalls = [];
+let pubImpl = null;
+const pubCalls = [];
 seed('../src/server/lib/youtube.js', {
   resolveOriginalInfo: async (args) => { origCalls.push(args); return origImpl ? origImpl(args) : null; },
+  resolvePublishedAt: async (args) => { pubCalls.push(args); return pubImpl ? pubImpl(args) : null; },
 });
 // 署名闸候选反查桩：verifyDownloadOwnership 的 song_detail 惰性反查经
 // lyric-verify 内 lazy require 打到这里——钉录制桩隔离真实网易上行；
@@ -43,13 +48,14 @@ seed('../src/server/services/netease-api.js', {
     return detailImpl ? detailImpl(name, params) : { body: { songs: [] } };
   },
 });
-const { parseLrcLines, lyricVerdictKey, judgeLyricLines, judgePoolPick, verifyDownloadOwnership, composerCreditNames, _clearDeclaredMemo } = require('../src/server/services/lyric-verify.js');
+const { parseLrcLines, lyricVerdictKey, judgeLyricLines, judgePoolPick, verifyDownloadOwnership, composerCreditNames, resolveYtPublishDate, resolveCreditGateCandidate, _clearDeclaredMemo } = require('../src/server/services/lyric-verify.js');
 
 const lrc = '[00:01.00]line one\n[00:02.00]line two\n[00:03.00]line three\n';
 const lines = parseLrcLines(lrc);
-// _clearDeclaredMemo：resolveYtDeclared 的 videoId 级 memoize 会绕过
-// origImpl 原位桩——用例间不清缓存会把前例解析结果带进后例
-const reset = () => { aiScript = []; verdictRows = {}; writes.length = 0; askCalls = 0; aiOn = true; lastAsk = null; origImpl = null; origCalls.length = 0; detailImpl = null; apiCalls.length = 0; _clearDeclaredMemo(); };
+// _clearDeclaredMemo：resolveYtDeclared/resolveYtPublishDate 的 videoId 级
+// memoize 会绕过 origImpl/pubImpl 原位桩——用例间不清缓存会把前例解析
+// 结果带进后例（声明+发布日两簿同清）
+const reset = () => { aiScript = []; verdictRows = {}; writes.length = 0; askCalls = 0; aiOn = true; lastAsk = null; origImpl = null; origCalls.length = 0; pubImpl = null; pubCalls.length = 0; detailImpl = null; apiCalls.length = 0; _clearDeclaredMemo(); };
 
 test('vkey 含词源 id/模型/源签名；源签名对标题作者敏感', () => {
   const a = lyricVerdictKey('123', 'Title', 'Author');
@@ -799,4 +805,298 @@ test('resolveYtDeclared：memo 有界——FIFO 挤出 + 过期读即弃重查�
     await resolveYtDeclared('exp1');
     assert.equal(origCalls.length, n + 1); // 过期不命中——真查
   } finally { Date.now = realNow; }
+});
+
+// ── chrono-guard：源发布日证据（vkey c1 语境位 / pubSeg / 惰性反解 / 候选上架日）──
+
+// vkey 时间位（第六参 chronoMark）：携源发布日证据的判定语境与无日期口径
+// 必须分键——本案形态正是「无日期盲审落的假 ok 不能挡住携日期重判」；
+// c1 只锚源侧（候选 publishTime 是条目身份面且要 song_detail 才能取——
+// 进键会把「查键」变成「先付上行」，破坏缓存命中零上行纪律）
+test('vkey 时间位：chronoMark 真值盐尾并 c1——携日期语境判定与无日期旧键分家', () => {
+  const saltedKey = (salt) => (id, t, a) => `${id}@stub-model@${createHash('sha1')
+    .update(`${salt}|${String(t).slice(0, 300).toLowerCase().trim()}|${String(a).slice(0, 120).toLowerCase().trim()}`)
+    .digest('hex').slice(0, 12)}`;
+  const v2 = lyricVerdictKey('7', 'Twig ／ rei sirose', '_');
+  const v4d3 = lyricVerdictKey('7', 'Twig ／ rei sirose', '_', true, true);
+  const v2c1 = lyricVerdictKey('7', 'Twig ／ rei sirose', '_', false, false, true);
+  const v4d3c1 = lyricVerdictKey('7', 'Twig ／ rei sirose', '_', true, true, true);
+  // 盐字面量等值——时间位锚的就是盐尾 'c1'（v2c1/v4d3c1 形态断言）
+  assert.equal(v2c1, saltedKey('v2c1')('7', 'Twig ／ rei sirose', '_'));
+  assert.equal(v4d3c1, saltedKey('v4d3c1')('7', 'Twig ／ rei sirose', '_'));
+  // 与无 c1 旧键分家——无日期语境落的判定不被携日期判定吃到
+  assert.notEqual(v2c1, v2);
+  assert.notEqual(v4d3c1, v4d3);
+  // 第六参缺席/假值 = 无日期旧口径——存量键面逐位不动
+  assert.equal(lyricVerdictKey('7', 'Twig ／ rei sirose', '_'), v2);
+  assert.equal(lyricVerdictKey('7', 'Twig ／ rei sirose', '_', false, false), v2);
+  assert.equal(lyricVerdictKey('7', 'Twig ／ rei sirose', '_', false, false, false), v2);
+  assert.equal(lyricVerdictKey('7', 'Twig ／ rei sirose', '_', true, true, 0), v4d3);
+  assert.match(v4d3c1, /^7@stub-model@[0-9a-f]{12}$/);  // 键形态不破
+});
+
+test('旧无 c1 键 verdict 不被携日期判定复用——v2 预置判否在 v2c1 重进时重判', async () => {
+  reset();
+  const saltedKey = (salt) => `${'d1'}@stub-model@${createHash('sha1')
+    .update(`${salt}|${'来源题'.slice(0, 300).toLowerCase().trim()}|${''.slice(0, 120).toLowerCase().trim()}`)
+    .digest('hex').slice(0, 12)}`;
+  // 无日期盲审落的判否预置——携日期语境重进应按 v2c1 键重判：旧键判定
+  // 不盖掉新语境的判定机会（与 d2→d3 换代同纪律）
+  verdictRows[saltedKey('v2')] = { ok: 0 };
+  aiScript = [{ ok: true }];
+  const vkey = lyricVerdictKey('d1', '来源题', '', false, false, true);
+  const r = await judgeLyricLines({ vkey, lines, title: '来源题', author: '',
+    publishedAt: Date.parse('2020-04-07') });
+  assert.equal(r, true);
+  assert.equal(askCalls, 1);              // 真问过模型——没吃旧无 c1 键 verdict
+  assert.equal(writes[0].vkey, saltedKey('v2c1'));
+});
+
+// 时间证据段进判定 prompt（实案面：翻唱投稿比「原曲」首发条目早 4 年的
+// 真倒挂应被两侧日期+caveat 喂给判官——日期是证据不是机械闸）：双侧齐→
+// 源段+上架段+条款；仅源侧→源段+条款；仅候选侧→上架段+条款；全缺→
+// 逐位旧口径；verdict detail 烙 |pub:
+test('judgeInner 日期证据段：双侧齐/仅源侧/仅候选侧/全缺四形态；detail 烙 |pub:', async () => {
+  reset();
+  // 双侧日期齐（墨田区实案形态）：来源发布日 + 候选上架日都进 prompt
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({
+    vkey: 'ct1', lines, title: '墨田区 SUMMER NIGHT', author: 'R',
+    candidate: { title: '墨田区 SUMMER NIGHT', artist: '未来電波基地', publishTime: Date.parse('2024-03-18') },
+    publishedAt: Date.parse('2020-04-07'),
+  });
+  assert.match(lastAsk.user, /来源发布日：2020-04-07/);
+  assert.match(lastAsk.user, /候选条目：.*\/ 上架 2024-03-18/);
+  assert.match(lastAsk.system, /日期证据：「上架」是曲库数字上架\/再压盘日而非歌曲诞生日/);
+  assert.match(lastAsk.system, /来源投稿不可能采用该词/);
+  assert.equal(writes[0].detail, '墨田区 SUMMER NIGHT|pub:2020-04-07');
+  // 仅源侧在场：pubSeg+条款在，candSeg 无日期位
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({
+    vkey: 'ct2', lines, title: 't', author: 'a',
+    candidate: { title: 'c', artist: 'x' },
+    publishedAt: Date.parse('2020-04-07'),
+  });
+  assert.match(lastAsk.user, /来源发布日：2020-04-07/);
+  assert.ok(!lastAsk.user.includes('上架 '));
+  assert.match(lastAsk.system, /日期证据/);
+  assert.equal(writes.at(-1).detail, 't|pub:2020-04-07');
+  // 仅候选侧在场：上架段+条款在，pubSeg 不出（无源段不烙 |pub:）
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({
+    vkey: 'ct3', lines, title: 't', author: 'a',
+    candidate: { title: 'c', artist: 'x', publishTime: Date.parse('2024-03-18') },
+  });
+  assert.ok(!lastAsk.user.includes('来源发布日'));
+  assert.match(lastAsk.user, /\/ 上架 2024-03-18/);
+  assert.match(lastAsk.system, /日期证据/);
+  assert.equal(writes.at(-1).detail, 't');
+  // 日期-only 候选（wantDates 补料拿到 publishTime 没拿到艺人）：段照出、
+  // 缺席身份槽位填「未知」同 candSeg 惯例
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({
+    vkey: 'ct3b', lines, title: 't', author: 'a',
+    candidate: { publishTime: Date.parse('2024-03-18') },
+  });
+  assert.match(lastAsk.user, /候选条目：标题 未知 \/ 艺人 未知 \/ 专辑 未知 \/ 上架 2024-03-18/);
+  // 全缺：prompt 逐位旧口径——无日期段无条款无 |pub: 烙位
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({ vkey: 'ct4', lines, title: 't', author: 'a', candidate: { title: 'c', artist: 'x' } });
+  assert.ok(!lastAsk.user.includes('来源发布日'));
+  assert.ok(!lastAsk.user.includes('上架 '));
+  assert.ok(!lastAsk.system.includes('日期证据'));
+  assert.equal(writes.at(-1).detail, 't');
+  // 源侧脏值（2000 前/超窗）按无日期——sanePublishMs 窗内丢弃
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({
+    vkey: 'ct5', lines, title: 't', author: 'a',
+    publishedAt: Date.parse('1999-12-31'),
+  });
+  assert.ok(!lastAsk.user.includes('来源发布日'));
+  assert.equal(writes.at(-1).detail, 't');
+  // 候选 publishTime 超 Date 值域（9e15 > 8.64e15）→ candPubDay 按无日期
+  // 处理不抛——夹界前 new Date(9e15).toISOString() 在此处抛 RangeError；
+  // 收口后 candSeg 无上架段、日期条款仍随源侧 pubSeg 在场
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({
+    vkey: 'ct6', lines, title: 't', author: 'a',
+    candidate: { title: 'c', artist: 'x', publishTime: 9e15 },
+    publishedAt: Date.parse('2020-04-07'),
+  });
+  assert.match(lastAsk.user, /来源发布日：2020-04-07/);
+  assert.ok(!lastAsk.user.includes('上架 '));
+  assert.match(lastAsk.system, /日期证据/);
+  assert.equal(writes.at(-1).detail, 't|pub:2020-04-07');
+});
+
+// resolveYtPublishDate：resolveYtDeclared 的时间轴镜像——memoize 单飞/
+// 负结果 60s 窗同入/impl 抛错 fail-soft 归 null/旧桩缺导出 ?. 不炸
+test('resolveYtPublishDate：memo 单飞 + 负结果窗 + 抛错/缺导出/脏值归 null', async () => {
+  reset();
+  // 同 videoId 两次解析——impl 只真打一次（60s memoize）
+  pubImpl = async () => Date.parse('2020-04-07');
+  assert.equal(await resolveYtPublishDate('pubvid00001'), Date.parse('2020-04-07'));
+  assert.equal(await resolveYtPublishDate('pubvid00001'), Date.parse('2020-04-07'));
+  assert.equal(pubCalls.length, 1);
+  // 负结果同入窗——「无日期」一分钟内按稳定事实记不重打（防 c1 位抖动劈键）
+  pubCalls.length = 0; pubImpl = null;
+  assert.equal(await resolveYtPublishDate('pubvid00002'), null);
+  assert.equal(await resolveYtPublishDate('pubvid00002'), null);
+  assert.equal(pubCalls.length, 1);
+  // impl 抛错 → fail-soft 归 null 不炸（增强证据不抛）
+  pubCalls.length = 0;
+  pubImpl = async () => { throw new Error('upstream boom'); };
+  assert.equal(await resolveYtPublishDate('pubvid00003'), null);
+  assert.equal(pubCalls.length, 1);
+  // impl 归出窗脏值 → 过源侧合法性窗同归 null
+  pubImpl = async () => Date.parse('1990-01-01');
+  assert.equal(await resolveYtPublishDate('pubvid00004'), null);
+  // 过期条目读即弃：时钟拨过 60s 后同 id 重查上游
+  const realNow = Date.now;
+  try {
+    pubCalls.length = 0;
+    pubImpl = async () => Date.parse('2020-04-07');
+    await resolveYtPublishDate('pubvid00005');
+    const n = pubCalls.length;
+    Date.now = () => realNow() + 61000;
+    await resolveYtPublishDate('pubvid00005');
+    assert.equal(pubCalls.length, n + 1);   // 过期不命中——真查
+  } finally { Date.now = realNow; }
+  // 旧桩面缺 resolvePublishedAt 导出 → ?. 调归 undefined→null 不炸
+  const ytStub = require('../src/server/lib/youtube.js');
+  const saved = ytStub.resolvePublishedAt;
+  delete ytStub.resolvePublishedAt;
+  try {
+    assert.equal(await resolveYtPublishDate('pubvid00006'), null);
+  } finally { ytStub.resolvePublishedAt = saved; }
+});
+
+// 源发布日接线（chrono-guard）：providerData 快照直吃零上行 / yt_ 持久缺席
+// 惰性反解 / bv_ 持久字段供轴 / extId 词源不解析不携 c1（与级联 verifyHit
+// 键面守恒互命中）
+test('verifyDownloadOwnership：publishedAt 快照直吃/yt_ 惰性/bv_ 字段/extId 不带 c1', async () => {
+  reset();
+  const YT_PUB = Date.parse('2020-04-07');
+  // providerData.youtube.publishedAt 在手 → 直吃——resolvePublishedAt 零上行
+  aiScript = [{ ok: true }];
+  assert.equal(await verifyDownloadOwnership({
+    songId: YT_ID, lyricId: '9001',
+    providerData: { youtube: { videoId: 'abcdefghijk', title: 'Y来源题', author: 'Y频道', publishedAt: YT_PUB } },
+    lrc,
+  }), true);
+  assert.equal(pubCalls.length, 0);                 // 快照在手不付惰性上行
+  assert.match(lastAsk.user, /来源发布日：2020-04-07/);
+  // vkey 携 c1 位（无声明→v2c1 盐）；detail 同烙 |pub:
+  assert.equal(writes[0].vkey, lyricVerdictKey('9001', 'Y来源题', 'Y频道', false, false, true));
+  assert.equal(writes[0].detail, 'Y来源题|pub:2020-04-07');
+  // yt_ 持久字段缺席 → 惰性反解（与 declared 同 videoId 回落口径）
+  pubImpl = async () => YT_PUB;
+  aiScript = [{ ok: true }];
+  assert.equal(await verifyDownloadOwnership({
+    songId: 'yt_pubmiss0001', lyricId: '9002',
+    providerData: { youtube: { videoId: 'pubmiss0001', title: 'Y来源题', author: 'Y频道' } },
+    lrc,
+  }), true);
+  assert.equal(pubCalls.length, 1);
+  assert.equal(pubCalls[0].videoId, 'pubmiss0001');
+  assert.equal(writes.at(-1).vkey, lyricVerdictKey('9002', 'Y来源题', 'Y频道', false, false, true));
+  assert.match(lastAsk.user, /来源发布日：2020-04-07/);
+  // yt_ 反解空手（无日期）→ 无 c1 旧键逐位不动
+  pubImpl = null;
+  aiScript = [{ ok: true }];
+  assert.equal(await verifyDownloadOwnership({
+    songId: 'yt_pubnone0001', lyricId: '9003',
+    providerData: { youtube: { videoId: 'pubnone0001', title: 'Y来源题', author: 'Y频道' } },
+    lrc,
+  }), true);
+  assert.equal(writes.at(-1).vkey, lyricVerdictKey('9003', 'Y来源题', 'Y频道'));
+  assert.ok(!lastAsk.user.includes('来源发布日'));
+  // bv_ 吃 providerData.bilibili.publishedAt → c1 键 + 源段进 prompt
+  // （无服务端惰性解析——pubCalls 零增长）
+  pubCalls.length = 0;
+  aiScript = [{ ok: true }];
+  assert.equal(await verifyDownloadOwnership({
+    songId: BV_ID, lyricId: '9004',
+    providerData: { bilibili: { bvid: 'BV1xx411c7mD', title: 'B来源题', author: 'B作者', publishedAt: Date.parse('2021-05-06') } },
+    lrc,
+  }), true);
+  assert.equal(pubCalls.length, 0);
+  assert.equal(writes.at(-1).vkey, lyricVerdictKey('9004', 'B来源题', 'B作者', false, false, true));
+  assert.match(lastAsk.user, /来源发布日：2021-05-06/);
+  // extId 词源：publishedAt 快照在手也不解析不携 c1——无候选日期对照轴，
+  // 与级联 verifyHit 键面守恒互命中
+  aiScript = [{ ok: true }];
+  assert.equal(await verifyDownloadOwnership({
+    songId: 'yt_pubext00001', lyricId: 'ytm_x9',
+    providerData: { youtube: { videoId: 'pubext00001', title: 'Y来源题', author: 'Y频道', publishedAt: YT_PUB } },
+    lrc,
+  }), true);
+  assert.equal(pubCalls.length, 0);
+  assert.equal(writes.at(-1).vkey, lyricVerdictKey('ytm_x9', 'Y来源题', 'Y频道'));
+  assert.ok(!lastAsk.user.includes('来源发布日'));
+});
+
+// resolveCreditGateCandidate wantDates（chrono-guard 双触发位）：声明/署名
+// 行缺席但源侧日期在场同样付一跳 song_detail——本案正是无声明形态；同跳
+// 提取 publishTime 与艺人双供进判定 prompt
+test('resolveCreditGateCandidate：wantDates 位——无声明携日期照样反查、publishTime 双供', async () => {
+  reset();
+  // 无 declared + wantDates + 网易 id → 付跳；publishTime 进 candidate
+  detailImpl = async () => ({ body: { songs: [
+    { name: '墨田区 SUMMER NIGHT', ar: [{ name: '未来電波基地' }], publishTime: Date.parse('2024-03-18') },
+  ] } });
+  const cand = await resolveCreditGateCandidate({ id: '2136493163', lines, declared: null, wantDates: true });
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].name, 'song_detail');
+  assert.equal(apiCalls[0].params.ids, '2136493163');
+  assert.deepEqual(cand, { artist: '未来電波基地', publishTime: Date.parse('2024-03-18') });
+  // 补料产物进判定语境——候选上架日进 candSeg
+  aiScript = [{ ok: true }];
+  await judgeLyricLines({ vkey: 'wd1', lines, title: 't', author: 'a', candidate: cand,
+    publishedAt: Date.parse('2020-04-07') });
+  assert.match(lastAsk.user, /\/ 上架 2024-03-18/);
+  assert.match(lastAsk.user, /来源发布日：2020-04-07/);
+  // song_detail 空手 → 归 null——日期段不出
+  detailImpl = null;
+  assert.equal(await resolveCreditGateCandidate({ id: '2136493164', lines, declared: null, wantDates: true }), null);
+  // wantDates 缺席 + 声明/署名行不在 → 旧语义逐位同（零上行归 null）
+  const n = apiCalls.length;
+  assert.equal(await resolveCreditGateCandidate({ id: '2136493165', lines, declared: null }), null);
+  assert.equal(apiCalls.length, n);
+  // 非网易 id → 形态闸天然跳过（wantDates 也不反查）
+  assert.equal(await resolveCreditGateCandidate({ id: 'ytm_x1', lines, declared: null, wantDates: true }), null);
+  assert.equal(apiCalls.length, n);
+});
+
+// wantDates 调用点接线 + 缓存命中零上行（chrono-guard 收口）：下载链
+// verifyDownloadOwnership 的 `wantDates: srcPubMs>0 && !cached` 实参曾是
+// 零断言链——本案主流形态（无声明曲 + 源日在场 + 网易 lyricId）靠它把候选
+// 上架日送进判定语境。未命中付跳 song_detail 双供；verdict 命中则该跳不付
+// ——命中路径不消费 publishTime 就不为它付上行（与 routes/ai.js 播放链同序）
+test('verifyDownloadOwnership：wantDates 接线——未命中付跳供上架日进 prompt；verdict 命中零上行', async () => {
+  reset();
+  const PUB = Date.parse('2020-04-07');
+  const PD_PUB = { youtube: { videoId: 'wdvid000001', title: 'Y来源题', author: 'Y频道', publishedAt: PUB } };
+  const songId = 'yt_wdvid000001';
+  detailImpl = async () => ({ body: { songs: [
+    { name: '墨田区 SUMMER NIGHT', ar: [{ name: '未来電波基地' }], publishTime: Date.parse('2024-03-18') },
+  ] } });
+  // 未命中臂：srcPubMs>0 且无声明/无署名行 → wantDates 付跳 song_detail——
+  // 取回的 publishTime 进判定语境（candSeg 上架段）
+  aiScript = [{ ok: true }];
+  const r = await verifyDownloadOwnership({ songId, lyricId: '9010', providerData: PD_PUB, lrc });
+  assert.equal(r, true);
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].name, 'song_detail');
+  assert.equal(apiCalls[0].params.ids, '9010');
+  assert.match(lastAsk.user, /来源发布日：2020-04-07/);
+  assert.match(lastAsk.user, /\/ 上架 2024-03-18/);
+  // 命中臂（零上行钉）：同键预置 verdict——wantDates-only 形态下取回的
+  // publishTime 零消费，song_detail 一跳不付；署名闸无对照轴（无声明/无
+  // 署名行）同样不适用——缓存透出零上行
+  verdictRows[lyricVerdictKey('9011', 'Y来源题', 'Y频道', false, false, true)] = { ok: 1 };
+  const r2 = await verifyDownloadOwnership({ songId, lyricId: '9011', providerData: PD_PUB, lrc });
+  assert.equal(r2, true);
+  assert.equal(apiCalls.length, 1);   // 仍只有上一臂那跳——命中零上行
+  assert.equal(askCalls, 1);          // 缓存透出也没烧 AI
 });
