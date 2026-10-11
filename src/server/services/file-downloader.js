@@ -854,7 +854,15 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
     // items[0] 可能解锁失败但后续条目有 url——选第一个可用的，而不是永远盯着第一个
     const songData = items.find(i => i.url && !i.unlockFailed) || items[0];
     if (songData.unlockFailed) {
-      throw fatalError('解锁失败，所有可用源均无匹配');
+      // 逐源归因进错误消息（L1）：flatMap 收全 items——单曲下载即该曲全部
+      // 源记录；breaker 条目是「该源本次没跑」的证据而非 transient
+      const errs = items.flatMap(i => Array.isArray(i.unlockErrors) ? i.unlockErrors : []);
+      const detail = errs.map(e => `${e.source}: ${e.msg}`).join('；');
+      const msg = `解锁失败，逐源均无匹配（${detail || '无逐源记录'}）`;
+      // L4：任一源瞬时失败 → 普通 Error 走 retryAfter 退避（≤3 次自动重试）；
+      // 全 nomatch/authwall/breaker 是窗口内确定性结果——维持 fatal 不白打
+      if (errs.some(e => e.cls === 'transient')) throw new Error(msg);
+      throw fatalError(msg);
     }
     if (songData.freeTrialInfo) {
       throw fatalError('仅获取到试听片段，可能受版权限制');
