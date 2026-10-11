@@ -54,10 +54,20 @@ function upsertVerdict(vkey, kind, ok, detail) {
   ).run(vkey, kind, ok ? 1 : 0, detail);
 }
 
+// 解锁 verdict 按曲前缀整删（hard retry）：vkey = <曲id>@yt_<videoId>@<模型>，
+// GLOB 前缀匹配——LIKE 的 '_' 是单字通配（'yt_' 段会宽匹），GLOB 只 '*'
+// 通配、前缀逐字相等，且值全量参数绑定不入 SQL 文本
+function deleteUnlockVerdicts(songId) {
+  return getDb().prepare(
+    `DELETE FROM song_ai_verdict WHERE kind = 'unlock' AND song_id GLOB ?`
+  ).run(`${String(songId)}@yt_*`).changes;
+}
+
 const getLyricVerdict = (vkey) => getVerdict(vkey, 'lyric');
 const upsertLyricVerdict = (vkey, ok, detail) => upsertVerdict(vkey, 'lyric', ok, detail);
 
 module.exports = {
   getCachedTranslation, upsertTranslation, markTranslationSkip,
   getVerdict, upsertVerdict, getLyricVerdict, upsertLyricVerdict,
+  deleteUnlockVerdicts,
 };
