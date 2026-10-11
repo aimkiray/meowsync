@@ -8,6 +8,10 @@ const { withBasePath } = require('../lib/base-path');
 const { aiEnabled, askAiJson } = require('../lib/ai');
 const { callNeteaseApi, apiModules } = require('./netease');
 const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('./unlock');
+// 源级熔断健康闸——独立路径而非 ./unlock 解构：既有测试对 index.js 的
+// seed 桩面只有 {PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES} 三字段，
+// 从门面解构 health 会在桩下拿到 undefined 崩掉
+const sourceHealth = require('./unlock/health');
 
 // 试听版判定阈值：上游返回的 url 时长不超过 60s 视为试听片段
 const TRIAL_MAX_DURATION_MS = 60000;
@@ -140,7 +144,7 @@ const unlockCacheSet = (purpose, id, proxied, value) => {
 // 共享 promise 不吃调用方 signal——首调用方断连不该让搭车者陪绑降级；
 // 各等待方 await 后用自己的 signal 决定吃不吃结果
 // （unlockInfoInflight / net-guard dnsInflight 同款先例）
-const unlockInflight = new Map(); // unlockCacheKey 同型键 -> Promise<resolved|null>
+const unlockInflight = new Map(); // unlockCacheKey 同型键 -> Promise<{resolved, errors}>
 
 // ── AI 解锁辅助 ────────────────────────────────────────────────
 // unm match() 内部的 select 用 keyword（name - artists）在各源站搜候选——
@@ -194,7 +198,9 @@ async function aiUnlockInfo(songRow, signal) {
   // 断连不该让同 inflight 的 waiter 陪绑降级（10s 超时已是内层自净上限）
   const gate = unlockInfoInflight.get(key);
   if (gate) return gate;
-  const p = aiUnlockInfoInner(songRow).finally(() => unlockInfoInflight.delete(key));
+  // 身份守卫与 unlockInflight 同口径：forgetSongUnlock 清键后旧链
+  // finally 不得误逐后注册的新 gate
+  const p = aiUnlockInfoInner(songRow).finally(() => { if (unlockInfoInflight.get(key) === p) unlockInfoInflight.delete(key); });
   unlockInfoInflight.set(key, p);
   const data = await p;
   if (signal?.aborted) return data;
@@ -256,6 +262,15 @@ function extOf(url) {
   return null;
 }
 
+// 逐源异常 → unlockErrors cls 分类（[canonical CLSRULE]）：authRejected 是
+// 凭据级证据归 authwall；HTTP 5xx/429/超时/网络层归 transient（决定 L4
+// 全灭时任务走退避重试而非 fatal）；其余含 4xx/空回/未知抛错兜底 nomatch
+const UNLOCK_TRANSIENT_RE = /HTTP (5\d\d|429)|超时|timed?\s*out|abort|fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|visitorData 获取失败/i;
+const classifyUnlockError = (e) => {
+  if (e?.authRejected) return 'authwall';
+  return UNLOCK_TRANSIENT_RE.test(String(e?.message || e || '')) ? 'transient' : 'nomatch';
+};
+
 // 对 song_url 返回的 data 数组做解锁后处理（原地修改并返回）
 // - url 为空或为试听片段的条目尝试 ./unlock 注册表里的 provider 回退源
 // - 时长校验对所有源生效（provider 候选期已知 durationSec 直接比对，
@@ -277,6 +292,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
     for (const dropped of unlockTargets.splice(MAX_UNLOCK_ITEMS)) {
       dropped.url = null;
       dropped.unlockFailed = true;
+      dropped.unlockErrors = [{ source: '-', msg: '超出单次解锁条数上限，未尝试', cls: 'nomatch' }];
     }
   }
   throwIfAborted();
@@ -311,6 +327,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   // signal（自净上限靠每次 provider 调用的 UNBLOCK_TIMEOUT_MS）；并发等待
   // 方在 await 共享 promise 后自查自己的 signal 决定吃不吃结果
   const resolveOne = async (item, originalDt) => {
+    // 逐源失败归因——不直写 item：产出经 unlockInflight 键共享给并发
+    // 搭车者，errors 必须随共享结果 {resolved, errors} 一起走，否则
+    // 搭车 item 无归因（L1）
+    const errors = [];
     // AI 规整检索元数据：一次提取全源复用（provider 拿 keyword 去外站
     // 搜候选，干净的 name/artists 让候选选择更准）。失败 → 退回
     // song_detail 原始字段拼 keyword；连 songRow 都没有时 info=null——
@@ -329,6 +349,15 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
     for (const source of allSources) {
       const provider = PROVIDERS[source];
       if (!provider) continue;
+      // 源级熔断闸（L2）：盖章窗内整源跳过——每次解锁重跑注定失败的
+      // 完整试错链（youtube 每候选 3 形态 × 至多 2 试 + 30s 子预算）既
+      // 拖长 resolve 又持续给风控喂信号；breaker 条目记「该源本次没跑」
+      if (sourceHealth.isOpen(source)) {
+        const msg = `源熔断中：${sourceHealth.breakerReason(source) || '连败判据'}`;
+        errors.push({ source, msg, cls: 'breaker' });
+        console.info(`[unlock] ${item.id} ${source}: ${msg}`);
+        continue;
+      }
       try {
         const unblocked = await provider.resolve(
           info ? { ...info } : { id: item.id, keyword: '' },
@@ -361,6 +390,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           urls.push(chk.url.toString());
         }
         if (!checked) {
+          // 区分两类真因：源回 null/AI 全否（unblocked 空）与「有回链被
+          // 归一化/公网校验杀」——下游 FAILMSG 直接消费这段文案
+          errors.push({ source, msg: unblocked ? '回链归一化/公网校验全拒' : '源未产出候选', cls: 'nomatch' });
           console.info(`[unlock] ${item.id} ${source}: 无可用回链或归一化/公网校验全拒`);
           continue;
         }
@@ -378,6 +410,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
           }
           if (!urls.length) {
+            errors.push({ source, msg: '回链不在代理白名单', cls: 'nomatch' });
             console.info(`[unlock] ${item.id} ${source}: 不在代理白名单`);
             continue;
           }
@@ -405,6 +438,7 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             estMs = estimateDuration(sizeBytes, unblocked.br);
           }
           if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
+            errors.push({ source, msg: `时长校验不符（估算${Math.round(estMs)}ms/原始${originalDt}ms）`, cls: 'nomatch' });
             console.warn(
               `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
             );
@@ -426,13 +460,21 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           timeMs: estMs || originalDt || null,
         };
         unlockCacheSet(purpose, item.id, !!proxyOrigin, resolved);
-        return resolved;
+        // 源一次成功 = 凭据面回春——连败清零（已盖章的不撤，窗内仍跳过）
+        sourceHealth.noteSourceOk(source);
+        // errors 可能非空：前序源失败留痕随成功结果一起下发
+        return { resolved, errors };
       } catch (e) {
+        const cls = classifyUnlockError(e);
+        // [canonical MARKER] provider 内已逐候选记过账的 authRejected
+        // 不重复计——否则单 resolve 单证据计 2 次即误触盖章
+        if (cls === 'authwall' && !e.authCounted) sourceHealth.noteAuthRejected(source);
+        errors.push({ source, msg: String(e?.message || e).replace(/[\r\n]+/g, ' '), cls });
         // 该源失败，继续下一个——留一行 info 让「逐源全灭」可排障
         console.info(`[unlock] ${item.id} ${source}: ${e?.message || e}`);
       }
     }
-    return null;
+    return { resolved: null, errors };
   };
 
   const runUnlock = async (item) => {
@@ -451,12 +493,18 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         let gate = unlockInflight.get(gateKey);
         if (!gate) {
           gate = resolveOne(item, originalDt)
-            .finally(() => unlockInflight.delete(gateKey));
+            // 身份守卫：forgetSongUnlock 会在旧链在途时清键——旧 gate 的
+            // finally 无条件删会把后注册的新 gate 误逐（同键双链破坏单飞）
+            .finally(() => { if (unlockInflight.get(gateKey) === gate) unlockInflight.delete(gateKey); });
           unlockInflight.set(gateKey, gate);
         } else {
           shared = true;
         }
-        resolved = await gate;
+        const out = await gate;
+        resolved = out?.resolved ?? null;
+        // errors 随共享结果下发——本 item 可能是搭车者（resolveOne 跑的是
+        // 首调用方的 item），归因不能落在别人对象上
+        if (out?.errors?.length) item.unlockErrors = out.errors;
         throwIfAborted();
       }
       if (resolved) {
@@ -560,4 +608,25 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   return items;
 }
 
-module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock, MAX_UNLOCK_ITEMS };
+// 手动重试 = hard retry：把该曲在解锁链各层的负状态一次清掉——否则重跑
+// 只是复读同一条注定失败的链（60s unlockCache 里可能是已死签名链、
+// deadCands/verdict 里躺着墙期误判、rejectedAt 冷却挡住 AI 重评）。
+// 编排层缓存按键尾段 |<id> 匹配（键型 `${purpose}|${'px'|'direct'}|${id}`，
+// 尾段即歌曲 id，| 界符天然防 id 前缀误配）；provider 级负状态由各自
+// forgetSong 钩自清（pyncmd 无态、youtube 死簿/冷却/verdict 三簿）。
+// 全程 best-effort：任一环失败不阻塞重试主路径。
+function forgetSongUnlock(songId) {
+  const id = String(songId);
+  const suffix = `|${id}`;
+  for (const k of [...unlockCache.keys()]) if (k.endsWith(suffix)) unlockCache.delete(k);
+  for (const k of [...unlockInflight.keys()]) if (k.endsWith(suffix)) unlockInflight.delete(k);
+  unlockInfoCache.delete(id);
+  unlockInfoInflight.delete(id);
+  for (const p of Object.values(PROVIDERS)) {
+    try { p?.forgetSong?.(id); } catch (e) {
+      console.warn(`[unlock] forgetSong(${id}) 清理失败:`, e?.message || e);
+    }
+  }
+}
+
+module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock, MAX_UNLOCK_ITEMS, forgetSongUnlock };
