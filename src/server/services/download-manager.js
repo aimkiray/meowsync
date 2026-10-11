@@ -6,6 +6,9 @@ const playlistTracksRepo = require('../repositories/playlistTracks');
 const playlistsRepo = require('../repositories/playlists');
 const { importPlaylistFromNetease } = require('./playlist-sync');
 const fileDownloader = require('./file-downloader');
+// 手动重试 = hard retry：负状态清理由 netease-api 聚合出口收口。
+// 无环依赖——netease-api 不依赖本模块，file-downloader 本已把它拉进图谱
+const { forgetSongUnlock } = require('./netease-api');
 const { getDb } = require('../db/client');
 const { httpError } = require('../lib/http-error');
 const { FILE_TRACK_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
@@ -2201,6 +2204,11 @@ async function retryTask(taskId) {
     }
   })();
   retryAfter.delete(taskId); // 人工重试即用户明确再等——退避不该挡它
+  // 人工重试 = hard retry：该曲解锁负状态（缓存/死簿/冷却/verdict）一并清，
+  // 否则重跑只是复读同一条注定失败的链；best-effort——清理失败不挡重试
+  try { forgetSongUnlock(task.songId); } catch (e) {
+    console.warn(`任务 ${taskId} 重试前清理解锁负状态失败:`, e?.message || e);
+  }
   deleteFiles([task.audioPath, task.lyricsPath, task.coverPath, task.videoPath]); // 行先清文件后删
 
   if (queue) {
@@ -2291,6 +2299,13 @@ async function retryQueue(queueId) {
     recountQueueCounters(queueId);
   })();
   for (const task of failedTasks) retryAfter.delete(task.id);
+  // 批量 hard retry：逐曲清解锁负状态，按 songId 去重——同曲多任务行
+  // 不重复清（各簿删除幂等，去重只是省日志与库跳）
+  for (const sid of new Set(failedTasks.map(t => String(t.songId)))) {
+    try { forgetSongUnlock(sid); } catch (e) {
+      console.warn(`队列 ${queueId} 重试前清理歌曲 ${sid} 解锁负状态失败:`, e?.message || e);
+    }
+  }
   deleteFiles(resetPaths); // 行先清、文件后删
 
   // 重试即启动：pending 队列没有消费者，用户预期"重试"是直接跑起来
