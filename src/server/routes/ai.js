@@ -1,6 +1,6 @@
 const { Hono } = require('hono');
 const lyricAiRepo = require('../repositories/lyricAi');
-const { parseLrcLines, plainTextLines, lyricVerdictKey, judgeLyricLines, resolveYtDeclared, resolveCreditGateCandidate, composerCreditRefutes, sanitizePrompt } = require('../services/lyric-verify');
+const { parseLrcLines, plainTextLines, lyricVerdictKey, judgeLyricLines, resolveYtDeclared, resolveYtPublishDate, resolveCreditGateCandidate, composerCreditRefutes, sanitizePrompt } = require('../services/lyric-verify');
 const { csrfOriginOk } = require('../lib/auth-gate');
 const { parseJsonBody } = require('../lib/validate');
 const { aiLyricBody } = require('../../shared/contracts.js');
@@ -30,6 +30,15 @@ const {
 // 同 id/vkey 在途去重（值只是完成信号，不载数据——见各路由内注释）
 const inflightTranslate = new Map();
 const inflightVerify = new Map();
+
+// 来源发布日合法性窗（chrono-guard 规格 §3.1 同式——不为 3 行函数建共享
+// 依赖，各消费文件就地实现）：下限 2000-01-01（平台上线前不存在真发布日，
+// 再早必脏）；上限 now+24h 容忍时钟偏差——body 回传的超界/非有限数按
+// 「未注」丢弃，脏数据不进证据面
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
 
 // GET /ai/status —— 暴露启用态给前端（模型名可回显；key 绝不出口）
 app.get('/ai/status', (c) => {
@@ -213,14 +222,26 @@ app.post('/ai/lyric-verify', async (c) => {
   // 或非 yt_ 形态时旧路径逐位不动
   const ytM = YT_TRACK_ID_RE.exec(String(body.trackId || ''));
   const declared = ytM ? await resolveYtDeclared(ytM[1], signal) : null;
+  // 源发布日（vkey c1 语境位）：客户端持久快照优先（body.publishedAt），
+  // yt_ 缺席回退惰性反解（resolveYtPublishDate 8s/60s memo——与 declared
+  // 同位同价）；仅网易条目词源配日期轴——extId 无候选日期对照（级联
+  // verifyHit/下载链键面守恒）。与 declared 同纪律先于 vkey：c1 键位
+  // 落定才能命中「日期语境」已落的判定行；脏 body 值经 sanePublishMs
+  // 丢弃按未注（fail-soft 不炸请求）
+  const srcPubMs = NETEASE_ID_BOUNDED_RE.test(id)
+    ? (sanePublishMs(body.publishedAt)
+      || (ytM ? (await resolveYtPublishDate(ytM[1], signal)) || 0 : 0))
+    : 0;
   // 键入参用未 trim 的原串——键函数内置 slice→lower→trim，与下载链
   // providerData 截断值产同键；先 trim 再传会让截断窗口错位。
   // sourceAuthor 缺省传 '' 而非 undefined——String(undefined) 会把字面量
   // 'undefined' 写进 vkey 签名，与下载链的空串签名产不同键。
   // declMark 与 judgeInner declSeg 出场条件逐字对齐（declTitle||declAuthor）
-  // ——声明实参在场但题/名全空时键与 prompt 不劈叉
+  // ——声明实参在场但题/名全空时键与 prompt 不劈叉；chronoMark 同纪律携
+  // srcPubMs>0——与 judgeInner pubSeg 出场条件逐字对齐，携日期语境的
+  // 判定与无日期旧键分家互不命中
   const vkey = lyricVerdictKey(id, body.sourceTitle, body.sourceAuthor || '', false,
-    Boolean(declared?.title || declared?.author));
+    Boolean(declared?.title || declared?.author), srcPubMs > 0);
 
   // 署名闸重检（缓存早退与 inflight 命中两处共用；declared/id/signal 取
   // 路由闭包，入参仅为已落库 ok）：已落库的放行判定可能是署名闸接线前
@@ -294,17 +315,18 @@ app.post('/ai/lyric-verify', async (c) => {
       return c.json({ code: 200, ok: true, reason: 'no-lyric' });
     }
     // 署名否证闸的候选艺人惰性补料（wholicoji 实案病灶：song_match 绑错
-    // 网易条目时本链手里没有候选身份，闸够不着）——仅声明在场 + 词源为
-    // 网易条目 + 词内确有作曲署名行才付一跳 song_detail；无声明/无署名行
-    // 零上行。
+    // 网易条目时本链手里没有候选身份，闸够不着）——声明在场 + 词源为
+    // 网易条目 + 词内确有作曲署名行才付一跳 song_detail；wantDates 携
+    // 源侧日期在场位——无声明/无署名行的形态同样付跳取候选上架日
+    // （署名闸要艺人、时间轴要 publishTime，一跳双供）；双触发位全缺零上行。
     // 已知盲区如实记：本路由手里只有词源 id 没有候选 meta（fetchLyricRaw
     // 只回词文），extId 词源（ytm_/lrclib_/kugou_）又没有网易条目可反查——
     // 声明在场时署名闸对 extId 词源不适用。级联 verifyHit 自带 candidate、
     // 下载链 verifyDownloadOwnership 有 candidate 形参可收口；本路由缺这
     // 半供给，拿不到归 null 不传——闸对照轴不齐自动不适用
-    const candidate = await resolveCreditGateCandidate({ id, lines, declared, signal })
+    const candidate = await resolveCreditGateCandidate({ id, lines, declared, signal, wantDates: srcPubMs > 0 })
       .catch(() => null);   // 补料自身抛错同归「无候选」——不连带牺牲本次判定
-    const ok = await judgeLyricLines({ vkey, lines, title: sourceTitle, author: sourceAuthor, candidate, signal, declared });
+    const ok = await judgeLyricLines({ vkey, lines, title: sourceTitle, author: sourceAuthor, candidate, signal, declared, publishedAt: srcPubMs || undefined });
     if (ok === null) {
       // 模型没给判定 → 不缓存、不误伤，按「相符」放行
       return c.json({ code: 200, ok: true, inconclusive: true });

@@ -43,11 +43,16 @@ seed('../src/server/services/lyric-external.js', {
 });
 // 自署本家反解桩：lyric-verify（经模块对象调 lib/youtube.resolveOriginalInfo）
 // 的 yt_ trackId 声明解析——钉录制桩隔离真身 fetchPlayer 上行面；
-// origImpl 缺席默认归 null=无声明
+// origImpl 缺席默认归 null=无声明。
+// resolvePublishedAt 同款录制桩：chrono-guard 的源发布日惰性反解经
+// ytLib.resolvePublishedAt?.() 打到这里；pubImpl 缺席默认归 null=无日期
 let origImpl = null;
 const origCalls = [];
+let pubImpl = null;
+const pubCalls = [];
 seed('../src/server/lib/youtube.js', {
   resolveOriginalInfo: async (args) => { origCalls.push(args); return origImpl ? origImpl(args) : null; },
+  resolvePublishedAt: async (args) => { pubCalls.push(args); return pubImpl ? pubImpl(args) : null; },
 });
 
 let app, lyricAiRepo, lyricVerify;
@@ -753,4 +758,134 @@ test('ai：lyric-verify 纯文本词兜底取样——有词文照判、真空�
     assert.equal(r2.body.reason, 'no-lyric');
     assert.equal(aiCalls.length, nAi);
   } finally { extHit = null; }
+});
+
+// ── 源发布日证据（publishedAt → vkey c1 语境位 / pubSeg）──
+// chrono-guard：客户端持久快照（body.publishedAt）优先、yt_ 缺席惰性反解；
+// 仅网易条目词源配日期轴——extId 无候选日期对照轴（与级联/下载链键面守恒）。
+// 用例经独立 XFF IP 隔离限流桶（'local' 桶已被前置用例占近满）
+const postVerifyIp = (ip, body) => app.request('http://t/ai/lyric-verify', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip },
+  body: JSON.stringify(body),
+});
+
+test('ai：lyric-verify body.publishedAt 接受→c1 键+来源发布日进 prompt；出窗脏值丢弃', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  lyricPayload = { lrc: { lyric: '[00:01.00]chrono line\n[00:02.00]other' }, tlyric: { lyric: '' } };
+  aiAnswer = { ok: true };
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  try {
+    const nPub = pubCalls.length;
+    const r = await json(await postVerifyIp('10.7.0.1', {
+      id: '880080', sourceTitle: 'chrono-src', sourceAuthor: 'a',
+      publishedAt: Date.parse('2020-04-07'),
+    }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, true);
+    // body 直吃零上行——快照在手不经 yt_ 惰性反解
+    assert.equal(pubCalls.length, nPub);
+    // c1 键位实锤：verdict 落 v2c1 盐键，无 c1 旧键面不被携日期判定写到
+    assert.ok(lyricAiRepo.getVerdict(
+      lyricVerify.lyricVerdictKey('880080', 'chrono-src', 'a', false, false, true), 'lyric'));
+    assert.ok(!lyricAiRepo.getVerdict(
+      lyricVerify.lyricVerdictKey('880080', 'chrono-src', 'a'), 'lyric'));
+    assert.match(aiCalls.at(-1).user, /来源发布日：2020-04-07/);
+    // 出窗脏值（2000 前/超 now+24h 的合法数值）→ sanePublishMs 丢弃按未注：
+    // 落无 c1 旧键、prompt 无日期段（schema 前的服务端正校验面——非数值
+    // 型脏值由 looseObject/zod 面拦截，这里钉的是过 schema 后的语义窗）
+    for (const [i, dirty] of [Date.parse('1999-01-01'), Date.now() + 10 * 86400e3].entries()) {
+      const rid = `880081${i}`;
+      const r2 = await json(await postVerifyIp('10.7.0.1', {
+        id: rid, sourceTitle: 't', sourceAuthor: 'a', publishedAt: dirty,
+      }));
+      assert.equal(r2.status, 200);
+      assert.ok(lyricAiRepo.getVerdict(lyricVerify.lyricVerdictKey(rid, 't', 'a'), 'lyric'));
+      assert.ok(!lyricAiRepo.getVerdict(
+        lyricVerify.lyricVerdictKey(rid, 't', 'a', false, false, true), 'lyric'));
+    }
+    assert.ok(!aiCalls.at(-1).user.includes('来源发布日'));
+    assert.equal(pubCalls.length, nPub);   // 无 trackId——脏值丢弃后也无回退
+  } finally {
+    if (prevTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTp;
+    lyricVerify._clearDeclaredMemo();
+  }
+});
+
+test('ai：lyric-verify yt_ trackId+网易词源→惰性反解携 c1；extId/无 trackId 零解析', async () => {
+  aiOn = true;
+  lyricVerify._clearDeclaredMemo();
+  origImpl = null;
+  pubImpl = async () => Date.parse('2020-04-07');
+  lyricPayload = { lrc: { lyric: '[00:01.00]chrono line\n[00:02.00]other' }, tlyric: { lyric: '' } };
+  aiAnswer = { ok: true };
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  try {
+    // yt_ trackId + 网易 id + body 未注 → 惰性反解（与 declared 同位同价）
+    const nPub = pubCalls.length;
+    const nApi = apiCalls.length;
+    // wantDates 接线钉（本案主流形态端到端）：无声明/无署名行 + srcPubMs>0
+    // → song_detail 补料被调，取回的 publishTime 进判定 prompt 上架段
+    detailSongs = [{ name: '墨田区 SUMMER NIGHT', ar: [{ name: '未来電波基地' }],
+      publishTime: Date.parse('2024-03-18') }];
+    const r = await json(await postVerifyIp('10.7.0.2', {
+      id: '880082', sourceTitle: 'chrono-src', sourceAuthor: 'a', trackId: 'yt_pubvid00001',
+    }));
+    assert.equal(r.status, 200);
+    assert.equal(pubCalls.length, nPub + 1);
+    assert.equal(pubCalls.at(-1).videoId, 'pubvid00001');
+    // c1 键位实锤：verdict 落携日期语境键；prompt 携来源发布日
+    assert.ok(lyricAiRepo.getVerdict(
+      lyricVerify.lyricVerdictKey('880082', 'chrono-src', 'a', false, false, true), 'lyric'));
+    assert.match(aiCalls.at(-1).user, /来源发布日：2020-04-07/);
+    assert.equal(apiCalls.slice(nApi).filter(x => x.name === 'song_detail').length, 1);
+    assert.match(aiCalls.at(-1).user, /\/ 上架 2024-03-18/);
+    detailSongs = [];
+    // 快照优先钉：trackId+body.publishedAt 同发——body 值直吃，惰性解析
+    // 不发起（pubCalls 不变），vkey 仍携 c1
+    const nPubS = pubCalls.length;
+    const rS = await json(await postVerifyIp('10.7.0.2', {
+      id: '880084', sourceTitle: 'chrono-src', sourceAuthor: 'a',
+      trackId: 'yt_pubvid00004', publishedAt: Date.parse('2021-06-01'),
+    }));
+    assert.equal(rS.status, 200);
+    assert.equal(pubCalls.length, nPubS);
+    assert.ok(lyricAiRepo.getVerdict(
+      lyricVerify.lyricVerdictKey('880084', 'chrono-src', 'a', false, false, true), 'lyric'));
+    assert.match(aiCalls.at(-1).user, /来源发布日：2021-06-01/);
+    // extId 词源（ytm_）：trackId+publishedAt 齐在场也不解析不携 c1——
+    // 无候选日期对照轴，与级联 verifyHit 键面守恒互命中
+    extHit = { lrc: '[00:01.00]ext line\n[00:02.00]x', source: 'ytm', extId: 'ytm_chrono01', synced: true };
+    const nPub2 = pubCalls.length;
+    const r2 = await json(await postVerifyIp('10.7.0.2', {
+      id: 'ytm_chrono01', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_pubvid00002',
+      publishedAt: Date.parse('2020-04-07'),
+    }));
+    assert.equal(r2.status, 200);
+    assert.equal(r2.body.ok, true);
+    assert.equal(pubCalls.length, nPub2);
+    assert.ok(lyricAiRepo.getVerdict(
+      lyricVerify.lyricVerdictKey('ytm_chrono01', 't', 'a'), 'lyric'));  // 无 c1 旧键
+    // qq_ 词源 id：L203 形态闸 400 拒在解析面前——连 declared/srcPubMs 都不发起
+    const nPubQ = pubCalls.length;
+    const rq = await postVerifyIp('10.7.0.2', {
+      id: 'qq_chrono001', sourceTitle: 't', sourceAuthor: 'a', trackId: 'yt_pubvid00003',
+      publishedAt: Date.parse('2020-04-07'),
+    });
+    assert.equal(rq.status, 400);
+    assert.equal(pubCalls.length, nPubQ);
+    // body/trackId 双缺 → 无源可解不解析（无日期旧路径逐位不动）
+    const nPub3 = pubCalls.length;
+    const r3 = await json(await postVerifyIp('10.7.0.2', { id: '880083', sourceTitle: 't', sourceAuthor: 'a' }));
+    assert.equal(r3.status, 200);
+    assert.equal(pubCalls.length, nPub3);
+  } finally {
+    if (prevTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTp;
+    origImpl = null; pubImpl = null; extHit = null; detailSongs = []; lyricVerify._clearDeclaredMemo();
+  }
 });
