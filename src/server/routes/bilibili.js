@@ -17,6 +17,15 @@ const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, 
 
 const app = new Hono();
 
+// 来源侧日期合法性窗（规格要求各文件就地实现同一公式）：
+//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
+//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
+//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+
 // 歌名提取：标签优先——B 站音乐识别标签形如「发现《歌名》」/「发现歌名」；
 // 其次《歌名》式样标签；最后落到清洗后的标题（去【UP主】前缀、- 后缀、常见修饰词）
 function extractSongName(tagNames, title) {
@@ -59,6 +68,10 @@ app.get('/bilibili/resolve', async (c) => {
   if (!id) return c.json({ code: 400, message: '无法从输入解析 BV/av 号' }, 400);
   try {
     const view = await biliFetch(`/x/web-interface/view?${viewQuery(id)}`, c.req.raw.signal);
+    // 源稿件发布日（unix 秒→ms）：view 契约携带 pubdate——解析期预注进
+    // sourceInfo/回包，核验/匹配链零上行取数；缺席或脏值归 null
+    //（fail-soft，日期是增强证据不是门禁）
+    const publishedAt = sanePublishMs(Number(view.pubdate) * 1000) || null;
     // 分P定位：?p=N 时取 pages[N-1] 的 cid/时长/分P名——不然导 P2 会静默播 P1
     const pages = Array.isArray(view.pages) ? view.pages : [];
     const pageIdx = Math.min(pickPageParam(input), Math.max(pages.length, 1)) - 1;
@@ -88,6 +101,7 @@ app.get('/bilibili/resolve', async (c) => {
         title: view.title || '', author: view.owner?.name || '',
         artists: view.owner?.name ? [view.owner.name] : [],
         trackId: `bv_${view.bvid}${pageIdx + 1 > 1 ? `_p${pageIdx + 1}` : ''}`,
+        publishedAt,
       },
     });
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
@@ -127,6 +141,8 @@ app.get('/bilibili/resolve', async (c) => {
       hasVideo: avcStreams.length > 0,
       // 含 URL 的条目才算可下载——null/无地址脏条目不亮假入口
       hasDownloadableVideo: allVideo.some(v => v && (v.baseUrl || v.base_url)),
+      // 源稿件发布日（epoch ms|null）——客户端持久化与核验链的时间证据
+      publishedAt,
       hasHiRes,
       hasDolby,
       audioQuality: audio ? { id: audio.id, bandwidth: audio.bandwidth } : null,
@@ -188,6 +204,10 @@ app.get('/bilibili/favlist', async (c) => {
           skipped++;
           continue;
         }
+        // fav 接口 media 条目的发布字段实测键名是 pubtime（pubdate 是旧版/
+        // 邻域别名，?? 双键兜底）；unix 秒→ms。缺席/脏值不产键——无字段
+        // 曲目不落 publishedAt 键，保 infoOf/持久化链的缺席语义
+        const pubMs = sanePublishMs(Number(m.pubtime ?? m.pubdate) * 1000);
         tracks.push({
           bvid: m.bvid,
           cid: null,                    // cid 由播放/下载链自愈（view 兜底）
@@ -197,6 +217,7 @@ app.get('/bilibili/favlist', async (c) => {
           cover: m.cover || '',
           duration: m.duration || 0,
           owner: m.upper?.name || '',
+          ...(pubMs ? { publishedAt: pubMs } : {}),
           songName: extractSongName([], m.title),
           hasVideo: true,               // favlist 不给 playurl——avc1 可用性按乐观值，流链兜底降级
           hasDownloadableVideo: true,   // 同口径乐观值——纯非 avc1 稿件也能亮下载入口
@@ -228,6 +249,8 @@ app.get('/bilibili/favlist', async (c) => {
       infoOf: (t) => ({
         title: t.title, author: t.owner,
         artists: t.owner ? [t.owner] : [], trackId: `bv_${t.bvid}`,
+        // 缺席未注与「字段不存在」同归 0——匹配器无差别按未知处理
+        publishedAt: t.publishedAt || 0,
       }),
     });
     if (signal?.aborted) return c.body(null, 499);

@@ -68,7 +68,10 @@ export const aiLyricBody = z.looseObject({
   sourceAuthor: z.string().optional(),
   // lyric-verify 可选：来源轨道 id——yt_ 形态时服务端反解投稿自署本家
   // 作判定语境（声明位进 vkey 分键）；缺席与旧 body 行为逐位同
-  trackId: z.string().max(200).optional()
+  trackId: z.string().max(200).optional(),
+  // lyric-verify 可选：源媒体发布日（epoch ms）——稿日倒挂判据的时间
+  // 证据；客户端只送有限正数，缺席/脏值按未知处理不拒
+  publishedAt: z.number().int().positive().optional()
 });
 
 // PUT /settings：键白名单与值整形在 lib/settings.js（含 ASCII/长度/归一化）；

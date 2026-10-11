@@ -1100,6 +1100,9 @@ export default {
           artists: [ext?.author, ext?.authorClean].filter(Boolean),
           durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
           excludeIds: prevId != null ? [prevId] : [],
+          // 源媒体发布日（epoch ms）回喂——provider 块持久化的时间证据；
+          // 缺席/脏值归 undefined 不进 body（与 usePlayer 两处同口径）
+          publishedAt: ext?.publishedAt || undefined,
         })
         if (matched?.id) {
           // retryMatch 回包已把同层诊断字段并进 matched 返回（matchedBy/

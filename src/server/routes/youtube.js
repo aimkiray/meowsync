@@ -15,8 +15,10 @@ const app = new Hono();
 
 // Innertube 原语在 lib/youtube.js；本路由消费 fetchPlayer/pickStreamList
 //（/resolve 元数据）与 fetchYtPlaylistPage（歌单页）——/stream 的闸控感知
-// 取流走 services/youtube-resolve.js，搜索原语 innertubeSearch 归解锁层
-const { fetchPlayer, pickStreamList, fetchYtPlaylistPage } = require('../lib/youtube');
+// 取流走 services/youtube-resolve.js，搜索原语 innertubeSearch 归解锁层。
+// resolvePublishedAt 走 ?. 调用：旧桩面缺导出归 null 不炸（与
+// netease-match/lyric-verify 的 ytLib 模块对象消费口径同型）
+const { fetchPlayer, pickStreamList, fetchYtPlaylistPage, resolvePublishedAt } = require('../lib/youtube');
 
 // SABR 闸控探测/gateCache/VISIONOS 升级/progressive 结转已下沉到
 // services/youtube-resolve.js——/stream 与解锁链共用同一份判定，
@@ -146,6 +148,11 @@ app.get('/youtube/resolve', async (c) => {
     const vd = player.videoDetails || {};
     const duration = parseInt(vd.lengthSeconds, 10) || 0;
     const author = vd.author || '';
+    // 源视频发布日（epoch ms）：player 在手直给提取零上行，且写穿
+    // basicsMemo 焐热——后续 match/verify 的惰性日期解析命中同一本
+    // memo 不再回源。提取失败/字段缺席归 null（?. + ?? null 对旧桩
+    // 缺导出面双保险）——日期是增强证据不是门禁
+    const publishedAt = await resolvePublishedAt?.({ videoId, player, signal: c.req.raw.signal }).catch(() => null) ?? null;
     // artistFromAuthor 是剥掉 ' - Topic'/'VEVO' 后的干净歌手名——前端兜底显示用
     const { songName, candidates, artistFromAuthor } = extractYtSong(vd.title, author);
 
@@ -163,6 +170,8 @@ app.get('/youtube/resolve', async (c) => {
         // 描述在手交给匹配器的本家声明惰性解析——命中 utaite/翻唱稿的
         // 自署出处链时省一跳 self player 回源（lib/youtube resolveOriginalInfo）
         description: vd.shortDescription || '',
+        // 发布日同槽注入：匹配器消费「稿日倒挂」判据时零回源取数
+        publishedAt,
       },
     });
     // matchNeteaseSong 因断连早退后，继续构造响应只是写给死 socket
@@ -195,6 +204,8 @@ app.get('/youtube/resolve', async (c) => {
       matchScore: matchScore ?? null,
       hasVideo,
       hasDownloadableVideo,
+      // 源视频发布日（epoch ms|null）——客户端持久化与核验链的时间证据
+      publishedAt: publishedAt || null,
       audioQuality: audio ? { itag: audio.itag, bitrate: audio.bitrate, mimeType: audio.mimeType } : null,
       videoQuality: video ? { itag: video.itag, width: video.width, height: video.height } : null,
     });

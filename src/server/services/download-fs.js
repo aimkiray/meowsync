@@ -45,6 +45,15 @@ function drainWithTimeout(promise, ms = DRAIN_TIMEOUT_MS) {
   ]);
 }
 
+// 来源侧日期合法性窗（规格要求各文件就地实现同一公式）：
+//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
+//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
+//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+
 // 任务行快照的源私有字段：qq=mediaMid（vkey filename 键）；bv_/yt_ 导
 // 入曲带自有源流定位（bilibili=bvid/cid/page、youtube=videoId）+ neteaseId
 // （匹配到的网易词源）——落 provider_data 让任务跨重启可重放、
@@ -71,7 +80,11 @@ function providerDataOf(track) {
         // 来源标题/作者随 providerData 走——歌词归属核验的 verdict 签名
         // 需要它们，缺了只能跳过核验（老镜像行的无损降级）
         title: String(track.bilibili.title || '').slice(0, 300) || null,
-        author: String(track.bilibili.author || '').slice(0, 120) || null
+        author: String(track.bilibili.author || '').slice(0, 120) || null,
+        // 源稿发布日（epoch ms）：缺席/脏值不出键——providerData 投影面有
+        // 既有深等于断言，无字段曲目不产键才能零扰动
+        ...(sanePublishMs(track.bilibili.publishedAt)
+          ? { publishedAt: sanePublishMs(track.bilibili.publishedAt) } : {})
       },
       neteaseId
     };
@@ -81,7 +94,9 @@ function providerDataOf(track) {
       youtube: {
         videoId: String(track.youtube.videoId),
         title: String(track.youtube.title || '').slice(0, 300) || null,
-        author: String(track.youtube.author || '').slice(0, 120) || null
+        author: String(track.youtube.author || '').slice(0, 120) || null,
+        ...(sanePublishMs(track.youtube.publishedAt)
+          ? { publishedAt: sanePublishMs(track.youtube.publishedAt) } : {})
       },
       neteaseId
     };

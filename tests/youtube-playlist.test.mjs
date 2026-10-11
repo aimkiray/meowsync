@@ -14,6 +14,8 @@ const matchCalls = [];
 let matchImpl = async () => ({ song: null, query: null });
 let rateImpl = () => true;
 let fetchPlayerImpl = async () => ({});   // /resolve 支路的 Innertube 出口
+let pubImpl = async () => null;           // resolvePublishedAt 实现注入口
+const pubCalls = [];                      // resolvePublishedAt 录参簿（直给形态钉）
 
 // seed/getJson 公共脚手架在 tests/helpers.mjs
 import { seed, getJson, seedMatchModule } from './helpers.mjs';
@@ -31,6 +33,7 @@ seed('../src/server/lib/youtube.js', {
   fetchPlayer: (...a) => fetchPlayerImpl(...a),
   fetchPlayerWith: async () => ({}),
   pickStreamList: () => [],
+  resolvePublishedAt: (...a) => { pubCalls.push(a); return pubImpl(...a); },
 });
 seedMatchModule(matchCalls, () => matchImpl);
 const app = require('../src/server/routes/youtube.js');
@@ -43,6 +46,7 @@ const reset = () => {
   pageScript = {}; pageCalls = 0; rateImpl = () => true;
   matchCalls.length = 0; matchImpl = async () => ({ song: null, query: null });
   fetchPlayerImpl = async () => ({});
+  pubImpl = async () => null; pubCalls.length = 0;
 };
 test('continuation 翻页 + 失效过滤 + 曲目归一', async () => {
   reset();
@@ -230,4 +234,61 @@ test('resolve：ver.<名> 尾缀标题给匹配器补剥缀候选（songName 诚
   assert.ok(sent.some((c) => c.includes('ver.EMA')), '原始形态仍在候选');
   assert.ok(sent.includes('Dream Play Sick') || sent.includes('EMA Dream Play Sick'),
     '剥 ver. 尾缀的形态须进候选');
+});
+
+test('resolve：publishedAt 随回包下发并预注 sourceInfo（解析期 player 直给）', async () => {
+  reset();
+  // microformat 夹具——真实现从 playerMicroformatRenderer.publishDate 提取；
+  // 本桩以 pubImpl 模拟同值回返，直给形态（videoId+player 入场）另行钉死
+  const player = {
+    videoDetails: { title: '曲 - 歌', author: '频道', lengthSeconds: '200' },
+    streamingData: {},
+    microformat: { playerMicroformatRenderer: { publishDate: '2020-04-07' } },
+  };
+  fetchPlayerImpl = async () => player;
+  pubImpl = async () => Date.parse('2020-04-07');
+  const { status, body } = await getJson(app, '/youtube/resolve?input=' +
+    encodeURIComponent('https://youtu.be/dQw4w9WgXcQ'));
+  assert.equal(status, 200);
+  assert.equal(body.publishedAt, Date.parse('2020-04-07'));
+  // 一手 player 直给入场——写穿 basicsMemo 焐热，match/verify 惰性消费零上行
+  assert.equal(pubCalls.length, 1);
+  assert.equal(pubCalls[0][0].videoId, 'dQw4w9WgXcQ');
+  assert.equal(pubCalls[0][0].player, player);
+  // 预注进匹配语境（matchWithBudget 第 5 参 sourceInfo）
+  assert.equal(matchCalls[0][4].publishedAt, Date.parse('2020-04-07'));
+});
+
+test('resolve：旧桩缺 resolvePublishedAt 导出 → publishedAt:null 不炸（?. 兼容钉）', async () => {
+  reset();
+  fetchPlayerImpl = async () => ({
+    videoDetails: { title: 'T', author: 'A', lengthSeconds: '100' },
+    streamingData: {},
+  });
+  // 桩面降级到「缺导出」形态：覆写 lib/youtube 种子并重载路由——
+  // require 期解构快照拿到 undefined，?. 调用短路 + ?? 兜底归 null。
+  // 这正是真实旧桩面（本规格之前的历史测试播种形态）的回归钉
+  const ytPath = require.resolve('../src/server/lib/youtube.js');
+  const routePath = require.resolve('../src/server/routes/youtube.js');
+  const keepYt = require.cache[ytPath];
+  const keepRoute = require.cache[routePath];
+  try {
+    require.cache[ytPath] = { id: ytPath, filename: ytPath, loaded: true,
+      exports: {
+        fetchPlayer: (...a) => fetchPlayerImpl(...a),
+        fetchPlayerWith: async () => ({}),
+        pickStreamList: () => [],
+        fetchYtPlaylistPage: async () => { throw new Error('unstubbed'); },
+      } };
+    delete require.cache[routePath];
+    const appBare = require(routePath);
+    const { status, body } = await getJson(appBare, '/youtube/resolve?input=' +
+      encodeURIComponent('https://youtu.be/dQw4w9WgXcQ'));
+    assert.equal(status, 200);
+    assert.equal(body.publishedAt, null);
+    assert.equal(body.videoId, 'dQw4w9WgXcQ');
+  } finally {
+    require.cache[ytPath] = keepYt;
+    require.cache[routePath] = keepRoute;
+  }
 });

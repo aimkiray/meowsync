@@ -68,6 +68,56 @@ test('老镜像（无 title/author）重传补齐：签名变化触发重写', (
   assert.equal(pd.neteaseId, '777');
 });
 
+test('镜像链：publishedAt 穿透 raw_json 到 providerData；缺席/脏值不出键', () => {
+  const ms = 1586217600000;   // 2020-04-07T00:00:00Z
+  const row = mirror.mirrorLocalPlaylist('local_pl_pub1', '歌单', '', [
+    { id: 'bv_p1', name: 'x', ar: [{ name: 'UP' }], al: { name: '' }, dt: 200000,
+      bilibili: { bvid: 'BV1xx411c7mD', cid: '123456', page: 2, title: 't', author: 'a', publishedAt: ms } },
+    { id: 'yt_p2', name: 'y', ar: [{ name: 'ch' }], al: { name: '' }, dt: 100,
+      youtube: { videoId: 'abcdefghijk', title: 't', author: 'a', publishedAt: ms } },
+  ]);
+  const [s1, s2] = tracksRepo.listTracksByPlaylistId(row.id);
+  assert.equal(providerDataOf(s1).bilibili.publishedAt, ms);
+  assert.equal(providerDataOf(s2).youtube.publishedAt, ms);
+  // 缺席/脏值不产键——providerData 投影面与既有 deepEqual 断言同形零扰动
+  const row2 = mirror.mirrorLocalPlaylist('local_pl_pub2', '歌单', '', [
+    { id: 'bv_p3', name: 'x', ar: [{ name: 'U' }], al: { name: '' }, dt: 100,
+      bilibili: { bvid: 'BV3xx', cid: '1', page: 1, title: 't', author: 'a' } },
+    { id: 'bv_p4', name: 'x', ar: [{ name: 'U' }], al: { name: '' }, dt: 100,
+      bilibili: { bvid: 'BV4xx', cid: '1', page: 1, title: 't', author: 'a', publishedAt: null } },
+    { id: 'bv_p5', name: 'x', ar: [{ name: 'U' }], al: { name: '' }, dt: 100,
+      bilibili: { bvid: 'BV5xx', cid: '1', page: 1, title: 't', author: 'a', publishedAt: -5 } },
+    { id: 'bv_p6', name: 'x', ar: [{ name: 'U' }], al: { name: '' }, dt: 100,
+      bilibili: { bvid: 'BV6xx', cid: '1', page: 1, title: 't', author: 'a', publishedAt: '脏' } },
+  ]);
+  for (const stored of tracksRepo.listTracksByPlaylistId(row2.id)) {
+    assert.equal('publishedAt' in providerDataOf(stored).bilibili, false,
+      `${stored.id} 缺席/脏值不落 publishedAt 键`);
+  }
+});
+
+test('老镜像（无 publishedAt）重传补齐：签名变化触发重写自愈', () => {
+  const ms = 1664197919000;   // 2022-09-26
+  const bare = { id: 'bv_p7', name: '歌名', ar: [{ name: 'UP' }], al: { name: '' }, dt: 200000,
+    bilibili: { bvid: 'BV7xx', cid: '9', page: 1, title: 't', author: 'a' } };   // 无 publishedAt
+  const row = mirror.mirrorLocalPlaylist('local_pl_pub3', '歌单', '', [bare]);
+  const [stored] = tracksRepo.listTracksByPlaylistId(row.id);
+  assert.equal('publishedAt' in providerDataOf(stored).bilibili, false);
+
+  // 客户端带新字段重传——sigOf 的新分量必须让这次 rewrite 发生
+  // （publishedAt 从无到有落 raw_json），否则老镜像永远拿不到时间证据
+  mirror.mirrorLocalPlaylist('local_pl_pub3', '歌单', '', [{
+    ...bare, bilibili: { ...bare.bilibili, publishedAt: ms },
+  }]);
+  const pd = providerDataOf(tracksRepo.listTracksByPlaylistId(row.id)[0]);
+  assert.equal(pd.bilibili.publishedAt, ms);
+  // 幂等复查：同值重传签名不变（不该把 0/缺席再洗掉）
+  mirror.mirrorLocalPlaylist('local_pl_pub3', '歌单', '', [{
+    ...bare, bilibili: { ...bare.bilibili, publishedAt: ms },
+  }]);
+  assert.equal(providerDataOf(tracksRepo.listTracksByPlaylistId(row.id)[0]).bilibili.publishedAt, ms);
+});
+
 test('providerDataOf 边界：qq 分支带回落词源签名 / 纯网易云曲为 null / 缺 provider 字段的外部曲保底 neteaseId', () => {
   // qq 曲：mediaMid + 回落核验签名（名/艺人）+ neteaseId 全带
   const qqPd = providerDataOf({ id: 'qq_001', name: 'QQ曲', ar: [{ name: '歌手甲' }], qq: { mediaMid: 'mid1' }, neteaseId: '555' });

@@ -32,6 +32,15 @@ const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const strList = (v, count, max) => (Array.isArray(v) ? v : [])
   .map(x => str(x, max)).filter(Boolean).slice(0, count);
 
+// 来源侧日期合法性窗（规格要求各文件就地实现同一公式）：
+//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
+//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
+//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+
 app.get('/match/state', async (c) => {
   // 只读也要限流：客户端每轨首播都会问，裸奔可被批量轨道 id 刷成
   // song_detail 扇出（与 match-retry 同思路，桶宽松一档——这是热路径）
@@ -102,6 +111,10 @@ app.post('/match/retry', async (c) => {
   const excludeIds = (Array.isArray(body?.excludeIds) ? body.excludeIds : [])
     .filter(x => ['string', 'number'].includes(typeof x))
     .slice(0, 50).map(String);
+  // 源媒体发布日（epoch ms，可选）：客户端拿持久化 provider 字段回喂——
+  // 重建 sourceInfo 不回源重取（同下行注释口径，纠错不被上游可用性绑架）；
+  // 字符串/负数/超未来窗等脏值一律按未注（0），fail-soft
+  const publishedAt = sanePublishMs(body?.publishedAt);
   // 候选串：调用方给则照用；否则按「艺人 歌名 → 裸歌名」从 provider 字段组
   const queries = candidates.length ? candidates
     : [...new Set([author ? `${author} ${title}` : '', title].filter(Boolean))];
@@ -123,7 +136,7 @@ app.post('/match/retry', async (c) => {
     const { song, query, score } = await matchWithBudget({
       candidates: queries, durationSec, tag: 'match-retry',
       reqSignal: c.req.raw.signal,
-      sourceInfo: { title, author, artists, trackId },
+      sourceInfo: { title, author, artists, trackId, publishedAt: publishedAt || 0 },
       skipCache: true, excludeIds,
       // 单曲重匹配是用户显式触发——客户端 axios 超时 60s（src/api/music.js
       // retryMatch），服务端预算取 55s 留 5s 头：覆盖「≤8 串云搜（~0.5s/串）

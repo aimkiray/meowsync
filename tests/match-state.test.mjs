@@ -186,6 +186,34 @@ test('match-retry：excludeIds 先落账——matchWithBudget 被调时否决已
   } finally { retryImpl = async () => ({ song: null }); }
 });
 
+test('match-retry：body.publishedAt 透传进 sourceInfo；脏值等价未传', async () => {
+  let seen = null;
+  retryImpl = async (...args) => { seen = args; return { song: null }; };
+  try {
+    // epoch ms 正数 → 原样预注进 matchWithBudget 第 5 参 sourceInfo
+    const res = await postRetry({
+      trackId: 'yt_PUB1', title: 'x', author: 'a',
+      candidates: ['x'], publishedAt: 1586217600000,   // 2020-04-07
+    });
+    assert.equal(res.status, 200);
+    assert.equal(seen[4].publishedAt, 1586217600000);
+    // 脏值三形态——字符串/负数/超未来窗一律按未注（0），fail-soft 不 400
+    for (const bad of ['2020-04-07', -5, Date.now() + 86400e3 * 3]) {
+      seen = null;
+      const r = await postRetry({
+        trackId: 'yt_PUB2', title: 'x', candidates: ['x'], publishedAt: bad,
+      });
+      assert.equal(r.status, 200);
+      assert.equal(seen[4].publishedAt, 0, JSON.stringify(bad));
+    }
+    // 未传字段同归 0——与「字段不存在」无差别按未知处理
+    seen = null;
+    const r = await postRetry({ trackId: 'yt_PUB3', title: 'x', candidates: ['x'] });
+    assert.equal(r.status, 200);
+    assert.equal(seen[4].publishedAt, 0);
+  } finally { retryImpl = async () => ({ song: null }); }
+});
+
 test('match-retry：材料缺席注定 400 的请求不落否决账', async () => {
   // 落账点在 queries 400 校验之后——脏请求（无 title/candidates）不得
   // 往簿里灌 excludeIds，连 stub 行都不该产

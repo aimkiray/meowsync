@@ -58,6 +58,11 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
       t.bilibili?.title || '', t.bilibili?.author || '',
       t.youtube?.videoId || '',
       t.youtube?.title || '', t.youtube?.author || '',
+      // 发布日入签名域：老镜像库里 provider 块没有该字段时签名变化，下次
+      // 客户端带新字段重传触发一次性重写自愈（publishedAt 从无到有落
+      // raw_json）；双方同缺席同得 0 不扰动既有签名
+      t.bilibili?.publishedAt || 0,
+      t.youtube?.publishedAt || 0,
       t.neteaseId || ''
     ]);
     const existing = playlistTracksRepo.listTracksByPlaylistId(row.id);

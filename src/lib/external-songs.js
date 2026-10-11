@@ -88,7 +88,12 @@ export const buildBilibiliSong = (data) => {
       cover: data.cover || '',
       author: data.owner || '', matchedBy: data.matchedBy || null,
       // 匹配分透传（诊断用——/match/retry 纠错与排查错配时要看证据强弱）
-      matchScore: data.matchScore ?? null
+      matchScore: data.matchScore ?? null,
+      // 源稿发布日（epoch ms）持久化进 provider 块：retry/verify 回喂、
+      // mirror 签名都从这里取；缺席/脏值归 null（builder 界不产键会扰动
+      // localStorage 既有曲形，null 与缺席对下游读取等价）
+      publishedAt: Number.isFinite(data.publishedAt) && data.publishedAt > 0
+        ? data.publishedAt : null
     },
     neteaseId: data.matched?.id || null
   }
@@ -120,7 +125,11 @@ export const buildYouTubeSong = (data) => {
       // authorClean 持久化：存量自愈/行内展示不必再剥 ' - Topic'/'VEVO'
       title: data.title, author: data.author, authorClean: data.authorClean || null,
       matchedBy: data.matchedBy || null,
-      matchScore: data.matchScore ?? null
+      matchScore: data.matchScore ?? null,
+      // 源视频发布日（epoch ms）持久化进 provider 块：retry/verify 回喂、
+      // mirror 签名都从这里取；缺席/脏值归 null（与 bilibili 侧同口径）
+      publishedAt: Number.isFinite(data.publishedAt) && data.publishedAt > 0
+        ? data.publishedAt : null
     },
     neteaseId: data.matched?.id || null
   }
