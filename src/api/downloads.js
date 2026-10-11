@@ -164,11 +164,17 @@ export const downloadsApi = {
       // 截断收口在服务端单边做，这里原样透传
       ...(t.bilibili?.bvid ? { bilibili: {
         bvid: t.bilibili.bvid, cid: t.bilibili.cid, page: t.bilibili.page,
-        title: t.bilibili.title, author: t.bilibili.author
+        title: t.bilibili.title, author: t.bilibili.author,
+        // 源稿发布日（epoch ms）入镜——服务端 sigOf 吃它做镜像签名；
+        // 缺席/非有限正数不出键，既有深等于投影面零扰动
+        ...(Number.isFinite(t.bilibili.publishedAt) && t.bilibili.publishedAt > 0
+          ? { publishedAt: t.bilibili.publishedAt } : {})
       } } : {}),
       ...(t.youtube?.videoId ? { youtube: {
         videoId: t.youtube.videoId,
-        title: t.youtube.title, author: t.youtube.author
+        title: t.youtube.title, author: t.youtube.author,
+        ...(Number.isFinite(t.youtube.publishedAt) && t.youtube.publishedAt > 0
+          ? { publishedAt: t.youtube.publishedAt } : {})
       } } : {}),
       ...(t.neteaseId ? { neteaseId: t.neteaseId } : {})
       }

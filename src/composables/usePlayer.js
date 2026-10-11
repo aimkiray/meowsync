@@ -1166,6 +1166,9 @@ export function usePlayer({
         artistsJoined: (song?.ar || song?.artists || [])
           .map(a => a?.name).filter(Boolean).join('/'),
         durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
+        // 源媒体发布日（epoch ms）：retry/verify 回喂的时间证据——provider
+        // 块缺字段/脏值归 undefined，axios 丢 undefined 键不进 body
+        publishedAt: ext?.publishedAt || undefined,
       }
     }
     const loadLyrics = async (song, signal = null) => {
@@ -1494,6 +1497,7 @@ export function usePlayer({
           artists: [feed.extAuthor, feed.extAuthorClean].filter(Boolean),
           durationSec: feed.durationSec,
           excludeIds,
+          publishedAt: feed.publishedAt,
         }, signal)
         // 完成型 miss（matched===null——异常走 catch 不进这里）且本次外发
         // 的 excludeIds 含当前绑定 id（RTT 窗内被别路改绑则不含，显式选择
@@ -1586,6 +1590,7 @@ export function usePlayer({
           durationSec: feed.durationSec || undefined,
           // 空集不捎字段——保持首配契约干净（有否决账才发 excludeIds）
           ...(excludeIds.length ? { excludeIds } : {}),
+          publishedAt: feed.publishedAt,
         }, signal)
         // matched=null 不留痕（无匹配仍是事实，不写曲对象）；RTT 窗内
         // 被别路补绑也不再覆写——用户显式选择优先
@@ -1732,9 +1737,11 @@ export function usePlayer({
       //    不因 enabled=false 跳过：服务端先回已落库的判定缓存，命中即生效
       //    ——AI 关停后旧否决仍能挡住错词；未命中才 503 由 catch 放行
       const ext = song?.youtube
-        ? { title: song.youtube.title, author: song.youtube.author || '' }
+        ? { title: song.youtube.title, author: song.youtube.author || '',
+            publishedAt: song.youtube.publishedAt }
         : song?.bilibili
-          ? { title: song.bilibili.title, author: song.bilibili.author || '' }
+          ? { title: song.bilibili.title, author: song.bilibili.author || '',
+              publishedAt: song.bilibili.publishedAt }
           : ((song?.qq || QQ_SONG_ID_RE.test(String(song?.id)))
               && String(lyricId) === String(song.neteaseId))
             ? { title: song.name, author: song.ar?.map(a => a.name).join(' ') || '' }
@@ -1758,8 +1765,10 @@ export function usePlayer({
             // verify 秒级任务随切歌一起 abort；translate 刻意不接 signal——
             // 切歌不断连，服务端仍可完成并落库（页面关闭则连服务端一起中止）。
             // 第 5 参携来源轨道 id：yt_ 时服务端反解投稿自署本家进判定语境
-            // （非 yt_ 形态服务端正则直接放过，不产生额外上行）
-            const v = await aiApi.verifyLyric(lyricId, ext.title, ext.author, signal, song?.id)
+            // （非 yt_ 形态服务端正则直接放过，不产生额外上行）；第 6 参携
+            // 源发布日——稿日倒挂判据的时间证据，缺席按未知不扰判定
+            const v = await aiApi.verifyLyric(lyricId, ext.title, ext.author, signal, song?.id,
+              ext.publishedAt)
             ok = v?.ok !== false
             // inconclusive（服务端故障放行）不缓存——恢复后重播要能重验，
             // 与服务端不落库 inconclusive 的口径一致

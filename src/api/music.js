@@ -384,10 +384,12 @@ export const musicApi = {
   // 落 provider.matchedBy/matchScore 供纠错排查（score 为调用方实读字段，
   // matchScore 别名对齐 provider 侧命名）；未中回 null；错误（429/502 等）
   // 照常抛给调用方。最坏 ~55s，超时放宽到 60s
-  retryMatch: async ({ trackId, title, author, artists, durationSec, candidates, excludeIds },
+  // publishedAt（epoch ms，可选）：源媒体发布日回喂——服务端重建
+  // sourceInfo 不回源重取；缺席/undefined 键不进 body，与旧负载逐位同
+  retryMatch: async ({ trackId, title, author, artists, durationSec, candidates, excludeIds, publishedAt },
     abortSignal = null) => {
     const response = await api.post('/match/retry', {
-      trackId, title, author, artists, durationSec, candidates, excludeIds
+      trackId, title, author, artists, durationSec, candidates, excludeIds, publishedAt
     }, { signal: abortSignal, timeout: 60000 })
     const data = unwrapBody(response)
     if (data.code !== 200) throw new Error(data.message || '重匹配失败')

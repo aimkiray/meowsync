@@ -35,6 +35,15 @@ function parseIdParam(c, name = 'id') {
   return parseNumericId(c.req.param(name));
 }
 
+// 来源侧日期合法性窗（规格要求各文件就地实现同一公式）：
+//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
+//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
+//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+
 
 
 // 队列/单曲下载的可选参数规范化：脏值回落默认，concurrentLimit 限定 1-10
@@ -552,13 +561,17 @@ app.post('/downloads/local/mirror', async (c) => {
               cid: /^\d+$/.test(String(t.bilibili.cid ?? '')) ? String(t.bilibili.cid) : null,
               page: Math.max(1, parseInt(t.bilibili.page, 10) || 1),
               title: String(t.bilibili.title || '').slice(0, 300) || null,
-              author: String(t.bilibili.author || '').slice(0, 120) || null
+              author: String(t.bilibili.author || '').slice(0, 120) || null,
+              // 发布日（epoch ms）入签名域——缺席/脏值归 null 不落 0 键，
+              // 与 title/author 的缺席归 null 同口径
+              publishedAt: sanePublishMs(t.bilibili.publishedAt) || null
             } } : {}),
         ...(t.youtube && YT_ID_RE.test(String(t.youtube.videoId || ''))
           ? { youtube: {
               videoId: String(t.youtube.videoId),
               title: String(t.youtube.title || '').slice(0, 300) || null,
-              author: String(t.youtube.author || '').slice(0, 120) || null
+              author: String(t.youtube.author || '').slice(0, 120) || null,
+              publishedAt: sanePublishMs(t.youtube.publishedAt) || null
             } } : {}),
         ...(NETEASE_ID_RE.test(String(t.neteaseId ?? ''))
           ? { neteaseId: String(t.neteaseId) } : {})

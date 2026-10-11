@@ -212,3 +212,51 @@ test('resolve 遇收藏夹链 → 400 带 favlist 字段（前端自动转歌单
   assert.equal(status, 400);
   assert.equal(body.favlist, '55');
 });
+
+test('favlist：media.pubtime/pubdate → 曲目 publishedAt + infoOf 透传；无字段不产键', async () => {
+  reset();
+  const sec = 1664197919;   // 2022-09-26 —— 实测 resource/list 媒体字段
+  biliScript = { 'resource/list': favPage([
+    media(1, { pubtime: sec }),                 // 主键名
+    media(2),                                   // 无发布字段 → 不产键
+    media(3, { pubtime: '脏' }),                // 脏值 → 不产键
+    media(4, { pubdate: sec }),                 // 旧版别名兜底
+  ], 4) };
+  const { status, body } = await getJson(app, '/bilibili/favlist?input=ml123456');
+  assert.equal(status, 200);
+  assert.equal(body.tracks[0].publishedAt, sec * 1000);
+  assert.equal('publishedAt' in body.tracks[1], false, '无字段媒体不落 publishedAt 键');
+  assert.equal('publishedAt' in body.tracks[2], false, '脏值不落 publishedAt 键');
+  assert.equal(body.tracks[3].publishedAt, sec * 1000, 'pubdate 别名同效');
+  // infoOf 把曲目发布日透传进匹配调用（matchCalls 第 5 参 sourceInfo）；
+  // 无字段曲目归 0——与「字段不存在」无差别按未知处理
+  const srcs = matchCalls.map(c => c[4]);
+  assert.equal(srcs[0].publishedAt, sec * 1000);
+  assert.equal(srcs[1].publishedAt, 0);
+  assert.equal(srcs[2].publishedAt, 0);
+  assert.equal(srcs[3].publishedAt, sec * 1000);
+});
+
+test('resolve：view.pubdate 预注——sourceInfo 与回包同带 publishedAt', async () => {
+  reset();
+  const sec = 1586217600;   // 2020-04-07T00:00:00Z
+  biliScript = {
+    'web-interface/view': {
+      bvid: 'BV1xx411c7mD', aid: 1, cid: 111, title: '投稿标题',
+      owner: { name: 'UP主' }, duration: 200, pic: 'http://i0.hdslb.com/x.jpg',
+      pubdate: sec, pages: [{ cid: 111, duration: 200, page: 1 }],
+    },
+    'tag/archive/tags': [],
+    'player/playurl': { dash: {} },
+  };
+  const { status, body } = await getJson(app, '/bilibili/resolve?input=BV1xx411c7mD');
+  assert.equal(status, 200);
+  assert.equal(body.publishedAt, sec * 1000);
+  // 预注进匹配语境——核验/匹配链零上行取数
+  assert.equal(matchCalls[0][4].publishedAt, sec * 1000);
+  // pubdate 缺席归 null 不落脏值
+  biliScript['web-interface/view'] = { ...biliScript['web-interface/view'], pubdate: undefined };
+  const r2 = await getJson(app, '/bilibili/resolve?input=BV1xx411c7mD');
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.publishedAt, null);
+});

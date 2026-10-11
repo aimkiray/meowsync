@@ -29,12 +29,17 @@ export const aiApi = {
     http.post('/ai/lyric-translate', { id }, { signal, timeout: 300000 }),
 
   // 核验配到的歌词是否属于来源音视频（外部导入曲专用）。trackId 携 yt_
-  // 轨道 id 时服务端反解投稿自署本家作判定语境；缺席键不进 body——
+  // 轨道 id 时服务端反解投稿自署本家作判定语境；publishedAt（epoch ms）
+  // 是稿日倒挂判据的时间证据——只送有限正数，缺席/脏值键不进 body，
   // 与旧请求负载逐位相同。入参先归一成串：number 型 song.id 直发会被
   // zod z.string() 拒成 400 静默丢 verify——防御性收口
-  verifyLyric: (id, sourceTitle, sourceAuthor, signal = null, trackId = null) =>
+  verifyLyric: (id, sourceTitle, sourceAuthor, signal = null, trackId = null, publishedAt = null) =>
     // 服务端前置链（yt_ 声明反解 + 词文拉取 + 署名闸重检可各烧一条上游跳）
     // 之后才是 ≤30s 的 AI 判定——30s 前端超时会把仍在跑的合法核验掐成
     // 「通道故障放行」，给到 45s
-    http.post('/ai/lyric-verify', { id, sourceTitle, sourceAuthor, trackId: String(trackId || '') || undefined }, { signal, timeout: 45000 })
+    http.post('/ai/lyric-verify', {
+      id, sourceTitle, sourceAuthor,
+      trackId: String(trackId || '') || undefined,
+      publishedAt: Number.isFinite(publishedAt) && publishedAt > 0 ? publishedAt : undefined
+    }, { signal, timeout: 45000 })
 }

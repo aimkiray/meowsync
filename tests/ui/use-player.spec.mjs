@@ -736,7 +736,7 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     // extId 即词属主键：校准 meta 与归属核验都拿它，不碰网易云 /lyric
     expect(downloadsApi.getSongMeta).toHaveBeenCalledWith('lrclib_42')
     await vi.waitFor(() =>
-      expect(aiApi.verifyLyric).toHaveBeenCalledWith('lrclib_42', '视频标题', 'UP主', expect.anything(), 'bv_BV1xx411c7mD'))
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith('lrclib_42', '视频标题', 'UP主', expect.anything(), 'bv_BV1xx411c7mD', undefined))
     expect(musicApi.getLyrics).not.toHaveBeenCalled()
   })
 
@@ -895,7 +895,7 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     await player.playSong(bv)
     // 换绑 222 后新词源同样被 verify 否决——等它发生再断言无二次重试
     await vi.waitFor(() =>
-      expect(aiApi.verifyLyric).toHaveBeenCalledWith(222, '视频标题', 'UP主', expect.anything(), 'bv_BV1xx411c7mD'))
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith(222, '视频标题', 'UP主', expect.anything(), 'bv_BV1xx411c7mD', undefined))
     await vi.waitFor(() => expect(player.lyrics.value).toEqual([]))
     await new Promise(r => setTimeout(r, 0))
     expect(musicApi.retryMatch).toHaveBeenCalledTimes(1)
@@ -1068,7 +1068,7 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     const { player } = makePlayer()
     await player.playSong(bvSong()) // 无 neteaseId → 外源词路
     await vi.waitFor(() =>
-      expect(aiApi.verifyLyric).toHaveBeenCalledWith('lrclib_9', '视频标题', 'UP主', expect.anything(), 'bv_BV1xx411c7mD'))
+      expect(aiApi.verifyLyric).toHaveBeenCalledWith('lrclib_9', '视频标题', 'UP主', expect.anything(), 'bv_BV1xx411c7mD', undefined))
     await vi.waitFor(() => expect(player.lyrics.value).toEqual([]))
     expect(toast).toHaveBeenCalledWith('歌词与歌曲疑似不匹配，已隐藏', 'info')
     // 判否对象是外源词源（lrclib_9 非 neteaseId）——不走换绑否决记账，
@@ -1089,7 +1089,7 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     // externalArtistName 回 null）
     await vi.waitFor(() =>
       expect(aiApi.verifyLyric).toHaveBeenCalledWith(
-        111, '歌yt_abcdefghijk', '艺人', expect.anything(), 'yt_abcdefghijk'))
+        111, '歌yt_abcdefghijk', '艺人', expect.anything(), 'yt_abcdefghijk', undefined))
   })
 
   it('判否换绑并入菜单显式否决簿：已否词源不进 retryMatch 候选', async () => {
@@ -1416,7 +1416,7 @@ describe('usePlayer：外源歌词兜底与自动重匹配', () => {
     expect(downloadsApi.getSongMeta).toHaveBeenCalledWith('lrclib_5')
     await vi.waitFor(() =>
       expect(aiApi.verifyLyric).toHaveBeenCalledWith(
-        'lrclib_5', 'sasayakuを歌いました', 'rei sirose - Topic', expect.anything(), 'yt_abcdefghijk'))
+        'lrclib_5', 'sasayakuを歌いました', 'rei sirose - Topic', expect.anything(), 'yt_abcdefghijk', undefined))
     // 已绑定曲不回首配——rematchUnbound 的 neteaseId==null 闸天然防环
     expect(musicApi.retryMatch).not.toHaveBeenCalled()
   })

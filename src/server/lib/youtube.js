@@ -423,9 +423,14 @@ function parseOriginalRef(description, selfVideoId) {
 // 门禁，任何一环失败（异常/超时/缺字段）按「无声明」交回，不抛
 async function resolveOriginalInfoOnce({ videoId, description, signal }) {
   try {
+    // 描述缺席时经 fetchVideoBasics 补跳——与发布日解析共享同一跳 player
+    // 与同一本 memo（见下「视频基础信息」段）：microformat 与
+    // videoDetails.shortDescription 同包回，拆成两条上行链会把 yt_
+    // 每曲的一跳翻成两跳。调者经 resolveOriginalInfo 共享计算进场时
+    // signal 恒为 null（memo 纪律），等待方在簿外自查自己的 signal
     const desc = typeof description === 'string'
       ? description
-      : (await fetchPlayer(videoId, signal))?.videoDetails?.shortDescription || '';
+      : (await fetchVideoBasics(videoId, signal))?.description || '';
     const ref = parseOriginalRef(desc, videoId);
     if (!ref) return null;
     // 文本声明形态：author/title 已在描述里内联——直交，videoId 缺席
@@ -489,8 +494,131 @@ async function resolveOriginalInfo({ videoId, description, signal }) {
   if (signal?.aborted) return null;
   return res;
 }
-// 测试钩（_clearDeclaredMemo 先例）：memoize 跨用例残留会污染 fetch 计数断言
-const _clearOriginalMemo = () => origMemo.clear();
+// 测试钩（_clearDeclaredMemo 先例）：memoize 跨用例残留会污染 fetch 计数断言。
+// 连带清 basicsMemo——origMemo 产物的描述轴原料正是经 fetchVideoBasics 取的，
+// 只清结果簿不清原料簿会让「清后重打」的用例吃到残留 basics（链冷语义）
+const _clearOriginalMemo = () => { origMemo.clear(); basicsMemo.clear(); };
+
+// ── 视频基础信息（发布日 + 描述）─────────────────────────────────────
+// 源视频发布日与描述共享一条 player 上行链与同一本 memo：
+// publishDate/uploadDate 在 microformat.playerMicroformatRenderer 里与
+// videoDetails.shortDescription 同包回——publishedAt 解析（匹配/核验的
+// 时间证据）与本家声明解析若各走一条链，yt_ 每曲的一跳就翻成两跳。
+//
+// 数据源取舍：①player 响应 microformat.publishDate（ISO 日粒度，选定）：
+// 既有 fetchPlayer 原语直读零成本、惰性路径与声明解析共享一跳、格式非
+// 本地化可 Date.parse；②/youtubei/v1/next engagementPanels
+// publishDate.simpleText（"Apr 7, 2020"）：本地化文本需语言相关解析、
+// 多一个端点多一个反爬面，弃；③watch 页 HTML meta[itemprop=datePublished]
+// （ISO）：整页 ~1MB 抓取+HTML 解析太重，弃。microformat 在部分客户端
+// 形态的 player 响应里可缺席——归 null，fail-soft。
+// publishDate 优先于 uploadDate：定时首播/预售稿的「公开日」是
+// publishDate（uploadDate 可远早），倒挂判据吃的是公开日。
+
+// 来源侧日期合法性窗（规格要求各文件就地实现同一公式）：
+//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
+//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
+//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+
+// memo 纪律与 origMemo（见上「进程级 memo」段）逐条对齐：存 promise 不存
+// 落地值（并发首调天然单飞去重）；共享计算不吃调用方 signal（首调用方
+// 断连不陪绑搭车者——Once catch 归 null，await 安全）；等待方 await 后
+// 自查自己的 signal 再消费；cap 500 FIFO 写前挤最旧。
+// TTL 分档锚在「发布日轴是否拿到」上而非整条落地值上：拿到发布日是
+// 稳定事实按 6h（与 origMemo 同档——basics 同时喂 description 轴，
+// TTL 不得劣于声明解析旧界）；发布日缺席（microformat 缺形态或整条
+// 失败）按 10min 负结果短窗——microformat 缺哪种形态是轮替变量不是
+// 稳定事实，短窗给下一形态一次翻身机会，别把「这次没拿到」固化成
+// 「它没有」
+const BASICS_MEMO_OK_MS = 6 * 3600e3;
+const BASICS_MEMO_NULL_MS = 10 * 60e3;
+const BASICS_MEMO_CAP = 500;
+const basicsMemo = new Map();   // videoId -> {p:Promise<basics|null>, at}
+
+// player 响应 → {publishedAt, description}；字段缺席/脏值各自归 null。
+// 原始值按型分流：microformat 契约是日期字符串（ISO）走 Date.parse；
+// 数字原始值不是日期串——Date.parse('5') 会宽容成 2001-05 脏数据骗过
+// 合法性窗，按 ms 轴直接消毒
+const basicsOf = (player) => {
+  const vd = player?.videoDetails || {};
+  const mf = player?.microformat?.playerMicroformatRenderer || {};
+  const raw = mf.publishDate || mf.uploadDate;
+  const ms = sanePublishMs(typeof raw === 'number' ? raw : Date.parse(String(raw || '')));
+  return {
+    publishedAt: ms || null,
+    description: typeof vd.shortDescription === 'string' ? vd.shortDescription : null,
+  };
+};
+
+// 单跳自源基础信息——全链 fail-soft，增强证据不抛（LOGIN_REQUIRED/
+// 风控/超时/缺字段一律归 null）
+async function fetchVideoBasicsOnce(videoId) {
+  try { return basicsOf(await fetchPlayer(videoId, null)); }
+  catch { return null; }
+}
+
+async function fetchVideoBasics(videoId, signal) {
+  // 调用方已断连不进场——早退不占簿位（resolveOriginalInfo 同口径）
+  if (signal?.aborted) return null;
+  const hit = basicsMemo.get(videoId);
+  if (hit) {
+    const res = await hit.p.catch(() => undefined);
+    // 命中即单飞——在途与落地同一条 promise；过期/异常即弃不占位
+    if (res !== undefined
+      && Date.now() - hit.at < (res?.publishedAt ? BASICS_MEMO_OK_MS : BASICS_MEMO_NULL_MS)) {
+      return res;
+    }
+    // 身份闸：await 期间 player 直给写穿可能已覆盖上新鲜条目——
+    // 过期清理只删自己读到的这条，别把别人的热条目误逐
+    if (basicsMemo.get(videoId) === hit) basicsMemo.delete(videoId);
+  }
+  const p = fetchVideoBasicsOnce(videoId);
+  if (basicsMemo.size >= BASICS_MEMO_CAP && !basicsMemo.has(videoId)) {
+    basicsMemo.delete(basicsMemo.keys().next().value);   // 写前挤最旧（FIFO）
+  }
+  basicsMemo.set(videoId, { p, at: Date.now() });
+  const res = await p;   // Once fail-soft 归 null 不抛——await 安全
+  // 等待期间本调用方断连：结果真值已落簿（videoId 级事实），后续调用方
+  // 照吃不浪费这趟回源——abort 只落在消费侧
+  if (signal?.aborted) return null;
+  return res;
+}
+
+// 自源视频发布日（epoch ms|null）：player 在手（/resolve 路由解析期刚
+// 拿过）→ 同步提取 + 写穿 basicsMemo——一手新料焐热让 match/verify 的
+// 惰性消费零上行，旧缓存条目不挡当日解析；否则走 memo 单飞回源。
+// 全链 fail-soft——日期是增强证据不是门禁，任何环节失败归 null
+async function resolvePublishedAt({ videoId, player, signal }) {
+  if (signal?.aborted) return null;
+  if (player) {
+    const basics = basicsOf(player);
+    // 写穿前 merge 已有条目：publishedAt/description 两轴都是单调事实——
+    // 本次直给的 player 若落在缺 microformat 形态上，写穿 {null,null} 会把
+    // 簿内焓热正条目的日期与描述双轴降级 10min（新 null 覆盖旧真值不更优）。
+    // await 在途条目同口径——直给写穿本是 async 函数，等半拍换不降级
+    const old = basicsMemo.get(videoId);
+    if (old) {
+      const prev = await old.p.catch(() => null);   // 在途/落地同一条 p
+      basics.publishedAt = basics.publishedAt ?? prev?.publishedAt ?? null;
+      basics.description = basics.description ?? prev?.description ?? null;
+    }
+    if (basicsMemo.size >= BASICS_MEMO_CAP && !basicsMemo.has(videoId)) {
+      basicsMemo.delete(basicsMemo.keys().next().value);   // 写前挤最旧（FIFO）
+    }
+    basicsMemo.set(videoId, { p: Promise.resolve(basics), at: Date.now() });
+    // 等待 merge 期间本调用方断连：merge 真值已落簿（videoId 级事实），
+    // abort 只落在消费侧——后续调用方照吃不浪费
+    return signal?.aborted ? null : basics.publishedAt;
+  }
+  return (await fetchVideoBasics(videoId, signal))?.publishedAt ?? null;
+}
+// 测试钩（_clearOriginalMemo 先例）：basics 簿位独立清——只读发布日/
+// 描述轴的用例不该被迫拖 origMemo 一起冷
+const _clearBasicsMemo = () => basicsMemo.clear();
 
 // 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
 // spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强。
@@ -838,4 +966,4 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   };
 }
 
-module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, parseOriginalRef, resolveOriginalInfo, _clearOriginalMemo, YT_TIMEOUT_MS };
+module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, parseOriginalRef, resolveOriginalInfo, _clearOriginalMemo, resolvePublishedAt, _clearBasicsMemo, YT_TIMEOUT_MS };
