@@ -10,8 +10,14 @@ const {
 const { titleVariantsOf, isPlaceholderAuthor, normKey } = require('../../shared/title-variants.js');
 const { YT_TRACK_ID_RE } = require('../../shared/predicates.js');
 // 本家声明惰性解析（yt_ 来源的 shortDescription 自署出处链）——收单决断
-// 前挑战与候选面穷尽兜底两处调用，模块顶层 require 不带运行期成本
+// 前挑战与候选面穷尽兜底两处调用，模块顶层 require 不带运行期成本。
+// 同包 microformat 里还躺着视频发布日（publishedAt）——时间一致性证据
+// 轴与声明解析共享同一跳 player（fetchVideoBasics memo 焐热即零边际上行）
 const { resolveOriginalInfo } = require('../lib/youtube');
+// 发布日惰性消费持模块对象不持解构：测试桩对 lib/youtube 的原位覆写
+// 才能接管 ytLib.resolvePublishedAt?.()——解构会把真身定死在 require
+// 时绕开桩层；旧桩缺该导出经 ?. 归 undefined 不炸（lyric-verify.js 先例）
+const ytLib = require('../lib/youtube');
 const songMatchRepo = require('../repositories/songMatch');
 
 // 外部导入曲（B 站/YouTube/QQ）匹配网易云词源：每个候选串云搜 limit:10，
@@ -70,12 +76,63 @@ const nameHitNeedsConfirm = (song, q, sourceInfo) => {
 const cleanPrompt = (s) => String(s ?? '')
   .replace(/[\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
 
-const songDesc = (s) => {
+// ── 时间一致性证据（chrono-guard）──────────────────────────────────
+// 来源侧日期合法性窗（A/B/C 各文件就地实现同一公式——cleanPrompt 同款
+// 「不为 3 行函数建共享依赖」先例，字面量跨单元逐字节一致）：
+//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
+//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
+//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+// 展示统一 UTC 日粒度（YYYY-MM-DD，不受服务器 TZ 影响）
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+// 候选侧只过滤明显脏数据（未来上架日是合法证据——首发预售条目对现存视频
+// 本就不可能，嫌疑判面天然覆盖），不设业务上限；只夹 Date 值域——
+// t >= 8.64e15（约 ±10 万年）时 new Date(t).toISOString() 抛 RangeError，
+// 超此必脏数据按无日期处理（与 sanePublishMs 的窗语义同族）
+const candPubMsOf = (s) => {
+  const t = Number(s?.publishTime);
+  return Number.isFinite(t) && t > 0 && t <= 8640000000000000 ? t : 0;
+};
+
+const srcPubMsOf = (sourceInfo) => sanePublishMs(sourceInfo?.publishedAt);
+
+const CHRONO_GRACE_MS = 30 * 86400e3;   // 宽限 30d：投稿→正式发行的正常链路滞后
+// 单向判「候选上架晚于来源发布+宽限」（翻唱早于原曲不可能；候选早于是常态）。
+// 只产两件事：①songDesc 的 ⚠ 标记；②复核发起条件——不产生分数变化、
+// 不产生机械否决、不写 veto：审计 9/9 旗标全误报（上架日≠诞生日），
+// 所有否决结论一律出自 AI 复核
+const chronoSuspect = (song, srcMs) =>
+  srcMs > 0 && candPubMsOf(song) > srcMs + CHRONO_GRACE_MS;
+
+// 时间证据条款（条件注入，origDeclLine「缺席不出行」同口径）
+const CHRONO_GUIDE = '候选条目标注的是平台上架日（非歌曲诞生日）：老歌数字上架/'
+  + '再压盘/精选重收的上架日常晚于诞生日数年，不构成否决；仅当候选是首发性质'
+  + '条目（首发单曲/新曲首发）且上架日明显晚于来源发布日，形成「翻唱早于原曲」'
+  + '的时间倒挂时才作否决证据。';
+
+// 来源行追加段（publishedAt 缺席不出段）
+const pubDateSeg = (sourceInfo) => {
+  const ms = srcPubMsOf(sourceInfo);
+  return ms ? `，发布于 ${isoDay(ms)}` : '';
+};
+
+// srcMs=来源发布日（0=未知）：候选带 publishTime 时描述行附上「上架」日，
+// 倒挂嫌疑加 ⚠ 天数标记——第二参全缺省与旧签名逐位不变
+const songDesc = (s, srcMs = 0) => {
   const arr = Array.isArray(s?.ar || s?.artists) ? (s.ar || s.artists) : [];
   const artists = arr.map(a => a?.name).filter(Boolean).join('/') || '未知';
   const dur = Math.round((s?.dt || s?.duration || 0) / 1000);
   const album = s?.al?.name || s?.album?.name || '未知';
-  return `${cleanPrompt(s?.name)} — ${cleanPrompt(artists)}（${dur}s，专辑《${cleanPrompt(album)}》）`;
+  const pt = candPubMsOf(s);
+  const dateSeg = pt > 0
+    ? `，上架 ${isoDay(pt)}${chronoSuspect(s, srcMs)
+        ? `，⚠晚于来源发布约${Math.round((pt - srcMs) / 86400e3)}天` : ''}`
+    : '';
+  return `${cleanPrompt(s?.name)} — ${cleanPrompt(artists)}（${dur}s，专辑《${cleanPrompt(album)}》${dateSeg}）`;
 };
 
 // AI 复核：灰区候选是错配高发场景——有能力时让模型复核；模型拒答/超时
@@ -106,6 +163,9 @@ const origDeclLine = (sourceInfo) => {
   return `\n来源描述声明本家：${cleanPrompt(o.title) || '未知'} — ${cleanPrompt(o.author) || '未知'}`;
 };
 async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
+  // 时间轴证据进 prompt：源/候选任一侧有日期即附条款（两侧全缺=旧 prompt
+  // 逐位不变——缺席不出段、不出条款、不构成否决）
+  const srcMs = srcPubMsOf(sourceInfo);
   const ans = await askAiJson({
     // 复核/再生/兜底三处的单发时限不写死——交 askAiJson 默认链治理
     // （AI_TIMEOUT_MS env，默认 30s，见 lib/ai.js）。慢模型部署实测单发
@@ -114,8 +174,9 @@ async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
     // 不靠在每发上砍时限
     system: '你是歌词源匹配助手。判断候选歌曲与来源音/视频的歌词是否同一作品'
       + LYRIC_MATCH_CRITERIA
+      + (srcMs > 0 || candPubMsOf(song) > 0 ? CHRONO_GUIDE : '')
       + '只输出 JSON {"match":true|false}。',
-    user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s）${origDeclLine(sourceInfo)}\n候选：${songDesc(song)}`,
+    user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s${pubDateSeg(sourceInfo)}）${origDeclLine(sourceInfo)}\n候选：${songDesc(song, srcMs)}`,
     maxTokens: 32,
     signal,
   });
@@ -165,12 +226,14 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
       ...all.filter(s => !preferIds.has(s.id)).sort((a, b) => scoreOf(b) - scoreOf(a))]
     : all.sort((a, b) => scoreOf(b) - scoreOf(a))).slice(0, 10);
   if (!list.length) return null;
-  const desc = list.map((s, i) => `${i + 1}. ${songDesc(s)}`).join('\n');
+  const srcMs = srcPubMsOf(sourceInfo);   // 与 aiConfirmMatch 同款条件注入
+  const desc = list.map((s, i) => `${i + 1}. ${songDesc(s, srcMs)}`).join('\n');
   const ans = await askAiJson({
     system: '你是歌词源匹配助手。从候选列表选出与来源音/视频歌词同一作品的编号'
       + LYRIC_MATCH_CRITERIA
+      + (srcMs > 0 || list.some(candPubMsOf) ? CHRONO_GUIDE : '')
       + '都不符返回 {"match":0}，能确定返回 {"match":编号}。只输出 JSON。',
-    user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s）${origDeclLine(sourceInfo)}\n候选：\n${desc}`,
+    user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s${pubDateSeg(sourceInfo)}）${origDeclLine(sourceInfo)}\n候选：\n${desc}`,
     maxTokens: 32,
     // 单发时限同走 AI_TIMEOUT_MS env（见 aiConfirmMatch 头注）
     signal,
@@ -367,12 +430,14 @@ function expandSearchQueries(candidates, sourceInfo, variantKeys = null) {
 // 首个产出可收命中的串即返回（确定性 ≥75 或灰区收下）。signal：客户端断连/
 // 调用方主动作废时早退，不刷无意义的上游云搜。
 // sourceInfo={title,author,artists[],titles[],trackId,durationSec?,description?,
-//   original?}：AI 增强用——灰区复核 + 启发式全灭时再生/兜底挑；artists/titles
-//   喂打分器，trackId 接 song_match 缓存键。original={title,author} 是投稿者
-//   自署的本家出处：调用方可预注（任意源），未注且 trackId 为 yt_<videoId>
-//   时经 sourceInfo.description（或补一跳 player）惰性解析——触发点提前
-//   到首个收单决断前（让证据先于决断到场），全灭路径兜底位仍解析。
-//   AI 未配置时语义与宽松启发式一致
+//   original?,publishedAt?}：AI 增强用——灰区复核 + 启发式全灭时再生/兜底挑；
+//   artists/titles 喂打分器，trackId 接 song_match 缓存键。original={title,author}
+//   是投稿者自署的本家出处：调用方可预注（任意源），未注且 trackId 为
+//   yt_<videoId> 时经 sourceInfo.description（或补一跳 player）惰性解析——
+//   触发点提前到首个收单决断前（让证据先于决断到场），全灭路径兜底位仍解析。
+//   publishedAt=源发布日 epoch ms（调用方可预注；yt_ 未注时按 trackId 惰性
+//   解析——与本家声明共享 fetchVideoBasics memo；bv_ 由路由预注 pubdate；
+//   qq_ 不供）。AI 未配置时语义与宽松启发式一致
 // opts={excludeIds}：请求级预置否决集（/match/retry 纠错口）——与持久
 //   否决簿（song_match.vetoed_json）同种子进 vetoedIds，与 AI 否决
 //   同规则永不复活。返回值各出口带 vetoedIds 供上层落账/负行判定
@@ -391,12 +456,12 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
   const seenSongs = new Map();
   const scoreById = new Map();
   const vetoedIds = new Set();
-  // 声明语境放行记忆（vetoedIds 的对偶，yt_ 声明语境专属）：带声明行复核
-  // 放行的 (源,候选) 对是终态——同一首歌后续查询串以 ≥ACCEPT top 复现时
-  // 挑战直返，同一问题不再重答。declSeen/hit.aiChecked 都不跨查询存续，
-  // 无此集合则同曲复现恒重发同 prompt——模型抖动把已放行歌曲翻成否决，
-  // vetoedIds 连 heldHit 回补一并堵死。对偶不变量：「否决不经任何路径
-  // 复活」↔「放行不重复烧额度」
+  // 全证据语境放行记忆（vetoedIds 的对偶）：声明轴（yt_）∪ 时间轴（全源）
+  // 复核放行的 (源,候选) 对是终态——同一首歌后续查询串以 ≥ACCEPT top
+  // 复现时挑战直返，同一问题不再重答。declSeen/hit.chronoSeen/hit.aiChecked
+  // 都不跨查询存续，无此集合则同曲复现恒重发同 prompt——模型抖动把已
+  // 放行歌曲翻成否决，vetoedIds 连 heldHit 回补一并堵死。对偶不变量：
+  // 「否决不经任何路径复活」↔「放行不重复烧额度」
   const declClearedIds = new Set();
   const rejectedMarkerIds = new Set(); // 标类硬拒——连 AI 兜底池都开除
   let searchedAny = false; // 任一云搜 resolve（空集也算搜过）——全灭=传输故障
@@ -526,42 +591,79 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     }
     return o || null;
   };
-  // hit={song,query,score[,aiChecked]} 收单决断挑战：true=照原收单；
-  // false=声明冲突否决（vetoedIds 已记，调用方转下一个）。declSeen=该
-  // 候选的放行判决本就在声明语境下作出——证据已含，不重复烧额度；
-  // declClearedIds=跨决断放行记忆——带声明语境判过的 (源,候选) 对是
-  // 终态，后续查询串同曲复现直返不重问。
-  // 豁免语义是「无声明才豁免」：yt_ 声明在位的每次收单决断（任何分位）
+  // 来源发布日惰性解析（yt_ 限定，本家声明同款纪律）：日期只作 AI 证据与
+  // 挑战触发料——AI 关时解析是纯浪费直接不发起；候选不带 publishTime 时
+  // 无对照轴同不发起。pubAttempted memoize 每曲至多一跳；解析空手/异常/
+  // abort 都按「无日期」继续，不构成否决。调用次序在 ensureOriginal 之后
+  // 是红利位——描述缺席时 Once 先焐热 basics memo，publishedAt 解析 0 边际上行
+  let pubAttempted = false;
+  const ensurePublishedAt = async (need) => {
+    if (!need || !useAi || pubAttempted || !ytSelfId || signal?.aborted) return;
+    if (srcPubMsOf(sourceInfo) > 0) return;      // 调用方已预注——零上行
+    pubAttempted = true;
+    const ms = await Promise.resolve(
+      ytLib.resolvePublishedAt?.({ videoId: ytSelfId, signal })
+    ).catch(() => null);
+    if (Number.isFinite(ms) && ms > 0) sourceInfo.publishedAt = ms;
+  };
+  // hit={song,query,score[,aiChecked][,chronoSeen]} 收单决断复核：
+  // true=照原收单；false=复核否决（vetoedIds 已记，调用方转下一个）。
+  // 两条证据轴各判「未判证据」——
+  //   声明轴（yt_ 专属）：ensureOriginal 惰性解析 + 派生串插队列原样保留；
+  //     声明在场而该对未带声明语境判过（!declSeen）即未判；
+  //   时间轴（全源通用）：候选上架日晚于来源发布 +30d 宽限的倒挂嫌疑
+  //     （chronoSuspect——墨田区实案「翻唱早于原曲 4 年」形态），该对
+  //     未带日期语境判过（!hit.chronoSeen）即未判；bv_ 预注日期同享
+  //     此轴——!ytSelfId 早退曾把它挡在挑战面外（-a 洞在此收口）。
+  // declSeen=该候选的放行判决本就在声明语境下作出——证据已含，不重复
+  // 烧额度；hit.chronoSeen 是其时间轴对偶（灰区复核位烙）。declClearedIds=
+  // 跨决断放行记忆——带全证据语境判过的 (源,候选) 对是终态，后续查询串
+  // 同曲复现直返不重问（「否决不经任何路径复活」的对偶：放行不重复烧
+  // 额度——重答只会给模型抖动一次翻案机会，连 heldHit 回补都堵死）。
+  // 豁免语义是「无证据才豁免」：yt_ 声明在位的每次收单决断（任何分位）
   // 都过带声明行的复核——'Moonlight ver.EMA' 实案 s88 撞名收单凭分数
   // 豁免直收同题异曲（把确定的一手证据换成启发式置信），分数自此不是
-  // 免证据通道；声明缺席（解析空手/失败/非 yt_）即无证据可核，照原
-  // 启发式放行零漂移。
+  // 免证据通道；两轴证据全缺席即无可核，照原启发式放行零漂移。
   // 成本纪律：每收单决断至多 1 跳 resolveOriginalInfo（origAttempted
-  // memoize 全曲只一次）+ ≤1 发 AI（AI_CALL_BUDGET 总闸兜底）；非 yt_
-  // 源 !ytSelfId 早退不变
+  // memoize 全曲只一次）+ ≤1 跳 resolvePublishedAt（pubAttempted 同款，
+  // 候选无日期/AI 关/已预注不发起）+ ≤1 发 AI（AI_CALL_BUDGET 总闸兜底）；
+  // AI 通道关/耗尽保守维持原收单
   const challengeAccept = async (hit, declSeen) => {
-    if (!ytSelfId || signal?.aborted) return true;
-    await ensureOriginal();
-    // 派生串插队到当前串之后——本家检索词是第一方证据，先于剩余候选打
-    if (origDerived.length) {
-      candidates.splice(candidateCursor + 1, 0, ...origDerived.splice(0));
+    if (signal?.aborted) return true;
+    // 声明轴照旧 yt_ 专属——ensureOriginal + 派生串插队列原样保留
+    if (ytSelfId) {
+      await ensureOriginal();
+      // 派生串插队到当前串之后——本家检索词是第一方证据，先于剩余候选打
+      if (origDerived.length) {
+        candidates.splice(candidateCursor + 1, 0, ...origDerived.splice(0));
+      }
     }
-    // 已放行对直返：声明语境放行是 (源,候选) 对级终态——同曲在后续串
-    // 复现不重发同 prompt（「否决不经任何路径复活」的对偶：放行不重复
-    // 烧额度——重答只会给模型抖动一次翻案机会，连 heldHit 回补都堵死）
-    if (!sourceInfo?.original || declSeen
-      || declClearedIds.has(String(hit.song.id))) return true;
+    // 已放行对直返：全证据语境放行是 (源,候选) 对级终态（对偶不变量不变）
+    if (declClearedIds.has(String(hit.song.id))) return true;
+    // 时间轴：候选带上架日才值得解来源日（无对照轴不白付上行）；
+    // yt_ 惰性（basics memo 大概率已被 ensureOriginal 焐热），bv_ 走路由预注
+    await ensurePublishedAt(candPubMsOf(hit.song) > 0);
+    const srcMs = srcPubMsOf(sourceInfo);
+    const suspect = chronoSuspect(hit.song, srcMs);
+    // 未判证据轴 = 声明在场但该对未带声明语境判过（yt_ 专属），
+    //   或倒挂嫌疑未带日期语境判过（全源通用）
+    const unjudged = (ytSelfId && !!sourceInfo?.original && !declSeen)
+      || (suspect && !hit.chronoSeen);
+    if (!unjudged) return true;
     if (!useAi || aiLeft <= 0) return true;    // AI 通道关/耗尽——保守维持
     aiLeft--; aiTouched = true;
     const verdict = await aiConfirmMatch(hit.song, sourceInfo, durationSec, signal);
     if (verdict === false) {
       vetoedIds.add(String(hit.song.id));
-      console.info(`[${tag}] 本家声明挑战否决收单: ${songDesc(hit.song)} ← ${hit.query}`);
+      // 审计日志带轴标记——读得出哪条证据否决的（'声明'/'时间'/'声明+时间'）
+      const axes = [ytSelfId && sourceInfo?.original && '声明', suspect && '时间']
+        .filter(Boolean).join('+');
+      console.info(`[${tag}] 收单复核否决（${axes}证据）: ${songDesc(hit.song, srcMs)} ← ${hit.query}`);
       return false;
     }
     // 放行（含模型哑 null——哑是粘性放行，与复核放行同记）记对级终态
     declClearedIds.add(String(hit.song.id));
-    hit.aiChecked = true;    // 该对已带声明语境判过——再生轮不再重问
+    hit.aiChecked = true;    // 该对已带全证据语境判过——再生轮不再重问
     return true;
   };
 
@@ -667,6 +769,9 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
       if (vetoedIds.has(String(g.s.id))) continue;   // 挑战/复核否决的不复活
       if (confirms < 2 && aiLeft > 0) {
         confirms++; aiLeft--; aiTouched = true;
+        // 首个带 publishTime 的候选进复核前把来源日补齐——首发 confirm
+        // 就带日期语境（chronoSeen 烙位才有意义）；候选无日期不发起（无对照轴）
+        await ensurePublishedAt(candPubMsOf(g.s) > 0);
         const declSeen = !!sourceInfo?.original;
         const verdict = await aiConfirmMatch(g.s, sourceInfo, durationSec, signal);
         if (verdict === false) {
@@ -675,7 +780,10 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
           if (++vetoes >= 2) return null;
           continue;
         }
-        const hit = { song: g.s, query: q, score: g.score, aiChecked: true };
+        // chronoSeen=该对的放行判决已在日期语境下作出（源日此刻在场）——
+        // declSeen 的时间轴对偶钉，挑战的「未判证据」判面消费
+        const hit = { song: g.s, query: q, score: g.score, aiChecked: true,
+          chronoSeen: srcPubMsOf(sourceInfo) > 0 };
         if (await challengeAccept(hit, declSeen)) {
           if (acceptOrHold(hit)) return hit;
           return null;   // 待定转下一串——不记 veto（挑战放行只是延后收单）
@@ -783,14 +891,33 @@ async function matchNeteaseSong(candidates, durationSec, tag = 'import', signal 
     }
   }
   if (useAi && seenSongs.size && !signal?.aborted && aiLeft > 0) {
+    // pick 池任一候选带 publishTime 即补来源日——池中描述行要带日期证据
+    // （墨田区实案正是死在 score=49 无 confirm 直通兜底这条路径）
+    await ensurePublishedAt([...seenSongs.values()].some(s => candPubMsOf(s) > 0));
     aiLeft--; aiTouched = true;
     // 畸形上游数据（ar 非数组等）在 desc 构建处可能 TypeError——
     // 兜底是增强路径，异常按「无兜底」降级而非 502；再生批优先入池
     const pick = await aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds, regenIds, scoreById, rejectedMarkerIds, derivedSeenIds)
       .catch(() => null);
     if (pick) {
-      console.info(`[${tag}] AI 兜底命中: ${songDesc(pick)} ← ${sourceInfo.title}`);
-      return { song: pick, query: 'ai:pick', score: scoreById.get(pick.id) ?? null, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
+      // 时间复核（120s 粗闸的弱信号对偶）：倒挂嫌疑不机械弃票——压盘
+      // 误报面太大（audit 9/9 全误报），补一发带日期语境的 confirm 由
+      // 模型裁量；预算耗尽/AI 哑按原样收下（AI 是增强不是门禁）；判否
+      // 不重挑（省额度），落穿尾部 null 返回——veto 随 vetoedIds 落账
+      if (chronoSuspect(pick, srcPubMsOf(sourceInfo)) && aiLeft > 0) {
+        aiLeft--; aiTouched = true;
+        const verdict = await aiConfirmMatch(pick, sourceInfo, durationSec, signal);
+        if (verdict === false) {
+          vetoedIds.add(String(pick.id));
+          console.info(`[${tag}] AI 兜底命中被时间复核否决: ${songDesc(pick, srcPubMsOf(sourceInfo))} ← ${sourceInfo.title}`);
+        } else {
+          console.info(`[${tag}] AI 兜底命中: ${songDesc(pick, srcPubMsOf(sourceInfo))} ← ${sourceInfo.title}`);
+          return { song: pick, query: 'ai:pick', score: scoreById.get(pick.id) ?? null, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
+        }
+      } else {
+        console.info(`[${tag}] AI 兜底命中: ${songDesc(pick, srcPubMsOf(sourceInfo))} ← ${sourceInfo.title}`);
+        return { song: pick, query: 'ai:pick', score: scoreById.get(pick.id) ?? null, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };
+      }
     }
   }
   return { song: null, query: null, score: null, ai: aiTouched, searchedAny, vetoedIds: [...vetoedIds] };

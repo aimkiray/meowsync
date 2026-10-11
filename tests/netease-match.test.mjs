@@ -45,12 +45,17 @@ require.cache[aiPath] = { id: aiPath, filename: aiPath, loaded: true, exports: {
   aiModel: () => aiModelName,
 } };
 // 本家惰性解析出口桩：netease-match 只消费 resolveOriginalInfo 这个面——
-// Innertube/描述解析细节由 tests/youtube-original.test.mjs 钉真实现
+// Innertube/描述解析细节由 tests/youtube-original.test.mjs 钉真实现；
+// resolvePublishedAt 同款录制桩（发布日惰性解析出口，?. 调用旧桩缺导出
+// 归 undefined 不炸——这里显式补上录制面）
 let resolveOrigImpl = async () => null;
+let pubImpl = async () => null;
 const resolveOrigCalls = [];
+const pubCalls = [];
 const ytLibPath = require.resolve('../src/server/lib/youtube.js');
 require.cache[ytLibPath] = { id: ytLibPath, filename: ytLibPath, loaded: true, exports: {
   resolveOriginalInfo: (...a) => { resolveOrigCalls.push(...a); return resolveOrigImpl(...a); },
+  resolvePublishedAt: (...a) => { pubCalls.push(...a); return pubImpl(...a); },
 } };
 const {
   matchNeteaseSong, nameHitNeedsConfirm, matchWithBudget, matchTracksPool,
@@ -63,6 +68,7 @@ const reset = () => {
   aiScript = []; apiScript = []; detailScript = [];
   apiCalls.length = 0; aiCalls.length = 0;
   resolveOrigImpl = async () => null; resolveOrigCalls.length = 0;
+  pubImpl = async () => null; pubCalls.length = 0;
 };
 
 test('歌名互包含 → 启发式命中返回原查询串，不触发 AI', async () => {
@@ -1461,4 +1467,309 @@ test('否决簿：完成型运行落账本轮 AI 否决——跨会话可见', a
   // AI 期落账记 m='stub'——同模读面生效（换模后旧否决不参与过滤）
   assert.ok(songMatchRepo.getVetoedIds('bv_V5', 'stub').has('1'));
   assert.ok(!songMatchRepo.getVetoedIds('bv_V5', '').has('1'));
+});
+
+// ── 时间一致性加固（chrono-guard）：publishedAt×publishTime 证据轴 ──────
+// 墨田区实案（yt_S6S51wpLnrY 发布 2020-04-07 → 绑 2136493163「墨田区
+// SUMMER NIGHT」上架 2024-03-18，倒挂 1441 天）防再发：日期只作 AI 证据
+// 与复核触发器——不进分数、不机械否决；倒挂嫌疑触发既有收单复核同型挑战
+// （时间轴对全源生效），ai:pick 兜底命中倒挂候选补一发带日期 confirm
+const DAY_MS = 86400e3;
+const SRC_DAY = Date.parse('2020-04-07');     // 实案视频发布日
+const CAND_DAY = Date.parse('2024-03-18');    // 实案条目上架日（diff=1441 天）
+// 倒挂候选：上架 2024-03-18；'×' 成员级艺人交集（同 'EMA×ZZ' 先例 +25 分）
+const suspectSong = (id, extra = {}) => ({
+  id, name: '墨田区 SUMMER NIGHT', dt: 107000,
+  ar: [{ name: 'rei shirose×未来電波基地' }], al: { name: 'al' },
+  publishTime: CAND_DAY, ...extra,
+});
+const chronoInfo = (extra = {}) => ({
+  title: '墨田区 SUMMER NIGHT', author: 'rei shirose', artists: ['rei shirose'],
+  ...extra,
+});
+
+test('墨田区实案复现：预注发布日+倒挂候选确定性收单 → 挑战复核否决记 veto', async () => {
+  reset();
+  // 名50+成员艺25+时长20=95 确定性分位收单决断——挑战发起带日期语境复核；
+  // publishedAt 预注 → resolvePublishedAt 零调用（预注免解析钉）
+  const info = chronoInfo({ trackId: 'yt_S6S51wpLnrY', publishedAt: SRC_DAY });
+  apiScript = [[suspectSong(2136493163)]];
+  aiScript = [{ match: false }, { queries: [] }];
+  const r = await matchNeteaseSong(['脏串'], 107, 't', null, info);
+  assert.equal(r.song, null);
+  assert.ok(r.vetoedIds.includes('2136493163'));
+  assert.equal(pubCalls.length, 0);
+  assert.equal(aiCalls.length, 2);      // 挑战复核 + extract（池被 veto 清空，pick 未发）
+  // prompt 携两侧日期证据：来源行发布日 + 候选行上架日 + ⚠倒挂天数 + 条款
+  assert.match(aiCalls[0].user, /发布于 2020-04-07/);
+  assert.match(aiCalls[0].user, /上架 2024-03-18/);
+  assert.match(aiCalls[0].user, /⚠晚于来源发布约1441天/);
+  assert.match(aiCalls[0].system, /上架日（非歌曲诞生日）/);
+  assert.match(aiCalls[0].system, /时间倒挂/);
+});
+
+test('倒挂复核放行照收：declClearedIds 记对——后续串同曲复现不重问', async () => {
+  reset();
+  // 双轴同在场形态（yt_ 声明+预注发布日）：首串弱确定性收单→挑战放行→
+  // 待定（身后派生串）；'Moonlight' 串同曲复现→declClearedIds 直返零重问。
+  // 放行臂同钉压盘误报面语义——老条目上架晚于诞生日数年，复核放行即收
+  const info = chronoInfo({ trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY });
+  resolveOrigImpl = async () => ({ title: '本家曲', author: '本家P' });
+  const suspect = suspectSong(7);
+  apiScript = [
+    [suspect],   // '脏串'：名50+成员艺25=75 弱确定性→挑战（声明+时间两轴未判）→放行→待定
+    [],          // 派生 '本家P 本家曲' 空
+    [],          // 派生 '本家曲' 空
+    [suspect],   // 'Moonlight'：同曲复现→declClearedIds 直返
+  ];
+  aiScript = [{ match: true }, { match: false }];   // 尾弹抖动否决永远轮不到
+  const r = await matchNeteaseSong(['脏串', 'Moonlight'], 0, 't', null, info);
+  assert.equal(r.song.id, 7);
+  assert.equal(r.query, 'Moonlight');
+  assert.equal(aiCalls.length, 1);         // 仅首串挑战复核——复现零调用
+  assert.equal(aiScript.length, 1);        // 抖动否决没被消费
+  assert.match(aiCalls[0].user, /来源描述声明本家：本家曲 — 本家P/);
+  assert.match(aiCalls[0].user, /⚠晚于来源发布约1441天/);
+  assert.equal(pubCalls.length, 0);
+  assert.deepEqual(apiCalls.map(c => c.keywords),
+    ['脏串', '本家P 本家曲', '本家曲', 'Moonlight']);
+});
+
+test('ai:pick 兜底命中倒挂候选：补发带日期 confirm——判否 veto 落穿 null', async () => {
+  reset();
+  // 本案死亡路径：score<50 无 confirm 直通兜底池。名0+时长硬拒
+  // （300s vs 源 200s 差 100>45 拒、≤120 粗闸内 pick 仍可救）留池
+  const info = chronoInfo({ trackId: 'yt_S6S51wpLnrY', publishedAt: SRC_DAY });
+  const cand = suspectSong(2136493163, { name: '无关条目', dt: 300000 });
+  apiScript = [[cand]];
+  aiScript = [{ queries: [] }, { match: 1 }, { match: false }];
+  const r = await matchNeteaseSong(['脏串'], 200, 't', null, info);
+  assert.equal(r.song, null);
+  assert.ok(r.vetoedIds.includes('2136493163'));
+  assert.equal(aiCalls.length, 3);                 // extract + pick + 时间复核
+  assert.match(aiCalls[1].user, /上架 2024-03-18/);   // pick 池描述行已带日期
+  assert.match(aiCalls[1].system, /时间倒挂/);
+  assert.match(aiCalls[2].user, /发布于 2020-04-07/);
+  assert.match(aiCalls[2].user, /⚠晚于来源发布约1441天/);  // 补发 confirm 全证据
+  assert.equal(pubCalls.length, 0);
+});
+
+test('ai:pick 倒挂复核放行 → 收单成立（判 true 直收）', async () => {
+  reset();
+  const info = chronoInfo({ trackId: 'yt_PICKOK12345' });
+  // 未预注但走预注等价形：直接注 publishedAt 免一跳（解析路径在时序钉用例）
+  info.publishedAt = SRC_DAY;
+  const cand = suspectSong(5, { name: '无关条目', dt: 300000 });
+  apiScript = [[cand]];
+  aiScript = [{ queries: [] }, { match: 1 }, { match: true }];
+  const r = await matchNeteaseSong(['脏串'], 200, 't', null, info);
+  assert.equal(r.song.id, 5);
+  assert.equal(r.query, 'ai:pick');
+  assert.equal(aiCalls.length, 3);   // extract + pick + 时间复核放行
+});
+
+test('pick 倒挂+预算尽：aiLeft 耗尽 → 倒挂候选直收（门禁不收紧）', async () => {
+  reset();
+  const info = { title: '明日之歌', author: '某人', artists: ['某人'],
+    trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY };
+  // 两个灰区否决烧 2 发 + extract 1 发 → pick 是第 4 发：复核预算尽，
+  // 倒挂嫌疑不再补 confirm——AI 是增强不是门禁
+  const pool = suspectSong(5, { name: '无关条目', dt: 300000 });
+  apiScript = [[
+    song(1, '明日之歌', 200000, '无关A'),    // 50+0+20=70 灰区→否决
+    song(2, '明日之歌', 210000, '无关B'),    // 50+0+10=60 灰区→否决
+    pool,                                     // 名0+时长硬拒留池
+  ]];
+  aiScript = [{ match: false }, { match: false }, { queries: [] }, { match: 1 }];
+  const r = await matchNeteaseSong(['明日之歌'], 200, 't', null, info);
+  assert.equal(r.song.id, 5);
+  assert.equal(r.query, 'ai:pick');
+  assert.equal(aiCalls.length, 4);          // 预算账钉：≤AI_CALL_BUDGET=4
+  assert.match(aiCalls[3].system, /从候选列表选出/);   // 末发是 pick——其后
+});                                          // 的倒挂 confirm 没发起
+
+test('预算账：倒挂收单复核+倒挂 pick 复核同烧 AI_CALL_BUDGET=4', async () => {
+  reset();
+  // 收单复核否决 1 发 + extract/pick/时间复核各 1 发 = 4 发钉顶——
+  // 第 5 发永无机会（预算总闸不破）
+  const info = chronoInfo({ trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY });
+  const pool = suspectSong(9, { name: '无关条目' });      // 名0 沉池（dur 证据缺）
+  apiScript = [[suspectSong(6), pool]];                   // top 75 确定性→挑战否决
+  aiScript = [{ match: false }, { queries: [] }, { match: 1 }, { match: false }];
+  const r = await matchNeteaseSong(['脏串'], 0, 't', null, info);
+  assert.equal(r.song, null);
+  assert.ok(r.vetoedIds.includes('6'));
+  assert.ok(r.vetoedIds.includes('9'));
+  assert.equal(aiCalls.length, 4);          // 挑战复核+extract+pick+pick 时间复核
+});
+
+test('bv_ 预注日期开放复核：倒挂确定性收单照样过挑战（时间轴全源生效）', async () => {
+  reset();
+  // -a 洞收口：bv_ 路由预注的 publishedAt 同样进收单复核——!ytSelfId 早退
+  // 曾把这条轴挡在挑战面外
+  const info = chronoInfo({ trackId: 'bv_BV1xx411c7mD', publishedAt: SRC_DAY });
+  apiScript = [[suspectSong(2136493163)]];
+  aiScript = [{ match: false }, { queries: [] }];
+  const r = await matchNeteaseSong(['脏串'], 107, 't', null, info);
+  assert.equal(r.song, null);
+  assert.ok(r.vetoedIds.includes('2136493163'));
+  assert.equal(pubCalls.length, 0);          // bv_ 无服务端惰性解析——预注是唯一供给
+  assert.equal(resolveOrigCalls.length, 0);  // 声明轴照旧 yt_ 专属
+  assert.match(aiCalls[0].user, /发布于 2020-04-07/);
+  assert.match(aiCalls[0].user, /⚠晚于来源发布约1441天/);
+});
+
+test('bv_ 非嫌疑候选/无日期源：resolvePublishedAt 0 调用、行为逐位同旧', async () => {
+  reset();
+  // 宽限内（+10d<30d）不嫌疑——预注在场也零复核零解析
+  const info = { title: 'Hit', author: 'AB', artists: ['AB'],
+    trackId: 'bv_BV1xx411c7mD', publishedAt: SRC_DAY };
+  apiScript = [[{ ...song(1, 'Hit', 200000, 'AB'), publishTime: SRC_DAY + 10 * DAY_MS }]];
+  const r = await matchNeteaseSong(['Hit'], 200, 't', null, info);
+  assert.equal(r.song.id, 1);
+  assert.equal(aiCalls.length, 0);
+  assert.equal(pubCalls.length, 0);
+  // 无日期臂：bv_ 源无 publishedAt + 候选无 publishTime——逐位旧行为
+  apiScript = [[song(2, 'Hit', 200000, 'AB')]];
+  const r2 = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'bv_BV1xx411c7mD' });
+  assert.equal(r2.song.id, 2);
+  assert.equal(aiCalls.length, 0);
+  assert.equal(pubCalls.length, 0);
+});
+
+test('无日期证据零变化：prompt 无日期段/条款、resolvePublishedAt 零调用', async () => {
+  reset();
+  // 灰区复核位：候选无 publishTime——首个 confirm 不带日期语境，不发起解析
+  apiScript = [[song(1, '明日之歌', 200000, '无关A')]];
+  aiScript = [{ match: true }];
+  const r = await matchNeteaseSong(['明日之歌'], 200, 't', null,
+    { title: '明日之歌', author: '某人', artists: ['某人'], trackId: 'yt_abcdefghijk' });
+  assert.equal(r.song.id, 1);
+  assert.equal(pubCalls.length, 0);
+  assert.equal(aiCalls.length, 1);
+  assert.doesNotMatch(aiCalls[0].user, /发布于|上架/);
+  assert.doesNotMatch(aiCalls[0].system, /上架日（非歌曲诞生日）/);
+  // 兜底位同钉：池无 publishTime——pick 前解析不发起，desc 无日期段
+  reset();
+  apiScript = [[song(5, '无关')]];
+  aiScript = [{ queries: [] }, { match: 1 }];
+  const r2 = await matchNeteaseSong(['甲'], 0, 't', null,
+    { title: '甲', author: 'A', trackId: 'yt_abcdefghijk' });
+  assert.equal(r2.song.id, 5);
+  assert.equal(pubCalls.length, 0);
+  assert.doesNotMatch(aiCalls[1].user, /发布于|上架/);
+  assert.doesNotMatch(aiCalls[1].system, /上架日（非歌曲诞生日）/);
+});
+
+test('AI 关不解析：倒挂候选照收——resolvePublishedAt 0 调用', async () => {
+  reset();
+  aiOn = false;
+  // yt_ 未预注 + 候选带 publishTime——AI 关时日期无消费位，惰性解析不
+  // 发起；倒挂嫌疑不构成否决（AI 是增强不是门禁），确定性收单照旧
+  const info = chronoInfo({ trackId: 'yt_abcdefghijk' });
+  apiScript = [[suspectSong(3)]];
+  const r = await matchNeteaseSong(['脏串'], 107, 't', null, info);
+  assert.equal(r.song.id, 3);
+  assert.equal(aiCalls.length, 0);
+  assert.equal(pubCalls.length, 0);
+  // 对照钉：声明解析不受 AI 闸（派生串是启发式收益），日期解析才受
+  assert.equal(resolveOrigCalls.length, 1);
+});
+
+test('resolvePublishedAt 抛错/归 null → 静默按无日期继续', async () => {
+  // 异常臂：yt_ 未预注 + 候选带 publishTime——解析发起但炸毛→按无日期，
+  // 挑战无可判证据→确定性收单零复核（fail-soft 不否决）
+  reset();
+  pubImpl = async () => { throw new Error('取流灭'); };
+  const info = { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk' };
+  apiScript = [[{ ...song(1, 'Hit', 200000, 'AB'), publishTime: CAND_DAY }]];
+  const r = await matchNeteaseSong(['Hit'], 200, 't', null, info);
+  assert.equal(r.song.id, 1);
+  assert.equal(pubCalls.length, 1);          // 解析确实发起过——异常静默吞
+  assert.equal(aiCalls.length, 0);           // 无日期证据→挑战无可判→零复核
+  assert.equal(info.publishedAt, undefined); // 空手不注字段
+  // null 归同口径
+  reset();
+  pubImpl = async () => null;
+  apiScript = [[{ ...song(2, 'Hit', 200000, 'AB'), publishTime: CAND_DAY }]];
+  const r2 = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk' });
+  assert.equal(r2.song.id, 2);
+  assert.equal(pubCalls.length, 1);
+  assert.equal(aiCalls.length, 0);
+});
+
+test('publishTime 边界：0/缺不触发解析；+30d 宽限钉、+31d 嫌疑、未来值嫌疑', async () => {
+  // 臂一：publishTime=0 → 无对照轴——预注在场不嫌疑，零复核
+  reset();
+  apiScript = [[{ ...song(1, 'Hit', 200000, 'AB'), publishTime: 0 }]];
+  let r = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY });
+  assert.equal(r.song.id, 1);
+  assert.equal(aiCalls.length, 0);
+  assert.equal(pubCalls.length, 0);
+  // 臂二：+30d 恰在宽限内（嫌疑判面是严格大于——等界不嫌疑）→ 零复核
+  reset();
+  apiScript = [[{ ...song(2, 'Hit', 200000, 'AB'), publishTime: SRC_DAY + 30 * DAY_MS }]];
+  r = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY });
+  assert.equal(r.song.id, 2);
+  assert.equal(aiCalls.length, 0);
+  // 臂三：+31d 出宽限 → 嫌疑——复核发起且 ⚠ 天数进 prompt
+  reset();
+  apiScript = [[{ ...song(3, 'Hit', 200000, 'AB'), publishTime: SRC_DAY + 31 * DAY_MS }]];
+  aiScript = [{ match: true }];
+  r = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY });
+  assert.equal(r.song.id, 3);
+  assert.equal(aiCalls.length, 1);
+  assert.match(aiCalls[0].user, /上架 2020-05-08，⚠晚于来源发布约31天/);
+  // 臂四：未来上架日 → 恒嫌疑（首发预售条目对现存视频本就不可能）
+  reset();
+  apiScript = [[{ ...song(4, 'Hit', 200000, 'AB'), publishTime: Date.now() + 365 * DAY_MS }]];
+  aiScript = [{ match: true }];
+  r = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY });
+  assert.equal(r.song.id, 4);
+  assert.equal(aiCalls.length, 1);
+  // 臂五：publishTime 键缺席 + 源日未注 → 与 0 同——解析不发起、零复核
+  reset();
+  apiScript = [[song(5, 'Hit', 200000, 'AB')]];
+  r = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk' });
+  assert.equal(r.song.id, 5);
+  assert.equal(aiCalls.length, 0);
+  assert.equal(pubCalls.length, 0);
+  // 臂六：publishTime 超 Date 值域（9e15 > 8.64e15 上限）→ 按无日期处理——
+  // 夹界前 isoDay(9e15) 在 songDesc 里抛 RangeError 冒穿炸整串候选面；
+  // 收口后不出日期段、不嫌疑、不抛错，确定性收单照走
+  reset();
+  apiScript = [[{ ...song(6, 'Hit', 200000, 'AB'), publishTime: 9e15 }]];
+  r = await matchNeteaseSong(['Hit'], 200, 't', null,
+    { title: 'Hit', author: 'AB', artists: ['AB'], trackId: 'yt_abcdefghijk', publishedAt: SRC_DAY });
+  assert.equal(r.song.id, 6);
+  assert.equal(aiCalls.length, 0);            // 超界归无日期——不嫌疑零复核
+  assert.equal(pubCalls.length, 0);
+});
+
+test('时序钉：灰区首个 confirm 前 ensurePublishedAt 已跑——首判即带日期语境', async () => {
+  reset();
+  // yt_ 未预注——惰性解析路径：候选带 publishTime 触发补料，首个 confirm
+  // 的 user 即含来源行发布日（防「判决先于证据」）
+  const info = chronoInfo({ trackId: 'yt_abcdefghijk' });
+  pubImpl = async () => SRC_DAY;
+  // 灰区倒挂候选：名50+艺0+时长20=70——复核发起前来源日必须先到位
+  const cand = suspectSong(8, { ar: [{ name: '未来電波基地' }] });
+  apiScript = [[cand]];
+  aiScript = [{ match: true }];
+  const r = await matchNeteaseSong(['脏串'], 107, 't', null, info);
+  assert.equal(r.song.id, 8);
+  assert.equal(pubCalls.length, 1);
+  assert.equal(pubCalls[0].videoId, 'abcdefghijk');
+  assert.equal(aiCalls.length, 1);
+  assert.match(aiCalls[0].user, /发布于 2020-04-07/);
+  assert.match(aiCalls[0].user, /上架 2024-03-18，⚠晚于来源发布约1441天/);
+  assert.match(aiCalls[0].system, /上架日（非歌曲诞生日）/);
+  assert.equal(info.publishedAt, SRC_DAY);    // 就地写回供后续判定面复用
 });
