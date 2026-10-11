@@ -405,6 +405,11 @@ function getQueueCover(queue) {
 .dql-scroll {
   overflow-y: auto;
   border-top: var(--hairline-soft);
+  padding: 10px; /* 行块内收——选中框四边到面板缘/分隔线/滚动条统一 ~11px 留白 */
+}
+/* ≤640 容器内收减到 8px——窄屏给队列行让回横向 */
+@media (max-width: 640.98px) {
+  .dql-scroll { padding: 8px; }
 }
 /* <xl 时滚动器是外层 DownloadsPanel 网格（本列随内容撑高不内滚）——车道只在 ≥xl 常驻 */
 @media (min-width: 1280px) {
@@ -420,7 +425,7 @@ function getQueueCover(queue) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 44px 10px 16px; /* 与 dtl 卡左缘 16 同轴 */
+  padding: 10px 44px 10px 16px; /* 封面位 = scroll pad 10 + 行内左 16 → 内缘 26px，与 dtl 卡内容轴（16+边1.2+10≈27）近同轴 */
   cursor: pointer;
   transition: background .12s;
 }
@@ -433,7 +438,7 @@ function getQueueCover(queue) {
 
 .dql-row--sel {
   outline: var(--hairline);
-  outline-offset: -2.4px; /* 四缘留等量 moat，不与邻线相贴 */
+  outline-offset: -2.4px; /* 内收 1.2px + scroll padding 10px → 框四边 ~11px 等量留白 */
 }
 
 /* 选中行获焦仍可辨——选中态的 1.2px outline 会压掉全局焦点环 */
