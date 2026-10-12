@@ -88,8 +88,8 @@
         </div>
 
         <img
-          v-if="proxiedCoverUrl(songCoverUrl(currentSong))"
-          :src="httpsCover(proxiedCoverUrl(songCoverUrl(currentSong)))"
+          v-if="stageCoverSrc"
+          :src="httpsCover(stageCoverSrc)"
           :alt="currentSong.name"
           class="fullscreen-player__cover"
           :class="{ 'playing-animation': isPlaying }"
@@ -140,6 +140,7 @@ import PixelIcon from './PixelIcon.vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 import { songCoverUrl, proxiedCoverUrl } from '../lib/song'
+import { useStageCover } from '../composables/useStageCover.js'
 import { trapTabKeydown } from '../lib/focus-trap'
 import { isConfirmOpen } from '../lib/feedback'
 
@@ -249,6 +250,12 @@ export default {
       dragPointerId.value = null
     }
 
+    // 封面大位 HD 升档：与 WatchView 舞台位同协议——占位铺位→实探顶替→
+    // stale 闸收 src/composables/useStageCover.js 单点；coverBaseUrl 先铺
+    // 占位兼作 watch 同曲换封面源
+    const coverBaseUrl = computed(() => proxiedCoverUrl(songCoverUrl(props.currentSong)))
+    const stageCoverSrc = useStageCover(() => props.currentSong, coverBaseUrl)
+
     // 沉浸页 idle 自隐：2.6s 无输入 → 光标+全部 chrome（顶栏/底栏/进度条）
     // 淡出；mousemove/pointerdown/任意键戳醒。暂停态常显——画面静止时
     // 控件是唯一状态读数（与 WatchView 视频控制层同一语义、同一时长）
@@ -323,8 +330,7 @@ export default {
       seekProgress,
       formatTime,
       httpsCover,
-      songCoverUrl,
-      proxiedCoverUrl,
+      stageCoverSrc,
       seekToPosition,
       nudgeSeek,
       onProgressPointerDown,
