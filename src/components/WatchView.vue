@@ -120,7 +120,7 @@
               class="watch-cover watch-cover--video"
               :src="mediaVideoUrl"
               :aria-label="`视频画面：${currentSong?.name || ''}`"
-              :poster="coverUrl ? httpsCover(coverUrl) : undefined"
+              :poster="stageCoverSrc ? httpsCover(stageCoverSrc) : undefined"
               muted
               playsinline
               preload="auto"
@@ -158,8 +158,8 @@
             </div>
           </template>
           <img
-            v-else-if="coverUrl"
-            :src="httpsCover(coverUrl)"
+            v-else-if="stageCoverSrc"
+            :src="httpsCover(stageCoverSrc)"
             :alt="currentSong?.name"
             class="watch-cover"
             :class="{ 'playing-animation': isPlaying }"
@@ -504,6 +504,7 @@
 <script>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useVirtualList, dividerPadAdjust, dividerRowShift } from '../composables/useVirtualList.js'
+import { useStageCover } from '../composables/useStageCover.js'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
@@ -671,6 +672,9 @@ export default {
     // 大图位吃原始构图（不改走 songThumbUrl 的缩放/降档语法），但白名单
     // 图床外链统一经服务端 /img-proxy 代取——包装幂等，file_/相对形直通
     const coverUrl = computed(() => proxiedCoverUrl(songCoverUrl(props.currentSong)))
+    // 舞台位 HD 升档：占位铺位→实探顶替→stale 闸协议收
+    // src/composables/useStageCover.js 单点；coverUrl 兼作 watch 同曲换封面源
+    const stageCoverSrc = useStageCover(() => props.currentSong, coverUrl)
     // 氛围场底图：小尺寸封面高糊放大（舞台底色由它供给）——换曲叠化
     // 由模板 :key + Transition 承担
     const ambientUrl = computed(() => {
@@ -1542,14 +1546,14 @@ export default {
       LYRIC_FS_MAX,
       lyricOffsetLabel,
       dragIndex,
-      coverUrl,
+      stageCoverSrc,
       ambientUrl,
       artistText,
       songArtist,
       formatDuration,
       formatTime,
       httpsCover,
-      songCoverUrl, songThumbUrl, isFileTrackId,
+      songThumbUrl, isFileTrackId,
       playModeIcon,
       TABS,
       setTab,

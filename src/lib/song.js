@@ -175,6 +175,164 @@ export function songThumbUrl(song, px = 96) {
   return coverSizeUrl(songCoverUrl(song), px)
 }
 
+// ── 舞台位（播放页/沉浸层大封面槽，~560px）HD 升档 ──
+// coverSizeUrl 管列表缩略降档；本函数反向升级——拿源站已知更大的档。
+// 输入输出都是裸 provider URL：代理包装/https 升级仍是调用方链路职责
+//（songCoverUrl→proxiedCoverUrl→httpsCover 管线口径不变）。各源事实：
+//   i.ytimg.com     /vi/{id}/{grade}default.jpg 档名换 maxresdefault——
+//                   hq(480p) 升 720p 档；maxres 在无高清帧的老视频上 404，
+//                   本函数只改档名不判存在——能否采用由 resolveStageCover
+//                   的实探裁定（404 会回落，改写本身零代价）
+//   *.music.126.net  al.picUrl 本即原图——剥上游偶发的 ?param={w}y{h} 缩放
+//                    query 键（带着它就是降档图）
+//   *.hdslb.com     view.pic 原图偶发带 @{w}w_{h}h_1c.{ext} 变换尾缀——剥掉
+//   gtimg/qpic 系   T002R{w}x{h} 尺寸令牌嵌路径段——升 QQ 公开 800 档
+// 已代理形（防腐化同 coverSizeUrl 前置闸）/非 http(s)/不上表/解析失败一律
+// 原样透传——只做「不会更糟」的加法改写，fail-closed 归下游 proxiedCoverUrl
+export function coverHdUrl(url) {
+  const s = String(url || '')
+  if (!s) return ''
+  if (isProxiedImgUrl(s)) return s
+  let parsed
+  try { parsed = new URL(s) } catch { return s }   // 裸相对串/畸形——改写无从谈起
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return s
+  const h = parsed.hostname.toLowerCase()
+  // 改写只准落在 path 段：先切 query/hash，各支动 head 后逐字节拼回 tail——
+  // query 里撞同名片段（内嵌 url 明文等）不被误伤
+  const qi = s.search(/[?#]/)
+  const head = qi === -1 ? s : s.slice(0, qi)
+  const tail = qi === -1 ? '' : s.slice(qi)
+  if (h === 'i.ytimg.com' || /^i\d\.ytimg\.com$/.test(h)) {
+    // 档名锚在 path 末段——/vi/{id}/ 前缀与 id 原样保留；非档位末段
+    // （编号档 0.jpg、vi_webp 等）不匹配即透传
+    return head.replace(/(\/vi\/[^/]+\/)(?:maxres|sd|hq|mq)?default\.jpg$/i, '$1maxresdefault.jpg') + tail
+  }
+  if (h === 'music.126.net' || h.endsWith('.music.126.net')) {
+    if (!tail.startsWith('?')) return s            // 无 query 即原图形态
+    const hashAt = tail.indexOf('#')
+    const parts = tail.slice(1, hashAt === -1 ? tail.length : hashAt).split('&').filter(Boolean)
+    const kept = parts.filter(kv => !/^param=/i.test(kv))  // param 恒为缩放键
+    if (kept.length === parts.length) return s
+    const hash = hashAt === -1 ? '' : tail.slice(hashAt)
+    return head + (kept.length ? `?${kept.join('&')}` : '') + hash
+  }
+  if (h === 'hdslb.com' || h.endsWith('.hdslb.com')) {
+    // @ 变换尾缀恒挂 path 末段文件名上；authority 段的 userinfo@host 不算——
+    // 末段 '/' 必须落在 '://' 之后才算 path 段
+    const segStart = head.lastIndexOf('/')
+    if (segStart <= head.indexOf('//') + 1) return s
+    const at = head.indexOf('@', segStart)
+    // '@' 后必须紧跟变换语法才剥——剥除闸 /^@\d+w/ 刻意比 coverSizeUrl 的
+    // 检测闸 /@\d+w_/ 略宽：hdslb 实有 @100w 类无下划线的单宽变换形，
+    // 同属该剥的缩放尾缀；'x@2x.jpg' 类文件名内 '@' 不是变换尾缀，剥了
+    // 连扩展名都丢（必 404）——不满足即原样透传
+    return at !== -1 && /^@\d+w/.test(head.slice(at)) ? head.slice(0, at) + tail : s
+  }
+  if (h === 'gtimg.cn' || h === 'qpic.cn' || h.endsWith('.gtimg.cn') || h.endsWith('.qpic.cn')) {
+    // T002R{w}x{h} 令牌只认 path 内（photo_new/T002R300x300M000{albummid}）；
+    // 无令牌说明不是这套缩放语法，透传。宿主面放宽到 gtimg/qpic 全子域——
+    // 令牌存在性本身已是改写闸
+    return /T002R\d+x\d+/i.test(head)
+      ? head.replace(/T002R\d+x\d+/i, 'T002R800x800') + tail
+      : s
+  }
+  return s
+}
+
+// yt 档位实探结果 memo（videoId → 在途/已落地 Promise<string>）：并发同曲
+// 复用同一次探测、反复切歌不重探；容量走逐最旧 FIFO（dlCacheSet 同律的
+// delete+set+超 cap 删 keys().next().value——探测天然低频，淘汰代价可忽略）。
+// memo 存 Promise 的不变量：probeStageImg 只 resolve 不 reject、链路异常由
+// try/catch 吸收成跳档——本链按构造不产生 rejected Promise；若未来探测
+// 可拒，须 catch 后 delete，防拒绝结果按 videoId 毒钉
+const stageCoverMemo = new Map()
+const STAGE_COVER_MEMO_CAP = 300
+const STAGE_IMG_PROBE_MS = 6000
+const stageCoverMemoSet = (k, v) => {
+  stageCoverMemo.delete(k)
+  stageCoverMemo.set(k, v)
+  if (stageCoverMemo.size > STAGE_COVER_MEMO_CAP) {
+    stageCoverMemo.delete(stageCoverMemo.keys().next().value)
+  }
+}
+
+// base 判 yt 档位形并取 videoId 作 memo 键：只有 /vi/{id}/{grade}default.jpg
+// 形态才进探测链（编号档/vi_webp 等不该被拽进 maxres 假定）。走 new URL
+// 归一——与 coverHdUrl 改写闸同构，宿主面同口径（i 与 i1~i9，真实源只此；
+// \d? 收裸 i 与单位数字）：裸串正则吃不下 i.ytimg.com:443 类显式默认端口/
+// 大写宿主的合法形态，探改两闸不对称会放未实探的 maxres 上屏
+function ytStageVideoId(s) {
+  let parsed
+  try { parsed = new URL(s) } catch { return null }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  if (!/^i\d?\.ytimg\.com$/i.test(parsed.hostname)) return null
+  const m = /\/vi\/([^/]+)\/(?:maxres|sd|hq|mq)?default\.jpg$/i.exec(parsed.pathname)
+  return m ? m[1] : null
+}
+
+// 单档实探：onload=档位真存在。探测必须过 proxiedCoverUrl 代理形——零被动
+// 外联不变式对探测链一视同仁（img-proxy 把上游 ≥400 原样透传成 onerror）。
+// 6s 超时按失败进下一档——CDN 黑洞（握手挂死）不能把整条链钉死
+function probeStageImg(proxiedUrl) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    let settled = false
+    const done = (ok) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      img.onload = img.onerror = null   // 迟到的对立事件不重复结算
+      resolve(ok)
+    }
+    const timer = setTimeout(() => done(false), STAGE_IMG_PROBE_MS)
+    img.onload = () => done(true)
+    img.onerror = () => done(false)
+    img.src = proxiedUrl
+  })
+}
+
+// yt 档位链：maxres(720p 档) → sd(480p) → hq(恒在档) → base。首个实探成活
+// 者胜出；hq 是链上的可证活兜底——base 已是 sd/maxres 形时裸回落 base
+// 给的是已探死 URL，恒在档不能省。四档全灭（等同断网/img-proxy 全挂）
+// 才回落 base 交调用方铺位；base=mq 形顺路免费升档是预期收益
+async function probeYtStageGrades(base) {
+  const gradeRe = /(?:maxres|sd|hq|mq)?default\.jpg(?=[?#]|$)/i
+  const sd = base.replace(gradeRe, 'sddefault.jpg')
+  const hq = base.replace(gradeRe, 'hqdefault.jpg')
+  // Set 去重保序：base 已是 maxres/sd/hq 形时链不重复打同一 URL
+  for (const candidate of new Set([coverHdUrl(base), sd, hq, base])) {
+    try {
+      // 代理包装归 ''（非标端口/凭据/白名单外）直接跳档不建 Image——
+      // img.src='' 会把当前文档当图片白拉一遍才 error
+      const proxied = proxiedCoverUrl(candidate)
+      if (!proxied) continue
+      if (await probeStageImg(proxied)) return candidate
+    } catch { /* 探测异常同档失败——进下一档 */ }
+  }
+  return base
+}
+
+// 舞台位 HD 封面解析：songCoverUrl → 应喂给 proxiedCoverUrl→httpsCover 链
+// 的裸 URL。ytimg 档位只有源站知道存在性（maxres/sd 都可能 404）必须实探；
+// 其余源 coverHdUrl 纯改写零探测。竞态归调用方（watcher onCleanup/序号闸
+// 丢弃迟到结果）——本函数只管解析口径，切歌后写不写视图不归它管。
+// Image 实探是本文件纯函数口径的唯一 DOM 副作用豁免：只读不发改、产物
+// 仍是纯数据 URL，副作用面收敛在 probeStageImg 一处
+export async function resolveStageCover(song) {
+  const base = songCoverUrl(song)
+  if (!base) return ''
+  const videoId = ytStageVideoId(base)
+  if (!videoId) return coverHdUrl(base)
+  const hit = stageCoverMemo.get(videoId)
+  if (hit) return hit
+  // Image 缺席（SSR/node 直调）无从实探——给同步升档结果且不记 memo：
+  // 记了会让后续有 Image 的环境把未验证的 maxres 当成已裁定真值
+  if (typeof Image === 'undefined') return coverHdUrl(base)
+  const p = probeYtStageGrades(base)
+  stageCoverMemoSet(videoId, p)   // 存在途 Promise：并发同 videoId 复用探测
+  return p
+}
+
 // 「VIP 隐藏开关」过滤谓词（App.vue filteredSongs 与 SongList 共用——
 // 此前两份手写副本）：showVip 时全量；否则滤掉 VIP 且当前凭据不可播的曲
 export function visibleSongs(list, showVip, caps) {
