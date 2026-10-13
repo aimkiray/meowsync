@@ -182,7 +182,7 @@
 <script>
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
-import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, isSongmidLike, extractNeteaseSongId } from '../lib/url.js'
+import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, extractYouTubeId, isSongmidLike, extractNeteaseSongId, YT_ID_RE } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import { authState } from '../lib/auth-state.js'
 import { authApi } from '../api/auth.js'
@@ -215,7 +215,7 @@ export default {
       default: false
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-yt', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-yt', 'search-yt-songs', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
 
@@ -290,6 +290,31 @@ export default {
           return
         }
         emit('search-qq-songs', kw)
+        return
+      }
+      // yt: 前缀=YouTube 语法（与 qq: 同记号）：前缀内歌单链/URL/裸
+      // videoId 走既有 resolve/歌单导入链（search-yt 事件），其余关键词
+      // 走 YouTube 曲库搜索（search-yt-songs——结果落顶部搜索的 songs
+      // 结果区）。整串判定先于本块的是裸输入形态——带 yt: 前缀的
+      // URL 在上游 isYouTubeInput 已先被 resolve 链收走，这里只剩
+      // 前缀内裸 id/关键词
+      if (/^yt[:：]\s*$/i.test(query)) return
+      const ytPref = query.match(/^yt[:：](.+)$/i)
+      if (ytPref) {
+        const kw = ytPref[1].trim()
+        if (!kw) return
+        if (extractYouTubePlaylistId(kw) || extractYouTubeId(kw)) {
+          emit('search-yt', kw)
+          return
+        }
+        // 纯数字 11 位 videoId：extractYouTubeId 裸分支拒收（防与网易云 id
+        // 撞型）——yt: 前缀已是显式源声明，改写 ?yt= 分享链形态送达，服务端
+        // extractYouTubeId 的 YT_URL_RES 同表可解（extractYouTubeId 本体不动）
+        if (YT_ID_RE.test(kw)) {
+          emit('search-yt', `?yt=${kw}`)
+          return
+        }
+        emit('search-yt-songs', kw)
         return
       }
       // 单曲链接先于歌单 id 提取——music.163.com/song?id=N 的 ?id= 会撞
@@ -371,10 +396,11 @@ export default {
       emit('update:searchQuery', e.target.value)
       const q = e.target.value.trim()
       cancelSuggest()
-      // 纯数字/歌单链接/B站（视频与收藏夹）/YouTube（视频与歌单）/QQ 输入走直达路径，不弹建议
+      // 纯数字/歌单链接/B站（视频与收藏夹）/YouTube（视频与歌单）/QQ 输入走直达路径，不弹建议；
+      // qq:/yt: 前缀语法同样直达——输入即分流意图，建议词对「yt:」前缀没有消费面
       if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)
         || isQQInput(q) || extractQQPlaylistId(q) || extractBiliFavlistId(q)
-        || extractYouTubePlaylistId(q) || /^qq[:：]/i.test(q)) {
+        || extractYouTubePlaylistId(q) || /^qq[:：]/i.test(q) || /^yt[:：]/i.test(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

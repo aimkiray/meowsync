@@ -75,15 +75,16 @@
         <!-- 虚拟滚动下沿 spacer -->
         <div :style="{ height: songBottomPad + 'px' }" aria-hidden="true"></div>
         <!-- 单曲深挖：服务端翻页（cloudsearch offset+songCount）——
-             20 首封顶的时代结束；QQ 源结果（songTotal=null）不亮此键。
-             刻意只点按不接 IO 哨兵：每次点击=一次上游请求，
-             滚动到底自动连发会打爆上游配额/风控 -->
+             20 首封顶的时代结束。亮灯口径收在父级 songHasMore：
+             total 源（网易云/QQ）按 已载/total 判定，YT 无总数走
+             continuation 游标在场即亮。刻意只点按不接 IO 哨兵：
+             每次点击=一次上游请求，滚动到底自动连发会打爆上游配额/风控 -->
         <button
-          v-if="songTotal != null && songs.length < songTotal"
+          v-if="songHasMore"
           class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
           :disabled="songLoadingMore"
           @click="$emit('load-more-songs')"
-        >{{ songLoadingMore ? '加载中喵…' : `加载更多歌曲 · ${songs.length} / ${songTotal}` }}</button>
+        >{{ songLoadingMore ? '加载中喵…' : songMoreLabel }}</button>
       </section>
 
       <section v-if="results.length" class="result-section">
@@ -189,10 +190,17 @@ export default {
       type: String,
       default: ''
     },
-    // 服务端分页契约：null=本批不可深挖（QQ 源）；数字=上游 songCount
+    // 服务端分页契约：null=无总数源（YT 恒 null；total 源失败回退）；
+    // 数字=上游 songCount——只喂按钮文案的「n / total」，亮灯归 songHasMore
     songTotal: {
       type: Number,
       default: null
+    },
+    // 深挖键亮灯闸（useSearchNav.searchSongHasMore）：三口径合一——
+    // total 源按已载<total，YT 按 continuation 游标非 null
+    songHasMore: {
+      type: Boolean,
+      default: false
     },
     songLoadingMore: {
       type: Boolean,
@@ -270,6 +278,11 @@ export default {
 
     const formatSongDuration = (song) => formatTime((song.dt || song.duration || 0) / 1000)
 
+    // 深挖键文案：total 源带「n / total」进度；YT 无总数只报已载数
+    const songMoreLabel = computed(() => props.songTotal != null
+      ? `加载更多歌曲 · ${props.songs.length} / ${props.songTotal}`
+      : `加载更多歌曲 · ${props.songs.length}`)
+
     // 歌单卡渐进渲染窗：搜索结果一次换整块 results（新查询=新引用=身份变化），
     // 故 resetWhen 直接认数组引用——这不是 silent 刷新场景，回卷正确
     const wrapEl = ref(null)
@@ -344,6 +357,7 @@ export default {
       songArtist,
       songAlbum,
       formatSongDuration,
+      songMoreLabel,
       wrapEl,
       pagedResults,
       gridHasMore,

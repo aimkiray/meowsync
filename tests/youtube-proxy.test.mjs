@@ -2,7 +2,8 @@
 // - lib/yt-proxy.js：URL 校验（http/https 收、其余 scheme 拒、凭据随 URL
 //   整进隧道 agent）、ytDispatcher 懒建/值变重建/清除销毁、
 //   isYoutubeHost 域族判定（后缀点防蹭名）、settings.normalizeOverride 写时验
-// - lib/youtube.js：四发 fetch 带 dispatcher 位（player/search/browse/首页）；
+// - lib/youtube.js：六发 fetch 带 dispatcher 位（player/search/browse/next/
+//   suggestqueries/首页）；
 //   cookie+proxy 同发同框；代理凭据不落日志不渗请求头；未配逐字节旧行为
 // - download-io fetchStream：googlevideo 跳换隧道 agent 对+proxy:false、
 //   下掉 guarded 钉扎 agent、跳过本机公网校验；抛错剥 config/request
@@ -257,7 +258,7 @@ test('settings.normalizeOverride：yt_proxy 写时验——http(s) 收、其余 
 
 // ── lib/youtube.js：fetch 四面接线 ──
 
-test('lib/youtube：代理在位 player/search/browse/首页 fetch 全带同一 dispatcher', async () => {
+test('lib/youtube：代理在位 player/search/browse/next/suggest/首页 fetch 全带同一 dispatcher', async () => {
   reset();
   proxyValue = PROXY;
   // player
@@ -286,6 +287,21 @@ test('lib/youtube：代理在位 player/search/browse/首页 fetch 全带同一 
   await yt.fetchYtPlaylistPage({ listId: 'PLproxytest001', extraSignal: null });
   const browseCall = fetchCalls.find((c) => c.url.includes('/v1/browse'));
   assert.equal(browseCall.opts.dispatcher, playerCall.opts.dispatcher);
+  // next（fetchWatchNext 走 innertubePost——同接线面摘了 ytFetchOpts 即红）
+  playerImpl = async () => ({
+    ok: true,
+    json: async () => ({ contents: { secondaryResults: { results: [
+      { compactVideoRenderer: { videoId: 'vidnext0001', title: { simpleText: 'R' } } },
+    ] } } })
+  });
+  await yt.fetchWatchNext('vidproxy005', null);
+  const nextCall = fetchCalls.find((c) => c.url.includes('/v1/next'));
+  assert.equal(nextCall.opts.dispatcher, playerCall.opts.dispatcher);
+  // suggest（suggestqueries.google.com 也挂 ytFetchOpts——google.com 与
+  // youtube.com 同墙，代理在位时直连必超时；摘了即红）
+  await yt.ytSuggest('q', null);
+  const sugCall = fetchCalls.find((c) => c.url.includes('suggestqueries.google.com'));
+  assert.equal(sugCall.opts.dispatcher, playerCall.opts.dispatcher);
   // 首页（VISIONOS 升级路 getVisitorData 出口）
   playerImpl = async () => ({
     ok: true,
@@ -296,11 +312,15 @@ test('lib/youtube：代理在位 player/search/browse/首页 fetch 全带同一 
   assert.equal(homeCall.opts.dispatcher, playerCall.opts.dispatcher);
 });
 
-test('lib/youtube：代理未配——四发 fetch 无 dispatcher 键（逐字节旧行为）', async () => {
+test('lib/youtube：代理未配——fetch 无 dispatcher 键（逐字节旧行为）', async () => {
   reset();
   await yt.fetchPlayer('vidproxy003', null);
   const call = fetchCalls.find((c) => c.url.includes('/v1/player'));
   assert.ok(!('dispatcher' in call.opts));
+  // 非 youtubei 出口（suggestqueries）同样裸发
+  await yt.ytSuggest('q', null);
+  const sugCall = fetchCalls.find((c) => c.url.includes('suggestqueries.google.com'));
+  assert.ok(!('dispatcher' in sugCall.opts));
 });
 
 test('lib/youtube：cookie+proxy 同发——WEB_AUTH 凭据头与 dispatcher 同框且不互斥', async () => {
