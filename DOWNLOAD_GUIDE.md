@@ -219,7 +219,7 @@ data/downloads/
 
 - **后端**：Node.js + Hono (@hono/node-server) + SQLite (better-sqlite3)
 - **前端**：Vue 3 + Vite + Tailwind CSS
-- **音乐 API**：自研 NetEase 客户端（services/netease/，weapi+eapi）
+- **音乐 API**：自研 NetEase 客户端（services/netease/，明文 /api 通道）
 - **VIP 解锁**：自研解锁层（services/unlock/：pyncmd/youtube）
 - **下载**：axios (流式下载)
 

@@ -10,7 +10,9 @@ const { csrfOriginOk } = require('../lib/auth-gate');
 
 const app = new Hono();
 
-// 仅放行前端实际使用的只读 API，避免暴露登录、发短信等高危端点
+// 仅放行前端实际使用的只读 API，避免暴露登录、发短信等高危端点。
+// song_url_v1/check_music/album/artists/banner/toplist 与 lyric_new 同因摘除：
+// 零前端消费，收白名单攻击面——ENDPOINTS 定义保留作进程内/兼容留档
 const ALLOWED_APIS = new Set([
   'search',
   'cloudsearch',
@@ -18,15 +20,9 @@ const ALLOWED_APIS = new Set([
   'search_hot',
   'playlist_detail',
   'playlist_track_all',
-  'toplist',
   'song_url',
-  'song_url_v1',
   'song_detail',
   'lyric',
-  'check_music',
-  'album',
-  'artists',
-  'banner',
   'personalized',
 ]);
 
@@ -36,7 +32,8 @@ const MAX_BODY_BYTES = 1024 * 1024;
 // 上游模块会消费的危险参数（比较前统一转小写，覆盖 realIP 等大小写变体）：
 // proxy 可把上游请求走私到攻击者代理，real_ip/realIP 可伪造客户端IP；
 // crypto='api' 会让上游走明文无签名通道、ua 允许篡改发往网易的 User-Agent、
-// e_r 改变上游响应形态——三者都是 createOption() 的 option 通道参数，前端从不下发，统一封禁
+// e_r 改变上游响应形态——三者都是 createOption() 的 option 通道参数，前端从不下发，统一封禁。
+// 明文 /api 通道化后 crypto/ua/e_r 参数通道已退役——留封作纵深防复活
 const BLOCKED_PARAMS = new Set([
   'proxy', 'real_ip', 'realip', 'crypto', 'ua', 'e_r',
   // request.js: options.ip 同样会写进 X-Real-IP/X-Forwarded-For（IP 伪造）
@@ -184,6 +181,7 @@ app.all('/:apiName', async (c) => {
   // song_url 系一次入站可扇出 ≤20 首 × 2 源试错 + AI 规整——另设更严桶。
   // 30/min：每播放一首歌=1-2 拍（含换码率重试），10/min 会在快速切歌/
   // 本地下载 ~10 首起即误伤正常用户
+  // （song_url_v1 现白名单外不可达——判据里留着备复活，免得复活时漏配桶）
   if (['song_url', 'song_url_v1'].includes(apiName)
     && !rateLimit(c, 'music:unlock', 30)) {
     return c.json({ code: 429, message: '请求太频繁' }, 429);
@@ -253,7 +251,8 @@ app.all('/:apiName', async (c) => {
 
     // 对 song_url 接口：若 url 为空或为试听版则尝试解锁源 fallback。
     // 上限数「待解锁项」而非 data 全量——可播项无扇出成本，全可播的
-    // 大批量不该被 20 阈值误拒（MAX_UNLOCK_ITEMS 语义对齐）
+    // 大批量不该被 20 阈值误拒（MAX_UNLOCK_ITEMS 语义对齐）。
+    // song_url_v1 现白名单外，备复活——复活后同走解锁后处理
     if (['song_url', 'song_url_v1'].includes(apiName) && Array.isArray(result.body?.data)) {
       const count = result.body.data.filter(needsUnlock).length;
       if (count > MAX_UNLOCK_ITEMS) {

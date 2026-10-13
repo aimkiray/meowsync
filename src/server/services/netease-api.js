@@ -104,7 +104,7 @@ function withTimeout(promise, ms, label) {
 }
 
 // callNeteaseApi/apiModules 由 ./netease 门面提供（自研客户端——
-// services/netease/{crypto,request,endpoints}.js，替代 NeteaseCloudMusicApi）
+// services/netease/{request,endpoints}.js，替代 NeteaseCloudMusicApi）
 
 // 单请求内解锁扇出的硬上限：song_url 接受逗号分隔多 id，逐项又会并发跑
 // 2 源 × match() 出站请求——无界扇出会把服务端 FD/上游配额打爆

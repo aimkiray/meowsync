@@ -1,13 +1,15 @@
-// NetEase 上游请求层——复刻 NeteaseCloudMusicApi/util/request.js 的可观察语义：
-// cookie 组装（游客 MUSIC_A、随机 NMTID/_ntes_nuid、进程级 WNMCID/deviceId）、
-// weapi/eapi 通道的 UA 与 Cookie 头形态、{status, body, cookie[]} 应答契约、
+// NetEase 上游请求层——明文 /api/ 通道。本机零 cookie 实测（2026-10）：
+// music.163.com/api/* 明文 POST 全部 17 端点存活，应答 schema 与旧
+// weapi/eapi 通道逐位相同（eapi 应答本就不加密 e_r:false），
+// weapi/eapi 加密面已整体退役。
+// 保留的可观察语义：cookie 组装（游客 MUSIC_A、随机 NMTID/_ntes_nuid、
+// 进程级 WNMCID/deviceId——风控指纹与加密无关）、web 表单形态（Chrome
+// UA + Referer + csrf_token 直铺）、{status, body, cookie[]} 应答契约、
 // 特殊业务码 → 200 映射、非 200 reject(answer)（非 Error——消费方靠形态识别）。
 // 传输换原生 fetch + AbortSignal（超时是真取消，不再留 axios 僵尸请求）。
 const crypto = require('crypto');
-const { weapiEncrypt, eapiEncrypt } = require('./crypto');
 
 const DOMAIN = 'https://music.163.com';
-const API_DOMAIN = 'https://interface.music.163.com';
 const DEFAULT_TIMEOUT_MS = 30000;
 
 // 进程级稳定标识（上游用 global.deviceId/WNMCID 同款惰性语义——原实现里
@@ -29,10 +31,9 @@ const OS_MAP = {
   iphone: { os: 'iPhone OS', appver: '9.0.90', osver: '16.2', channel: 'distribution' },
 };
 
-const UA = {
-  weapi: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
-  eapi: 'NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)',
-};
+// 明文 /api 走 web 表单形态——Chrome UA（旧 weapi 通道同款头面；
+// eapi 的 iPhone 缝合头随加密通道一并退役）
+const UA_WEB = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0';
 
 const SPECIAL_BODY_CODES = new Set([201, 302, 400, 502, 800, 801, 802, 803]);
 
@@ -62,7 +63,10 @@ const hex = (n) => crypto.randomBytes(n).toString('hex');
 function buildCookie(cookie) {
   if (typeof cookie === 'string') cookie = cookieToJson(cookie);
   if (typeof cookie !== 'object' || !cookie) return { map: {} };
-  const nuid = hex(32);
+  // 上游 _ntes_nuid 是 randomBytes(16) = 32 hex 字符——hex(32) 产 64 字符，
+  // 指纹长度在风控眼里是异常信号（同函数 NMTID hex(16) 已与上游一致）。
+  // _ntes_nnid 拼接 nuid 一并继承正确长度
+  const nuid = hex(16);
   const os = OS_MAP[cookie.os] || OS_MAP.iphone;
   const map = {
     ...cookie,
@@ -89,61 +93,35 @@ function buildCookie(cookie) {
  * @returns Promise<{status, body, cookie[]}>——非 200 业务码 reject(answer)
  * 而非 resolve（playlist-sync/music.js 的 isUpstreamAnswer 依赖此形态）
  */
-async function request(uri, data, { crypto: mode = 'eapi', cookie, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
+async function request(uri, data, { cookie, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
   const cookieObj = typeof cookie === 'string' ? cookieToJson(cookie)
     : (typeof cookie === 'object' && cookie) || {};
   const csrfToken = cookieObj.__csrf || '';
   const headers = {};
-  let url, form;
-  const payload = { ...data };
 
-  if (mode === 'weapi') {
-    const { map } = buildCookie(cookieObj);
-    if (uri.indexOf('login') === -1) map.NMTID = hex(16);
-    headers.Referer = DOMAIN;
-    headers['User-Agent'] = UA.weapi;
-    headers.Cookie = cookieObjToString(map);
-    payload.csrf_token = csrfToken;
-    form = weapiEncrypt(payload);
-    url = `${DOMAIN}/weapi/${uri.slice(5)}`;
-  } else {
-    // eapi：Cookie 头只含重建的 header 对象（上游 request.js:158-180 语义——
-    // header 读 merge 后的 cookie 字段，os='pc' 这类选择器经 osMap 展开后
-    // 要渗透进这里；versioncode/mobilename/buildver/resolution 是 header
-    // 独占字段不经 merge）。MUSIC_U/MUSIC_A 上游是 if-truthy 条件写入——
-    // 空 anonymous_token 下键位本身缺席而非空值
-    const { map } = buildCookie(cookieObj);
-    const header = {
-      osver: map.osver,
-      deviceId: map.deviceId,
-      os: map.os,
-      appver: map.appver,
-      versioncode: cookieObj.versioncode || '140',
-      mobilename: cookieObj.mobilename || '',
-      buildver: cookieObj.buildver || Date.now().toString().slice(0, 10),
-      resolution: cookieObj.resolution || '1920x1080',
-      __csrf: csrfToken,
-      channel: map.channel,
-      requestId: `${Date.now()}_${Math.floor(Math.random() * 1000).toString().padStart(4, '0')}`,
-    };
-    if (map.MUSIC_U) header.MUSIC_U = map.MUSIC_U;
-    if (map.MUSIC_A) header.MUSIC_A = map.MUSIC_A;
-    headers.Cookie = cookieObjToString(header);
-    headers['User-Agent'] = UA.eapi;
-    payload.header = header;
-    // 上游恒写 e_r:false（APP_CONF.encryptResponse=false 且 e_r 在网关
-    // BLOCKED_PARAMS 内）——不实现 eapiResDecrypt 即不需要真值
-    payload.e_r = false;
-    form = eapiEncrypt(uri, payload);
-    url = `${API_DOMAIN}/eapi/${uri.slice(5)}`;
-  }
+  // 明文通道：业务字段直铺 form（无 params= 密文）。Cookie map 仍注整套
+  // 指纹——NMTID/_ntes_nuid/deviceId/WNMCID 是风控身份而非加密部件；
+  // 旧 weapi 分支的 login 门沿用（登录链不该被注入的 NMTID 覆盖上游下发值）
+  const { map } = buildCookie(cookieObj);
+  if (uri.indexOf('login') === -1) map.NMTID = hex(16);
+  headers.Referer = DOMAIN;
+  headers['User-Agent'] = UA_WEB;
+  headers.Cookie = cookieObjToString(map);
+  // csrf_token 写在 spread 后——data 夹带的伪造 csrf_token 被真值覆盖
+  const form = { ...data, csrf_token: csrfToken };
+  const url = `${DOMAIN}${uri}`;
 
   const answer = { status: 500, body: {}, cookie: [] };
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(form).toString(),
+      // 上游用 node querystring.stringify——undefined 值产出 'key=' 空值而
+      // 非丢键（丢 undefined 是 qs 库语义）；此处滤掉是对齐 qs 系干净形态
+      // 的主动选择：URLSearchParams 会序列化出 'key=undefined' 字面量
+      body: new URLSearchParams(
+        Object.fromEntries(Object.entries(form).filter(([, v]) => v !== undefined))
+      ).toString(),
       // Fixed-domain upstream has no legitimate redirect semantics — never
       // follow silently; a 3xx arrives verbatim and is forced into the error
       // path below instead of being re-targeted cross-origin
@@ -160,6 +138,12 @@ async function request(uri, data, { crypto: mode = 'eapi', cookie, timeoutMs = D
     try {
       body = JSON.parse(raw);
     } catch {
+      // 上游偶发把明文 /api 请求回 eapi 密文（32+ 位 hex 前缀的应答体）——
+      // 对消费方是不可解析噪声，warn 留痕便于定位通道侧漂移；body 仍归
+      // raw 字符串走原形态，不新造错误路径
+      if (/^[0-9a-f]{32,}/.test(raw)) {
+        console.warn('[netease] 明文 /api 应答疑似密文:', uri);
+      }
       body = raw;
     }
     answer.body = body;

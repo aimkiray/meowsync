@@ -35,7 +35,7 @@
 
 - **前端**: Vue 3 (Composition API) + Vite + TailwindCSS + Howler.js
 - **服务端**: Hono 4 单进程（API + WebSocket `/remote` + 静态托管 + SPA fallback）+ better-sqlite3 + ws
-- **音乐数据**: 自研 NetEase 客户端（weapi/eapi 加密通道）+ Bilibili/YouTube/QQ 各源解析层
+- **音乐数据**: 自研 NetEase 客户端（明文 /api 通道）+ Bilibili/YouTube/QQ 各源解析层
 - **共享层**: `src/shared/` 前后端同一份谓词/协议/契约（服务端 `require` ESM 复用）
 - **测试**: node:test（服务端/共享层）+ Vitest + @vue/test-utils（组件）+ `tsc --noEmit` 类型检查
 
