@@ -1167,8 +1167,9 @@ export function usePlayer({
           .map(a => a?.name).filter(Boolean).join('/'),
         durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined,
         // 源媒体发布日（epoch ms）：retry/verify 回喂的时间证据——provider
-        // 块缺字段/脏值归 undefined，axios 丢 undefined 键不进 body
-        publishedAt: ext?.publishedAt || undefined,
+        // 块缺字段/脏值归 undefined，axios 丢 undefined 键不进 body；
+        // qq 槽位与 bv/yt 同轴（buildQQSong 归一 publishTime 而来）
+        publishedAt: ext?.publishedAt || song?.qq?.publishedAt || undefined,
       }
     }
     const loadLyrics = async (song, signal = null) => {
@@ -1744,7 +1745,9 @@ export function usePlayer({
               publishedAt: song.bilibili.publishedAt }
           : ((song?.qq || QQ_SONG_ID_RE.test(String(song?.id)))
               && String(lyricId) === String(song.neteaseId))
-            ? { title: song.name, author: song.ar?.map(a => a.name).join(' ') || '' }
+            ? { title: song.name, author: song.ar?.map(a => a.name).join(' ') || '',
+                // 与 bv/yt 两支同轴——发行日喂服务端 chrono 判据
+                publishedAt: song.qq?.publishedAt }
             // provider 块缺席的裸 bv_/yt_ 老行（isUgcExternalTrack 形态命
             // 中）也可能经 hydrateMatchBinding 补绑吃上嫁接词——一样要验：
             // 曲面元数据喂判定（externalArtistName 复剥 Topic/VEVO 后缀）

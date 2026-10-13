@@ -6,7 +6,7 @@
 // 每次都重取，且最终拉流要么本进程要么经 /audio-proxy 回源（不能拿 vkey 的
 // 机器与拉流的机器不同 IP）。
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('./net-guard');
-const { SONGMID_RE, pickQqFromUrl } = require('../../shared/predicates.js');
+const { SONGMID_RE, pickQqFromUrl, providerPlaylistShellId } = require('../../shared/predicates.js');
 const { isInstrumentalPlaceholder } = require('../../shared/lrc.js');
 const { createHash } = require('crypto');
 const { Agent } = require('undici');
@@ -392,42 +392,142 @@ async function getSongDetail(idOrMid, extraSignal, keyHint) {
   throw new Error(`qq 详情获取失败 ${idOrMid}`);
 }
 
+// searchid 用上游公式形态（netease-qq-music-api utils.rs）——
+// 时间戳取模混入两段随机数，比 Date.now()%1e17 更像真值。
+// 搜索系端点（曲库 musicu 兜底 / 歌单搜索）共用
+const newSearchId = () => String((1 + Math.floor(Math.random() * 20)) * 18014398509481984
+  + Math.floor(Math.random() * 4194305) * 4294967296 + (Date.now() % 86400000));
+
 // 曲库搜索三层兜底：c.y.qq.com（桌面口径）→ shc.y.qq.com（移动 H5 口径，
 // 移动端 UA——eIsland/lyrix/LDDC 定位为备用通道）→ musicu
 // DoSearchForQQMusicDesktop（匿名风控空回时 musicu 自动升级签名通道）。
-// 健康空结果（code=0+空 list）不回落——真空搜索不白打上游
+// 健康空结果（code=0+空 list）不回落——真空搜索不白打上游。
+// page 直透上游页码（1 起：soso p / musicu page_num，实机钉 totalnum/
+// curpage/curnum 是真分页）；返回 {list,total}——total 是上游真值
+// （soso/shc 的 data.song.totalnum、musicu 的 data.meta.sum），缺/脏归
+// null——前端深挖键按 null 灭灯
 const SHC_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
   'Referer': 'https://y.qq.com/',
 };
-async function searchSongs(query, limit = 20, extraSignal) {
+async function searchSongs(query, { limit = 20, page = 1 } = {}, extraSignal) {
   const n = Math.min(limit, 30);
+  const p = Math.max(1, Math.floor(+page) || 1);
   for (const hop of [
-    () => fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=1&format=json&g_tk=5381&platform=yqq&needNewCode=0`, extraSignal),
-    () => fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=1&format=json&platform=h5&needNewCode=1&zhidaqu=1&catZhida=1&t=0&flag=1&ie=utf-8&aggr=0&perpage=${n}&remoteplace=txt.mqq.all`, extraSignal, { host: 'shc.y.qq.com', headers: SHC_HEADERS }),
+    () => fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=${p}&format=json&g_tk=5381&platform=yqq&needNewCode=0`, extraSignal),
+    () => fcg(`/soso/fcgi-bin/search_for_qq_cp?w=${encodeURIComponent(query)}&n=${n}&p=${p}&format=json&platform=h5&needNewCode=1&zhidaqu=1&catZhida=1&t=0&flag=1&ie=utf-8&aggr=0&perpage=${n}&remoteplace=txt.mqq.all`, extraSignal, { host: 'shc.y.qq.com', headers: SHC_HEADERS }),
   ]) {
     try {
       const body = await hop();
       const list = body?.data?.song?.list;
       if (body?.code === 0 && Array.isArray(list)) {
-        return list.map(normalizeTrack).filter(Boolean);
+        const total = +body.data.song.totalnum;
+        return {
+          list: list.map(normalizeTrack).filter(Boolean),
+          total: Number.isFinite(total) && total >= 0 ? total : null,
+        };
       }
     } catch (e) {
       if (extraSignal?.aborted) throw e;  // abort 不回落
       /* 落到下一跳 */
     }
   }
-  // searchid 用上游公式形态（netease-qq-music-api utils.rs）——
-  // 时间戳取模混入两段随机数，比 Date.now()%1e17 更像真值
-  const searchid = String((1 + Math.floor(Math.random() * 20)) * 18014398509481984
-    + Math.floor(Math.random() * 4194305) * 4294967296 + (Date.now() % 86400000));
   const data = await musicu('music.search.SearchCgiService', 'DoSearchForQQMusicDesktop', {
-    query: String(query || ''), search_type: 0, page_num: 1,
+    query: String(query || ''), search_type: 0, page_num: p,
     num_per_page: n, remoteplace: 'txt.yqq.top', grp: 1, highlight: 1,
-    searchid,
+    searchid: newSearchId(),
   }, extraSignal, 'req_1');
   const list = data?.body?.song?.list;
-  return Array.isArray(list) ? list.map(normalizeTrack).filter(Boolean) : [];
+  // meta.sum 是 musicu 分页总数（匿名空桶形态已验：body.song.list=[]
+  // 且 sum=0——是合法的 0 不是缺省，直透）；缺席/脏归 null
+  const total = +data?.meta?.sum;
+  return {
+    list: Array.isArray(list) ? list.map(normalizeTrack).filter(Boolean) : [],
+    total: Number.isFinite(total) && total >= 0 ? total : null,
+  };
+}
+
+// 歌单搜索（client_music_search_songlist）：实机钉——data.{sum,list:[
+// {dissid,dissname,imgurl,creator:{name},song_count,listennum}]}。
+// 归一出 PlaylistGrid 卡契约（provider:'qq' 走 QQ 专属打开链）
+async function searchPlaylists(query, { page = 1, limit = 20 } = {}, extraSignal) {
+  const p = Math.max(1, Math.floor(+page) || 1);
+  const n = Math.max(1, Math.min(Math.floor(+limit) || 20, 50));
+  const body = await fcg(`/soso/fcgi-bin/client_music_search_songlist?query=${encodeURIComponent(query)}&page_no=${p}&num_per_page=${n}&remoteplace=txt.yqq.top&searchid=${newSearchId()}&flag=1&platform=yqq&format=json&g_tk=5381`, extraSignal);
+  if (body?.code !== 0 || !Array.isArray(body?.data?.list)) {
+    throw new Error(`qq 歌单搜索 code=${body?.code}`);
+  }
+  const total = +body.data.sum;
+  return {
+    playlists: body.data.list.map(normalizePlaylistCard).filter(Boolean),
+    total: Number.isFinite(total) && total >= 0 ? total : null,
+  };
+}
+
+// 歌单卡字段归一：id 直接落 local_pl_qq_<disstid> 导入壳 id
+// （providerPlaylistShellId 同源）——前端「已收藏」判定/点卡即导入收敛
+// 同一身份，不会再复制出第二份壳；creator 用网易卡 {nickname} 形态——
+// PlaylistGrid 的 creator?.nickname 渲染面零改。imgurl 实测有
+// //y.gtimg.cn/... 协议相对形态——补 https: 防 <img> 协议落空
+function normalizePlaylistCard(item) {
+  const disstid = String(item?.dissid || '').trim();
+  if (!/^\d+$/.test(disstid)) return null;
+  const rawCover = String(item?.imgurl || item?.diss_cover || '').trim();
+  return {
+    id: providerPlaylistShellId('qq', disstid),
+    disstid,
+    name: String(item?.dissname || '').trim(),
+    coverImgUrl: rawCover.startsWith('//') ? `https:${rawCover}`
+      : /^https?:\/\//i.test(rawCover) ? rawCover : '',
+    creator: { nickname: String(item?.creator?.name || item?.creator?.nickname || item?.nick || '').trim() },
+    trackCount: Number.isFinite(+item?.song_count) ? +item.song_count : 0,
+    playCount: Number.isFinite(+item?.listennum) ? +item.listennum : 0,
+    provider: 'qq',
+  };
+}
+
+// 搜索建议（smartbox_new）：映射 NetEase search_suggest 消费面
+// {allMatch:[{keyword}],songs:[{name,artists:[{name}]}],artists:[{name}],
+// albums:[{name,artist:{name}}]}。allMatch 用单曲项「名 - 艺人」合成——
+// 与 songs[].name 字面不同才有增量（纯名会被前端按 label 去重全吃掉）
+async function searchSuggest(key, extraSignal) {
+  const body = await fcg(`/splcloud/fcgi-bin/smartbox_new.fcg?key=${encodeURIComponent(key)}&g_tk=5381&format=json&inCharset=utf-8&outCharset=utf-8`, extraSignal);
+  if (body?.code !== 0) throw new Error(`qq 建议 code=${body?.code}`);
+  const d = body.data || {};
+  const items = (node) => (Array.isArray(node?.itemlist) ? node.itemlist : []);
+  // 单曲项 singer 是逗号串成的艺人串（'周杰伦'），包成网易 artists 形
+  const songs = items(d.song).map(it => ({
+    name: String(it?.name || '').trim(),
+    artists: [{ name: String(it?.singer || '').trim() }],
+  })).filter(s => s.name);
+  const artists = items(d.singer)
+    .map(it => ({ name: String(it?.name || it?.singer || '').trim() }))
+    .filter(a => a.name);
+  const albums = items(d.album).map(it => ({
+    name: String(it?.name || '').trim(),
+    artist: { name: String(it?.singer || '').trim() },
+  })).filter(a => a.name);
+  return {
+    allMatch: songs.slice(0, 6).map(s => ({
+      keyword: s.artists[0].name ? `${s.name} - ${s.artists[0].name}` : s.name,
+    })),
+    songs, artists, albums,
+  };
+}
+
+// 热搜（gethotkey）：映射 NetEase /search_hot 形态 {hots:[{first}]}。
+// special_key 是官方主推位——非空时插首（实测常态是空白格占位，先 trim）
+async function getHotkeys(extraSignal) {
+  const body = await fcg('/splcloud/fcgi-bin/gethotkey.fcg?g_tk=5381&format=json&inCharset=utf-8&outCharset=utf-8', extraSignal);
+  if (body?.code !== 0) throw new Error(`qq 热搜 code=${body?.code}`);
+  const d = body.data || {};
+  const hots = (Array.isArray(d.hotkey) ? d.hotkey : [])
+    .map(h => ({ first: String(h?.k || '').trim() }))
+    .filter(h => h.first);
+  const special = String(d.special_key || '').trim();
+  // special_key 可能与 hotkey 项重复（主推位恰是热搜词本身）——查重再插首
+  if (special && !hots.some(h => h.first === special)) hots.unshift({ first: special });
+  return { hots };
 }
 
 // 歌单详情（fcg_ucc_getcdinfo）：disstid 纯数字；song_begin/song_num 分页
@@ -492,6 +592,21 @@ async function getLyric(mid, extraSignal) {
   return { lyric: isInstrumentalPlaceholder(lyric) ? '' : lyric, trans };
 }
 
+// 发行日双源归一 → epoch ms：pubtime（soso 口径 unix 秒——实测青花瓷
+// 1193932800）与 time_public（musicu 口径，ISO 串或 unix 秒双形态）。
+// 纯数字 <1e12 按秒 ×1000，≥1e12 已是毫秒直吃；非数字走 Date.parse。
+// 缺/脏（0、负、非数非期）归 null——调用方不留键
+const pubMsOf = (v) => {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const n = +s;
+  // 数值口径：<1e8（≈1973 前，含 0/负/'2007' 裸年串）不可能是真发行日——
+  // 归 null 强过发一个 1970 的假日期；[1e8,1e12) 是秒，≥1e12 已是毫秒
+  if (Number.isFinite(n)) return n >= 1e8 ? (n < 1e12 ? Math.round(n * 1000) : Math.round(n)) : null;
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+};
+
 // ── 字段归一：新旧两套命名（songmid/songname/... vs mid/name/singer[]）→ 统一形态
 function normalizeTrack(s) {
   if (!s || typeof s !== 'object') return null;
@@ -502,6 +617,9 @@ function normalizeTrack(s) {
   const albummid = s.album?.mid || s.albummid || '';
   const file = s.file || {};
   const pay = s.pay || {};
+  // 发行日按源各过一道归一：`s.pubtime || s.time_public` 形态下 pubtime
+  // 的脏/负 truthy 值会短路成唯一归一源，把合法的 time_public 也拖下水
+  const publishMs = pubMsOf(s.pubtime) ?? pubMsOf(s.time_public);
   return {
     mid,
     songId: s.id || s.songid || null,
@@ -516,6 +634,9 @@ function normalizeTrack(s) {
     payPlay: (pay.pay_play ?? pay.payplay) === 1 && (pay.time_free ?? pay.timefree) !== 1,
     vipOnly: (pay.pay_month ?? pay.paytrackmouth) === 1,
     cover: albummid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albummid}.jpg` : '',
+    // 发行日归一成 epoch ms——归一失败/缺席不留键（routes 的 trackJson
+    // 白名单同口径，键在即有值）
+    ...(publishMs ? { publishTime: publishMs } : {}),
   };
 }
 
@@ -575,5 +696,6 @@ module.exports = {
   QUALITY_TIERS, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
   musicu, fcg, normalizeTrack, zzcSign,
   getSongDetail, getStreamCandidates, pickStreamUrl, getLyric, getPlaylist, searchSongs,
+  searchPlaylists, searchSuggest, getHotkeys,
   resolveQqInput,
 };

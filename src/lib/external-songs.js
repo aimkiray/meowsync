@@ -10,6 +10,7 @@
 import { httpsCover } from './url.js'
 import { externalCoverUrl } from './song.js'
 import { musicApi } from '../api/music.js'
+import { applyTrackOrder } from './track-order.js'
 
 // ── 艺人重合闸（builder 与 applyMatchResult 共用）──
 // 词源绑定宽松 / 展示身份保守：matched 网易云数据的核心职责是给外源曲
@@ -161,7 +162,12 @@ export const buildQQSong = (data) => ({
     songId: data.songId, albummid: data.albummid || '',
     payPlay: !!data.payPlay, vipOnly: !!data.vipOnly,
     matchedBy: data.matchedBy || null,
-    matchScore: data.matchScore ?? null
+    matchScore: data.matchScore ?? null,
+    // 曲库发行日（epoch ms）持久化进 provider 块——与 bv_/yt_ 同款槽位：
+    // retry/verify 回喂、mirror 签名、providerData 投影都从这里取；
+    // 缺席/脏值归 null（null 与缺席对下游读取等价）
+    publishedAt: Number.isFinite(data.publishTime) && data.publishTime > 0
+      ? data.publishTime : null
   },
   neteaseId: data.matched?.id || null
 })
@@ -222,6 +228,30 @@ export const applyMatchResult = (song, matched, extras = {}) => {
   })
   song.al = { ...(song.al && typeof song.al === 'object' ? song.al : {}), ...rebuilt }
   return song
+}
+
+// provider 导入壳幂等 upsert：QQ/B站/YouTube 整单导入 + QQ 歌单卡「+ 收藏」
+// 共用同一归并（原 useExternalImport.upsertImportedShell 提取，语义逐行等价）：
+// 壳存在则原地刷新元信息+新集曲目前插，用户本地追加的曲目保留在尾
+// （撞 id 的以新集为准自然消歧）；旧成员各回其 tracks 序位——排序模式
+// 重排过的排布不被远端集前插抹掉。只写内存数组——落盘/视图选中归
+// 调用方（各域的 savePlaylistsToStorage/select 入口不同源）
+export const upsertProviderShell = (playlists, { shellId, tracks, name, coverImgUrl, creator }) => {
+  let pl = playlists.find(p => String(p.id) === shellId)
+  if (!pl) {
+    pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
+    playlists.unshift(pl)
+  }
+  pl.name = name
+  pl.coverImgUrl = coverImgUrl
+  pl.creator = { nickname: creator }
+  const newIds = new Set(tracks.map(t => String(t.id)))
+  pl.tracks = applyTrackOrder(
+    [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))],
+    (pl.tracks || []).map(t => t.id)
+  )
+  pl.trackCount = pl.tracks.length
+  return pl
 }
 
 // 外部媒体导入共用骨架：B 站/YouTube/QQ 同一形态「resolve → 幂等壳 → 开播进

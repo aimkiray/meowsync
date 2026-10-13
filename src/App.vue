@@ -919,6 +919,7 @@ export default {
       gates,
       searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
       userPlaylists, selectedPlaylist, loadingSongs, selectPlaylist,
+      savePlaylistsToStorage,
       playSong: (s, o) => playSong(s, o),
       playSongFromSearch: (s) => playSongFromSearch(s),
       playSongFromRelated: (s, l) => playSongFromRelated(s, l),

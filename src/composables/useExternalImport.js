@@ -8,9 +8,8 @@ import {
 } from '../lib/url.js'
 import {
   buildBilibiliSong, buildYouTubeSong, buildQQSong,
-  MEDIA_IMPORT_SPECS, redirectDataOf,
+  MEDIA_IMPORT_SPECS, redirectDataOf, upsertProviderShell,
 } from '../lib/external-songs.js'
-import { applyTrackOrder } from '../lib/track-order.js'
 
 const MIX_IMPORT_CAP = 300   // 与生成侧 playlistShareUrl 的截断对齐
 const MIX_RESOLVE_CAP = 10   // bv_/yt_ 逐项 resolve——客户端预算共桶（服务端两端点各 12/min 分桶）
@@ -128,26 +127,11 @@ export function useExternalImport({
   const importYouTubeOrPlaylist = (input) =>
     extractYouTubePlaylistId(input) ? importYouTubePlaylist(input) : importYouTube(input)
 
-  // 整单导入共享壳 upsert：幂等壳存在则原地刷新元信息+新集曲目前插，
-  // 用户本地追加的曲目保留在尾（撞 id 的以新集为准自然消歧）。
+  // 整单导入共享壳 upsert：幂等归并本身在 lib/external-songs.js 的
+  // upsertProviderShell（搜索卡「+ 收藏」同口——同一壳形两处不复读两套）。
   // 正选中该壳时视图数组已换引用——selectPlaylistAndShow 须 force 防同 id 短路
   const upsertImportedShell = ({ shellId, tracks, name, coverImgUrl, creator }) => {
-    let pl = userPlaylists.value.find(p => String(p.id) === shellId)
-    if (!pl) {
-      pl = { id: shellId, name: '', coverImgUrl: '', creator: { nickname: '' }, trackCount: 0, tracks: [], isLocal: true }
-      userPlaylists.value.unshift(pl)
-    }
-    pl.name = name
-    pl.coverImgUrl = coverImgUrl
-    pl.creator = { nickname: creator }
-    const newIds = new Set(tracks.map(t => String(t.id)))
-    // 旧成员（含 provider 仍在集的曲）各回其 tracks 序位——排序模式重排过
-    // 的排布不被远端集前插抹掉；真·远端新曲落尾——与 trackOrder 归并同语义
-    pl.tracks = applyTrackOrder(
-      [...tracks, ...(pl.tracks || []).filter(t => !newIds.has(String(t.id)))],
-      (pl.tracks || []).map(t => t.id)
-    )
-    pl.trackCount = pl.tracks.length
+    const pl = upsertProviderShell(userPlaylists.value, { shellId, tracks, name, coverImgUrl, creator })
     savePlaylistsToStorage()
     selectPlaylistAndShow(pl, { force: true })
     return pl

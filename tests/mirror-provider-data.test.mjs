@@ -118,6 +118,31 @@ test('老镜像（无 publishedAt）重传补齐：签名变化触发重写自�
   assert.equal(providerDataOf(tracksRepo.listTracksByPlaylistId(row.id)[0]).bilibili.publishedAt, ms);
 });
 
+test('镜像链：qq publishedAt 穿透 raw_json 到 providerData；缺席/脏值不出键', () => {
+  const ms = 1193932800000;   // 2007-11-01
+  const row = mirror.mirrorLocalPlaylist('local_pl_qqpub', '歌单', '', [
+    { id: 'qq_m1', name: 'x', ar: [{ name: '歌手' }], al: {}, dt: 200000,
+      qq: { mediaMid: 'mm1', publishedAt: ms }, neteaseId: '555' },
+    { id: 'qq_m2', name: 'y', ar: [{ name: '歌手' }], al: {}, dt: 200000,
+      qq: { mediaMid: 'mm2' }, neteaseId: '556' },
+    { id: 'qq_m3', name: 'z', ar: [{ name: '歌手' }], al: {}, dt: 200000,
+      qq: { mediaMid: 'mm3', publishedAt: -5 } },
+  ]);
+  const [q1, q2, q3] = tracksRepo.listTracksByPlaylistId(row.id);
+  assert.equal(providerDataOf(q1).qq.publishedAt, ms); // grafted 核验链的时间证据
+  assert.equal('publishedAt' in providerDataOf(q2).qq, false);
+  assert.equal('publishedAt' in providerDataOf(q3).qq, false);
+
+  // sigOf 含 qq.publishedAt：同曲带新字段重传触发一次性重写自愈——
+  // 签名不吃它的话老镜像行被跳过重写，providerData 永远拿不到日期
+  mirror.mirrorLocalPlaylist('local_pl_qqpub', '歌单', '', [
+    { id: 'qq_m2', name: 'y', ar: [{ name: '歌手' }], al: {}, dt: 200000,
+      qq: { mediaMid: 'mm2', publishedAt: ms }, neteaseId: '556' },
+  ]);
+  assert.equal(
+    providerDataOf(tracksRepo.listTracksByPlaylistId(row.id)[0]).qq.publishedAt, ms);
+});
+
 test('providerDataOf 边界：qq 分支带回落词源签名 / 纯网易云曲为 null / 缺 provider 字段的外部曲保底 neteaseId', () => {
   // qq 曲：mediaMid + 回落核验签名（名/艺人）+ neteaseId 全带
   const qqPd = providerDataOf({ id: 'qq_001', name: 'QQ曲', ar: [{ name: '歌手甲' }], qq: { mediaMid: 'mid1' }, neteaseId: '555' });

@@ -12,6 +12,7 @@ const { matchWithBudget, toMatchedJson } = require('../services/netease-match');
 const {
   hasQqCookie, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
   getSongDetail, pickStreamUrl, getLyric, getPlaylist, searchSongs,
+  searchPlaylists, searchSuggest, getHotkeys,
   resolveQqInput,
 } = require('../lib/qq');
 
@@ -22,7 +23,9 @@ const app = new Hono();
 // 法务面：腾讯对第三方抓取有明确律师函史（lx-music/MusicFree）——本路由是
 // 自托管个人工具实现，QQ_COOKIE 由部署者自带（强烈建议小号，勿用主力号）
 
-// 曲目归一 → 前端歌单元件（buildQQSong 与下载器共用口径）
+// 曲目归一 → 前端歌单元件（buildQQSong 与下载器共用口径）。
+// publishTime 是 normalizeTrack 的条件键（归一失败不留键）——白名单
+// 条件透传，不下发明文 undefined
 const trackJson = (t) => ({
   mid: t.mid,
   songId: t.songId,
@@ -35,6 +38,7 @@ const trackJson = (t) => ({
   mediaMid: t.mediaMid,
   payPlay: t.payPlay,
   vipOnly: t.vipOnly,
+  ...(t.publishTime ? { publishTime: t.publishTime } : {}),
 });
 
 // vkey 档梯挑选：与 file-downloader 共用 lib/qq.js 的 pickStreamUrl
@@ -103,6 +107,9 @@ app.get('/qq/resolve', async (c) => {
       sourceInfo: {
         title: t.name, author: t.artists.join(' '),
         artists: t.artists, trackId: `qq_${t.mid}`,
+        // 曲库发行日（epoch ms）喂匹配侧时间证据——与 bv/yt 路由同轴
+        // （srcPubMsOf 只认正有限数，缺席归 0=未知不扰判定）
+        publishedAt: t.publishTime || 0,
       },
     });
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
@@ -173,20 +180,111 @@ app.get('/qq/lyric', async (c) => {
   }
 });
 
-// 曲库搜索——点歌台 qq: 前缀搜索用
+// 曲库搜索——点歌台 qq: 前缀搜索用。p/limit 是深挖翻页参数（QQ 源用
+// 上游页码 p 而非 offset）；total 是上游真值，挖不到归 null——前端
+// 「加载更多」键按 null 灭灯
 app.get('/qq/search', async (c) => {
   if (!rateLimit(c, 'qq-search', 20)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
   }
   const q = (c.req.query('q') || '').trim();
   if (!q || q.length > 100) return c.json({ code: 400, message: 'invalid query' }, 400);
+  // p 上限钳 1000——QQ 深挖页码直透上游，无界页码会放大上游翻页扇面
+  const page = Math.min(1000, Math.max(1, Math.floor(+c.req.query('p')) || 1));
+  const limit = Math.min(Math.max(1, Math.floor(+c.req.query('limit')) || 20), 30);
   try {
-    const list = await searchSongs(q, 20, c.req.raw.signal);
-    return c.json({ code: 200, list: list.map(trackJson) });
+    const { list, total } = await searchSongs(q, { limit, page }, c.req.raw.signal);
+    return c.json({ code: 200, list: list.map(trackJson), total, page });
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[qq] search 失败:', e.message);
     return c.json({ code: 502, message: `QQ 音乐搜索失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 搜索建议（typeahead）：smartbox → 网易 search_suggest 归一形态
+// {allMatch,songs,artists,albums}。客户端自行防抖——服务端不限连发节奏
+// groundwork:全局切源(P5)消费
+app.get('/qq/suggest', async (c) => {
+  if (!rateLimit(c, 'qq-suggest', 30)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const key = (c.req.query('key') || '').trim();
+  if (!key || key.length > 100) return c.json({ code: 400, message: 'invalid key' }, 400);
+  try {
+    const result = await searchSuggest(key, c.req.raw.signal);
+    return c.json({ code: 200, result });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[qq] suggest 失败:', e.message);
+    return c.json({ code: 502, message: `QQ 搜索建议失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 热搜：gethotkey → 网易 search_hot 归一形态 {hots:[{first}]}
+// groundwork:全局切源(P5)消费
+app.get('/qq/hot', async (c) => {
+  if (!rateLimit(c, 'qq-hot', 20)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  try {
+    const result = await getHotkeys(c.req.raw.signal);
+    return c.json({ code: 200, result });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[qq] hot 失败:', e.message);
+    return c.json({ code: 502, message: `QQ 热搜获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 歌单搜索：client_music_search_songlist → PlaylistGrid 归一卡
+// （provider:'qq' 让前端点卡走 /qq/playlist 导入链而非 getPlaylistDetail）
+app.get('/qq/search-playlists', async (c) => {
+  if (!rateLimit(c, 'qq-search-playlists', 20)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const q = (c.req.query('q') || '').trim();
+  if (!q || q.length > 100) return c.json({ code: 400, message: 'invalid query' }, 400);
+  const page = Math.max(1, Math.floor(+c.req.query('p')) || 1);
+  const limit = Math.min(Math.max(1, Math.floor(+c.req.query('limit')) || 20), 50);
+  try {
+    const { playlists, total } = await searchPlaylists(q, { page, limit }, c.req.raw.signal);
+    // page 回传——与 /qq/search 分页契约同轴（深挖键按真页码续拉）
+    return c.json({ code: 200, playlists, total, page });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[qq] search-playlists 失败:', e.message);
+    return c.json({ code: 502, message: `QQ 歌单搜索失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 相似曲：上游相似接口（GetSimilarSongs/GetSingerSongList/get_radio_track）
+// 匿名一律拒绝——艺人搜索降级实装（与 usePlayer 相关接续同款降级语义），
+// degraded 标记透出给前端区分「真相似」与降级面。种子曲自身从结果剔除
+// groundwork:全局切源(P5)消费
+app.get('/qq/similar', async (c) => {
+  if (!rateLimit(c, 'qq-similar', 20)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const mid = c.req.query('songmid') || '';
+  if (!SONGMID_RE.test(mid)) return c.json({ code: 400, message: 'invalid songmid' }, 400);
+  try {
+    const t = await getSongDetail(mid, c.req.raw.signal, 'mid');
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    const artist = (t?.artists || [])[0];
+    if (!artist) return c.json({ code: 200, list: [], degraded: true });
+    const { list } = await searchSongs(artist, { limit: 20 }, c.req.raw.signal);
+    return c.json({
+      code: 200,
+      // 剔种子用 detail 归一后的 t.mid——请求串 mid 可能与归一产物不同
+      //（songid 入参被解成 songmid 等），比错对象自身会混进相似列表
+      list: list.filter(x => x.mid !== t.mid).map(trackJson),
+      degraded: true,
+    });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[qq] similar 失败:', e.message);
+    return c.json({ code: 502, message: `QQ 相似歌曲获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 

@@ -1,9 +1,10 @@
 import { ref, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { apiErrorMessage } from '../api/http.js'
-import { toast } from '../lib/feedback.js'
+import { toast, toastDismiss } from '../lib/feedback.js'
 import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl.js'
-import { buildQQSong } from '../lib/external-songs.js'
+import { buildQQSong, upsertProviderShell } from '../lib/external-songs.js'
+import { providerPlaylistShellId } from '../lib/url.js'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
 // 单曲深挖翻页、id 预览、watch 页进出。
@@ -12,13 +13,16 @@ import { buildQQSong } from '../lib/external-songs.js'
 //   gates.search / gates.preview — 搜索与预览竞态闸
 //   searchQuery / currentSong / watchTab / isFullscreenPlayerOpen — App 持有的
 //     共享输入与播放器态（沉浸层开时 popstate 先收层不换页）
-//   userPlaylists / selectedPlaylist / loadingSongs / selectPlaylist — 库域
+//   userPlaylists / selectedPlaylist / loadingSongs / selectPlaylist /
+//     savePlaylistsToStorage — 库域（落盘收口唯一实现：指纹簿记/队列剪枝/
+//     瘦身投影都在它内部，本域不再自备投影——两份持久化实现会漂簿记）
 //   playSong / playSongFromSearch / playSongFromRelated / playPlaylist —
 //     播放器域（usePlayer 先实例化；惰性转发是双向循环依赖下的惯例写法）
 export function useSearchNav({
   gates,
   searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
   userPlaylists, selectedPlaylist, loadingSongs, selectPlaylist,
+  savePlaylistsToStorage,
   playSong, playSongFromSearch, playSongFromRelated, playPlaylist,
 }) {
   const centerView = ref('home') // 'home' | 'songs' | 'search' | 'watch' | 'downloads' | 'settings'
@@ -27,10 +31,14 @@ export function useSearchNav({
   const searchResults = ref([])     // 歌单搜索结果
   const searchSongResults = ref([]) // 单曲搜索结果（与歌单结果同区展示）
   // 单曲搜索深挖态：query/total 驱动 PlaylistGrid 的「加载更多」键；
-  // total=null 表示本批结果不可深挖（QQ 搜索等无分页源）
+  // total=null 表示本批结果不可深挖（上游不吐 total 时灭灯）
   const searchSongQuery = ref('')
   const searchSongTotal = ref(null)
   const searchSongLoadingMore = ref(false)
+  // QQ 深挖页游标：>0 表示当前单曲结果集来自 QQ 源且已拉到第 N 页——
+  // QQ 上游吃页码 p 不吃 offset，深挖发 p=N+1；0=网易云口径（深挖按
+  // 现有结果数当 offset）。两个搜索 handler 都复位它，不能做成算出来的
+  let qqSongPage = 0
 
   // ── URL 导航（YTM 式：视图/歌单可寻址，浏览器前进后退生效） ──
   // 寻址规则本体在 lib/navUrl.js（writeNavParams/readNavParams/resolveNavView
@@ -231,11 +239,57 @@ export function useSearchNav({
     await selectPlaylist(playlist, opts)
   }
 
-  // 点搜索结果卡片 = 打开歌单（不入库）；「+ 收藏」才进侧栏库
+  // 点搜索结果卡片 = 打开歌单（不入库）；「+ 收藏」才进侧栏库。
+  // provider==='qq' 的卡 disstid 不在网易云 id 空间——selectPlaylist 的
+  // /playlist_detail 链不认它，走 QQ 导入链（/qq/playlist 拉全量曲目 →
+  // local_pl_qq_ 幂等壳 → 选中），与顶栏 QQ 歌单链同一落点
   const openSearchPlaylist = async (playlist) => {
+    if (playlist?.provider === 'qq' && playlist?.disstid != null) {
+      return openQqPlaylistCard(playlist)
+    }
     centerView.value = 'songs'
     pushNavState(playlist)
     await selectPlaylist(playlist)
+  }
+
+  // QQ 歌单卡打开：与 useExternalImport.importQQPlaylist 同款行为
+  // （编排各归各域——闸/进度 toast/选中是本域职责；幂等归并走共享的
+  // external-songs.upsertProviderShell）。占 mediaImport 闸作废在途
+  // 选单/导入 → /qq/playlist 拉全量 → local_pl_qq_<disstid> 幂等壳
+  // upsert（远端集前插、本地追加保尾、trackOrder 覆盖层沿旧序）→
+  // 库域 save 落盘 → force 选中。壳 id 与 providerPlaylistShellId('qq',·)
+  // 同源——顶栏导入/搜索卡点卡/卡上「+ 收藏」三条入口收敛同一库行
+  const openQqPlaylistCard = async (card) => {
+    const disstid = String(card.disstid || '').trim()
+    if (!/^\d{1,15}$/.test(disstid)) return // 卡面脏数据不烧上游
+    gates.select.invalidate()
+    const myReq = gates.mediaImport.claim()
+    loadingSongs.value = false // 被顶的 selectPlaylist 不会再复位 loading——收掉
+    const opening = toast('正在导入 QQ 歌单…', 'info', 120000)
+    try {
+      const data = await musicApi.getQQPlaylist(disstid)
+      if (!gates.mediaImport.isCurrent(myReq)) return
+      const tracks = (data.tracks || []).map(buildQQSong)
+      if (!tracks.length) {
+        toast('QQ 歌单为空或全部不可解析', 'error')
+        return
+      }
+      const pl = upsertProviderShell(userPlaylists.value, {
+        shellId: providerPlaylistShellId('qq', disstid),
+        tracks,
+        name: data.name || card.name || `QQ 歌单 ${disstid}`,
+        coverImgUrl: data.cover || card.coverImgUrl || tracks[0]?.al?.picUrl || '',
+        creator: data.creator || card.creator?.nickname || 'QQ 音乐',
+      })
+      savePlaylistsToStorage()
+      await selectPlaylistAndShow(pl, { force: true })
+      toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首${data.truncated ? '，超出上限部分未导入' : ''}）`, 'success', 6000)
+    } catch (e) {
+      if (!gates.mediaImport.isCurrent(myReq)) return
+      toast('QQ 歌单导入失败: ' + apiErrorMessage(e), 'error', 5000)
+    } finally {
+      toastDismiss(opening)
+    }
   }
 
   // 货架卡片（榜单/最近歌单共用）：歌单还在库时用活副本——
@@ -305,6 +359,7 @@ export function useSearchNav({
     searchSongResults.value = []
     searchSongQuery.value = '' // 同步清：在途旧深挖的 query 守卫即刻失效
     searchSongTotal.value = null
+    qqSongPage = 0 // 结果集换回网易云口径——深挖走 offset 不走页码
     try {
       const [plRes, songRes] = await Promise.allSettled([
         musicApi.searchPlaylists(query),
@@ -328,8 +383,9 @@ export function useSearchNav({
     }
   }
 
-  // 单曲深挖：cloudsearch offset 翻页——query 快照比对挡「深挖在途时新搜索」竞态；
-  // 上游翻页间结果可能漂移重叠，按 id 去重追加
+  // 单曲深挖：cloudsearch offset 翻页 / QQ 页码翻页（p 游标，qqSongPage
+  // 区分口径）——query 快照比对挡「深挖在途时新搜索」竞态；上游翻页间
+  // 结果可能漂移重叠，按 id 去重追加
   const loadMoreSearchSongs = async () => {
     const q = searchSongQuery.value
     const myReq = gates.search.current()
@@ -337,17 +393,28 @@ export function useSearchNav({
     if (searchSongResults.value.length >= searchSongTotal.value) return
     searchSongLoadingMore.value = true
     try {
-      const { songs: more, total } = await musicApi.searchSongsPage(q, {
-        limit: 20, offset: searchSongResults.value.length,
-      })
+      let more, total
+      if (qqSongPage > 0) {
+        // QQ 深挖：页码游标——取第 N+1 页；失败游标不动可重试
+        const r = await musicApi.searchQQSongs(q, { limit: 20, page: qqSongPage + 1 })
+        more = (r.songs || []).map(buildQQSong)
+        total = r.total
+      } else {
+        const r = await musicApi.searchSongsPage(q, {
+          limit: 20, offset: searchSongResults.value.length,
+        })
+        more = r.songs
+        total = r.total
+      }
       // 双代次守卫：query 快照挡异词切换；reqId 快照挡同词重搜
       // （同词重搜后 results 已回写首页，旧深挖再落地会造队列缺口）
       if (searchSongQuery.value !== q || !gates.search.isCurrent(myReq)) return
+      if (qqSongPage > 0) qqSongPage += 1 // 页游标只在真消费后推进
       if (total != null) searchSongTotal.value = total
       const seen = new Set(searchSongResults.value.map(s => String(s.id)))
       const fresh = more.filter(s => !seen.has(String(s.id)))
       searchSongResults.value = [...searchSongResults.value, ...fresh]
-      // 零进展灭键：上游返空页/整页撞重时 offset 原地踏步，再点必空转
+      // 零进展灭键：上游返空页/整页撞重时游标原地踏步，再点必空转
       if (!fresh.length) searchSongTotal.value = searchSongResults.value.length
     } catch (e) {
       // 与上方落地闸同口径：旧深挖的迟到失败不盖新搜索的结果区
@@ -363,7 +430,8 @@ export function useSearchNav({
   }
 
   // qq: 关键词 → QQ 曲库搜索：结果与网易云单曲共用 songs 结果区
-  // （qq_ 曲对象的播放/下载/分享链与列表渲染已兼容）
+  // （qq_ 曲对象的播放/下载/分享链与列表渲染已兼容）；歌单腿并行——
+  // QQ 卡带 provider:'qq'，openSearchPlaylist 走 /qq/playlist 导入链
   const handleQQSongSearch = async (kw) => {
     gates.preview.invalidate()
     centerView.value = 'search'
@@ -373,15 +441,27 @@ export function useSearchNav({
     searchResults.value = []
     searchSongResults.value = []
     searchSongQuery.value = ''
-    searchSongTotal.value = null // QQ 搜索无服务端分页——不亮深挖键
+    searchSongTotal.value = null
+    qqSongPage = 0
     try {
-      const list = await musicApi.searchQQSongs(kw)
+      const [songRes, plRes] = await Promise.allSettled([
+        musicApi.searchQQSongs(kw, { limit: 20, page: 1 }),
+        musicApi.searchQQPlaylists(kw, { limit: 20 }),
+      ])
       if (!gates.search.isCurrent(myReq)) return
-      searchSongResults.value = (list || []).map(buildQQSong)
-    } catch (e) {
-      // 先查闸再弹——旧请求的落地错误不应覆盖正在进行的新搜索
-      if (!gates.search.isCurrent(myReq)) return
-      toast('QQ 音乐搜索失败: ' + apiErrorMessage(e), 'error')
+      // 双腿全败 = QQ 搜索不可用而非「零结果」——与 handlePlaylistSearch
+      // 同口径：单腿败留 console 痕迹，半幅结果仍有效
+      if (songRes.status === 'rejected' && plRes.status === 'rejected') {
+        toast('QQ 音乐搜索失败: ' + apiErrorMessage(songRes.reason || plRes.reason), 'error')
+        return
+      }
+      if (songRes.status === 'rejected') console.warn('[search] QQ 单曲搜索失败:', songRes.reason)
+      if (plRes.status === 'rejected') console.warn('[search] QQ 歌单搜索失败:', plRes.reason)
+      searchSongResults.value = songRes.status === 'fulfilled' ? (songRes.value?.songs || []).map(buildQQSong) : []
+      searchResults.value = plRes.status === 'fulfilled' ? (plRes.value?.playlists || []) : []
+      searchSongQuery.value = kw
+      qqSongPage = 1 // 第 1 页已在手——深挖从 p=2 起（游标>0 也是 QQ 口径标记）
+      searchSongTotal.value = songRes.status === 'fulfilled' ? (songRes.value?.total ?? null) : null
     } finally {
       if (gates.search.isCurrent(myReq)) searching.value = false
     }

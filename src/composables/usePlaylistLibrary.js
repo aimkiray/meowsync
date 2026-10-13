@@ -5,8 +5,9 @@ import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
 import { onRemoteApply } from '../lib/sync.js'
 import { toast } from '../lib/feedback.js'
 import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides, slimTrack } from '../lib/song.js'
-import { SAVED_QUEUE_PREFIX } from '../shared/predicates.js'
+import { SAVED_QUEUE_PREFIX, providerPlaylistShellId } from '../shared/predicates.js'
 import { applyTrackOrder, groupTracksByArtist, moveTrackByIds } from '../lib/track-order.js'
+import { buildQQSong, upsertProviderShell } from '../lib/external-songs.js'
 
 const PLAYLISTS_STORAGE_KEY = LS_KEYS.PLAYLISTS
 const REMOVED_DEFAULT_PLAYLISTS_KEY = LS_KEYS.REMOVED_DEFAULT_PLAYLISTS
@@ -243,6 +244,33 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       // 检查是否已存在（确保ID类型一致）
       const exists = userPlaylists.value.find(p => String(p.id) === String(playlist.id))
       if (exists) {
+        return
+      }
+
+      // QQ 歌单卡（provider:'qq' + disstid）：id 是 local_pl_qq_ 壳 id 不在
+      // 网易云 id 空间——走下方 getPlaylistDetail 链必落空，产出的是无
+      // tracks 的死壳（点开即空列表且 selectPlaylist 走 local 分支永不再拉）。
+      // 改走 /qq/playlist 导入链产完整壳——与 useSearchNav.openQqPlaylistCard
+      // 同一归并（external-songs.upsertProviderShell）：幂等 upsert 自带
+      // 重查语义，await 期间并发入库合流同一壳行不复制
+      if (playlist.provider === 'qq' && playlist.disstid != null) {
+        const disstid = String(playlist.disstid).trim()
+        if (!/^\d{1,15}$/.test(disstid)) return // 卡面脏数据不烧上游
+        try {
+          const data = await musicApi.getQQPlaylist(disstid)
+          const tracks = (data.tracks || []).map(buildQQSong)
+          if (!tracks.length) return // 上游空回不入库——与点卡导入同闸
+          upsertProviderShell(userPlaylists.value, {
+            shellId: providerPlaylistShellId('qq', disstid),
+            tracks,
+            name: data.name || playlist.name || `QQ 歌单 ${disstid}`,
+            coverImgUrl: data.cover || playlist.coverImgUrl || tracks[0]?.al?.picUrl || '',
+            creator: data.creator || playlist.creator?.nickname || 'QQ 音乐',
+          })
+          savePlaylistsToStorage()
+        } catch (error) {
+          console.error('❌ QQ 歌单收藏失败:', error)
+        }
         return
       }
 

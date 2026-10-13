@@ -99,6 +99,70 @@ describe('musicApi：歌单详情两段请求 + 字段形状', () => {
   })
 })
 
+describe('musicApi：QQ 源端点契约', () => {
+  it('searchQQSongs：{songs,total} 形 + p/limit 页码参数进 params', async () => {
+    setResponses({
+      get: { '/qq/search': { code: 200, list: [{ mid: 'm1' }], total: 600, page: 2 } },
+    })
+    const r = await musicApi.searchQQSongs('x', { limit: 5, page: 2 })
+    expect(r).toEqual({ songs: [{ mid: 'm1' }], total: 600 })
+    expect(httpCalls.at(-1).cfg.params).toMatchObject({ q: 'x', p: 2, limit: 5 })
+    expect(httpCalls.at(-1).cfg.timeout).toBe(30000) // 三跳最坏 ~45s 内的客户端上限
+  })
+
+  it('searchQQSongs：total 缺席 → null（深挖灭灯语义）', async () => {
+    setResponses({ get: { '/qq/search': { code: 200, list: [] } } })
+    const r = await musicApi.searchQQSongs('x')
+    expect(r).toEqual({ songs: [], total: null })
+  })
+
+  it('searchQQSuggest/getQQHot/searchQQPlaylists/getQQSimilar 形状与 params', async () => {
+    setResponses({
+      get: {
+        '/qq/suggest': { code: 200, result: { allMatch: [{ keyword: 'k' }], songs: [{ name: 's' }] } },
+        '/qq/hot': { code: 200, result: { hots: [{ first: 'h' }] } },
+        '/qq/search-playlists': { code: 200, playlists: [{ disstid: '1', provider: 'qq' }], total: 9 },
+        '/qq/similar': { code: 200, list: [{ mid: 'm2' }], degraded: true },
+      },
+    })
+    expect(await musicApi.searchQQSuggest('k')).toMatchObject({ allMatch: [{ keyword: 'k' }] })
+    expect(httpCalls.at(-1).cfg.params).toMatchObject({ key: 'k' })
+    expect(await musicApi.getQQHot()).toEqual([{ first: 'h' }])
+    const pl = await musicApi.searchQQPlaylists('q', { page: 3, limit: 10 })
+    expect(pl).toEqual({ playlists: [{ disstid: '1', provider: 'qq' }], total: 9 })
+    expect(httpCalls.at(-1).cfg.params).toMatchObject({ q: 'q', p: 3, limit: 10 })
+    expect(httpCalls.at(-1).cfg.timeout).toBe(20000)
+    const sim = await musicApi.getQQSimilar('001mid00000xx')
+    expect(sim).toEqual({ songs: [{ mid: 'm2' }], degraded: true })
+    expect(httpCalls.at(-1).cfg.params).toMatchObject({ songmid: '001mid00000xx' })
+  })
+
+  it('getQQPlaylist：id 进 params + 90s 串行拉页超时', async () => {
+    setResponses({ get: { '/qq/playlist': { code: 200, name: 'P', tracks: [] } } })
+    const r = await musicApi.getQQPlaylist('777')
+    expect(r.name).toBe('P')
+    expect(httpCalls.at(-1).cfg.params).toEqual({ id: '777' })
+    expect(httpCalls.at(-1).cfg.timeout).toBe(90000) // 串行分页上界 ~75s 上留余
+  })
+
+  it('QQ 端点 code!==200 抛错透服务端 message', async () => {
+    setResponses({
+      get: {
+        '/qq/search': { code: 502, message: 'QQ 音乐搜索失败: x' },
+        '/qq/suggest': { code: 500, message: 'QQ 搜索建议失败: y' },
+        '/qq/hot': { code: 500, message: 'QQ 热搜获取失败: z' },
+        '/qq/search-playlists': { code: 502, message: 'QQ 歌单搜索失败: w' },
+        '/qq/similar': { code: 502, message: 'QQ 相似歌曲获取失败: v' },
+      },
+    })
+    await expect(musicApi.searchQQSongs('x')).rejects.toThrow('QQ 音乐搜索失败')
+    await expect(musicApi.searchQQSuggest('x')).rejects.toThrow('QQ 搜索建议失败')
+    await expect(musicApi.getQQHot()).rejects.toThrow('QQ 热搜获取失败')
+    await expect(musicApi.searchQQPlaylists('x')).rejects.toThrow('QQ 歌单搜索失败')
+    await expect(musicApi.getQQSimilar('m')).rejects.toThrow('QQ 相似歌曲获取失败')
+  })
+})
+
 describe('musicApi：上游业务码 code!==200 不吞成空态', () => {
   it('搜索系（歌单/建议/单曲/深挖/推荐/热搜）code!==200 抛错', async () => {
     setResponses({

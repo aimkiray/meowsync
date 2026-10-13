@@ -548,10 +548,14 @@ app.post('/downloads/local/mirror', async (c) => {
         al: (t.al && typeof t.al === 'object') ? t.al
           : (t.album && typeof t.album === 'object') ? t.album : {},
         dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0),
-        // qq 源私有字段只收 mediaMid（vkey filename 键）——其余下载链用不上；
+        // qq 源私有字段只收 mediaMid（vkey filename 键）+ publishedAt（发行日
+        // 证据——与 bv/yt 同轴，providerData/签名域都吃）——其余下载链用不上；
         // 形态校验防任意对象进 raw_json
         ...(t.qq && SONGMID_RE.test(String(t.qq.mediaMid || ''))
-          ? { qq: { mediaMid: String(t.qq.mediaMid) } } : {}),
+          ? { qq: {
+              mediaMid: String(t.qq.mediaMid),
+              publishedAt: sanePublishMs(t.qq.publishedAt) || null
+            } } : {}),
         // bv_/yt_ 曲同理只收流定位字段（bvid/cid/page、videoId）+ neteaseId
         // 词源 + title/author——下载链的歌词归属核验要靠来源标题与作者
         // 构造 verdict 签名，不整只落 provider 对象
