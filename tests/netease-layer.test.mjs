@@ -1,5 +1,5 @@
 // 自研 NetEase 层回归：端点表↔路由白名单一致性、候选时长匹配、
-// cookie 解析、envelope 语义。离网可跑——加密正确性由 netease-crypto.test.mjs 对拍
+// cookie 解析、envelope 语义。离网可跑——明文 /api 通道化后无加密面需对拍
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -22,12 +22,20 @@ test('端点表覆盖白名单且名称双向一致', () => {
     assert.ok(ENDPOINTS[name], `白名单端点 ${name} 缺实现`);
     assert.equal(typeof ENDPOINTS[name].handler, 'function');
   }
-  // lyric_new 定义保留但已摘除透传（无客户端消费，/lyric 的 id 校验同挡）；
-  // 白名单外端点路由层直回 404，天然不在鉴权面上
-  const NOT_PASSED_THROUGH = new Set(['lyric_new']);
+  // lyric_new 早已摘除；song_url_v1/check_music/album/artists/banner/toplist
+  // 本轮同因摘——零前端消费，收白名单攻击面。ENDPOINTS 定义保留作进程内/
+  // 兼容留档；白名单外端点路由层直回 404，天然不在鉴权面上
+  const NOT_PASSED_THROUGH = new Set([
+    'lyric_new', 'song_url_v1', 'check_music', 'album', 'artists', 'banner', 'toplist',
+  ]);
   for (const name of Object.keys(ENDPOINTS)) {
     if (NOT_PASSED_THROUGH.has(name)) continue;
-    assert.ok(ALLOWED_APIS.has(name), `端点 ${name} 不在白名单——会成未鉴权面`);
+    assert.ok(ALLOWED_APIS.has(name), `端点 ${name} 存在但未做白名单登记决策`);
+  }
+  // 反向钉：摘除名不得回白名单——正向循环对它们 continue，摘名复活进
+  // ALLOWED_APIS 时上面断言照样全绿，只有这里能红（lyric_new 同罩住）
+  for (const n of NOT_PASSED_THROUGH) {
+    assert.ok(!ALLOWED_APIS.has(n), `端点 ${n} 复活进白名单`);
   }
 });
 
@@ -62,9 +70,13 @@ test('cookieObjToString 键值均 encodeURIComponent', () => {
   assert.equal(cookieObjToString({ a: 'x y', 'k;k': 'v' }), 'a=x%20y; k%3Bk=v');
 });
 
-test('端点 crypto 通道分布与上游一致（eapi 默认 / weapi 显式）', () => {
-  const weapi = Object.keys(ENDPOINTS).filter(n => ENDPOINTS[n].crypto === 'weapi').sort();
-  assert.deepEqual(weapi, ['album', 'artists', 'check_music', 'personalized', 'search_suggest', 'song_detail'].sort());
+// 明文 /api 通道钉板：迁移后端点表不得残留 crypto 死元数据——重新引入
+// 通道字段说明有人复活了加密分支（request() 签名已无 crypto 入参）
+test('端点表无 crypto 字段——明文 /api 通道化后通道元数据已退役', () => {
+  for (const [name, ep] of Object.entries(ENDPOINTS)) {
+    assert.equal(ep.crypto, undefined, `${name} 不应带 crypto 字段`);
+    assert.deepEqual(Object.keys(ep), ['handler'], `${name} 应只剩 handler`);
+  }
 });
 
 // 回归钉：qqCookie→maybeRenewQqCookie→qqCookie 曾互递归（cookie 非空即栈溢出，

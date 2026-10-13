@@ -28,7 +28,11 @@ seed('../src/server/services/netease-api.js', {
 });
 
 let app;
-before(() => { app = require('../src/server/routes/music.js'); });
+let ALLOWED_APIS;
+before(() => {
+  app = require('../src/server/routes/music.js');
+  ALLOWED_APIS = app.ALLOWED_APIS; // module.exports.ALLOWED_APIS 挂在 app 上
+});
 after(() => { rmSync(process.env.DATA_DIR, { recursive: true, force: true }); });
 
 const req = (path, init = {}) => app.request(`http://t${path}`, init);
@@ -98,6 +102,19 @@ test('music：/lyric 的 id 只收网易云数字——abc 400 不打上游；�
 test('music：lyric_new 移出 passthrough 白名单 → 404', async () => {
   apiCalls.length = 0;
   assert.equal((await req('/lyric_new?id=1')).status, 404);
+  assert.equal(apiCalls.length, 0);
+});
+
+// 零前端消费端点随白名单收面摘除——ENDPOINTS 定义仍在（进程内/兼容留档），
+// 但 /:apiName 透传面不再放行；每个摘除名都钉 404 防悄悄复活
+test('music：零消费端点摘出白名单 → 一律 404 且零上游扇出', async () => {
+  apiCalls.length = 0;
+  for (const name of ['song_url_v1', 'check_music', 'album', 'artists', 'banner', 'toplist']) {
+    // 桩 apiModules 只含 search/lyric——摘除名即便复活回白名单，HTTP 断言
+    // 也照拿 404（!apiModules[name] 短路）永不红；白名单集判定才是真复活钉
+    assert.ok(!ALLOWED_APIS.has(name), `端点 ${name} 复活进了白名单`);
+    assert.equal((await req(`/${name}?id=1`)).status, 404, name);
+  }
   assert.equal(apiCalls.length, 0);
 });
 
