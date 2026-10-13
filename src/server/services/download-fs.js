@@ -62,7 +62,13 @@ function providerDataOf(track) {
   const qqMid = track.qq?.mediaMid;
   if (qqMid) {
     return {
-      qq: { mediaMid: qqMid },
+      qq: {
+        mediaMid: qqMid,
+        // 发行日（epoch ms）与 bv/yt 同轴——grafted 核验链的 chrono
+        // 证据；缺席/脏值不出键（深等于投影面零扰动）
+        ...(sanePublishMs(track.qq?.publishedAt)
+          ? { publishedAt: sanePublishMs(track.qq.publishedAt) } : {}),
+      },
       // qq 曲缺词时回落 neteaseId 词源——核验签名需要曲自身名/艺人快照
       neteaseId: /^\d+$/.test(String(track.neteaseId ?? '')) ? String(track.neteaseId) : null,
       title: String(track.name || '').slice(0, 300) || null,

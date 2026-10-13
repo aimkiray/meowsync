@@ -156,8 +156,14 @@ export const downloadsApi = {
         pic_str: al.pic_str || album.pic_str || ''
       },
       dt: t.dt || t.duration || 0,
-      // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返
-      ...(t.qq?.mediaMid ? { qq: { mediaMid: t.qq.mediaMid } } : {}),
+      // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返；
+      // publishedAt 与 bv/yt 同轴入镜（服务端 sigOf/providerData 都吃它）——
+      // 缺席/非有限正数不出键，既有投影面零扰动
+      ...(t.qq?.mediaMid ? { qq: {
+        mediaMid: t.qq.mediaMid,
+        ...(Number.isFinite(t.qq.publishedAt) && t.qq.publishedAt > 0
+          ? { publishedAt: t.qq.publishedAt } : {}),
+      } } : {}),
       // bv_/yt_ 曲的自有源流定位 + neteaseId 词源 + title/author——歌词
       // 归属核验的 verdict 签名靠来源标题/作者；缺了也能按 id 前缀自愈
       // 重解（cid 会多一次 view 往返、歌词段拿不到词源），带上更省。

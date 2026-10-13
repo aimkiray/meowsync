@@ -328,9 +328,10 @@ export function useAddToPlaylist({
         // resolve 失败回落搜索前复查闸——在途间隙窗可能已关/新意图已认领
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
         if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
-        const list = await musicApi.searchQQSongs(kw, pickerAbort.signal)
+        // searchQQSongs 回 {songs,total}——点歌台只要列表，total 无消费面
+        const { songs: qqList } = await musicApi.searchQQSongs(kw, { signal: pickerAbort.signal })
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
-        songPickerResults.value = (list || []).map(buildQQSong)
+        songPickerResults.value = (qqList || []).map(buildQQSong)
         if (!songPickerResults.value.length) toast('QQ 音乐没有找到相关歌曲', 'info')
         return
       }

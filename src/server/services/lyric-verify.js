@@ -574,7 +574,12 @@ async function verifyDownloadOwnership({ songId, lyricId, providerData, grafted,
     const ytM = YT_TRACK_ID_RE.exec(String(songId));
     const extSrc = BV_TRACK_ID_RE.test(String(songId)) ? providerData?.bilibili
       : ytM ? providerData?.youtube
-      : grafted ? { title: providerData?.title, author: providerData?.author }
+      : grafted ? {
+        title: providerData?.title, author: providerData?.author,
+        // qq_ grafted 行的时间证据槽位——与 bv/yt 嵌套块同轴（providerData
+        // 投影在 download-fs.js 条件透传，缺席归 undefined=未知）
+        publishedAt: providerData?.qq?.publishedAt,
+      }
       : null;
     if (!extSrc?.title?.trim()) return true;
     // 词文采样先于声明解析——剥完真空的纯文本/元行词直接放行，省一跳反解

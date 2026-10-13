@@ -19,6 +19,7 @@ vi.mock('../../src/api/music.js', () => ({
     getSongDetail: vi.fn(),
     getSongsDetail: vi.fn(async () => []),
     getPlaylistDetail: vi.fn(async () => null),
+    getQQPlaylist: vi.fn(async () => ({ tracks: [] })),
     retryMatch: vi.fn(async () => null),
   },
 }))
@@ -395,7 +396,7 @@ describe('L6：id 预览失败的视图/URL 归一', () => {
     userPlaylists: ref([]), selectedPlaylist: ref(null), loadingSongs: ref(false),
     selectPlaylist: vi.fn(async () => true),
     playSong: vi.fn(), playSongFromSearch: vi.fn(), playSongFromRelated: vi.fn(),
-    playPlaylist: vi.fn(),
+    playPlaylist: vi.fn(), savePlaylistsToStorage: vi.fn(),
   })
 
   it('预览拉取失败：centerView 回 home，地址栏摘掉失效 pl', async () => {
@@ -452,5 +453,61 @@ describe('L9：本地歌单命名', () => {
     const pLong = lib.createLocalPlaylist(longName)
     expect(pLong.name.length).toBeLessThanOrEqual(40)
     expect(pLong.name.endsWith('(2)')).toBe(true)
+  })
+})
+
+describe('M1：QQ 歌单卡「+ 收藏」走 /qq/playlist 导入链产完整壳', () => {
+  const makeLib = () => usePlaylistLibrary({
+    gates: { select: makeGate(), mediaImport: makeGate(), preview: makeGate() },
+    playingPlaylistId: ref(null), loading: ref(false),
+  })
+  // PlaylistGrid provider:'qq' 归一卡形态（lib/qq.js normalizePlaylistCard 产物）
+  const QQ_CARD = {
+    id: 'local_pl_qq_7097197259', disstid: '7097197259', name: '催专累了',
+    coverImgUrl: 'https://y.gtimg.cn/x.jpg', creator: { nickname: '念安娜' },
+    trackCount: 108, playCount: 91998486, provider: 'qq',
+  }
+  const QQ_TRACK = {
+    mid: '002BBBbbb00002', songId: 1, name: '歌', artists: ['艺人'], album: '专',
+    duration: 200, mediaMid: '002BBBbbb00002', publishTime: 1193932800000,
+  }
+  beforeEach(() => { localStorage.clear(); vi.clearAllMocks() })
+
+  it('provider=qq 卡 → getQQPlaylist 拉全量 → 幂等壳带 tracks 入库（不走网易云链）', async () => {
+    musicApi.getQQPlaylist.mockResolvedValue({
+      name: '催专累了', creator: '念安娜', cover: 'https://c/pl.jpg',
+      tracks: [QQ_TRACK], truncated: false,
+    })
+    const lib = makeLib()
+    await lib.addPlaylistToLibrary(QQ_CARD)
+    expect(musicApi.getQQPlaylist).toHaveBeenCalledWith('7097197259')
+    expect(musicApi.getPlaylistDetail).not.toHaveBeenCalled() // local_pl_qq_ 不在网易 id 空间
+    const pl = lib.userPlaylists.value.find(p => String(p.id) === 'local_pl_qq_7097197259')
+    expect(pl).toBeTruthy()
+    expect(pl.isLocal).toBe(true)
+    expect(pl.tracks.map(t => t.id)).toEqual(['qq_002BBBbbb00002'])
+    expect(pl.name).toBe('催专累了')
+    // 落盘收口=库域 savePlaylistsToStorage——瘦身投影 + 新壳指纹差盖 updatedAt
+    const stored = JSON.parse(localStorage.getItem('userPlaylists'))
+    expect(stored[0].id).toBe('local_pl_qq_7097197259')
+    expect(stored[0].tracks[0].id).toBe('qq_002BBBbbb00002')
+    expect(stored[0].updatedAt).toBeTypeOf('number')
+  })
+
+  it('幂等：已在库早退不重复拉取；拉取失败/上游空集不入库不产死壳', async () => {
+    const lib = makeLib()
+    lib.userPlaylists.value.push({ id: 'local_pl_qq_7097197259', name: 'x', tracks: [], isLocal: true })
+    await lib.addPlaylistToLibrary(QQ_CARD)
+    expect(musicApi.getQQPlaylist).not.toHaveBeenCalled() // exists 早退——不烧上游
+
+    lib.userPlaylists.value = []
+    musicApi.getQQPlaylist.mockResolvedValue({ tracks: [] }) // 上游空回
+    await lib.addPlaylistToLibrary(QQ_CARD)
+    expect(lib.userPlaylists.value).toHaveLength(0)
+
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    musicApi.getQQPlaylist.mockRejectedValue(new Error('上游挂'))
+    await lib.addPlaylistToLibrary(QQ_CARD)
+    expect(lib.userPlaylists.value).toHaveLength(0) // 失败不产空壳
   })
 })

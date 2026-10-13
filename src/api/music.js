@@ -609,21 +609,84 @@ export const musicApi = {
     return { loggedIn: Boolean(body?.loggedIn) }
   },
 
-  // QQ 曲库搜索（点歌台 qq: 前缀；服务端固定回 20 条）
-  searchQQSongs: async (q, abortSignal = null) => {
-    const response = await api.get('/qq/search', { params: { q }, signal: abortSignal }).catch(err => {
+  // QQ 曲库搜索（点歌台 qq: 前缀）：回 {songs,total}——total 是上游
+  // totalnum 真值（挖不到归 null），前端深挖「加载更多」按它亮灭；
+  // page 是页码游标（上游 p，1 起）不是 offset。三跳兜底最坏 ~45s，
+  // 客户端上限给 30s——超时后服务端仍在跑但前端不再悬挂
+  searchQQSongs: async (q, { limit = 20, page = 1, signal } = {}) => {
+    const response = await api.get('/qq/search', {
+      params: { q, p: page, limit }, signal, timeout: 30000,
+    }).catch(err => {
       if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
     })
     const data = unwrapBody(response)
     if (data.code !== 200) throw new Error(data.message || 'QQ 音乐搜索失败')
-    return data.list || []
+    return { songs: data.list || [], total: data.total ?? null }
   },
 
-  // QQ 歌单详情（disstid → 归一曲目列表，导入本地歌单用）
+  // QQ 搜索建议（smartbox → 网易 search_suggest 归一形）：
+  // {allMatch:[{keyword}],songs,artists,albums}——与 searchSuggest 同消费面
+  // groundwork:全局切源(P5)消费
+  searchQQSuggest: async (key, abortSignal = null) => {
+    const response = await api.get('/qq/suggest', {
+      params: { key }, signal: abortSignal, timeout: 8000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 搜索建议失败')
+    return data.result || {}
+  },
+
+  // QQ 热搜（gethotkey → 网易 search_hot 归一形）：[{first}]
+  // groundwork:全局切源(P5)消费
+  getQQHot: async (abortSignal = null) => {
+    const response = await api.get('/qq/hot', { signal: abortSignal, timeout: 8000 })
+      .catch(err => {
+        if (err?.response?.data?.message) throw resolveRethrow(err)
+        throw err
+      })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 热搜获取失败')
+    return data.result?.hots || []
+  },
+
+  // QQ 歌单搜索：归一 PlaylistGrid 卡（provider:'qq' + disstid——点卡
+  // 走 /qq/playlist 导入链不是 getPlaylistDetail）；{playlists,total}
+  searchQQPlaylists: async (q, { page = 1, limit = 20, signal } = {}) => {
+    const response = await api.get('/qq/search-playlists', {
+      params: { q, p: page, limit }, signal, timeout: 20000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 歌单搜索失败')
+    return { playlists: data.playlists || [], total: data.total ?? null }
+  },
+
+  // QQ 相似曲：上游相似接口匿名全拒，服务端艺人搜索降级实装——
+  // degraded=true 透出降级面（曲目元素与 searchQQSongs 同形）
+  // groundwork:全局切源(P5)消费
+  getQQSimilar: async (songmid, abortSignal = null) => {
+    const response = await api.get('/qq/similar', {
+      params: { songmid }, signal: abortSignal, timeout: 30000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'QQ 相似歌曲获取失败')
+    return { songs: data.list || [], degraded: data.degraded === true }
+  },
+
+  // QQ 歌单详情（disstid → 归一曲目列表，导入本地歌单用）：
+  // 服务端 200 条/页串行拉取上限 ~75s——客户端上限 90s 不早退
   getQQPlaylist: async (id) => {
     const response = await api.get('/qq/playlist', {
-      params: { id }, timeout: 60000
+      params: { id }, timeout: 90000
     }).catch(err => {
       if (err?.response?.data?.message) throw resolveRethrow(err)
       throw err
