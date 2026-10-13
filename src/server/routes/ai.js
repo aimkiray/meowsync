@@ -188,7 +188,9 @@ app.post('/ai/lyric-translate', async (c) => {
     return c.json({ code: 200, tlyric: result, lines: translated.size, total: lines.length, source: 'ai' });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
-    console.error('[ai] lyric-translate 失败:', e?.message || e);
+    // answer 对象（{status,body,cookie[]}）无 .message——裸 dump 会把
+    // 上游 Set-Cookie 指纹整包打进日志，归一成 status+body.code 留痕
+    console.error('[ai] lyric-translate 失败:', e?.message || (e && typeof e === 'object' ? `answer.status=${e.status} body.code=${e.body?.code}` : e));
     return fail(c, 502, '翻译失败');
   } finally {
     // 只删自己创建的 gate——多 waiter 场景里别人的新 gate 不能被误删
@@ -334,7 +336,8 @@ app.post('/ai/lyric-verify', async (c) => {
     return c.json({ code: 200, ok });
   } catch (e) {
     if (signal?.aborted) return c.body(null, 499);
-    console.error('[ai] lyric-verify 失败:', e?.message || e);
+    // 同 lyric-translate：answer 对象裸 dump 会泄上游 cookie——归一留痕
+    console.error('[ai] lyric-verify 失败:', e?.message || (e && typeof e === 'object' ? `answer.status=${e.status} body.code=${e.body?.code}` : e));
     // 核验通道故障按相符放行——AI 是增强不是门禁
     return c.json({ code: 200, ok: true, inconclusive: true });
   } finally {

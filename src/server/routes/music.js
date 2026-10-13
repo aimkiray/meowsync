@@ -214,7 +214,9 @@ app.all('/:apiName', async (c) => {
   // 白名单收敛到网易登录态键——整包转发会把本站域下的其他凭据
   // （SSO 网关的 CF_Authorization/oauth2-proxy 会话等）一并泄给第三方
   const clientCookie = c.req.header('cookie');
-  if (clientCookie && !params.cookie) {
+  // 仅 cookie 参数缺席才注入 ambient——显式 cookie=（空串=要游客态）/
+  // null/{} 都是调用方自填值，不该被本域凭据覆盖
+  if (clientCookie && params.cookie === undefined) {
     params.cookie = clientCookie.split(';')
       .map(part => part.trim())
       .filter(part => {
@@ -241,10 +243,11 @@ app.all('/:apiName', async (c) => {
     return c.json({ code: 400, message: '非法 lyric id' }, 400);
   }
   // 上游慢链路（千曲歌单 detail/track_all 常超 30s 默认）放宽到 120s，
-  // 与 playlist-sync 同口径——否则 UI 加载大歌单必死且每次重试另起上游请求
+  // 与 playlist-sync 同口径——否则 UI 加载大歌单必死且每次重试另起上游请求；
+  // signal 与下方 resolveSongUrls 同口径——客户端断连即杀上游 socket
   const upstreamOptions = ['playlist_detail', 'playlist_track_all'].includes(apiName)
-    ? { timeoutMs: 120000 }
-    : {};
+    ? { timeoutMs: 120000, signal: c.req.raw.signal }
+    : { signal: c.req.raw.signal };
 
   try {
     const result = await callNeteaseApi(apiName, params, upstreamOptions);

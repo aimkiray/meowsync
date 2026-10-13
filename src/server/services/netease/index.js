@@ -8,8 +8,10 @@ const { ENDPOINTS } = require('./endpoints');
 const apiModules = ENDPOINTS;
 
 async function callNeteaseApi(apiName, params, options = {}) {
+  // hasOwn 判存在：'constructor'/'__proto__' 等原型键在裸索引下 truthy，
+  // 会越过 not found 检查拿 Function 当 ep 崩 500
+  if (!Object.hasOwn(ENDPOINTS, apiName)) throw new Error(`API '${apiName}' not found`);
   const ep = ENDPOINTS[apiName];
-  if (!ep) throw new Error(`API '${apiName}' not found`);
   // timeoutMs 可覆盖：千曲歌单的 playlist_detail/track_all 慢链路可超 30s
   return ep.handler(params, { timeoutMs: options.timeoutMs, signal: options.signal });
 }

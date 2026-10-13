@@ -12,14 +12,15 @@ import { seed, tmpDataDir } from './helpers.mjs';
 process.env.DATA_DIR = tmpDataDir('meowsync-route-music-');
 const require = createRequire(import.meta.url);
 
-// ── 桩：网易云上游——callNeteaseApi 录制入参，默认回固定 200 信封；
+// ── 桩：网易云上游——callNeteaseApi 录制入参（含第三参 options——signal/
+// timeoutMs 透传面），默认回固定 200 信封；
 // upstreamImpl 可例内替换（模拟上游 reject answer / 在途断连组合）
 const apiCalls = [];
 let upstreamImpl = async (name) => ({ status: 200, body: { code: 200, echoed: name }, cookie: [] });
 seed('../src/server/services/netease-api.js', {
   apiModules: { search: {}, lyric: {} },
-  callNeteaseApi: async (name, params) => {
-    apiCalls.push({ name, params });
+  callNeteaseApi: async (name, params, options) => {
+    apiCalls.push({ name, params, options });
     return upstreamImpl(name, params);
   },
   resolveSongUrls: async () => {},
@@ -184,4 +185,41 @@ test('music：断连优先于上游 answer 透传——aborted 时 upstream answ
   } finally {
     upstreamImpl = saved;
   }
+});
+
+// ambient Cookie 注入双向钉：仅 params.cookie 缺席（=== undefined）才注入
+// 本域凭据——显式 cookie:null 是调用方自填值（要游客态/自有凭据），被
+// ambient 覆盖等于把本站 SSO/网关会话泄给上游；缺席方向则锁注入本身
+// 不丢（注入还要过 NETEASE_COOKIE_KEYS 白名单，ms_session 这种本站键滤掉）
+test('music：显式 cookie:null 不被 ambient 覆盖；cookie 缺席走白名单注入', async () => {
+  apiCalls.length = 0;
+  const ambient = { cookie: 'MUSIC_U=ambient-u; ms_session=site-session' };
+  const explicit = await req('/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...ambient },
+    body: JSON.stringify({ keywords: 'x', cookie: null }),
+  });
+  assert.equal(explicit.status, 200);
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].params.cookie, null, '显式 cookie:null 不得被 ambient 覆盖');
+  const absent = await req('/search?keywords=x', { headers: ambient });
+  assert.equal(absent.status, 200);
+  assert.equal(apiCalls.length, 2);
+  assert.equal(apiCalls[1].params.cookie, 'MUSIC_U=ambient-u',
+    'cookie 缺席应注入白名单过滤后的 ambient 凭据');
+});
+
+// signal 透传钉：路由层把客户端在途信号交给 callNeteaseApi 第三参——
+// Request 构造器产「跟随体」AbortSignal 而非同一对象（=== 会误判），
+// 故钉 instanceof + 跟随 abort 语义（断连杀上游 socket 链的接线）
+test('music：options.signal 透传——AbortSignal 实例且跟随客户端断连', async () => {
+  apiCalls.length = 0;
+  const ac = new AbortController();
+  const r = await req('/search?keywords=x', { signal: ac.signal });
+  assert.equal(r.status, 200);
+  assert.equal(apiCalls.length, 1);
+  const sig = apiCalls[0].options?.signal;
+  assert.ok(sig instanceof AbortSignal, '第三参 options.signal 应为 AbortSignal');
+  ac.abort();
+  assert.equal(sig.aborted, true, 'options.signal 须跟随客户端请求信号 abort');
 });

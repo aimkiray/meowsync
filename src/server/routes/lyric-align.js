@@ -138,7 +138,9 @@ app.post('/lyric-align', async (c) => {
       truncated = fetched.truncated;
     } catch (e) {
       if (signal?.aborted) return c.body(null, 499);
-      console.error('[lyric-align] 词源拉取失败:', e?.message || e);
+      // answer 对象（{status,body,cookie[]}）无 .message——裸 dump 泄上游
+      // Set-Cookie，归一成 status+body.code（routes/ai.js 同口径）
+      console.error('[lyric-align] 词源拉取失败:', e?.message || (e && typeof e === 'object' ? `answer.status=${e.status} body.code=${e.body?.code}` : e));
       return fail(c, 502, '歌词源拉取失败');
     }
     if (!lines.length) return fail(c, 404, '该歌曲无歌词');

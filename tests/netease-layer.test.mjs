@@ -10,6 +10,7 @@ import { tmpDataDir } from './helpers.mjs';
 process.env.DATA_DIR = tmpDataDir('meowsync-netlayer-');
 const require = createRequire(import.meta.url);
 const { ENDPOINTS } = require('../src/server/services/netease/endpoints.js');
+const { callNeteaseApi } = require('../src/server/services/netease/index.js');
 const { ALLOWED_APIS } = require('../src/server/routes/music.js');
 const { pickByDuration } = require('../src/server/services/unlock/match.js');
 const { cookieToJson, cookieObjToString } = require('../src/server/services/netease/request.js');
@@ -76,6 +77,21 @@ test('端点表无 crypto 字段——明文 /api 通道化后通道元数据已
   for (const [name, ep] of Object.entries(ENDPOINTS)) {
     assert.equal(ep.crypto, undefined, `${name} 不应带 crypto 字段`);
     assert.deepEqual(Object.keys(ep), ['handler'], `${name} 应只剩 handler`);
+  }
+});
+
+// 门面存在性判定必须走 Object.hasOwn——裸索引（ENDPOINTS[name]）下
+// 'constructor'/'hasOwnProperty' 等原型键 truthy，会越过 not found 检查
+// 拿 Function 当 ep 后崩 TypeError（路由层包装成 500 假错而非 404 语义）。
+// 钉死「原型键名 → Error('API ... not found')」而非原型遮蔽崩溃
+test('callNeteaseApi：原型键名拒作端点——Error not found 而非 TypeError 崩', async () => {
+  for (const name of ['constructor', 'hasOwnProperty', '__proto__', 'toString']) {
+    await assert.rejects(
+      callNeteaseApi(name, {}),
+      (err) => err instanceof Error && !(err instanceof TypeError)
+        && err.message === `API '${name}' not found`,
+      name,
+    );
   }
 });
 
