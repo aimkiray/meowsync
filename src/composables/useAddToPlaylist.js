@@ -6,7 +6,7 @@ import { isSingleSongShellId, songCoverUrl } from '../lib/song.js'
 import {
   extractBiliFavlistId, isBilibiliInput, extractYouTubePlaylistId,
   isYouTubeInput, extractYouTubeId, extractQQPlaylistId, isQQInput,
-  isSongmidLike, extractNeteaseSongId,
+  isSongmidLike, extractNeteaseSongId, YT_ID_RE,
 } from '../lib/url.js'
 import { buildBilibiliSong, buildYouTubeSong, buildQQSong } from '../lib/external-songs.js'
 
@@ -333,6 +333,60 @@ export function useAddToPlaylist({
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
         songPickerResults.value = (qqList || []).map(buildQQSong)
         if (!songPickerResults.value.length) toast('QQ 音乐没有找到相关歌曲', 'info')
+        return
+      }
+      // yt: 前缀触发 YouTube 曲库搜索——与 qq: 同记号。前缀内歌单链给
+      // 指向性提示（点歌台无整单导入落点）；URL/裸 videoId 先试 resolve
+      // （与上方 isYouTubeInput 分支同链），失败才回落关键词搜索；
+      // 其余关键词直搜（结果经 buildYouTubeSong 归一成 yt_ 曲）
+      if (/^yt[:：]/i.test(q)) {
+        action = 'YouTube 搜索'
+        const kw = q.replace(/^yt[:：]/i, '').trim()
+        if (!kw) return
+        if (extractYouTubePlaylistId(kw)) {
+          toast('这是 YouTube 歌单链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
+        // 纯数字 11 位 videoId 也要收：extractYouTubeId 裸分支拒纯数字
+        //（防与网易云 id 撞型），yt: 前缀已是显式源声明——改写 ?yt= 分享链
+        // 形态送达服务端（其 extractYouTubeId 同表可解；谓词本体不动），
+        // 顶栏 yt: 块同口径
+        let vid = extractYouTubeId(kw)
+        let resolveInput = kw
+        if (!vid && YT_ID_RE.test(kw)) {
+          vid = kw
+          resolveInput = `?yt=${kw}`
+        }
+        if (vid) {
+          // 裸 videoId/URL 形态可本地推出 yt_<id>——已在单短路省 resolve
+          //（与上方 isYouTubeInput 分支同口径）
+          if (pickerTakenIds.value.has(`yt_${vid}`)) {
+            toast('该视频已在歌单里', 'info')
+            songPickerQuery.value = ''
+            return
+          }
+          try {
+            pickerAbort = new AbortController()
+            const data = await musicApi.resolveYouTube(resolveInput, pickerAbort.signal)
+            if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+            await resolveToPickedSong(buildYouTubeSong(data))
+            return
+          } catch (e) {
+            // 主动中止（关窗/新搜索认领顶掉）不是「resolve 失败」——静默退出，
+            // 不回落搜索：窗已关还发新上游请求是纯浪费（qq: 分支同口径）
+            if (e?.name === 'AbortError' || e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return
+            /* id 形态的关键词——resolve 失败按搜索处理 */
+          }
+        }
+        // resolve 失败回落搜索前复查闸——在途间隙窗可能已关/新意图已认领
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+        if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
+        // searchYouTubeSongs 回 {items,continuation}——点歌台只要列表，
+        // continuation 深挖游标无消费面（与 qq: 弃 total 同口径）
+        const { items: ytList } = await musicApi.searchYouTubeSongs(kw, { signal: pickerAbort.signal })
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+        songPickerResults.value = (ytList || []).map(buildYouTubeSong)
+        if (!songPickerResults.value.length) toast('YouTube 没有找到相关歌曲', 'info')
         return
       }
       const songId = extractNeteaseSongId(q)

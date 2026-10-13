@@ -33,6 +33,7 @@
       @search-song="importNeteaseSongById"
       @search-bili="importBilibiliOrFav"
       @search-yt="importYouTubeOrPlaylist"
+      @search-yt-songs="handleYTSongSearch"
       @search-qq="importQQ"
       @search-qq-pl="importQQPlaylist"
       @search-qq-songs="handleQQSongSearch"
@@ -99,6 +100,7 @@
           :songs="searchSongResults"
           :query="searchQuery"
           :song-total="searchSongTotal"
+          :song-has-more="searchSongHasMore"
           :song-loading-more="searchSongLoadingMore"
           :current-song="currentSong"
           :user-playlists="userPlaylists"
@@ -906,7 +908,7 @@ export default {
     const {
       centerView, sidebarOpen, searching,
       searchResults, searchSongResults,
-      searchSongTotal, searchSongLoadingMore,
+      searchSongTotal, searchSongHasMore, searchSongLoadingMore,
       applyUrlNav, normalizeNavEntry,
       navHome, closeSearchView, toggleCenterView, toggleSettings, watchBack,
       downloadsPl, downloadsPlSeq, openDownloadsForPlaylist, clearDownloadsPl,
@@ -914,7 +916,7 @@ export default {
       selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,
       previewPlaylistById,
       openWatchSong, openWatchSearchSong, openWatchRecent, playPlaylistAndWatch,
-      handlePlaylistSearch, handleQQSongSearch, loadMoreSearchSongs,
+      handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, loadMoreSearchSongs,
     } = useSearchNav({
       gates,
       searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
@@ -1354,6 +1356,7 @@ export default {
       searching,
       searchSongResults,
       searchSongTotal,
+      searchSongHasMore,
       searchSongLoadingMore,
       loadMoreSearchSongs,
       playlistDownloadsRefreshKey,
@@ -1386,6 +1389,7 @@ export default {
       navHome,
       handlePlaylistSearch,
       handleQQSongSearch,
+      handleYTSongSearch,
       playPlaylistFromSidebar,
       playNextInQueue,
       addToQueueEnd,

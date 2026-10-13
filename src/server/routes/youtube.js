@@ -14,11 +14,13 @@ const { extractYouTubeId, extractYouTubePlaylistId, YT_ID_RE } = require('../../
 const app = new Hono();
 
 // Innertube 原语在 lib/youtube.js；本路由消费 fetchPlayer/pickStreamList
-//（/resolve 元数据）与 fetchYtPlaylistPage（歌单页）——/stream 的闸控感知
-// 取流走 services/youtube-resolve.js，搜索原语 innertubeSearch 归解锁层。
+//（/resolve 元数据）、fetchYtPlaylistPage（歌单页）与 innertubeSearch/
+// fetchWatchNext/ytSuggest（曲库搜索/相关/建议）——/stream 的闸控感知
+// 取流走 services/youtube-resolve.js。
 // resolvePublishedAt 走 ?. 调用：旧桩面缺导出归 null 不炸（与
 // netease-match/lyric-verify 的 ytLib 模块对象消费口径同型）
-const { fetchPlayer, pickStreamList, fetchYtPlaylistPage, resolvePublishedAt } = require('../lib/youtube');
+const { fetchPlayer, pickStreamList, fetchYtPlaylistPage, resolvePublishedAt,
+  innertubeSearch, fetchWatchNext, ytSuggest } = require('../lib/youtube');
 
 // SABR 闸控探测/gateCache/VISIONOS 升级/progressive 结转已下沉到
 // services/youtube-resolve.js——/stream 与解锁链共用同一份判定，
@@ -128,7 +130,29 @@ function extractYtSong(title, author) {
   return { songName, candidates, artistFromAuthor };
 }
 
-
+// 搜索/相关行 → buildYouTubeSong 直喂形（与 /resolve 同口径 extractYtSong
+// 剥洗；search/next 不给 streamingData——hasVideo/hasDownloadableVideo
+// 乐观值与歌单导入同口径，流链兜底降级）。channelId/publishedTimeText
+// 上游在场才挂键；publishedAt 恒 null——搜索/相关页只有相对时间文本，
+// ISO 发布日另走 resolve 的 microformat 轴
+const ytSearchRow = (it) => {
+  const { songName, artistFromAuthor } = extractYtSong(it.title, it.owner);
+  return {
+    videoId: it.videoId,
+    title: it.title || '',
+    author: it.owner || '',
+    authorClean: artistFromAuthor || null,
+    duration: it.durationSec || 0,
+    cover: `https://i.ytimg.com/vi/${it.videoId}/hqdefault.jpg`, // 与 resolve 同款确定性缩略图
+    songName: songName || null,
+    matched: null,
+    publishedAt: null,
+    hasVideo: true,
+    hasDownloadableVideo: true,
+    ...(it.channelId ? { channelId: it.channelId } : {}),
+    ...(it.publishedTimeText ? { publishedTimeText: it.publishedTimeText } : {}),
+  };
+};
 
 app.get('/youtube/resolve', async (c) => {
   if (!rateLimit(c, 'yt-resolve', 12)) {
@@ -325,6 +349,84 @@ app.get('/youtube/playlist', async (c) => {
       return c.json({ code: 404, message: '歌单不存在或不可公开访问' }, 404);
     }
     return c.json({ code: 502, message: `歌单获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// ── 曲库搜索 / 相关 / 建议 ─────────────────────────────────────────────
+// yt: 前缀与深挖游标的服务端面：搜索续页走不透明 continuation token
+// （原样透传——格式即上游私有契约，格式校验只会随改版误杀）；
+// 相关走 /next secondaryResults；建议是 suggestqueries 纯 JSON 归一成
+// 网易 search_suggest 同款 {allMatch:[{keyword}]}——切源面板（P5）直消费
+app.get('/youtube/search', async (c) => {
+  if (!rateLimit(c, 'yt-search', 20)) {
+    return c.json({ code: 429, message: '搜索太频繁，稍后再试' }, 429);
+  }
+  const q = (c.req.query('q') || '').trim();
+  if (!q || q.length > 200) {
+    return c.json({ code: 400, message: 'invalid query' }, 400);
+  }
+  const limit = Math.min(30, Math.max(5, Math.floor(+c.req.query('limit')) || 20));
+  // 翻页游标原样透传——长度钳防滥用（真 token 是 KB 级 base64 串）。
+  // 注：续页请求上游只认 token——continuation 自含 query，这里 q 必填是保守契约
+  const continuation = (c.req.query('continuation') || '').slice(0, 2000) || null;
+  try {
+    const { items, continuation: next } = await innertubeSearch(q, {
+      signal: c.req.raw.signal, limit, continuation,
+    });
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    return c.json({ code: 200, items: items.map(ytSearchRow), continuation: next || null });
+  } catch (e) {
+    // 客户端已断连：静默 499，不写错误日志（正常断连不算服务端错误）
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[youtube] search 失败:', e.message);
+    return c.json({ code: 502, message: `YouTube 搜索失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 相关视频：/next secondaryResults → 同搜索行形。mixPlaylistId 是
+// YouTube Mix 自动生成单（radioRenderer.playlistId）——单列不混 items
+app.get('/youtube/related', async (c) => {
+  if (!rateLimit(c, 'yt-related', 30)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const videoId = c.req.query('v') || '';
+  if (!YT_ID_RE.test(videoId)) {
+    return c.json({ code: 400, message: 'invalid video id' }, 400);
+  }
+  try {
+    const { items, mixPlaylistId } = await fetchWatchNext(videoId, c.req.raw.signal);
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    return c.json({
+      code: 200,
+      // 种子稿混进相关栏是上游常态噪声——剔除防相关面板自环
+      items: items.filter(it => it.videoId !== videoId).map(ytSearchRow),
+      mixPlaylistId: mixPlaylistId || null,
+    });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[youtube] related 失败:', e.message);
+    return c.json({ code: 502, message: `YouTube 相关获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 搜索建议：suggestqueries → {allMatch:[{keyword}]}（网易 search_suggest
+// 归一形——前端 search_suggest 消费面直接可切）
+app.get('/youtube/suggest', async (c) => {
+  if (!rateLimit(c, 'yt-suggest', 30)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const q = (c.req.query('q') || '').trim();
+  if (!q || q.length > 200) {
+    return c.json({ code: 400, message: 'invalid query' }, 400);
+  }
+  try {
+    const { suggestions } = await ytSuggest(q, c.req.raw.signal);
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    return c.json({ code: 200, result: { allMatch: (suggestions || []).map(k => ({ keyword: k })) } });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[youtube] suggest 失败:', e.message);
+    return c.json({ code: 502, message: `YouTube 搜索建议失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 

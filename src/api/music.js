@@ -549,6 +549,52 @@ export const musicApi = {
       `${artists} - ${song.name}.m4a`)
   },
 
+  // YouTube 曲库搜索（顶栏 yt: 前缀 + 深挖游标）：{items,continuation}——
+  // items 是服务端已剥洗好的 buildYouTubeSong 直喂形；continuation 是
+  // 不透明上游翻页 token（深挖游标原样回传，null=见底）。YT 无总数——
+  // 深挖亮灭走 ytContinuation 而非 searchSongTotal（QQ 的 total 口径不适用）
+  searchYouTubeSongs: async (q, { limit = 20, continuation = null, signal } = {}) => {
+    const response = await api.get('/youtube/search', {
+      params: { q, limit, ...(continuation ? { continuation } : {}) },
+      signal, timeout: 30000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'YouTube 搜索失败')
+    return { items: data.items || [], continuation: data.continuation ?? null }
+  },
+
+  // YouTube 搜索建议（suggestqueries → 网易 search_suggest 归一形
+  // {allMatch:[{keyword}]}）——groundwork:全局切源(P5)消费
+  getYouTubeSuggest: async (q, abortSignal = null) => {
+    const response = await api.get('/youtube/suggest', {
+      params: { q }, signal: abortSignal, timeout: 5000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'YouTube 搜索建议失败')
+    return data.result || {}
+  },
+
+  // YouTube 相关视频（/next secondaryResults → buildYouTubeSong 直喂形）：
+  // {items,mixPlaylistId}——mix 是 YouTube Mix 自动生成单
+  // groundwork:相关面板分派(P5)消费
+  getYouTubeRelated: async (videoId, abortSignal = null) => {
+    const response = await api.get('/youtube/related', {
+      params: { v: videoId }, signal: abortSignal, timeout: 30000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'YouTube 相关获取失败')
+    return { items: data.items || [], mixPlaylistId: data.mixPlaylistId ?? null }
+  },
+
   // QQ 音乐导入：解析 songDetail/分享链接/songmid/songid → 真实元数据 +
   // 网易云匹配（只做封面/歌词兜底源）。服务端串 musicu + 云搜
   resolveQQ: async (input, abortSignal = null) => {

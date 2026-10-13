@@ -1,9 +1,9 @@
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { musicApi } from '../api/music.js'
 import { apiErrorMessage } from '../api/http.js'
 import { toast, toastDismiss } from '../lib/feedback.js'
 import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl.js'
-import { buildQQSong, upsertProviderShell } from '../lib/external-songs.js'
+import { buildQQSong, buildYouTubeSong, upsertProviderShell } from '../lib/external-songs.js'
 import { providerPlaylistShellId } from '../lib/url.js'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
@@ -39,6 +39,18 @@ export function useSearchNav({
   // QQ 上游吃页码 p 不吃 offset，深挖发 p=N+1；0=网易云口径（深挖按
   // 现有结果数当 offset）。两个搜索 handler 都复位它，不能做成算出来的
   let qqSongPage = 0
+  // YT 深挖游标：YouTube 搜索无总数（searchSongTotal 恒 null）——深挖走
+  // continuation 不透明 token；非 null 表示当前单曲结果集来自 YT 且还有
+  // 下一页，null=深挖通道关闭（见底/非 YT 源）。各搜索 handler 复位它
+  const ytContinuation = ref(null)
+
+  // 深挖键亮灯总闸（PlaylistGrid 直读）：total 源（网易云/QQ）= 已载数未
+  // 到 total；YT 无总数——continuation 游标非 null 即还有下一页。与
+  // loadMoreSearchSongs 的三口径同一张真值表，灭键语义（零进展收 total/
+  // 游标）经它自然传导，不改 NetEase/QQ 旧行为
+  const searchSongHasMore = computed(() =>
+    ytContinuation.value != null
+    || (searchSongTotal.value != null && searchSongResults.value.length < searchSongTotal.value))
 
   // ── URL 导航（YTM 式：视图/歌单可寻址，浏览器前进后退生效） ──
   // 寻址规则本体在 lib/navUrl.js（writeNavParams/readNavParams/resolveNavView
@@ -360,6 +372,7 @@ export function useSearchNav({
     searchSongQuery.value = '' // 同步清：在途旧深挖的 query 守卫即刻失效
     searchSongTotal.value = null
     qqSongPage = 0 // 结果集换回网易云口径——深挖走 offset 不走页码
+    ytContinuation.value = null
     try {
       const [plRes, songRes] = await Promise.allSettled([
         musicApi.searchPlaylists(query),
@@ -389,12 +402,21 @@ export function useSearchNav({
   const loadMoreSearchSongs = async () => {
     const q = searchSongQuery.value
     const myReq = gates.search.current()
-    if (!q || searchSongTotal.value == null || searchSongLoadingMore.value) return
-    if (searchSongResults.value.length >= searchSongTotal.value) return
+    // YT 深挖走 ytContinuation 游标而非 total——游标非 null 即还有下一页
+    //（无 token 的 YT 结果集与其他源一样，深挖通道天然关闭）
+    const ytDive = ytContinuation.value != null
+    if (!q || searchSongLoadingMore.value) return
+    if (!ytDive && searchSongTotal.value == null) return
+    if (searchSongTotal.value != null && searchSongResults.value.length >= searchSongTotal.value) return
     searchSongLoadingMore.value = true
     try {
-      let more, total
-      if (qqSongPage > 0) {
+      let more, total, nextYt = null
+      if (ytDive) {
+        // YT 深挖：不透明 continuation 游标原样回传——失败游标不动可重试
+        const r = await musicApi.searchYouTubeSongs(q, { limit: 20, continuation: ytContinuation.value })
+        more = (r.items || []).map(buildYouTubeSong)
+        nextYt = r.continuation ?? null
+      } else if (qqSongPage > 0) {
         // QQ 深挖：页码游标——取第 N+1 页；失败游标不动可重试
         const r = await musicApi.searchQQSongs(q, { limit: 20, page: qqSongPage + 1 })
         more = (r.songs || []).map(buildQQSong)
@@ -409,13 +431,18 @@ export function useSearchNav({
       // 双代次守卫：query 快照挡异词切换；reqId 快照挡同词重搜
       // （同词重搜后 results 已回写首页，旧深挖再落地会造队列缺口）
       if (searchSongQuery.value !== q || !gates.search.isCurrent(myReq)) return
+      if (ytDive) ytContinuation.value = nextYt // 游标只在真消费后推进；null 收键=见底
       if (qqSongPage > 0) qqSongPage += 1 // 页游标只在真消费后推进
       if (total != null) searchSongTotal.value = total
       const seen = new Set(searchSongResults.value.map(s => String(s.id)))
       const fresh = more.filter(s => !seen.has(String(s.id)))
       searchSongResults.value = [...searchSongResults.value, ...fresh]
-      // 零进展灭键：上游返空页/整页撞重时游标原地踏步，再点必空转
-      if (!fresh.length) searchSongTotal.value = searchSongResults.value.length
+      // 零进展灭键：上游返空页/整页撞重时游标原地踏步，再点必空转——
+      // YT 侧同口径收游标（token 还在但页页撞重，续拉只会烧配额）
+      if (!fresh.length) {
+        if (ytDive) ytContinuation.value = null
+        else searchSongTotal.value = searchSongResults.value.length
+      }
     } catch (e) {
       // 与上方落地闸同口径：旧深挖的迟到失败不盖新搜索的结果区
       if (searchSongQuery.value === q && gates.search.isCurrent(myReq)) {
@@ -443,6 +470,7 @@ export function useSearchNav({
     searchSongQuery.value = ''
     searchSongTotal.value = null
     qqSongPage = 0
+    ytContinuation.value = null
     try {
       const [songRes, plRes] = await Promise.allSettled([
         musicApi.searchQQSongs(kw, { limit: 20, page: 1 }),
@@ -462,6 +490,38 @@ export function useSearchNav({
       searchSongQuery.value = kw
       qqSongPage = 1 // 第 1 页已在手——深挖从 p=2 起（游标>0 也是 QQ 口径标记）
       searchSongTotal.value = songRes.status === 'fulfilled' ? (songRes.value?.total ?? null) : null
+    } finally {
+      if (gates.search.isCurrent(myReq)) searching.value = false
+    }
+  }
+
+  // yt: 关键词 → YouTube 曲库搜索：单腿（YT 无歌单搜索腿——歌单走链接
+  // 导入链）。服务端行形即 buildYouTubeSong 输入形（yt_ 曲对象的播放/
+  // 下载/分享链与列表渲染已兼容）；searchSongTotal 恒 null——YT 无总数，
+  // 深挖走 ytContinuation 游标（非 null 即还有下一页，null=收键见底）
+  const handleYTSongSearch = async (kw) => {
+    gates.preview.invalidate()
+    centerView.value = 'search'
+    pushNavState()
+    const myReq = gates.search.claim()
+    searching.value = true
+    searchResults.value = []
+    searchSongResults.value = []
+    searchSongQuery.value = ''
+    searchSongTotal.value = null
+    qqSongPage = 0
+    ytContinuation.value = null
+    try {
+      const r = await musicApi.searchYouTubeSongs(kw, { limit: 20 })
+      if (!gates.search.isCurrent(myReq)) return
+      searchSongResults.value = (r.items || []).map(buildYouTubeSong)
+      searchSongQuery.value = kw
+      ytContinuation.value = r.continuation || null
+    } catch (e) {
+      // 单腿搜索——失败须报出，不能像 QQ 双腿那样单腿败留半幅结果
+      if (!gates.search.isCurrent(myReq)) return
+      console.warn('[search] YT 单曲搜索失败:', e?.message || e)
+      toast('YouTube 搜索失败: ' + apiErrorMessage(e), 'error')
     } finally {
       if (gates.search.isCurrent(myReq)) searching.value = false
     }
@@ -527,6 +587,7 @@ export function useSearchNav({
     centerView, sidebarOpen, searching,
     searchResults, searchSongResults,
     searchSongQuery, searchSongTotal, searchSongLoadingMore,
+    ytContinuation, searchSongHasMore,
     // 导航
     buildNavUrl, pushNavState, applyUrlNav, normalizeNavEntry,
     navHome, closeSearchView, toggleCenterView, toggleSettings, watchBack,
@@ -537,6 +598,6 @@ export function useSearchNav({
     previewPlaylistById,
     openWatchSong, openWatchSearchSong, openWatchRecent, playPlaylistAndWatch,
     // 搜索
-    handlePlaylistSearch, handleQQSongSearch, loadMoreSearchSongs,
+    handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, loadMoreSearchSongs,
   }
 }

@@ -620,85 +620,240 @@ async function resolvePublishedAt({ videoId, player, signal }) {
 // 描述轴的用例不该被迫拖 origMemo 一起冷
 const _clearBasicsMemo = () => basicsMemo.clear();
 
-// 关键词搜索：解锁层的「网易曲目 → YouTube 候选」入口（替代 unm 的 yt-dlp
-// spawn 链）。候选期即拿 lengthSeconds——比 ytsearch1 dump-json 后盲探测更强。
-// 客户端表回落与 fetchPlayer 同口径：Innertube 风控按客户端形态整体生效，
-// ANDROID 被封时 search 若写死单形态会在 player 回落链之前就整源死亡。
-// cookie 在位时认证档排头——yt-dlp 只对 SUPPORTS_COOKIES 的 web 系形态
-// 发 cookie（移动形态带 web cookie 是指纹自相矛盾），bot 墙若按端点
-// 生效则搜索同受益；失败照常轮转匿名移动档
-async function innertubeSearch(keyword, extraSignal, limit = 5) {
-  // 递归扫 videoRenderer（web 客户端形态）与 compactVideoRenderer
-  // （ANDROID/IOS 移动客户端形态）——twoColumnSearchResultsRenderer 的
-  // 嵌套深度随 YouTube 改版漂移，按节点形状收集比按路径深取稳
-  const textOf = (n) => (n?.runs || []).map(r => r.text).join('') || n?.simpleText || '';
-  const seen = new Set(); // 同 videoId 会在主结果与相关推荐栏重复出现——去重防重复打 player
-  const walk = (node, out) => {
-    if (!node || typeof node !== 'object' || out.length >= limit) return;
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item, out);
-      return;
+// ── 曲库搜索 / 相关（search/next 端点）────────────────────────────────
+// ownerText/shortBylineText/longBylineText runs 里的频道端点（UC 前缀
+// browseId）即 channelId——videoRenderer/compactVideoRenderer 同位字段名相同
+const channelIdOf = (v) => {
+  for (const byline of [v.ownerText, v.shortBylineText, v.longBylineText]) {
+    for (const r of byline?.runs || []) {
+      const bid = r?.navigationEndpoint?.browseEndpoint?.browseId;
+      if (typeof bid === 'string' && bid.startsWith('UC')) return bid;
     }
-    const v = node.videoRenderer || node.compactVideoRenderer;
-    if (v?.videoId && !seen.has(v.videoId)) {
-      seen.add(v.videoId);
-      // lengthText 两种形态都出现：simpleText（web）或 runs（compact）——
-      // 统一走 textOf；部分形态直接给 lengthSeconds 数字
-      const lt = textOf(v.lengthText);
-      // +null=0 会被 isFinite 当合法时长（0s 反而绕过下游对账）——null/空串先归 NaN
-      const ls = v.lengthSeconds == null || v.lengthSeconds === ''
-        ? NaN : Number(v.lengthSeconds);
-      out.push({
-        videoId: v.videoId,
-        title: textOf(v.title),
-        owner: textOf(v.ownerText) || textOf(v.shortBylineText),
-        durationSec: Number.isFinite(ls) && ls > 0 ? ls
-          : (lt ? lt.split(':').reduce((s, p) => s * 60 + (+p || 0), 0) : null),
-      });
-    }
-    for (const key of Object.keys(node)) {
-      if (key === 'videoRenderer' || key === 'compactVideoRenderer') continue;
-      walk(node[key], out);
-    }
+  }
+  return null;
+};
+
+// videoRenderer/compactVideoRenderer → 通用条目 {videoId,title,owner,
+// durationSec,channelId?,publishedTimeText?}。publishedTimeText 是本地化
+// 相对时间文本（'3 年前'）——原样透传不解析（ISO 发布日另走
+// resolvePublishedAt/microformat 轴）；channelId/publishedTimeText 在场才挂键
+const videoItemOf = (v) => {
+  // lengthText 两种形态都出现：simpleText（web）或 runs（compact）——
+  // 统一走 rendererText；部分形态直接给 lengthSeconds 数字
+  const lt = rendererText(v.lengthText);
+  // +null=0 会被 isFinite 当合法时长（0s 反而绕过下游对账）——null/空串先归 NaN
+  const ls = v.lengthSeconds == null || v.lengthSeconds === ''
+    ? NaN : Number(v.lengthSeconds);
+  const channelId = channelIdOf(v);
+  const publishedTimeText = rendererText(v.publishedTimeText);
+  return {
+    videoId: v.videoId,
+    title: rendererText(v.title),
+    owner: rendererText(v.ownerText) || rendererText(v.shortBylineText),
+    durationSec: Number.isFinite(ls) && ls > 0 ? ls
+      : (lt ? lt.split(':').reduce((s, p) => s * 60 + (+p || 0), 0) : null),
+    ...(channelId ? { channelId } : {}),
+    ...(publishedTimeText ? { publishedTimeText } : {}),
   };
+};
+
+// 续页 token 提取（fetchYtPlaylistPage 的哨兵槽+plcToken 兜底模式泛化）：
+// continuationItemRenderer/continuationItemViewModel/nextContinuationData/
+// reloadContinuationData 是明确的加载更多语境——哨兵位优先收；
+// *Continuation 尾段容器与 continuations 数组兜底（哨兵未命中才启用）。
+// 任意节点的裸 continuationCommand 不裸收——条目内「继续观看」类非分页
+// 指令会被当翻页游标（产出死循环续页请求，与歌单页注释同口径）
+const contTokenOf = (c) => c?.continuation
+  || c?.continuationEndpoint?.continuationCommand?.token
+  || c?.continuationCommand?.token
+  || (Array.isArray(c?.continuations) ? c.continuations : [])
+    .map(x => x?.nextContinuationData?.continuation
+      || x?.nextContinuationData?.continuationEndpoint?.continuationCommand?.token
+      || x?.continuationEndpoint?.continuationCommand?.token
+      || x?.continuationCommand?.token)
+    .find(Boolean)
+  || null;
+// 哨兵容器（continuationItemRenderer/continuationItemViewModel）内 token 槽
+// 随版本漂移——continuationEndpoint/commandExecutorCommand/button.command/
+// innertubeCommand 各家形态都在容器内递归收；容器本体就是分页语境，裸槽敢收
+const deepContToken = (n) => {
+  if (!n || typeof n !== 'object') return null;
+  if (Array.isArray(n)) {
+    for (const i of n) { const t = deepContToken(i); if (t) return t; }
+    return null;
+  }
+  const t = (typeof n.continuation === 'string' ? n.continuation : null)
+    || n.continuationCommand?.token
+    || n.continuationEndpoint?.continuationCommand?.token
+    || n.nextContinuationData?.continuation
+    || n.nextContinuationData?.continuationEndpoint?.continuationCommand?.token;
+  if (t) return t;
+  for (const k of Object.keys(n)) {
+    // 哨兵容器内嵌的条目节点不下钻——条目内的「继续观看」类指令不是分页游标
+    if (k === 'videoRenderer' || k === 'compactVideoRenderer' || k === 'lockupViewModel') continue;
+    const r = deepContToken(n[k]);
+    if (r) return r;
+  }
+  return null;
+};
+
+// 登录/风控类 alert 文本判据（sign in/bot 语义）——innertubePost 与
+// fetchYtPlaylistPage 共用口径：命中记 ALERT_AUTH（凭据被拒，挂
+// authRejected 供认证档负缓存记账）；未命中的 ERROR alert 落
+// ALERT_ERROR——上游终态，逐字节重发同结果，不烧轮转
+const ALERT_AUTH_RE = /sign in|log ?in|bot|登录|登入|验证|確認/i;
+
+// youtubei POST 轮替共用段（search/next 同构）：认证档排头+匿名档殿后、
+// 负缓存窗内跳认证（formsWithAuth）、vd/clientHeaders/timedSignal/代理
+// 接线、401-403 凭据证据打 authRejected 旗、认证档成败记账
+// （noteAuthOk/noteAuthVerdict）——与 fetchPlayer/旧搜索同口径。
+// parseBody 把回包收成业务产物——空壳/无效响应抛错按失败轮转下一形态
+async function innertubePost(endpoint, anonForms, fields, extraSignal, parseBody) {
   let lastErr = null;
-  for (const form of formsWithAuth(INNERTUBE_CLIENTS)) {
+  for (const form of formsWithAuth(anonForms)) {
     if (extraSignal?.aborted) throw new Error('aborted');
+    const vd = freshVisitorData();
+    // needsVisitor 形态（VISIONOS）无匿名通路——缓存无 vd 时发了必败，
+    // 跳过换下一形态（fetchPlayer 轮替 :267-272 同款口径）
+    if (form.needsVisitor && !vd) continue;
     try {
-      const vd = freshVisitorData();
-      const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}`, {
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/${endpoint}?key=${INNERTUBE_KEY}`, {
         method: 'POST',
         headers: clientHeaders(form, vd),
         body: JSON.stringify({
           context: { client: vd ? { ...form.client, visitorData: vd } : form.client },
-          query: String(keyword || ''),
-          // sp=EgIQAQ%3D%3D 对应「仅视频」过滤——歌单/频道卡片不占候选位
-          params: 'EgIQAQ==',
+          ...fields,
         }),
         signal: timedSignal(extraSignal),
         ...ytFetchOpts(),
       });
       if (!res.ok) {
-        const err = new Error(`innertube search HTTP ${res.status}`);
+        const err = new Error(`innertube ${endpoint} HTTP ${res.status}`);
+        // 401/403 是凭据被拒的明确信号——认证档记账靠它，匿名档挂上无害
         if (res.status === 401 || res.status === 403) err.authRejected = true;
         throw err;
       }
-      const body = await res.json();
-      const out = [];
-      walk(body?.contents, out);
-      // 空壳响应（风控时常见 200+无 renderer）视为失败换下一客户端——
-      // 与 fetchPlayer 的「无 streamingData 即换形态」同口径
-      if (!out.length) throw new Error('搜索结果无候选（空壳响应/风控）');
+      const parsed = await res.json();
+      // search/next 同样回 alerts[].alertRenderer——以前它混在业务解析里
+      // 被当空壳轮转，认证档吃登录墙时 authRejected 缺席导致负缓存永不
+      // 记账（死 cookie 每请求白打三档）。判据与 fetchYtPlaylistPage 同款：
+      // type==='ERROR' 或文本含 sign-in/bot 语义即收；登录语义挂
+      // authRejected+ALERT_AUTH，其余 ERROR 落 ALERT_ERROR 终态直抛
+      const alert = (parsed?.alerts || []).find(a => {
+        const r = a?.alertRenderer;
+        return r?.type === 'ERROR' || ALERT_AUTH_RE.test(rendererText(r?.text));
+      });
+      if (alert) {
+        const text = rendererText(alert.alertRenderer.text);
+        const err = new Error(`innertube ${endpoint} alert: ${text || 'ERROR'}`);
+        err.upstreamCode = ALERT_AUTH_RE.test(text) ? 'ALERT_AUTH' : 'ALERT_ERROR';
+        // ALERT_AUTH 是凭据被拒的明确信号——认证档记账靠它，匿名档挂上无害
+        if (err.upstreamCode === 'ALERT_AUTH') err.authRejected = true;
+        throw err;
+      }
+      const result = parseBody(parsed);
       if (form.auth) noteAuthOk();
-      return out;
+      return result;
     } catch (e) {
       lastErr = e;
       if (extraSignal?.aborted) throw new Error('aborted');
+      // ALERT_ERROR 是上游终态（与歌单页同口径）——匿名重试逐字节同结果
+      // 不重复打；ALERT_AUTH/空壳/传输错才可能换形态翻身
+      if (e.upstreamCode === 'ALERT_ERROR') throw e;
       if (form.auth) noteAuthVerdict(e);
-      console.warn(`[youtube] ${form.name} 客户端搜索失败:`, e.message);
+      console.warn(`[youtube] ${form.name} 客户端 ${endpoint} 失败:`, e.message);
     }
   }
-  throw lastErr || new Error('所有客户端形态搜索均失败');
+  throw lastErr || new Error(`所有客户端形态 ${endpoint} 均失败`);
+}
+
+// 关键词搜索：顶栏 yt: 曲库搜索与解锁层「网易曲目 → YouTube 候选」共用
+// 入口（替代 unm 的 yt-dlp spawn 链）。候选期即拿 lengthSeconds——比
+// ytsearch1 dump-json 后盲探测更强。
+// 双签名：对象形 (keyword, {signal, limit, continuation}) 回
+// {items,continuation}——深挖游标新契约；旧位置形 (keyword, signal, limit)
+// 回裸 items 数组——解锁链调用点（unlock 域零改）与既有直调桩原样可用。
+// continuation 是不透明上游翻页 token——带 token 时请求只发
+// {context,continuation}（query/params 已烙在 token 里，重发会双重过滤），
+// 响应根换成 continuationContents 系（四根全扫与歌单页同口径）
+async function innertubeSearch(keyword, opts, legacyLimit) {
+  const o = opts && typeof opts === 'object' && typeof opts.addEventListener !== 'function'
+    ? opts
+    : { signal: opts ?? null, limit: legacyLimit ?? 5, legacy: true };
+  const { signal: extraSignal, limit = 5, continuation = null } = o;
+  const seen = new Set(); // 同 videoId 会在主结果与相关推荐栏重复出现——去重防重复打 player
+  const parseBody = (body) => {
+    const items = [];
+    let next = null;    // 哨兵槽 token（明确分页语境，优先）
+    let nextAlt = null; // 容器槽 token 兜底（哨兵未命中才启用）
+    // 递归扫三族条目节点：videoRenderer/compactVideoRenderer（旧形态，
+    // web/移动客户端）与 lockupViewModel（ViewModel 迁移后的条目卡——
+    // 与 /next、歌单页共用 lockupItem 解析）——twoColumnSearchResultsRenderer
+    // 的嵌套深度随 YouTube 改版漂移，按节点形状收集比按路径深取稳。
+    // limit 满而 token 未到时继续扫——条目槽在 token 槽前，先满就停会
+    // 漏游标掐死深挖。
+    // 收集闸统一（相关面同款）：合法 11 位 videoId + 有标题 + 非失效哨兵
+    // 标题——漏收 lockup 形态的响应 items 全空，会被「结构在位零条目」
+    // 误判成真实空结果（挡掉轮替、空表如实下发）
+    const pushItem = (it) => {
+      if (it && items.length < limit && /^[A-Za-z0-9_-]{11}$/.test(it.videoId || '')
+        && it.title && !DEAD_TITLE.test(it.title) && !seen.has(it.videoId)) {
+        seen.add(it.videoId);
+        items.push(it);
+      }
+    };
+    const walk = (node) => {
+      if (!node || typeof node !== 'object' || (items.length >= limit && next)) return;
+      if (Array.isArray(node)) { for (const it of node) walk(it); return; }
+      const v = node.videoRenderer || node.compactVideoRenderer;
+      if (v) pushItem(videoItemOf(v));
+      if (node.lockupViewModel) pushItem(lockupItem(node.lockupViewModel));
+      if (node.continuationItemRenderer || node.continuationItemViewModel) {
+        const t = deepContToken(node.continuationItemRenderer || node.continuationItemViewModel);
+        if (t && !next) next = t;
+      }
+      const sentinel = node.nextContinuationData?.continuation
+        || node.nextContinuationData?.continuationEndpoint?.continuationCommand?.token
+        || node.reloadContinuationData?.continuation
+        || node.reloadContinuationData?.continuationEndpoint?.continuationCommand?.token;
+      if (sentinel && !next) next = sentinel;
+      if (!nextAlt) {
+        // 续页容器槽位随版本漂移（itemSectionContinuation/
+        // sectionListContinuation 等尾段、continuations 数组）——
+        // 按容器形状兜底，哨兵未命中才启用
+        for (const k of Object.keys(node)) {
+          if (/Continuation$/.test(k) && node[k] && typeof node[k] === 'object') {
+            nextAlt = contTokenOf(node[k]);
+            if (nextAlt) break;
+          }
+        }
+        if (!nextAlt && Array.isArray(node.continuations)) nextAlt = contTokenOf(node);
+      }
+      for (const key of Object.keys(node)) {
+        // 已消费的条目节点不再下钻——其内部字段（角标/端点）里可能嵌着
+        // 非分页 continuation-ish 结构，裸收会误当翻页游标
+        if (key === 'videoRenderer' || key === 'compactVideoRenderer' || key === 'lockupViewModel') continue;
+        walk(node[key]);
+      }
+    };
+    // 续页响应根字段随版本漂移（onResponseReceivedActions/Endpoints /
+    // continuationContents）——四棵候选根都扫，各自子树不重叠
+    const roots = [body?.contents, body?.onResponseReceivedActions,
+      body?.onResponseReceivedEndpoints, body?.continuationContents];
+    for (const r of roots) walk(r);
+    // 四根全空=风控空壳（200+无内容骨架）——轮转下一形态与 fetchPlayer
+    // 「无 streamingData 即换形态」同口径；结构在位但零视频项是真实空
+    // 结果（无此关键词），按空表交回不当上游故障
+    if (!items.length && !roots.some(Boolean)) {
+      throw new Error('搜索结果无候选（空壳响应/风控）');
+    }
+    return { items, continuation: next || nextAlt || null };
+  };
+  const r = await innertubePost('search', INNERTUBE_CLIENTS,
+    // sp=EgIQAQ== 对应「仅视频」过滤——歌单/频道卡片不占候选位
+    continuation ? { continuation } : { query: String(keyword || ''), params: 'EgIQAQ==' },
+    extraSignal, parseBody);
+  return o.legacy ? r.items : r;
 }
 
 // 选流：音频默认优先 mp4a/m4a 容器（audio/mp4——webm opus 在 Safari 的
@@ -755,6 +910,65 @@ function pickStreamList(data, kind, prefer = '', opts = {}) {
 // renderer 树通用读文本——runs 拼接优先，simpleText 兜底
 const rendererText = (n) => (n?.runs || []).map(r => r.text).join('') || n?.simpleText || '';
 
+// 失效条目标题哨兵（各语言形态）——lockup 形态里失效项仍带 videoId，
+// 只能靠标题判；整串匹配防 'Private Eyes' 类真标题误杀；无标题/无
+// videoId 的节点同样不可播。歌单页与 /next 相关面共用
+const DEAD_TITLE = /^\s*[\[【「『(]?\s*(?:(?:deleted|private|removed|unavailable)\s*video|已[删刪]除的?[视影]片|已移除的?[视影]片|已设为私享的?[视影]片|私享[视影]片|私人[视影]片|无法播放的?[视影]片|削除された(?:動画|ビデオ)|삭제된 동영상)\s*[\]】」』)]?\s*$/i;
+// 找 part 里的频道跳转（browseEndpoint.browseId='UC…'）——比按语言
+// 匹配「by/创建者」前缀更稳（lockup 行与 pageHeader 共用）
+const channelBrowseId = (m) => {
+  if (!m || typeof m !== 'object') return null;
+  if (Array.isArray(m)) {
+    for (const i of m) { const r = channelBrowseId(i); if (r) return r; }
+    return null;
+  }
+  const bid = m.browseEndpoint?.browseId;
+  if (typeof bid === 'string' && bid.startsWith('UC')) return bid;
+  for (const k of Object.keys(m)) { const r = channelBrowseId(m[k]); if (r) return r; }
+  return null;
+};
+const hasChannelLink = (m) => Boolean(channelBrowseId(m));
+const parseSecs = (t) => /^\d+(?::\d{1,2})+$/.test(t || '')
+  ? t.split(':').reduce((s, p) => s * 60 + (+p || 0), 0) : 0;
+
+// 新版 lockupViewModel（ViewModel 架构迁移后的条目形态）→
+// {videoId,title,owner,durationSec,channelId?}：contentId=videoId；标题在
+// lockupMetadataViewModel.title.content；频道在 metadataRows 首行首个带
+// UC 跳转的文本 part；时长在缩略图角标 badge。歌单页与 /next 相关面共用
+// ——renderer 形态同族；非 VIDEO 卡（频道/合集）归 null 由调用方判
+const lockupItem = (lv) => {
+  if (lv.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO') return null; // 频道/合集卡不算失效
+  const meta = lv.metadata?.lockupMetadataViewModel;
+  const rows = meta?.metadata?.contentMetadataViewModel?.metadataRows || [];
+  let badge = '';
+  const findBadge = (n) => {
+    if (badge || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { for (const i of n) findBadge(i); return; }
+    const t = n.thumbnailBadgeViewModel?.text;
+    if (typeof t === 'string' && /^\d+:\d{2}/.test(t)) { badge = t; return; }
+    for (const k of Object.keys(n)) findBadge(n[k]);
+  };
+  findBadge(lv.contentImage);
+  // 频道名：优先带 UC 跳转的 part（合并行里视图计数无频道端点）——
+  // browseId 值顺带就是 channelId，身份证据与 id 一处取；
+  // 兜底首文本 part 按「•」截段剥尾噪
+  const row0 = rows[0]?.metadataParts || [];
+  const partText = (p) => p?.text?.content
+    || p?.avatarStack?.avatarStackViewModel?.text?.content || p?.avatarStack?.text?.content || '';
+  let channelId = null;
+  const ownerPart = row0.find(p => {
+    const bid = channelBrowseId(p?.text?.commandRuns || p?.avatarStack?.avatarStackViewModel?.text?.commandRuns);
+    if (bid) { channelId = bid; return true; }
+    return false;
+  }) || row0.find(p => partText(p));
+  const owner = partText(ownerPart).split(/\s*[•·]\s*/)[0].trim();
+  return {
+    videoId: lv.contentId, title: meta?.title?.content || '', owner,
+    durationSec: parseSecs(badge),
+    ...(channelId ? { channelId } : {}),
+  };
+};
+
 // 歌单页一页：首屏走 browseId=VL<listId>，续页走 continuation token。
 // 条目节点递归收集（嵌套深度随 YouTube 改版漂移，按节点形状取比按路径
 // 深取稳——与 innertubeSearch 同款防御）。失效条目（isPlayable:false/
@@ -795,7 +1009,7 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
       if (alert) {
         const text = rendererText(alert.alertRenderer.text);
         const e = new Error(`播放列表不可用: ${text || 'ERROR'}`);
-        e.upstreamCode = /sign in|log ?in|bot|登录|登入|验证|確認/i.test(text) ? 'ALERT_AUTH' : 'ALERT_ERROR';
+        e.upstreamCode = ALERT_AUTH_RE.test(text) ? 'ALERT_AUTH' : 'ALERT_ERROR';
         // ALERT_AUTH 是凭据被拒的明确信号——认证档负缓存记账靠它
         if (e.upstreamCode === 'ALERT_AUTH') e.authRejected = true;
         throw e;
@@ -826,21 +1040,6 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   const seen = new Set();
   let skipped = 0;
   let next = null;
-  // 失效条目标题哨兵（各语言形态）——lockup 形态里失效项仍带 videoId，
-  // 只能靠标题判；整串匹配防 'Private Eyes' 类真标题误杀；无标题/无
-  // videoId 的节点同样不可播
-  const DEAD_TITLE = /^\s*[\[【「『(]?\s*(?:(?:deleted|private|removed|unavailable)\s*video|已[删刪]除的?[视影]片|已移除的?[视影]片|已设为私享的?[视影]片|私享[视影]片|私人[视影]片|无法播放的?[视影]片|削除された(?:動画|ビデオ)|삭제된 동영상)\s*[\]】」』)]?\s*$/i;
-  // 找 part 里的频道跳转（browseEndpoint.browseId='UC…'）——比按语言
-  // 匹配「by/创建者」前缀更稳（lockup 行与 pageHeader 共用）
-  const hasChannelLink = (m) => {
-    if (!m || typeof m !== 'object') return false;
-    if (Array.isArray(m)) return m.some(hasChannelLink);
-    const bid = m.browseEndpoint?.browseId;
-    if (typeof bid === 'string' && bid.startsWith('UC')) return true;
-    return Object.keys(m).some(k => hasChannelLink(m[k]));
-  };
-  const parseSecs = (t) => /^\d+(?::\d{1,2})+$/.test(t || '')
-    ? t.split(':').reduce((s, p) => s * 60 + (+p || 0), 0) : 0;
   const pushItem = (videoId, title, owner, durationSec) => {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId || '') || !title || DEAD_TITLE.test(title)) {
       skipped++; return;
@@ -849,31 +1048,12 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
     seen.add(videoId);
     items.push({ videoId, title, owner: owner || '', durationSec });
   };
-  // 新版 lockupViewModel（ViewModel 架构迁移后的条目形态）：
-  // contentId=videoId；标题在 lockupMetadataViewModel.title.content；
-  // 频道在 metadataRows 首行首个文本；时长在缩略图角标 badge
+  // 新版 lockupViewModel（ViewModel 架构迁移后的条目形态）——条目解析与
+  // /next 相关面共用 lockupItem；pushItem 负责失效判定/skipped 记账
+  // （非 VIDEO 卡 lockupItem 归 null——频道/合集卡不算失效）
   const parseLockup = (lv) => {
-    if (lv.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO') { return; } // 频道/合集卡不算失效
-    const meta = lv.metadata?.lockupMetadataViewModel;
-    const rows = meta?.metadata?.contentMetadataViewModel?.metadataRows || [];
-    let badge = '';
-    const findBadge = (n) => {
-      if (badge || !n || typeof n !== 'object') return;
-      if (Array.isArray(n)) { for (const i of n) findBadge(i); return; }
-      const t = n.thumbnailBadgeViewModel?.text;
-      if (typeof t === 'string' && /^\d+:\d{2}/.test(t)) { badge = t; return; }
-      for (const k of Object.keys(n)) findBadge(n[k]);
-    };
-    findBadge(lv.contentImage);
-    // 频道名：优先带 UC 跳转的 part（合并行里视图计数无频道端点），
-    // 兜底首文本 part 按「•」截段剥尾噪
-    const row0 = rows[0]?.metadataParts || [];
-    const partText = (p) => p?.text?.content
-      || p?.avatarStack?.avatarStackViewModel?.text?.content || p?.avatarStack?.text?.content || '';
-    const ownerPart = row0.find(p => hasChannelLink(p?.text?.commandRuns || p?.avatarStack?.avatarStackViewModel?.text?.commandRuns))
-      || row0.find(p => partText(p));
-    const owner = partText(ownerPart).split(/\s*[•·]\s*/)[0].trim();
-    pushItem(lv.contentId, meta?.title?.content || '', owner, parseSecs(badge));
+    const it = lockupItem(lv);
+    if (it) pushItem(it.videoId, it.title, it.owner, it.durationSec);
   };
   let nextAlt = null; // playlistVideoListContinuation 已知槽位兜底（哨兵优先）
   // 歌单续页续流指令只出现在已知槽位——任意节点上的裸
@@ -966,4 +1146,115 @@ async function fetchYtPlaylistPage({ listId, continuation, extraSignal }) {
   };
 }
 
-module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchYtPlaylistPage, pickStreamList, hasYtCookie, parseOriginalRef, resolveOriginalInfo, _clearOriginalMemo, resolvePublishedAt, _clearBasicsMemo, YT_TIMEOUT_MS };
+// /next 端点：watch 页相关视频（secondaryResults——实机 ~20 条
+// lockupViewModel）。renderer 形态与歌单页同族：lockupViewModel 为主
+//（ViewModel 迁移后的条目形态，解析器与 fetchYtPlaylistPage 共用
+// lockupItem），compactVideoRenderer 兜底；radioRenderer.playlistId 与
+// PLAYLIST 类 RD 前缀 lockup 都是 YouTube Mix 自动生成单——单列字段
+// 回传不混进视频 items。
+// 收集域收窄到 secondaryResults 键位 + 续页容器：主列 results.results
+// 里的结构化描述/商品卡（engagement panel 系）同样长 lockupViewModel，
+// contents 全树扫会把主列卡混进 related——M2 复审发现。
+// WEB 形态+formsWithAuth 轮替（桌面端 renderer 结构——与 browse 歌单页
+// 同口径），authRejected/空壳记账与 innertubeSearch 一致（innertubePost
+// 共用段）
+const WATCH_NEXT_CAP = 40;  // 收集帽：related 常态 ~20 条，病理回包防膨胀
+async function fetchWatchNext(videoId, extraSignal) {
+  const seen = new Set();
+  const parseBody = (body) => {
+    const items = [];
+    let mixPlaylistId = null;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { for (const it of node) walk(it); return; }
+      const lv = node.lockupViewModel;
+      if (lv) {
+        // YouTube Mix 的 lockup 形态：PLAYLIST 卡 + RD 前缀 contentId——
+        // 与 radioRenderer.playlistId 二取一（先到先采，同类 id 同源）
+        if (!mixPlaylistId && lv.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST'
+          && /^RD/.test(lv.contentId || '')) {
+          mixPlaylistId = lv.contentId;
+        }
+        const it = lockupItem(lv);
+        // 失效/私有卡（哨兵标题）与畸形 id 按歌单页口径剔除——不计
+        // skipped（相关面非导入面，无透出消费方）
+        if (it && items.length < WATCH_NEXT_CAP
+          && /^[A-Za-z0-9_-]{11}$/.test(it.videoId || '')
+          && it.title && !DEAD_TITLE.test(it.title) && !seen.has(it.videoId)) {
+          seen.add(it.videoId);
+          items.push(it);
+        }
+      }
+      const v = node.compactVideoRenderer;
+      if (v?.videoId && !seen.has(v.videoId) && items.length < WATCH_NEXT_CAP) {
+        const it = videoItemOf(v);
+        if (it.title && !DEAD_TITLE.test(it.title)) {
+          seen.add(v.videoId);
+          items.push(it);
+        }
+      }
+      // YouTube Mix（radioRenderer 自动生成单）——单列字段不混视频 items
+      if (!mixPlaylistId && typeof node.radioRenderer?.playlistId === 'string') {
+        mixPlaylistId = node.radioRenderer.playlistId;
+      }
+      for (const key of Object.keys(node)) {
+        // 已消费的条目节点不再下钻（search walk 同款口径）
+        if (key === 'compactVideoRenderer' || key === 'lockupViewModel') continue;
+        walk(node[key]);
+      }
+    };
+    // 相关域定位：secondaryResults 键位（twoColumnWatchNextResults 下）与
+    // 续页容器（*Continuation 尾段键/continuations[] 数组）才是 related
+    // 语境——只把它们作收集根，其余子树（含主列）留在外面
+    const scopeRoots = [];
+    const findScope = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { for (const i of node) findScope(i); return; }
+      for (const k of Object.keys(node)) {
+        if (k === 'secondaryResults' || k === 'continuations' || /Continuation$/.test(k)) {
+          // 命中的子树整体作收集根，不再向内找根（walk 会覆盖其全域）
+          if (node[k] && typeof node[k] === 'object') scopeRoots.push(node[k]);
+        } else {
+          findScope(node[k]);
+        }
+      }
+    };
+    findScope(body?.contents);
+    for (const r of scopeRoots) walk(r);
+    // 有效 videoId 恒有相关条——四根全空按空壳轮转（与 search 同口径）；
+    // 结构在位但零条目（私享/下架稿的退化页）按空表交回
+    const roots = [body?.contents, body?.onResponseReceivedActions,
+      body?.onResponseReceivedEndpoints, body?.continuationContents];
+    if (!items.length && !roots.some(Boolean)) {
+      throw new Error('watch next 空壳响应（无相关条目/风控）');
+    }
+    return { items, mixPlaylistId };
+  };
+  return innertubePost('next', [WEB_CLIENT], { videoId }, extraSignal, parseBody);
+}
+
+// 搜索建议（typeahead）：suggestqueries.google.com 的 firefox client 路径
+// 回纯 JSON [q,[suggestions…]]——clients6.youtube.com 的同参端点回
+// window.google.ac.h(...) JSONP 壳，别走那条。代理面：google.com 与
+// youtube.com 同墙——ytFetchOpts 不查域名，配了 YT_PROXY 的部署直连必
+// 超时，挂上让代理顺带承运
+async function ytSuggest(q, extraSignal) {
+  if (extraSignal?.aborted) throw new Error('aborted');
+  const url = 'https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q='
+    + encodeURIComponent(String(q || ''));
+  const res = await fetch(url, {
+    headers: { 'User-Agent': DESKTOP_UA },
+    signal: timedSignal(extraSignal, 5000), // typeahead 语义：5s 预算
+    ...ytFetchOpts(),
+  });
+  if (!res.ok) throw new Error(`yt suggest HTTP ${res.status}`);
+  const j = await res.json().catch(() => null);
+  if (extraSignal?.aborted) throw new Error('aborted');
+  // 契约 [q,[suggestions…]]——JSONP 壳/非数组载荷防御性归空
+  return {
+    suggestions: (Array.isArray(j?.[1]) ? j[1] : [])
+      .filter(s => typeof s === 'string' && s),
+  };
+}
+
+module.exports = { fetchPlayer, fetchPlayerWith, innertubeSearch, fetchWatchNext, ytSuggest, fetchYtPlaylistPage, pickStreamList, hasYtCookie, parseOriginalRef, resolveOriginalInfo, _clearOriginalMemo, resolvePublishedAt, _clearBasicsMemo, YT_TIMEOUT_MS };
