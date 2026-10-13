@@ -65,7 +65,8 @@ async function renewQqCookie(cookie) {
   try {
     const res = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      // 续期外呼此前是全仓唯一裸头请求——带 UA/Referer 与全站外呼同形态（qqHeaders 已含 Cookie）
+      headers: { ...qqHeaders(cookie), 'Content-Type': 'application/json' },
       // musicid 拼裸数字串绕过 MAX_SAFE_INTEGER 精度截断
       body: `{"req":{"module":"music.login.LoginServer","method":"Login",`
         + `"param":{"refresh_token":${JSON.stringify(refreshToken)},`
@@ -235,6 +236,7 @@ async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cook
   // 风控信号：code=2001 + feedbackURL 要求登录——同一 body 换签名通道重试。
   // 2001 可出现在 body 顶层或 node 层（{"req":{"code":2001}} 为 node 形态）
   if (!signed && (body?.code === 2001 || node?.code === 2001 || node?.data?.feedbackURL || body?.data?.feedbackURL)) {
+    console.info(`[qq] musicu 风控命中(code=${body?.code ?? node?.code})→ 升级 musics.fcg 签名通道`);
     return musicu(module, method, param, extraSignal, reqKey, cookie, true);
   }
   if (body?.code !== 0 || !node || node.code !== 0) {
@@ -571,7 +573,7 @@ async function resolveQqInput(input, extraSignal) {
 module.exports = {
   hasQqCookie, QQ_STREAM_HOST_OK,
   QUALITY_TIERS, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
-  musicu, fcg, normalizeTrack,
+  musicu, fcg, normalizeTrack, zzcSign,
   getSongDetail, getStreamCandidates, pickStreamUrl, getLyric, getPlaylist, searchSongs,
   resolveQqInput,
 };
