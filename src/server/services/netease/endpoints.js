@@ -44,6 +44,9 @@ const ENDPOINTS = {
       const res = await request('/api/v6/playlist/detail', {
         id: q.id, n: 100000, s: q.s || 8,
       }, opts(q, ctx));
+      // 一跳业务失败（400/502/801 等 resolve-200 特殊码）原样透出——
+      // 透下去会被二跳的空 trackIds 洗成空歌单，吞掉真实失败
+      if (res.body && Number(res.body.code) !== 200) return res;
       const limit = parseInt(q.limit) || 1000;
       const offset = parseInt(q.offset) || 0;
       const trackIds = res.body?.playlist?.trackIds || [];
@@ -58,16 +61,21 @@ const ENDPOINTS = {
   },
   song_url: {
     handler: async (q, ctx) => {
-      const ids = String(q.id).split(',');
+      // 逐段 trim+滤空：'1, 2' 带空格旧形态（JSON.stringify 字符串数组）
+      // 上游拒答；数字元素形态 '[1,2]' 实测被接受（上游 module 同款构造）
+      const ids = String(q.id).split(',').map(s => s.trim()).filter(Boolean);
       const res = await request('/api/song/enhance/player/url', {
-        ids: JSON.stringify(ids), br: parseInt(q.br || 999000),
+        ids: '[' + ids.join(',') + ']', br: parseInt(q.br || 999000),
       }, opts(q, ctx));
       // 上游把结果按请求 id 序重排（res.body.data 顺序不保证）
-      const result = res.body.data;
+      const result = res.body?.data;
       if (Array.isArray(result)) {
         result.sort((a, b) => ids.indexOf(String(a.id)) - ids.indexOf(String(b.id)));
       }
-      return { status: 200, body: { code: 200, data: result }, cookie: res.cookie };
+      // code 不透洗成 200——SPECIAL_BODY_CODES resolve-200 的 400/502/801
+      // 业务码须原样透出（同 playlist_track_all 一跳语义，否则前端把真实
+      // 失败当空 data 渲染）；body 非对象/缺 code/NaN 归 200 保持 envelope 契约
+      return { status: 200, body: { code: Number(res.body?.code) || 200, data: result }, cookie: res.cookie };
     },
   },
   song_url_v1: {
@@ -98,7 +106,7 @@ const ENDPOINTS = {
   check_music: {
     handler: async (q, ctx) => {
       const res = await request('/api/song/enhance/player/url', {
-        ids: '[' + parseInt(q.id) + ']', br: parseInt(q.br || 999000),
+        ids: '[' + q.id + ']', br: parseInt(q.br || 999000),
       }, opts(q, ctx));
       const playable = res.body?.code == 200 && res.body?.data?.[0]?.code == 200;
       res.body = playable
@@ -108,10 +116,10 @@ const ENDPOINTS = {
     },
   },
   album: {
-    handler: (q, ctx) => request(`/api/v1/album/${q.id}`, {}, opts(q, ctx)),
+    handler: (q, ctx) => request(`/api/v1/album/${encodeURIComponent(q.id)}`, {}, opts(q, ctx)),
   },
   artists: {
-    handler: (q, ctx) => request(`/api/v1/artist/${q.id}`, {}, opts(q, ctx)),
+    handler: (q, ctx) => request(`/api/v1/artist/${encodeURIComponent(q.id)}`, {}, opts(q, ctx)),
   },
   banner: {
     handler: (q, ctx) => request('/api/v2/banner/get', {

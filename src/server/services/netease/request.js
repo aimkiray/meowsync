@@ -138,13 +138,16 @@ async function request(uri, data, { cookie, timeoutMs = DEFAULT_TIMEOUT_MS, sign
     try {
       body = JSON.parse(raw);
     } catch {
-      // 上游偶发把明文 /api 请求回 eapi 密文（32+ 位 hex 前缀的应答体）——
-      // 对消费方是不可解析噪声，warn 留痕便于定位通道侧漂移；body 仍归
-      // raw 字符串走原形态，不新造错误路径
-      if (/^[0-9a-f]{32,}/.test(raw)) {
-        console.warn('[netease] 明文 /api 应答疑似密文:', uri);
-      }
+      // 不可解析体仍归 raw 字符串走原形态，不新造错误路径
       body = raw;
+    }
+    // 上游偶发把明文 /api 请求回 eapi 密文——两种形态都留痕：裸 32+ 位
+    // hex 应答体（JSON.parse 失败归 raw），或 JSON 壳里 data 字段塞整段
+    // hex。对消费方是不可解析噪声，warn 便于定位通道侧漂移
+    if (/^[0-9a-f]{32,}/.test(raw.trim())
+      || (body && typeof body === 'object' && typeof body.data === 'string'
+        && /^[0-9a-f]{32,}$/.test(body.data))) {
+      console.warn('[netease] 明文 /api 应答疑似密文:', uri);
     }
     answer.body = body;
     if (body && typeof body === 'object' && body.code) body.code = Number(body.code);
