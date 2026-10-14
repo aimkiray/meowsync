@@ -13,6 +13,10 @@ export const LS_KEYS = {
   VIDEO_MODE: 'meowsync-bili-video',
   LYRIC_FONT_SIZE: 'meowsync-lyric-fs',
   WATCH_TAB: 'meowsync-watch-tab',
+  // 裸关键词/搜索建议的默认源（'netease'|'qq'|'yt'|'bili'）。进 SYNC_LS_KEYS
+  // 跨端同步——与 VIDEO_MODE/LYRIC_FONT_SIZE 同轨：切源是「我在哪听歌」的
+  // 习惯偏好，换设备重挑是纯噪音；GLITCH_MOTION 那种设备级豁免才不进白名单
+  SEARCH_SOURCE: 'meowsync-search-src',
   // 故障动效减动豁免（glitch 字符腐蚀）：'1'=强制开，其余/absent=跟随系统。
   // 设备级 a11y 豁免——显式不进 sync.js 的 SYNC_LS_KEYS：减动豁免绑的是
   // 本机用户的感官需求，跨端 LWW 复制会把一台设备的豁免静默传染到所有登录端。

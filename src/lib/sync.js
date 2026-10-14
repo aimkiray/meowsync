@@ -14,7 +14,7 @@ import { syncApi } from '../api/sync.js'
 // 远端回填依赖方向：引擎 → 叶模块。叶模块（theme.js/prefs.js）不许反向
 // import 本文件——会把 api/http 的 import.meta.env 链拖进 node:test 裸跑面
 import { applyRemoteTheme } from './theme.js'
-import { applyRemoteVideoPref, applyRemoteLyricFs } from './prefs.js'
+import { applyRemoteVideoPref, applyRemoteLyricFs, applyRemoteSearchSource } from './prefs.js'
 // 播放上下文壳（single_song_/saved_queue_）过滤推送面——共享谓词层是纯
 // ESM 零 IO，叶模块同一定位（不引入新依赖方向）
 import { isEphemeralPlaylistId } from '../shared/predicates.js'
@@ -37,6 +37,7 @@ const SYNC_LS_KEYS = new Set([
   LS_KEYS.THEME,
   LS_KEYS.VIDEO_MODE,
   LS_KEYS.LYRIC_FONT_SIZE,
+  LS_KEYS.SEARCH_SOURCE,
   LS_KEYS.WATCH_TAB,
   LS_KEYS.SETUP_DISMISSED,
 ])
@@ -111,6 +112,7 @@ const LEAF_APPLY_HANDLERS = [
   [LS_KEYS.THEME, applyRemoteTheme],
   [LS_KEYS.VIDEO_MODE, applyRemoteVideoPref],
   [LS_KEYS.LYRIC_FONT_SIZE, applyRemoteLyricFs],
+  [LS_KEYS.SEARCH_SOURCE, applyRemoteSearchSource],
 ]
 
 // ── doc 级 LWW 写戳表（LS 持久化——跨会话判据）──

@@ -180,10 +180,11 @@
 </template>
 
 <script>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, extractYouTubeId, isSongmidLike, extractNeteaseSongId, YT_ID_RE } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
+import { prefSearchSource } from '../lib/prefs.js'
 import { authState } from '../lib/auth-state.js'
 import { authApi } from '../api/auth.js'
 import { cycleMenuItems } from '../lib/focus-trap.js'
@@ -215,7 +216,7 @@ export default {
       default: false
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-bili-songs', 'search-yt', 'search-yt-songs', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-netease', 'search-bili', 'search-bili-songs', 'search-yt', 'search-yt-songs', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
 
@@ -242,13 +243,15 @@ export default {
       // 提在分派前统一收——URL/歌单/关键词各 emit 分支全覆盖；
       // restoreFocus 归还触发钮（与 Esc 同律），桌面 searchOpen 恒 false 是空操作
       closeSearch(true)
-      // bili: 前缀=B 站语法（与 yt:/qq: 同记号），先于整串 B 站判别剥前缀——
-      // 整串判别的 b23.tv 域名命中会把 'bili:b23.tv/x' 连前缀原样送进
-      // resolve 链，服务端锚定正则（^b23\.tv/）被前缀挡 → 必死 400。
-      // 前缀内 BV/av/链接/短链走既有 resolve 链（search-bili 事件，App 层
-      // importBilibiliOrFav 再分单曲/收藏夹），其余关键词走 B 站曲库搜索
-      // （search-bili-songs）。前缀=显式源声明——前缀内的非 B 站形态按
-      // 关键词搜，后序整串判别不再抢道（yt:/qq: 块对异源链接同律）
+      // ── 源前缀簇：bili:/netease:/qq:/yt:（163:/wy: 是 netease: 同义别名）──
+      // 前缀=显式源声明，先于一切整串判别剥壳——整串域名谓词不认前缀：
+      // 'netease:b23.tv/x' 会被 b23.tv 命中连壳送进 resolve（服务端锚定
+      // 正则 ^b23\.tv/ 被前缀挡 → 必死 400），netease:/yt: 前缀内的
+      // y.qq.com 歌单链会被 extractQQPlaylistId 抢去 search-qq-pl。
+      // 声明了源就本域消化：前缀内本域可解形态走各自既有 resolve/导入链
+      // （bili:→resolve、qq:→resolve/歌单、yt:→resolve/歌单），异源形态
+      // 一律按本域关键词搜；netease: 载荷恒为去前缀关键词。后序整串判别
+      // 只见无前缀输入，不再抢道
       if (/^bili[:：]\s*$/i.test(query)) return
       const biliPref = query.match(/^bili[:：](.+)$/i)
       if (biliPref) {
@@ -261,6 +264,62 @@ export default {
         emit('search-bili-songs', kw)
         return
       }
+      // netease: 前缀=显式网易云语法——「搜索源」偏好切走后强制回网易云
+      // 双腿的逃生口：裸 'search' 事件走 handleSearch 按偏好分派，本事件
+      // 直达网易云 handler 绕过它；前缀内链接/id 不二次分派（要直达就
+      // 别加前缀），异源链同样只当关键词
+      if (/^(?:netease|163|wy)[:：]\s*$/i.test(query)) return
+      const nePref = query.match(/^(?:netease|163|wy)[:：](.+)$/i)
+      if (nePref) {
+        const kw = nePref[1].trim()
+        if (!kw) return
+        emit('search-netease', kw)
+        return
+      }
+      // qq: 前缀=QQ 语法（与点歌台同记号）：前缀内歌单链/mid 形态/单曲
+      // 链接走各自 resolve 直解（歌单语境先于单曲，与整串判别同序），
+      // 其余关键词走 QQ 曲库搜索（结果落顶部搜索的 songs 结果区）
+      if (/^qq[:：]\s*$/i.test(query)) return
+      const qqPref = query.match(/^qq[:：](.+)$/i)
+      if (qqPref) {
+        const kw = qqPref[1].trim()
+        if (!kw) return
+        const qqPlInPref = extractQQPlaylistId(kw)
+        if (qqPlInPref) {
+          emit('search-qq-pl', qqPlInPref)
+          return
+        }
+        if (isQQInput(kw) || isSongmidLike(kw)) {
+          emit('search-qq', isQQInput(kw) ? kw : `qq:${kw}`)
+          return
+        }
+        emit('search-qq-songs', kw)
+        return
+      }
+      // yt: 前缀=YouTube 语法（与 qq: 同记号）：前缀内歌单链/URL/裸
+      // videoId 走既有 resolve/歌单导入链（search-yt 事件），其余关键词
+      // 走 YouTube 曲库搜索（search-yt-songs——结果落顶部搜索的 songs
+      // 结果区）
+      if (/^yt[:：]\s*$/i.test(query)) return
+      const ytPref = query.match(/^yt[:：](.+)$/i)
+      if (ytPref) {
+        const kw = ytPref[1].trim()
+        if (!kw) return
+        if (extractYouTubePlaylistId(kw) || extractYouTubeId(kw)) {
+          emit('search-yt', kw)
+          return
+        }
+        // 纯数字 11 位 videoId：extractYouTubeId 裸分支拒收（防与网易云 id
+        // 撞型）——yt: 前缀已是显式源声明，改写 ?yt= 分享链形态送达，服务端
+        // extractYouTubeId 的 YT_URL_RES 同表可解（extractYouTubeId 本体不动）
+        if (YT_ID_RE.test(kw)) {
+          emit('search-yt', `?yt=${kw}`)
+          return
+        }
+        emit('search-yt-songs', kw)
+        return
+      }
+      // ── 整串判别（无前缀输入）──
       // B 站收藏夹链接先于视频判定——favlist/medialist URL 也含 bilibili.com，
       // 顺序错了会被单曲导入抢走再被服务端弹回
       if (extractBiliFavlistId(query)) {
@@ -290,50 +349,6 @@ export default {
       }
       if (isQQInput(query)) {
         emit('search-qq', query)
-        return
-      }
-      // qq: 前缀=QQ 语法（与点歌台同记号）：mid 形态/链接走 resolve 直解，
-      // 其余关键词走 QQ 曲库搜索（结果落顶部搜索的 songs 结果区）
-      if (/^qq[:：]\s*$/i.test(query)) return
-      const qqPref = query.match(/^qq[:：](.+)$/i)
-      if (qqPref) {
-        const kw = qqPref[1].trim()
-        if (!kw) return
-        const qqPlInPref = extractQQPlaylistId(kw)
-        if (qqPlInPref) {
-          emit('search-qq-pl', qqPlInPref)
-          return
-        }
-        if (isQQInput(kw) || isSongmidLike(kw)) {
-          emit('search-qq', isQQInput(kw) ? kw : `qq:${kw}`)
-          return
-        }
-        emit('search-qq-songs', kw)
-        return
-      }
-      // yt: 前缀=YouTube 语法（与 qq: 同记号）：前缀内歌单链/URL/裸
-      // videoId 走既有 resolve/歌单导入链（search-yt 事件），其余关键词
-      // 走 YouTube 曲库搜索（search-yt-songs——结果落顶部搜索的 songs
-      // 结果区）。整串判定先于本块的是裸输入形态——带 yt: 前缀的
-      // URL 在上游 isYouTubeInput 已先被 resolve 链收走，这里只剩
-      // 前缀内裸 id/关键词
-      if (/^yt[:：]\s*$/i.test(query)) return
-      const ytPref = query.match(/^yt[:：](.+)$/i)
-      if (ytPref) {
-        const kw = ytPref[1].trim()
-        if (!kw) return
-        if (extractYouTubePlaylistId(kw) || extractYouTubeId(kw)) {
-          emit('search-yt', kw)
-          return
-        }
-        // 纯数字 11 位 videoId：extractYouTubeId 裸分支拒收（防与网易云 id
-        // 撞型）——yt: 前缀已是显式源声明，改写 ?yt= 分享链形态送达，服务端
-        // extractYouTubeId 的 YT_URL_RES 同表可解（extractYouTubeId 本体不动）
-        if (YT_ID_RE.test(kw)) {
-          emit('search-yt', `?yt=${kw}`)
-          return
-        }
-        emit('search-yt-songs', kw)
         return
       }
       // 单曲链接先于歌单 id 提取——music.163.com/song?id=N 的 ?id= 会撞
@@ -395,13 +410,23 @@ export default {
       activeIndex.value = -1
     }
 
+    // 建议源跟随「搜索源」偏好：四源建议端点产出同一归一形
+    // {allMatch:[{keyword}],…}（mapSuggestions 对缺组容错），分派在
+    // 拉取口一处收口——onInput 的直达抑制表不随源变（前缀/link 本就直达）
+    const SUGGEST_BY_SOURCE = {
+      netease: (q, sig) => musicApi.searchSuggest(q, sig),
+      qq: (q, sig) => musicApi.searchQQSuggest(q, sig),
+      yt: (q, sig) => musicApi.getYouTubeSuggest(q, sig),
+      bili: (q, sig) => musicApi.getBiliSuggest(q, sig),
+    }
     const fetchSuggestions = async (query) => {
       suggestAbort?.abort()
       const seq = ++suggestSeq
       const ctrl = new AbortController()
       suggestAbort = ctrl
       try {
-        const result = await musicApi.searchSuggest(query, ctrl.signal)
+        const fetcher = SUGGEST_BY_SOURCE[prefSearchSource.value] || SUGGEST_BY_SOURCE.netease
+        const result = await fetcher(query, ctrl.signal)
         if (seq !== suggestSeq) return
         suggestions.value = mapSuggestions(result)
         activeIndex.value = -1
@@ -411,15 +436,24 @@ export default {
       }
     }
 
+    // 切源即回收建议面：残留列表是上一源的产物，挂在新源语境下展示是脏态；
+    // 在途旧源回包也不得落地——cancelSuggest 的 seq 闸同一条链
+    watch(prefSearchSource, () => {
+      cancelSuggest()
+      suggestions.value = []
+      suggestOpen.value = false
+    })
+
     const onInput = (e) => {
       emit('update:searchQuery', e.target.value)
       const q = e.target.value.trim()
       cancelSuggest()
       // 纯数字/歌单链接/B站（视频与收藏夹）/YouTube（视频与歌单）/QQ 输入走直达路径，不弹建议；
-      // qq:/yt:/bili: 前缀语法同样直达——输入即分流意图，建议词对前缀语法没有消费面
+      // qq:/yt:/bili:/netease: 前缀语法同样直达——输入即分流意图，建议词对前缀语法没有消费面
       if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)
         || isQQInput(q) || extractQQPlaylistId(q) || extractBiliFavlistId(q)
-        || extractYouTubePlaylistId(q) || /^qq[:：]/i.test(q) || /^yt[:：]/i.test(q) || /^bili[:：]/i.test(q)) {
+        || extractYouTubePlaylistId(q) || /^qq[:：]/i.test(q) || /^yt[:：]/i.test(q) || /^bili[:：]/i.test(q)
+        || /^(?:netease|163|wy)[:：]/i.test(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

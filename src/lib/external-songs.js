@@ -139,12 +139,16 @@ export const buildYouTubeSong = (data) => {
 // QQ 导入曲对象：id 用 qq_<songmid> 前缀。与 bv/yt 的关键差异是 QQ 自带
 // 真实元数据（name/artists/album/duration/cover 就是正主而非提取的噪声
 // 标题）与权威双语歌词——matched 仅作封面退化兜底与 neteaseId 词源备胎
+//
+// 无艺人兜底哨兵名：related.js 的「哨兵艺人拒发上游搜索」判据复用同一
+// 常量——拿兜底名搜上游必返垃圾，两处共一份防字符串漂移
+export const QQ_ARTIST_FALLBACK = 'QQ 音乐'
 export const buildQQSong = (data) => ({
   id: `qq_${data.mid}`,
   name: data.name || data.matched?.name || '未知歌曲',
   ar: data.artists?.length
     ? data.artists.map(n => ({ name: n }))
-    : (data.matched?.ar?.length ? data.matched.ar : [{ name: 'QQ 音乐' }]),
+    : (data.matched?.ar?.length ? data.matched.ar : [{ name: QQ_ARTIST_FALLBACK }]),
   // QQ 专辑名/封面 provider 优先——matched 字段只是兜底，但兜底同样过
   // 艺人重合闸（与 bv_/yt_ 构造器同口径）：闸不过时连 al.id 也不放行——
   // 展示的是 QQ 专辑名却挂着别家专辑 id 是更隐蔽的脏数据

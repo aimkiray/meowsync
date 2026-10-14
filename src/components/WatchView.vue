@@ -441,7 +441,7 @@
           </div>
         </div>
 
-        <!-- 相关（按当前艺人拉取，点击即播） -->
+        <!-- 相关（按曲源分派拉取——bv_/yt_ 上游相似稿、qq_/数值按艺人，点击即播） -->
         <div
           id="watch-panel-related"
           role="tabpanel"
@@ -513,6 +513,7 @@ import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
+import { relatedSourceOf, relatedFetch } from '../lib/related'
 import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
 import { cycleMenuItems } from '../lib/focus-trap.js'
@@ -810,36 +811,53 @@ export default {
       window.addEventListener('blur', onEnd)
     }
 
-    // ── 相关歌曲：按当前曲艺人拉取，切歌后重载（懒加载+序号防乱序）──
+    // ── 相关歌曲：按曲源分派拉取，切歌后重载（懒加载+序号防乱序）──
     const relatedSongs = ref([])
     const relatedLoading = ref(false)
     let relatedFor = null // 已按哪首歌加载过
     let relatedSeq = 0
 
+    // 分派/凭据解形/种曲剔除全部收进 lib/related.js（usePlayer 队列播完
+    // 接续同源）——判源仍是 id 前缀定源：bv_/yt_ 走上游相似接口（真相关，
+    // 与艺人无关）；qq_ 上游相似匿名全拒按首艺人搜 QQ 曲库；其余照旧网易
+    // 云艺人搜索。缺料（relatedFetch→null）即空不回落错源；此时 relatedFor
+    // 不记账——字段晚到的恢复曲（providerData 未就位）下次切 tab 还能再试
     const loadRelated = async () => {
-      const artist = (props.currentSong?.ar || props.currentSong?.artists || [])[0]?.name
-      const songId = props.currentSong?.id
-      if (!artist || songId == null) { relatedSongs.value = []; return }
-      relatedFor = songId
+      const song = props.currentSong
+      // 空曲早退也要作废在途拉取（++relatedSeq）并收 loading——否则上一曲
+      // 的在途回包晚到会盖进空态，其 finally 也因 seq 失配不再清 loading
+      if (song?.id == null) {
+        ++relatedSeq
+        relatedSongs.value = []
+        relatedLoading.value = false
+        return
+      }
+      relatedFor = song.id
       const seq = ++relatedSeq
       relatedLoading.value = true
       try {
-        const list = await musicApi.searchSongs(artist, 15)
+        const r = await relatedFetch(song)
         if (seq !== relatedSeq) return
-        relatedSongs.value = (list || [])
-          .filter(s => s?.id != null && String(s.id) !== String(songId))
+        if (!r) relatedFor = null // 缺料不记账（见上注）
+        relatedSongs.value = r?.items || []
       } catch {
+        // 抛错路径 relatedFor 保持记账（与缺料 null 的不记账不对称）——
+        // 缺料是「字段晚到可再试」，抛错按本次已处置不自动重试，
+        // 防坏曲每进 related tab 都白打一趟上游
         if (seq === relatedSeq) relatedSongs.value = []
       } finally {
         if (seq === relatedSeq) relatedLoading.value = false
       }
     }
-    // 刊头 meta「艺人 · N首」：relatedSongs 由当前曲首艺人名搜索得来
-    // （与 loadRelated 同一取法）——无艺人字段的源曲只报规模，不硬造归属
+    // 刊头 meta「艺人 · N首」只在艺人搜口径下有义（网易云/QQ 都是按首艺人
+    // 拉的结果）；bv_/yt_ 的相关是上游相似稿——挂「艺人·N首」是假归属，
+    // 只报规模。无艺人字段的源曲同样只报规模，不硬造归属
     const relatedHeadLabel = computed(() => {
       const artist = (props.currentSong?.ar || props.currentSong?.artists || [])[0]?.name
       const n = relatedSongs.value.length
-      return artist ? `${artist} · ${n} 首` : `${n} 首`
+      const src = relatedSourceOf(props.currentSong)
+      const byArtist = src === 'qq' || src === 'netease'
+      return byArtist && artist ? `${artist} · ${n} 首` : `${n} 首`
     })
 
     // 【序】immediate 挂载即跑——离开再进 watch 时按持久化 tab 补一次

@@ -5,6 +5,7 @@ import { toast, toastDismiss } from '../lib/feedback.js'
 import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl.js'
 import { buildBilibiliSong, buildQQSong, buildYouTubeSong, upsertProviderShell } from '../lib/external-songs.js'
 import { providerPlaylistShellId } from '../lib/url.js'
+import { prefSearchSource } from '../lib/prefs.js'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
 // 单曲深挖翻页、id 预览、watch 页进出。
@@ -361,6 +362,18 @@ export function useSearchNav({
 
   // ── 搜索 ──
 
+  // 裸关键词搜索入口（顶栏 @search 唯一落点）：按「搜索源」偏好分派——
+  // 视同打了源前缀：qq 档含歌单腿（与 qq: 前缀同 handler），yt/bili 单腿，
+  // 其余（含缺席/非法值已被 prefs 归一成 netease）走网易云双腿。
+  // 前缀/链接/数字形态不经此路——TopNav 的直达分派在 emit('search') 前已 return
+  const handleSearch = (query) => {
+    const src = prefSearchSource.value
+    if (src === 'qq') return handleQQSongSearch(query)
+    if (src === 'yt') return handleYTSongSearch(query)
+    if (src === 'bili') return handleBiliSongSearch(query)
+    return handlePlaylistSearch(query)
+  }
+
   // 顶栏搜索：并行搜 歌单 + 单曲（YTM 分区结果）；序号守卫防连搜覆盖
   const handlePlaylistSearch = async (query) => {
     gates.preview.invalidate() // 新搜索意图作废在途 id 预览
@@ -368,6 +381,9 @@ export function useSearchNav({
     pushNavState()
     const myReq = gates.search.claim()
     searching.value = true
+    // 双区同清（与另三 handler 对称）：歌单腿在途期间残留下的旧源卡片区
+    // 挂在新区块上会误导阅读——尤其从 qq: 结果切回网易云双腿时
+    searchResults.value = []
     searchSongResults.value = []
     searchSongQuery.value = '' // 同步清：在途旧深挖的 query 守卫即刻失效
     searchSongTotal.value = null
@@ -630,6 +646,7 @@ export function useSearchNav({
     previewPlaylistById,
     openWatchSong, openWatchSearchSong, openWatchRecent, playPlaylistAndWatch,
     // 搜索
+    handleSearch,
     handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, handleBiliSongSearch,
     loadMoreSearchSongs,
   }
