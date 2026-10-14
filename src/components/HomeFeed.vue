@@ -168,11 +168,12 @@ export default {
 
 <style scoped>
 .home-feed {
-  /* 滚动条车道上下内缩：透明 border 把轨道抬离页缘 20px，
-     与内容首行轴齐平；padding-block 让位同量，内容几何不动。
+  /* 滚动条车道顶部内缩：透明 border-top 把轨道抬离页缘 20px，
+     与内容首行轴齐平；底部不缩——border 落在 scrollport 外会
+     留出页底色死缝，底缘滚齐播放器发丝线。
      横向页缘走 --page-pad-x 全站档（≤640 收 12px） */
   padding: 0 var(--page-pad-x, 20px);
-  border-block: 20px solid transparent;
+  border-top: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
   scrollbar-gutter: stable;

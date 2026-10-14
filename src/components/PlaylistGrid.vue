@@ -377,10 +377,10 @@ export default {
 
 <style scoped>
 .playlist-grid-wrap {
-  /* 同 .home-feed：透明 border 抬滚动条车道离页缘，内容轴不动；
-     横向页缘走 --page-pad-x 全站档（≤640 收 12px） */
+  /* 同 .home-feed：border-top 抬滚动条车道离顶页缘，底缘滚齐
+     播放器发丝线；横向页缘走 --page-pad-x 全站档（≤640 收 12px） */
   padding: 0 var(--page-pad-x, 20px);
-  border-block: 20px solid transparent;
+  border-top: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
   scrollbar-gutter: stable;
