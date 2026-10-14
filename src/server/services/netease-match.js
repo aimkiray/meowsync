@@ -179,6 +179,7 @@ async function aiConfirmMatch(song, sourceInfo, durationSec, signal) {
     user: `来源：${cleanPrompt(sourceInfo.title)} — ${cleanPrompt(sourceInfo.author) || '未知'}（${durationSec || '?'}s${pubDateSeg(sourceInfo)}）${origDeclLine(sourceInfo)}\n候选：${songDesc(song, srcMs)}`,
     maxTokens: 32,
     signal,
+    tag: 'match-confirm',
   });
   return ans && typeof ans.match === 'boolean' ? ans.match : null;
 }
@@ -196,6 +197,7 @@ async function aiExtractQueries(sourceInfo, signal) {
     maxTokens: 96,
     // 单发时限同走 AI_TIMEOUT_MS env（见 aiConfirmMatch 头注）
     signal,
+    tag: 'match-regen',
   });
   const raw = Array.isArray(ans?.queries) ? ans.queries : [];
   return [...new Set(raw
@@ -237,6 +239,7 @@ async function aiPickMatch(seenSongs, sourceInfo, durationSec, signal, vetoedIds
     maxTokens: 32,
     // 单发时限同走 AI_TIMEOUT_MS env（见 aiConfirmMatch 头注）
     signal,
+    tag: 'match-pick',
   });
   // match:true（模型混用 confirm 形态）Number(true)=1 会假命中第 1 候选——
   // 布尔与 null 显式排除后再转数字

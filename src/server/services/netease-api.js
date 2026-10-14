@@ -171,6 +171,7 @@ async function aiUnlockInfoInner(songRow, signal) {
     // 慢于此直接回基线（unm 自抓 detail），别把 AI 延迟放大进解锁链
     timeoutMs: 10000,
     signal,
+    tag: 'unlock-info',
   });
   let data = null;
   if (ans && typeof ans.name === 'string' && ans.name.trim()) {

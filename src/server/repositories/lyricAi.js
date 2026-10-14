@@ -3,23 +3,38 @@
 const { getDb } = require('../db/client');
 const { aiModel } = require('../lib/ai');
 
+// AI 译文缓存键的 prompt 版本盐：AI 产译文按 '<模型>@<版本>' 落库/命中——
+// lyric-translate 的 prompt 或负载契约修订时递增本串，旧译文全链自动
+// 失效重译（路由读/写与下载链读同口径），不必清库。skip:* 哨兵与
+// netease/qq 官方行不参盐逐字存读——确定性判定与词源事实跟 prompt 无关。
+// 常量住在持久层而非 lyric-translate：file-downloader 等单参读点只传
+// 裸模型，由本层把裸模型扩成「裸键（命中盐前存量行）+ 当前盐键」两查——
+// 盐语义单点收口，版本递增后旧盐行对裸模型读点也自动断命中
+const TRANSLATE_PROMPT_VERSION = 't1';
+const translationModelKey = (model) => (model ? `${model}@${TRANSLATE_PROMPT_VERSION}` : '');
+
 // AI 产译文按模型键控——换模型后旧译文永不命中（不然模型升级后仍发旧译）。
 // 但两类行必须永命中：skip:* 哨兵（TTL 内）与官方译文（model='netease'/
 // 'qq'，词源事实与 AI 模型无关）。currentModel 缺省取当前配置模型——
 // file-downloader 等单参调用点同口径受益。
+// model = ? 双查：第一参原样吃调用方给的键（传盐键即精确命中本版行，
+// 传裸模型命中盐前存量行），第二参把裸模型扩成当前盐键——两种入参
+// 形态都能命中当前版本行
 // 例外：currentModel 为空（AI 完全未配置/模型被清空）时放行全部非 skip
 // 行——存量 AI 译文好过没有；这与「AI 关闭后已落库译文照常下发」的
 // 路由语义自洽（否则清模型关 AI 会让下载链静默丢译文）
 function getCachedTranslation(songId, currentModel = aiModel()) {
+  const m = currentModel || '';
   return getDb().prepare(
     `SELECT tlyric FROM song_lyric_translation WHERE song_id = ?
      AND (
        (model LIKE 'skip:%' AND updated_at >= datetime('now', '-7 days'))
        OR model IN ('netease', 'qq')
        OR model = ?
+       OR model = ?
        OR (? = '' AND model NOT LIKE 'skip:%')
      )`
-  ).get(songId, currentModel || '', currentModel || '');
+  ).get(songId, m, translationModelKey(m), m);
 }
 
 function upsertTranslation(songId, tlyric, model) {
@@ -69,5 +84,5 @@ const upsertLyricVerdict = (vkey, ok, detail) => upsertVerdict(vkey, 'lyric', ok
 module.exports = {
   getCachedTranslation, upsertTranslation, markTranslationSkip,
   getVerdict, upsertVerdict, getLyricVerdict, upsertLyricVerdict,
-  deleteUnlockVerdicts,
+  deleteUnlockVerdicts, TRANSLATE_PROMPT_VERSION, translationModelKey,
 };

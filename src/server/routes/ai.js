@@ -102,7 +102,9 @@ app.post('/ai/lyric-translate', async (c) => {
   // 刷新 updated_at 续期（SQL 细节收敛在 repositories/lyricAi.js）。
   // 缓存查询先于 aiEnabled 闸：AI 关闭后已落库译文（含官方 netease/qq
   // 译文——本来就不依赖 AI）照常下发，只是不再产新译文（verify 同口径）
-  const rowOf = () => lyricAiRepo.getCachedTranslation(id, aiModel());
+  // AI 译文行按 模型@prompt版本 盐键读（translationModelKey——盐规则
+  // 收口在 repositories/lyricAi）；skip 哨兵与官方译文不参盐照常命中
+  const rowOf = () => lyricAiRepo.getCachedTranslation(id, lyricAiRepo.translationModelKey(aiModel()));
   const skipInsert = (reason) => markSkip(id, reason);
   const cached0 = rowOf();
   if (cached0) {
@@ -183,7 +185,7 @@ app.post('/ai/lyric-translate', async (c) => {
     // 截断产出永不写库：缓存无完成度标记，截断译文固化成「完整缓存」
     // 比现状更差——只在去重文本全覆盖时落库，部分覆盖照旧经响应透出
     if (translated.size === jobs.length) {
-      lyricAiRepo.upsertTranslation(id, result, aiModel());
+      lyricAiRepo.upsertTranslation(id, result, lyricAiRepo.translationModelKey(aiModel()));
     }
     return c.json({ code: 200, tlyric: result, lines: translated.size, total: lines.length, source: 'ai' });
   } catch (e) {

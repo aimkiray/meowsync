@@ -268,6 +268,7 @@ async function llmAlignTimes({ envelope, onsets, durationMs, frameMs, lines, sig
         maxTokens: Math.min(8192, chunk.length * 24 + 512),
         timeoutMs: LLM_TIMEOUT_MS,
         signal,
+        tag: 'align',
       });
       if (signal?.aborted) return null;
       times = normalizeLlmTimes(ans, chunk.length, durationMs);

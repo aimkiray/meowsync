@@ -45,6 +45,31 @@ test('lyricAi 翻译缓存：upsert 命中、skip 哨兵行存在', () => {
   assert.equal(skip.tlyric, '');
 });
 
+test('lyricAi 盐键扩展：裸模型读点命中 <模型>@<版本> 行；异模/旧盐不命中', () => {
+  // 写侧（路由/下载链）按 translationModelKey 落 '<模型>@<版本>' 盐键；
+  // file-downloader 单参读点只传裸模型——持久层把裸模型扩成
+  // 「裸键逐字 + 当前盐键」双查收口。突变钉：删掉第二个 OR model=? 盐键
+  // 子句后首个断言即转红
+  const salted = lyricAiRepo.translationModelKey('m');   // 当前 'm@t1'
+  lyricAiRepo.upsertTranslation('song-salt', '[00:01.00]盐词', salted);
+  // 裸模型读点（下载链口径）→ 扩成当前盐键命中本版行
+  assert.equal(lyricAiRepo.getCachedTranslation('song-salt', 'm').tlyric, '[00:01.00]盐词');
+  // 盐键直传（路由口径）→ 第一参逐字命中
+  assert.equal(lyricAiRepo.getCachedTranslation('song-salt', salted).tlyric, '[00:01.00]盐词');
+  // 异模不命中——'m2' 扩成 'm2@t1'，两个键都不是 'm@t1'
+  assert.equal(lyricAiRepo.getCachedTranslation('song-salt', 'm2'), undefined);
+  // 旧盐版本不命中——'m@t0' 逐字≠'m@t1'，再扩成 'm@t0@t1' 也不中
+  assert.equal(lyricAiRepo.getCachedTranslation('song-salt', 'm@t0'), undefined);
+  // 盐前存量行（裸 model 落库）对裸模型读点仍命中——双查第一参逐字面
+  lyricAiRepo.upsertTranslation('song-legacy', '[00:01.00]旧词', 'm');
+  assert.equal(lyricAiRepo.getCachedTranslation('song-legacy', 'm').tlyric, '[00:01.00]旧词');
+  // skip:* 哨兵与官方译文行不吃盐——确定性状态/词源事实与 prompt 版本无关
+  lyricAiRepo.markTranslationSkip('song-saltskip', 'no-lyric');
+  assert.ok(lyricAiRepo.getCachedTranslation('song-saltskip', 'whatever'));
+  lyricAiRepo.upsertTranslation('song-saltqq', '[00:01.00]官译', 'qq');
+  assert.equal(lyricAiRepo.getCachedTranslation('song-saltqq', 'm@t0').tlyric, '[00:01.00]官译');
+});
+
 test('lyricAi 判定缓存：vkey 键隔离、ok/detail 往返', () => {
   assert.equal(lyricAiRepo.getLyricVerdict('v-none'), undefined);
   lyricAiRepo.upsertLyricVerdict('id@m1@sig1', false, '错配示例');
