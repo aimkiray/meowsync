@@ -98,7 +98,7 @@
           :aria-expanded="srcMenuOpen"
           aria-controls="topnav-src-menu"
           @click="toggleSrcMenu"
-        ><PixelIcon name="grip" :size="18" /></button>
+        ><PixelIcon name="broadcast" :size="18" /></button>
         <Teleport to="body">
           <div
             v-if="srcMenuOpen"

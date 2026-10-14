@@ -591,9 +591,9 @@ button {
   .topnav-suggest-item--active, .rc-queue-row--current {
     outline: 1.2px solid transparent;
   }
-  /* 透明 border 被强制色刷成 ButtonText 实心条——滚动条内缩车道退化为
+  /* 透明 border 被强制色刷成 ButtonText 实心条——滚动条顶部内缩车道退化为
      padding（滚动条恢复顶到页缘，HC 下可读性优先于车道美学） */
-  .home-feed, .playlist-grid-wrap { border-block: 0; padding-block: 20px; }
+  .home-feed, .playlist-grid-wrap { border-top: 0; padding-block: 20px; }
 }
 /* teleport 菜单触发器语态 */
 [aria-expanded="true"].song-menu-btn,
