@@ -100,13 +100,12 @@
           </div>
         </section>
 
-        <!-- ═══ 界面偏好（本机） ═══ -->
+        <!-- ═══ 界面偏好 ═══ -->
         <section class="settings-card" aria-labelledby="st-local">
           <div class="settings-card-head">
             <h3 id="st-local" class="settings-card-title">界面偏好</h3>
-            <span class="pg-chip pg-chip--static pg-chip--dim">本机</span>
           </div>
-          <p class="settings-hint">只保存在此设备的浏览器里，与服务端配置无关。</p>
+          <p class="settings-hint">主题/搜索源/视频模式/歌词字号随账号跨端同步；故障动效豁免只在本机生效，均与服务端配置无关。</p>
 
           <div class="settings-row settings-row--flat" role="group" aria-label="主题">
             <span class="settings-label">主题</span>
@@ -120,6 +119,19 @@
               >{{ t.name }}</button>
             </span>
           </div>
+          <div class="settings-row settings-row--flat" role="group" aria-label="搜索源">
+            <span class="settings-label">搜索源</span>
+            <span class="settings-themes">
+              <button
+                v-for="s in SEARCH_SOURCES" :key="s.id"
+                class="pg-chip"
+                :class="{ 'pg-chip--on': s.id === prefSearchSource }"
+                :aria-pressed="s.id === prefSearchSource"
+                @click="prefSearchSource = s.id"
+              >{{ s.name }}</button>
+            </span>
+          </div>
+          <p class="settings-hint">裸关键词搜索与输入建议走此源；netease: / qq: / yt: / bili: 前缀仍可显式指定搜索源。</p>
           <div class="settings-row settings-row--flat" role="group" aria-label="视频模式">
             <span class="settings-label">视频模式</span>
             <button
@@ -159,7 +171,7 @@ import { apiErrorMessage } from '../api/http.js'
 import { toast } from '../lib/feedback.js'
 import { refreshServerCaps } from '../lib/caps.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
-import { prefVideoOn, prefLyricFontSize, prefGlitchMotion, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs.js'
+import { prefVideoOn, prefLyricFontSize, prefGlitchMotion, prefSearchSource, SEARCH_SOURCES, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs.js'
 
 export default {
   name: 'SettingsPanel',
@@ -329,7 +341,7 @@ export default {
       srcText, secretPlaceholder, cookiePlaceholder, cookieState,
       saveAi, saveCookie, clearOverride, testAi,
       THEMES, currentTheme, setTheme,
-      prefVideoOn, prefLyricFontSize, prefGlitchMotion, LYRIC_FS_MIN, LYRIC_FS_MAX,
+      prefVideoOn, prefLyricFontSize, prefGlitchMotion, prefSearchSource, SEARCH_SOURCES, LYRIC_FS_MIN, LYRIC_FS_MAX,
     }
   }
 }

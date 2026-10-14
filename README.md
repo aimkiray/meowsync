@@ -78,7 +78,7 @@ npm run typecheck    # 类型检查（tsc --noEmit）
 
 | 输入形态 | 示例 | 去向 |
 |---|---|---|
-| 关键词 | 曲名/艺人/专辑（带输入建议） | 搜索结果页 |
+| 关键词 | 曲名/艺人/专辑（带输入建议） | 搜索结果页（走「搜索源」偏好所设源） |
 | 纯数字 id / `?id=`、`?playlist=` 链接 | `2829883282` | 网易云歌单 |
 | 含 song 的链接 | `music.163.com/song?id=N`、本站 `?song=N` | 网易云单曲 |
 | BV 号 / av 号 / B 站链接 | `BV1xx...`、`av170001`、`b23.tv/...` | B 站视频 |
@@ -88,8 +88,13 @@ npm run typecheck    # 类型检查（tsc --noEmit）
 | QQ 链接 | `y.qq.com`、`c.y.qq.com`、`qqmusic://`、`songmid=` | QQ 单曲 |
 | QQ 歌单链 | `/playlist/N`、`taoge.html?id=N`、`disstid` | QQ 歌单 |
 | `qq:` 前缀 | `qq:关键词`、`qq:<链接或 mid>` | QQ 曲库搜索 / 直解 |
+| `yt:` 前缀 | `yt:关键词`、`yt:<链接或 videoId>` | YouTube 曲库搜索 / 直解 |
+| `bili:` 前缀 | `bili:关键词`、`bili:<BV/av/链接>` | B 站曲库搜索 / 直解 |
+| `netease:`/`163:`/`wy:` 前缀 | `netease:关键词` | 网易云曲库搜索（切源后的显式逃生口） |
 
 > 裸 11 位 YouTube videoId 与裸 QQ songmid 和搜索词天然歧义，按关键词处理——要直解请贴完整链接或用 `?yt=`/`?qq=` 分享形态。
+>
+> 「设置 → 搜索源」决定裸关键词搜索与输入建议的默认源（随账号跨端同步）；`netease:`/`qq:`/`yt:`/`bili:` 前缀是显式源声明，不受该偏好影响。
 
 ### URL 参数
 

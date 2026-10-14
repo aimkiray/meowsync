@@ -35,6 +35,10 @@ vi.mock('../../src/api/music.js', () => ({
   musicApi: {
     getSongUrl: vi.fn(async () => ({ url: 'https://cdn.example/online.mp3', br: 320000 })),
     searchSongs: vi.fn(async () => []),
+    // continueWithRelated 改走 lib/related.js 同源分派后按曲源可达的三条腿
+    getBiliRelated: vi.fn(async () => ({ items: [] })),
+    getYouTubeRelated: vi.fn(async () => ({ items: [], mixPlaylistId: null })),
+    searchQQSongs: vi.fn(async () => ({ songs: [], total: 0 })),
     bilibiliStreamUrl: vi.fn(() => 'https://x/bili'),
     youtubeStreamUrl: vi.fn(() => 'https://x/yt'),
     qqStreamUrl: vi.fn(() => 'https://x/qq'),
@@ -129,6 +133,10 @@ beforeEach(() => {
   musicApi.getSongUrl.mockImplementation(async () => ({ url: 'https://cdn.example/online.mp3', br: 320000 }))
   musicApi.youtubeStreamUrl.mockImplementation(() => 'https://x/yt')
   musicApi.searchSongs.mockImplementation(async () => [])
+  // related 三腿新桩同样归位——用例内 mockResolvedValue 覆写会残留到次例
+  musicApi.getBiliRelated.mockResolvedValue({ items: [] })
+  musicApi.getYouTubeRelated.mockResolvedValue({ items: [], mixPlaylistId: null })
+  musicApi.searchQQSongs.mockResolvedValue({ songs: [], total: 0 })
   downloadsApi.getSongDownloadStatus.mockImplementation(async () => null)
   // clearAllMocks 只清调用记录不清实现——逐用例覆写的 mock 全部归位
   parseLyrics.mockImplementation(() => [])
@@ -2337,6 +2345,40 @@ describe('usePlayer：F1 continueWithRelated 代次闸与在途去重', () => {
     expect(player.playingSongs.value.map(s => s.id)).toEqual([9])
     expect(howls).toHaveLength(howlCount)
     expect(player.currentSong.value.id).toBe(9)
+  })
+
+  it('bv_ 种曲接续走 relatedFetch 同源口径：打相似接口而非艺人搜', async () => {
+    // 与 WatchView 相关面板同一分派（lib/related.js）——B 站曲队列播完续的
+    // 是上游相似稿，不是拿 UP 主名去搜网易云曲库
+    const a = song('bv_BV1xx411c7XE', { bilibili: { bvid: 'BV1xx411c7XE' } })
+    const { player } = makePlayer({ songs: [a] })
+    player.autoplayOn.value = true
+    await player.playSong(a)
+    musicApi.getBiliRelated.mockResolvedValue({ items: [
+      // 上游回包混种曲本体（bvid 同）——relatedFetch 内剔除后只剩真相关
+      { bvid: 'BV1xx411c7XE', title: '本体', owner: 'u', duration: 60, cover: '' },
+      { bvid: 'BV9yy511d7YF', title: '相关稿', owner: 'v', duration: 60, cover: '' },
+    ] })
+    howls.at(-1).fire('onend')
+    await vi.waitFor(() => expect(musicApi.getBiliRelated).toHaveBeenCalledWith('BV1xx411c7XE'))
+    expect(musicApi.searchSongs).not.toHaveBeenCalled()
+    await vi.waitFor(() =>
+      expect(player.playingSongs.value.map(s => s.id)).toEqual(['bv_BV1xx411c7XE', 'bv_BV9yy511d7YF']))
+    expect(player.currentSong.value.id).toBe('bv_BV9yy511d7YF')
+  })
+
+  it('缺料曲（无艺人 file_）接续落停止分支——relatedFetch null 不假造相关', async () => {
+    const a = song('file_abcd1234', { ar: [] })
+    const { player } = makePlayer({ songs: [a] })
+    player.autoplayOn.value = true
+    await player.playSong(a)
+    howls.at(-1).fire('onload')
+    howls.at(-1).fire('onplay')
+    expect(player.isPlaying.value).toBe(true)
+    howls.at(-1).fire('onend')
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.searchSongs).not.toHaveBeenCalled()
+    expect(player.isPlaying.value).toBe(false) // 真停止收尾，不是挂起
   })
 })
 

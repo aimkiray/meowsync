@@ -12,6 +12,7 @@ import { glitchBurst } from '../lib/theme.js'
 import { httpsCover, isResolvableTrackId, NETEASE_ID_RE, YT_TRACK_ID_RE, BV_TRACK_ID_RE, QQ_SONG_ID_RE } from '../lib/url.js'
 import { isEphemeralPlaylistId, isLocalPlaylistId, isFileTrackId, fileArtifactUrl, songCoverUrl, isUgcExternalTrack, externalArtistName, proxiedCoverUrl } from '../lib/song.js'
 import { applyMatchResult } from '../lib/external-songs.js'
+import { relatedFetch } from '../lib/related.js'
 // MIRROR_PLAYLIST_ID_RE/isLikelyChineseLyric 未走 lib 转口（lib/url.js 转口表无它们）——直引共享层
 import { MIRROR_PLAYLIST_ID_RE, isLikelyChineseLyric } from '../shared/predicates.js'
 import { plainLyricLines } from '../shared/lrc.js'
@@ -535,11 +536,11 @@ export function usePlayer({
       if (queueOriginalOrder) queueOriginalOrder.push(...list)
     }
 
-    // autoplay：自然播完且队列耗尽时，拉当前艺人相关歌接进队列继续播。
+    // autoplay：自然播完且队列耗尽时，拉当前曲相关歌接进队列继续播。
     // in-flight 去重只合流同代调用：自动/手动两入口或队尾连点在一代内
-    // 共享一张票，各发各的 RTT 落地会双份 pushTail。票的种子（当前艺人）
+    // 共享一张票，各发各的 RTT 落地会双份 pushTail。票的种子（当前曲）
     // 在立案那刻读取——换代后旧票种子已属旧曲，绝不能「收养」进新代
-    // （落地会拿旧艺人的相关歌劫持新队列）；新代来调用则另立新票新种子，
+    // （落地会拿旧曲的相关歌劫持新队列）；新代来调用则另立新票新种子，
     // 旧票随其 RTT 落地被代次闸弃。代次闸：落地前复查 ticket.seq——RTT
     // 窗内用户切歌/卸载（playSeq 换代）时 pushTail+playSong 会劫持新代
     // 队列复活出声；seq 失配返回 true 抑制调用方的 stopAtQueueEnd——
@@ -552,14 +553,16 @@ export function usePlayer({
       const ticket = { seq: playSeq, p: null }
       const p = (async () => {
         try {
-          const artist = (currentSong.value?.ar || currentSong.value?.artists || [])[0]?.name
-          if (!artist) return false
-          const list = await musicApi.searchSongs(artist, 15)
+          // 与 WatchView 相关面板同一分派（lib/related.js）：bv_/yt_ 打上游
+          // 相似接口（真相关——B 站/YouTube 队列播完续的是相似稿而非同艺人
+          // 的别家曲库曲）、qq_/数值按首艺人搜；判源/id 解形兜底/种曲剔除
+          // 全在 relatedFetch，缺料 null=该曲无相关面 → 落停止分支
+          const r = await relatedFetch(currentSong.value)
           // 换代即弃：不得动 playingSongs（可能已是新代重拍的队列），也不得
           // playSong 把人拉回旧代——true 让调用方静默收尾（世界已归新代）
           if (ticket.seq !== playSeq) return true
           const exist = new Set(playingSongs.value.map(s => String(s.id)))
-          const fresh = (list || []).filter(s => s?.id != null && !exist.has(String(s.id)))
+          const fresh = (r?.items || []).filter(s => s?.id != null && !exist.has(String(s.id)))
           if (!fresh.length) return false
           pushTail(fresh)
           playSong(fresh[0], { preserveContext: true })

@@ -760,8 +760,10 @@ export const musicApi = {
   },
 
   // QQ 相似曲：上游相似接口匿名全拒，服务端艺人搜索降级实装——
-  // degraded=true 透出降级面（曲目元素与 searchQQSongs 同形）
-  // groundwork:全局切源(P5)消费
+  // degraded=true 透出降级面（曲目元素与 searchQQSongs 同形）。
+  // 未接线 groundwork：前端相关分派（lib/related.js）已自选「qq_ 按首
+  // 艺人搜 QQ 曲库」降级路不经过本端点——留备上游相似放通/全局切源
+  // 需要服务端降级面时再接线
   getQQSimilar: async (songmid, abortSignal = null) => {
     const response = await api.get('/qq/similar', {
       params: { songmid }, signal: abortSignal, timeout: 30000,

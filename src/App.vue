@@ -28,9 +28,10 @@
       @open-settings="toggleSettings"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @nav-home="navHome"
-      @search="handlePlaylistSearch"
+      @search="handleSearch"
       @search-by-id="previewPlaylistById"
       @search-song="importNeteaseSongById"
+      @search-netease="handlePlaylistSearch"
       @search-bili="importBilibiliOrFav"
       @search-bili-songs="handleBiliSongSearch"
       @search-yt="importYouTubeOrPlaylist"
@@ -917,6 +918,7 @@ export default {
       selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,
       previewPlaylistById,
       openWatchSong, openWatchSearchSong, openWatchRecent, playPlaylistAndWatch,
+      handleSearch,
       handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, handleBiliSongSearch,
       loadMoreSearchSongs,
     } = useSearchNav({
@@ -1389,6 +1391,7 @@ export default {
       openSearchPlaylist,
       closeSearchView,
       navHome,
+      handleSearch,
       handlePlaylistSearch,
       handleQQSongSearch,
       handleYTSongSearch,

@@ -37,6 +37,7 @@ const makeRemoteApplyGate = () => {
 }
 const videoRemoteGate = makeRemoteApplyGate()
 const lyricFsRemoteGate = makeRemoteApplyGate()
+const searchSrcRemoteGate = makeRemoteApplyGate()
 
 // 视频模式：'0' 显式关，其余为开——视频源曲的价值就是画面，默认开。
 // LS_KEYS.VIDEO_MODE 沿用 B 站时代键名：YouTube 接入不换名重置用户选择
@@ -53,6 +54,19 @@ export const clampLyricFs = (raw) => Math.min(LYRIC_FS_MAX, Math.max(LYRIC_FS_MI
   parseInt(raw) || 18))
 export const prefLyricFontSize = ref(clampLyricFs(safeGetLs(LS_KEYS.LYRIC_FONT_SIZE)))
 watch(prefLyricFontSize, v => { if (!lyricFsRemoteGate.isApplying()) safeSetLs(LS_KEYS.LYRIC_FONT_SIZE, String(v)) })
+
+// 搜索源偏好：裸关键词搜索/搜索建议的默认源。值域白名单——LS 里是自由
+// 字符串，远端可能推来新版客户端才有的源值，缺席/不认识的值一律归
+// 'netease'（显式 qq:/yt:/bili: 前缀不受此偏好影响，TopNav 分派先行）
+export const SEARCH_SOURCES = [
+  { id: 'netease', name: '网易云' },
+  { id: 'qq', name: 'QQ 音乐' },
+  { id: 'yt', name: 'YouTube' },
+  { id: 'bili', name: 'Bilibili' },
+]
+const normSearchSource = (raw) => SEARCH_SOURCES.some(s => s.id === raw) ? raw : 'netease'
+export const prefSearchSource = ref(normSearchSource(safeGetLs(LS_KEYS.SEARCH_SOURCE)))
+watch(prefSearchSource, v => { if (!searchSrcRemoteGate.isApplying()) safeSetLs(LS_KEYS.SEARCH_SOURCE, v) })
 
 // 故障动效豁免：'1' 显式强制开，其余/absent 跟随系统——读判据 === '1' 是
 // opt-in（与 VIDEO_MODE 的 !== '0' opt-out 方向相反）：默认不该越过 a11y
@@ -86,4 +100,9 @@ export function applyRemoteLyricFs() {
   lyricFsRemoteGate.begin()
   prefLyricFontSize.value = clampLyricFs(safeGetLs(LS_KEYS.LYRIC_FONT_SIZE))
   lyricFsRemoteGate.end()
+}
+export function applyRemoteSearchSource() {
+  searchSrcRemoteGate.begin()
+  prefSearchSource.value = normSearchSource(safeGetLs(LS_KEYS.SEARCH_SOURCE))
+  searchSrcRemoteGate.end()
 }
