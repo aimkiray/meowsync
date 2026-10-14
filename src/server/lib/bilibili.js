@@ -3,6 +3,8 @@
 // 移动边界：上游交互（cookie 头形态、API 调用、流挑选、输入解析）全在这里；
 // HTTP 语义留在路由。两份实现漂移会让"能播不能下/能下不能播"互不知情
 const { Agent } = require('undici');
+const vm = require('node:vm');
+const v8 = require('node:v8');
 const { normalizeOutboundUrl, resolvesToPublicIp, makeGuardedLookup } = require('./net-guard');
 const { BVID_RE, BVID_IN_TEXT_RE, extractBiliFavlistId } = require('../../shared/predicates.js');
 
@@ -145,6 +147,272 @@ async function biliFetch(path, extraSignal) {
   const body = await res.json();
   if (body.code !== 0) throw new Error(`bilibili ${path.split('?')[0]} code=${body.code} ${body.message || ''}`);
   return body.data;
+}
+
+// ── 搜索/相关/建议上游面 ─────────────────────────────────────────────
+// B 站曲库搜索的匿名通路只有 SSR 数据岛：search.bilibili.com/video?keyword=
+// 返回的 HTML 里 `window.__pinia=<IIFE>` 语句（实测 ~115KB）携带完整
+// searchAllResponse——result[] 分桶，只取 result_type==='video' 的 data[]。
+// page/p 参数对 SSR 无效（恒回第 1 页）：续页走 WBI 签名接口，匿名已被
+// v_voucher 风控墙死（本机实锤）——WBI 路径刻意不实现，pinia 即全量。
+// 搜索页在 search.bilibili.com（www 域系）而非 api.bilibili.com——请求
+// 只带 BILI_PUBLIC_HEADERS，biliCookie 是 api 域专属不外泄（域闸保持）。
+
+// window.__pinia 数据岛求值：indexOf 定位赋值点 + </script> 截断（岛内
+// 字符串的 '<' 上游已转义）。沙箱是隔离 context 域而非「喂宿主对象」——
+// Object.create(null) 作 context 全局、window 用 context 内 var 建立
+// （IIFE 的 this/window.constructor 落在 context 域内建对象上，摸不到宿主
+// Function）；codeGeneration 关死 eval/new Function——window.constructor.
+// constructor('return process')() 这类逃逸在字符串代码生成处掐断成
+// EvalError；microtaskMode:'afterEvaluate' 把岛内微任务排水收进同一份
+// timeout 预算——context 全局 Promise 已先一步置 undefined，
+// Promise.resolve().then(()=>while(1)) 这型在求值期就同步 TypeError
+// 死、根本排不进微任务。
+// 返回物不走跨域对象引渡：context 内 JSON.stringify 出文本、宿主侧
+// JSON.parse——调用方读键永不踩 context getter（getter 只在岛内 stringify
+// 里跑，仍吃 timeout 预算）。payload 非 JSON 可表达（BigInt/环引用）即判
+// 畸形归 null——数据岛契约本就是纯数据。vm 域隔离收窄了逃逸面但不是
+// 绝对边界（context 内建对象间的旁路理论存在），上面几道闸缺一不可。
+// 岛内 promise 拒绝的残面：context 域 promise 仍向宿主 unhandledRejection
+// 上报（宿主无进程级兜底→崩进程）——eval 同步窗口内挂 promiseHooks.init
+// 给每个新生 promise 补 swallow-catch；窗口是同步段，其他代码构造的
+// promise 不会混入。
+// 已知残面（Node bug nodejs/node#38503）：async/await 是语法级内建不受
+// Promise 影子化管——`(async()=>{await 0;while(1){}})()` 仍能排进排水被
+// timeout 掐断，但掐断点落在微任务排水里会弄坏 async_hooks 记账栈，
+// 进程可能稍后 assert 崩（node --test 下必现；无 hooks 的裸进程实测存活）。
+// 比宿主事件循环挂死强（崩溃可自愈、挂死是僵尸），且攻击者要先能写
+// bilibili 域 SSR 页 HTML。返回 null = 岛缺席/求值失败/超时——调用方按
+// 「解析失败」抛
+function evalPiniaIsland(html, { timeoutMs = 3000 } = {}) {
+  const s = String(html || '');
+  const anchor = 'window.__pinia';
+  const i = s.indexOf(anchor);
+  if (i < 0) return null;
+  const eq = s.indexOf('=', i + anchor.length);
+  const end = eq < 0 ? -1 : s.indexOf('</script>', eq);
+  if (eq < 0 || end < 0) return null;
+  // 尾分号剥掉再包圆括号——裸对象字面量会被当块语句误解析（{a:1} 读成
+  // label），IIFE 包括号语义不变，两种产出形态通吃
+  const stmt0 = s.slice(eq + 1, end).trim().replace(/;+$/, '');
+  if (!stmt0) return null;
+
+  const sandbox = Object.create(null);
+  vm.createContext(sandbox, {
+    codeGeneration: { strings: false, wasm: false }, // 禁 eval/new Function/编译型逃逸
+    microtaskMode: 'afterEvaluate',                  // 微任务排水收进 timeout 预算
+  });
+  // window 建在 context 域（宿主传对象会把宿主 constructor 链送进门内）；
+  // __msj 钉住真 JSON.stringify——岛语句若覆写 JSON 全局不波及串行化；
+  // Promise 置 undefined——微任务/拒绝的命名通道在求值期同步 TypeError
+  // 死（async/await 语法级残面见上方块注释），数据岛契约本不需要 Promise
+  vm.runInContext('var window = {}; var __msj = JSON.stringify; var Promise = undefined;', sandbox);
+  // 首评+截断重试共享同一份 timeoutMs 总预算（起评时刻起算）——每刀独立
+  // 吃满会让病态岛（每次都耗到超时才败的漂移串）叠出 5×timeoutMs 的同步
+  // 事件循环冻结；余额 <50ms 直接弃刀归 null。vm timeout 必须是整数
+  // （分数会 ERR_OUT_OF_RANGE）——floor 后下发
+  const t0 = Date.now();
+  const evalFrag = (frag) => {
+    const left = Math.floor(timeoutMs - (Date.now() - t0));
+    if (left < 50) return null;
+    const json = vm.runInContext(
+      // IIFE 可自赋 window.__pinia 而不返回值——v===undefined 兜一眼 window
+      `(function(){var v=(${frag});if(v===undefined)v=window.__pinia;return __msj(v)})()`,
+      sandbox, { timeout: left });
+    if (typeof json !== 'string') return null;
+    const v = JSON.parse(json); // JSON.parse 产物是宿主域纯数据
+    return v && typeof v === 'object' ? v : null;
+  };
+
+  // 岛内 promise 构造即挂 swallow-catch——拒绝不外溢宿主 unhandledRejection。
+  // swallowing 闸断 .then 衍生物的递归钩（衍生物构造同样触发 init）。
+  // 必须走宿主内建 Promise.prototype.then.call：岛可经
+  // (async()=>{})().constructor.prototype 摸到 context 域 Promise.prototype
+  // 并覆写 .then——裸 promise.then(...) 会被钓走导致吞咽失效、拒绝照样外溢；
+  // 宿主内建对 context 域 promise 可直接调用（内部槽位跨 realm 通用），
+  // 衍生物仍落 context 域、构造时照触 init——swallowing 闸语义不变
+  let swallowing = false;
+  const stopHook = v8.promiseHooks.createHook({
+    init(promise) {
+      if (swallowing) return;
+      swallowing = true;
+      try { Promise.prototype.then.call(promise, undefined, () => {}); } finally { swallowing = false; }
+    },
+  });
+  try {
+    // 多语句岛残面：RHS 后混同 script 块其它语句时整段必炸——求值失败
+    // 从尾往前逐 ;/, 截断重试（至多 4 刀防无限）。残面：逗号刀可能切开
+    // 合法尾逗号表达式，但只在已失败后兜底——完整形永远先行
+    let frag = stmt0;
+    for (let cuts = 0; frag;) {
+      try {
+        const v = evalFrag(frag);
+        if (v) return v;
+      } catch { /* 语法漂移/内部 throw/超时同归——不细分，截尾重试 */ }
+      if (++cuts > 4) return null;
+      const cut = Math.max(frag.lastIndexOf(';'), frag.lastIndexOf(','));
+      if (cut <= 0) return null;
+      frag = frag.slice(0, cut).trim().replace(/;+$/, '');
+    }
+    return null;
+  } finally {
+    stopHook();
+  }
+}
+
+// 搜索高亮剥洗：<em class="keyword">词</em>（title/suggest value 都可能带）
+const stripSearchEm = (s) => String(s ?? '').replace(/<em[^>]*>|<\/em>/g, '');
+// 上游 pic 常是 '//i*.hdslb.com/…' 协议相对形态——补 https:；非 http(s)
+// 串不落（与前端 pickAlbumCover 的非 http 排除同口径）
+const httpsPic = (p) => {
+  const s = String(p || '');
+  return s.startsWith('//') ? `https:${s}` : (/^https?:\/\//i.test(s) ? s : '');
+};
+// duration 双形态归一到秒：搜索页是 'M:SS'/'H:MM:SS' 字符串（'4:0'/'55:17'），
+// view/related 系是秒数数字。坏形态归 0——时长是展示/匹配参考不是门禁
+function durationSecOf(v) {
+  if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? Math.round(v) : 0;
+  const parts = String(v || '').split(':').map(p => Number(p.trim()));
+  if (parts.length < 2 || parts.length > 3 || parts.some(n => !Number.isFinite(n) || n < 0)) return 0;
+  return Math.round(parts.reduce((acc, n) => acc * 60 + n, 0));
+}
+// 搜索/相关条目归一行：{bvid,title,author,durationSec,pic,typeid,typename,pubdate}。
+// 两路字段名不同源——搜索桶给 author/typeid/typename（typeid 是字符串!），
+// archive/related 给 owner.name/tid/tname（数字）——同孔径双吃
+const videoItemToRow = (v) => ({
+  bvid: typeof v?.bvid === 'string' ? v.bvid : '',
+  title: stripSearchEm(v?.title).trim(),
+  author: String(v?.author ?? v?.owner?.name ?? ''),
+  durationSec: durationSecOf(v?.duration),
+  pic: httpsPic(v?.pic),
+  typeid: Number(v?.typeid ?? v?.tid) || 0,
+  typename: String(v?.typename ?? v?.tname ?? ''),
+  pubdate: Number(v?.pubdate) || 0,
+});
+
+// 音乐分区白名单（原创28/现场29/VU30/翻唱31/演奏59/音乐综合130/MV193/
+// AI音乐265/饭拍266/电台267）——搜索=音乐源语义的默认过滤面；乐评243/
+// 教学244 等非音乐桶剔除。typeid 入参是字符串——先转 Number 再集合判
+const MUSIC_ZONE_TYPEIDS = new Set([28, 29, 30, 31, 59, 130, 193, 265, 266, 267]);
+const musicZoneOf = (typeid) => MUSIC_ZONE_TYPEIDS.has(Number(typeid));
+
+// 搜索页逐跳域闸：302 链上每一跳建连前验 host——外站/scheme 漂移的连接
+// 根本不发生；只认 bilibili.com 本系（b23.tv 只是跳解跳房，不出 pinia
+// 岛，不放进）
+const isBiliPageHost = (h) => h === 'bilibili.com' || h.endsWith('.bilibili.com');
+// 岛页体积闸：实测 pinia 岛 ~115KB——2MB 上限余量充足又挡住畸形巨页
+const BILI_SEARCH_MAX_BYTES = 2 * 1024 * 1024;
+// 有界读体：头侧 content-length 早拒（可谎报/缺省），流侧逐块累计超界
+// 断流（img-proxy readBoundedBody 同款）；测试桩无 body 时退 res.text()
+async function readSearchHtml(res) {
+  const declared = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > BILI_SEARCH_MAX_BYTES) {
+    await res.body?.cancel().catch(() => {});
+    throw new Error(`bilibili search body content-length ${declared} 超限`);
+  }
+  const stream = res.body;
+  if (stream && typeof stream.getReader === 'function') {
+    const reader = stream.getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value?.byteLength || 0;
+      if (total > BILI_SEARCH_MAX_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`bilibili search body 超 ${BILI_SEARCH_MAX_BYTES}B`);
+      }
+      chunks.push(value);
+    }
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+    return new TextDecoder().decode(buf);
+  }
+  return res.text();
+}
+
+// B 站曲库搜索：SSR 页 → pinia 岛 → video 桶归一行。返回 {items,seid,
+// numResults}；岛缺席/求值失败/形态漂移一律抛（路由转 502）——静默空态
+// 会把上游改版伪装成「没搜到」。唯独 video 桶缺席不是漂移：result[] 桶表
+// 合法但词只命中直播/用户等非视频分区时上游不下发 video 桶——合法零视频
+// 词归空态；漂移判定只剩 result 缺席/非数组/桶非对象/video 桶 data 非数组。
+// evalTimeoutMs 是测试参数通道——微任务 DoS 钉板不等满 3s 默认预算
+async function biliSearchVideos(q, { signal, evalTimeoutMs } = {}) {
+  const reqUrl = `https://search.bilibili.com/video?keyword=${encodeURIComponent(q)}`;
+  // 逐跳手动跟 302（redirect:'manual'）——裸 fetch 的 follow 模式会先把连接
+  // 打到 302 指向的任意 host/port/scheme（含 http://内网IP），再验 res.url
+  // 终态域是马后炮：连接已经发生了（盲 SSRF）。范式同 resolveBiliLink：
+  // 每跳建连前先过 normalizeOutboundUrl（限 http/https + 80/443 + 剥
+  // credentials + 尾点归一）+ isBiliPageHost 域白名单——只认 bilibili.com
+  // 本系（b23.tv 是短链跳解跳房，归 resolveBiliLink 链，本链不收），
+  // 跳数上限 ≤3。与 resolveBiliLink 的差异：本链入口是服务端构造的常量
+  // URL 而非用户输入，逐跳域白名单已把连接面钉死在 B 站本系——不引
+  // resolvesToPublicIp/makeGuardedLookup（*.bilibili.com 解析进私网需要
+  // 上游 DNS 本身被控，彼时 SSR 页已是敌意输入，防线在 eval 沙箱不在
+  // 建连层）。域闸前置后 res.url 终态断言被结构性取代（manual 下 res.url
+  // 即本跳已校验 URL，post-check 无增量）——缺席的 res.url 不再判越域
+  const sig = signal
+    ? AbortSignal.any([AbortSignal.timeout(BILI_TIMEOUT_MS), signal])
+    : AbortSignal.timeout(BILI_TIMEOUT_MS); // 整链共享一份总预算——跳解不放大超时面
+  let href = reqUrl;
+  let res = null;
+  for (let hop = 0; hop <= 3; hop++) {
+    const checked = normalizeOutboundUrl(href);
+    if (!checked.ok) throw new Error(`bilibili search 目标非法（${checked.code}）`);
+    if (!isBiliPageHost(checked.url.hostname)) {
+      throw new Error(`bilibili search 重定向越域（终态 ${checked.url.hostname}）`);
+    }
+    res = await fetch(checked.url.href, {
+      headers: BILI_PUBLIC_HEADERS,
+      redirect: 'manual',
+      signal: sig,
+    });
+    const loc = res.status >= 300 && res.status < 400 ? res.headers?.get?.('location') : null;
+    if (!loc) break; // 终态（含无 location 的 3xx——!res.ok 在下方统一抛）
+    await res.body?.cancel().catch(() => {}); // 跳解响应体不读——排水后放掉
+    try { href = new URL(loc, checked.url.href).toString(); }
+    catch { throw new Error('bilibili search 重定向 location 畸形'); }
+    res = null;
+  }
+  if (!res) throw new Error('bilibili search 重定向跳数超限（>3 跳仍 3xx）');
+  if (!res.ok) throw new Error(`bilibili search HTTP ${res.status}`);
+  const pinia = evalPiniaIsland(await readSearchHtml(res), { timeoutMs: evalTimeoutMs });
+  const all = pinia?.searchResponse?.searchAllResponse;
+  const buckets = Array.isArray(all?.result) ? all.result : null;
+  let videoData = null;
+  if (buckets && buckets.every(b => b && typeof b === 'object')) {
+    const hit = buckets.find(b => b.result_type === 'video');
+    if (!hit) videoData = [];                     // 合法零视频命中——空态不归 502
+    else if (Array.isArray(hit.data)) videoData = hit.data;
+  }
+  if (videoData === null) {
+    throw new Error('bilibili search 数据岛解析失败（pinia 缺席或形态漂移）');
+  }
+  return {
+    items: videoData.map(videoItemToRow).filter(v => v.bvid),
+    seid: all.seid ?? null,
+    numResults: Number(all.numResults) || 0,
+  };
+}
+
+// 搜索建议：web-interface/suggest → result.tag[].value（高亮在 name 字段，
+// value 是纯文本；em 剥洗仍做——上游字段互换防御）。免签名免 cookie
+async function biliSuggest(term, { signal } = {}) {
+  const data = await biliFetch(`/x/web-interface/suggest?term=${encodeURIComponent(term)}`, signal);
+  const tags = data?.result?.tag;
+  if (!Array.isArray(tags)) return [];
+  return tags.map(t => stripSearchEm(t?.value ?? t?.name))
+    .map(s => s.trim()).filter(Boolean).slice(0, 20);
+}
+
+// 相关视频：archive/related → data[]（免签名，上游给 ~40 条上限）。
+// 归一与搜索同孔径（owner.name→author、duration 秒数数字、tid→typeid）；
+// 种曲剔除与分区裁剪都归路由层——本函数只做上游搬运
+async function biliRelated(bvid, { signal } = {}) {
+  const data = await biliFetch(`/x/web-interface/archive/related?bvid=${encodeURIComponent(bvid)}`, signal);
+  return (Array.isArray(data) ? data : []).map(videoItemToRow).filter(v => v.bvid);
 }
 
 const viewQuery = (id) => typeof id === 'string' ? `bvid=${id}` : `aid=${id.aid}`;
@@ -322,5 +590,7 @@ module.exports = {
   biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView,
   flatUrls,
   viewQuery, parseBvid, resolveBiliLink, isBiliLinkHost, resolveBiliAudio, resolveBiliMedia,
+  // 曲库面：SSR 数据岛搜索/建议/相关 + 音乐分区白名单 + 条目归一
+  biliSearchVideos, biliSuggest, biliRelated, musicZoneOf, videoItemToRow,
   BVID_RE,
 };

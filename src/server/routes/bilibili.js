@@ -13,7 +13,8 @@ const { createTtlCache } = require('../lib/stream-resolve-cache');
 const { BVID_RE } = require('../../shared/predicates.js');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
-const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, flatUrls, viewQuery, resolveBiliLink, hasBiliCookie, QN_HEIGHT } = require('../lib/bilibili');
+const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, flatUrls, viewQuery, resolveBiliLink, hasBiliCookie, QN_HEIGHT,
+  biliSearchVideos, biliSuggest, biliRelated, musicZoneOf } = require('../lib/bilibili');
 
 const app = new Hono();
 
@@ -277,6 +278,110 @@ app.get('/bilibili/favlist', async (c) => {
       return c.json({ code: 404, message: '收藏夹不存在或不可公开访问' }, 404);
     }
     return c.json({ code: 502, message: `收藏夹获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// ── 曲库搜索 / 相关 / 建议 ─────────────────────────────────────────────
+// bili: 前缀的服务端面。搜索=SSR 数据岛（pinia 是匿名唯一通路——续页要
+// WBI 签名已被 v_voucher 风控墙死，total 恒 null 透出「不可深挖」防前端
+// 深挖键误判）；建议=web-interface/suggest 归一成网易 search_suggest
+// 同款 {allMatch:[{keyword}]}；相关=archive/related（~40 条上限，
+// 种曲剔除防相关面板自环）。行形与收藏夹导入同口径——
+// buildBilibiliSong 直喂（cid 播放链自愈、流可用性乐观值兜底降级、
+// publishedAt 过合法窗才挂键）
+const biliSearchRow = (v) => {
+  const pubMs = sanePublishMs(Number(v.pubdate) * 1000);
+  return {
+    bvid: v.bvid,
+    cid: null,                    // cid 由播放/下载链 view 自愈（与收藏夹同口径）
+    page: 1,
+    title: v.title || '',
+    owner: v.author || '',
+    cover: v.pic || '',
+    duration: v.durationSec || 0,
+    ...(pubMs ? { publishedAt: pubMs } : {}),
+    songName: extractSongName([], v.title),
+    hasVideo: true,               // 搜索/相关不给 playurl——乐观值，流链兜底降级
+    hasDownloadableVideo: true,
+    matched: null,
+    matchedBy: null,
+    matchScore: null,
+  };
+};
+
+app.get('/bilibili/search', async (c) => {
+  if (!rateLimit(c, 'bili-search', 20)) {
+    return c.json({ code: 429, message: '搜索太频繁，稍后再试' }, 429);
+  }
+  const q = (c.req.query('q') || '').trim();
+  if (!q || q.length > 200) {
+    return c.json({ code: 400, message: 'invalid query' }, 400);
+  }
+  // 「音乐源」语义：默认按音乐分区白名单过滤（乐评/教学等非音乐桶剔除）；
+  // all=1 显式放行全部分区——防「我就要那个游戏视频」死路
+  const all = c.req.query('all') === '1';
+  try {
+    const { items } = await biliSearchVideos(q, { signal: c.req.raw.signal });
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    return c.json({
+      code: 200,
+      items: items.filter(v => all || musicZoneOf(v.typeid)).map(biliSearchRow),
+      // total 恒 null——SSR 只有第 1 页可达，numResults 是跨页总数，
+      // 透出会让前端深挖键亮灯却永远拉不到第 2 页
+      total: null,
+    });
+  } catch (e) {
+    // 客户端已断连：静默 499，不写错误日志（正常断连不算服务端错误）
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[bilibili] search 失败:', e.message);
+    return c.json({ code: 502, message: `B 站搜索失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 搜索建议：web-interface/suggest → {allMatch:[{keyword}]}（网易
+// search_suggest 归一形——前端建议消费面直接可切）
+app.get('/bilibili/suggest', async (c) => {
+  if (!rateLimit(c, 'bili-suggest', 30)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const term = (c.req.query('term') || '').trim();
+  if (!term || term.length > 100) {
+    return c.json({ code: 400, message: 'invalid term' }, 400);
+  }
+  try {
+    const words = await biliSuggest(term, { signal: c.req.raw.signal });
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    return c.json({ code: 200, result: { allMatch: words.map(k => ({ keyword: k })) } });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[bilibili] suggest 失败:', e.message);
+    return c.json({ code: 502, message: `B 站搜索建议失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// 相关视频：archive/related → 同搜索行形。种曲剔除——上游 related 会回混
+// 种子稿自身，混进相关面板是自环（yt 侧同口径）
+app.get('/bilibili/related', async (c) => {
+  if (!rateLimit(c, 'bili-related', 30)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const bvid = c.req.query('bvid') || '';
+  if (!BVID_RE.test(bvid)) {
+    return c.json({ code: 400, message: 'invalid bvid' }, 400);
+  }
+  try {
+    const items = await biliRelated(bvid, { signal: c.req.raw.signal });
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    return c.json({
+      code: 200,
+      items: items
+        .filter(v => String(v.bvid).toLowerCase() !== bvid.toLowerCase())
+        .map(biliSearchRow),
+    });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    console.error('[bilibili] related 失败:', e.message);
+    return c.json({ code: 502, message: `B 站相关获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
 });
 

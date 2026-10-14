@@ -230,6 +230,59 @@ export function useAddToPlaylist({
     songPickerSearching.value = true
     let action = '搜索' // 失败 toast 名头按分支换——直加路径挂「搜索失败」误导
     try {
+      // bili: 前缀触发 B 站曲库搜索——与 yt:/qq: 同记号，先于整串 B 站判别
+      // 剥前缀：整串判别的 b23.tv 域名命中会把 'bili:b23.tv/x' 连壳送进
+      // resolveBilibili，服务端 ^b23\.tv/ 锚被前缀挡必死 400。前缀内
+      // 收藏夹链给指向性提示（点歌台无整单导入落点）；BV/av/链接/短链形态
+      // 先试 resolve（与下方 isBilibiliInput 分支同链），失败才回落关键词
+      // 搜索；其余关键词直搜（结果经 buildBilibiliSong 归一成 bv_ 曲）。
+      // 前缀=显式源声明——前缀内非 B 站形态按关键词搜，后序判别不抢道
+      if (/^bili[:：]/i.test(q)) {
+        action = 'B 站搜索'
+        const kw = q.replace(/^bili[:：]/i, '').trim()
+        if (!kw) return
+        if (extractBiliFavlistId(kw)) {
+          toast('这是 B 站收藏夹链接，请在顶部搜索框粘贴导入', 'info')
+          return
+        }
+        if (isBilibiliInput(kw)) {
+          // 裸 BV(+可选 ?p=N) 可本地推出确定 id——已在单短路省 resolve
+          //（与下方 isBilibiliInput 分支同口径的大小写不敏感比对）
+          const bvM = kw.match(/\b(BV[0-9A-Za-z]{10})\b/i)
+          const pvM = kw.match(/[?&]p=(\d+)/i)
+          if (bvM) {
+            const candLow = `bv_${bvM[1]}${(+pvM?.[1] || 0) > 1 ? `_p${+pvM[1]}` : ''}`.toLowerCase()
+            if ([...pickerTakenIds.value].some(id => id.toLowerCase() === candLow)) {
+              toast('该视频已在歌单里', 'info')
+              songPickerQuery.value = ''
+              return
+            }
+          }
+          try {
+            pickerAbort = new AbortController()
+            const data = await musicApi.resolveBilibili(kw, pickerAbort.signal)
+            if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+            await resolveToPickedSong(buildBilibiliSong(data))
+            return
+          } catch (e) {
+            // 主动中止（关窗/新搜索认领顶掉）不是「resolve 失败」——静默退出，
+            // 不回落搜索：窗已关还发新上游请求是纯浪费（yt:/qq: 分支同口径）
+            if (e?.name === 'AbortError' || e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return
+            /* BV/链接形态的关键词——resolve 失败按搜索处理 */
+          }
+          // resolve 回包若是收藏夹重定向（b23 跳解出 favlist）也按搜索回落——
+          // 点歌台无导入落点，让搜索结果兜底比弹回「导入歌单」误导文案强
+        }
+        // resolve 失败回落搜索前复查闸——在途间隙窗可能已关/新意图已认领
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+        if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
+        // searchBiliSongs 回 {items}——SSR 只有第 1 页无总数，点歌台只要列表
+        const { items: biliList } = await musicApi.searchBiliSongs(kw, { signal: pickerAbort.signal })
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+        songPickerResults.value = (biliList || []).map(buildBilibiliSong)
+        if (!songPickerResults.value.length) toast('B 站没有找到相关歌曲', 'info')
+        return
+      }
       // 收藏夹链接在点歌台无落点（整单导入走顶栏）——先于 isBilibiliInput
       // 判，否则 favlist URL 会被当单曲送去 resolve 再弹回
       if (extractBiliFavlistId(q)) {
