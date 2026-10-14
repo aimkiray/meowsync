@@ -108,6 +108,7 @@ async function aiRankCandidates(info, usable, signal) {
           + '都不像返回 {"pick":0}，能确定返回 {"pick":编号}。只输出 JSON。',
         user: `目标：${cleanField(info.name)} — ${cleanField((info.artists || []).join(' / '))}`
           + `（${Math.round((info.durationMs || 0) / 1000) || '?'}s）\n候选：\n${desc}`,
+        tag: 'yt-rank',
       });
       // 直接对原始值验类型——Number(true)/Number("0")/Number([]) 都会伪装成
       // 合法整数（pick:true 曾被转成 1 把未认可候选写成批准 verdict）

@@ -353,6 +353,7 @@ async function judgeInner(vkey, lines, title, author, candidate, declared, publi
       + '只输出 JSON {"ok":true|false}',
     user: `来源标题：${sourceTitle}\n来源作者/频道：${sourceAuthor || '未知'}${declSeg}${pubSeg}${candSeg}${poolSeg}\n歌词抽样：\n${sample.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
     maxTokens: 64,
+    tag: 'verify',
   });
   if (ans == null || typeof ans.ok !== 'boolean') return null;
   // detail 是人读审计列——来源题外烙声明/时间语境位：vkey 的 'd3'/'c1'
@@ -423,6 +424,7 @@ async function judgePoolPick({ title, author, pool, signal, declared }) {
     user: `来源标题：${sourceTitle}\n来源作者/频道：${sourceAuthor || '未知'}${declSeg}\n候选池：\n`
       + rows.map((p, i) => `${i + 1}. ${p.title || '未知'} / ${p.artist || '未知'} / ${p.album || '未知'}`).join('\n'),
     maxTokens: 64,
+    tag: 'pool',
   });
   // 明言否决：模型按约回 {"pick":null} 才是「全池无合理候选」的裁决——
   // 与哑火/畸形应答（answered:false）分家，否决面只信这个显式形态
