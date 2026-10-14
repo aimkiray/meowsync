@@ -32,6 +32,7 @@
       @search-by-id="previewPlaylistById"
       @search-song="importNeteaseSongById"
       @search-bili="importBilibiliOrFav"
+      @search-bili-songs="handleBiliSongSearch"
       @search-yt="importYouTubeOrPlaylist"
       @search-yt-songs="handleYTSongSearch"
       @search-qq="importQQ"
@@ -916,7 +917,8 @@ export default {
       selectPlaylistAndShow, openSearchPlaylist, openShelfPlaylist,
       previewPlaylistById,
       openWatchSong, openWatchSearchSong, openWatchRecent, playPlaylistAndWatch,
-      handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, loadMoreSearchSongs,
+      handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, handleBiliSongSearch,
+      loadMoreSearchSongs,
     } = useSearchNav({
       gates,
       searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
@@ -1390,6 +1392,7 @@ export default {
       handlePlaylistSearch,
       handleQQSongSearch,
       handleYTSongSearch,
+      handleBiliSongSearch,
       playPlaylistFromSidebar,
       playNextInQueue,
       addToQueueEnd,

@@ -509,6 +509,52 @@ export const musicApi = {
       `${artists} - ${song.name}.m4a`)
   },
 
+  // B 站曲库搜索（顶栏/点歌台 bili: 前缀）：{items}——items 是服务端
+  // 已归一好的 buildBilibiliSong 直喂形。搜索走 SSR 数据岛，无续页
+  // 游标无总数（total 恒 null——深挖键恒灭，与 ytContinuation 同理
+  // 无消费面）。SSR HTML 页重（pinia 岛 ~115KB），超时给 30s；
+  // all=1 放行服务端音乐分区过滤（默认只放行音乐分区桶）
+  searchBiliSongs: async (q, { all = false, signal } = {}) => {
+    const response = await api.get('/bilibili/search', {
+      params: { q, ...(all ? { all: 1 } : {}) },
+      signal, timeout: 30000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'B 站搜索失败')
+    return { items: data.items || [] }
+  },
+
+  // B 站搜索建议（web-interface/suggest → 网易 search_suggest 归一形
+  // {allMatch:[{keyword}]}）——groundwork:全局切源(P5)消费
+  getBiliSuggest: async (term, abortSignal = null) => {
+    const response = await api.get('/bilibili/suggest', {
+      params: { term }, signal: abortSignal, timeout: 5000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'B 站搜索建议失败')
+    return data.result || {}
+  },
+
+  // B 站相关视频（archive/related → buildBilibiliSong 直喂形）：{items}
+  // groundwork:相关面板分派(P5)消费
+  getBiliRelated: async (bvid, abortSignal = null) => {
+    const response = await api.get('/bilibili/related', {
+      params: { bvid }, signal: abortSignal, timeout: 15000,
+    }).catch(err => {
+      if (err?.response?.data?.message) throw resolveRethrow(err)
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) throw new Error(data.message || 'B 站相关获取失败')
+    return { items: data.items || [] }
+  },
+
   // YouTube 导入：解析 watch/youtu.be/shorts 等 URL 形态 → videoDetails + 歌名提取 + 网易云
   // 匹配。服务端串 Innertube + 云搜，超时放宽与 B 站同款
   resolveYouTube: async (input, abortSignal = null) => {

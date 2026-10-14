@@ -215,7 +215,7 @@ export default {
       default: false
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-yt', 'search-yt-songs', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
+  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-bili', 'search-bili-songs', 'search-yt', 'search-yt-songs', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
 
@@ -242,6 +242,25 @@ export default {
       // 提在分派前统一收——URL/歌单/关键词各 emit 分支全覆盖；
       // restoreFocus 归还触发钮（与 Esc 同律），桌面 searchOpen 恒 false 是空操作
       closeSearch(true)
+      // bili: 前缀=B 站语法（与 yt:/qq: 同记号），先于整串 B 站判别剥前缀——
+      // 整串判别的 b23.tv 域名命中会把 'bili:b23.tv/x' 连前缀原样送进
+      // resolve 链，服务端锚定正则（^b23\.tv/）被前缀挡 → 必死 400。
+      // 前缀内 BV/av/链接/短链走既有 resolve 链（search-bili 事件，App 层
+      // importBilibiliOrFav 再分单曲/收藏夹），其余关键词走 B 站曲库搜索
+      // （search-bili-songs）。前缀=显式源声明——前缀内的非 B 站形态按
+      // 关键词搜，后序整串判别不再抢道（yt:/qq: 块对异源链接同律）
+      if (/^bili[:：]\s*$/i.test(query)) return
+      const biliPref = query.match(/^bili[:：](.+)$/i)
+      if (biliPref) {
+        const kw = biliPref[1].trim()
+        if (!kw) return
+        if (extractBiliFavlistId(kw) || isBilibiliInput(kw)) {
+          emit('search-bili', kw)
+          return
+        }
+        emit('search-bili-songs', kw)
+        return
+      }
       // B 站收藏夹链接先于视频判定——favlist/medialist URL 也含 bilibili.com，
       // 顺序错了会被单曲导入抢走再被服务端弹回
       if (extractBiliFavlistId(query)) {
@@ -397,10 +416,10 @@ export default {
       const q = e.target.value.trim()
       cancelSuggest()
       // 纯数字/歌单链接/B站（视频与收藏夹）/YouTube（视频与歌单）/QQ 输入走直达路径，不弹建议；
-      // qq:/yt: 前缀语法同样直达——输入即分流意图，建议词对「yt:」前缀没有消费面
+      // qq:/yt:/bili: 前缀语法同样直达——输入即分流意图，建议词对前缀语法没有消费面
       if (!q || extractPlaylistId(q) || isBilibiliInput(q) || isYouTubeInput(q)
         || isQQInput(q) || extractQQPlaylistId(q) || extractBiliFavlistId(q)
-        || extractYouTubePlaylistId(q) || /^qq[:：]/i.test(q) || /^yt[:：]/i.test(q)) {
+        || extractYouTubePlaylistId(q) || /^qq[:：]/i.test(q) || /^yt[:：]/i.test(q) || /^bili[:：]/i.test(q)) {
         suggestions.value = []
         suggestOpen.value = false
         return

@@ -3,7 +3,7 @@ import { musicApi } from '../api/music.js'
 import { apiErrorMessage } from '../api/http.js'
 import { toast, toastDismiss } from '../lib/feedback.js'
 import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl.js'
-import { buildQQSong, buildYouTubeSong, upsertProviderShell } from '../lib/external-songs.js'
+import { buildBilibiliSong, buildQQSong, buildYouTubeSong, upsertProviderShell } from '../lib/external-songs.js'
 import { providerPlaylistShellId } from '../lib/url.js'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
@@ -527,6 +527,38 @@ export function useSearchNav({
     }
   }
 
+  // bili: 关键词 → B 站曲库搜索：单腿（B 站歌单=收藏夹，走链接导入链不走
+  // 搜索）。服务端行形即 buildBilibiliSong 输入形（bv_ 曲对象的播放/下载/
+  // 分享链与列表渲染已兼容）；searchSongTotal 恒 null 且无游标——SSR 数据岛
+  // 只有第 1 页可达（续页 WBI 签名被 v_voucher 风控墙死），深挖键恒灭
+  const handleBiliSongSearch = async (kw) => {
+    gates.preview.invalidate()
+    centerView.value = 'search'
+    pushNavState()
+    const myReq = gates.search.claim()
+    searching.value = true
+    searchResults.value = []
+    searchSongResults.value = []
+    searchSongQuery.value = ''
+    searchSongTotal.value = null
+    qqSongPage = 0
+    ytContinuation.value = null
+    try {
+      const r = await musicApi.searchBiliSongs(kw)
+      if (!gates.search.isCurrent(myReq)) return
+      searchSongResults.value = (r.items || []).map(buildBilibiliSong)
+      searchSongQuery.value = kw
+      // 深挖通道天然关闭：total/游标/页码三态都不亮——SSR 无续页可达
+    } catch (e) {
+      // 单腿搜索——失败须报出（与 yt 同口径，无半幅容错）
+      if (!gates.search.isCurrent(myReq)) return
+      console.warn('[search] B 站单曲搜索失败:', e?.message || e)
+      toast('B 站搜索失败: ' + apiErrorMessage(e), 'error')
+    } finally {
+      if (gates.search.isCurrent(myReq)) searching.value = false
+    }
+  }
+
   // 预览落空（未命中/拉取失败）的视图+URL 归一：popstate 路径上
   // applyUrlNav 调本函数后即 return——不补救的话视图从未按 URL 落定，
   // 地址栏还挂着 ?view=songs&pl=<失效 id> 死链，刷新/再回放必重放失败。
@@ -598,6 +630,7 @@ export function useSearchNav({
     previewPlaylistById,
     openWatchSong, openWatchSearchSong, openWatchRecent, playPlaylistAndWatch,
     // 搜索
-    handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, loadMoreSearchSongs,
+    handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, handleBiliSongSearch,
+    loadMoreSearchSongs,
   }
 }
