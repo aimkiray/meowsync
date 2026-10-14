@@ -600,6 +600,7 @@ button {
 [aria-expanded="true"].queue-menu-trigger,
 [aria-expanded="true"].topnav-hamburger,
 [aria-expanded="true"].topnav-menu-btn,
+[aria-expanded="true"].topnav-src-btn,
 [aria-expanded="true"].pl-action { outline: 1.2px solid var(--ink); outline-offset: -4px; }
 /* 反白行上的展开态改纸色——墨环在墨行上不可见 */
 .song-row--playing [aria-expanded="true"].song-menu-btn { outline-color: var(--paper); }
