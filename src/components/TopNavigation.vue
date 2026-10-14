@@ -86,6 +86,42 @@
             </div>
           </div>
         </div>
+        <!-- 搜索源切换钮：字段右缘 ↕ 字形——prefSearchSource 是模块级 ref，
+             改它裸搜索分派/建议拉取/设置页 chips 全局同切；菜单走 pg-menu
+             同构（⋯ 菜单范式：pointerdown 外关、Esc 归还、fixed 翻上兜底） -->
+        <button
+          ref="srcBtn"
+          class="pg-icobtn pg-icobtn--bare topnav-src-btn"
+          :title="`搜索源：${srcName}`"
+          :aria-label="`搜索源：${srcName}`"
+          aria-haspopup="menu"
+          :aria-expanded="srcMenuOpen"
+          aria-controls="topnav-src-menu"
+          @click="toggleSrcMenu"
+        ><PixelIcon name="grip" :size="18" /></button>
+        <Teleport to="body">
+          <div
+            v-if="srcMenuOpen"
+            id="topnav-src-menu"
+            class="pg-menu topnav-src-menu"
+            role="menu"
+            aria-label="搜索源"
+            :style="srcMenuPos"
+            @keydown="cycleMenuItems"
+          >
+            <div class="pg-menu-head" role="presentation">搜索源</div>
+            <button
+              v-for="s in SEARCH_SOURCES" :key="s.id"
+              class="pg-menu-item"
+              role="menuitemradio"
+              :aria-checked="s.id === prefSearchSource"
+              @click="pickSource(s.id)"
+            ><span class="topnav-theme-check" aria-hidden="true"><PixelIcon
+              v-if="s.id === prefSearchSource" name="check" :size="12"
+            /></span>{{ s.name }}</button>
+            <div class="pg-menu-head" role="presentation">qq:/yt:/bili:/netease: 前缀仍可直接搜</div>
+          </div>
+        </Teleport>
       </div>
 
       <div class="topnav-actions" :inert="searchOpen">
@@ -180,11 +216,11 @@
 </template>
 
 <script>
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { isBilibiliInput, isYouTubeInput, isQQInput, extractQQPlaylistId, extractBiliFavlistId, extractYouTubePlaylistId, extractYouTubeId, isSongmidLike, extractNeteaseSongId, YT_ID_RE } from '../lib/url.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
-import { prefSearchSource } from '../lib/prefs.js'
+import { prefSearchSource, SEARCH_SOURCES } from '../lib/prefs.js'
 import { authState } from '../lib/auth-state.js'
 import { authApi } from '../api/auth.js'
 import { cycleMenuItems } from '../lib/focus-trap.js'
@@ -446,6 +482,7 @@ export default {
 
     const onInput = (e) => {
       emit('update:searchQuery', e.target.value)
+      closeSrcMenu() // 输入意图优先：源菜单让位——打字照常弹建议，俩浮层不叠
       const q = e.target.value.trim()
       cancelSuggest()
       // 纯数字/歌单链接/B站（视频与收藏夹）/YouTube（视频与歌单）/QQ 输入走直达路径，不弹建议；
@@ -463,6 +500,7 @@ export default {
 
     const onSearchFocus = () => {
       closeMenu() // 「/」快捷键开着菜单聚焦搜索：建议下拉会与菜单同窗叠盖
+      closeSrcMenu() // 源切换菜单同律——聚焦即输入语境，浮层只留建议
       if (suggestions.value.length) suggestOpen.value = true
     }
 
@@ -584,6 +622,7 @@ export default {
         // 右缘对齐触发键右缘——菜单从顶栏右簇向左展开
         right: Math.max(8, window.innerWidth - rect.right) + 'px'
       }
+      closeSrcMenu() // 与源切换菜单互斥——顶栏浮层同窗只存一（对侧同律关本菜单）
       menuOpen.value = true
       // 菜单 teleport 到 body 末尾——不主动移焦，键盘 Tab 会穿进菜单底下
       // 的页面内容；开菜单即聚焦第一项（.pg-menu-item 均真实 button/a，
@@ -603,10 +642,56 @@ export default {
     const pickTheme = (id) => { setTheme(id); closeMenu(true) }
     const pickLogout = () => { closeMenu(); logout() }
 
+    // ── 搜索源切换菜单（搜索框右缘钮）──
+    // prefSearchSource 是模块级 ref——改它即全局生效（裸搜索分派/建议拉取/
+    // 设置页 chips 同步变脸）；菜单本体与 ⋯ 菜单同一套 pg-menu 行为范式
+    const srcBtn = ref(null)
+    const srcMenuOpen = ref(false)
+    const srcMenuPos = ref({})
+    // LS/远端可能推来白名单外值——normSearchSource 已在 prefs 读取侧归一，
+    // 这里再兜底 '网易云' 是同口径双保险（查表 miss 不裸显 id）
+    const srcName = computed(() =>
+      SEARCH_SOURCES.find(s => s.id === prefSearchSource.value)?.name || '网易云')
+
+    const toggleSrcMenu = () => {
+      if (srcMenuOpen.value) { closeSrcMenu(); return }
+      const rect = srcBtn.value?.getBoundingClientRect?.()
+      if (!rect) return
+      // 开菜单=输入面被接管——在途建议与已开下拉都是旧语境（与提交同律）
+      cancelSuggest()
+      suggestions.value = []
+      suggestOpen.value = false
+      closeMenu() // 与 ⋯ 菜单互斥（对侧 toggleMenu 同律关本菜单）
+      // 菜单高按可见行数估（item≈39/head≈36）：源项 + 头行 + 尾注行——
+      // 下方放不下翻到上方
+      const h = SEARCH_SOURCES.length * 39 + 2 * 36 + 8
+      srcMenuPos.value = {
+        top: (rect.bottom + 4 + h <= window.innerHeight
+          ? rect.bottom + 4 : Math.max(8, rect.top - h - 4)) + 'px',
+        // 右缘对齐触发键右缘——与 ⋯ 菜单同口径
+        right: Math.max(8, window.innerWidth - rect.right) + 'px'
+      }
+      srcMenuOpen.value = true
+      // 菜单 teleport 到 body 末尾——开即聚焦第一项（⋯ 菜单同律，编程聚焦
+      // 在鼠标点击后不出 :focus-visible 环，鼠标用户无感）
+      nextTick(() => document.querySelector('#topnav-src-menu .pg-menu-item')?.focus())
+    }
+
+    const closeSrcMenu = (restoreFocus = false) => {
+      const was = srcMenuOpen.value
+      srcMenuOpen.value = false
+      if (restoreFocus && was) srcBtn.value?.focus({ preventScroll: true })
+    }
+
+    // 切源没有「下一跳」接管焦点——与 pickTheme 同为解散语义，归还触发键
+    const pickSource = (id) => { prefSearchSource.value = id; closeSrcMenu(true) }
+
     // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
     const onDocPointerDown = (e) => {
       if (!(e.target instanceof Element)) return
-      if (!e.target.closest('.topnav-menu, .topnav-menu-btn')) closeMenu()
+      if (e.target.closest('.topnav-menu, .topnav-menu-btn, .topnav-src-menu, .topnav-src-btn')) return
+      closeMenu()
+      closeSrcMenu()
     }
     // Esc 解散菜单；焦点归还仅在焦点还在菜单/触发键内时进行——
     // 用户已把焦点挪去搜索框等别处时不得强拽（/ 快捷键开着菜单聚焦
@@ -615,14 +700,20 @@ export default {
       // App onGlobalKeydown（window、setup 同步注册——先于本监听）已消费的
       // Esc 带 defaultPrevented 戳：confirm/弹窗结算的那发按键不再收第二层。
       // 监听须挂 window 相位——document 相位先于一切 window 监听跑，读不到戳
-      if (e.key !== 'Escape' || e.defaultPrevented || !menuOpen.value) return
+      if (e.key !== 'Escape' || e.defaultPrevented) return
       const ae = document.activeElement
+      // 两菜单互斥不并存——一发 Esc 只收开着的那层，收完即出
+      if (srcMenuOpen.value) {
+        closeSrcMenu(ae === srcBtn.value || !!ae?.closest?.('#topnav-src-menu'))
+        return
+      }
+      if (!menuOpen.value) return
       closeMenu(ae === menuBtn.value || !!ae?.closest?.('#topnav-menu'))
     }
 
     // 直传 closeMenu 会把 Event 对象塞进 restoreFocus 形参（真事件源→真值
     // →resize 时强拽焦点）——必须包箭头，同 PlaylistPanel closeOnScroll 注释坑
-    const onResizeClose = () => closeMenu()
+    const onResizeClose = () => { closeMenu(); closeSrcMenu() }
 
     // 离开 ≤768 强收展开层——宽档搜索行回归常驻 grid，残留的 --open
     // 绝对定位样式只在 ≤768 media 块内生效本无害，但 searchOpen 悬真
@@ -687,7 +778,16 @@ export default {
       searchOpen,
       searchBtn,
       openSearch,
-      closeSearch
+      closeSearch,
+      SEARCH_SOURCES,
+      prefSearchSource,
+      srcName,
+      srcBtn,
+      srcMenuOpen,
+      srcMenuPos,
+      toggleSrcMenu,
+      closeSrcMenu,
+      pickSource
     }
   }
 }
@@ -798,6 +898,14 @@ export default {
   width: 480px;
   max-width: 100%; /* 大于可用中列时收缩；width:min() 的 % 与 auto 列宽循环依赖会塌成 input 固有宽 */
 }
+
+/* 源切换钮：跟在字段后吃 .topnav-search 的 8px gap——中列收紧时
+   字段先收（max-width:100%）；钮不被压变形的 flex-shrink:0 由
+   .pg-icobtn 基类供给，此档不重复声明 */
+
+/* 尾注是菜单最后一格：pg-menu-head 的默认底发丝会与菜单自身边框
+   叠出双线——翻面由上一项的 border-bottom 分隔，底边削掉 */
+.topnav-src-menu .pg-menu-head:last-child { border-bottom: none; }
 
 .topnav-search-icon {
   margin-left: 10px;
