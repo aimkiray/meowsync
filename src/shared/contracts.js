@@ -51,6 +51,17 @@ export const songMetaBody = z.looseObject({
   )
 });
 
+// POST /lyric/manual：手选词源绑定。id 是本站轨道/词源键（形态集合由
+// 路由层 SONG_ID_RES 把关——netease 数字/file_/qq_/bv_/yt_/ext 词源 id），
+// extId 是外源词源 id（EXT_LYRIC_ID_STRICT_RE 在路由层），token 是词源
+// 私有取词凭证（kugou accesskey——候选池透出，pick 时原样回传；上限
+// 200 与 fetchByExtId 的 /^[\w-]{1,200}$/ 收口同口径，超长在服务层必拒）
+export const lyricManualPickBody = z.looseObject({
+  id: z.union([z.string().min(1).max(200), z.number().int().positive()]),
+  extId: z.string().min(1).max(200),
+  token: z.string().max(200).optional()
+});
+
 // POST /auth/setup 与 /auth/login：登录凭据契约。
 // username 白名单字符集（防注入展示/HTML），password 8-128（OWASP 建议下限 8，
 // 上限防 bcrypt 式截断语义与超长 DoS——argon2/scrypt 无截断问题但超长输入

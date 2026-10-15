@@ -46,6 +46,8 @@ vi.mock('../../src/api/music.js', () => ({
     getLyrics: vi.fn(async () => ({ lyrics: [] })),
     getQQLyric: vi.fn(async () => ({ lyrics: [] })),
     getExternalLyric: vi.fn(async () => null),
+    // 手动绑定词读口（/lyric/manual）——默认未绑归 null 落回自动链
+    getManualLyric: vi.fn(async () => null),
     lyricAlign: vi.fn(async () => null),
     retryMatch: vi.fn(async () => null),
     // /match/state 绑定态读口——默认无正绑（match=null）
@@ -144,6 +146,7 @@ beforeEach(() => {
   downloadsApi.mirrorLocalPlaylist.mockImplementation(async () => ({}))
   musicApi.getLyrics.mockResolvedValue({ lyrics: [] })
   musicApi.getExternalLyric.mockResolvedValue(null)
+  musicApi.getManualLyric.mockResolvedValue(null)
   musicApi.lyricAlign.mockResolvedValue(null)
   musicApi.retryMatch.mockResolvedValue(null)
   musicApi.getMatchState.mockResolvedValue(null)
@@ -2000,6 +2003,84 @@ describe('usePlayer：手动词务（获取歌词 / 生成滚动词）', () => {
     await player.alignCurrentLyrics()
     // 补轴成行集有戳后重发一轮后处理——翻译按词属主键（=lyricId 7）补位
     await vi.waitFor(() => expect(aiApi.translateLyric).toHaveBeenCalledWith(7))
+  })
+})
+
+describe('usePlayer：手动绑定词支（loadLyrics 置顶覆盖层）', () => {
+  const bvSong = (extra) => song('bv_BV1xx411c7mD', {
+    bilibili: { bvid: 'BV1xx411c7mD', title: '视频标题', author: 'UP主' },
+    ...extra,
+  })
+
+  it('读口命中压过自动链：已绑 neteaseId 的曲也直落手动词，网易/外源腿全不发', async () => {
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '手挑词' }])
+    musicApi.getManualLyric.mockResolvedValue({
+      lrc: '[00:01.00]手挑词', source: 'kugou', extId: 'kugou_9', synced: true,
+    })
+    const { player } = makePlayer()
+    // neteaseId 在场——手动支缺席时本曲必走 getLyrics(99) 网易词腿
+    await player.playSong(bvSong({ neteaseId: 99 }))
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '手挑词' }])
+    expect(musicApi.getManualLyric).toHaveBeenCalledWith('bv_BV1xx411c7mD', expect.anything())
+    expect(musicApi.getLyrics).not.toHaveBeenCalled()     // 网易词腿没走
+    expect(musicApi.getQQLyric).not.toHaveBeenCalled()
+    expect(musicApi.getExternalLyric).not.toHaveBeenCalled() // 外源级联没走
+    expect(downloadsApi.getSongMeta).toHaveBeenCalledWith('kugou_9') // 词属主键挂 extId
+  })
+
+  it('读口归 null（404 在 api 层已归一）落回既有自动链：绑定曲走 netease 腿', async () => {
+    musicApi.getManualLyric.mockResolvedValue(null)
+    musicApi.getLyrics.mockResolvedValue({ lyrics: [{ time: 1, text: '网易词' }] })
+    const { player } = makePlayer()
+    await player.playSong(bvSong({ neteaseId: 99 }))
+    expect(musicApi.getManualLyric).toHaveBeenCalledWith('bv_BV1xx411c7mD', expect.anything())
+    expect(musicApi.getLyrics).toHaveBeenCalledWith(99, expect.anything())
+    expect(musicApi.getExternalLyric).not.toHaveBeenCalled()
+    expect(player.lyrics.value).toEqual([{ time: 1, text: '网易词' }])
+  })
+
+  it('读口在途被切歌顶替：晚到的手动绑定回包不写新歌界面（stale 闸）', async () => {
+    let release
+    musicApi.getManualLyric.mockImplementation((id) =>
+      String(id).startsWith('bv_') ? new Promise(r => { release = r }) : Promise.resolve(null))
+    const { player } = makePlayer()
+    const p = player.playSong(bvSong())
+    await new Promise(r => setTimeout(r, 0)) // 让 A 代读口确实发出（release 赋值）
+    await player.playSong(song(2)) // 切歌：abort 旧 signal + lyricLoadSeq 升号
+    howls.at(-1).fire('onload')
+    parseLyrics.mockImplementation(() => [{ time: 1, text: '晚到词' }])
+    release({ lrc: '[00:01.00]晚到词', source: 'lrclib', extId: 'lrclib_9', synced: true })
+    await p
+    await new Promise(r => setTimeout(r, 0))
+    expect(player.lyrics.value).toEqual([]) // song(2) 的空词态没被晚到回包盖掉
+  })
+
+  it('手动词落地段抛错：归空词终态不冒 playbackError（词务故障≠播放失败）', async () => {
+    musicApi.getManualLyric.mockResolvedValue({
+      lrc: '[00:01.00]x', source: 'lrclib', extId: 'lrclib_5', synced: true,
+    })
+    // applyExternalLyricHit 内部抛错（行集解析故障）——修前会冒到 playSong
+    // 的 catch 被写成「播放请求失败」playbackError
+    parseLyrics.mockImplementation(() => { throw new Error('parse boom') })
+    const { player } = makePlayer()
+    await player.playSong(bvSong())
+    expect(player.playbackError.value).toBe('')
+    expect(player.lyrics.value).toEqual([])
+    expect(player.loadingLyrics.value).toBe(false)
+  })
+
+  it('手动命中跳 AI 归属核验（用户显式选定不吃否决），翻译腿照常跑', async () => {
+    aiApi.status.mockResolvedValue({ enabled: true })
+    parseLyrics.mockImplementation(() => [{ time: 1, text: 'line one' }])
+    musicApi.getManualLyric.mockResolvedValue({
+      lrc: '[00:01.00]line one', source: 'lrclib', extId: 'lrclib_5', synced: true,
+    })
+    const { player } = makePlayer()
+    // bv_ 形态曲——postProcess ①的归属核验腿本会打 /ai/lyric-verify；
+    // 用户显式挑的词不许被 AI 否决藏掉，核验腿跳过、翻译腿照常
+    await player.playSong(bvSong())
+    await vi.waitFor(() => expect(aiApi.translateLyric).toHaveBeenCalledWith('lrclib_5'))
+    expect(aiApi.verifyLyric).not.toHaveBeenCalled()
   })
 })
 
