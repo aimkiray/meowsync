@@ -26,7 +26,9 @@
 //     明言否决判死、未应答/故障落回逐候选核验；具名轮不注入
 //   · deadline 短路：逐候选迭代过期起轮即停不续烧 AI/download；verify
 //     闭包过期判否不盲收（choose 挑中条过期补验判死该变体不收录）
-//   · LYRIC_PROXY：LRCLIB/酷狗 fetch 带共享 dispatcher，缺省无 dispatcher 键
+//   · LYRIC_PROXY：LRCLIB/酷狗 fetch 带共享 dispatcher，缺省无 dispatcher
+//     键；代理闸死（连接级失败/3s 拨号探针掐黑洞面）剥 dispatcher 直连
+//     重发一次，调用方 abort/对端行为/族外错误不回退
 // globalThis.fetch 按 URL 分发到各源桩——不打真网络；lib/ai 桩控
 // aiEnabled/askAiJson（核验路径开/关都要钉）；netease-api 桩供
 // file-downloader 网易词相位。
@@ -2223,6 +2225,180 @@ test('lyricDispatcher：懒建缓存、值变重建销毁旧池、清除归 null
     console.warn = realWarn;
     delete process.env.LYRIC_PROXY;
     lyricProxy.lyricDispatcher();
+  }
+});
+
+// LYRIC_PROXY 闸死回退（lyricFetch）：配了代理但代理进程没跑（死端口
+// 形态）时带 dispatcher 的首发必炸连接级失败——剥 dispatcher 直连重发
+// 一次兜底而不是整链 fetch failed 判死。打表桩 globalThis.fetch：见
+// dispatcher 炸 undici 同款 TypeError('fetch failed')+cause.code
+// （ECONNREFUSED），剥掉 dispatcher 的直连重发正常回包。
+// 黑洞面（主机宕机/防火墙 DROP 不产 RST）：首发被 3s 拨号探针掐的
+// TimeoutError 也回退——桩 AbortSignal.timeout 立返已 fired 信号钉；
+// 调用方伞/取消优先于探针面，时限语义不穿透
+test('LYRIC_PROXY 闸死回退：连接级失败剥代理直连重发；abort/对端行为/族外错误不回退', async () => {
+  const connFail = () => new TypeError('fetch failed', {
+    cause: Object.assign(new Error('connect refused'), { code: 'ECONNREFUSED' }),
+  });
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warns.push(a.map(String).join(' '));
+  const lyricWarns = () => warns.filter((l) => l.includes('[lyric-proxy]'));
+  process.env.LYRIC_PROXY = 'http://127.0.0.1:1';              // 死端口闸死形态
+  try {
+    // (a) 服务面 e2e：酷狗检索+下载两站各先炸代理、剥代理直连重发命中
+    const inits = [];
+    reset([
+      ['lyrics.kugou.com/search', (url, init) => {
+        inits.push(['kgs', init]);
+        if (init.dispatcher) throw connFail();
+        return J(kg);
+      }],
+      ['lyrics.kugou.com/download', (url, init) => {
+        inits.push(['kgd', init]);
+        if (init.dispatcher) throw connFail();
+        return kgAll();
+      }],
+    ]);
+    const res = await svc.kugouFetch({ title: '曲', artist: '艺人', durationSec: 200 });
+    assert.equal(res.extId, 'kugou_k3');
+    // 每站 = 代理首发炸 + 直连重发命中，两站共 4 发交替
+    assert.deepEqual(inits.map(([n]) => n), ['kgs', 'kgs', 'kgd', 'kgd']);
+    assert.ok(inits.every(([, i], idx) => idx % 2 === 0
+      ? i.dispatcher instanceof ProxyAgent : !('dispatcher' in i)));
+    // (d) warn-once：同代理值周期内两次回退只记一次；URL/凭据不落日志
+    assert.equal(lyricWarns().length, 1);
+    assert.ok(!lyricWarns()[0].includes('127.0.0.1'));
+
+    // LRCLIB 检索面同接线（站点 3/4）——同值再回退仍不重复刷 warn
+    inits.length = 0;
+    reset([['lrclib.net', (url, init) => {
+      inits.push(init);
+      if (init.dispatcher) throw connFail();
+      return J([{ id: 31, trackName: '曲', artistName: '艺人', duration: 200, syncedLyrics: '[00:01.00]回' }]);
+    }]]);
+    const res2 = await svc.lrclibFetch({ title: '曲', artist: '艺人', durationSec: 200 });
+    assert.equal(res2.extId, 'lrclib_31');
+    assert.equal(inits.length, 2);                             // 代理炸 + 直连中
+    assert.equal(lyricWarns().length, 1);
+
+    // (b) 不回退面——lyricFetch 直测：每形态只打一发、原样上抛
+    const ac = new AbortController();
+    ac.abort();
+    for (const [name, mkErr, opts] of [
+      // 调用方信号已 aborted——即便炸的是连接级错也不重发（信号闸在先）
+      ['signal 已 aborted', connFail, { signal: ac.signal }],
+      // AbortError/TimeoutError——伞超时是真实时限，回退会穿透时限预算
+      ['AbortError', () => Object.assign(new Error('aborted'), { name: 'AbortError' }), {}],
+      ['TimeoutError', () => Object.assign(new Error('timed out'), { name: 'TimeoutError' }), {}],
+      // 对端行为：CONNECT 回非 200（UND_ERR_ABORTED）——代理活着明拒隧道不回退
+      ['CONNECT 非 200', () => new TypeError('fetch failed', {
+        cause: Object.assign(new Error('tunnel refused'), { code: 'UND_ERR_ABORTED' }),
+      }), {}],
+      // 非 TypeError 与普通 fetch failed（cause 无 socket/dial 码）不回退
+      ['非 TypeError', () => new Error('boom'), {}],
+      ['族外 code', () => new TypeError('fetch failed', {
+        cause: Object.assign(new Error('headers timeout'), { code: 'UND_ERR_HEADERS_TIMEOUT' }),
+      }), {}],
+    ]) {
+      reset([['', () => { throw mkErr(); }]]);
+      await assert.rejects(lyricProxy.lyricFetch('https://probe.invalid/x', opts), name);
+      assert.equal(calls.length, 1, name);
+    }
+    // cause 链下钻：真因套一层也认（Happy Eyeballs 聚合面）→ 仍回退
+    reset([['', (url, init) => {
+      if (init.dispatcher) {
+        throw new TypeError('fetch failed', {
+          cause: { cause: Object.assign(new Error('tcp timeout'), { code: 'ETIMEDOUT' }) },
+        });
+      }
+      return J({ ok: 1 });
+    }]]);
+    assert.equal((await lyricProxy.lyricFetch('https://probe.invalid/x', {})).status, 200);
+    assert.equal(calls.length, 2);
+    // AggregateError 的 errors 面同查（Happy Eyeballs 聚合真身形态——真因
+    // 不挂 cause 挂 errors[]）→ 仍回退
+    reset([['', (url, init) => {
+      if (init.dispatcher) {
+        throw new TypeError('fetch failed', {
+          cause: new AggregateError(
+            [Object.assign(new Error('dial tcp refused'), { code: 'ECONNREFUSED' })],
+            'dial'),
+        });
+      }
+      return J({ ok: 1 });
+    }]]);
+    assert.equal((await lyricProxy.lyricFetch('https://probe.invalid/x', {})).status, 200);
+    assert.equal(calls.length, 2);
+
+    // (e) 黑洞面回退：首发被 3s 拨号探针掐（TimeoutError）而调用方伞无恙
+    // → 视作代理不可达剥代理直连。桩 AbortSignal.timeout 立返已 fired 信号
+    // ——AbortSignal.any 的合成信号外部无法手动掐、真等 3s 太慢，桩 timeout
+    // 源头是让探针面可控的扳手；桩 fetch 抛合成信号的 reason（TimeoutError）
+    // 即 undici 以 signal.reason 拒发的同款形态
+    const realTimeout = AbortSignal.timeout;
+    AbortSignal.timeout = () => AbortSignal.abort(new DOMException('', 'TimeoutError'));
+    try {
+      const caller = new AbortController();
+      const fbInits = [];
+      reset([['', (url, init) => {
+        fbInits.push(init);
+        if (init.dispatcher) throw init.signal.reason;
+        return J({ ok: 1 });
+      }]]);
+      const optsIn = {
+        redirect: 'manual',
+        headers: { 'User-Agent': 'probe-ua' },
+        signal: caller.signal,
+      };
+      const probeRes = await lyricProxy.lyricFetch('https://probe.invalid/x', optsIn);
+      assert.equal(probeRes.status, 200);
+      assert.equal(fbInits.length, 2);
+      assert.ok(fbInits[0].dispatcher instanceof ProxyAgent);   // 首发带池
+      assert.equal(fbInits[0].signal.aborted, true);            // 探针合成信号已掐
+      // 回退跳契约：剥 dispatcher 外 init 与首发逐字节同源——redirect/UA
+      // 保留、signal 即首发 opts.signal（回退跳吃同一把伞的剩余额度）
+      assert.ok(!('dispatcher' in fbInits[1]));
+      assert.equal(fbInits[1].redirect, 'manual');
+      assert.equal(fbInits[1].headers['User-Agent'], 'probe-ua');
+      assert.equal(fbInits[1].signal, caller.signal);
+      assert.equal(caller.signal.aborted, false);               // 伞无恙才走回退
+      // 调用方伞先掐 + TimeoutError：探针面即便也 fired，时限方优先——不回退
+      const ac2 = new AbortController();
+      ac2.abort();
+      reset([['', (url, init) => {
+        if (init.dispatcher) throw new DOMException('', 'TimeoutError');
+        return J({ ok: 1 });
+      }]]);
+      await assert.rejects(
+        lyricProxy.lyricFetch('https://probe.invalid/x', { signal: ac2.signal }),
+        (e) => e.name === 'TimeoutError');
+      assert.equal(calls.length, 1);
+    } finally {
+      AbortSignal.timeout = realTimeout;
+    }
+    // (d) 代理值换新 → warn 按值生命周期再记一次
+    process.env.LYRIC_PROXY = 'http://127.0.0.1:2';
+    reset([['', (url, init) => {
+      if (init.dispatcher) throw connFail();
+      return J({ ok: 1 });
+    }]]);
+    await lyricProxy.lyricFetch('https://probe.invalid/x', {});
+    assert.equal(lyricWarns().length, 2);
+    assert.ok(!lyricWarns()[1].includes('127.0.0.1'));
+
+    // (c) 未配代理：纯透传零分支——无 dispatcher 键、一发即中、不记 warn
+    delete process.env.LYRIC_PROXY;
+    const bareInits = [];
+    reset([['', (url, init) => { bareInits.push(init); return J({ ok: 1 }); }]]);
+    assert.equal((await lyricProxy.lyricFetch('https://probe.invalid/x', {})).status, 200);
+    assert.equal(bareInits.length, 1);
+    assert.ok(!('dispatcher' in bareInits[0]));
+    assert.equal(lyricWarns().length, 2);
+  } finally {
+    console.warn = realWarn;
+    delete process.env.LYRIC_PROXY;
+    lyricProxy.lyricDispatcher();                              // 值变重建顺带销毁测试池
   }
 });
 
