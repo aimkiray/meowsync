@@ -1239,6 +1239,10 @@ async function fetchByExtId(extId, { signal, token } = {}) {
 // （「池子缺一角」比「整池 502」强）。
 const CAND_SRC_ORDER = { lrclib: 0, kugou: 1, ytm: 2 };
 const CAND_CAP = 12;
+// 扇出节流双闸（机制见 runCandForms 头注）：召回地板——池收满此数后
+// 最多再宽采 1 个形态即停；形态硬顶——单源形态查询数硬上限
+const CAND_POOL_FLOOR = 4;
+const CAND_MAX_FORMS = 6;
 const CAND_SRC_TIMEOUT_MS = 15000;
 const CAND_PREVIEW_CHARS = 80;
 const CAND_PREVIEW_LINES = 2;
@@ -1300,14 +1304,27 @@ function candQueryForms({ songId, title, artist }) {
 
 // 形态展开执行体（lrclib/kugou 共用）：forms 按序逐发（尊重上游不并发扇
 // 出），extId 首现者胜（形态序=特异性序，先入者更可信）、烙 _form=命中
-// 形态序号，池满 ≥CAND_CAP 早停。形态级失败与「源失败降级部分池」同口径：
-// 已收条目在池即中断余下形态、端出已拿到的部分（warn 留痕，含伞自裁面——
-// 调用方真断连由路由 499 兜底）；首形态即炸自然空池，上抛归外层「源失败
-// warn+[]」旧语义（调用方 abort 亦经外层 signal 判定穿透）
+// 形态序号，池满 ≥CAND_CAP 早停、池按 CAND_CAP 截断返回。
+// 扇出节流：「地板+1 宽采 + 6 形态硬顶」——形态扇出把单端点查询数 ×变体
+// 数放大（每源最多 12 发串行），用户连点几首歌就能把部署 IP 刷进上游限流
+// （实机病例：「楽園 ver.EMA」首形态即吃 lrclib 429 → 整源归空池）。双闸：
+//   · 召回地板早停——某形态使 pool ≥ CAND_POOL_FLOOR(4) 后记其序号 N，至
+//     多执行到 N+1 形态（含）即停：给次优形态一次补位机会（防首个非空形
+//     态只有 1-2 条同题异曲）；未达地板照常走到头/硬顶
+//   · 形态硬顶 CAND_MAX_FORMS(6)——UGC 变体外圈序下前 6 形态覆盖 v0 全
+//     轮 + v1 全轮（剥缀+裸轮在内）；更多形态的收益边际递减而限流成本陡增
+// 形态级失败与「源失败降级部分池」同口径：已收条目在池即中断余下形态、
+// 端出已拿到的部分（warn 留痕，含伞自裁面——调用方真断连由路由 499 兜底）；
+// 中途 429 即此熔断面（非重试——上游 Retry-After/5xx 单点重试消化在
+// lrclibSearchList 内部，本层不动）；首形态即炸自然空池，上抛归外层
+// 「源失败 warn+[]」旧语义（调用方 abort 亦经外层 signal 判定穿透）
 async function runCandForms(forms, source, signal, query) {
   const pool = [];
   const seenIds = new Set();
-  for (let f = 0; f < forms.length; f++) {
+  // 可执行形态上界：形态数与硬顶取小；召回地板再把它压到「首个使池
+  // ≥CAND_POOL_FLOOR 的形态序号 +1」——地板后只再宽采 1 个形态即停
+  let lastIdx = Math.min(forms.length, CAND_MAX_FORMS) - 1;
+  for (let f = 0; f <= lastIdx; f++) {
     if (pool.length >= CAND_CAP) break;
     let batch;
     try {
@@ -1324,6 +1341,7 @@ async function runCandForms(forms, source, signal, query) {
       cand._form = f;
       pool.push(cand);
     }
+    if (pool.length >= CAND_POOL_FLOOR) lastIdx = Math.min(lastIdx, f + 1);
   }
   return pool;
 }
@@ -1434,8 +1452,9 @@ async function searchLyricCandidates({ songId, title, artist, durationSec, signa
   // 形态序 _form 先决（0=最严形态——降轮命中是不同曲的可能性高，时长差
   // 贴近不翻案特异性）→ 时长差升序（null 殿后）→ 源序；同键内保上游
   // 原序（sort 稳定）。ytm 支路无 _form（videoId 直达无查询形态）殿后——
-  // 哨兵须大过真实 _form 上限（UGC 4 变体×3 轮=12 形态，_form 可达 11；
-  // 哨兵 9 会让 UGC 尾形态命中与 ytm 串桶混排、甚至排到其后）
+  // 哨兵须大过真实 _form 上限（硬顶 CAND_MAX_FORMS 内 _form ≤5；旧哨兵
+  // 9 曾在 12 形态时代让 UGC 尾形态命中与 ytm 串桶混排、甚至排到其后，
+  // 哨兵余量即防此类回潮）
   all.sort((a, b) => (a._form ?? 9e9) - (b._form ?? 9e9)
     || (a._diff ?? 9e9) - (b._diff ?? 9e9)
     || (CAND_SRC_ORDER[a.source] ?? 9) - (CAND_SRC_ORDER[b.source] ?? 9));
