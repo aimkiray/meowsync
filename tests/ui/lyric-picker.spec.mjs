@@ -129,7 +129,7 @@ describe('LyricPicker：候选列表', () => {
     )
   })
 
-  it('滚动性标签分源：集外源 synced:false 是「未知」，白名单 lrclib/ytm synced 真语义', async () => {
+  it('滚动性标签分源：集外源 synced:false 是「未知」，白名单源 synced 真语义', async () => {
     musicApi.getLyricCandidates.mockResolvedValue([
       { extId: 'kugou_1', source: 'kugou', title: 'A', synced: false },
       { extId: 'lrclib_2', source: 'lrclib', title: 'B', synced: false },
@@ -143,10 +143,16 @@ describe('LyricPicker：候选列表', () => {
     expect(tags).toEqual(['未知', '纯文本', '滚动', '未知'])
   })
 
-  it('netease/qq 候选：163/QQ 徽标 + synced:false 归「未知」（检索无词型回报，同 kugou 口径）', async () => {
+  it('netease/qq 候选：163/QQ 徽标 + synced 三态钉（探中真值滚动/纯文本、漏网 null 未知）', async () => {
+    // 服务端出池 lyric 探针后 netease/qq 的 synced 是三态真值：探中条按
+    // 词型真值滚动/纯文本；探针故障漏网条 synced:null 如实「未知」——
+    // 故障≠纯文本断言，不谎报词型
     musicApi.getLyricCandidates.mockResolvedValue([
-      { extId: 'netease_1', source: 'netease', title: 'N', synced: false },
-      { extId: 'qq_2', source: 'qq', title: 'Q', synced: false },
+      { extId: 'netease_1', source: 'netease', title: 'N', synced: true },
+      { extId: 'netease_2', source: 'netease', title: 'N2', synced: false },
+      { extId: 'netease_5', source: 'netease', title: 'N3', synced: null },
+      { extId: 'qq_3', source: 'qq', title: 'Q', synced: true },
+      { extId: 'qq_4', source: 'qq', title: 'Q2', synced: null },
     ])
     mountPicker()
     await flush()
@@ -154,7 +160,7 @@ describe('LyricPicker：候选列表', () => {
     expect(document.querySelector('.lp-badge--netease')?.textContent).toBe('163')
     expect(document.querySelector('.lp-badge--qq')?.textContent).toBe('QQ')
     const tags = [...document.querySelectorAll('.lp-tag')].map(t => t.textContent)
-    expect(tags).toEqual(['未知', '未知'])
+    expect(tags).toEqual(['滚动', '纯文本', '未知', '滚动', '未知'])
   })
 
   it('候选检索失败 → 错误态文案 + 「重试」键再发一轮', async () => {

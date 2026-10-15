@@ -88,10 +88,12 @@ import PixelIcon from './PixelIcon.vue'
 
 // 词源徽标映射（后端 /lyric/candidates 的 source 枚举）
 const SOURCE_BADGE = { lrclib: 'LRC', kugou: 'KGM', netease: '163', qq: 'QQ', ytm: 'YTM' }
-// synced 字段可信度白名单：只有 lrclib/ytm 的检索回报带词型信息，集内
-// synced 是真语义；集外源（kugou/netease/qq 及一切未登记新源）的 synced
+// synced 字段可信度白名单：lrclib/ytm 的检索回报带词型信息、netease/qq
+// 由服务端出池 lyric 探针回填——集内 synced 是三态语义：探中条 true/
+// false 真值（滚动/纯文本），探针故障漏网条 null 如实「未知」（故障≠
+// 纯文本断言，不谎报词型）；集外源（kugou 及一切未登记新源）的 synced
 // 只是占位值=「未知」——标纯文本/滚动都是谎报，新源默认诚实不谎报
-const SYNC_KNOWN_SOURCES = new Set(['lrclib', 'ytm'])
+const SYNC_KNOWN_SOURCES = new Set(['lrclib', 'ytm', 'netease', 'qq'])
 
 export default {
   name: 'LyricPicker',
@@ -150,12 +152,14 @@ export default {
     sourceBadge(source) {
       return SOURCE_BADGE[source] || String(source || '').slice(0, 3).toUpperCase() || 'EXT'
     },
-    // 滚动性标签分源诚实化：白名单内（lrclib/ytm）的 synced 是真语义
-    // （false=纯文本）；集外源检索回报无词型信息，synced:false 只是
-    // 「未知」——标纯文本是谎报；未登记新源同样默认「未知」不谎报
+    // 滚动性标签分源诚实化：白名单内（lrclib/ytm 检索回报、netease/qq
+    // lyric 探针回填）synced 三态——null/缺键=「未知」（探针漏网条如实
+    // 呈现）、false=「纯文本」、true=「滚动」；集外源检索回报无词型信息，
+    // synced:false 只是占位——标纯文本是谎报；未登记新源同样默认「未知」
     syncTag(c) {
       if (!SYNC_KNOWN_SOURCES.has(c?.source)) return '未知'
-      return c?.synced === false ? '纯文本' : '滚动'
+      if (c?.synced == null) return '未知'
+      return c.synced === false ? '纯文本' : '滚动'
     },
     // 开屏并行：候选扇出 + 现有手动绑定读口（决定页脚「恢复自动匹配」显隐）。
     // 检索喂料与 usePlayer 词载链同一份口径（字段抽取见下方 feed 注）——
