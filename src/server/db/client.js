@@ -402,6 +402,21 @@ function initSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 手选词源绑定（手动歌词匹配）：用户在外源候选池里点名挑的那条词，
+    -- 修「同名错配/错词」。词文整存不存指针——kugou_ 词源的 accesskey
+    -- 不落 ext_id（无 refetch 通道），绑定时取到的词必须随绑定落库，
+    -- 否则重读拿不出词。song_id 主键域与 song_lyric_meta 同（本站轨道/
+    -- 词源键）；同一歌只留一条当前绑定，重挑覆盖
+    CREATE TABLE IF NOT EXISTS song_lyric_manual (
+      song_id TEXT PRIMARY KEY,       -- 本站轨道/词源键（与 song_lyric_meta 同域）
+      ext_id TEXT NOT NULL,           -- 手选词源 id（ytm_/lrclib_/kugou_）
+      source TEXT NOT NULL,
+      lrc TEXT NOT NULL DEFAULT '',
+      plain TEXT NOT NULL DEFAULT '',
+      synced INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- 外部源→网易云匹配缓存：track_id 是 bv_/yt_/qq_ 客户端曲目 id。
     -- netease_id NULL=负缓存（读查询判 7d TTL）；model 键控 AI 参与结果
     -- （''=纯启发式永命中，AI 结果只在同模型下复用）。正向行只存 id——

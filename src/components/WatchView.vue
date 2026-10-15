@@ -438,6 +438,14 @@
               @click="$emit('lyric-align')"
               title="按已下载音频给歌词打时间轴" aria-label="生成滚动歌词"
             ><PixelIcon name="sand" :size="11" /> {{ lyricFetching ? '生成中…' : '生成滚动词' }}</button>
+            <!-- 手动匹配：外部词源候选挑选弹层，选定即落绑定（压过一切
+                 自动词源——读口在词载链顶部，见 usePlayer.loadLyrics）。
+                 殿组末位：组内首键被测试谱作「获取歌词」锚 -->
+            <button type="button" class="lyric-tool lyric-tool--icon"
+              :disabled="songSwitching || loadingLyrics || lyricFetching"
+              @click="lyricPickerOpen = true"
+              title="从外部词源候选中手动挑词" aria-label="手动匹配歌词"
+            ><PixelIcon name="edit" :size="11" /> 换词</button>
           </div>
         </div>
 
@@ -498,6 +506,15 @@
         </div>
       </aside>
     </div>
+
+    <!-- 手动词源挑选弹层：组件内 Teleport 到 body；applied 上行经
+         onLyricPickApplied 走 usePlayer 模块级单槽触发重载词载链 -->
+    <LyricPicker
+      v-if="lyricPickerOpen && currentSong"
+      :song="currentSong"
+      @close="lyricPickerOpen = false"
+      @applied="onLyricPickApplied"
+    />
   </div>
 </template>
 
@@ -509,6 +526,7 @@ import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-m
 import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
 import PixelIcon from './PixelIcon.vue'
+import LyricPicker from './LyricPicker.vue'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
@@ -531,7 +549,7 @@ const dlCacheSet = (k, v) => {
 
 export default {
   name: 'WatchView',
-  components: { PixelIcon },
+  components: { PixelIcon, LyricPicker },
   props: {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },
@@ -1530,6 +1548,21 @@ export default {
     // →resize 时强拽焦点）——必须包箭头（PlaylistPanel closeOnScroll 同坑）
     const onMenuResizeClose = () => closeMenu()
 
+    // 手动匹配歌词弹层（LyricPicker 内 Teleport 到 body）：「换词」按钮开；
+    // 选词/解绑 applied（载荷=绑定曲 id）→ 上行通知播放器对正播同曲重走
+    // 词载链——emit 接线表在 App.vue（不在组件域），上行走 usePlayer 的
+    // 模块级单槽（notifyLyricRematch 同款通道）。动态 import 拿 App 侧已
+    // 实例化的同模块槽位：静态引会把 howler/词链全图拖进「只挂 WatchView」
+    // 的测试谱（spec 常半桩 usePlayer，具名静态 import 会直接炸解析）
+    const lyricPickerOpen = ref(false)
+    const onLyricPickApplied = (songId) => {
+      lyricPickerOpen.value = false
+      if (songId == null) return
+      import('../composables/usePlayer.js')
+        .then(m => m.notifyLyricManualChange?.(songId))
+        .catch(() => {})
+    }
+
     onMounted(() => {
       document.addEventListener('pointerdown', onMenuDocPointerDown)
       window.addEventListener('keydown', onMenuKeydown)
@@ -1617,7 +1650,9 @@ export default {
       pickDownload,
       cycleMenuItems,
       pauseLyricFollow,
-      onWatchTouchStart
+      onWatchTouchStart,
+      lyricPickerOpen,
+      onLyricPickApplied
     }
   }
 }

@@ -344,6 +344,86 @@ export const musicApi = {
     }
   },
 
+  // 「手动匹配歌词」候选列表：GET /lyric/candidates——服务端并发探
+  // LRCLIB/酷狗/YTM 把可绑词源整列给用户挑（与 /lyric/external 自动
+  // 级联同一片上游、同一份检索喂料口径——调用方传参对齐
+  // lyricSearchFeed 的抽取）。多源扇出最坏段给 45s；code!==200
+  // 照常抛——候选空与级联故障是两种结局，不能归一成空列表
+  getLyricCandidates: async ({ id, title, artist, durationSec }, abortSignal = null) => {
+    const response = await api.get('/lyric/candidates', {
+      params: { id, title, artist, duration: durationSec },
+      signal: abortSignal,
+      timeout: 45000
+    })
+    const data = unwrapBody(response)
+    assertCode200(data, '歌词候选')
+    return Array.isArray(data.candidates) ? data.candidates : []
+  },
+
+  // 手动词绑定读口：GET /lyric/manual?id=——「手动匹配」里选定过的词源
+  // 绑定行，命中回 {hit:{lrc,plain,source,extId,synced}}（与外源级联
+  // hit 同构，loadLyrics 直接喂 applyExternalLyricHit）。未绑过服务端
+  // 回 404——「没绑过」是常态结局，与 getExternalLyric 同口径归一成
+  // null 不进错误通道；其余错误（网络/超时）照常抛——调用方按场景
+  // 自行 .catch 归一（loadLyrics 手动支即 catch→null 放行既有链）
+  getManualLyric: async (id, abortSignal = null) => {
+    const response = await api.get('/lyric/manual', {
+      params: { id }, signal: abortSignal
+    }).catch(err => {
+      if (err?.response?.status === 404) return null
+      throw err
+    })
+    if (response === null) return null
+    const data = unwrapBody(response)
+    // body 内 code:404（契约漂移防御，与 getExternalLyric 同口径）同归 null
+    if (data.code === 404) return null
+    assertCode200(data, '手动歌词')
+    // 契约 hit 嵌套；data 嵌套/平铺形态兼容性地看一眼
+    const hit = data.hit && typeof data.hit === 'object' ? data.hit
+      : (data.data && typeof data.data === 'object' ? data.data : data)
+    // 纯文本绑定 lrc 可缺席（正文在 plain）——两槽皆空才算「无绑」
+    const lrc = typeof hit.lrc === 'string' && hit.lrc.trim() ? hit.lrc : null
+    const plain = typeof hit.plain === 'string' && hit.plain.trim() ? hit.plain : null
+    if (!lrc && !plain) return null
+    return { lrc, plain, source: hit.source ?? null, extId: hit.extId ?? null, synced: hit.synced !== false }
+  },
+
+  // 手动绑词提交：POST /lyric/manual {id, extId, token?}——服务端按
+  // extId 回解词源（kugou 链靠候选回带的 token 定位）落手动绑定行，
+  // 回包与 GET 同构 {hit:{…}}。词源失效（候选过期/上游下架）回 404：
+  // axios 对非 2xx 直接拒，status 透传给调用方分诊文案；200 体内的
+  // 业务码（含防御性 code:404 漂移）打标 bizCode 透出
+  pickManualLyric: async ({ id, extId, token }, abortSignal = null) => {
+    const response = await api.post('/lyric/manual', { id, extId, token }, {
+      signal: abortSignal, timeout: 30000
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) {
+      const err = new Error(data.message || '绑定歌词失败')
+      err.bizCode = data.code
+      throw err
+    }
+    const hit = data.hit && typeof data.hit === 'object' ? data.hit : data
+    return {
+      lrc: typeof hit.lrc === 'string' ? hit.lrc : null,
+      plain: typeof hit.plain === 'string' ? hit.plain : null,
+      source: hit.source ?? null,
+      extId: hit.extId ?? null,
+      synced: hit.synced !== false
+    }
+  },
+
+  // 解手动绑词：DELETE /lyric/manual?id=——恢复自动匹配语义（词载链
+  // 回落 netease/QQ/外源级联）。code!==200 照常抛给调用方出 toast
+  clearManualLyric: async (id, abortSignal = null) => {
+    const response = await api.delete('/lyric/manual', {
+      params: { id }, signal: abortSignal
+    })
+    const data = unwrapBody(response)
+    assertCode200(data, '解除歌词绑定')
+    return data
+  },
+
   // 手动「生成滚动词」：POST /lyric-align——纯文本词行 + 已下载音频工件
   // （songId 寻址，服务端跨歌单查 download_tasks 的 completed 行）经
   // ffmpeg 抽包络 + LLM 行首映射产滚动 LRC。服务端最坏路径=

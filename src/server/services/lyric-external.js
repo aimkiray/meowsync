@@ -432,14 +432,10 @@ const LRCLIB_UA = 'MeowSync external-lyric fallback (self-hosted)';
 //     落回 verify 迭代，降级期不缩召回
 // deadline（可选）：级联软时限戳——逐候选迭代把单源 AI 判定面放大到
 // 至多 3 次，过期起轮即停不再续烧；缺席保持旧行为（直调/测试不填）
-async function lrclibFetch({ title, artist, anchor, durationSec, verify, choose, signal, deadline }) {
-  // 艺人面双态：AI 在位降排序偏好（artistOk 进排序键），AI 关维持硬滤。
-  // anchor=失锚判定的比对艺人（级联 runRound 注入：具名轮=轮 artist，
-  // 曲库 '' 开放轮=曲目原始 artist；缺省/null=不设锚）——失锚候选
-  // 只在 verify 明言判真时收录，判不定拒收（详见文件头注 AI 段）
-  const aiRank = aiEnabled();
-  const q = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
-  if (!q) return null;
+// LRCLIB /api/search 的传输面（429 尊重 Retry-After 重试一次、5xx 单点
+// 重试、体量闸读体）——lrclibFetch 级联检索与 searchLyricCandidates
+// 手选候选池共用同一段请求序列，两消费面只在筛后处理上分家
+async function lrclibSearchList(q, signal) {
   const url = `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`;
   const doFetch = () => fetch(url, {
     headers: { 'User-Agent': LRCLIB_UA, Accept: 'application/json' },
@@ -464,7 +460,18 @@ async function lrclibFetch({ title, artist, anchor, durationSec, verify, choose,
     res = await doFetch();
   }
   if (!res.ok) throw new Error(`lrclib HTTP ${res.status}`);
-  const list = await readJsonCapped(res);
+  return readJsonCapped(res);
+}
+
+async function lrclibFetch({ title, artist, anchor, durationSec, verify, choose, signal, deadline }) {
+  // 艺人面双态：AI 在位降排序偏好（artistOk 进排序键），AI 关维持硬滤。
+  // anchor=失锚判定的比对艺人（级联 runRound 注入：具名轮=轮 artist，
+  // 曲库 '' 开放轮=曲目原始 artist；缺省/null=不设锚）——失锚候选
+  // 只在 verify 明言判真时收录，判不定拒收（详见文件头注 AI 段）
+  const aiRank = aiEnabled();
+  const q = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
+  if (!q) return null;
+  const list = await lrclibSearchList(q, signal);
   const items = (Array.isArray(list) ? list : [])
     .filter((it) => it && typeof it === 'object' && it.id != null)
     .filter((it) => it.instrumental !== true)
@@ -611,6 +618,57 @@ async function lrclibGetById(id, signal) {
 // krc1 magic/低可打印率载荷拒收）。艺人面同 lrclibFetch 双态（AI 在位
 // 降排序偏好、AI 关硬滤）。候选按艺人相符 → 时长差升序 → 上游 score
 // 决胜，至多串行试 CANDIDATE_TRY_N 条——单条失败换条不恋战。
+// 候选标题字段实测是 song（部分回包形态带 songname——两槽都认）
+const kugouCandTitle = (cd) => cd.song || cd.songname;
+
+// 酷狗 search 一跳：keyword+duration 提示 → candidates 原始回包——
+// kugouFetch 级联与 searchLyricCandidates 手选候选池共用同一段请求
+async function kugouSearchList(kw, durationSec, signal) {
+  const durArg = durationSec ? `&duration=${Math.round(durationSec * 1000)}` : '';
+  const sres = await fetch(`https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword=${encodeURIComponent(kw)}${durArg}`, {
+    headers: { 'User-Agent': YTM_UA, Accept: 'application/json' },
+    signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
+    ...EXT_FETCH_GUARD,
+    ...lyricOpts(),
+  });
+  if (!sres.ok) throw new Error(`kugou search HTTP ${sres.status}`);
+  return readJsonCapped(sres);
+}
+
+// 酷狗 download 一跳：candidate id + accesskey → fmt=lrc 词原文。
+// kugouFetch 的 downloadHit 迭代与 fetchByExtId 的手选重取（候选池
+// token 透回）共用同一段请求 + 载荷卫生闸（krc1 magic/低可打印率拒收）
+async function kugouDownloadLrc(id, accesskey, signal) {
+  const dres = await fetch('https://lyrics.kugou.com/download?ver=1&client=pc'
+    + `&id=${encodeURIComponent(String(id))}&accesskey=${encodeURIComponent(String(accesskey))}`
+    + '&fmt=lrc&charset=utf8', {
+    headers: { 'User-Agent': YTM_UA, Accept: 'application/json' },
+    signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
+    ...EXT_FETCH_GUARD,
+    ...lyricOpts(),
+  });
+  if (!dres.ok) return null;
+  const dbody = await readJsonCapped(dres);
+  // 非 LRC 载荷拒收（换条不恋战）：fmt 协商失败回 'krc' 等其它格式
+  if (dbody?.fmt != null && String(dbody.fmt).toLowerCase() !== 'lrc') return null;
+  const buf = Buffer.from(String(dbody?.content || ''), 'base64');
+  // 'krc1' magic = KRC 加密词——协商漏判时按内容再挡一道
+  if (buf.subarray(0, 4).toString('latin1') === 'krc1') return null;
+  const lrc = buf.toString('utf8').trim();
+  if (!lrc) return null;
+  // 无时间戳又大面积不可打印/替换符 = 实为二进制/乱码载荷——拒收；
+  // 真纯文本词（无戳但正常可读）放行走 synced:false 面
+  if (!parseLrcLines(lrc).length) {
+    const units = [...lrc];
+    // 可打印=非控制类（\p{C} 覆盖 Cc/Cf/Co/Cs/Cn）且非替换符
+    // U+FFFD（So 类不在 \p{C} 内，码点单列）；\r\n\t 是版面不是脏字
+    const printable = units.filter((ch) => '\r\n\t'.includes(ch)
+      || (ch.charCodeAt(0) !== 0xFFFD && !/\p{C}/u.test(ch))).length;
+    if (printable < units.length * KUGOU_PRINTABLE_MIN) return null;
+  }
+  return lrc;
+}
+
 // 标题身份闸恒在（strictTitleHit 硬接线，语义同 lrclibFetch 头注）
 // verify（可选）：(hit, {pool}) 逐候选归属核验——download 得词后判否即
 // 换条，并入「单条失败换条」同款语义；第二参透排序后候选池身份（同
@@ -629,21 +687,11 @@ async function kugouFetch({ title, artist, anchor, durationSec, verify, choose, 
   const aiRank = aiEnabled();
   const kw = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
   if (!kw) return null;
-  const durArg = durationSec ? `&duration=${Math.round(durationSec * 1000)}` : '';
-  const sres = await fetch(`https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword=${encodeURIComponent(kw)}${durArg}`, {
-    headers: { 'User-Agent': YTM_UA, Accept: 'application/json' },
-    signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
-    ...EXT_FETCH_GUARD,
-    ...lyricOpts(),
-  });
-  if (!sres.ok) throw new Error(`kugou search HTTP ${sres.status}`);
-  const sbody = await readJsonCapped(sres);
-  // 候选标题字段实测是 song（部分回包形态带 songname——两槽都认）
-  const candTitleOf = (cd) => cd.song || cd.songname;
+  const sbody = await kugouSearchList(kw, durationSec, signal);
   const cands = (Array.isArray(sbody?.candidates) ? sbody.candidates : [])
     .filter((cd) => cd && cd.id != null && cd.accesskey)
     .filter((cd) => aiRank || artistHit(artist, cd.singer))
-    .filter((cd) => strictTitleHit(candTitleOf(cd), title))
+    .filter((cd) => strictTitleHit(kugouCandTitle(cd), title))
     .map((cd) => ({
       cd,
       artistOk: artistHit(artist, cd.singer),
@@ -661,46 +709,22 @@ async function kugouFetch({ title, artist, anchor, durationSec, verify, choose, 
   // 面）；酷狗候选无专辑字段则 album 略
   const pool = cands.slice(0, POOL_TOP_N).map(({ cd }) => ({
     extId: `kugou_${cd.id}`,
-    title: candTitleOf(cd), artist: cd.singer,
+    title: kugouCandTitle(cd), artist: cd.singer,
     album: cd.album || cd.albumname || undefined,
   }));
   // 单候选 download → hit：失败归 null（调用方换条/落回迭代，不整源判
-  // 死），abort 穿透。choose 挑中条与逐候选迭代共用一份
+  // 死），abort 穿透。choose 挑中条与逐候选迭代共用一份；传输面收在
+  // 模块级 kugouDownloadLrc（手选重取 fetchByExtId 同用）
   const downloadHit = async (cd) => {
     try {
-      const dres = await fetch('https://lyrics.kugou.com/download?ver=1&client=pc'
-        + `&id=${encodeURIComponent(String(cd.id))}&accesskey=${encodeURIComponent(String(cd.accesskey))}`
-        + '&fmt=lrc&charset=utf8', {
-        headers: { 'User-Agent': YTM_UA, Accept: 'application/json' },
-        signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
-        ...EXT_FETCH_GUARD,
-        ...lyricOpts(),
-      });
-      if (!dres.ok) return null;
-      const dbody = await readJsonCapped(dres);
-      // 非 LRC 载荷拒收（换条不恋战）：fmt 协商失败回 'krc' 等其它格式
-      if (dbody?.fmt != null && String(dbody.fmt).toLowerCase() !== 'lrc') return null;
-      const buf = Buffer.from(String(dbody?.content || ''), 'base64');
-      // 'krc1' magic = KRC 加密词——协商漏判时按内容再挡一道
-      if (buf.subarray(0, 4).toString('latin1') === 'krc1') return null;
-      const lrc = buf.toString('utf8').trim();
+      const lrc = await kugouDownloadLrc(cd.id, cd.accesskey, signal);
       if (!lrc) return null;
-      // 无时间戳又大面积不可打印/替换符 = 实为二进制/乱码载荷——拒收；
-      // 真纯文本词（无戳但正常可读）放行走 synced:false 面
-      if (!parseLrcLines(lrc).length) {
-        const units = [...lrc];
-        // 可打印=非控制类（\p{C} 覆盖 Cc/Cf/Co/Cs/Cn）且非替换符
-        // U+FFFD（So 类不在 \p{C} 内，码点单列）；\r\n\t 是版面不是脏字
-        const printable = units.filter((ch) => '\r\n\t'.includes(ch)
-          || (ch.charCodeAt(0) !== 0xFFFD && !/\p{C}/u.test(ch))).length;
-        if (printable < units.length * KUGOU_PRINTABLE_MIN) return null;
-      }
       return {
         lrc, source: 'kugou', extId: `kugou_${cd.id}`,
         synced: parseLrcLines(lrc).length > 0,
         // 同 lrclib——候选条目身份透给归属核验（酷狗候选无专辑字段则略）
         meta: {
-          title: candTitleOf(cd), artist: cd.singer,
+          title: kugouCandTitle(cd), artist: cd.singer,
           album: cd.album || cd.albumname || undefined,
         },
       };
@@ -1161,19 +1185,22 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
   return { hit: null, truncated: deadlineHit, dirty: Boolean(lastErr) };
 }
 
-// extId → 词原文反查（ai.js 词源核验/翻译端点的取词支路——它们手里只有
-// 词源 id 没有检索词）。ytm_<videoId> 直通 YTM（videoId 即键）、
-// lrclib_<条目id> 走 /api/get；kugou_ 的 accesskey 不落 extId——出缓存即
-// 无反查通道，只能吃进程内 LRU 里级联刚产出的那份（正窗 6h 内可命中）。
+// extId → 词原文反查（ai.js 词源核验/翻译端点的取词支路与
+// routes/lyric-manual 的手选绑定——它们手里只有词源 id 没有检索词）。
+// ytm_<videoId> 直通 YTM（videoId 即键）、lrclib_<条目id> 走 /api/get；
+// kugou_ 的 accesskey 不落 extId——两条取词道：进程内 LRU 里级联/手选
+// 刚产出的那份（正窗 6h 内可命中），或 opts.token 携候选池透回的
+// accesskey 直达 lyrics.kugou.com/download（手选绑定唯一取词通道——
+// 缺 token 只能等缓存，出缓存即归 null）。
 // 返回与级联同构的 {lrc, source, extId, synced, plain?}；id 非法/无词 →
 // null，传输故障抛错（与级联同语义：故障走重试而不是固化成「无词」）。
-async function fetchByExtId(extId, { signal } = {}) {
+async function fetchByExtId(extId, { signal, token } = {}) {
   const id = String(extId || '').trim();
   const m = EXT_LYRIC_ID_STRICT_RE.exec(id);
   if (!m) return null;
   const [, src, key] = m;
   // 进程内 LRU 先扫：下载相位几分钟前级联出的词免一次上游往返；
-  // kugou_ 更是唯一取词道。比对用 trim 后的 id——入参带空白时原串比对必漏
+  // 比对用 trim 后的 id——入参带空白时原串比对必漏
   for (const e of resultCache.values()) {
     if (e.res && e.res.extId === id && Date.now() - e.at <= POS_TTL_MS) {
       return e.res;
@@ -1181,7 +1208,161 @@ async function fetchByExtId(extId, { signal } = {}) {
   }
   if (src === 'ytm') return ytmFetchLyric(key, signal);
   if (src === 'lrclib') return lrclibGetById(key, signal);
-  return null; // kugou_
+  // kugou_：候选池透回的 accesskey token 是 download 必填凭证；收敛
+  // 字符集/长度再进查询串（虽经 encodeURIComponent，脏尾仍拒收）
+  const ak = String(token || '').trim();
+  if (!/^[\w-]{1,200}$/.test(ak)) return null;
+  const lrc = await kugouDownloadLrc(key, ak, signal);
+  if (!lrc) return null;
+  return {
+    lrc, source: 'kugou', extId: id,
+    synced: parseLrcLines(lrc).length > 0,
+  };
+}
+
+// ── 手选候选池（GET /lyric/candidates 供）──
+// 级联是「系统判官」——错配时用户是终审：本函数把三路外源的宽检候选
+// 原样端出（级联侧的 strictTitleHit 标题闸/artistHit 艺人面/±15s 时长
+// 硬滤全部摘掉——那些是「错词比没词更糟」的自动收窄，人眼终审要看到
+// 全池，含刻意可挑的异时长版）。仍剥的只有「没词可给」的条目
+// （lrclib 的 instrumental/无双形态词文行——摆进池也只能给用户挑出一
+// 个 404，纯噪音）。无核验无 choose——judge 席位留给用户。
+// 出参 [{extId, source, title, artist, album?, durationSec?, synced,
+// preview, token?}]：
+//   preview  词稿首 1-2 行词文（剥行首时间戳与 [tag:] 元行，≤80 字）——
+//            列表里人眼比对用；kugou 候选逐条 download 才见词，候选池
+//            阶段不付那笔扇出 → 恒 ''
+//   token    kugou accesskey——POST /lyric/manual 时须原样回传，是
+//            download 唯一取词凭证（kugou_ extId 无 refetch 通道）
+//   synced   滚动词旗标；kugou search 回包无词型信息恒 false——诚实
+//            值而非「是纯文本」的断言
+// 排序：声明时长时按 |候选时长-durationSec| 升序（无差值殿后——刻意不
+// 做 ±15s 硬滤，截取版/异时长版用户有权明挑）→ 源序 lrclib→kugou→ytm，
+// 截 12 条。每源独立 15s 伞时限（内部单跳仍 10s），单源故障 catch 掉
+// warn 续走——一源死拖不翻整池（「池子缺一角」比「整池 502」强）。
+const CAND_SRC_ORDER = { lrclib: 0, kugou: 1, ytm: 2 };
+const CAND_CAP = 12;
+const CAND_SRC_TIMEOUT_MS = 15000;
+const CAND_PREVIEW_CHARS = 80;
+const CAND_PREVIEW_LINES = 2;
+
+// 词稿预览：剥行首时间戳与 [tag:] 元行（plainTextLines 与 verifyHit
+// 同口径）取首 N 行词文——元行不冒充词文行占位
+const candPreview = (text) => plainTextLines(text)
+  .slice(0, CAND_PREVIEW_LINES).map((l) => l.text)
+  .join(' / ').slice(0, CAND_PREVIEW_CHARS);
+
+const candDiff = (dur, durationSec) => (
+  dur != null && Number.isFinite(durationSec) && durationSec > 0
+    ? Math.abs(dur - durationSec) : null
+);
+
+async function lrclibCandidates({ title, artist, durationSec, signal }) {
+  const q = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
+  if (!q) return [];
+  const list = await lrclibSearchList(q, signal);
+  return (Array.isArray(list) ? list : [])
+    .filter((it) => it && typeof it === 'object' && it.id != null)
+    .filter((it) => it.instrumental !== true)
+    .filter((it) => (typeof it.syncedLyrics === 'string' && it.syncedLyrics.trim())
+      || (typeof it.plainLyrics === 'string' && it.plainLyrics.trim()))
+    .map((it) => {
+      const syncedText = String(it.syncedLyrics || '').trim();
+      // null/''/非数都归「无时长信息」——+x 强转会把 null 吃成 0 假时长
+      const durNum = Number(it.duration);
+      const dur = Number.isFinite(durNum) && durNum > 0 ? durNum : null;
+      return {
+        extId: `lrclib_${it.id}`, source: 'lrclib',
+        title: String(it.trackName || ''), artist: String(it.artistName || ''),
+        album: it.albumName || undefined,
+        durationSec: dur ?? undefined,
+        synced: Boolean(syncedText),
+        preview: candPreview(syncedText || it.plainLyrics),
+        _diff: candDiff(dur, durationSec),
+      };
+    });
+}
+
+async function kugouCandidates({ title, artist, durationSec, signal }) {
+  const kw = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
+  if (!kw) return [];
+  // 刻意不透 durationSec 给上游：级联侧的 ±15s 时长滤在候选池面全摘
+  // （用户可能明挑异时长版——kugou 的 duration= 参是服务端收窄，透出去
+  // 等于把「宽检池」又关回窗内）；时长只进本地 _diff 排序键
+  const sbody = await kugouSearchList(kw, 0, signal);
+  return (Array.isArray(sbody?.candidates) ? sbody.candidates : [])
+    .filter((cd) => cd && cd.id != null && cd.accesskey)
+    .map((cd) => {
+      // 毫秒→秒；null/''/非数归「无时长信息」（+x 强转会吃 null 成 0）
+      const durNum = Number(cd.duration);
+      const dur = Number.isFinite(durNum) && durNum > 0 ? durNum / 1000 : null;
+      return {
+        extId: `kugou_${cd.id}`, source: 'kugou',
+        title: String(kugouCandTitle(cd) || ''), artist: String(cd.singer || ''),
+        album: cd.album || cd.albumname || undefined,
+        durationSec: dur ?? undefined,
+        synced: false,
+        preview: '',
+        // accesskey 原样透回——POST /lyric/manual 的取词凭证（见头注）
+        token: String(cd.accesskey),
+        _diff: candDiff(dur, durationSec),
+      };
+    });
+}
+
+// ytm 支路限 yt_ 曲（videoId 直达）：候选存在的前提是词真拿得到——
+// 拿不到词/支路故障静默略（候选池不因一支路哑火翻面，也摆不出一个
+// 注定 404 的条目）；拿得到顺带产 preview。title/artist 回填检索词
+// ——timedLyricsData 无候选条目元数据，展示面用来源身份兜底
+async function ytmCandidate({ songId, title, artist, signal }) {
+  const vid = String(songId || '').match(YT_TRACK_ID_RE)?.[1];
+  if (!vid) return [];
+  const hit = await ytmFetchLyric(vid, signal);
+  if (!hit) return [];
+  return [{
+    extId: `ytm_${vid}`, source: 'ytm',
+    title: String(title || ''), artist: String(artist || ''),
+    synced: Boolean(hit.synced),
+    preview: candPreview(hit.lrc),
+    _diff: null,
+  }];
+}
+
+async function searchLyricCandidates({ songId, title, artist, durationSec, signal }) {
+  if (signal?.aborted) throw abortErr();
+  const jobs = [
+    ['lrclib', lrclibCandidates({
+      title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
+    })],
+    ['kugou', kugouCandidates({
+      title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
+    })],
+  ];
+  if (YT_TRACK_ID_RE.test(String(songId || ''))) {
+    jobs.push(['ytm', ytmCandidate({
+      songId, title, artist, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
+    })]);
+  }
+  const pools = await Promise.all(jobs.map(async ([name, p]) => {
+    try {
+      return await p;
+    } catch (e) {
+      // 穿透判定只凭调用方信号——不看 e.aborted：源内部走的是伞信号
+      // （timedSignal 合成），伞时限自裁或源内 Retry-After 睡眠被伞掐醒
+      // 都产带 .aborted 的 abortErr；误穿透会让路由对仍连接的客户端回
+      // 499。调用方断连才穿透（整池响应已无人接收）；源自身故障/伞超时
+      // 都只灭自己一角——warn 留痕可回放
+      if (signal?.aborted) throw abortErr();
+      console.warn(`[lyric-ext] 候选池 ${name} 源失败：${e?.message || e}`);
+      return [];
+    }
+  }));
+  const all = pools.flat();
+  // 时长差升序（null 殿后）→ 源序；同键内保上游原序（sort 稳定）
+  all.sort((a, b) => (a._diff ?? 9e9) - (b._diff ?? 9e9)
+    || (CAND_SRC_ORDER[a.source] ?? 9) - (CAND_SRC_ORDER[b.source] ?? 9));
+  // _diff 是内部排序键——不透出 API 面
+  return all.slice(0, CAND_CAP).map(({ _diff, ...cand }) => cand);
 }
 
 // 入口：单飞 + LRU。{ songId, title, artist, durationSec, videoId, signal,
@@ -1221,6 +1402,8 @@ async function fetchExternalLyric(args) {
 module.exports = {
   fetchExternalLyric,
   fetchByExtId,
+  // 手选候选池（GET /lyric/candidates）——宽检无闸的用户终审面
+  searchLyricCandidates,
   // 源内函数导出供测试探针/调试——正常消费只走 fetchExternalLyric
   ytmFetchLyric, lrclibFetch, kugouFetch, lrclibGetById, titleVariantsOf, strictTitleHit,
   artistHit, normName, DIRTY_NEG_TTL_MS,

@@ -147,36 +147,9 @@ if (hasDist) {
 // 把磁盘写满。同一 token 在 authGate 里是服务对服务/脚本的全量 API 旁路凭据
 // （含 GET）；浏览器登录态（session cookie）视为等效凭据：启用登录后浏览器
 // 不再构建期注入 token。
-// 懒读 env（中间件内每次取）而非启动快照——启动时未设、运行后注入
-// DOWNLOAD_TOKEN 也必须生效，与 authGate 的口径一致
-{
-  const { sessionFromCookieHeader } = require('./src/server/lib/auth-gate');
-  const { tokenMatches } = require('./src/server/lib/token-eq');
-  app.use('*', async (c, next) => {
-    const downloadToken = process.env.DOWNLOAD_TOKEN || '';
-    if (!downloadToken) return next();
-    const p = c.req.path;
-    const protectedWrite = (p === '/downloads' || p.startsWith('/downloads/')
-      || p === '/playlists' || p.startsWith('/playlists/')
-      || p === '/ai' || p.startsWith('/ai/')
-      || p === '/settings' || p.startsWith('/settings/')
-      || p === '/song-meta' || p.startsWith('/song-meta/')
-      || p === '/match' || p.startsWith('/match/')
-      || p === '/uploads' || p.startsWith('/uploads/')
-      || p === '/lyric-align' || p.startsWith('/lyric-align/')
-      || p === '/sync' || p.startsWith('/sync/'))
-      && c.req.method !== 'GET' && c.req.method !== 'HEAD';
-    if (!protectedWrite) return next();
-    // 已登录会话放行（authGate 已验过并 set('user')——直接消费不二次查库）
-    if (c.get('user') || sessionFromCookieHeader(c.req.header('cookie'))) return next();
-    // 与 authGate/remote.js/qq.js 同一份 tokenMatches——手写 sha256+timingSafeEqual
-    // 的第四处拷贝会漂（且裸 digest 比较缺 tokenMatches 的空值保护）
-    if (!tokenMatches(c.req.header('x-download-token'), downloadToken)) {
-      return c.json({ code: 401, message: '未授权：缺少或错误的下载令牌' }, 401);
-    }
-    return next();
-  });
-}
+// 实现收敛在 lib/protected-write.js（前缀表含 /lyric 段——/lyric/manual 的
+// POST/DELETE 会写库+触发上游取词，同属写面）；懒读 env 语义不变
+app.use('*', require('./src/server/lib/protected-write').protectedWrite);
 
 // 路由：音频代理 → 歌单/下载管理 → 受限的网易云API
 // Hono 路由中静态路径（/audio-proxy、/healthz、/playlists、/downloads/*）优先级高于参数路由（/:apiName）
@@ -202,6 +175,8 @@ app.route('/', require('./src/server/routes/sync'));
 // 外部歌词兜底链（/lyric/external）——先注册不碍事：首段 'lyric' 亦在
 // ALLOWED_APIS，但 /:apiName 只匹配单段路径，多段路由不会撞车
 app.route('/', require('./src/server/routes/lyric-external'));
+// 手选词源绑定（/lyric/candidates 候选池 + /lyric/manual 绑/读/解绑）
+app.route('/', require('./src/server/routes/lyric-manual'));
 const musicRoutes = require('./src/server/routes/music');
 app.route('/', musicRoutes);
 

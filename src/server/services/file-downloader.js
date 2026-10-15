@@ -15,6 +15,9 @@ const { resolveBiliAudio, resolveBiliMedia, biliFetch, BILI_PUBLIC_HEADERS } = r
 const { fetchPlayer: ytFetchPlayer, fetchPlayerWith: ytFetchPlayerWith, pickStreamList: ytPickStreamList } = require('../lib/youtube');
 const lyricAiRepo = require('../repositories/lyricAi');
 const downloadTasksRepo = require('../repositories/downloadTasks');
+// 手选词源绑定表：用户在「手动匹配」里点名的词即终审——下载相位与播放链
+// （getManualLyric 覆盖层）同口径，绑定在场压过全部自动词源
+const lyricManualRepo = require('../repositories/lyricManual');
 const { pathPresent, isUnderDownloadDir } = require('./download-fs');
 // 封面宿主白名单与 download-manager.deriveCoverUrl 同一闸（CJS require(ESM)）：
 // 派生点闸只能管住新落库的 cover_url——存量脏行在 downloadCover 消费点
@@ -1063,6 +1066,53 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
       }
       return { path: outputPath, size: Buffer.byteLength(lyricText, 'utf-8') };
     };
+    // 级联命中/手选绑定 → 落盘公共尾段（两者同构 {lrc, plain, source,
+    // extId, synced}）：归属核验 → 纯文本补轴 → 词源元行烙记 → AI 译文
+    // 合并 → .part 对账写。skipVerify 只给手选绑定用——用户显式点名的
+    // 词是终审（播放链 getManualLyric 直贴无核验同口径）：核验面可能
+    // 正压着当年错判该词源的 verdict/署名闸记录，复核会把「终审」挡回
+    // 门外——手选功能恰为修这种错判而生，不能自噬
+    const writeExtHit = async (hit, ctx, { skipVerify = false } = {}) => {
+      // hit.plain 是「同条目附赠的纯文本形态」——synced 缺席时源内已把
+      // plain 填进 lrc 槽，这里的 plain 分支不可达，只取 lrc
+      let text = String(hit?.lrc || '');
+      if (!hit || !text.trim()) return null;
+      // 与嫁接词同款归属核验——词源键挂源内 extId（ytm_/lrclib_/kugou_
+      // 前缀，与网易云 id 空间隔离）；qq_ 走 grafted 支路取顶层签名。
+      // candidate 携级联命中条目的候选身份（hit.meta，{title,artist,album}
+      // 与核验侧同口径）——署名闸据此对 extId 词源可达（extId 无网易条目
+      // 可反查）；ytm 支路/缓存反查/手选绑定无 meta 的形态不传走原路径
+      if (!skipVerify) {
+        const ownership = await verifyDownloadOwnership({
+          songId, lyricId: hit.extId, providerData,
+          grafted: !extM, lrc: text, signal,
+          ...(hit.meta ? { candidate: hit.meta } : {}),
+        });
+        if (ownership === false) {
+          console.info(`[download] ${songId} 外源歌词（${hit.source}）归属核验不符，跳过落盘`);
+          return null;
+        }
+      }
+      // 纯文本词（无时间戳）且盘上已有本曲音频工件 → 进程内自动对齐补轴；
+      // 音频没下完/对齐失败都照旧落纯文本——有词好过没词
+      let alignedBy = null;
+      if (!hit.synced && ctx.audioPath) {
+        const aligned = await alignPlainLrc(ctx.audioPath, text, signal);
+        if (aligned) { text = aligned.lrc; alignedBy = aligned.alignedBy; }
+      }
+      // 外源产物落盘留痕：补轴词/外源同步词与官方词同形无法区分词源——
+      // 首部插 LRC 元行（[re:]=制作工具、[ve:]=版本，标准 id 标签位）把
+      // extId/补轴方式烙进工件。parseLrcLines/mergeLrcTrans/前端
+      // parseLyrics 只认时间戳行——元行各层透传无副作用
+      text = `[re:MeowSync ${hit.extId}]`
+        + `${alignedBy ? `\n[ve:align-${alignedBy}]` : ''}\n${text}`;
+      // AI 译文缓存键同样挂 extId——ai.js 词源白名单扩展后下载链零改动受益
+      const extTrans = lyricAiRepo.getCachedTranslation(hit.extId)?.tlyric || '';
+      const written = writeLrcFile(mergeLrcTrans(text, extTrans));
+      // 补轴产物的质量档透出给调用方/日志（alignedBy='llm'|'heuristic'）
+      if (alignedBy) written.alignedBy = alignedBy;
+      return written;
+    };
     // 外源词兜底相位：源签名 bv_/yt_ 取 providerData.<provider> 嵌套块、
     // qq_ 取顶层 title/author（与 download-fs providerDataOf 投影同口径）；
     // 老镜像行字段缺省按空串降级——LRCLIB/酷狗无检索词自然全灭回 null，
@@ -1087,44 +1137,19 @@ async function downloadLyrics(songId, outputPath, signal, providerData) {
         durationSec,
         signal,
       });
-      // hit.plain 是「同条目附赠的纯文本形态」——synced 缺席时源内已把
-      // plain 填进 lrc 槽，这里的 plain 分支不可达，只取 lrc
-      let text = String(hit?.lrc || '');
-      if (!hit || !text.trim()) return null;
-      // 与嫁接词同款归属核验——词源键挂源内 extId（ytm_/lrclib_/kugou_
-      // 前缀，与网易云 id 空间隔离）；qq_ 走 grafted 支路取顶层签名。
-      // candidate 携级联命中条目的候选身份（hit.meta，{title,artist,album}
-      // 与核验侧同口径）——署名闸据此对 extId 词源可达（extId 无网易条目
-      // 可反查）；ytm 支路/缓存反查无 meta 的形态不传走原路径
-      const ownership = await verifyDownloadOwnership({
-        songId, lyricId: hit.extId, providerData,
-        grafted: !extM, lrc: text, signal,
-        ...(hit.meta ? { candidate: hit.meta } : {}),
-      });
-      if (ownership === false) {
-        console.info(`[download] ${songId} 外源歌词（${hit.source}）归属核验不符，跳过落盘`);
-        return null;
-      }
-      // 纯文本词（无时间戳）且盘上已有本曲音频工件 → 进程内自动对齐补轴；
-      // 音频没下完/对齐失败都照旧落纯文本——有词好过没词
-      let alignedBy = null;
-      if (!hit.synced && ctx.audioPath) {
-        const aligned = await alignPlainLrc(ctx.audioPath, text, signal);
-        if (aligned) { text = aligned.lrc; alignedBy = aligned.alignedBy; }
-      }
-      // 外源产物落盘留痕：补轴词/外源同步词与官方词同形无法区分词源——
-      // 首部插 LRC 元行（[re:]=制作工具、[ve:]=版本，标准 id 标签位）把
-      // extId/补轴方式烙进工件。parseLrcLines/mergeLrcTrans/前端
-      // parseLyrics 只认时间戳行——元行各层透传无副作用
-      text = `[re:MeowSync ${hit.extId}]`
-        + `${alignedBy ? `\n[ve:align-${alignedBy}]` : ''}\n${text}`;
-      // AI 译文缓存键同样挂 extId——ai.js 词源白名单扩展后下载链零改动受益
-      const extTrans = lyricAiRepo.getCachedTranslation(hit.extId)?.tlyric || '';
-      const written = writeLrcFile(mergeLrcTrans(text, extTrans));
-      // 补轴产物的质量档透出给调用方/日志（alignedBy='llm'|'heuristic'）
-      if (alignedBy) written.alignedBy = alignedBy;
-      return written;
+      return writeExtHit(hit, ctx);
     };
+    // 手选绑定终审（用户点名的词压过网易/QQ/外源级联全部自动词源——与
+    // 播放链 getManualLyric 覆盖层同口径）：song_lyric_manual 有行即当
+    // 级联命中走同一落盘尾段，外源级联与归属核验整链跳过。键域与路由
+    // 同源（数字/file_/qq_/bv_/yt_/ext 词源 id）。行词文为空（畸形行）
+    // 归 null 落回自动链——手动层是覆盖层，永不许锁死词载主链
+    let manual = null;
+    try { manual = lyricManualRepo.getManual(songId); } catch { /* DB 抖动归无绑定 */ }
+    if (manual) {
+      const written = await writeExtHit(manual, extSongContext(songId), { skipVerify: true });
+      if (written) return written;
+    }
     if (extM && !NETEASE_ID_RE.test(String(providerData?.neteaseId ?? ''))) {
       const ext = await externalLyricHit();
       if (ext) return ext;

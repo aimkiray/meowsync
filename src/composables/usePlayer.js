@@ -68,6 +68,16 @@ export const notifyRemoteSeek = () => {
   remoteSeekSettleHandler?.()
 }
 
+// 手动词绑定变更通知槽（WatchView 里 LyricPicker 选词/解绑后调）：
+// 与 notifyLyricRematch 同款模块级单槽——picker 的 applied emit 止于
+// WatchView，而 emit 接线表在 App.vue（不在组件改动域），上行只能靠
+// 单槽回调。载荷只捎 trackId：绑定本体落在服务端，客户端要做的只是
+// 「正播同曲重走词载链」——loadLyrics 顶部 manual 支自会取到新绑定
+let lyricManualChangeHandler = null
+export const notifyLyricManualChange = (trackId) => {
+  lyricManualChangeHandler?.(trackId)
+}
+
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
 // 歌词管线（拉取/CJK 判定/AI 校验翻译/时间校准持久化）、进度与音量、
@@ -1189,6 +1199,34 @@ export function usePlayer({
       // 显式清）——本代被顶替时绝不能抢新代的旗
       loadingLyrics.value = true
       const stale = makeLyricStale(song, signal, mySeq)
+      // 手动绑定词源置顶：用户在「手动匹配」里显式选定的词即终态——压过
+      // file_ 工件/网易/QQ/外源级联全部自动词源（用户覆盖语义）。读口
+      // 404/网络错/桩缺席一律归 null 落回下方既有链：手动层只是覆盖
+      // 层，永不许破词载主链。try/catch 裹整段——?.() 对缺席桩返回
+      // undefined，而 .catch 兜不住「函数不存在」的同步 TypeError
+      let manual = null
+      try { manual = await musicApi.getManualLyric?.(song.id, signal) ?? null } catch { /* 归 null 放行 */ }
+      if (manual?.lrc || manual?.plain) {
+        try {
+          // hit 与 /lyric/external 级联回形同构（{lrc,plain,source,extId,
+          // synced}）——行集剥戳/校准/AI 后处理全走既有收口，不为手动
+          // 绑定另开写屏链。manual 标记让 postProcess 跳过归属核验腿：
+          // 用户显式选定的词即终态，不许 AI 否决藏掉（翻译腿照常跑）
+          await applyExternalLyricHit(song, manual, { signal, stale, manual: true })
+        } catch (error) {
+          // 与下方外源支同口径分诊：stale/abort/取消静默归还（本代已被顶替）；
+          // 真故障清词态归空词——绝不能冒上去被 playSong 的 catch 写成
+          // playbackError（词务故障≠播放失败）
+          if (stale() || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
+          console.error('❌ 加载手动绑定歌词失败:', error)
+          lyrics.value = []
+          currentLyricIndex.value = 0
+          lyricOwnerKey.value = null
+        } finally {
+          if (!stale()) loadingLyrics.value = false
+        }
+        return
+      }
       // file_ 曲：词源=用户上传的 .lrc 工件（file 端点 kind=lyrics）。无资产时 404 → 空词。
       // 词属主键用 song.id——file 词与曲同生死，offset 校准也挂它（song_lyric_meta 按 id 存）
       if (isFileTrackId(song?.id)) {
@@ -1372,7 +1410,7 @@ export function usePlayer({
     // 的 seq/abort 组法不同），写共享态前统一复查；admit 是提交前否决闸
     // （手动路径的防降级用）——返回 { applied, synced, rows } 供调用方
     // 区分「落地/被陈旧丢/被闸拦」出文案
-    const applyExternalLyricHit = async (song, hit, { signal = null, stale = () => false, admit = null } = {}) => {
+    const applyExternalLyricHit = async (song, hit, { signal = null, stale = () => false, admit = null, manual = false } = {}) => {
       // 纯文本→静态行：parseLyrics 只吃带时间戳的行，synced=false 的
       // lrc 会全空——plainLyricLines（共享层 lrc.js，先剥行首时间戳再判
       // [tag:] 元行）逐行落 time:Infinity：WatchView 照常渲行、同步循环
@@ -1407,9 +1445,11 @@ export function usePlayer({
       }
       // extId 缺席时词属主键已降级成轨道 id（bv_/yt_）——该形态不在
       // /ai/lyric-verify 与 /ai/lyric-translate 白名单内，postProcess
-      // 去了必吃 400 白打两跳，整条跳过（词照常可见，只是无核验/翻译）
+      // 去了必吃 400 白打两跳，整条跳过（词照常可见，只是无核验/翻译）。
+      // manual 命中的词是用户显式选定——核验腿跳过（否决会藏掉用户的
+      // 选择），翻译腿照常补译文
       if (hit?.extId) {
-        void postProcessLyrics(song, extLyricId, seq, signal)
+        void postProcessLyrics(song, extLyricId, seq, signal, { skipVerify: manual })
           .catch(e => console.warn('AI 歌词后处理异常:', e))
       }
       return { applied: true, synced, rows }
@@ -1717,16 +1757,27 @@ export function usePlayer({
       void loadLyrics(currentSong.value)
     }
     lyricRematchHandler = onLyricRematch
+    // 手动词绑定变更槽（notifyLyricManualChange 头注）：只对正播同曲
+    // 热重载——非正播曲的绑定改动留到下次播放由 loadLyrics 手动支
+    // 自然消费，与 onLyricRematch 的归属判同口径
+    const onLyricManualChange = (trackId) => {
+      if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
+      void loadLyrics(currentSong.value)
+    }
+    lyricManualChangeHandler = onLyricManualChange
     // 遥控 seek 销账槽注册：与 lyricRematchHandler 同生命周期口径——卸载只摘
     // 自己的槽（测试多实例共存时不误摘新实例的注册）
     const onRemoteSeek = () => { pendingSeekTime = null }
     remoteSeekSettleHandler = onRemoteSeek
     onBeforeUnmount(() => {
       if (lyricRematchHandler === onLyricRematch) lyricRematchHandler = null
+      if (lyricManualChangeHandler === onLyricManualChange) lyricManualChangeHandler = null
       if (remoteSeekSettleHandler === onRemoteSeek) remoteSeekSettleHandler = null
     })
 
-    const postProcessLyrics = async (song, lyricId, seq, signal = null) => {
+    // skipVerify（手动绑定词支）：用户显式选定的词不吃归属核验否决——
+    // 核验判否会藏掉用户的显式选择，核验腿整条跳过；翻译腿不受影响
+    const postProcessLyrics = async (song, lyricId, seq, signal = null, { skipVerify = false } = {}) => {
       if (!lyrics.value.length) return
       // 直调 aiApi.status()——它自带「只缓存成功」的会话 memoize 与
       // invalidateStatus（SettingsPanel 改配置即失效），本层不再另挂第二份
@@ -1761,7 +1812,7 @@ export function usePlayer({
                   || (song?.ar || song?.artists || []).map(a => a?.name).filter(Boolean).join(' '),
               }
               : null
-      if (ext?.title && ownsLyric()) {
+      if (!skipVerify && ext?.title && ownsLyric()) {
         // 含模型维度——与服务端 vkey 同口径：换模型后旧判定不应再挡路
         const vkey = JSON.stringify([lyricId, ext.title, ext.author, st.model || ''])
         let ok = aiLyricVerdicts.get(vkey)
