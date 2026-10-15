@@ -195,8 +195,8 @@ test('isYoutubeHost 覆盖 music.youtube.com（YTM 词源走 yt_proxy）', () =>
   assert.equal(isYoutubeHost('music.youtube.com.evil.com'), false);
 });
 
-test('EXT_LYRIC_ID_RE：三源词源 id 收，轨道 id 不收', () => {
-  for (const s of ['ytm_abcdefgh123', 'lrclib_777', 'kugou_k3']) {
+test('EXT_LYRIC_ID_RE：四前缀词源 id 收（ytm/lrclib/kugou/netease），轨道 id 不收', () => {
+  for (const s of ['ytm_abcdefgh123', 'lrclib_777', 'kugou_k3', 'netease_1454432192']) {
     assert.equal(EXT_LYRIC_ID_RE.test(s), true);
   }
   for (const s of ['yt_abcdefgh123', 'qq_abc12345678', '998877', 'bv_BV1xx411c7mD']) {

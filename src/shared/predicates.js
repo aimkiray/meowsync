@@ -39,15 +39,26 @@ export const YT_TRACK_ID_RE = /^yt_([A-Za-z0-9_-]{11})$/;
 // 刻意不进 isResolvableTrackId：接收端没有那份文件，mix 分享链应滤掉它；
 // 「下载到服务器」对它也无意义（文件本就在盘上）
 export const FILE_TRACK_ID_RE = /^file_[0-9a-z]{8,40}$/;
-// 外部词源 id：lyric-external 级联产出的源内 id（ytm_<videoId>/
-// lrclib_<条目id>/kugou_<行id>）——词源核验/翻译白名单与词属主键用它和
-// 网易云/QQ id 空间隔离。注意这是**词源**命名空间不是轨道 id——
-// 不进 isResolvableTrackId（接收端没有对应媒体可解）
-export const EXT_LYRIC_ID_RE = /^(ytm|lrclib|kugou)_/;
+// 外部词源 id：lyric-external 级联/手选候选池产出的源内 id（ytm_<videoId>/
+// lrclib_<条目id>/kugou_<行id>/netease_<曲目id>）——词源核验/翻译白名单
+// 与词属主键用它和网易云/QQ id 空间隔离。注意这是**词源**命名空间不是
+// 轨道 id——不进 isResolvableTrackId（接收端没有对应媒体可解）。
+// netease_ 收进宽松形是绑定词下游链路所需：网易轨道 id 是纯数字裸串，
+// netease_ 前缀零撞型；手选绑定的 netease_ 词属主键要过 ai.js 翻译/
+// 核验白名单——fetchLyricRaw 对 netease_<数字> 走专属直支保官方
+// tlyric（非数字尾段才落 fetchByExtId 反查）——不收等于给每条手绑
+// 网易词判「永不可译」（每次播放白打一发 400）。
+// qq_ 刻意不收：与轨道 id 命名空间（QQ_SONG_ID_RE）同型，收进会把真
+// QQ 轨道词的 fetchLyricRaw 分流劫到反查支路、丢掉官方译文 tlyric；
+// qq_ 手选绑定词经 QQ_SONG_ID_RE 支路照常取词（官方译文一并回），
+// 不在本白名单仍可被翻译端点放行
+export const EXT_LYRIC_ID_RE = /^(ytm|lrclib|kugou|netease)_/;
 // extId 严格整串形（fetchByExtId 反查入参校验用）：白名单闸只查前缀，
 // 进 URL path/源内查询的键必须连尾段字符集也收敛——`[ /?` 这类脏尾
-// 在宽松形下会漏到上游请求里
-export const EXT_LYRIC_ID_STRICT_RE = /^(ytm|lrclib|kugou)_([\w-]{1,120})$/;
+// 在宽松形下会漏到上游请求里。netease_<曲目id>/qq_<songmid> 两个手选
+// 池词源 id（id/mid 即取词键，无 kugou 式 accesskey token 面）在严格
+// 形全收；宽松形的取舍按撞型逐源评估见上方头注
+export const EXT_LYRIC_ID_STRICT_RE = /^(ytm|lrclib|kugou|netease|qq)_([\w-]{1,120})$/;
 
 // 本地歌单 id 前缀族
 // - single_song_*：单曲分享临时壳

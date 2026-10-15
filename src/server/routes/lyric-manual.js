@@ -1,7 +1,7 @@
 // 手选词源绑定路由（手动歌词匹配的服务端半侧）——级联是「系统判官」，
 // 错配时用户是终审：
 //   GET    /lyric/candidates?id=&title=&artist=&duration=
-//     三路外源宽检候选池（services/lyric-external.searchLyricCandidates）：
+//     五路外源宽检候选池（services/lyric-external.searchLyricCandidates）：
 //     无标题闸/艺人闸/时长硬滤——人眼终审要看全池，含刻意可挑的异时长版
 //   GET    /lyric/manual?id=
 //     当前手选绑定：{code:200, hit:{lrc,plain,source,extId,synced}}；
@@ -46,7 +46,7 @@ const songIdOk = (id) => SONG_ID_RES.some(re => re.test(id));
 const MANUAL_LYRIC_MAX_CHARS = 512 * 1024;
 
 // GET /lyric/candidates —— 候选池检索。未鉴权即直连上游扇出——限流防把
-// 服务端 IP 刷进上游风控（同 /lyric/external 口径，宽检三路扇出再收一档）
+// 服务端 IP 刷进上游风控（同 /lyric/external 口径，宽检五路扇出再收一档）
 app.get('/lyric/candidates', async (c) => {
   if (!rateLimit(c, 'lyric-cand', 20)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);

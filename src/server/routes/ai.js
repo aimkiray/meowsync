@@ -12,8 +12,9 @@ const { aiEnabled, aiModel } = require('../lib/ai');
 const app = new Hono();
 
 // 词源相关端点只认网易云数字 id、qq_<songmid>（QQ 曲吃自家权威歌词做词源）
-// 与 EXT_LYRIC_ID_RE 外源词源 id（ytm_/lrclib_/kugou_——下载链外源兜底的
-// 词键，取词走 lyric-external.fetchByExtId 反查支路）；bv_/yt_ 轨道 id
+// 与 EXT_LYRIC_ID_RE 外源词源 id（ytm_/lrclib_/kugou_/netease_——下载链
+// 外源兜底与手绑词的词键；netease_ 数字形在 fetchLyricRaw 内有专属直取
+// 支路，余者走 lyric-external.fetchByExtId 反查支路）；bv_/yt_ 轨道 id
 // 仍拒——它们没有可翻译词源，放行只会空耗一次上游调用再 404
 // 20 位上限的 bounded 形与共享无界 NETEASE_ID_RE 语义不同——直接用共享名防遮蔽
 const { NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, EXT_LYRIC_ID_RE, YT_TRACK_ID_RE, isLikelyChineseLyric } = require('../../shared/predicates.js');
@@ -48,7 +49,19 @@ app.get('/ai/status', (c) => {
 // callNeteaseApi 第三参 options.signal 端到端透传到 request 层——
 // 客户端断连即杀上游 socket，不必等自身超时
 async function fetchLyricRaw(id, signal) {
-  // 外源词源 id（ytm_/lrclib_/kugou_）：下载链级联兜底的词键，反查取原文。
+  // netease_<数字id> 手绑词不走 fetchByExtId——那支 hit 契约只回 {lrc}
+  // 无 tlyric 槽，官方译文会被丢掉（翻译腿白烧 AI 配额、AI 关则永无译
+  // 文）；与 qq_ 支对齐保 trans 通道：直取 lyric 接口经 neteaseLyricBody
+  // 同口径归一（nolyric/uncollected/占位词→''，见下方裸 id 支注），异常
+  // 原样上抛（传输故障语义与 qq_ 支一致）。非数字尾段（netease_abc 类）
+  // 配不上 lyric 接口形参——不进本支，落下方 EXT 支路按反查处理
+  const neM = id.match(/^netease_(\d+)$/);
+  if (neM) {
+    const res = await callNeteaseApi('lyric', { id: neM[1] }, { signal });
+    return neteaseLyricBody(res?.body);
+  }
+  // 外源词源 id（ytm_/lrclib_/kugou_，及 netease_ 非数字尾段——数字形已
+  // 在上方直支截走）：下载链级联兜底的词键，反查取原文。
   // 外源无官方译文概念——tlyric 恒空；kugou_ 出缓存查不回（accesskey 不
   // 落 extId）归一成空词，与网易云无词同走 no-lyric 语义
   if (EXT_LYRIC_ID_RE.test(id)) {
