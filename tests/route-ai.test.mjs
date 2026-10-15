@@ -276,6 +276,89 @@ test('ai：lyric-verify 收 ytm_ 词源 id——反查取词走判定链', async
   assert.equal(extCalls.at(-1), 'ytm_extvid0001');
 });
 
+// ── netease_ 手绑词源 id：fetchLyricRaw 专属直取支路 ──
+// netease_<数字id> 不走 fetchByExtId（那支 hit 契约 {lrc} 无 tlyric 槽会丢
+// 官方译文）——直取 lyric 接口经 neteaseLyricBody 归一，与 qq_ 支同构保
+// trans 通道；非数字尾段（netease_abc）配不上 lyric 形参，落回 EXT 反查支
+test('ai：netease_ 词源 id 直取 lyric——官方 tlyric 直回，零 fetchByExtId 零 AI', async () => {
+  aiOn = true;
+  lyricPayload = {
+    lrc: { lyric: '[00:01.00]song line' },
+    tlyric: { lyric: '[00:01.00]官方翻译' },
+  };
+  // 摘修对照面：若 netease_ 落回 EXT 反查支，fetchByExtId 只回 {lrc} 无
+  // 译文槽——下方 tlyric 断言即红（取回同词但官方译文已丢）
+  extHit = { lrc: '[00:01.00]song line', source: 'netease', extId: 'netease_880090', synced: true };
+  aiAnswer = { t: { '0': 'AI译文' } };
+  try {
+    const nExt = extCalls.length;
+    const nAi = aiCalls.length;
+    const r = await json(await post('/ai/lyric-translate', { id: 'netease_880090' }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.tlyric, '[00:01.00]官方翻译');
+    assert.equal(r.body.source, 'netease');
+    // lyric 上行吃剥前缀后的纯数字 key；fetchByExtId 与 AI 都未动
+    const lyricCalls = apiCalls.filter(x => x.name === 'lyric');
+    assert.equal(lyricCalls.at(-1).params.id, '880090');
+    assert.equal(extCalls.length, nExt);
+    assert.equal(aiCalls.length, nAi);
+  } finally { extHit = null; }
+});
+
+test('ai：netease_ 空词经 neteaseLyricBody 归一 → 404 落哨兵；netease_abc 非数字尾段落 fetchByExtId 支', async () => {
+  aiOn = true;
+  lyricPayload = { lrc: { lyric: '' }, tlyric: { lyric: '' } };
+  const prevTp = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '1';
+  const postIp = (ip, id) => app.request('http://t/ai/lyric-translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip },
+    body: JSON.stringify({ id }),
+  });
+  const nLyric = () => apiCalls.filter(x => x.name === 'lyric').length;
+  try {
+    // 空词归一 no-lyric：404 + skip 哨兵（netease_ 非 kugou_ 豁免面——
+    // lyric 接口空是真无词）；取词道钉在直支：lyric 上行 +1、反查零增加
+    const nExt = extCalls.length;
+    const nl = nLyric();
+    const r = await postIp('10.6.1.1', 'netease_880091');
+    assert.equal(r.status, 404);
+    assert.equal(nLyric(), nl + 1);
+    assert.equal(apiCalls.filter(x => x.name === 'lyric').at(-1).params.id, '880091');
+    assert.equal(extCalls.length, nExt);
+    assert.ok(lyricAiRepo.getCachedTranslation('netease_880091', 'test-model'));
+    // 重放吃缓存不再打上游
+    const nApi = apiCalls.length;
+    const r2 = await json(await postIp('10.6.1.2', 'netease_880091'));
+    assert.equal(r2.status, 200);
+    assert.equal(r2.body.cached, true);
+    assert.equal(apiCalls.length, nApi);
+    // nolyric 旗标同归空词（neteaseLyricBody 归一口径）——同样走直支 lyric
+    lyricPayload = { nolyric: true };
+    const nl2 = nLyric();
+    const r3 = await postIp('10.6.1.3', 'netease_880093');
+    assert.equal(r3.status, 404);
+    assert.equal(nLyric(), nl2 + 1);
+    // 非数字尾段配不上 lyric 直取形 → 落 EXT 支路 fetchByExtId 反查：
+    // extCalls 收到 'netease_abc'、lyric 上行零增加，取回词走 AI 翻译
+    extHit = {
+      lrc: '[00:01.00]foreign line\n[00:02.00]another',
+      source: 'netease', extId: 'netease_abc', synced: true,
+    };
+    aiAnswer = { t: { '0': '外词一', '1': '其二' } };
+    const nl3 = nLyric();
+    const r4 = await json(await postIp('10.6.1.4', 'netease_abc'));
+    assert.equal(r4.status, 200);
+    assert.equal(r4.body.source, 'ai');
+    assert.equal(extCalls.at(-1), 'netease_abc');
+    assert.equal(nLyric(), nl3, 'netease_abc 不应走 lyric 直取支路');
+  } finally {
+    if (prevTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTp;
+    extHit = null;
+  }
+});
+
 test('ai：lyric-verify 携 yt_ trackId → 反解自署本家进判定语境；缺席/非 yt_ 逐位同旧', async () => {
   aiOn = true;
   // memoize 命中会绕过 origImpl 原位桩——用例前后清 videoId 级解析缓存

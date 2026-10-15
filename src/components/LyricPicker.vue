@@ -87,7 +87,11 @@ import { trapTabKeydown, cycleMenuItems } from '../lib/focus-trap.js'
 import PixelIcon from './PixelIcon.vue'
 
 // 词源徽标映射（后端 /lyric/candidates 的 source 枚举）
-const SOURCE_BADGE = { lrclib: 'LRC', kugou: 'KGM', ytm: 'YTM' }
+const SOURCE_BADGE = { lrclib: 'LRC', kugou: 'KGM', netease: '163', qq: 'QQ', ytm: 'YTM' }
+// synced 字段可信度白名单：只有 lrclib/ytm 的检索回报带词型信息，集内
+// synced 是真语义；集外源（kugou/netease/qq 及一切未登记新源）的 synced
+// 只是占位值=「未知」——标纯文本/滚动都是谎报，新源默认诚实不谎报
+const SYNC_KNOWN_SOURCES = new Set(['lrclib', 'ytm'])
 
 export default {
   name: 'LyricPicker',
@@ -142,14 +146,15 @@ export default {
   },
   methods: {
     formatTime,
-    // 词源徽标：lrclib/kugou/ytm → LRC/KGM/YTM，未知源取前 3 位大写兜底
+    // 词源徽标：lrclib/kugou/netease/qq/ytm → LRC/KGM/163/QQ/YTM，未知源取前 3 位大写兜底
     sourceBadge(source) {
       return SOURCE_BADGE[source] || String(source || '').slice(0, 3).toUpperCase() || 'EXT'
     },
-    // 滚动性标签分源诚实化：lrclib/ytm 的 synced 是真语义（false=纯文本）；
-    // kugou 候选接口不回报滚动性，synced:false 只是「未知」——标纯文本是谎报
+    // 滚动性标签分源诚实化：白名单内（lrclib/ytm）的 synced 是真语义
+    // （false=纯文本）；集外源检索回报无词型信息，synced:false 只是
+    // 「未知」——标纯文本是谎报；未登记新源同样默认「未知」不谎报
     syncTag(c) {
-      if (c?.source === 'kugou') return '未知'
+      if (!SYNC_KNOWN_SOURCES.has(c?.source)) return '未知'
       return c?.synced === false ? '纯文本' : '滚动'
     },
     // 开屏并行：候选扇出 + 现有手动绑定读口（决定页脚「恢复自动匹配」显隐）。
@@ -320,6 +325,11 @@ export default {
 }
 .lp-badge--lrclib { color: var(--ink); }
 .lp-badge--kugou { color: var(--accent-magenta-ink, var(--ink)); }
+/* netease 品牌红——借 danger 通道的纸面小字深档（无 --accent-red-ink token，
+   accent 本色在纸面 <4.5:1，徽标是 9px 小字须用 -ink 档） */
+.lp-badge--netease { color: var(--accent-danger-ink, var(--ink)); }
+/* qq 品牌绿——与 magenta/danger 同族深档，保持纸面小字对比度 */
+.lp-badge--qq { color: var(--accent-green-ink, var(--ink)); }
 .lp-badge--ytm { color: var(--ink-86); }
 .lp-text {
   flex: 1;

@@ -129,16 +129,32 @@ describe('LyricPicker：候选列表', () => {
     )
   })
 
-  it('滚动性标签分源：kugou 的 synced:false 是「未知」，lrclib 仍标纯文本', async () => {
+  it('滚动性标签分源：集外源 synced:false 是「未知」，白名单 lrclib/ytm synced 真语义', async () => {
     musicApi.getLyricCandidates.mockResolvedValue([
       { extId: 'kugou_1', source: 'kugou', title: 'A', synced: false },
       { extId: 'lrclib_2', source: 'lrclib', title: 'B', synced: false },
       { extId: 'ytm_3', source: 'ytm', title: 'C', synced: true },
+      // 未登记新源：synced 字段不可信——即便 true 也不标「滚动」，默认「未知」
+      { extId: 'newsrc_4', source: 'newsrc', title: 'D', synced: true },
     ])
     mountPicker()
     await flush()
     const tags = [...document.querySelectorAll('.lp-tag')].map(t => t.textContent)
-    expect(tags).toEqual(['未知', '纯文本', '滚动'])
+    expect(tags).toEqual(['未知', '纯文本', '滚动', '未知'])
+  })
+
+  it('netease/qq 候选：163/QQ 徽标 + synced:false 归「未知」（检索无词型回报，同 kugou 口径）', async () => {
+    musicApi.getLyricCandidates.mockResolvedValue([
+      { extId: 'netease_1', source: 'netease', title: 'N', synced: false },
+      { extId: 'qq_2', source: 'qq', title: 'Q', synced: false },
+    ])
+    mountPicker()
+    await flush()
+    // 徽标类名由 c.source 派生——类+文双钉（着色在 scoped CSS，jsdom 不验色值）
+    expect(document.querySelector('.lp-badge--netease')?.textContent).toBe('163')
+    expect(document.querySelector('.lp-badge--qq')?.textContent).toBe('QQ')
+    const tags = [...document.querySelectorAll('.lp-tag')].map(t => t.textContent)
+    expect(tags).toEqual(['未知', '未知'])
   })
 
   it('候选检索失败 → 错误态文案 + 「重试」键再发一轮', async () => {

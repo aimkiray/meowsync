@@ -56,12 +56,15 @@
 // 单一源全灭在传输层（没有一个「干净无词」终态）时抛错——这是故障不是
 // 缺词，让调用方走重试语义，且不写负缓存。
 //
-// 结果面 { lrc, source:'ytm'|'lrclib'|'kugou', extId, synced, plain?, meta? }：
+// 结果面 { lrc, source:'ytm'|'lrclib'|'kugou'|'netease'|'qq', extId, synced,
+//          plain?, meta? }：
 //   lrc    最佳文本——synced=true 是标准 LRC；false 时是纯文本（无时间戳
 //          行，落盘仍是可读词稿，播放端解析不出滚动行而已）
-//   extId  源内稳定 id（ytm_<videoId>/lrclib_<条目id>/kugou_<行id>）——
-//          归属核验 vkey 与 AI 译文缓存键都挂它，与网易云/QQ id 空间隔离，
-//          形态见 shared/predicates.js EXT_LYRIC_ID_RE
+//   extId  源内稳定 id（ytm_<videoId>/lrclib_<条目id>/kugou_<行id>——级联
+//          产出面；netease_<曲目id>/qq_<songmid> 只出手选候选池与
+//          fetchByExtId 反查支路）——归属核验 vkey 与 AI 译文缓存键都
+//          挂它，与网易云/QQ id 空间隔离，形态见 shared/predicates.js
+//          EXT_LYRIC_ID_RE
 //   plain  纯文本歌词（LRCLIB 条目常带 synced+plain 两形态时顺带透出）
 //   meta   候选条目身份 {title, artist, album}——lrclib/kugou 检索命中透出，
 //          verifyHit 喂给 AI 归属判定作同名异曲拦截证据；ytm 支路
@@ -93,7 +96,7 @@ const { ytDispatcher } = require('../lib/yt-proxy');
 // lib/lyric-proxy.js 头注）：代理在位走共享 dispatcher，代理连接级
 // 失败（闸死）剥代理直连重发一次；未配置纯透传，各 fetch 点逐字节旧行为
 const { lyricFetch } = require('../lib/lyric-proxy');
-const { YT_TRACK_ID_RE, BV_TRACK_ID_RE, EXT_LYRIC_ID_STRICT_RE } = require('../../shared/predicates.js');
+const { YT_TRACK_ID_RE, BV_TRACK_ID_RE, EXT_LYRIC_ID_STRICT_RE, NETEASE_ID_RE, SONGMID_RE } = require('../../shared/predicates.js');
 // 标题变体/剥艺人/检索词清理的唯一真相源上提到 shared——网易云匹配漏斗
 // （netease-match.js candidates 展开）与这里的外源级联共用同一份规则集
 const {
@@ -107,6 +110,16 @@ const { parseLrcLines, plainTextLines, judgeLyricLines, lyricVerdictKey, judgePo
 // ——经模块对象调用：测试面可就地桩，并行落地期缺席（undefined）按无
 // 声明 fail-soft 处理
 const ytLib = require('../lib/youtube');
+// 手选候选池的两个曲库源原语（只进 searchLyricCandidates/fetchByExtId，
+// 不进级联）：网易走 ./netease 门面——候选池只要 callNeteaseApi 一跳，
+// 不拉 ./netease-api 的解锁/流址重依赖面；QQ 经模块对象调 lib/qq——
+// searchSongs 三层兜底/getLyric 已收口在内（与 file-downloader 同款
+// 消费形态，测试面可就地支桩）；neteaseLyricBody 是 lyric 回包归一
+// 唯一真相源（nolyric/uncollected/占位词归空——与 fetchLyricRaw/
+// 下载链 neteaseLyricOf 同口径）
+const { callNeteaseApi } = require('./netease');
+const qq = require('../lib/qq.js');
+const { neteaseLyricBody } = require('../../shared/lrc.js');
 
 const EXT_TIMEOUT_MS = 12000;
 // 级联软时限默认值——fetchExternalLyric 经 args.deadlineMs 可覆写（测试
@@ -1180,10 +1193,12 @@ async function cascade({ songId, title, artist, durationSec, videoId, signal, de
 // extId → 词原文反查（ai.js 词源核验/翻译端点的取词支路与
 // routes/lyric-manual 的手选绑定——它们手里只有词源 id 没有检索词）。
 // ytm_<videoId> 直通 YTM（videoId 即键）、lrclib_<条目id> 走 /api/get；
-// kugou_ 的 accesskey 不落 extId——两条取词道：进程内 LRU 里级联/手选
-// 刚产出的那份（正窗 6h 内可命中），或 opts.token 携候选池透回的
-// accesskey 直达 lyrics.kugou.com/download（手选绑定唯一取词通道——
-// 缺 token 只能等缓存，出缓存即归 null）。
+// netease_<曲目id> 走 /api/song/lyric、qq_<songmid> 走 fcg_query_lyric_new
+// ——两源的 id/mid 即 refetch 键，无 token 面；kugou_ 的 accesskey 不落
+// extId——两条取词道：进程内 LRU 里级联/手选刚产出的那份（正窗 6h 内可
+// 命中），或 opts.token 携候选池透回的 accesskey 直达
+// lyrics.kugou.com/download（手选绑定唯一取词通道——缺 token 只能等
+// 缓存，出缓存即归 null）。
 // 返回与级联同构的 {lrc, source, extId, synced, plain?}；id 非法/无词 →
 // null，传输故障抛错（与级联同语义：故障走重试而不是固化成「无词」）。
 async function fetchByExtId(extId, { signal, token } = {}) {
@@ -1200,6 +1215,29 @@ async function fetchByExtId(extId, { signal, token } = {}) {
   }
   if (src === 'ytm') return ytmFetchLyric(key, signal);
   if (src === 'lrclib') return lrclibGetById(key, signal);
+  // netease_：曲目 id 直取 /api/song/lyric。neteaseLyricBody 归一
+  // nolyric/uncollected/占位词→''（与 fetchLyricRaw/下载链同口径——
+  // 「纯音乐请欣赏」类占位不许冒充词文进绑定）；空/缺 → null
+  if (src === 'netease') {
+    const res = await neteaseCall('lyric', { id: key }, signal);
+    const lrc = neteaseLyricBody(res?.body).lrc;
+    if (!lrc) return null;
+    return { lrc, source: 'netease', extId: id, synced: parseLrcLines(lrc).length > 0 };
+  }
+  // qq_：songmid 直取 fcg_query_lyric_new（getLyric 内已 base64 解码 +
+  // 占位词归空——官方译文 trans 不进结果面：外源词契约 {lrc} 无译文槽，
+  // 与 ai.js「外源 tlyric 恒空」同口径）。业务码（-1901/-1301 无词等）是
+  // 确定性无词——归 null 与空词同口径；传输层错误（无 bizCode）照旧上
+  // 抛走重试语义
+  if (src === 'qq') {
+    const r = await qq.getLyric(key, signal).catch((e) => {
+      if (e && e.bizCode !== undefined) return null;
+      throw e;
+    });
+    const lrc = String(r?.lyric || '');
+    if (!lrc) return null;
+    return { lrc, source: 'qq', extId: id, synced: parseLrcLines(lrc).length > 0 };
+  }
   // kugou_：候选池透回的 accesskey token 是 download 必填凭证；收敛
   // 字符集/长度再进查询串（虽经 encodeURIComponent，脏尾仍拒收）
   const ak = String(token || '').trim();
@@ -1213,31 +1251,34 @@ async function fetchByExtId(extId, { signal, token } = {}) {
 }
 
 // ── 手选候选池（GET /lyric/candidates 供）──
-// 级联是「系统判官」——错配时用户是终审：本函数把三路外源的宽检候选
+// 级联是「系统判官」——错配时用户是终审：本函数把外源的宽检候选
 // 原样端出（级联侧的 strictTitleHit 标题闸/artistHit 艺人面/±15s 时长
 // 硬滤全部摘掉——那些是「错词比没词更糟」的自动收窄，人眼终审要看到
 // 全池，含刻意可挑的异时长版）。仍剥的只有「没词可给」的条目
-// （lrclib 的 instrumental/无双形态词文行——摆进池也只能给用户挑出一
-// 个 404，纯噪音）。无核验无 choose——judge 席位留给用户。
+// （lrclib 的 instrumental/无双形态词文行、netease/qq 的无 id/mid 或
+// 键形非法的脏行——摆进池也只能给用户挑出一个 404，纯噪音）。无核验
+// 无 choose——judge 席位留给用户。
 // 出参 [{extId, source, title, artist, album?, durationSec?, synced,
 // preview, token?}]：
 //   preview  词稿首 1-2 行词文（剥行首时间戳与 [tag:] 元行，≤80 字）——
-//            列表里人眼比对用；kugou 候选逐条 download 才见词，候选池
-//            阶段不付那笔扇出 → 恒 ''
+//            列表里人眼比对用；kugou 候选逐条 download 才见词、netease/qq
+//            检索面不回词文，候选池阶段都不付那笔扇出 → 恒 ''
 //   token    kugou accesskey——POST /lyric/manual 时须原样回传，是
-//            download 唯一取词凭证（kugou_ extId 无 refetch 通道）
-//   synced   滚动词旗标；kugou search 回包无词型信息恒 false——诚实
-//            值而非「是纯文本」的断言
+//            download 唯一取词凭证（kugou_ extId 无 refetch 通道）；
+//            netease_/qq_ 的 id/mid 即 refetch 键——无 token
+//   synced   滚动词旗标；kugou/netease/qq 检索面无词型信息恒 false——
+//            诚实值而非「是纯文本」的断言
 // 检索词展开接通级联同款漏斗：否则 yt_ 翻唱曲恒空——'楽園 ver.EMA EMA'
 // 实测 0 条而剥缀形态 '楽園' 20 条。标题变体 × 艺人降轮按序逐发（见
 // candQueryForms/runCandForms 头注），命中条目烙 _form=形态序号进排序键。
 // 排序：形态序 _form（0=最严形态命中——降轮命中是不同曲的可能性高，
 // 特异性先于时长差决胜）→ |候选时长-durationSec| 升序（无差值殿后——
 // 刻意不做 ±15s 硬滤，截取版/异时长版用户有权明挑）→ 源序
-// lrclib→kugou→ytm，截 12 条。每源独立 15s 伞时限（内部单跳仍 10s），
-// 形态中途失败与整源故障都降级部分池（warn 续走）——一源死拖不翻整池
-// （「池子缺一角」比「整池 502」强）。
-const CAND_SRC_ORDER = { lrclib: 0, kugou: 1, ytm: 2 };
+// lrclib→kugou→netease→qq→ytm，截 12 条。每源独立 15s 伞时限（内部单跳
+// 仍 10s——qq.searchSongs 内层 15s 由伞收口），形态中途失败与整源故障
+// 都降级部分池（warn 续走）——一源死拖不翻整池（「池子缺一角」比
+// 「整池 502」强）。
+const CAND_SRC_ORDER = { lrclib: 0, kugou: 1, netease: 2, qq: 3, ytm: 4 };
 const CAND_CAP = 12;
 // 扇出节流双闸（机制见 runCandForms 头注）：召回地板——池收满此数后
 // 最多再宽采 1 个形态即停；形态硬顶——单源形态查询数硬上限
@@ -1318,7 +1359,7 @@ function candQueryForms({ songId, title, artist }) {
 // 中途 429 即此熔断面（非重试——上游 Retry-After/5xx 单点重试消化在
 // lrclibSearchList 内部，本层不动）；首形态即炸自然空池，上抛归外层
 // 「源失败 warn+[]」旧语义（调用方 abort 亦经外层 signal 判定穿透）
-async function runCandForms(forms, source, signal, query) {
+async function runCandForms(forms, source, query) {
   const pool = [];
   const seenIds = new Set();
   // 可执行形态上界：形态数与硬顶取小；召回地板再把它压到「首个使池
@@ -1347,7 +1388,7 @@ async function runCandForms(forms, source, signal, query) {
 }
 
 async function lrclibCandidates({ songId, title, artist, durationSec, signal }) {
-  return runCandForms(candQueryForms({ songId, title, artist }), 'lrclib', signal,
+  return runCandForms(candQueryForms({ songId, title, artist }), 'lrclib',
     async (q) => {
       const list = await lrclibSearchList(q, signal);
       return (Array.isArray(list) ? list : [])
@@ -1377,7 +1418,7 @@ async function kugouCandidates({ songId, title, artist, durationSec, signal }) {
   // 刻意不透 durationSec 给上游：级联侧的 ±15s 时长滤在候选池面全摘
   // （用户可能明挑异时长版——kugou 的 duration= 参是服务端收窄，透出去
   // 等于把「宽检池」又关回窗内）；时长只进本地 _diff 排序键
-  return runCandForms(candQueryForms({ songId, title, artist }), 'kugou', signal,
+  return runCandForms(candQueryForms({ songId, title, artist }), 'kugou',
     async (kw) => {
       const sbody = await kugouSearchList(kw, 0, signal);
       return (Array.isArray(sbody?.candidates) ? sbody.candidates : [])
@@ -1395,6 +1436,84 @@ async function kugouCandidates({ songId, title, artist, durationSec, signal }) {
             preview: '',
             // accesskey 原样透回——POST /lyric/manual 的取词凭证（见头注）
             token: String(cd.accesskey),
+            _diff: candDiff(dur, durationSec),
+          };
+        });
+    });
+}
+
+// callNeteaseApi 对上游非 200 拒的是 answer{status,body,cookie} 对象而非
+// Error（上游兼容契约，见 netease/request.js——含 abort/超时也归一成
+// 502 answer）——候选池「源失败/形态熔断」与反查故障日志都吃
+// e?.message，裸 answer 会落 '[object Object]' 不可回放；归一成 Error
+// 再上抛，失败语义不变。单跳时限收 SRC_REQ_TIMEOUT_MS（与其它源同口径；
+// 外层 15s 伞仍在）
+const neteaseCall = (api, params, signal) =>
+  callNeteaseApi(api, params, { signal, timeoutMs: SRC_REQ_TIMEOUT_MS })
+    .catch((e) => {
+      if (e instanceof Error) throw e;
+      throw new Error(`netease ${api} status=${e?.status ?? e?.body?.code ?? '?'}`);
+    });
+
+// 候选池曲库源·网易云：cloudsearch(type=1) 单曲检索。实机钉字段名——
+// songs[{id,name,ar[{name}],al{name},dt(ms)}]，双名口径取（ar||artists、
+// al||album、dt||duration——netease-match 同款，防上游新旧命名漂移）；
+// 多艺人 join '/'。检索面无词型信息 → synced:false 诚实未知（kugou 同
+// 口径）；id 即 extId 可 refetch——无 token
+async function neteaseCandidates({ songId, title, artist, durationSec, signal }) {
+  return runCandForms(candQueryForms({ songId, title, artist }), 'netease',
+    async (kw) => {
+      const res = await neteaseCall('cloudsearch', { keywords: kw, type: 1, limit: 15 }, signal);
+      const songs = res?.body?.result?.songs;
+      return (Array.isArray(songs) ? songs : [])
+        // 键形预滤：非纯数字 id 产的 netease_ extId 过不了 fetchByExtId
+        // 严格形也配不上 lyric 接口形参——注定 404 的脏条不摆进池
+        .filter((s) => s && typeof s === 'object' && NETEASE_ID_RE.test(String(s.id ?? '')))
+        .map((s) => {
+          // 毫秒→秒；null/''/非数归「无时长信息」（+x 强转会吃 null 成 0）
+          const durNum = Number(s.dt || s.duration);
+          const dur = Number.isFinite(durNum) && durNum > 0 ? durNum / 1000 : null;
+          const ars = Array.isArray(s.ar || s.artists) ? (s.ar || s.artists) : [];
+          return {
+            extId: `netease_${s.id}`, source: 'netease',
+            title: String(s.name || ''),
+            artist: ars.map((a) => a?.name).filter(Boolean).join('/'),
+            album: (s.al || s.album)?.name || undefined,
+            durationSec: dur ?? undefined,
+            synced: false,
+            preview: '',
+            _diff: candDiff(dur, durationSec),
+          };
+        });
+    });
+}
+
+// 候选池曲库源·QQ：searchSongs 三层兜底收口在 lib/qq 内（soso→shc→
+// musicu），list 条目已 normalizeTrack 归一成 {mid,name,artists[],album,
+// intervalSec}；多艺人 join '/'。mid 即 extId 可 refetch——无 token；
+// 检索面无词型信息 → synced:false。无 mid/形非法脏行剥除
+// （normalizeTrack 滤无 mid，键形 SONGMID_RE 由本层兜）
+async function qqCandidates({ songId, title, artist, durationSec, signal }) {
+  return runCandForms(candQueryForms({ songId, title, artist }), 'qq',
+    async (kw) => {
+      const { list } = await qq.searchSongs(kw, { limit: 15 }, signal);
+      return (Array.isArray(list) ? list : [])
+        // 键形预滤：SONGMID_RE 过不了的脏 mid 产的 qq_ extId 同样过不了
+        // fetchByExtId/QQ_SONG_ID_RE 严格形——注定取不到词的条不摆进池
+        .filter((s) => s && typeof s === 'object' && SONGMID_RE.test(String(s.mid ?? '')))
+        .map((s) => {
+          // intervalSec 已是秒；null/''/非数归「无时长信息」
+          const durNum = Number(s.intervalSec);
+          const dur = Number.isFinite(durNum) && durNum > 0 ? durNum : null;
+          return {
+            extId: `qq_${s.mid}`, source: 'qq',
+            title: String(s.name || ''),
+            artist: (Array.isArray(s.artists) ? s.artists : [])
+              .filter(Boolean).join('/'),
+            album: s.album || undefined,
+            durationSec: dur ?? undefined,
+            synced: false,
+            preview: '',
             _diff: candDiff(dur, durationSec),
           };
         });
@@ -1426,6 +1545,16 @@ async function searchLyricCandidates({ songId, title, artist, durationSec, signa
       songId, title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
     })],
     ['kugou', kugouCandidates({
+      songId, title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
+    })],
+    // 两个曲库源恒在——LRCLIB/酷狗对翻唱曲的召回黑洞正是它们的补位面
+    // （实案「楽園 ver.EMA」：LRCLIB 无条目、酷狗抽风返 0、网易云曲库
+    // 有真身）。各走自己的 runCandForms——同 6 形态顶/地板+1 闸不扩
+    // 上游预算
+    ['netease', neteaseCandidates({
+      songId, title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
+    })],
+    ['qq', qqCandidates({
       songId, title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
     })],
   ];
