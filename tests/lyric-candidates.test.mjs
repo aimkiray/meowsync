@@ -335,3 +335,241 @@ test('调用方真断连仍穿透：源挂起被掐 + 调用方 signal 已 abort
   ac.abort();
   await assert.rejects(p, (e) => e?.aborted === true);
 });
+
+// ── 形态展开（变体 × 艺人降轮）——yt_ 翻唱曲恒空修复钉板 ──
+// 检索词不再是 cleanQueryTitle 单形态：与级联同构的 titleVariantsOf ×
+// artistRounds 按序逐发、extId 首现者胜、烙 _form 进排序键（特异性先于
+// 时长差）、池满 ≥12 早停；形态中途失败降级部分池、首形态即炸维持「源失败
+// warn+[]」旧语义。
+const qOf = (u, key) => decodeURIComponent(u.match(new RegExp(`[?&]${key}=([^&]*)`))?.[1] || '');
+const lrclibQs = () => calls.filter(u => u.includes('lrclib.net/api/search')).map(u => qOf(u, 'q'));
+const kugouQs = () => calls.filter(u => u.includes('lyrics.kugou.com/search')).map(u => qOf(u, 'keyword'));
+
+test('yt_ 翻唱曲形态展开：原形态恒空 → 剥缀变体 + 裸艺人轮命中', async () => {
+  const row = (id) => ({
+    id, trackName: '楽園', artistName: '本家艺人', duration: 200,
+    syncedLyrics: '[00:01.00]楽園の詞一行',
+  });
+  reset([
+    // 实案回放：'楽園 ver.EMA EMA' 0 条；只有剥到 '楽園' 裸标题才出真身
+    ['lrclib.net/api/search', (url) => J(qOf(url, 'q') === '楽園' ? [row(101), row(102)] : [])],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+    ['music.youtube.com', () => J({ contents: {} })],   // ytm 支路无词 tab 静默略
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: 'yt_rakuen01234', title: '楽園 ver.EMA', artist: 'EMA', durationSec: 200,
+  });
+  assert.deepEqual(list.map(c => c.extId), ['lrclib_101', 'lrclib_102']);
+  // 形态序 = 变体外圈 × 艺人轮内圈：'楽園 ver.EMA' 配 ['EMA','']（UGC 降轮
+  // artistFromTitle 剥不出→归并入 ''），再轮到剥缀变体 '楽園'
+  assert.deepEqual(lrclibQs(), [
+    '楽園 ver.EMA EMA', '楽園 ver.EMA', '楽園 EMA', '楽園',
+  ]);
+  // 内部排序键不透出 API 面
+  assert.ok(list.every(c => !('_form' in c) && !('_diff' in c)));
+});
+
+test('跨形态 extId 去重：首现者胜（降轮重复命中不重复进池）', async () => {
+  const row = (id, dur) => ({
+    id, trackName: '平原曲', artistName: '艺人', duration: dur, syncedLyrics: '[00:01.00]X',
+  });
+  reset([
+    ['lrclib.net/api/search', (url) => J(qOf(url, 'q') === '平原曲 艺人'
+      ? [row(1, 200), row(2, 210)]
+      : [row(2, 210), row(3, 205)])],   // 裸轮重复命中 id2
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: '880020', title: '平原曲', artist: '艺人', durationSec: 200,
+  });
+  // id2 只留 form0 那份；id3 是裸轮新增（_form=1 殿后）
+  assert.deepEqual(list.map(c => c.extId), ['lrclib_1', 'lrclib_2', 'lrclib_3']);
+  assert.equal(lrclibQs().length, 2);   // 具名轮 + 裸标题轮各一发
+});
+
+test('池满早停：首形态回 ≥12 条不再发该源后续形态查询', async () => {
+  const rows = Array.from({ length: 15 }, (_, i) => ({
+    id: i + 1, trackName: '平原曲', artistName: '艺人', duration: 200 + i, syncedLyrics: '[00:01.00]X',
+  }));
+  reset([
+    ['lrclib.net/api/search', () => J(rows)],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: '880021', title: '平原曲', artist: '艺人', durationSec: 200,
+  });
+  // lrclib 首形态已收 15 ≥ CAND_CAP——'平原曲' 裸轮不再打
+  assert.equal(lrclibQs().length, 1);
+  assert.deepEqual(lrclibQs(), ['平原曲 艺人']);
+  // kugou 未触满——自家两形态照发（早停是 per-源闸）
+  assert.deepEqual(kugouQs(), ['平原曲 艺人', '平原曲']);
+  assert.equal(list.length, 12);   // 跨源池仍按 CAND_CAP 截断
+});
+
+test('降轮构成：非 UGC [artist, 裸标题]；UGC 中间夹 artistFromTitle 轮', async () => {
+  const row = (id) => ({
+    id, trackName: '平原曲', artistName: '别人', duration: 300, syncedLyrics: '[00:01.00]Y',
+  });
+  reset([
+    ['lrclib.net/api/search', (url) => J(qOf(url, 'q') === '平原曲' ? [row(9)] : [])],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  // 曲库行（数字 id）：具名轮灭、裸标题轮命中——手动池无 AI 闸，裸轮是
+  // 修错配正当召回面
+  const list = await svc.searchLyricCandidates({ songId: '880022', title: '平原曲', artist: '艺人' });
+  assert.deepEqual(lrclibQs(), ['平原曲 艺人', '平原曲']);
+  assert.deepEqual(list.map(c => c.extId), ['lrclib_9']);
+
+  // UGC 曲：artist 实为 UP 主，artistFromTitle 剥出的真艺人候选占中间轮
+  reset([
+    ['lrclib.net/api/search', () => J([])],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  await svc.searchLyricCandidates({ songId: 'bv_BV1abcdefghi', title: 'Singer - 平原曲', artist: 'UP主' });
+  assert.deepEqual(lrclibQs(), [
+    'Singer - 平原曲 UP主', 'Singer - 平原曲 Singer', 'Singer - 平原曲',
+    '平原曲 UP主', '平原曲 Singer', '平原曲',
+  ]);
+});
+
+test('排序：_form 特异性序先于 _diff——降轮低差值不压 strict 命中', async () => {
+  const row = (id, dur) => ({
+    id, trackName: '平原曲', artistName: '艺人', duration: dur, syncedLyrics: '[00:01.00]X',
+  });
+  reset([
+    ['lrclib.net/api/search', (url) => J(qOf(url, 'q') === '平原曲 艺人'
+      ? [row(1, 250)]   // form0 diff50
+      : [row(2, 201)])], // form1 diff1
+    ['lyrics.kugou.com/search', (url) => J({ candidates: qOf(url, 'keyword') === '平原曲 艺人'
+      ? [{ id: 'k0', accesskey: 'ak0', singer: '艺人', song: '平原曲', duration: 230000 }]  // form0 diff30
+      : [{ id: 'k1', accesskey: 'ak1', singer: '艺人', song: '平原曲', duration: 200000 }] })], // form1 diff0
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: '880023', title: '平原曲', artist: '艺人', durationSec: 200,
+  });
+  // 旧纯 _diff 序会排成 k1(0)→l2(1)→k0(30)→l1(50)；_form 先决后降轮
+  // 命中整体劣后——降轮命中是不同曲的可能性高
+  assert.deepEqual(list.map(c => c.extId), [
+    'kugou_k0', 'lrclib_1',   // form0 内按 diff：30 < 50
+    'kugou_k1', 'lrclib_2',   // form1 内按 diff：0 < 1
+  ]);
+});
+
+test('形态中途故障：保留已收部分池、中断余下形态；首形态炸仍归源失败', async () => {
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warns.push(a.map(String).join(' '));
+  try {
+    reset([
+      ['lrclib.net/api/search', (url) => {
+        if (qOf(url, 'q') === 'Singer - 平原曲 UP主') {
+          return J([{ id: 5, trackName: '平原曲', artistName: 'Singer', duration: 200, syncedLyrics: '[00:01.00]X' }]);
+        }
+        return Promise.reject(new Error('socket hangup'));  // 第 2 形态起传输炸
+      }],
+      ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+      ['music.youtube.com', () => J({ contents: {} })],
+    ]);
+    const list = await svc.searchLyricCandidates({
+      songId: 'yt_abcdefghijk', title: 'Singer - 平原曲', artist: 'UP主',
+    });
+    // form0 命中端出；第 2 形态炸后 '平原曲' 系形态（3~6）不再打
+    assert.deepEqual(list.map(c => c.extId), ['lrclib_5']);
+    assert.equal(lrclibQs().length, 2);
+    assert.ok(warns.some(l => /候选池 lrclib 形态/.test(l) && /保留已收 1 条/.test(l)));
+
+    // 对照：首形态即炸（池尚空）→ 上抛归外层「源失败 warn+[]」旧语义
+    warns.length = 0;
+    reset([
+      ['lrclib.net', () => Promise.reject(new Error('socket hangup'))],
+      ['lyrics.kugou.com/search', () => J({
+        candidates: [{ id: 'k7', accesskey: 'ak7', singer: '艺人', song: '平原曲', duration: 200000 }],
+      })],
+    ]);
+    const list2 = await svc.searchLyricCandidates({ songId: '880025', title: '平原曲', artist: '艺人' });
+    assert.deepEqual(list2.map(c => c.extId), ['kugou_k7']);  // lrclib 空池、kugou 照常
+    assert.ok(warns.some(l => /候选池 lrclib 源失败/.test(l)));
+    assert.equal(lrclibQs().length, 1);   // 首形态炸即中断，不再打裸轮
+  } finally { console.warn = origWarn; }
+});
+
+// ── 展开序与 _form 哨兵边界钉 ──
+
+test('_form 哨兵不穿桶：UGC 尾形态（_form 10/11）命中仍排在 ytm 无 _form 候选前', async () => {
+  const row = (id) => ({
+    id, trackName: '平原曲', artistName: 'Singer', duration: 200,
+    syncedLyrics: '[00:01.00]X',
+  });
+  reset([
+    ['/youtubei/v1/next', () => nextOk('MPLYt_sent')],
+    ['/youtubei/v1/browse', () => browseOk()],
+    // 4 变体×3 轮=12 形态：只让尾部两形态出命中（'平原曲 Singer'=_form10、
+    // '平原曲'=_form11），前 10 发全空——真实 _form 大过旧哨兵 9 的面
+    ['lrclib.net/api/search', (url) => {
+      const q = qOf(url, 'q');
+      if (q === '平原曲 Singer') return J([row(51)]);
+      if (q === '平原曲') return J([row(52)]);
+      return J([]);
+    }],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: 'yt_sentinel001', title: 'Singer - 平原曲 ver.EMA', artist: 'UP主',
+  });
+  // 确认命中确系尾形态（_form 10/11）而非早形态——哨兵判例成立的前提
+  assert.equal(lrclibQs().indexOf('平原曲 Singer'), 10);
+  assert.equal(lrclibQs().indexOf('平原曲'), 11);
+  // 哨兵 9 时代：ytm 无 _form 按 9 排——尾形态命中被压在它之后（殿后意图
+  // 破缺）；哨兵 9e9 后 ytm 恒殿后、尾形态命中不与其串桶
+  assert.deepEqual(list.map(c => c.extId), [
+    'lrclib_51', 'lrclib_52', 'ytm_sentinel001',
+  ]);
+});
+
+test('非 UGC 展开序：轮外圈 × 变体内圈——具名变体全部先于裸标题轮', async () => {
+  const row = (id) => ({
+    id, trackName: '平原曲', artistName: '艺人', duration: 200, syncedLyrics: '[00:01.00]X',
+  });
+  reset([
+    ['lrclib.net/api/search', (url) => {
+      const q = qOf(url, 'q');
+      // 剥缀变体+真艺人（轮外圈序 _form=1）与裸轮首形态（_form=4）各出一条
+      if (q === 'Singer - 平原曲 艺人') return J([row(31)]);
+      if (q === 'Singer - 平原曲 ver.EMA') return J([row(30)]);
+      return J([]);
+    }],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: '880030', title: 'Singer - 平原曲 ver.EMA', artist: '艺人',
+  });
+  // 与级联 runRound 同序：具名轮 4 变体全打完才进裸标题轮（裸轮恒居尾）
+  assert.deepEqual(lrclibQs(), [
+    'Singer - 平原曲 ver.EMA 艺人', 'Singer - 平原曲 艺人',
+    '平原曲 ver.EMA 艺人', '平原曲 艺人',
+    'Singer - 平原曲 ver.EMA', 'Singer - 平原曲', '平原曲 ver.EMA', '平原曲',
+  ]);
+  // 特异性序纠正：变体外圈旧序下裸轮命中 'Singer - 平原曲 ver.EMA'(_form=1)
+  // 会压在具名变体命中 'Singer - 平原曲 艺人'(_form=2) 之前——无艺人证据
+  // 的同题命中不该赢过标题弱化+真艺人命中
+  assert.deepEqual(list.map(c => c.extId), ['lrclib_31', 'lrclib_30']);
+});
+
+test('UGC 展开序回归钉：仍变体外圈 × 艺人轮内圈（剥缀+裸轮伞内早触达）', async () => {
+  reset([
+    ['lrclib.net/api/search', () => J([])],
+    ['lyrics.kugou.com/search', () => J({ candidates: [] })],
+  ]);
+  await svc.searchLyricCandidates({
+    songId: 'bv_BV1abcdefghi', title: 'Singer - 平原曲 ver.EMA', artist: 'UP主',
+  });
+  // 4 变体 × 3 轮（UP主 / artistFromTitle='Singer' / ''）：每变体先打全
+  // 艺人轮再换变体——修复目标形态「v1 剥缀+裸轮」'Singer - 平原曲' 居
+  // _form=5，轮外圈序会把它推到第 9 发（15s 伞内更晚触达），故 UGC 不换序
+  assert.deepEqual(lrclibQs(), [
+    'Singer - 平原曲 ver.EMA UP主', 'Singer - 平原曲 ver.EMA Singer', 'Singer - 平原曲 ver.EMA',
+    'Singer - 平原曲 UP主', 'Singer - 平原曲 Singer', 'Singer - 平原曲',
+    '平原曲 ver.EMA UP主', '平原曲 ver.EMA Singer', '平原曲 ver.EMA',
+    '平原曲 UP主', '平原曲 Singer', '平原曲',
+  ]);
+});

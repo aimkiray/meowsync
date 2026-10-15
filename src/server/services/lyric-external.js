@@ -1228,10 +1228,15 @@ async function fetchByExtId(extId, { signal, token } = {}) {
 //            download 唯一取词凭证（kugou_ extId 无 refetch 通道）
 //   synced   滚动词旗标；kugou search 回包无词型信息恒 false——诚实
 //            值而非「是纯文本」的断言
-// 排序：声明时长时按 |候选时长-durationSec| 升序（无差值殿后——刻意不
-// 做 ±15s 硬滤，截取版/异时长版用户有权明挑）→ 源序 lrclib→kugou→ytm，
-// 截 12 条。每源独立 15s 伞时限（内部单跳仍 10s），单源故障 catch 掉
-// warn 续走——一源死拖不翻整池（「池子缺一角」比「整池 502」强）。
+// 检索词展开接通级联同款漏斗：否则 yt_ 翻唱曲恒空——'楽園 ver.EMA EMA'
+// 实测 0 条而剥缀形态 '楽園' 20 条。标题变体 × 艺人降轮按序逐发（见
+// candQueryForms/runCandForms 头注），命中条目烙 _form=形态序号进排序键。
+// 排序：形态序 _form（0=最严形态命中——降轮命中是不同曲的可能性高，
+// 特异性先于时长差决胜）→ |候选时长-durationSec| 升序（无差值殿后——
+// 刻意不做 ±15s 硬滤，截取版/异时长版用户有权明挑）→ 源序
+// lrclib→kugou→ytm，截 12 条。每源独立 15s 伞时限（内部单跳仍 10s），
+// 形态中途失败与整源故障都降级部分池（warn 续走）——一源死拖不翻整池
+// （「池子缺一角」比「整池 502」强）。
 const CAND_SRC_ORDER = { lrclib: 0, kugou: 1, ytm: 2 };
 const CAND_CAP = 12;
 const CAND_SRC_TIMEOUT_MS = 15000;
@@ -1249,56 +1254,132 @@ const candDiff = (dur, durationSec) => (
     ? Math.abs(dur - durationSec) : null
 );
 
-async function lrclibCandidates({ title, artist, durationSec, signal }) {
-  const q = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
-  if (!q) return [];
-  const list = await lrclibSearchList(q, signal);
-  return (Array.isArray(list) ? list : [])
-    .filter((it) => it && typeof it === 'object' && it.id != null)
-    .filter((it) => it.instrumental !== true)
-    .filter((it) => (typeof it.syncedLyrics === 'string' && it.syncedLyrics.trim())
-      || (typeof it.plainLyrics === 'string' && it.plainLyrics.trim()))
-    .map((it) => {
-      const syncedText = String(it.syncedLyrics || '').trim();
-      // null/''/非数都归「无时长信息」——+x 强转会把 null 吃成 0 假时长
-      const durNum = Number(it.duration);
-      const dur = Number.isFinite(durNum) && durNum > 0 ? durNum : null;
-      return {
-        extId: `lrclib_${it.id}`, source: 'lrclib',
-        title: String(it.trackName || ''), artist: String(it.artistName || ''),
-        album: it.albumName || undefined,
-        durationSec: dur ?? undefined,
-        synced: Boolean(syncedText),
-        preview: candPreview(syncedText || it.plainLyrics),
-        _diff: candDiff(dur, durationSec),
-      };
+// 检索形态展开（与级联同构的漏斗）：标题变体 × 艺人降轮笛卡尔展开、按整
+// 串查询词 normKey 去重——'楽園 EMA' 这类变体与具名轮撞出的同形查询不重
+// 复打。形态序=特异性序（0 最严），命中的候选烙 _form=形态序号。variants
+// 与级联同参（占位作者不作变体锚）；artistRounds：UGC 曲（yt_/bv_）
+// [artist, artistFromTitle, ''] normName 去重——级联同构，UGC artist 是
+// UP 主/翻唱者而非原曲艺人，具名轮之外剥题艺人候选与裸标题轮才是召回
+// 来源；非 UGC [artist, '']——手动池无 AI 闸、用户即判官，裸标题轮是修
+// 错配的正当召回面（不走级联的 aiEnabled 闸）。
+// 展开序按 ugc 分家：
+//  · UGC 变体外圈 × 艺人轮内圈——翻唱曲的修复目标形态是「剥缀变体+裸轮」，
+//    变体外圈让它（形态序号=变体序×3+2）在 15s 伞内更早触达；轮外圈会把
+//    它推到末段（伞超时面更先被截断）
+//  · 非 UGC 轮外圈 × 变体内圈——与级联 runRound 同序：具名变体全部先于裸
+//    轮打。变体外圈下裸标题轮（_form=轮数-1）会排在「剥缀变体+真艺人」
+//    （_form≥轮数）之前——无艺人证据的同题命中压过标题弱化+真艺人命中是
+//    特异性倒挂，且池满 CAND_CAP 早停会把更准的具名变体形态挤出伞外
+function candQueryForms({ songId, title, artist }) {
+  const sid = String(songId || '');
+  const ugc = YT_TRACK_ID_RE.test(sid) || BV_TRACK_ID_RE.test(sid);
+  const variants = titleVariantsOf(title, isPlaceholderAuthor(artist) ? '' : artist);
+  const artistRounds = [String(artist || '')];
+  const seenArtist = new Set(artistRounds.map(normName));
+  for (const a of (ugc ? [artistFromTitle(title), ''] : [''])) {
+    const k = normName(a);
+    if (!seenArtist.has(k)) { seenArtist.add(k); artistRounds.push(a); }
+  }
+  const forms = [];
+  const seenQ = new Set();
+  const push = (v, ra) => {
+    const q = [v, String(ra || '').trim()].filter(Boolean).join(' ');
+    if (!q) return;
+    const k = normKey(q);
+    if (seenQ.has(k)) return;
+    seenQ.add(k);
+    forms.push(q);
+  };
+  if (ugc) {
+    for (const v of variants) for (const ra of artistRounds) push(v, ra);
+  } else {
+    for (const ra of artistRounds) for (const v of variants) push(v, ra);
+  }
+  return forms;
+}
+
+// 形态展开执行体（lrclib/kugou 共用）：forms 按序逐发（尊重上游不并发扇
+// 出），extId 首现者胜（形态序=特异性序，先入者更可信）、烙 _form=命中
+// 形态序号，池满 ≥CAND_CAP 早停。形态级失败与「源失败降级部分池」同口径：
+// 已收条目在池即中断余下形态、端出已拿到的部分（warn 留痕，含伞自裁面——
+// 调用方真断连由路由 499 兜底）；首形态即炸自然空池，上抛归外层「源失败
+// warn+[]」旧语义（调用方 abort 亦经外层 signal 判定穿透）
+async function runCandForms(forms, source, signal, query) {
+  const pool = [];
+  const seenIds = new Set();
+  for (let f = 0; f < forms.length; f++) {
+    if (pool.length >= CAND_CAP) break;
+    let batch;
+    try {
+      batch = await query(forms[f]);
+    } catch (e) {
+      if (!pool.length) throw e;
+      console.warn(`[lyric-ext] 候选池 ${source} 形态「${forms[f]}」检索失败，`
+        + `保留已收 ${pool.length} 条：${e?.message || e}`);
+      break;
+    }
+    for (const cand of batch) {
+      if (seenIds.has(cand.extId)) continue;
+      seenIds.add(cand.extId);
+      cand._form = f;
+      pool.push(cand);
+    }
+  }
+  return pool;
+}
+
+async function lrclibCandidates({ songId, title, artist, durationSec, signal }) {
+  return runCandForms(candQueryForms({ songId, title, artist }), 'lrclib', signal,
+    async (q) => {
+      const list = await lrclibSearchList(q, signal);
+      return (Array.isArray(list) ? list : [])
+        .filter((it) => it && typeof it === 'object' && it.id != null)
+        .filter((it) => it.instrumental !== true)
+        .filter((it) => (typeof it.syncedLyrics === 'string' && it.syncedLyrics.trim())
+          || (typeof it.plainLyrics === 'string' && it.plainLyrics.trim()))
+        .map((it) => {
+          const syncedText = String(it.syncedLyrics || '').trim();
+          // null/''/非数都归「无时长信息」——+x 强转会把 null 吃成 0 假时长
+          const durNum = Number(it.duration);
+          const dur = Number.isFinite(durNum) && durNum > 0 ? durNum : null;
+          return {
+            extId: `lrclib_${it.id}`, source: 'lrclib',
+            title: String(it.trackName || ''), artist: String(it.artistName || ''),
+            album: it.albumName || undefined,
+            durationSec: dur ?? undefined,
+            synced: Boolean(syncedText),
+            preview: candPreview(syncedText || it.plainLyrics),
+            _diff: candDiff(dur, durationSec),
+          };
+        });
     });
 }
 
-async function kugouCandidates({ title, artist, durationSec, signal }) {
-  const kw = [cleanQueryTitle(title), String(artist || '').trim()].filter(Boolean).join(' ');
-  if (!kw) return [];
+async function kugouCandidates({ songId, title, artist, durationSec, signal }) {
   // 刻意不透 durationSec 给上游：级联侧的 ±15s 时长滤在候选池面全摘
   // （用户可能明挑异时长版——kugou 的 duration= 参是服务端收窄，透出去
   // 等于把「宽检池」又关回窗内）；时长只进本地 _diff 排序键
-  const sbody = await kugouSearchList(kw, 0, signal);
-  return (Array.isArray(sbody?.candidates) ? sbody.candidates : [])
-    .filter((cd) => cd && cd.id != null && cd.accesskey)
-    .map((cd) => {
-      // 毫秒→秒；null/''/非数归「无时长信息」（+x 强转会吃 null 成 0）
-      const durNum = Number(cd.duration);
-      const dur = Number.isFinite(durNum) && durNum > 0 ? durNum / 1000 : null;
-      return {
-        extId: `kugou_${cd.id}`, source: 'kugou',
-        title: String(kugouCandTitle(cd) || ''), artist: String(cd.singer || ''),
-        album: cd.album || cd.albumname || undefined,
-        durationSec: dur ?? undefined,
-        synced: false,
-        preview: '',
-        // accesskey 原样透回——POST /lyric/manual 的取词凭证（见头注）
-        token: String(cd.accesskey),
-        _diff: candDiff(dur, durationSec),
-      };
+  return runCandForms(candQueryForms({ songId, title, artist }), 'kugou', signal,
+    async (kw) => {
+      const sbody = await kugouSearchList(kw, 0, signal);
+      return (Array.isArray(sbody?.candidates) ? sbody.candidates : [])
+        .filter((cd) => cd && cd.id != null && cd.accesskey)
+        .map((cd) => {
+          // 毫秒→秒；null/''/非数归「无时长信息」（+x 强转会吃 null 成 0）
+          const durNum = Number(cd.duration);
+          const dur = Number.isFinite(durNum) && durNum > 0 ? durNum / 1000 : null;
+          return {
+            extId: `kugou_${cd.id}`, source: 'kugou',
+            title: String(kugouCandTitle(cd) || ''), artist: String(cd.singer || ''),
+            album: cd.album || cd.albumname || undefined,
+            durationSec: dur ?? undefined,
+            synced: false,
+            preview: '',
+            // accesskey 原样透回——POST /lyric/manual 的取词凭证（见头注）
+            token: String(cd.accesskey),
+            _diff: candDiff(dur, durationSec),
+          };
+        });
     });
 }
 
@@ -1324,10 +1405,10 @@ async function searchLyricCandidates({ songId, title, artist, durationSec, signa
   if (signal?.aborted) throw abortErr();
   const jobs = [
     ['lrclib', lrclibCandidates({
-      title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
+      songId, title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
     })],
     ['kugou', kugouCandidates({
-      title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
+      songId, title, artist, durationSec, signal: timedSignal(signal, CAND_SRC_TIMEOUT_MS),
     })],
   ];
   if (YT_TRACK_ID_RE.test(String(songId || ''))) {
@@ -1350,11 +1431,16 @@ async function searchLyricCandidates({ songId, title, artist, durationSec, signa
     }
   }));
   const all = pools.flat();
-  // 时长差升序（null 殿后）→ 源序；同键内保上游原序（sort 稳定）
-  all.sort((a, b) => (a._diff ?? 9e9) - (b._diff ?? 9e9)
+  // 形态序 _form 先决（0=最严形态——降轮命中是不同曲的可能性高，时长差
+  // 贴近不翻案特异性）→ 时长差升序（null 殿后）→ 源序；同键内保上游
+  // 原序（sort 稳定）。ytm 支路无 _form（videoId 直达无查询形态）殿后——
+  // 哨兵须大过真实 _form 上限（UGC 4 变体×3 轮=12 形态，_form 可达 11；
+  // 哨兵 9 会让 UGC 尾形态命中与 ytm 串桶混排、甚至排到其后）
+  all.sort((a, b) => (a._form ?? 9e9) - (b._form ?? 9e9)
+    || (a._diff ?? 9e9) - (b._diff ?? 9e9)
     || (CAND_SRC_ORDER[a.source] ?? 9) - (CAND_SRC_ORDER[b.source] ?? 9));
-  // _diff 是内部排序键——不透出 API 面
-  return all.slice(0, CAND_CAP).map(({ _diff, ...cand }) => cand);
+  // _form/_diff 是内部排序键——不透出 API 面
+  return all.slice(0, CAND_CAP).map(({ _diff, _form, ...cand }) => cand);
 }
 
 // 入口：单飞 + LRU。{ songId, title, artist, durationSec, videoId, signal,
