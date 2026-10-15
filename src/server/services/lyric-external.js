@@ -89,7 +89,10 @@
 // （roundArtist 是 '' 空约束不是锚）；UGC '' 开放轮不设锚（UGC artist
 // 是 UP 主非原曲艺人，锚它会灭掉全部翻唱命中——与旧口径同宽）。
 const { ytDispatcher } = require('../lib/yt-proxy');
-const { lyricDispatcher } = require('../lib/lyric-proxy');
+// LRCLIB/酷狗两条直连链的外源代理通道（LYRIC_PROXY 本地部署档——见
+// lib/lyric-proxy.js 头注）：代理在位走共享 dispatcher，代理连接级
+// 失败（闸死）剥代理直连重发一次；未配置纯透传，各 fetch 点逐字节旧行为
+const { lyricFetch } = require('../lib/lyric-proxy');
 const { YT_TRACK_ID_RE, BV_TRACK_ID_RE, EXT_LYRIC_ID_STRICT_RE } = require('../../shared/predicates.js');
 // 标题变体/剥艺人/检索词清理的唯一真相源上提到 shared——网易云匹配漏斗
 // （netease-match.js candidates 展开）与这里的外源级联共用同一份规则集
@@ -316,13 +319,6 @@ const ytmOpts = () => {
   return d ? { dispatcher: d } : {};
 };
 
-// LRCLIB/酷狗两条直连链的外源代理通道（LYRIC_PROXY 本地部署档——见
-// lib/lyric-proxy.js 头注）；未配置回 {}，各 fetch 点逐字节旧行为
-const lyricOpts = () => {
-  const d = lyricDispatcher();
-  return d ? { dispatcher: d } : {};
-};
-
 async function ytmPost(endpoint, body, signal) {
   const res = await fetch(`https://music.youtube.com/youtubei/v1/${endpoint}?alt=json&key=${YTM_KEY}`, {
     method: 'POST',
@@ -437,11 +433,10 @@ const LRCLIB_UA = 'MeowSync external-lyric fallback (self-hosted)';
 // 手选候选池共用同一段请求序列，两消费面只在筛后处理上分家
 async function lrclibSearchList(q, signal) {
   const url = `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`;
-  const doFetch = () => fetch(url, {
+  const doFetch = () => lyricFetch(url, {
     headers: { 'User-Agent': LRCLIB_UA, Accept: 'application/json' },
     signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
     ...EXT_FETCH_GUARD,
-    ...lyricOpts(),
   });
   let res = await doFetch();
   if (res.status === 429) {
@@ -590,11 +585,10 @@ async function lrclibFetch({ title, artist, anchor, durationSec, verify, choose,
 // LRCLIB /api/get/<id>：按条目 id 直取——fetchByExtId 反查支路用，不走
 // 检索自筛（归属核验在级联产出时已经做过，反查只是取回同一份词）
 async function lrclibGetById(id, signal) {
-  const res = await fetch(`https://lrclib.net/api/get/${encodeURIComponent(id)}`, {
+  const res = await lyricFetch(`https://lrclib.net/api/get/${encodeURIComponent(id)}`, {
     headers: { 'User-Agent': LRCLIB_UA, Accept: 'application/json' },
     signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
     ...EXT_FETCH_GUARD,
-    ...lyricOpts(),
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`lrclib get HTTP ${res.status}`);
@@ -625,11 +619,10 @@ const kugouCandTitle = (cd) => cd.song || cd.songname;
 // kugouFetch 级联与 searchLyricCandidates 手选候选池共用同一段请求
 async function kugouSearchList(kw, durationSec, signal) {
   const durArg = durationSec ? `&duration=${Math.round(durationSec * 1000)}` : '';
-  const sres = await fetch(`https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword=${encodeURIComponent(kw)}${durArg}`, {
+  const sres = await lyricFetch(`https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword=${encodeURIComponent(kw)}${durArg}`, {
     headers: { 'User-Agent': YTM_UA, Accept: 'application/json' },
     signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
     ...EXT_FETCH_GUARD,
-    ...lyricOpts(),
   });
   if (!sres.ok) throw new Error(`kugou search HTTP ${sres.status}`);
   return readJsonCapped(sres);
@@ -639,13 +632,12 @@ async function kugouSearchList(kw, durationSec, signal) {
 // kugouFetch 的 downloadHit 迭代与 fetchByExtId 的手选重取（候选池
 // token 透回）共用同一段请求 + 载荷卫生闸（krc1 magic/低可打印率拒收）
 async function kugouDownloadLrc(id, accesskey, signal) {
-  const dres = await fetch('https://lyrics.kugou.com/download?ver=1&client=pc'
+  const dres = await lyricFetch('https://lyrics.kugou.com/download?ver=1&client=pc'
     + `&id=${encodeURIComponent(String(id))}&accesskey=${encodeURIComponent(String(accesskey))}`
     + '&fmt=lrc&charset=utf8', {
     headers: { 'User-Agent': YTM_UA, Accept: 'application/json' },
     signal: timedSignal(signal, SRC_REQ_TIMEOUT_MS),
     ...EXT_FETCH_GUARD,
-    ...lyricOpts(),
   });
   if (!dres.ok) return null;
   const dbody = await readJsonCapped(dres);
