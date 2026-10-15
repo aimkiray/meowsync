@@ -1206,8 +1206,10 @@ async function fetchByExtId(extId, { signal, token } = {}) {
   const m = EXT_LYRIC_ID_STRICT_RE.exec(id);
   if (!m) return null;
   const [, src, key] = m;
-  // 进程内 LRU 先扫：下载相位几分钟前级联出的词免一次上游往返；
-  // 比对用 trim 后的 id——入参带空白时原串比对必漏
+  // 进程内 LRU 先扫：下载相位几分钟前级联出的词，与手选候选池
+  // cand_probe: 条目（netease/qq 探针探中、lrclib 检索内嵌词、ytm 已取
+  // 词——POST /lyric/manual 选定免二次上游往返）都走这层免一跳；比对
+  // 用 trim 后的 id——入参带空白时原串比对必漏
   for (const e of resultCache.values()) {
     if (e.res && e.res.extId === id && Date.now() - e.at <= POS_TTL_MS) {
       return e.res;
@@ -1256,18 +1258,24 @@ async function fetchByExtId(extId, { signal, token } = {}) {
 // 硬滤全部摘掉——那些是「错词比没词更糟」的自动收窄，人眼终审要看到
 // 全池，含刻意可挑的异时长版）。仍剥的只有「没词可给」的条目
 // （lrclib 的 instrumental/无双形态词文行、netease/qq 的无 id/mid 或
-// 键形非法的脏行——摆进池也只能给用户挑出一个 404，纯噪音）。无核验
-// 无 choose——judge 席位留给用户。
+// 键形非法脏行、以及 lyric 探针确定无词的曲目——netease/qq 候选是
+// 「曲目」不是词行，有没有词要逐条 lyric 端点探过才知道；摆进池也
+// 只能给用户挑出一个 404，纯噪音）。无核验无 choose——judge 席位留
+// 给用户。
 // 出参 [{extId, source, title, artist, album?, durationSec?, synced,
 // preview, token?}]：
 //   preview  词稿首 1-2 行词文（剥行首时间戳与 [tag:] 元行，≤80 字）——
-//            列表里人眼比对用；kugou 候选逐条 download 才见词、netease/qq
-//            检索面不回词文，候选池阶段都不付那笔扇出 → 恒 ''
+//            列表里人眼比对用；netease/qq 经 lyric 探针探中回填（词文
+//            本就要探，预览是白捡的；探针故障漏网条仍 ''），kugou 候选
+//            逐条 download 才见词、候选池不付那笔扇出 → 恒 ''
 //   token    kugou accesskey——POST /lyric/manual 时须原样回传，是
 //            download 唯一取词凭证（kugou_ extId 无 refetch 通道）；
 //            netease_/qq_ 的 id/mid 即 refetch 键——无 token
-//   synced   滚动词旗标；kugou/netease/qq 检索面无词型信息恒 false——
-//            诚实值而非「是纯文本」的断言
+//   synced   滚动词旗标三态（true 滚动/false 纯文本/null 未知）；
+//            lrclib/ytm 检索面即真值；netease/qq 经 lyric 探针回填真值，
+//            探针故障漏网条 null 如实「未知」——故障不是纯文本断言不谎
+//            报；kugou 检索面无词型信息恒 false 占位（前端按源白名单显
+//            「未知」，见 LyricPicker 的 SYNC_KNOWN_SOURCES）
 // 检索词展开接通级联同款漏斗：否则 yt_ 翻唱曲恒空——'楽園 ver.EMA EMA'
 // 实测 0 条而剥缀形态 '楽園' 20 条。标题变体 × 艺人降轮按序逐发（见
 // candQueryForms/runCandForms 头注），命中条目烙 _form=形态序号进排序键。
@@ -1284,6 +1292,15 @@ const CAND_CAP = 12;
 // 最多再宽采 1 个形态即停；形态硬顶——单源形态查询数硬上限
 const CAND_POOL_FLOOR = 4;
 const CAND_MAX_FORMS = 6;
+// lyric 探测预算收顶（netease/qq 在 runCandForms 产池与 probeCandLyrics
+// 之间的 candProbeTop 用）：检索窗放宽到 30/形态后只探出榜序最优的前
+// N 条——池尾注定不出榜的不付探测费，防放宽的检索窗把 lyric 端点压力
+// 翻倍
+const CAND_PROBE_CAP = 15;
+// 探针并发分片宽：miss 队列按 5/批顺序执行（批内 Promise.all）——15 发
+// 瞬时并行与 runCandForms 的串行节流取向矛盾（批并发=上游 lyric 端点的
+// 瞬时突刺宽度，纯串行又把探针面拖长），分片折中
+const CAND_PROBE_BATCH = 5;
 const CAND_SRC_TIMEOUT_MS = 15000;
 const CAND_PREVIEW_CHARS = 80;
 const CAND_PREVIEW_LINES = 2;
@@ -1343,9 +1360,10 @@ function candQueryForms({ songId, title, artist }) {
   return forms;
 }
 
-// 形态展开执行体（lrclib/kugou 共用）：forms 按序逐发（尊重上游不并发扇
-// 出），extId 首现者胜（形态序=特异性序，先入者更可信）、烙 _form=命中
-// 形态序号，池满 ≥CAND_CAP 早停、池按 CAND_CAP 截断返回。
+// 形态展开执行体（lrclib/kugou/netease/qq 共用）：forms 按序逐发（尊重
+// 上游不并发扇出），extId 首现者胜（形态序=特异性序，先入者更可信）、
+// 烙 _form=命中形态序号，池满 ≥CAND_CAP 早停——本层只做早停不做截断
+// （单形态可超收，CAND_CAP 截断在跨源合并层 searchLyricCandidates 尾部）。
 // 扇出节流：「地板+1 宽采 + 6 形态硬顶」——形态扇出把单端点查询数 ×变体
 // 数放大（每源最多 12 发串行），用户连点几首歌就能把部署 IP 刷进上游限流
 // （实机病例：「楽園 ver.EMA」首形态即吃 lrclib 429 → 整源归空池）。双闸：
@@ -1398,11 +1416,21 @@ async function lrclibCandidates({ songId, title, artist, durationSec, signal }) 
           || (typeof it.plainLyrics === 'string' && it.plainLyrics.trim()))
         .map((it) => {
           const syncedText = String(it.syncedLyrics || '').trim();
+          const plainText = String(it.plainLyrics || '').trim();
+          const extId = `lrclib_${it.id}`;
+          // 检索回包内嵌词文——顺带落 cand_probe: 正缓存（与 netease/qq
+          // 探针同键位、与 lrclibGetById 同形状）：用户点选这条时
+          // fetchByExtId 的 LRU 扫描直接命中，免 /api/get 二次上游往返
+          cacheWrite(`cand_probe:${extId}`, {
+            lrc: syncedText || plainText,
+            plain: syncedText && plainText ? plainText : undefined,
+            source: 'lrclib', extId, synced: Boolean(syncedText),
+          });
           // null/''/非数都归「无时长信息」——+x 强转会把 null 吃成 0 假时长
           const durNum = Number(it.duration);
           const dur = Number.isFinite(durNum) && durNum > 0 ? durNum : null;
           return {
-            extId: `lrclib_${it.id}`, source: 'lrclib',
+            extId, source: 'lrclib',
             title: String(it.trackName || ''), artist: String(it.artistName || ''),
             album: it.albumName || undefined,
             durationSec: dur ?? undefined,
@@ -1455,15 +1483,121 @@ const neteaseCall = (api, params, signal) =>
       throw new Error(`netease ${api} status=${e?.status ?? e?.body?.code ?? '?'}`);
     });
 
-// 候选池曲库源·网易云：cloudsearch(type=1) 单曲检索。实机钉字段名——
-// songs[{id,name,ar[{name}],al{name},dt(ms)}]，双名口径取（ar||artists、
-// al||album、dt||duration——netease-match 同款，防上游新旧命名漂移）；
-// 多艺人 join '/'。检索面无词型信息 → synced:false 诚实未知（kugou 同
-// 口径）；id 即 extId 可 refetch——无 token
+// netease/qq 候选是「曲目」不是词行——检索面只回元数据，该曲有没有词
+// 要逐条 lyric 端点探过才知道（实案：qq_002yaHfo2tvaS5「楽園-EMA」
+// 搜索命中、点选后 getLyric 回 bizCode=-1901 该曲无词 → POST
+// /lyric/manual 404「词源取词失败」死选）。runCandForms 出池后经
+// cand_probe: 缓存读穿 + CAND_PROBE_BATCH 分片探测（复用源伞 signal——
+// 探针扇出受同一把伞收口，与检索形态同伞不超源时限预算）：
+//   · 确定无词 → 滤出池 + cacheWrite(ck,null) 负窗固化——netease
+//     nolyric/uncollected/占位词归空与 fetchByExtId 同口径；qq 只认
+//     空 lyric 或 bizCode===-1901 实测无词码（getLyric 对任意
+//     code!==0 都打 err.bizCode——风控/权限/未知码不是「确定无词」，
+//     白名单化防 15 并发面下整源静默蒸发）。与「没词可给不摆池」
+//     头注同口径
+//   · 传输/探测异常 → 保留候选——探针故障≠无词，不惩罚条目：synced
+//     置 null 出「未知」+ 空 preview（故障不是纯文本断言，不谎报
+//     词型），且不写缓存——故障不固化，下次开窗给重探新机会；点选时
+//     fetchByExtId 直取照旧兜底
+//   · 探中 → 回填 preview=candPreview(lrc)（词文本就探过，预览是白捡
+//     的）与 synced=parseLrcLines 真值；并 cacheWrite('cand_probe:'+
+//     extId)——fetchByExtId 的 LRU 扫描按 e.res.extId 命中它（正窗 6h
+//     内），用户点选 POST /lyric/manual 时免二次上游往返
+//   · cand_probe: 读穿——正命中（res 非空）免上游直接回填收下；负命中
+//     （res:null 在 NEG_TTL 窗内）=确定无词直接滤出不重探。同 extId
+//     二次开窗零 lyric 上行（lrclib/ytm 的内嵌/已取词也写同键位正
+//     缓存，见 lrclibCandidates/ytmCandidate）
+// 探测预算按出榜序收顶——池尾注定不出榜的不付探测费：检索窗放宽到
+// 30/形态后池内深榜条目跨源合并也进不了 12 顶，按与源内出榜同序的
+// _form→_diff（形态特异性先决——晚形态近时长条不该挤掉早形态榜头
+// 条的探测位；null/无值殿后；sort 稳定、同键保上游序）取前
+// CAND_PROBE_CAP 条进探针，余者直接弃
+const candProbeTop = (pool) => pool.slice()
+  .sort((a, b) => (a._form ?? 9e9) - (b._form ?? 9e9)
+    || (a._diff ?? 9e9) - (b._diff ?? 9e9))
+  .slice(0, CAND_PROBE_CAP);
+
+// 探针量上界=喂入条目数——调用侧先经 candProbeTop 按出榜序收顶
+// （CAND_PROBE_CAP，放宽检索窗的探测费闸）；全部空词时该源如实出空池。
+// probe(key) 归一词文：''=确定无词；抛错按 bizCode 白名单分家——
+// bizCode===-1901=确定无词滤出+负窗固化，其余一切（他码 bizCode/
+// 传输错/伞 abort）=传输故障保留（不写缓存、synced:null 出「未知」）。
+// 执行面：先逐条 cand_probe: cacheRead 读穿（正命中回填收下/负窗滤出/
+// miss 归队列），miss 队列按 CAND_PROBE_BATCH 分片顺序探测（批内
+// Promise.all——瞬时并发面压到 5 而非 15 齐发）；out 槽保收顶序即
+// 出池序（合并层仍按 _form→_diff 重排，此序只兜同键稳定位）
+async function probeCandLyrics(pool, probe) {
+  const out = new Array(pool.length);
+  const queue = [];
+  for (const [i, cand] of pool.entries()) {
+    const key = EXT_LYRIC_ID_STRICT_RE.exec(cand.extId)?.[2];
+    // 键形预滤层已兜住脏条（netease/qq 各自 re），此判是双保险——
+    // 键形对不上的 extId 连探针都不配吃
+    if (!key) continue;
+    const ck = `cand_probe:${cand.extId}`;
+    const hit = cacheRead(ck);
+    if (hit.hit) {
+      // 负命中（res:null 在 NEG_TTL 窗内）=确定无词——直接滤出不重探
+      if (!hit.res) continue;
+      // 正命中免上游回填收下；缓存条回填面异常落回探测队列重探——
+      // 脏缓存不坑条目
+      try {
+        cand.preview = candPreview(hit.res.lrc);
+        cand.synced = hit.res.synced;
+        out[i] = cand;
+        continue;
+      } catch { /* 落回探测队列 */ }
+    }
+    queue.push({ i, cand, key, ck });
+  }
+  for (let b = 0; b < queue.length; b += CAND_PROBE_BATCH) {
+    await Promise.all(queue.slice(b, b + CAND_PROBE_BATCH).map(async (s) => {
+      // 词文后处理与缓存写全收进 try——parseLrcLines/candPreview/
+      // cacheWrite 的同步抛与异步拒包同归「故障保留」，不再灭整源
+      // （旧面在 try 外，一条畸形词文让 Promise.all 整池判死）
+      try {
+        const lrc = await probe(s.key);
+        if (!lrc) {
+          cacheWrite(s.ck, null);        // 确定无词——走现成负窗 TTL 固化
+          return;
+        }
+        const synced = parseLrcLines(lrc).length > 0;
+        s.cand.preview = candPreview(lrc);
+        s.cand.synced = synced;
+        cacheWrite(s.ck, {
+          lrc, source: s.cand.source, extId: s.cand.extId, synced,
+        });
+        out[s.i] = s.cand;
+      } catch (e) {
+        // bizCode===-1901 是 QQ 实测「该曲无词」码——确定无词滤出+负窗
+        // 固化；其余 bizCode（风控/权限/未知码）、传输错、伞 abort 全归
+        // 传输故障——保留条目不写缓存（故障不固化）
+        if (e?.bizCode === -1901) {
+          try { cacheWrite(s.ck, null); } catch { /* 负窗写入尽力而为 */ }
+          return;
+        }
+        s.cand.synced = null;            // 漏网条如实「未知」——非纯文本占位
+        out[s.i] = s.cand;
+      }
+    }));
+  }
+  return out.filter(Boolean);
+}
+
+// 候选池曲库源·网易云：cloudsearch(type=1) 单曲检索——检索窗放宽到
+// limit=30/形态收深榜（实案：裸「楽園」检索春野真身居第 23 名、窗 15
+// 直接截掉；池满 12 截断在跨源排序后，上游窗口只是候选料）。实机钉
+// 字段名——songs[{id,name,ar[{name}],al{name},dt(ms)}]，双名口径取
+// （ar||artists、al||album、dt||duration——netease-match 同款，防上游
+// 新旧命名漂移）；多艺人 join '/'。检索面不回词文——词文/词型交
+// lyric 探针回填（probeCandLyrics：确定无词滤出、探中 preview/synced
+// 真值 + 落 cand_probe: LRU、传输故障漏网条 synced:null 如实「未知」
+// 不写缓存），探测预算按出榜序收顶 CAND_PROBE_CAP(15)——池尾注定不出
+// 榜的不付探测费（candProbeTop 头注）；id 即 extId 可 refetch——无 token
 async function neteaseCandidates({ songId, title, artist, durationSec, signal }) {
-  return runCandForms(candQueryForms({ songId, title, artist }), 'netease',
+  const pool = await runCandForms(candQueryForms({ songId, title, artist }), 'netease',
     async (kw) => {
-      const res = await neteaseCall('cloudsearch', { keywords: kw, type: 1, limit: 15 }, signal);
+      const res = await neteaseCall('cloudsearch', { keywords: kw, type: 1, limit: 30 }, signal);
       const songs = res?.body?.result?.songs;
       return (Array.isArray(songs) ? songs : [])
         // 键形预滤：非纯数字 id 产的 netease_ extId 过不了 fetchByExtId
@@ -1480,23 +1614,37 @@ async function neteaseCandidates({ songId, title, artist, durationSec, signal })
             artist: ars.map((a) => a?.name).filter(Boolean).join('/'),
             album: (s.al || s.album)?.name || undefined,
             durationSec: dur ?? undefined,
-            synced: false,
+            // 词型占位 null=「未知」——探针探中回填真值、故障漏网条保持
+            // null 如实出「未知」（故障保留不谎报纯文本）
+            synced: null,
             preview: '',
             _diff: candDiff(dur, durationSec),
           };
         });
     });
+  // 出池前 lyric 可用性探针——候选是曲目不是词行（probeCandLyrics 头注）；
+  // 探测预算按出榜序收顶 15——池尾注定不出榜的不付探测费
+  return probeCandLyrics(candProbeTop(pool), async (key) => {
+    const res = await neteaseCall('lyric', { id: key }, signal);
+    return neteaseLyricBody(res?.body).lrc;
+  });
 }
 
 // 候选池曲库源·QQ：searchSongs 三层兜底收口在 lib/qq 内（soso→shc→
-// musicu），list 条目已 normalizeTrack 归一成 {mid,name,artists[],album,
-// intervalSec}；多艺人 join '/'。mid 即 extId 可 refetch——无 token；
-// 检索面无词型信息 → synced:false。无 mid/形非法脏行剥除
+// musicu），检索窗放宽到 limit=30/形态收深榜（与 netease 同口径——
+// 池满 12 截断在跨源排序后，上游窗口只是候选料），探测预算按出榜序
+// 收顶 CAND_PROBE_CAP(15)——池尾注定不出榜的不付探测费
+// （candProbeTop 头注）；list 条目已 normalizeTrack 归一成
+// {mid,name,artists[],album,intervalSec}；多艺人 join '/'。mid 即
+// extId 可 refetch——无 token；检索面不回词文——词文/词型交 lyric
+// 探针回填（getLyric 支：bizCode===-1901 白名单=确定无词滤出+负窗
+// 固化、他码/传输错保留不写缓存（synced:null 出「未知」）、探中回填
+// 真值+落 LRU，见 probeCandLyrics 头注）。无 mid/形非法脏行剥除
 // （normalizeTrack 滤无 mid，键形 SONGMID_RE 由本层兜）
 async function qqCandidates({ songId, title, artist, durationSec, signal }) {
-  return runCandForms(candQueryForms({ songId, title, artist }), 'qq',
+  const pool = await runCandForms(candQueryForms({ songId, title, artist }), 'qq',
     async (kw) => {
-      const { list } = await qq.searchSongs(kw, { limit: 15 }, signal);
+      const { list } = await qq.searchSongs(kw, { limit: 30 }, signal);
       return (Array.isArray(list) ? list : [])
         // 键形预滤：SONGMID_RE 过不了的脏 mid 产的 qq_ extId 同样过不了
         // fetchByExtId/QQ_SONG_ID_RE 严格形——注定取不到词的条不摆进池
@@ -1512,12 +1660,20 @@ async function qqCandidates({ songId, title, artist, durationSec, signal }) {
               .filter(Boolean).join('/'),
             album: s.album || undefined,
             durationSec: dur ?? undefined,
-            synced: false,
+            // 词型占位 null=「未知」——同 netease 支口径（探针回填真值、
+            // 故障漏网条不谎报纯文本）
+            synced: null,
             preview: '',
             _diff: candDiff(dur, durationSec),
           };
         });
     });
+  // 出池前 lyric 可用性探针——候选是曲目不是词行（probeCandLyrics 头注）；
+  // 探测预算按出榜序收顶 15——池尾注定不出榜的不付探测费
+  return probeCandLyrics(candProbeTop(pool), async (key) => {
+    const r = await qq.getLyric(key, signal);
+    return String(r?.lyric || '');
+  });
 }
 
 // ytm 支路限 yt_ 曲（videoId 直达）：候选存在的前提是词真拿得到——
@@ -1529,6 +1685,9 @@ async function ytmCandidate({ songId, title, artist, signal }) {
   if (!vid) return [];
   const hit = await ytmFetchLyric(vid, signal);
   if (!hit) return [];
+  // 词已取过（next+browse 两跳）——落 cand_probe: 正缓存（与探针同键位）：
+  // 用户点选时 fetchByExtId 的 LRU 扫描命中它，免重走 YTM 两跳
+  cacheWrite(`cand_probe:${hit.extId}`, hit);
   return [{
     extId: `ytm_${vid}`, source: 'ytm',
     title: String(title || ''), artist: String(artist || ''),

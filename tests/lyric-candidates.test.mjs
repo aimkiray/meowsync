@@ -6,7 +6,12 @@
 //     恒 ''（逐条 download 不付扇出）、时长毫秒→秒归一
 //   · netease/qq 曲库源候选：cloudsearch/soso 真形回包进池、艺人多名字
 //     join '/'、无 token（id/mid 即 refetch 键）、无 id 与键形非法
-//     （netease 非 \d+ / qq 非 SONGMID_RE）脏行剥除、synced:false 诚实未知
+//     （netease 非 \d+ / qq 非 SONGMID_RE）脏行剥除；出池前 lyric 探针
+//     ——候选是「曲目」不是词行：确定无词（nolyric/uncollected/空词/
+//     bizCode===-1901 白名单）滤出池+落负窗、传输故障保留（synced:null
+//     如实「未知」+空 preview、不写缓存）、探中回填 preview/synced 真值
+//     并落 cand_probe: LRU（fetchByExtId 选定免二次上游）；探针面
+//     cand_probe: 读穿（正命中免探/负窗滤出）+5/批分片
 //   · 宽检无闸：同名异曲/艺人不符/超 ±15s 窗的条目都留池——用户终审
 //   · 排序：时长差升序（null 殿后）→ 源序 lrclib→kugou→netease→qq→ytm；
 //     无时长时纯源序；总池截 12
@@ -681,19 +686,38 @@ test('中途 429 熔断：已收部分池端出、余下形态停发；首形态
 // intervalSec），fcg_query_lyric_new 回 {code:0,lyric:<base64>}。
 
 test('曲库源候选：netease/qq 命中进池——extId 前缀/艺人 join/时长归一/无 token/脏行剥', async () => {
+  const NE_LRC = '[00:01.00]网词一\n[00:02.00]网词二';
+  const QQ_LRC = '[00:03.00]扣词一\n[00:06.00]扣词二';
+  const neLimits = [];
   reset([
     ['lrclib.net', () => J([])],
     ['lyrics.kugou.com', () => J({ candidates: [] })],
-    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [
+    ['music.163.com/api/cloudsearch', (url, init) => {
+      neLimits.push(new URLSearchParams(String(init?.body || '')).get('limit'));
+      return J({ code: 200, result: { songs: [
       { id: 1454432192, name: '楽園', ar: [{ name: '春野' }, { name: 'EMA' }], al: { name: 'filia' }, dt: 244000 },
       { id: 9, name: '楽園', ar: [], al: null, dt: null },   // 缺艺人/专辑/时长 → 空串/undefined
       { name: '没id的脏行' },                                // 无 id → 剥
-    ] } })],
+    ] } });
+    }],
+    // lyric 探针（netease lyric 走 web 表单 POST——id 在 init.body 里）：
+    // 首条探中真词回填 preview/synced 真值，次条传输错保留
+    ['music.163.com/api/song/lyric', (url, init) => (
+      String(init?.body || '').includes('id=1454432192')
+        ? J({ code: 200, lrc: { version: 1, lyric: NE_LRC } })
+        : J({ err: 'probe boom' }, 500)
+    )],
     ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [
       { mid: '003abcDEF456gh', name: '楽園', singer: [{ name: '春野' }, { name: 'EMA' }], album: { name: 'filia' }, interval: 244 },
       { mid: '004abcDEF457gh', name: '楽園' },               // 缺 singer/album/interval
       { name: '没mid的脏行' },                               // normalizeTrack 滤
     ], totalnum: 3 } } })],
+    // qq lyric 探针：songmid 在查询串里——首条真词回填，次条传输错保留
+    ['fcg_query_lyric_new', (url) => (
+      url.includes('songmid=003abcDEF456gh')
+        ? J({ code: 0, lyric: Buffer.from(QQ_LRC).toString('base64'), trans: '' })
+        : J({ err: 'probe boom' }, 500)
+    )],
   ]);
   const list = await svc.searchLyricCandidates({ songId: '880100', title: '楽園', artist: 'EMA', durationSec: 244 });
   const ne = list.filter(c => c.source === 'netease');
@@ -703,10 +727,12 @@ test('曲库源候选：netease/qq 命中进池——extId 前缀/艺人 join/�
   assert.equal(ne[0].artist, '春野/EMA');          // 多艺人 join '/'
   assert.equal(ne[0].album, 'filia');
   assert.equal(ne[0].durationSec, 244);            // dt 毫秒→秒
-  assert.equal(ne[0].synced, false);               // 检索面无词型信息——诚实未知
-  assert.equal(ne[0].preview, '');
+  assert.equal(ne[0].synced, true);                // 探针探中——词型真值
+  assert.match(ne[0].preview, /网词一/);           // 词文白捡进预览
   assert.equal(ne[1].extId, 'netease_9');
   assert.equal(ne[1].artist, '');
+  assert.equal(ne[1].synced, null);                // 探针故障漏网条——如实「未知」
+  assert.equal(ne[1].preview, '');
   // 缺值键留 undefined 占位（与 kugou 支 `?? undefined` 同口径——出参
   // rest 解构只剥 _form/_diff；JSON 串行时 undefined 键不落线）
   assert.equal(ne[1].album, undefined);
@@ -718,14 +744,18 @@ test('曲库源候选：netease/qq 命中进池——extId 前缀/艺人 join/�
   assert.equal(qqs[0].artist, '春野/EMA');
   assert.equal(qqs[0].album, 'filia');
   assert.equal(qqs[0].durationSec, 244);           // intervalSec 已是秒
-  assert.equal(qqs[0].synced, false);
-  assert.equal(qqs[0].preview, '');
+  assert.equal(qqs[0].synced, true);
+  assert.match(qqs[0].preview, /扣词一/);
   assert.equal(qqs[1].artist, '');
+  assert.equal(qqs[1].synced, null);               // 探针故障漏网条——如实「未知」
+  assert.equal(qqs[1].preview, '');
   // 无 token（id/mid 即 refetch 键）——内部排序键不透出 API 面
   assert.ok(list.every(c => !('token' in c) && !('_form' in c) && !('_diff' in c)));
-  // qq 检索上行：limit 15 进 n= 参（runCandForms 串行逐形态发）
+  // 检索窗放宽钉板：netease limit=30 进 POST body、qq limit 30 进 n= 参
+  // （runCandForms 串行逐形态发；深榜召回实案钉在 880133 例）
+  assert.ok(neLimits.length >= 1 && neLimits.every(v => v === '30'));
   const qqUp = calls.filter(u => u.includes('y.qq.com/soso'));
-  assert.ok(qqUp.length >= 1 && qqUp.every(u => u.includes('n=15')));
+  assert.ok(qqUp.length >= 1 && qqUp.every(u => u.includes('n=30')));
 });
 
 test('候选键形预滤：netease 非 \\d+ id 与 qq 非 SONGMID_RE mid 的脏条不进池', async () => {
@@ -840,6 +870,210 @@ test('fetchByExtId：qq_<mid> 直取 fcg_query_lyric_new——命中同构；纯
   assert.equal(await svc.fetchByExtId('qq_006wOzl40aBcDh'), null);
 });
 
+// ── 出池前 lyric 可用性探针（netease/qq 候选是「曲目」不是词行）──
+// 实案：qq_002yaHfo2tvaS5（楽園-EMA）搜索命中、点选后 getLyric 回
+// bizCode=-1901 该曲无词 → POST /lyric/manual 404 死选。探针语义：
+// 确定无词（空 lyric/nolyric/uncollected/bizCode===-1901 白名单）滤出
+// 池+落负窗、传输故障保留（synced:null 如实「未知」+空 preview 不惩罚
+// 条目、不写缓存——故障不固化）、探中回填真值并落 cand_probe: LRU——
+// fetchByExtId 选定免二次上游；读穿层让同 extId 二次开窗零 lyric 上行。
+
+test('qq 候选 lyric 探针：bizCode 无词滤出、传输错保留、探中回填 + LRU 免二次上游', async () => {
+  const QQ_LRC = '[00:01.00]扣词一\n[00:02.00]扣词二';
+  let lyricCalls = 0;
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [] } })],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [
+      { mid: '002yaHfo2tvaS5', name: '楽園', singer: [{ name: 'EMA' }], interval: 244 },  // 实案——-1901 无词
+      { mid: '003wOzl40aBcDe', name: '楽園', singer: [{ name: 'EMA' }], interval: 244 },  // 真词
+      { mid: '004wOzl40aBcDf', name: '楽園', singer: [{ name: 'EMA' }], interval: 244 },  // 传输错
+    ], totalnum: 3 } } })],
+    ['fcg_query_lyric_new', (url) => {
+      lyricCalls += 1;
+      if (url.includes('songmid=002yaHfo2tvaS5')) return J({ code: -1901 });   // bizCode 确定无词
+      if (url.includes('songmid=003wOzl40aBcDe')) {
+        return J({ code: 0, lyric: Buffer.from(QQ_LRC).toString('base64'), trans: '' });
+      }
+      return J({ err: 'upstream boom' }, 500);   // fcg 抛 HTTP 错——无 bizCode 属传输故障
+    }],
+  ]);
+  const list = await svc.searchLyricCandidates({ songId: '880120', title: '楽園', artist: 'EMA' });
+  const qqs = list.filter(c => c.source === 'qq');
+  // 空词滤出池（摆进池也只能 404），传输错条目保留——探针故障≠无词
+  assert.deepEqual(qqs.map(c => c.extId), ['qq_003wOzl40aBcDe', 'qq_004wOzl40aBcDf']);
+  assert.equal(qqs[0].synced, true);                 // 探中——词型真值
+  assert.match(qqs[0].preview, /扣词一/);            // 词文白捡进预览
+  assert.equal(qqs[1].synced, null);                 // 漏网条如实「未知」——非纯文本断言
+  assert.equal(qqs[1].preview, '');
+  // 缓存钉：探中条词文已落 cand_probe: LRU——fetchByExtId 扫描命中零
+  // 上游（摘 cacheWrite 此钉即红：lyric 桩会被再打一发）
+  const before = lyricCalls;
+  const hit = await svc.fetchByExtId('qq_003wOzl40aBcDe');
+  assert.equal(hit.source, 'qq');
+  assert.equal(hit.extId, 'qq_003wOzl40aBcDe');
+  assert.equal(hit.synced, true);
+  assert.match(hit.lrc, /扣词一/);
+  assert.equal(lyricCalls, before);
+});
+
+test('netease 候选 lyric 探针：nolyric/uncollected 滤出、真词回填、传输错保留', async () => {
+  const NE_LRC = '[00:01.00]网词一\n[00:02.00]网词二';
+  let lyricCalls = 0;
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [
+      { id: 3101, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },   // 真词
+      { id: 3102, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },   // nolyric
+      { id: 3103, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },   // uncollected
+      { id: 3104, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },   // 传输错
+    ] } })],
+    ['music.163.com/api/song/lyric', (url, init) => {
+      lyricCalls += 1;
+      const body = String(init?.body || '');
+      if (body.includes('id=3101')) return J({ code: 200, lrc: { version: 1, lyric: NE_LRC } });
+      if (body.includes('id=3102')) return J({ code: 200, nolyric: true });
+      if (body.includes('id=3103')) return J({ code: 200, uncollected: true });
+      return J({ err: 'upstream boom' }, 500);   // answer 拒包归一 Error——传输故障保留
+    }],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [], totalnum: 0 } } })],
+  ]);
+  const list = await svc.searchLyricCandidates({ songId: '880121', title: '曲', artist: '艺人' });
+  assert.deepEqual(list.map(c => c.extId), ['netease_3101', 'netease_3104']);
+  assert.equal(list[0].synced, true);
+  assert.match(list[0].preview, /网词一/);
+  assert.equal(list[1].synced, null);                // 传输错漏网条——如实「未知」
+  assert.equal(list[1].preview, '');
+  // 缓存钉同口径：探中条 fetchByExtId 零上游命中
+  const before = lyricCalls;
+  const hit = await svc.fetchByExtId('netease_3101');
+  assert.equal(hit.source, 'netease');
+  assert.match(hit.lrc, /网词一/);
+  assert.equal(lyricCalls, before);
+});
+
+test('lyric 探针全灭：netease/qq 全部确定无词 → 该源如实出空池（不抛错）', async () => {
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [
+      { id: 3201, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },
+    ] } })],
+    ['music.163.com/api/song/lyric', () => J({ code: 200, nolyric: true })],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [
+      { mid: '005wOzl40aBcDg', name: '曲', singer: [{ name: '艺人' }], interval: 200 },
+    ], totalnum: 1 } } })],
+    ['fcg_query_lyric_new', () => J({ code: -1901 })],
+  ]);
+  const list = await svc.searchLyricCandidates({ songId: '880122', title: '曲', artist: '艺人' });
+  assert.deepEqual(list, []);
+});
+
+// ── 检索窗放宽 30 + 探测预算按 _diff 收顶 15 ──
+// 实案召回缺口：网易云裸「楽園」检索下春野真身居第 23 名——旧窗 15 直接
+// 截掉；其 244s 对目标 249s 的 _diff≈5 属全池优差。窗 30 让深榜条目进
+// 池，探针前按 _diff 收顶 15 收探测费——池尾注定不出榜的不付探测费。
+
+test('探测预算收顶：netease/qq 池 >15 条只探 _diff 最小的 15 条(null 殿后、池尾弃)', async () => {
+  const NE_LRC = '[00:01.00]网词一\n[00:02.00]网词二';
+  const QQ_LRC = '[00:03.00]扣词一\n[00:06.00]扣词二';
+  const neProbed = [];
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    // 20 条池：上游位序与 _diff 序刻意反拧——位序 p 的时长差=18-p
+    // （p0..p17），p18/p19 无时长(null 殿后)。收顶正确集合=p3..p17，
+    // 探测集合是排序证明而非位序切片巧合
+    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [
+      ...Array.from({ length: 18 }, (_, p) => ({
+        id: 6101 + p, name: '楽園', ar: [{ name: '艺人' }], dt: (249 + 18 - p) * 1000,
+      })),
+      { id: 6119, name: '楽園', ar: [{ name: '艺人' }] },   // 无时长 → _diff null 殿后
+      { id: 6120, name: '楽園', ar: [{ name: '艺人' }] },
+    ] } })],
+    ['music.163.com/api/song/lyric', (url, init) => {
+      neProbed.push(String(init?.body || '').match(/id=(\d+)/)?.[1]);
+      return J({ code: 200, lrc: { version: 1, lyric: NE_LRC } });
+    }],
+    // qq 同构 20 条：mid 尾号即位序，interval 差同上反拧
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [
+      ...Array.from({ length: 18 }, (_, p) => ({
+        mid: `004probe${7000 + p}x`, name: '楽園',
+        singer: [{ name: '艺人' }], interval: 249 + 18 - p,
+      })),
+      { mid: '004probe7018x', name: '楽園', singer: [{ name: '艺人' }] },   // 无时长殿后
+      { mid: '004probe7019x', name: '楽園', singer: [{ name: '艺人' }] },
+    ], totalnum: 20 } } })],
+    ['fcg_query_lyric_new', () => J({
+      code: 0, lyric: Buffer.from(QQ_LRC).toString('base64'), trans: '',
+    })],
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: '880130', title: '楽園', artist: '艺人', durationSec: 249,
+  });
+  const qqProbed = calls.filter(u => u.includes('fcg_query_lyric_new'))
+    .map(u => qOf(u, 'songmid'));
+  // 摘 slice(0,CAND_PROBE_CAP) 即红：探测数≠15(满池 20 发、双源翻倍)
+  assert.equal(neProbed.length, 15);
+  assert.equal(qqProbed.length, 15);
+  // 摘排序即红：收顶集合=_diff 最小的 15 条(p3..p17)；p0..p2(diff 18..16)
+  // 与 null 殿后尾条不付探测费
+  assert.deepEqual(new Set(neProbed),
+    new Set(Array.from({ length: 15 }, (_, i) => String(6104 + i))));
+  assert.deepEqual(new Set(qqProbed),
+    new Set(Array.from({ length: 15 }, (_, i) => `004probe${7003 + i}x`)));
+  // 池尾弃条不出榜；探中条带真值回填、跨源合并仍截 12
+  assert.equal(list.length, 12);
+  const ext = new Set(list.map(c => c.extId));
+  assert.ok(!ext.has('netease_6101') && !ext.has('netease_6119') && !ext.has('netease_6120'));
+  assert.ok(!ext.has('qq_004probe7018x') && !ext.has('qq_004probe7019x'));
+  const ne = list.filter(c => c.source === 'netease');
+  assert.equal(ne[0].extId, 'netease_6118');   // 全池 diff 最小(1)居首
+  assert.equal(ne[0].synced, true);
+});
+
+test('检索窗 30 深榜召回：裸「楽園」第 23 名春野生位进池探中(实案回归——旧窗 15 截断面)', async () => {
+  const NE_LRC = '[00:01.00]春野詞一\n[00:02.00]春野詞二';
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    // 桩诚实模拟上游检索窗：读 POST body limit 截返回数——limit 回退 15
+    // 此钉即红（第 23 名根本不进池）
+    ['music.163.com/api/cloudsearch', (url, init) => {
+      const lim = Number(new URLSearchParams(String(init?.body || '')).get('limit')) || 30;
+      const songs = Array.from({ length: 30 }, (_, p) => ({
+        id: 5001 + p, name: '楽園', ar: [{ name: '别人' }],
+        dt: (249 + 40 + p) * 1000,     // 占位条 _diff 40..69——恒劣后于真身
+      }));
+      // 实案钉板：裸「楽園」检索第 23 名(p22)才是春野真身——dt 244s 对
+      // 目标 249s 的 _diff=5 是全池最小差
+      songs[22] = {
+        id: 1454432192, name: '楽園', ar: [{ name: '春野' }], al: { name: 'filia' }, dt: 244000,
+      };
+      return J({ code: 200, result: { songs: songs.slice(0, lim) } });
+    }],
+    ['music.163.com/api/song/lyric', (url, init) => (
+      String(init?.body || '').includes('id=1454432192')
+        ? J({ code: 200, lrc: { version: 1, lyric: NE_LRC } })
+        : J({ code: 200, nolyric: true })   // 占位条确定无词滤出
+    )],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [], totalnum: 0 } } })],
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: '880131', title: '楽園', artist: 'EMA', durationSec: 249,
+  });
+  const hit = list.find(c => c.extId === 'netease_1454432192');
+  assert.ok(hit, '深榜第 23 名该进 30 窗并被 _diff 收顶探中');
+  assert.equal(hit.artist, '春野');
+  assert.equal(hit.durationSec, 244);
+  assert.equal(hit.synced, true);
+  assert.match(hit.preview, /春野詞一/);
+  // 占位条全 nolyric 滤出——netease 榜只剩真身（_diff=5 全池最小居首）
+  assert.deepEqual(list.map(c => c.extId), ['netease_1454432192']);
+});
+
 test('谓词：EXT_LYRIC_ID_STRICT_RE 前缀组含 netease|qq——合法收、空 key/脏尾拒', async () => {
   const { EXT_LYRIC_ID_STRICT_RE } = await import('../src/shared/predicates.js');
   assert.equal(EXT_LYRIC_ID_STRICT_RE.test('netease_1454432192'), true);
@@ -859,4 +1093,147 @@ test('谓词：EXT_LYRIC_ID_STRICT_RE 前缀组含 netease|qq——合法收、�
   const { EXT_LYRIC_ID_RE } = await import('../src/shared/predicates.js');
   assert.equal(EXT_LYRIC_ID_RE.test('netease_1454432192'), true);
   assert.equal(EXT_LYRIC_ID_RE.test('qq_003wOzl40aBcDe'), false);
+});
+
+// ── 探针加固钉板：_form 收顶 / bizCode 白名单 / cand_probe: 读穿 / 并发分片 ──
+
+test('探测收顶含 _form 序：跨形态混合池 >15 时早形态不被晚形态近差值挤出', async () => {
+  const NE_LRC = '[00:01.00]网词一\n[00:02.00]网词二';
+  const neProbed = [];
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    // 混合形态池 18 条：form0「平原曲 艺人」8 条时长差大（dt350 对目标
+    // 200→diff150）；form1「平原曲」10 条差值贴着（diff 0..9）。纯
+    // _diff 收顶下 form0 只能挤进前 5 条、7206..7208 掉出探测面
+    ['music.163.com/api/cloudsearch', (url, init) => {
+      const kw = new URLSearchParams(String(init?.body || '')).get('s');
+      if (kw === '平原曲 艺人') {
+        return J({ code: 200, result: { songs: Array.from({ length: 8 }, (_, i) => ({
+          id: 7201 + i, name: '平原曲', ar: [{ name: '艺人' }], dt: 350000,
+        })) } });
+      }
+      return J({ code: 200, result: { songs: Array.from({ length: 10 }, (_, i) => ({
+        id: 7301 + i, name: '平原曲', ar: [{ name: '艺人' }], dt: (200 - i) * 1000,
+      })) } });
+    }],
+    ['music.163.com/api/song/lyric', (url, init) => {
+      neProbed.push(String(init?.body || '').match(/id=(\d+)/)?.[1]);
+      return J({ code: 200, lrc: { version: 1, lyric: NE_LRC } });
+    }],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [], totalnum: 0 } } })],
+  ]);
+  const list = await svc.searchLyricCandidates({
+    songId: '880140', title: '平原曲', artist: '艺人', durationSec: 200,
+  });
+  // 摘 _form 比较子即红：旧纯 _diff 收顶下探针集=10 form1 + 5 form0，
+  // form0 后 3 条（7206/7207/7208）被挤出池
+  assert.equal(neProbed.length, 15);
+  assert.deepEqual(new Set(neProbed), new Set([
+    ...Array.from({ length: 8 }, (_, i) => String(7201 + i)),  // form0 全 8 条
+    ...Array.from({ length: 7 }, (_, i) => String(7301 + i)),  // form1 差值最小 7 条
+  ]));
+  // form0 条目全数出榜（_form 先决序下居前 8 位）
+  const neOut = new Set(list.filter(c => c.source === 'netease').map(c => c.extId));
+  for (let i = 0; i < 8; i++) assert.ok(neOut.has(`netease_${7201 + i}`));
+});
+
+test('qq 探针 bizCode 白名单：-1901 确定无词滤出+负窗；他码/纯文本探中各归其位', async () => {
+  const QQ_LRC = '[00:01.00]扣词一\n[00:02.00]扣词二';
+  const PLAIN = '纯文本词一行\n纯文本词二行';
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [] } })],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [
+      { mid: '001aaBBccDDee1', name: '曲', singer: [{ name: '艺人' }], interval: 200 },  // -1901 无词
+      { mid: '002aaBBccDDee2', name: '曲', singer: [{ name: '艺人' }], interval: 200 },  // -2001 风控码
+      { mid: '003aaBBccDDee3', name: '曲', singer: [{ name: '艺人' }], interval: 200 },  // 滚动词
+      { mid: '004aaBBccDDee4', name: '曲', singer: [{ name: '艺人' }], interval: 200 },  // 纯文本词
+    ], totalnum: 4 } } })],
+    ['fcg_query_lyric_new', (url) => {
+      if (url.includes('songmid=001aaBBccDDee1')) return J({ code: -1901 });
+      if (url.includes('songmid=002aaBBccDDee2')) return J({ code: -2001 });   // 非无词业务码
+      if (url.includes('songmid=004aaBBccDDee4')) {
+        return J({ code: 0, lyric: Buffer.from(PLAIN).toString('base64'), trans: '' });
+      }
+      return J({ code: 0, lyric: Buffer.from(QQ_LRC).toString('base64'), trans: '' });
+    }],
+  ]);
+  const list = await svc.searchLyricCandidates({ songId: '880141', title: '曲', artist: '艺人' });
+  const qqs = list.filter(c => c.source === 'qq');
+  // 摘白名单即红：旧「bizCode!==undefined 即滤」会把 -2001 条整出池
+  assert.deepEqual(qqs.map(c => c.extId),
+    ['qq_002aaBBccDDee2', 'qq_003aaBBccDDee3', 'qq_004aaBBccDDee4']);
+  assert.equal(qqs[0].synced, null);       // 风控码漏网条——如实「未知」
+  assert.equal(qqs[0].preview, '');
+  assert.equal(qqs[1].synced, true);       // 探中滚动词
+  assert.equal(qqs[2].synced, false);      // 探中纯文本——真值 false
+  assert.match(qqs[2].preview, /纯文本词一行/);   // 词文白捡进预览
+});
+
+test('cand_probe: 读穿——二次开窗正命中免探回填、负窗滤出、漏网条重探', async () => {
+  const NE_LRC = '[00:01.00]网词一\n[00:02.00]网词二';
+  const probed = [];
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [
+      { id: 8101, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },   // 探中→正缓存
+      { id: 8102, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },   // nolyric→负窗
+      { id: 8103, name: '曲', ar: [{ name: '艺人' }], dt: 200000 },   // 传输错漏网→不固化
+    ] } })],
+    ['music.163.com/api/song/lyric', (url, init) => {
+      probed.push(String(init?.body || '').match(/id=(\d+)/)?.[1]);
+      const body = String(init?.body || '');
+      if (body.includes('id=8101')) return J({ code: 200, lrc: { version: 1, lyric: NE_LRC } });
+      if (body.includes('id=8102')) return J({ code: 200, nolyric: true });
+      return J({ err: 'probe boom' }, 500);
+    }],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [], totalnum: 0 } } })],
+  ]);
+  const list1 = await svc.searchLyricCandidates({ songId: '880142', title: '曲', artist: '艺人' });
+  assert.deepEqual(list1.map(c => c.extId), ['netease_8101', 'netease_8103']);
+  assert.equal(list1[0].synced, true);
+  assert.equal(list1[1].synced, null);            // 漏网条——如实「未知」
+  assert.equal(probed.length, 3);                 // 三条首轮全探
+  // 二次开窗（缓存不清、上行重新记）：8101 正命中直接回填收下、8102
+  // 负窗内确定无词直接滤出、8103 故障不固化重探一次——摘读穿/负写
+  // 任一即红（无读穿 3 条全重探；无负写 8102 多探一发）
+  probed.length = 0;
+  const list2 = await svc.searchLyricCandidates({ songId: '880142', title: '曲', artist: '艺人' });
+  assert.deepEqual(list2.map(c => c.extId), ['netease_8101', 'netease_8103']);
+  assert.equal(list2[0].synced, true);
+  assert.match(list2[0].preview, /网词一/);       // 正命中回填词型+预览
+  assert.equal(list2[1].synced, null);
+  assert.deepEqual(probed, ['8103']);             // 只有漏网条重探
+});
+
+test('探针并发分片：15 条按 5/批执行——桩记 in-flight 峰值恰 5（批内并行非串行）', async () => {
+  const QQ_LRC = '[00:01.00]扣词一\n[00:02.00]扣词二';
+  let inFlight = 0, maxInFlight = 0;
+  reset([
+    ['lrclib.net', () => J([])],
+    ['lyrics.kugou.com', () => J({ candidates: [] })],
+    ['music.163.com/api/cloudsearch', () => J({ code: 200, result: { songs: [] } })],
+    ['y.qq.com/soso', () => J({ code: 0, data: { song: { list: [
+      ...Array.from({ length: 15 }, (_, i) => ({
+        mid: `004shard${String(i).padStart(3, '0')}x`, name: '曲',
+        singer: [{ name: '艺人' }], interval: 200,
+      })),
+    ], totalnum: 15 } } })],
+    ['fcg_query_lyric_new', async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(r => setTimeout(r, 5));
+      inFlight -= 1;
+      return J({ code: 0, lyric: Buffer.from(QQ_LRC).toString('base64'), trans: '' });
+    }],
+  ]);
+  const list = await svc.searchLyricCandidates({ songId: '880143', title: '曲', artist: '艺人' });
+  const qqs = list.filter(c => c.source === 'qq');
+  assert.equal(qqs.length, 12);           // 探中 15 条全收、跨源合并截 12
+  assert.ok(qqs.every(c => c.synced === true));
+  // 摘分片即红：15 发瞬时并行→峰值 15、纯串行→峰值 1——5/批恰钉 5
+  assert.equal(maxInFlight, 5);
 });
