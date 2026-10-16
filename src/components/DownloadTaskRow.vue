@@ -4,12 +4,13 @@
     <div class="dtr-cover">
       <!-- alt 留空：封面与紧邻的 .dtr-name 同源文本——命名会让 SR 把歌名报两遍 -->
       <img
-        v-if="coverSrc"
+        v-if="coverSrc && !coverErr"
         :src="coverSrc"
         alt=""
         class="dtr-cover-img"
         loading="lazy"
         decoding="async"
+        @error="coverErr = true"
       />
       <div v-else class="dtr-cover-fb"><PixelIcon name="note" :size="14" /></div>
     </div>
@@ -17,12 +18,13 @@
       <div class="dtr-top">
         <div class="dtr-headcell">
           <div class="dtr-namerow">
-            <h4 class="dtr-name">{{ task.songName }}</h4>
+            <!-- h3：面板题 h2（DQL/DTL 标题级）→ 卡名 h3，原 h4 跳了一级 -->
+            <h3 class="dtr-name">{{ task.songName }}</h3>
             <span class="pg-chip pg-chip--static dtr-chip" :class="chipTierClass">{{ statusLabel }}</span>
           </div>
           <p class="dtr-artist">{{ task.artist }}</p>
         </div>
-        <div class="dtr-id">#{{ task.id }}</div>
+        <!-- 「#任务id」列已删——内部自增 id 对用户无信息量 -->
       </div>
       <div class="dtr-flags">
         <span v-if="task.downloadAudio" class="dtr-flag">音频</span>
@@ -44,7 +46,7 @@
         <div class="dtr-progress-num">{{ clampedProgress }}%</div>
       </div>
       <div v-else-if="task.status === 'failed'" class="dtr-err">
-        <p class="dtr-err-line"><span class="dtr-err-tag">error:</span> {{ task.errorMessage || '下载失败喵' }}</p>
+        <p class="dtr-err-line"><span class="dtr-err-tag">失败原因</span> {{ task.errorMessage || '下载失败喵' }}</p>
         <p v-if="task.retryCount > 0" class="dtr-retry-note">已重试 {{ task.retryCount }} 次</p>
         <button
           class="ink-btn ink-btn--ghost ink-btn--sm dtr-retry-btn"
@@ -52,9 +54,8 @@
           @click="$emit('retry-task', task.id)"
         >{{ isRetrying ? '重试中...' : '重试任务' }}</button>
       </div>
-      <div v-else-if="task.status === 'completed'" class="dtr-done">
-        <PixelIcon name="check" :size="11" />下载完成喵
-      </div>
+      <!-- completed 态无尾注块——绿色「完成」chip + 资源 flags 已说尽，
+           原 .dtr-done「下载完成喵」是第三遍复述 -->
       <!-- standalone 行的删除入口：downloading/pending 都藏——pending 的
            standalone 多在退避协程里（standaloneRunning），服务端一样 409 -->
       <div v-if="deletable && task.status !== 'downloading' && task.status !== 'pending'" class="dtr-actions">
@@ -69,7 +70,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { httpsCover } from '../lib/url'
 import { coverSizeUrl } from '../lib/song'
 import { taskStatusMeta, statusChipClass } from '../lib/downloadStatus.js'
@@ -104,6 +105,10 @@ defineEmits(['retry-task', 'delete-task'])
 // 前缀），非白名单/畸形 fail-closed 归 ''（v-if 挡 <img> 显占位）；httpsCover
 // 仅兜底残留的 http 明文直通形升级
 const coverSrc = computed(() => httpsCover(coverSizeUrl(props.task.coverUrl, 96)))
+// 裂图簿记：@error 立旗换回 note 占位（v-if 链只认 URL 形状不认可加载性）。
+// 轮询换上新 coverUrl（同 id 行对象被替换）时清旗再给新图一次机会
+const coverErr = ref(false)
+watch(coverSrc, () => { coverErr.value = false })
 const statusLabel = computed(() => taskStatusMeta(props.task.status).label)
 const chipTierClass = computed(() => statusChipClass(taskStatusMeta(props.task.status).tier))
 const isRetrying = computed(() => props.retryingTaskIds.includes(props.task.id))
@@ -188,18 +193,6 @@ const videoFlagTitle = computed(() => {
   text-overflow: ellipsis;
 }
 
-.dtr-id {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--ink-64);
-  flex-shrink: 0;
-  text-align: right;
-}
-/* ≤640 id 列让位——mono id 与歌名行争宽，队列侧 dql-meta 仍带 #id 可查 */
-@media (max-width: 640.98px) {
-  .dtr-id { display: none; }
-}
-
 .dtr-flags {
   display: flex;
   align-items: center;
@@ -218,7 +211,7 @@ const videoFlagTitle = computed(() => {
 .dtr-chip {
   height: 20px;
   padding: 0 8px;
-  font-size: 10px;
+  font-size: 11px; /* 与 dql-chip 同步升档——10px 微字过矮 */
   flex-shrink: 0;
 }
 
@@ -277,17 +270,6 @@ const videoFlagTitle = computed(() => {
 }
 
 .dtr-retry-btn { margin-top: 6px; }
-
-.dtr-done {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 5px;
-  font-size: 11px;
-  color: var(--ink-86);
-}
-
-.dtr-done svg { color: var(--accent-green); }
 
 /* standalone 删除动作行：与重试键同族 ghost 小钮 */
 .dtr-actions { margin-top: 8px; }

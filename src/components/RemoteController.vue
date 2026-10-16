@@ -1,5 +1,8 @@
 <template>
   <div class="remote-controller">
+    <!-- 常驻逃生口：剥掉 ?mode=controller 回普通模式。fixed 定位天然
+         浮在 .rc-connecting 空态之上（断连态也能退出） -->
+    <a class="rc-exit" :href="exitUrl" aria-label="退出遥控模式">退出遥控</a>
     <div v-if="!connected || hostDisconnected" class="rc-connecting">
       <div v-if="!gaveUp" class="rc-spinner pixel-loading pixel-loading--on-ink"></div>
       <p>{{ gaveUp ? '无法连接主机' : (hostDisconnected ? '主机已断开，等待重连...' : '正在连接主机...') }}</p>
@@ -10,11 +13,12 @@
       <!-- 封面 + 歌曲信息 -->
       <div class="rc-cover-wrap">
         <img
-          v-if="coverSrc(state.currentSong)"
+          v-if="coverSrc(state.currentSong) && !coverErr"
           :src="coverSrc(state.currentSong)"
           :alt="state.currentSong?.name || '专辑封面'"
           class="rc-cover"
           :class="{ 'playing-animation': state.isPlaying }"
+          @error="coverErr = true"
         />
         <div v-else class="rc-cover rc-cover-placeholder"><PixelIcon name="note" :size="56" /></div>
       </div>
@@ -96,7 +100,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { formatTime } from '../lib/format'
 import { httpsCover } from '../lib/url'
 import { resolveApiBaseUrl } from '../lib/api-base.js'
@@ -160,6 +164,14 @@ const coverSrc = (song) => {
   if (u.startsWith('/') && !u.startsWith('//')) return httpsCover(apiBase + u)
   return httpsCover(u)
 }
+// 裂图簿记：@error 立旗换占位——盯解析后 URL 而非 song 引用：
+// host 推送换 currentSong 对象但封面同源时不误清旗，真换图才放行
+const coverErr = ref(false)
+watch(() => coverSrc(state.value.currentSong), () => { coverErr.value = false })
+
+// 逃生链：origin+pathname 剥掉 ?mode=controller（含 base 子路径部署——
+// TopNavigation 拼 controllerUrl 同款公式，两端同构）
+const exitUrl = window.location.origin + window.location.pathname
 
 function connect() {
   if (destroyed) return
@@ -367,6 +379,10 @@ onUnmounted(() => {
   --font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'PingFang SC', 'Noto Sans SC', monospace;
   --font-display: 'Space Grotesk', 'Inter', 'Noto Sans SC', sans-serif;
+  /* pin 住的令牌要真正落字——遥控页脱离 app-shell，body 的 font-family
+     仍会继承进来；不声明则 pin 只服务 mono/display 显式引用处 */
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -377,6 +393,27 @@ onUnmounted(() => {
   background: var(--ink);
   color: var(--paper);
   gap: 20px;
+}
+
+/* 常驻逃生口：fixed 贴左上——.rc-connecting 空态/正常态都可达；
+   白字发丝边小链（暗面令牌），hover 回纸色。刘海横屏/PWA 下压
+   max(env(safe-area-inset-*)) 安全区（与 bottom-player/app-sidebar
+   的 env() 惯例同口径）——逃生链不压进安全区 */
+.rc-exit {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  left: max(16px, env(safe-area-inset-left, 0px));
+  z-index: 10;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--white-80);
+  border: 1.2px solid var(--white-40);
+  text-decoration: none;
+  transition: color .12s, border-color .12s;
+}
+.rc-exit:hover {
+  color: var(--paper);
+  border-color: var(--paper);
 }
 
 .rc-connecting {

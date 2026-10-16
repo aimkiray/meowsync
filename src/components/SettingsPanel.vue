@@ -2,7 +2,7 @@
   <div class="settings-panel">
     <div class="settings-col">
       <header class="settings-head">
-        <h2 class="settings-title">设置</h2>
+        <h2 class="settings-title"><GlitchText text="设置" /></h2>
         <p class="settings-sub">留空的项读取服务端环境变量配置；密钥类值只显示是否已配置，不回显内容</p>
       </header>
 
@@ -13,9 +13,9 @@
 
       <template v-else>
         <!-- ═══ AI 配置 ═══ -->
-        <section class="settings-card" aria-labelledby="st-ai">
+        <section class="settings-card pg-panel" aria-labelledby="st-ai">
           <div class="settings-card-head">
-            <h3 id="st-ai" class="settings-card-title">AI 配置</h3>
+            <h3 id="st-ai" class="settings-card-title"><GlitchText text="AI 配置" /></h3>
             <span class="pg-chip pg-chip--static" :class="ai.enabled ? 'pg-chip--ok' : 'pg-chip--dim'">
               {{ ai.enabled ? `已启用 · ${ai.model || ''}` : '未启用' }}
             </span>
@@ -65,18 +65,19 @@
         </section>
 
         <!-- ═══ 音乐源凭据 ═══ -->
-        <section class="settings-card" aria-labelledby="st-cookies">
+        <section class="settings-card pg-panel" aria-labelledby="st-cookies">
           <div class="settings-card-head">
-            <h3 id="st-cookies" class="settings-card-title">音乐源凭据</h3>
+            <h3 id="st-cookies" class="settings-card-title"><GlitchText text="音乐源凭据" /></h3>
           </div>
           <p class="settings-hint">登录态 Cookie 解锁 VIP/高码率档；YouTube 侧绕匿名反机器人墙。出站代理与 Cookie 正交可叠加——Cookie 给登录态、代理换出口 IP（绕 IP 级风控）。Cookie 只发往对应源站域；QQ 凭据到期前服务端自动续期。</p>
 
           <div v-for="ck in cookieDefs" :key="ck.key" class="settings-cookie">
             <div class="settings-cookie-head">
+              <!-- .settings-src 是唯一状态戳——原 cookie-state 右列与 placeholder
+                   三处复读「未配置」已去重，hint（掩码尾号）并入 placeholder -->
               <span class="settings-label">{{ ck.label }}
                 <em class="settings-src" :class="`settings-src--${fields[ck.key]?.source || 'none'}`">{{ srcText(fields[ck.key]) }}</em>
               </span>
-              <span class="settings-cookie-state">{{ cookieState(ck.key) }}</span>
             </div>
             <textarea
               v-model="cookieDrafts[ck.key]"
@@ -101,9 +102,9 @@
         </section>
 
         <!-- ═══ 界面偏好 ═══ -->
-        <section class="settings-card" aria-labelledby="st-local">
+        <section class="settings-card pg-panel" aria-labelledby="st-local">
           <div class="settings-card-head">
-            <h3 id="st-local" class="settings-card-title">界面偏好</h3>
+            <h3 id="st-local" class="settings-card-title"><GlitchText text="界面偏好" /></h3>
           </div>
           <p class="settings-hint">主题/搜索源/视频模式/歌词字号随账号跨端同步；故障动效豁免只在本机生效，均与服务端配置无关。</p>
 
@@ -172,9 +173,11 @@ import { toast } from '../lib/feedback.js'
 import { refreshServerCaps } from '../lib/caps.js'
 import { THEMES, currentTheme, setTheme } from '../lib/theme.js'
 import { prefVideoOn, prefLyricFontSize, prefGlitchMotion, prefSearchSource, SEARCH_SOURCES, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs.js'
+import GlitchText from './GlitchText.vue'
 
 export default {
   name: 'SettingsPanel',
+  components: { GlitchText },
   setup() {
     const loading = ref(true)
     const loadError = ref('')
@@ -239,13 +242,11 @@ export default {
       if (f?.source === 'env') return '服务端配置'
       return '未配置'
     }
+    // 状态戳唯一化：「未配置」只由 .settings-src 徽标承担，placeholder
+    // 不复读——已配置带掩码 hint，未配置直接给动作提示
     const secretPlaceholder = (f) =>
-      f?.set ? `已配置（${srcText(f)}${f.hint ? ` · ${f.hint}` : ''}），输入以替换` : '未配置——输入以设置'
+      f?.set ? `已配置${f.hint ? ` · ${f.hint}` : ''}，输入以替换` : '输入以设置'
     const cookiePlaceholder = (key) => secretPlaceholder(fields.value[key])
-    const cookieState = (key) => {
-      const f = fields.value[key]
-      return f?.set ? `${srcText(f)}${f.hint ? ` · ${f.hint}` : ''}` : '未配置'
-    }
 
     const afterSave = (r, keys) => {
       applyFields(r?.fields, keys)
@@ -338,7 +339,7 @@ export default {
       fields, ai, aiBase, aiKey, aiModelName, aiTimeout,
       cookieDefs, cookieDrafts,
       saving, testing, testResult, testResultText,
-      srcText, secretPlaceholder, cookiePlaceholder, cookieState,
+      srcText, secretPlaceholder, cookiePlaceholder,
       saveAi, saveCookie, clearOverride, testAi,
       THEMES, currentTheme, setTheme,
       prefVideoOn, prefLyricFontSize, prefGlitchMotion, prefSearchSource, SEARCH_SOURCES, LYRIC_FS_MIN, LYRIC_FS_MAX,
@@ -366,9 +367,8 @@ export default {
 }
 .settings-error { color: var(--accent-danger-ink, #c0392b); display: flex; gap: 12px; align-items: center; justify-content: center; }
 
+/* 盒与纸面由 .pg-panel 供（glitch 下自动圆角柔影）——这里只留内槽布局 */
 .settings-card {
-  border: var(--hairline);
-  background: var(--paper);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -384,7 +384,8 @@ export default {
 .settings-src { font-style: normal; font-size: 11px; font-family: var(--font-mono); }
 .settings-src--override { color: var(--accent-magenta-ink, #b03a7c); }
 .settings-src--env { color: var(--ink-64); }
-.settings-src--none { color: var(--ink-30); }
+/* ink-30 档在纸面仅 ~1.8:1 不达微字线——「未配置」提回 ink-64 元数据档 */
+.settings-src--none { color: var(--ink-64); }
 
 .settings-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .settings-test { font-size: 12px; margin: 0; font-family: var(--font-mono); }
@@ -394,7 +395,6 @@ export default {
 .settings-cookie { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: var(--hairline-soft); }
 .settings-cookie:first-of-type { border-top: 0; padding-top: 0; }
 .settings-cookie-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.settings-cookie-state { font-size: 11px; color: var(--ink-64); font-family: var(--font-mono); }
 .settings-textarea {
   width: 100%;
   border: var(--hairline);
@@ -407,7 +407,10 @@ export default {
   min-height: 60px;
   outline: none;
 }
+/* 与 .pg-field:focus-within 同款内陷环——自定义 textarea 不吃 .pg-field
+   圆角化（它挂全局类），glitch 下按同档 4px 补（scoped 下 :root 照常命中） */
 .settings-textarea:focus { outline: 2px solid currentColor; outline-offset: -1px; }
+:root[data-theme="glitch-restoration"] .settings-textarea { border-radius: 4px; }
 .settings-textarea::placeholder { color: var(--ink-64); }
 /* iOS 聚焦防缩放要 16px——scoped 自带媒体块：全局 pointer:coarse 规则
    优先级低于 [data-v] 属性选择器，压不住本组件的 12px */

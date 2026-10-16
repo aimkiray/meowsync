@@ -78,7 +78,9 @@
   --font-pixel: 'Fusion Pixel', 'JetBrains Mono', monospace;
   --ease-ink: cubic-bezier(.12, .23, .5, 1); /* typesafe 签名缓动 */
 
-  /* 层级刻度：全屏播放器 < 点击捕手 < 悬浮菜单/侧栏抽屉 */
+  /* 层级刻度：顶栏 < 全屏播放器 < 点击捕手 < 悬浮菜单/侧栏抽屉 */
+  --z-topnav: 20;    /* 顶栏自成堆叠上下文：压 app-body 内容（fixed 件的层级凭据），
+                        低于 fullscreen 70/scrim 950/menu 1000——全屏播放器与遮罩仍在它之上 */
   --z-fullscreen: 70;
   --z-overlay: 950;
   --z-menu: 1000;
@@ -106,7 +108,7 @@
 :root[data-theme="glitch-restoration"] {
   --ink: #4e5662;                      /* slate 软墨 */
   --ink-86: rgba(78, 86, 98, .86);
-  --ink-64: rgba(78, 86, 98, .8);    /* slate 比 print 墨浅：.64 档纸面仅 ~3.1:1，提 .8 回 ~4.9:1 */
+  --ink-64: rgba(78, 86, 98, .85);   /* slate 比 print 墨浅：.8 档实测 4.46:1 未达微字线，.85≈#6e747e 回 ~4.7:1 */
   --ink-30: rgba(78, 86, 98, .30);
   --ink-10: rgba(78, 86, 98, .10);
   --ink-06: rgba(78, 86, 98, .06);
@@ -214,9 +216,12 @@
     0 0 15px var(--accent-magenta),
     0 0 30px var(--accent-magenta);
 }
-/* spent：禁用=灰底无辉光（规范 .spent 语义），不是调透明度 */
+/* spent：禁用=灰底无辉光（规范 .spent 语义），不是调透明度。
+   字色须显式降档——继承 execute 的 #fff 在 #b9c2c9 上仅 ~1.8:1；
+   slate-800 级 #40474f 合成 ~4.6:1，仍读作禁用 */
 :root[data-theme="glitch-restoration"] .ink-btn:disabled {
   background: #b9c2c9;
+  color: #40474f;
   box-shadow: none;
   opacity: 1;
   cursor: default; /* 与全局 ink-btn/pg-icobtn/transport 同约定 */
@@ -555,7 +560,7 @@ button {
 .pg-chip:focus-visible, .pg-field:focus-within,
 .song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
 .pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
-.song-result-main:focus-visible,
+.song-result-main:focus-visible, .home-songrow:focus-visible,
 .transport:focus-visible,
 .pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
 .pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
@@ -653,6 +658,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .app-shell[data-view="search"]    { --view-canvas: var(--canvas-pink); }
 .app-shell[data-view="watch"]     { --view-canvas: var(--canvas-teal); }
 .app-shell[data-view="downloads"] { --view-canvas: var(--canvas-sage); }
+.app-shell[data-view="settings"]  { --view-canvas: var(--canvas-sage); } /* 与 downloads/songs 同 utility 画布族——glitch 下自动变淡彩 */
 
 .app-body {
   flex: 1;
@@ -865,7 +871,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
     justify-content: center;
   }
   /* 窄轨里 hover 播放遮罩会盖满 44px 封面截胡点击——封面只管打开歌单。
-     触屏窄轨同命中：组件侧 (hover:none) 会让遮罩常显（特异度低于本条），靠此压住 */
+     触屏侧无需再护：组件侧 (hover:none) 常显规则已随整面罩退役删除
+     （触屏播放入口收进 ⋯ 菜单首项，见 PlaylistPanel.vue），本条只挡窄轨 hover 一支 */
   .app-sidebar:not(.app-sidebar--open) .playlist-play-overlay { display: none; }
 }
 
@@ -1327,7 +1334,7 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
 .queue-head-meta {
   font-family: var(--font-mono);
   font-weight: 300;
-  font-size: 10px;
+  font-size: 11px; /* 10px 微字提 11——与全站微标签地板同档 */
   color: var(--ink-64);
   flex-shrink: 0;
 }
@@ -1340,7 +1347,7 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   padding: 8px 12px 4px;
   font-family: var(--font-mono);
   font-weight: 300;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: .14em;
   color: var(--ink-64);
   white-space: nowrap;
@@ -1519,10 +1526,18 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   height: 4px;
   background: var(--pixel-progress-track);
   z-index: 1;
-  transition: height .12s ease; /* YTM：hover 变粗是平滑过渡 */
 }
-/* hover 加高仅限底部走带——FullscreenPlayer 复用同名类，不加前缀会渗漏 */
-.bottom-player .player-progress-bar:hover { height: 6px; }
+/* hover 加高仅限底部走带——FullscreenPlayer 复用同名类，不加前缀会渗漏。
+   scaleY 替代 height 过渡（height 动画是 layout-transition，每帧重排）：
+   常态不动（origin 无涉），hover 整体放大 1.5×——轨道 4→6px、填充同步
+   变粗（fill 是 height:100% 子级）。锚 bottom 钉住条体底缘（y=3 界线上方
+   才是主区/控件分界），加粗向上长不入控件区；新版 .bp-progress 把命中带
+   并进盒体 padding（content-box 轨道 y∈[-1,3]），此式在两版几何下同成立 */
+.bottom-player .player-progress-bar {
+  transform-origin: bottom;
+  transition: transform .12s ease; /* YTM：hover 变粗是平滑过渡 */
+}
+.bottom-player .player-progress-bar:hover { transform: scaleY(1.5); }
 @media (prefers-reduced-motion: reduce){
   .player-progress-bar { transition: none; }
 }

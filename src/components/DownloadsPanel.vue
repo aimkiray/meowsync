@@ -25,7 +25,7 @@
         />
       </div>
 
-      <div class="min-h-0 flex flex-col">
+      <div ref="taskColEl" class="min-h-0 flex flex-col">
         <DownloadTaskList
           :tasks="tasks"
           :loading="loadingTasks"
@@ -108,6 +108,7 @@ const hasLoadedTasks = ref(pageMem.hasLoadedTasks)
 const standaloneTasks = ref(pageMem.standaloneTasks)
 const deletingTaskIds = ref([])
 const gridEl = ref(null)
+const taskColEl = ref(null)
 
 // 卸载时把可复现的数据态回写快照（loading/轮询/序号闸等瞬态不存）；
 // 顺带记外层滚动位（<xl 单列时唯一滚动器）。必须 onBeforeUnmount——
@@ -255,6 +256,14 @@ function selectQueue(queue) {
   hasLoadedTasks.value = false
   tasksError.value = ''
   loadTasks(queue.id)
+  // <xl 单列堆叠时任务列在队列列下方屏外——选中后把它滚进视野
+  // （滚动容器是 gridEl 自身 overscroll-contain，scrollIntoView 直达）。
+  // matchMedia 是全浏览器 baseline 裸调；smooth 收 prefers-reduced-motion
+  // 门（全仓动效同律——reduce 命中退 'auto' 直跳，与 WatchView 歌词跟随同口径）
+  if (window.matchMedia('(max-width: 1279.98px)').matches) {
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    nextTick(() => taskColEl.value?.scrollIntoView?.({ behavior, block: 'start' }))
+  }
 }
 
 // 手动刷新（action 后 await loadQueues）与轮询 tick 可并发：认领闸保后发者赢，
