@@ -3,8 +3,8 @@
 // lyricFetching/songSwitching/loadingLyrics 透传；点击只发 emit（逻辑在
 // usePlayer 侧，见 use-player.spec.mjs 手动词务用例）。
 // 另钉 ⋯ 溢出菜单：触发键常驻页头行 .watch-head 右端（舞台化后不再叠
-// 媒体角标），操作项全量收进 teleport 菜单（沉浸/分享/下载/回源——
-// 音画组已上移顶栏常驻 .watch-av 分段，菜单只剩一次性操作项），
+// 媒体角标），操作项全量收进 teleport 菜单（沉浸/分享/收藏到歌单/下载/
+// 回源——音画组已上移顶栏常驻 .watch-av 分段，菜单只剩一次性操作项），
 // 落位/开合/焦点/条件闸断言见下方各 describe
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
@@ -344,6 +344,60 @@ describe('WatchView：⋯菜单沉浸项', () => {
     await clickEl(el)
     expect(w.emitted('open-fullscreen')).toHaveLength(1)
     expect(menuEl()).toBeNull()
+  })
+})
+
+describe('WatchView：⋯菜单收藏到歌单项', () => {
+  // 当前曲入本地歌单：项恒在只按 currentSong 禁能——file_ 上传曲也能进本地
+  // 歌单（分享/下载的 file_ 遮挡是「无源链/无上游可下」硬限制，收藏无此限；
+  // SongList 行级入口同律）。载荷=整曲对象，App 侧弹 atp 选单窗
+  it('落位分享与下载之间（当前曲操作簇内聚），渲染 playlist 图标', async () => {
+    const w = mountWatch({ tab: 'queue' })
+    await openActionsMenu(w)
+    const el = menuItemByTitle('收藏到歌单')
+    expect(el).toBeTruthy()
+    expect(el.hasAttribute('disabled')).toBe(false)
+    const icon = w.findAllComponents(PixelIcon).find(c => el.contains(c.element))
+    expect(icon.props('name')).toBe('playlist')
+    const texts = menuItems().map(i => i.textContent)
+    const at = texts.findIndex(t => t.includes('收藏到歌单'))
+    expect(texts.findIndex(t => t.includes('分享歌曲'))).toBeLessThan(at)
+    expect(at).toBeLessThan(texts.findIndex(t => t.includes('下载')))
+  })
+
+  it('点击发 add-to-playlist（载荷=currentSong 整曲 + ⋯触发键归还锚）并关菜单', async () => {
+    const w = mountWatch({ tab: 'queue' })
+    await openActionsMenu(w)
+    await clickEl(menuItemByTitle('收藏到歌单'))
+    expect(w.emitted('add-to-playlist')).toHaveLength(1)
+    // 载荷须就是 currentSong 本体（VTU 挂载 props 走 reactive——与挂载入参
+    // 同指是代理对代理比，故比锚 vm.currentSong 而非 SONG 字面量）
+    expect(w.emitted('add-to-playlist')[0][0]).toBe(w.vm.currentSong)
+    // 第二参=⋅⋅⋅触发键：menuitem 随菜单卸载即死，openAddToPlaylist 的
+    // activeElement 兜底会吃死锚——SongList 行菜单同款传参形
+    expect(w.emitted('add-to-playlist')[0][1]).toBe(menuTrigger(w).element)
+    expect(menuEl()).toBeNull()
+    expect(document.activeElement).toBe(menuTrigger(w).element) // 焦点已还触发键
+  })
+
+  it('currentSong=null → 项仍渲染但禁用（与沉浸项同律只禁不藏）', async () => {
+    const w = mountWatch({ tab: 'queue', currentSong: null })
+    await openActionsMenu(w)
+    const el = menuItemByTitle('收藏到歌单')
+    expect(el).toBeTruthy()
+    expect(el.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('file_ 上传曲仍亮项可点（本地歌单可收）——与分享/下载的 file_ 遮挡不同', async () => {
+    const FILE_SONG = { id: 'file_abcd1234', name: 'f', ar: [], al: {}, dt: 0, file: { hasAudio: true } }
+    const w = mountWatch({ tab: 'queue', currentSong: FILE_SONG })
+    await openActionsMenu(w)
+    const el = menuItemByTitle('收藏到歌单')
+    expect(el).toBeTruthy()
+    expect(el.hasAttribute('disabled')).toBe(false)
+    await clickEl(el)
+    expect(w.emitted('add-to-playlist')[0][0]).toBe(w.vm.currentSong)
+    expect(w.emitted('add-to-playlist')[0][0].id).toBe(FILE_SONG.id)
   })
 })
 

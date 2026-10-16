@@ -60,6 +60,16 @@
             :disabled="!currentSong"
             @click="pickShare"
           ><PixelIcon name="share" :size="14" /> 分享歌曲</button>
+          <!-- 收藏到歌单：项恒在只按 currentSong 禁能——file_ 上传曲也能进
+               本地歌单（SongList 行级入口同律不遮挡；分享/下载的 file_ 闸
+               是「无源链/无上游可下」硬限制，收藏无此限） -->
+          <button
+            class="pg-menu-item"
+            role="menuitem"
+            title="收藏到歌单"
+            :disabled="!currentSong"
+            @click="pickAddToPlaylist"
+          ><PixelIcon name="playlist" :size="14" /> 收藏到歌单</button>
           <!-- 下载到服务器：file_ 上传曲资产本就在服务端（无可下对象）不亮项。
                busy/已下载三态键面照搬原行内键——提交、镜像、终态轮询全在
                usePlayer 侧，切歌任务照跑、项面随曲换 -->
@@ -1535,7 +1545,7 @@ export default {
       // 菜单高按可见行数估（item≈39——TopNav 同公式）：下方放不下翻到上方。
       // 音画组上移顶栏后菜单只剩标准项——不再有组头 36px 偏置
       const fileTrack = isFileTrackId(props.currentSong?.id)
-      const items = 1                                          // 沉浸恒在
+      const items = 2                                          // 沉浸/收藏恒在
         + (fileTrack ? 0 : 1)                        // 分享（file_ 不出项）
         + (props.currentSong && !fileTrack ? 1 : 0)  // 下载（同 file_ 闸）
         + (sourceUrl.value ? 1 : 0)                  // 回源
@@ -1567,6 +1577,13 @@ export default {
     const pickFullscreen = () => { emit('open-fullscreen'); closeMenu(true) }
     const pickShare = () => { shareSong(); closeMenu(true) }
     const pickDownload = () => { emit('download-song'); closeMenu(true) }
+    // 收藏到歌单：menuitem 随菜单卸载即死，atp 选单窗关闭的归还锚须捎活着的
+    // ⋯触发键（SongList addToPlaylistFromMenu 同款传参——openAddToPlaylist
+    // 的 activeElement 兜底会吃到死锚）；先关后 emit，兜底路径也落真锚
+    const pickAddToPlaylist = () => {
+      closeMenu(true)
+      emit('add-to-playlist', props.currentSong, menuBtn.value)
+    }
 
     // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
     const onMenuDocPointerDown = (e) => {
@@ -1690,6 +1707,7 @@ export default {
       pickFullscreen,
       pickShare,
       pickDownload,
+      pickAddToPlaylist,
       cycleMenuItems,
       pauseLyricFollow,
       onWatchTouchStart,
