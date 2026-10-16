@@ -21,6 +21,7 @@
       ref="topNavRef"
       :is-downloads-view="centerView === 'downloads'"
       :is-settings-view="centerView === 'settings'"
+      :is-search-view="centerView === 'search'"
       v-model:search-query="searchQuery"
       :sidebar-open="sidebarOpen"
       :remote-mode="remoteMode"
@@ -51,6 +52,7 @@
           :loading="loading"
           :selected-playlist="selectedPlaylist"
           :user-playlists="userPlaylists"
+          :center-view="centerView"
           @select-playlist="selectPlaylistAndShow"
           @play-playlist="playPlaylistFromSidebar"
           @remove-playlist="handleRemovePlaylist"
@@ -96,11 +98,15 @@
           @open-downloads="openDownloadsForPlaylist(selectedPlaylist?.id)"
           @song-meta-updated="savePlaylistsToStorage"
         />
+        <!-- :query 喂立案词 searchSongQuery 而非框内活词：搜「晴天」后框里
+             改打未提交的字不该翻页头旧账；在途/失败期 handler 先清 ''，
+             ctx 行自动隐（v-if 有词才渲） -->
         <PlaylistGrid
           v-else-if="centerView === 'search'"
           :results="searchResults"
           :songs="searchSongResults"
-          :query="searchQuery"
+          :query="searchSongQuery"
+          :search-source="searchSource"
           :song-total="searchSongTotal"
           :song-has-more="searchSongHasMore"
           :song-loading-more="searchSongLoadingMore"
@@ -188,6 +194,7 @@
       :play-mode-text="getPlayModeText()"
       :shuffle-on="shuffleOn"
       :autoplay-on="autoplayOn"
+      :watch-open="centerView === 'watch'"
       @toggle-play="togglePlay"
       @previous="previousSong"
       @next="nextSong"
@@ -196,7 +203,7 @@
       @toggle-mute="toggleMute"
       @toggle-play-mode="togglePlayMode"
       @toggle-shuffle="toggleShuffle"
-      @open-watch="openWatchPanel"
+      @open-watch="openWatchOrBack"
       @enter-fullscreen="openFullscreenPlayer"
     />
 
@@ -350,6 +357,10 @@
               @click="songPickerSearch"
             ><PixelIcon name="search" :size="12" /> {{ songPickerSearching ? '…' : '搜索' }}</button>
           </div>
+          <!-- 前缀语法指路行：netease:/qq:/yt:/bili: 是隐性语法，
+               只写进 placeholder 用户看不见——mono 微标签钉在输入框正下方
+               （样式见底部 scoped：asp-search 的底发丝线让位给本行） -->
+          <p class="pg-label pg-label--dim asp-hint">支持粘贴各源链接；netease: / qq: / yt: / bili: 前缀指定源</p>
           <div class="atp-list" role="list" aria-label="搜索结果">
             <!-- 「从 0 新建」入口：上传音频/视频/歌词/封面组成本地 file_ 曲，
                  与搜歌并列是点歌台的第二条进曲通道 -->
@@ -910,7 +921,7 @@ export default {
     const {
       centerView, sidebarOpen, searching,
       searchResults, searchSongResults,
-      searchSongTotal, searchSongHasMore, searchSongLoadingMore,
+      searchSongQuery, searchSongTotal, searchSongHasMore, searchSongLoadingMore, searchSource,
       applyUrlNav, normalizeNavEntry,
       navHome, closeSearchView, toggleCenterView, toggleSettings, watchBack,
       downloadsPl, downloadsPlSeq, openDownloadsForPlaylist, clearDownloadsPl,
@@ -931,6 +942,15 @@ export default {
       playSongFromRelated: (s, l) => playSongFromRelated(s, l),
       playPlaylist: (sh) => playPlaylist(sh),
     })
+
+    // 底栏 ☰/队列入口的双态（@open-watch 唯一落点）：watch 页内点 =
+    // 「返回」上一视图（watchBack 走站内历史回放）；页外 = 开 watch
+    // 对应 tab。openWatchPanel 自带的「watch 内同 tab 再点→返回」只认
+    // tab 键开合——底栏这键是导航键，两处语义不等价，这里显式按视图分派
+    const openWatchOrBack = (tab) => {
+      if (centerView.value === 'watch') watchBack()
+      else openWatchPanel(tab)
+    }
 
     // Watch 沉浸舞台令牌层（style.css :root[data-stage="watch"]）：挂在
     // <html> 上才能让 teleport 到 body 的菜单/对话框/toast 同走舞台令牌；
@@ -1359,9 +1379,11 @@ export default {
       autoplayOn,
       searching,
       searchSongResults,
+      searchSongQuery,
       searchSongTotal,
       searchSongHasMore,
       searchSongLoadingMore,
+      searchSource,
       loadMoreSearchSongs,
       playlistDownloadsRefreshKey,
       shuffleOn,
@@ -1413,6 +1435,7 @@ export default {
       clearQueue,
       saveQueueAsPlaylist,
       openWatchPanel,
+      openWatchOrBack,
       openWatchSong,
       openWatchSearchSong,
       openWatchRecent,
@@ -1476,3 +1499,15 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+/* 点歌台「前缀指路行」：归入搜索区——全局 .asp-search 的底发丝线
+   让位给本行底缘，不然搜索行与指路行之间横一条线把「注释关系」
+   切断。pg-label--dim 供 12px/mono/淡墨，这里只管盒距与折行 */
+.asp-search { border-bottom: none; }
+.asp-hint {
+  padding: 6px 10px 8px;
+  border-bottom: var(--hairline-soft);
+  line-height: 1.5; /* pg-label 的 1 倍行高经不起 380px 窄窗折行 */
+}
+</style>

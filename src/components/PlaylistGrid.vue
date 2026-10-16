@@ -6,6 +6,10 @@
       <div class="grid-head-text">
         <p class="pg-label">search results</p>
         <h2 class="grid-title" data-nosnippet><GlitchText text="搜索结果" /></h2>
+        <!-- 上下文行：「"词" · 源名」——多源时代结果页要自报口径，
+             不然切源重搜后用户分不清眼前是哪一库的产物。
+             query/source 任一缺席即无完整语境，整行不渲 -->
+        <p v-if="query && sourceName" class="pg-label pg-label--dim grid-head-ctx">“{{ query }}” · {{ sourceName }}</p>
       </div>
       <button class="pg-icobtn" @click="$emit('close')" title="返回首页" aria-label="返回首页"><PixelIcon name="close" :size="16" /></button>
     </header>
@@ -48,18 +52,29 @@
               <span class="song-result-index-num">{{ songStartIndex + i + 1 }}</span>
               <span class="song-result-index-play"><PixelIcon name="play" :size="16" /></span>
             </span>
+            <!-- 封面是紧邻歌名的装饰图：alt 置空防 SR 把歌名报两遍；
+                 @error 按曲 id 记进 failedThumbs——裂图直接落音符占位，
+                 同曲不再反复重发必 404 的请求 -->
             <img
-              v-if="songThumbUrl(song, 96)"
-              :src="httpsCover(songThumbUrl(song, 96))"
-              :alt="song.name"
+              v-if="pagedSongThumbs[i] && !failedThumbs.has(String(song.id))"
+              :src="httpsCover(pagedSongThumbs[i])"
+              alt=""
               class="song-result-cover"
               loading="lazy"
               decoding="async"
+              @error="failedThumbs.add(String(song.id))"
             />
             <div v-else class="song-result-cover song-result-cover--fallback"><PixelIcon name="note" :size="16" /></div>
             <div class="song-result-info">
-              <p class="song-result-name">{{ song.name }}</p>
-              <p class="song-result-meta">{{ songArtist(song) }}<template v-if="songAlbum(song)"> · {{ songAlbum(song) }}</template></p>
+              <!-- 歌名行：标题+来源角标同一 flex 行——name 收缩截断、
+                   tag（B站/YouTube/QQ音乐/本地上传）恒完整钉在右缘内侧 -->
+              <div class="song-result-title">
+                <p class="song-result-name">{{ song.name }}</p>
+                <span v-if="songSource(song)" class="pg-chip pg-chip--static song-result-tag">{{ songSource(song) }}</span>
+              </div>
+              <!-- 副行去重：songMeta 在专辑名=歌名时省略专辑段
+                   （外源曲库常把标题回填成专辑名，复读一遍是噪声） -->
+              <p class="song-result-meta">{{ songMeta(song) }}</p>
             </div>
             <span class="song-result-duration">{{ formatSongDuration(song) }}</span>
           </div>
@@ -152,6 +167,12 @@
         >加载更多 · {{ gridRendered }} / {{ results.length }}</button>
       </section>
 
+      <!-- 单腿源（yt/bili 本无歌单搜索腿）有曲无单时给指路行——
+           空区沉默会被读成漏抓；整单导入入口在顶栏搜索框（粘链接） -->
+      <p v-else-if="showPlaylistHint" class="pg-label pg-label--dim grid-hint">
+        该源结果不含歌单——整单导入请把歌单链接粘到顶部搜索框
+      </p>
+
       <div class="grid-foot">
         <span class="pg-label pg-label--dim">{{ songs.length }} songs · {{ results.length }} playlists</span>
       </div>
@@ -160,14 +181,15 @@
 </template>
 
 <script>
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { usePagedList } from '../composables/usePagedList.js'
 import { useVirtualList } from '../composables/useVirtualList.js'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
 import { shareOrCopy, playlistShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
-import { songCoverUrl, songThumbUrl, coverSizeUrl } from '../lib/song'
+import { songCoverUrl, songThumbUrl, coverSizeUrl, songSource } from '../lib/song'
+import { SEARCH_SOURCES } from '../lib/prefs.js'
 import { formatTime } from '../lib/format'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
@@ -187,6 +209,13 @@ export default {
     },
     // 当前搜索词——滚动记忆键的身份段：换词重挂不还旧词的位置
     query: {
+      type: String,
+      default: ''
+    },
+    // 服务源戳（useSearchNav.searchSource）：哪个搜索 handler 立案记的
+    // 哪个源——页头「"词" · 源名」与单腿源歌单 hint 都吃它；不读
+    // prefSearchSource——搜完再切源会把旧结果误报成新源产物
+    searchSource: {
       type: String,
       default: ''
     },
@@ -276,6 +305,38 @@ export default {
 
     const songAlbum = (song) => song.al?.name || song.album?.name || ''
 
+    // 副行去重：外源曲库常把标题回填成专辑名（yt/bili 无专辑概念，
+    // build*Song 拿 title/songName 填 al.name）——「艺人 · 同名专辑」
+    // 是复读；归一两侧再比：NFKC 折全角/兼容形 + 连空白塌单空格 +
+    // 大小写不敏感（外源回填常夹全角空格/ＡＢＣ兼容形，裸 trim+lower 挡不住）
+    const metaNorm = (s) =>
+      String(s ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
+    const songMeta = (song) => {
+      const artist = songArtist(song)
+      const album = songAlbum(song)
+      if (album && metaNorm(album) === metaNorm(song?.name)) {
+        return artist
+      }
+      return album ? `${artist} · ${album}` : artist
+    }
+
+    // 裂图登记（按曲 id 不按行键 id#n）：滑窗序号随深挖追加/回卷漂移，
+    // 行键会换；同 id 两行共享一份登记恰是去重目的——封面 URL 本就同一个，
+    // 一处裂图全行落音符占位。img @error 后该行永久落占位——同键不反复
+    // 重发请求；新搜索换批（id 集全换）旧登记自然够不着新行，无需主动清
+    const failedThumbs = reactive(new Set())
+
+    // 页头源名：源 id 经 SEARCH_SOURCES 映全名；未知/缺席 = 无源语境
+    // （id 预览等非搜索入口进的结果页），页头上下文行不渲
+    const sourceName = computed(() =>
+      SEARCH_SOURCES.find(s => s.id === props.searchSource)?.name || '')
+
+    // 单腿源指路行：yt/bili 的搜索本就没有歌单腿——有曲无单时明示
+    // 「源口径如此」并指路整单导入，别把空区读成漏抓/加载坏
+    const showPlaylistHint = computed(() =>
+      props.songs.length > 0 && props.results.length === 0
+      && (props.searchSource === 'yt' || props.searchSource === 'bili'))
+
     const formatSongDuration = (song) => formatTime((song.dt || song.duration || 0) / 1000)
 
     // 深挖键文案：total 源带「n / total」进度；YT 无总数只报已载数
@@ -325,6 +386,12 @@ export default {
       })
     })
 
+    // 行封面缩略图：与 pagedSongKeys 同构的并行 computed——模板里
+    // v-if/:src 两处消费同一值，收进数组一处求值（滑窗重算时按行序对齐），
+    // 空 URL 归一成 '' 让 v-if 直接判真
+    const pagedSongThumbs = computed(() =>
+      pagedSongs.value.map(s => songThumbUrl(s, 96) || ''))
+
     // 离场滚动记忆：搜索结果数据在 nav 层不丢，丢的是滚动位与卡片窗——
     // 重挂先把卡片前缀窗物化回深度再还 scrollTop（曲列 spacer 天然全高）。
     // 键编查询词：别处（watch 页顶栏）发起的新搜索重挂本组件时，旧词位置
@@ -356,6 +423,11 @@ export default {
       sharePlaylist,
       songArtist,
       songAlbum,
+      songMeta,
+      songSource,
+      failedThumbs,
+      sourceName,
+      showPlaylistHint,
       formatSongDuration,
       songMoreLabel,
       wrapEl,
@@ -366,6 +438,7 @@ export default {
       bindSentinel,
       pagedSongs,
       pagedSongKeys,
+      pagedSongThumbs,
       songStartIndex,
       songTopPad,
       songBottomPad,
@@ -412,6 +485,15 @@ export default {
   font-weight: 700;
   line-height: 1.15;
   color: var(--ink);
+}
+
+/* 页头上下文行（"词" · 源名）：贴标题下缘的次级注脚——
+   pg-label--dim 供 12px/mono/淡墨，这里只管间距与防溢出 */
+.grid-head-ctx {
+  margin-top: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .grid-state {
@@ -527,6 +609,16 @@ export default {
   min-width: 0;
 }
 
+/* 歌名行 flex：name 项重获省略语义须先松 min-width:auto 闸（flex
+   项默认不肯缩到内容宽以下）；tag 恒完整不缩 */
+.song-result-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.song-result-title .song-result-name { min-width: 0; }
+
 .song-result-name {
   font-size: 13px;
   font-weight: 500;
@@ -534,6 +626,15 @@ export default {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 来源角标：chip 皮缩到 20px/11px 档——行内戳记不该与 24px 控件档同高
+   （行高 56 虚拟滚动恒定，戳记超档会顶破行距假设） */
+.song-result-tag {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  flex-shrink: 0;
 }
 
 .song-result-meta {
@@ -595,6 +696,14 @@ export default {
 
 .grid-share {
   flex-shrink: 0;
+}
+
+/* 单腿源无歌单腿的指路行：与分区同发丝起头，占位在歌单 section 原位 */
+.grid-hint {
+  border-top: var(--hairline-soft);
+  padding: 12px 0;
+  margin-bottom: 26px;
+  line-height: 1.6; /* pg-label 的 1 倍行高经不起窄屏折行 */
 }
 
 .grid-foot {

@@ -98,7 +98,9 @@
           :aria-expanded="srcMenuOpen"
           aria-controls="topnav-src-menu"
           @click="toggleSrcMenu"
-        ><PixelIcon name="broadcast" :size="18" /></button>
+        ><PixelIcon name="broadcast" :size="18" /><span
+          class="topnav-src-tag" aria-hidden="true"
+        >{{ srcShort }}</span></button>
         <Teleport to="body">
           <div
             v-if="srcMenuOpen"
@@ -136,6 +138,7 @@
           class="pg-icobtn pg-icobtn--bare topnav-search-btn"
           aria-label="搜索"
           title="搜索"
+          :disabled="sidebarOpen"
           :aria-expanded="searchOpen"
           aria-controls="topnav-search"
           @click="openSearch"
@@ -183,12 +186,16 @@
               @click="closeMenu()"
               @auxclick="closeMenu()"
             >控制器</a>
+            <!-- remote 未启用指路改双行中文：「状态 + 启用法」一格说完——
+                 原 remote: off 英文裸值对中文界面用户是死文案（只报状态
+                 不说怎么办）；第二行压 10px 注脚档不入菜单正文层级 -->
             <div
               v-else-if="remoteMode === 'off'"
               class="pg-menu-head topnav-menu-remote"
               role="presentation"
               title="添加 ?mode=host 启用远程控制"
-            >remote: off</div>
+            ><span class="topnav-menu-remote-line">远程控制 · 未启用</span>
+            <span class="topnav-menu-remote-note">地址栏加 ?mode=host 启用</span></div>
 
             <div role="group" aria-label="主题">
               <div class="pg-menu-head" role="presentation">主题</div>
@@ -239,6 +246,9 @@ export default {
       type: String,
       default: ''
     },
+    // 侧栏抽屉态：喂汉堡键 aria-expanded + ≤768 搜索键禁用闸——
+    // sidebar-scrim/抽屉层序压在顶栏（z-topnav）之上，遮罩下的
+    // 搜索展开层开了也看不见，宁可禁点不留视觉死开关
     sidebarOpen: {
       type: Boolean,
       default: false
@@ -248,6 +258,12 @@ export default {
       default: 'off'
     },
     isSettingsView: {
+      type: Boolean,
+      default: false
+    },
+    // 「当前屏是结果页」戳：切源要不要原地重搜只认它——页外切源只调
+    // 偏好不打扰当前视图（watch/歌单均无「重搜」语义可消费）
+    isSearchView: {
       type: Boolean,
       default: false
     }
@@ -267,9 +283,12 @@ export default {
     }
 
     // B 站输入识别先收口到 lib/url（点歌框与顶栏同一条判定，防两处漂移）
-    // 搜索或直接按ID/URL加载歌单
-    const handleSearch = () => {
-      const query = props.searchQuery.trim()
+    // 搜索或直接按ID/URL加载歌单。
+    // queryOverride：pickSource 的剥壳重搜把裸词塞进来——props.searchQuery 是
+    // 父级 v-model，emit('update:searchQuery') 后本轮读不到新值；而模板
+    // @click 直绑会把 MouseEvent 塞进形参——非串一律回落 prop
+    const handleSearch = (queryOverride) => {
+      const query = (typeof queryOverride === 'string' ? queryOverride : props.searchQuery).trim()
       if (!query) return
       // 提交即废弃建议——否则在途 fetch 回包会把已关的下拉重新顶开遮挡结果
       cancelSuggest()
@@ -533,6 +552,9 @@ export default {
     const searchBtn = ref(null)
 
     const openSearch = () => {
+      // 抽屉开着时遮罩盖住整条顶栏——展开层开了也看不见还偷焦点；
+      // 钮上 :disabled 挡点击，本闸挡 focusSearch 的键盘/程序路径（双保险）
+      if (props.sidebarOpen) return
       searchOpen.value = true
       // 层在 v-if/class 翻转后才挂载可见——nextTick 接焦
       nextTick(() => searchInput.value?.focus())
@@ -615,7 +637,8 @@ export default {
         + (props.remoteMode === 'host' || props.remoteMode === 'off' ? 1 : 0)
         + 1 + THEMES.length
         + (authState.enabled && authState.authenticated ? 1 : 0)
-      const h = rows * 39 + 8
+      // remote 指路格是双行块（状态+注脚）——比单行 head 多占 ~14px
+      const h = rows * 39 + 8 + (props.remoteMode === 'off' ? 14 : 0)
       menuPos.value = {
         top: (rect.bottom + 4 + h <= window.innerHeight
           ? rect.bottom + 4 : Math.max(8, rect.top - h - 4)) + 'px',
@@ -652,6 +675,10 @@ export default {
     // 这里再兜底 '网易云' 是同口径双保险（查表 miss 不裸显 id）
     const srcName = computed(() =>
       SEARCH_SOURCES.find(s => s.id === prefSearchSource.value)?.name || '网易云')
+    // 钮上徽牌用源短标：顶栏寸土塞不下全名（「网易云」3字就把 32px 钮撑成
+    // 异形宽键），短记号一眼可辨；读屏走 aria-label 的全名不受影响
+    const SRC_SHORT = { netease: '163', qq: 'QQ', yt: 'YT', bili: 'B站' }
+    const srcShort = computed(() => SRC_SHORT[prefSearchSource.value] || '')
 
     const toggleSrcMenu = () => {
       if (srcMenuOpen.value) { closeSrcMenu(); return }
@@ -684,7 +711,32 @@ export default {
     }
 
     // 切源没有「下一跳」接管焦点——与 pickTheme 同为解散语义，归还触发键
-    const pickSource = (id) => { prefSearchSource.value = id; closeSrcMenu(true) }
+    const pickSource = (id) => {
+      // 同源点选=无变化：偏好没变就没有「重搜」语义，重发只会拿同词同源
+      // 再烧一遍上游——先记差再落定
+      const changed = id !== prefSearchSource.value
+      prefSearchSource.value = id // 先落定偏好——handleSearch 分派读到的是新源
+      closeSrcMenu(true)
+      // 结果页上切源=按新源原地重搜（「换源不换屏」的直觉兑现）；
+      // 页外切源只调偏好不打扰当前屏，空词无「重搜」语义同样不触发。
+      // handleSearch 自带 cancelSuggest+closeSearch 清空链，不用重复收
+      if (!changed || !props.isSearchView) return
+      const raw = props.searchQuery.trim()
+      if (!raw) return
+      // 前缀词剥壳重搜：'qq:晴天' 直走 handleSearch 会命中前缀分支仍搜旧源
+      // =空转——先把框词同步剥壳，再对裸词重跑整条分派（无前缀裸词落底部
+      // 整串判别→'search' emit 按新偏好分派；裸词自带的链接形态照旧直达）。
+      // 前缀表与 handleSearch 各分支/useAddToPlaylist 同口径（含 163/wy
+      // 同义别名与全角冒号），无共享常量故内联
+      if (/^(?:bili|netease|163|wy|qq|yt)[:：]/i.test(raw)) {
+        const bare = raw.replace(/^(?:bili|netease|163|wy|qq|yt)[:：]/i, '').trim()
+        emit('update:searchQuery', bare)
+        // 空壳前缀（'qq:'）剥完无词可搜——与 handleSearch 空载早退同口径
+        if (bare) handleSearch(bare)
+        return
+      }
+      handleSearch()
+    }
 
     // pointerdown 先于 click 且不受 @click.stop 影响——豁免菜单本体与触发键
     const onDocPointerDown = (e) => {
@@ -782,6 +834,7 @@ export default {
       SEARCH_SOURCES,
       prefSearchSource,
       srcName,
+      srcShort,
       srcBtn,
       srcMenuOpen,
       srcMenuPos,
@@ -800,6 +853,13 @@ export default {
   /* ≤768 搜索展开层 absolute inset:0 锚此（锚 inner 会被 max-width 帽
      缩出两侧露底） */
   position: relative;
+  /* 显式层序 --z-topnav（style.css :root 令牌，fallback 20 保底令牌缺席期）：
+     watch 舞台的 backdrop-filter 让顶栏自成堆叠上下文，z-index:auto 时顶栏
+     与后渲染的 .app-body 各归一层——watch 主区溢出元素会把建议下拉压在底下。
+     给 20 顶栏恒在主区之上；侧栏抽屉组（scrim 950/抽屉 1000）仍压在它之上，
+     配套闸是搜索键的 sidebarOpen 禁用（菜单级层序归 teleport 出去的
+     --z-menu 管线，不受此值限幅） */
+  z-index: var(--z-topnav, 20);
   /* 横屏刘海侧让位：viewport-fit=cover 下左缘 ~47px 死区 */
   padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
   border-bottom: var(--hairline);
@@ -901,7 +961,17 @@ export default {
 
 /* 源切换钮：跟在字段后吃 .topnav-search 的 8px gap——中列收紧时
    字段先收（max-width:100%）；钮不被压变形的 flex-shrink:0 由
-   .pg-icobtn 基类供给，此档不重复声明 */
+   .pg-icobtn 基类供给，此档不重复声明。
+   徽牌入钮后定宽 32 装不下「图标+短标」——放宽到内容宽（≤768
+   展开层里字段 flex:1 会让位，钮不会被顶出展开行） */
+.topnav-src-btn { width: auto; padding: 0 7px; gap: 3px; }
+.topnav-src-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: var(--ink-64); /* 徽牌弱于钮内图标墨色——识别靠记号不靠抢眼 */
+  white-space: nowrap;
+}
 
 /* 尾注是菜单最后一格：pg-menu-head 的默认底发丝会与菜单自身边框
    叠出双线——翻面由上一项的 border-bottom 分隔，底边削掉 */
@@ -1028,6 +1098,15 @@ export default {
 /* ⋯ 菜单：fixed 定位由 :style 给出（右缘对齐触发键）；
    remote 提示沿用 pg-menu-head 的 mono 小字档 */
 .topnav-menu-remote { cursor: default; }
+/* remote 指路格双行化：pg-menu-head 的 nowrap/ellipsis 是单行预设，
+   状态行+注脚行各自块排；注脚 10px 压半档（同族 .topnav-src-tag 尺寸） */
+.topnav-menu-remote-line,
+.topnav-menu-remote-note { display: block; white-space: normal; }
+.topnav-menu-remote-note {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--ink-64);
+}
 
 /* 主题组与后续项的分隔：组内末项命中 .pg-menu-item:last-child 无底线，
    组后还有项时由组级发丝线补上（无后续项则不画，末缘不叠双线） */

@@ -9,6 +9,7 @@ import {
   isSongmidLike, extractNeteaseSongId, YT_ID_RE,
 } from '../lib/url.js'
 import { buildBilibiliSong, buildYouTubeSong, buildQQSong } from '../lib/external-songs.js'
+import { prefSearchSource } from '../lib/prefs.js'
 
 // 「加入歌单」域：atp 弹窗（把指定曲加进某单）与点歌台弹窗（往当前单搜/粘曲）
 // 两弹窗显式互斥（openAddToPlaylist 关 picker、openSongPicker 清 addTargetSong）
@@ -477,6 +478,39 @@ export function useAddToPlaylist({
         const song = await musicApi.getSongDetail(songId)
         if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
         await resolveToPickedSong(song)
+        return
+      }
+      // ── 裸关键词按「搜索源」偏好分派（顶栏 useSearchNav.handleSearch
+      // 同口径）──：偏好切到 qq/yt/bili 时，点歌台裸词也走对应曲库——
+      // 用户切了源这里却恒回网易云是两入口口径漂移。显式前缀/链接形态
+      // 已在上方拦截，到这里的只剩无前缀关键词；AbortController 与
+      // mySeq/isCurrent/songPickerOpen 闸纪律照抄前缀分支同形
+      const src = prefSearchSource.value
+      if (src === 'qq') {
+        action = 'QQ 搜索'
+        if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
+        const { songs: qqList } = await musicApi.searchQQSongs(q, { signal: pickerAbort.signal })
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+        songPickerResults.value = (qqList || []).map(buildQQSong)
+        if (!songPickerResults.value.length) toast('QQ 音乐没有找到相关歌曲', 'info')
+        return
+      }
+      if (src === 'yt') {
+        action = 'YouTube 搜索'
+        if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
+        const { items: ytList } = await musicApi.searchYouTubeSongs(q, { signal: pickerAbort.signal })
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+        songPickerResults.value = (ytList || []).map(buildYouTubeSong)
+        if (!songPickerResults.value.length) toast('YouTube 没有找到相关歌曲', 'info')
+        return
+      }
+      if (src === 'bili') {
+        action = 'B 站搜索'
+        if (!pickerAbort || pickerAbort.signal.aborted) pickerAbort = new AbortController()
+        const { items: biliList } = await musicApi.searchBiliSongs(q, { signal: pickerAbort.signal })
+        if (!gates.picker.isCurrent(mySeq) || !songPickerOpen.value) return
+        songPickerResults.value = (biliList || []).map(buildBilibiliSong)
+        if (!songPickerResults.value.length) toast('B 站没有找到相关歌曲', 'info')
         return
       }
       const list = await musicApi.searchSongs(q, 30)
