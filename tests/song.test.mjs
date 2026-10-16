@@ -21,24 +21,27 @@ const BV = { id: 'bv_BV1xx411c7mD_p2', name: 'B站曲', bilibili: { bvid: 'BV1xx
 const YT = { id: 'yt_dQw4w9WgXcQ', name: 'YT曲', youtube: { videoId: 'dQw4w9WgXcQ', authorClean: 'Rick' } }
 const QQ = { id: 'qq_004abc123def', name: 'QQ曲', qq: { mid: '004abc123def' } }
 
-test('songSource：五形态标签 + 无对象 file_ 兜底（崩溃钉——曾 ReferenceError）', () => {
-  assert.equal(songSource(NE), null)                  // 无 provider 对象——触达 isFileTrackId 分支
+test('songSource：五形态标签 + 裸 id 前缀兜底（崩溃钉——曾 ReferenceError）', () => {
+  assert.equal(songSource(NE), null)                  // 纯数字网易云 id 不归名——主流曲无导入来源语义
   assert.equal(songSource(FILE_OBJ), '本地上传')       // .file 短路
   assert.equal(songSource(FILE_NO_OBJ), '本地上传')    // id 兜底——镜像投影无 .file 的落点
   assert.equal(songSource(BV), 'B站')
   assert.equal(songSource(YT), 'YouTube')
   assert.equal(songSource(QQ), 'QQ音乐')
-  // 口径钉死：bv_/yt_/qq_ 无 provider 对象不出徽标（对象即凭据——与
-  // songSourceName 的 id 兜底刻意不同，改语义要先改这里）
-  assert.equal(songSource({ id: 'bv_BV1xx411c7mD' }), null)
-  assert.equal(songSource({ id: 'yt_dQw4w9WgXcQ' }), null)
-  assert.equal(songSource({ id: 'qq_004abc123def' }), null)
+  // 裸 id 前缀兜底与 songSourceName 同口径：bv_/yt_/qq_ 无 provider 对象的
+  // 历史持久化行也出徽标（SongList .song-tag/队列 .queue-src 同享此收口）
+  assert.equal(songSource({ id: 'bv_BV1xx411c7mD' }), 'B站')
+  assert.equal(songSource({ id: 'bv_BV1xx411c7mD_p3' }), 'B站') // 分 p 形态同命中
+  assert.equal(songSource({ id: 'yt_dQw4w9WgXcQ' }), 'YouTube')
+  assert.equal(songSource({ id: 'qq_004abc123def' }), 'QQ音乐')
+  assert.equal(songSource({ id: '347230' }), null)   // 纯数字仍不出徽标
+  assert.equal(songSource({ id: 'x_garbage' }), null)
 })
 
 test('songSourceName：对象优先/id 兜底双通道与网易云归名', () => {
   assert.equal(songSourceName(NE), '网易云')
   assert.equal(songSourceName(FILE_NO_OBJ), '本地上传')
-  assert.equal(songSourceName({ id: 'bv_BV1xx411c7mD' }), 'B站')    // id 兜底（与 songSource 的分化点）
+  assert.equal(songSourceName({ id: 'bv_BV1xx411c7mD' }), 'B站')    // id 兜底（与 songSource 同口径）
   assert.equal(songSourceName({ id: 'yt_dQw4w9WgXcQ' }), 'YouTube')
   assert.equal(songSourceName({ id: 'qq_004abc123def' }), 'QQ音乐')
   assert.equal(songSourceName(BV), 'B站')

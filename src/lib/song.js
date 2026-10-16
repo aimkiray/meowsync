@@ -352,11 +352,17 @@ export function isUgcExternalTrack(song) {
     || BV_TRACK_ID_RE.test(String(song?.id)) || YT_TRACK_ID_RE.test(String(song?.id))
 }
 
-/** 导入来源标签：youtube/bilibili/qq/file 字段即持久化的来源凭据（行内小牌用） */
+/**
+ * 导入来源标签（行内小牌用）：provider 对象优先、本站轨道 id 前缀兜底——
+ * 与 songSourceName 同口径（镜像投影/旧持久化行可能缺 provider 对象但 id
+ * 仍在；file_ 已由 isFileTrackId 兜）。网易云数字 id 不归名——主流曲无
+ * 导入来源语义，不出徽标
+ */
 export function songSource(song) {
-  if (song?.bilibili) return 'B站'
-  if (song?.youtube) return 'YouTube'
-  if (song?.qq) return 'QQ音乐'
+  const id = String(song?.id ?? '')
+  if (song?.bilibili || BV_TRACK_ID_RE.test(id)) return 'B站'
+  if (song?.youtube || YT_TRACK_ID_RE.test(id)) return 'YouTube'
+  if (song?.qq || QQ_SONG_ID_RE.test(id)) return 'QQ音乐'
   if (song?.file || isFileTrackId(song?.id)) return '本地上传'
   return null
 }
