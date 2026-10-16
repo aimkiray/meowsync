@@ -5,6 +5,9 @@ const downloadQueuesRepo = require('../repositories/downloadQueues');
 const playlistTracksRepo = require('../repositories/playlistTracks');
 const playlistsRepo = require('../repositories/playlists');
 const { importPlaylistFromNetease } = require('./playlist-sync');
+// 远端单 localDelta 落库用的逐曲白名单消毒——与 /downloads/local/mirror
+// 镜像路由共用同一份（local-mirror 不回 require 本模块，无环）
+const { sanitizeMirrorTracks } = require('./local-mirror');
 const fileDownloader = require('./file-downloader');
 // 手动重试 = hard retry：负状态清理由 netease-api 聚合出口收口。
 // 无环依赖——netease-api 不依赖本模块，file-downloader 本已把它拉进图谱
@@ -126,8 +129,38 @@ function deriveCoverUrl(album) {
 // 防路径逃逸：任务记录的文件路径来自 DB，只允许删除 DOWNLOAD_BASE_DIR 内的文件
 // 用 path.relative 判断逃逸（".." 开头或在盘外即越界），比字符串前缀更稳
 
-
-
+// 远端单（纯数字 id）的本地增删面落库：客户端 addedTracks/removedTrackIds
+// 只活在 localStorage，而建队枚举的是服务端 playlist_tracks——不落库则
+// 追加的 yt_/bv_/qq_ 曲静默缺席队列。
+// 对账模型：addedTracks 是本地追加面的权威全集——消毒后逐条 upsert（打
+// local_added=1），再以它剪枝全部缺席的标记行：用户删掉追加曲时客户端
+// 只剪数组不补墓碑，没有这层对账，落库行就成永久幽灵（每次建队重复下）。
+// removedIds 不在这里物理删行——它只做枚举期虚拟过滤（见 createDownloadQueue
+// 的 removedSet）：恢复墓碑曲时客户端只清数组不重进 addedTracks，行被删了
+// 就永远回不来。
+// 必须在 resolvePlaylistId 之后调用：上游导入可能先整表重写曲目（全 0 标），
+// delta 压在它之上才生效；也因此天然幂等——每次建队重放一遍即自愈
+function applyLocalTrackDelta(playlistId, localDelta) {
+  if (!localDelta || typeof localDelta !== 'object') return;
+  // 本地单（local_pl_*/saved_queue_ 镜像，source='local'）跳过：其曲目表由
+  // /downloads/local/mirror 整表重写承载，delta 不插手——否则镜像行会被
+  // 当追加面误标/误剪
+  const playlist = playlistsRepo.findPlaylistById(playlistId);
+  if (!playlist || playlist.source === 'local') return;
+  const added = Array.isArray(localDelta.addedTracks) ? localDelta.addedTracks : [];
+  const db = getDb();
+  db.transaction(() => {
+    // 与镜像路由同一份白名单消毒——非法 id 形态静默弃（skipped 同哲学），
+    // 不 400 整单
+    const { tracks } = sanitizeMirrorTracks(added);
+    for (const track of tracks) {
+      playlistTracksRepo.upsertTrackForPlaylist(playlistId, track);
+    }
+    // 空 added 也是权威信号：「清空到零」必须能扫掉全部标记行——keep 集
+    // 传消毒后的曲目 id（消毒弃件本来也不在合法追加面内）
+    playlistTracksRepo.pruneLocalAddedTracks(playlistId, tracks.map(t => t.id));
+  })();
+}
 
 async function createDownloadQueue(playlistId, options = {}) {
   if (shuttingDown) {
@@ -147,7 +180,21 @@ async function createDownloadQueue(playlistId, options = {}) {
     throw httpError(404, '歌单不存在');
   }
 
-  const tracks = playlistTracksRepo.listTracksByPlaylistId(resolvedPlaylistId);
+  // 本地增删 delta 落库与下方曲目枚举同属一段同步段——中间不许插 await，
+  // 否则枚举可能读到写一半的曲目集
+  applyLocalTrackDelta(resolvedPlaylistId, options.localDelta);
+  // removedIds 是虚拟过滤而非删行：行留着恢复墓碑曲才能回得来（客户端只清
+  // 数组）。过滤先于判空/建队枚举——同 id 同现两键时移除赢（upsert 已把
+  // 最新投影落库，只是本次不入队）。本地单与 applyLocalTrackDelta 同闸：
+  // 镜像曲目由整表重写承载，delta 两键都不插手
+  const removedSet = new Set(
+    (playlist.source === 'local'
+      ? []
+      : Array.isArray(options.localDelta?.removedIds) ? options.localDelta.removedIds : []
+    ).map(String)
+  );
+  const tracks = playlistTracksRepo.listTracksByPlaylistId(resolvedPlaylistId)
+    .filter(t => !removedSet.has(String(t.id)));
   if (tracks.length === 0) {
     throw httpError(400, '歌单中没有歌曲');
   }

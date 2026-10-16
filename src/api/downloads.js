@@ -5,6 +5,80 @@ import http, { API_BASE_URL } from './http.js';
 // DownloadsPanel 的 pollInFlight 标志永久卡住、轮询停摆。单曲下载/任务重试
 // 都是"提交即返回"的异步语义，终态由状态轮询确认——不再需要长超时通道
 
+// 下载链瘦身投影：服务端只消费 id/name/ar/al/dt + provider 定位字段。本地
+// tracks 存的是全量曲对象（~2-3KB/首），原样上载 ~400 首就撞 1MB body
+// 上限；投影后 2000 曲 ≈600KB。整单镜像与远端单 localDelta 共用同一份
+// 投影——语义零差分，服务端消毒口径只有一份真相
+// 字段归一：ar/artists 接受数组或字符串艺人名（非数组的脏数据 .map 即
+// TypeError，整单镜像挂掉）；al/album 接受对象或字符串专辑名——
+// obj?.name 读不到字符串形会把专辑名静默丢掉
+const artistArr = (v) => Array.isArray(v) ? v
+  : (typeof v === 'string' && v.trim() ? [{ name: v.trim() }] : [])
+const albumObj = (v) => typeof v === 'string' ? { name: v.trim() }
+  : (v && typeof v === 'object' ? v : {})
+function projectTrackForDownload(t) {
+  if (!t) return t
+  const al = albumObj(t.al)
+  const album = albumObj(t.album)
+  const ar = artistArr(t.ar)
+  return {
+  id: t.id,
+  name: t.name,
+  // 成员可能是裸字符串（与 lib/song.js slimTrack 同口径）：对象取 name、
+  // 字符串透传——ar:['Jay'] 若只读 a?.name 会产出 {name:undefined} 丢艺人名
+  ar: (ar.length ? ar : artistArr(t.artists)).map(a => ({ name: typeof a === 'object' ? a?.name : a })),
+  al: {
+    name: al.name || album.name || '',
+    picUrl: al.picUrl || album.picUrl || '',
+    // pic_str 是上游专辑对象的双生字段——有些专辑只有它没有 picUrl，
+    // 下载管理器取封面会先试 picUrl 再兜 pic_str，丢了会让封面静默缺失
+    pic_str: al.pic_str || album.pic_str || ''
+  },
+  dt: t.dt || t.duration || 0,
+  // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返；
+  // publishedAt 与 bv/yt 同轴入镜（服务端 sigOf/providerData 都吃它）——
+  // 缺席/非有限正数不出键，既有投影面零扰动
+  ...(t.qq?.mediaMid ? { qq: {
+    mediaMid: t.qq.mediaMid,
+    ...(Number.isFinite(t.qq.publishedAt) && t.qq.publishedAt > 0
+      ? { publishedAt: t.qq.publishedAt } : {}),
+  } } : {}),
+  // bv_/yt_ 曲的自有源流定位 + neteaseId 词源 + title/author——歌词
+  // 归属核验的 verdict 签名靠来源标题/作者；缺了也能按 id 前缀自愈
+  // 重解（cid 会多一次 view 往返、歌词段拿不到词源），带上更省。
+  // 截断收口在服务端单边做，这里原样透传
+  ...(t.bilibili?.bvid ? { bilibili: {
+    bvid: t.bilibili.bvid, cid: t.bilibili.cid, page: t.bilibili.page,
+    title: t.bilibili.title, author: t.bilibili.author,
+    // 源稿发布日（epoch ms）入镜——服务端 sigOf 吃它做镜像签名；
+    // 缺席/非有限正数不出键，既有深等于投影面零扰动
+    ...(Number.isFinite(t.bilibili.publishedAt) && t.bilibili.publishedAt > 0
+      ? { publishedAt: t.bilibili.publishedAt } : {})
+  } } : {}),
+  ...(t.youtube?.videoId ? { youtube: {
+    videoId: t.youtube.videoId,
+    title: t.youtube.title, author: t.youtube.author,
+    ...(Number.isFinite(t.youtube.publishedAt) && t.youtube.publishedAt > 0
+      ? { publishedAt: t.youtube.publishedAt } : {})
+  } } : {}),
+  ...(t.neteaseId ? { neteaseId: t.neteaseId } : {})
+  }
+}
+
+// 远端单（纯数字 id）的本地增删面：addedTracks 走同一份瘦身投影上载，
+// removedIds 是墓碑 id 集（持久化层可能混数字形，归一成串——服务端 schema
+// 只收 string）。local_pl_ 本地单由镜像整体承载，不重复发这个键。
+// 发送前按 schema 上限截尾（added 500 / removed 2000，与镜像 2000 截断同
+// 哲学）——超限静默截尾而不是整单撞上体量硬边界吃 400
+const projectLocalDelta = (delta) => delta ? {
+  localDelta: {
+    addedTracks: (Array.isArray(delta.addedTracks) ? delta.addedTracks : [])
+      .map(projectTrackForDownload).slice(0, 500),
+    removedIds: (Array.isArray(delta.removedIds) ? delta.removedIds : [])
+      .map(String).slice(0, 2000)
+  }
+} : {}
+
 export const downloadsApi = {
   createQueue: (playlistId, options = {}) => {
     // 歌单未导入时服务端会先走两次上游往返（detail+tracks），慢网可超默认 10s——
@@ -16,7 +90,8 @@ export const downloadsApi = {
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
       downloadVideo: options.downloadVideo === true,
-      concurrentLimit: options.concurrentLimit || 3
+      concurrentLimit: options.concurrentLimit || 3,
+      ...projectLocalDelta(options.localDelta)
     }, { timeout: 60000 });
   },
 
@@ -127,64 +202,7 @@ export const downloadsApi = {
   // 的曲目数（网易云数字、qq_/bv_/yt_ 前缀之外的不明 id 形态）；
   // truncated = 投影超服务端上限被截断时置真
   mirrorLocalPlaylist: (playlist) => {
-    // 瘦身投影：服务端只消费 id/name/ar/al/dt + provider 定位字段。本地
-    // tracks 存的是全量曲对象（~2-3KB/首），原样上载 ~400 首就撞 1MB body
-    // 上限；投影后 2000 曲 ≈600KB
-    // 字段归一：ar/artists 接受数组或字符串艺人名（非数组的脏数据 .map 即
-    // TypeError，整单镜像挂掉）；al/album 接受对象或字符串专辑名——
-    // obj?.name 读不到字符串形会把专辑名静默丢掉
-    const artistArr = (v) => Array.isArray(v) ? v
-      : (typeof v === 'string' && v.trim() ? [{ name: v.trim() }] : [])
-    const albumObj = (v) => typeof v === 'string' ? { name: v.trim() }
-      : (v && typeof v === 'object' ? v : {})
-    const tracks = (playlist.tracks || []).map(t => {
-      if (!t) return t
-      const al = albumObj(t.al)
-      const album = albumObj(t.album)
-      const ar = artistArr(t.ar)
-      return {
-      id: t.id,
-      name: t.name,
-      // 成员可能是裸字符串（与 lib/song.js slimTrack 同口径）：对象取 name、
-      // 字符串透传——ar:['Jay'] 若只读 a?.name 会产出 {name:undefined} 丢艺人名
-      ar: (ar.length ? ar : artistArr(t.artists)).map(a => ({ name: typeof a === 'object' ? a?.name : a })),
-      al: {
-        name: al.name || album.name || '',
-        picUrl: al.picUrl || album.picUrl || '',
-        // pic_str 是上游专辑对象的双生字段——有些专辑只有它没有 picUrl，
-        // 下载管理器取封面会先试 picUrl 再兜 pic_str，丢了会让封面静默缺失
-        pic_str: al.pic_str || album.pic_str || ''
-      },
-      dt: t.dt || t.duration || 0,
-      // qq mediaMid 是 vkey filename 键——带过去下载链可省一次 detail 回填往返；
-      // publishedAt 与 bv/yt 同轴入镜（服务端 sigOf/providerData 都吃它）——
-      // 缺席/非有限正数不出键，既有投影面零扰动
-      ...(t.qq?.mediaMid ? { qq: {
-        mediaMid: t.qq.mediaMid,
-        ...(Number.isFinite(t.qq.publishedAt) && t.qq.publishedAt > 0
-          ? { publishedAt: t.qq.publishedAt } : {}),
-      } } : {}),
-      // bv_/yt_ 曲的自有源流定位 + neteaseId 词源 + title/author——歌词
-      // 归属核验的 verdict 签名靠来源标题/作者；缺了也能按 id 前缀自愈
-      // 重解（cid 会多一次 view 往返、歌词段拿不到词源），带上更省。
-      // 截断收口在服务端单边做，这里原样透传
-      ...(t.bilibili?.bvid ? { bilibili: {
-        bvid: t.bilibili.bvid, cid: t.bilibili.cid, page: t.bilibili.page,
-        title: t.bilibili.title, author: t.bilibili.author,
-        // 源稿发布日（epoch ms）入镜——服务端 sigOf 吃它做镜像签名；
-        // 缺席/非有限正数不出键，既有深等于投影面零扰动
-        ...(Number.isFinite(t.bilibili.publishedAt) && t.bilibili.publishedAt > 0
-          ? { publishedAt: t.bilibili.publishedAt } : {})
-      } } : {}),
-      ...(t.youtube?.videoId ? { youtube: {
-        videoId: t.youtube.videoId,
-        title: t.youtube.title, author: t.youtube.author,
-        ...(Number.isFinite(t.youtube.publishedAt) && t.youtube.publishedAt > 0
-          ? { publishedAt: t.youtube.publishedAt } : {})
-      } } : {}),
-      ...(t.neteaseId ? { neteaseId: t.neteaseId } : {})
-      }
-    })
+    const tracks = (playlist.tracks || []).map(projectTrackForDownload)
     return http.post(`/downloads/local/mirror`, {
       localId: playlist.id,
       name: playlist.name,
@@ -216,7 +234,8 @@ export const downloadsApi = {
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
       downloadVideo: options.downloadVideo === true,
-      concurrentLimit: options.concurrentLimit || 3
+      concurrentLimit: options.concurrentLimit || 3,
+      ...projectLocalDelta(options.localDelta)
     }, { timeout: 60000 });
   }
 };

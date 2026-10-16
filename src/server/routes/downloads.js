@@ -2,7 +2,7 @@ const { Hono } = require('hono');
 const fs = require('fs');
 const path = require('path');
 const downloadManager = require('../services/download-manager');
-const { mirrorLocalPlaylist } = require('../services/local-mirror');
+const { mirrorLocalPlaylist, sanitizeMirrorTracks } = require('../services/local-mirror');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
 const downloadTasksRepo = require('../repositories/downloadTasks');
 const playlistsRepo = require('../repositories/playlists');
@@ -12,7 +12,7 @@ const { parseJsonBody } = require('../lib/validate');
 const {
   downloadTaskBody, quickDownloadBody, mirrorBody
 } = require('../../shared/contracts.js');
-const { MIRROR_PLAYLIST_ID_RE, parseNumericId, QQ_SONG_ID_RE, SONGMID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, BVID_RE, YT_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
+const { MIRROR_PLAYLIST_ID_RE, parseNumericId } = require('../../shared/predicates.js');
 // 写请求 CSRF 同源闸（与 routes/sync.js 同口径）：本文件全部非 GET/HEAD
 // 端点先过 csrfOriginOk——session 写 authGate 已查，但开放部署（users
 // 空表）与 DOWNLOAD_TOKEN 旁路不经那一道，且 parseJsonBody 不校验
@@ -35,20 +35,9 @@ function parseIdParam(c, name = 'id') {
   return parseNumericId(c.req.param(name));
 }
 
-// 来源侧日期合法性窗（规格要求各文件就地实现同一公式）：
-//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
-//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
-//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
-const sanePublishMs = (v) => {
-  const ms = Number(v);
-  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
-};
-
-
-
 // 队列/单曲下载的可选参数规范化：脏值回落默认，concurrentLimit 限定 1-10
 function normalizeDownloadOptions(body) {
-  const { bitrate, downloadAudio, downloadLyrics, downloadCover, downloadVideo, concurrentLimit } = body;
+  const { bitrate, downloadAudio, downloadLyrics, downloadCover, downloadVideo, concurrentLimit, localDelta } = body;
   return {
     // 网易云端常见码率 128k-999k：越界值静默回落默认（上游要么忽略要么产空文件）
     bitrate: Number.isInteger(bitrate) && bitrate >= 64000 && bitrate <= 999000 ? bitrate : 320000,
@@ -59,7 +48,11 @@ function normalizeDownloadOptions(body) {
     downloadVideo: downloadVideo === true,
     concurrentLimit: Number.isInteger(concurrentLimit)
       ? Math.min(Math.max(concurrentLimit, 1), 10)
-      : 3
+      : 3,
+    // 远端单的本地增删面（addedTracks/removedIds，zod 已过形状与体量）——
+    // 透传给 createDownloadQueue 在枚举曲目前落 playlist_tracks；
+    // 单曲路径不消费它，缺省即 undefined 早退
+    localDelta
   };
 }
 
@@ -531,57 +524,10 @@ app.post('/downloads/local/mirror', async (c) => {
     const allTracks = Array.isArray(body.tracks) ? body.tracks : [];
     if (!allTracks.length) return fail(c, 400, '歌单中没有歌曲');
     // 只留服务端可下载的曲目：网易云数字 id + qq_/bv_/yt_ 自有源前缀；
-    // 其余形态跳过并回传计数让前端提示。
-    // 先过滤后截断：前 2000 个可下载曲进入镜像；skipped=不支持 id，truncated=超上限截尾
-    const numeric = allTracks.filter(t => t && (/^\d+$/.test(String(t.id ?? ''))
-      || QQ_SONG_ID_RE.test(String(t.id ?? ''))
-      || BV_TRACK_ID_RE.test(String(t.id ?? ''))
-      || YT_TRACK_ID_RE.test(String(t.id ?? ''))));
-    const tracks = numeric.slice(0, 2000)
-      .map(t => ({
-        id: String(t.id),
-        name: String(t.name || '未知歌曲').slice(0, 200),
-        // ar 收窄成 {name} 标量组——客户端投影同口径；任意形状对象不该整只落 raw_json
-        ar: (Array.isArray(t.ar || t.artists) ? (t.ar || t.artists) : [])
-          .slice(0, 20)
-          .map(a => ({ name: String(typeof a === 'string' ? a : a?.name ?? '').slice(0, 200) })),
-        al: (t.al && typeof t.al === 'object') ? t.al
-          : (t.album && typeof t.album === 'object') ? t.album : {},
-        dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0),
-        // qq 源私有字段只收 mediaMid（vkey filename 键）+ publishedAt（发行日
-        // 证据——与 bv/yt 同轴，providerData/签名域都吃）——其余下载链用不上；
-        // 形态校验防任意对象进 raw_json
-        ...(t.qq && SONGMID_RE.test(String(t.qq.mediaMid || ''))
-          ? { qq: {
-              mediaMid: String(t.qq.mediaMid),
-              publishedAt: sanePublishMs(t.qq.publishedAt) || null
-            } } : {}),
-        // bv_/yt_ 曲同理只收流定位字段（bvid/cid/page、videoId）+ neteaseId
-        // 词源 + title/author——下载链的歌词归属核验要靠来源标题与作者
-        // 构造 verdict 签名，不整只落 provider 对象
-        ...(t.bilibili && BVID_RE.test(String(t.bilibili.bvid || ''))
-          ? { bilibili: {
-              bvid: String(t.bilibili.bvid),
-              cid: /^\d+$/.test(String(t.bilibili.cid ?? '')) ? String(t.bilibili.cid) : null,
-              page: Math.max(1, parseInt(t.bilibili.page, 10) || 1),
-              title: String(t.bilibili.title || '').slice(0, 300) || null,
-              author: String(t.bilibili.author || '').slice(0, 120) || null,
-              // 发布日（epoch ms）入签名域——缺席/脏值归 null 不落 0 键，
-              // 与 title/author 的缺席归 null 同口径
-              publishedAt: sanePublishMs(t.bilibili.publishedAt) || null
-            } } : {}),
-        ...(t.youtube && YT_ID_RE.test(String(t.youtube.videoId || ''))
-          ? { youtube: {
-              videoId: String(t.youtube.videoId),
-              title: String(t.youtube.title || '').slice(0, 300) || null,
-              author: String(t.youtube.author || '').slice(0, 120) || null,
-              publishedAt: sanePublishMs(t.youtube.publishedAt) || null
-            } } : {}),
-        ...(NETEASE_ID_RE.test(String(t.neteaseId ?? ''))
-          ? { neteaseId: String(t.neteaseId) } : {})
-      }));
-    const skipped = allTracks.length - numeric.length;
-    const truncated = numeric.length - tracks.length;
+    // 其余形态跳过并回传计数让前端提示——逐曲消毒口径收在
+    // services/local-mirror.js（远端单 localDelta 建队共用同一份），
+    // skipped=不支持 id，truncated=超上限截尾
+    const { tracks, skipped, truncated } = sanitizeMirrorTracks(allTracks);
     if (!tracks.length) return fail(c, 400, `没有可下载的歌曲（跳过 ${skipped} 首不支持下载的曲目）`);
     const name = String(body.name || '本地歌单').slice(0, 200);
     // 落库事务收敛在 services/local-mirror.js（upsert+整表替换原子性、

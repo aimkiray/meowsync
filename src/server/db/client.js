@@ -167,6 +167,8 @@ const LEGACY_TABLE_COLUMNS = {
     album_json: 'TEXT',
     duration_ms: 'INTEGER NOT NULL DEFAULT 0',
     position: 'INTEGER NOT NULL DEFAULT 0',
+    // 存量库补列默认 0——历史行全是上游/镜像写入，无一行该被对账扫掉
+    local_added: 'INTEGER NOT NULL DEFAULT 0',
     raw_json: 'TEXT',
     created_at: 'TEXT'
   },
@@ -322,6 +324,10 @@ function initSchema(database) {
       album_json TEXT,
       duration_ms INTEGER NOT NULL DEFAULT 0,
       position INTEGER NOT NULL,
+      -- localDelta 追加行标记：远端单本地增删 upsert 进表的行置 1，
+      -- 上游导入/本地镜像整表重写（replaceTracksForPlaylist）的行恒 0——
+      -- 对账剪枝只扫标记行，绝不错删上游行
+      local_added INTEGER NOT NULL DEFAULT 0,
       raw_json TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
