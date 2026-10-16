@@ -17,7 +17,8 @@
         <p class="playlist-hero-sub">
           {{ selectedPlaylist.creator?.nickname || '神秘创建者' }} · {{ selectedPlaylist.trackCount || songs.length }} 首
         </p>
-        <!-- 主按钮墨块 / 随机、VIP 过滤同为幽灵键；on 态 accent 字 + ✓ 前缀。
+        <!-- 主按钮墨块 / 随机、VIP 过滤同为幽灵键；VIP on 态实墨反白 + ✓ 前缀
+             （accent 字色在 sage 画布上仅 ~2.8:1，违 style.css 彩纸禁令）。
              loadingSongs 期 disabled：远端单拉取未落地时点播放会把旧单曲目拍进
              队列却冠新单 playingPlaylistId（queueTitle/历史/刷新恢复全错位） -->
         <div class="playlist-hero-actions">
@@ -33,16 +34,19 @@
             :disabled="loadingSongs"
             title="随机播放"
           ><PixelIcon name="shuffle" :size="15" /> 随机</button>
-          <!-- 排序态 VIP 开关虚设（displayRows 绕过滤）——禁用避免假动作 -->
+          <!-- 排序态 VIP 开关虚设（displayRows 绕过滤）——禁用避免假动作。
+               可见文案恒「VIP」：状态由 ✓ + aria-pressed + 反白承担，
+               title 说动作——旧写法把「显示VIP/隐藏VIP」文案当状态位，
+               on 态读起来像「点我隐藏」的动作钮而非已开的开关 -->
           <button
             @click="$emit('toggle-vip-songs')"
             class="ink-btn ink-btn--ghost hero-vip-toggle"
             :aria-pressed="showVipSongs"
             :disabled="reorderMode"
-            title="切换VIP歌曲显示"
+            :title="showVipSongs ? '隐藏VIP歌曲' : '显示VIP歌曲'"
           >
             <PixelIcon v-if="showVipSongs" name="check" :size="13" />
-            {{ showVipSongs ? '隐藏VIP' : '显示VIP' }}
+            VIP
           </button>
           <!-- 单向同步：静默重拉远端并合并本地增删（本地单没有远端可拉，隐藏） -->
           <button
@@ -85,6 +89,27 @@
             :disabled="loadingSongs"
             title="拖拽或逐行移动调整歌曲顺序"
           ><PixelIcon name="grip" :size="15" /> 排序</button>
+          <!-- 歌单内筛选：滑窗列表窗外行不进 DOM——Cmd+F 只能命中已渲段，
+               本地过滤是虚拟化的补位。排序态隐藏：displayRows 绕过
+               filteredSongs，留着输入框会口径不一致（词还挂着行却不动） -->
+          <div v-if="!reorderMode" class="pg-field song-filter">
+            <PixelIcon name="search" :size="14" class="song-filter-icon" />
+            <input
+              ref="filterInputEl"
+              v-model="listQuery"
+              type="text"
+              placeholder="筛选本歌单…"
+              aria-label="歌单内筛选"
+              class="song-filter-input"
+            />
+            <button
+              v-if="listQuery"
+              class="pg-icobtn pg-icobtn--bare pg-icobtn--sm song-filter-clear"
+              title="清除筛选"
+              aria-label="清除筛选"
+              @click="clearListQuery"
+            ><PixelIcon name="close" :size="12" /></button>
+          </div>
         </div>
       </div>
     </div>
@@ -110,6 +135,14 @@
       <!-- 空歌单与未选歌单分文案：前者指路「添加歌曲」入口 -->
       <p class="song-state-text">{{ selectedPlaylist ? '歌单还是空的喵~' : '从左侧选择歌单，或在顶部搜索发现新歌单喵~' }}</p>
       <p v-if="selectedPlaylist && !isShareShell" class="song-state-sub">点上方「添加歌曲」搜歌/粘链接进来</p>
+    </div>
+
+    <!-- 筛选落空态：songs 非空 + 有词 + 零命中——无分支会渲出空滚动器+「共0首」，
+         把「没歌」与「没搜到」混成一团。排序态豁免：displayRows 走全量口径，
+         词还被挂着但行要照排（筛选框已隐，不与过滤态并存） -->
+    <div v-else-if="!reorderMode && filteredSongs.length === 0 && listQueryTrimmed" class="song-state">
+      <PixelIcon name="search" :size="36" class="song-state-icon" />
+      <p class="song-state-text">没有匹配「{{ listQueryTrimmed }}」的歌曲</p>
     </div>
 
     <div v-else ref="rowsEl" class="flex-1 min-h-0 overflow-y-auto song-rows" @dragleave="onRowsDragLeave">
@@ -227,10 +260,14 @@
       <!-- 虚拟滚动下沿 spacer：撑出窗外余量（排序态渲全量不需要 spacer 对） -->
       <div v-if="!reorderMode" :style="{ height: vBottomPad + 'px' }" aria-hidden="true"></div>
 
-      <!-- YTM 曲目列表全滚动：底部只留计数（分页器拆除） -->
+      <!-- YTM 曲目列表全滚动：底部只留计数（分页器拆除）。两级过滤分账：
+           「共 n 首」吃筛选前基线（vipVisibleSongs——「筛选出」括弧是命中数，
+           主数再写 filteredSongs 会同数双份）；「隐藏 n 首VIP」只算 VIP 谓词
+           砍掉的。筛选括弧基线同锚 vipVisibleSongs——比对 songs.length 会让
+           VIP 先行收缩时零过滤词也挂出假筛选计数；排序态行量=displayRows -->
       <div class="song-list-footer">
         <span class="pg-label pg-label--dim">
-          共 {{ reorderMode ? displayRows.length : filteredSongs.length }} 首<template v-if="!reorderMode && !showVipSongs && songs.length > filteredSongs.length">（隐藏 {{ songs.length - filteredSongs.length }} 首VIP）</template>
+          共 {{ reorderMode ? displayRows.length : vipVisibleSongs.length }} 首<template v-if="!reorderMode && !showVipSongs && songs.length > vipVisibleSongs.length">（隐藏 {{ songs.length - vipVisibleSongs.length }} 首VIP）</template><template v-if="!reorderMode && listQueryTrimmed && filteredSongs.length < vipVisibleSongs.length">（筛选出 {{ filteredSongs.length }} 首）</template>
         </span>
       </div>
     </div>
@@ -253,151 +290,132 @@
             {{ menuSong?.name || '歌曲操作' }}
           </div>
 
-          <!-- 行内 ⋯ 菜单：队列操作与分享/下载合一 -->
-          <div
-            class="pg-menu-item"
-            role="menuitem"
-            tabindex="0"
-            @click="playNextFromMenu"
-            @keydown.enter="playNextFromMenu"
-            @keydown.space.prevent="playNextFromMenu"
-          >
+          <!-- 行内 ⋯ 菜单：分四组——播放队列 / 歌曲 / 下载 / 尾组（纠正+危险，
+               无头）。组头只在其组有可见项时渲染（估高与 toggleDownloadMenu
+               同口径）。菜单项一律 <button>：.pg-menu-item 全局类已含 button
+               归一化；原生 Enter/Space 即派发 click——旧 div+tabindex 形态
+               的 @keydown.enter/space 全删，留着会双发 -->
+
+          <div class="pg-menu-head">播放队列</div>
+          <button type="button" class="pg-menu-item" role="menuitem" @click="playNextFromMenu">
             <PixelIcon name="next" :size="15" /> 下一首播放
-          </div>
-          <div
-            class="pg-menu-item"
-            role="menuitem"
-            tabindex="0"
-            @click="addToQueueFromMenu"
-            @keydown.enter="addToQueueFromMenu"
-            @keydown.space.prevent="addToQueueFromMenu"
-          >
+          </button>
+          <button type="button" class="pg-menu-item" role="menuitem" @click="addToQueueFromMenu">
             <PixelIcon name="plus" :size="13" /> 加入队列末尾
-          </div>
-          <div
-            class="pg-menu-item"
-            role="menuitem"
-            tabindex="0"
-            @click="addToPlaylistFromMenu"
-            @keydown.enter="addToPlaylistFromMenu"
-            @keydown.space.prevent="addToPlaylistFromMenu"
-          >
+          </button>
+          <button type="button" class="pg-menu-item" role="menuitem" @click="addToPlaylistFromMenu">
             <PixelIcon name="m-list" :size="13" /> 添加到歌单
-          </div>
+          </button>
+
+          <div v-if="menuHasSongGroup" class="pg-menu-head">歌曲</div>
           <!-- 编辑：元数据（名字/艺人/专辑/时长）对所有曲开放；file_ 上传曲
                另可换音频/视频/封面/歌词源文件。分享壳隐藏——壳不持久化，编辑
                写了也没处落 -->
-          <div
+          <button
             v-if="selectedPlaylist && !isShareShell"
+            type="button"
             class="pg-menu-item"
             role="menuitem"
-            tabindex="0"
             @click="editFromMenu"
-            @keydown.enter="editFromMenu"
-            @keydown.space.prevent="editFromMenu"
           >
             <PixelIcon name="edit" :size="13" /> 编辑歌曲
-          </div>
-          <!-- 从歌单移除：远端曲写墓碑防同步复活，本地追加/本地单曲直接删。
-               分享壳（single_song_）隐藏——移除唯一曲只会留个待剪枝的空壳 -->
-          <div
-            v-if="selectedPlaylist && !isShareShell"
-            class="pg-menu-item pg-menu-item--danger"
-            role="menuitem"
-            tabindex="0"
-            @click="removeFromPlaylistFromMenu"
-            @keydown.enter="removeFromPlaylistFromMenu"
-            @keydown.space.prevent="removeFromPlaylistFromMenu"
-          >
-            <PixelIcon name="close" :size="13" /> 从歌单移除
-          </div>
+          </button>
           <!-- file_ 曲没有可分享的源链接（?song= 只收数字 id）——死链不亮 -->
-          <div
+          <button
             v-if="!isFileTrackId(menuSong?.id)"
+            type="button"
             class="pg-menu-item"
             role="menuitem"
-            tabindex="0"
             @click="shareFromMenu"
-            @keydown.enter="shareFromMenu"
-            @keydown.space.prevent="shareFromMenu"
           >
             <PixelIcon name="share" :size="13" /> 分享歌曲
-          </div>
-
+          </button>
           <!-- 回源：新页打开曲目在源站的原页面（B站/YouTube/QQ/网易云）。
                分享壳也亮——纯外链跳转无服务端语义 -->
-          <div
+          <button
             v-if="menuSourceUrl"
+            type="button"
             class="pg-menu-item"
             role="menuitem"
-            tabindex="0"
             @click="openSourceFromMenu"
-            @keydown.enter="openSourceFromMenu"
-            @keydown.space.prevent="openSourceFromMenu"
           >
             <PixelIcon name="external" :size="13" /> {{ menuSourceName }}
-          </div>
+          </button>
 
+          <div class="pg-menu-head">下载</div>
           <!-- 获取源文件（浏览器下载）。菜单目标从全量 props.songs 查，不依赖渲染切片 -->
-          <div
+          <button
+            type="button"
             class="pg-menu-item"
             role="menuitem"
-            tabindex="0"
             @click="downloadSongDirect(menuSong, 320000)"
-            @keydown.enter="downloadSongDirect(menuSong, 320000)"
-            @keydown.space.prevent="downloadSongDirect(menuSong, 320000)"
           >
             <PixelIcon name="download" :size="13" /> {{ isFileTrackId(menuSong?.id) ? '下载文件' : (menuSong?.bilibili || menuSong?.youtube || menuSong?.qq) ? '获取源文件（最优音质）' : '获取源文件 (320k)' }}
-          </div>
-
-          <!-- 下载到服务器 / 删除已下载：single_song_ 分享壳无服务端持久化意义隐藏；
+          </button>
+          <!-- 下载到服务器（未下载面）：single_song_ 分享壳无服务端持久化意义隐藏；
                qq_/bv_/yt_ 只在本地歌单显示（镜像链投影 provider 定位字段进曲目表
-               后 file-downloader 前缀分发可达），远端单里这些 id 必 404 -->
-          <div
-            v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong)"
+               后 file-downloader 前缀分发可达），远端单里这些 id 必 404。
+               已下载面（danger「删除已下载文件」）落在尾组——危险项集中尾部 -->
+          <button
+            v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong) && !serverDownloadedStates[showDownloadMenu]"
+            type="button"
             class="pg-menu-item"
-            :class="{ 'pg-menu-item--danger': serverDownloadedStates[showDownloadMenu] }"
             role="menuitem"
-            tabindex="0"
             @click="toggleServerDownload(menuSong)"
-            @keydown.enter="toggleServerDownload(menuSong)"
-            @keydown.space.prevent="toggleServerDownload(menuSong)"
           >
             <template v-if="serverDownloadingStates[showDownloadMenu]"><span class="pixel-loading" aria-hidden="true"></span> 处理中...</template>
-            <template v-else-if="serverDownloadedStates[showDownloadMenu]"><PixelIcon name="warn" :size="13" /> 删除已下载文件</template>
             <template v-else><PixelIcon name="download" :size="13" /> 下载到服务器</template>
-          </div>
-
+          </button>
           <!-- 源站视频下载（仅 bv_/yt_ 且确认有浏览器可放视频流的曲目）——
                服务端 ffmpeg 合流出真·最高画质 mp4；已下过音频的任务翻 pending
                只补视频相位 -->
-          <div
+          <button
             v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong) && canServerVideo(menuSong)"
+            type="button"
             class="pg-menu-item"
             role="menuitem"
-            tabindex="0"
             @click="downloadServerVideo(menuSong)"
-            @keydown.enter="downloadServerVideo(menuSong)"
-            @keydown.space.prevent="downloadServerVideo(menuSong)"
           >
             <template v-if="serverDownloadingStates[showDownloadMenu]"><span class="pixel-loading" aria-hidden="true"></span> 处理中...</template>
             <template v-else><PixelIcon name="play" :size="13" /> 下载视频到服务器</template>
-          </div>
+          </button>
 
-          <!-- 外源曲词源纠错：自动匹配判错词（verify 否决）或没配上时重打
-               服务端匹配链，命中把新 neteaseId 写回曲对象。分享壳不开放
+          <!-- 尾组（无头）：外源曲词源纠错——自动匹配判错词（verify 否决）或没配上
+               时重打服务端匹配链，命中把新 neteaseId 写回曲对象。分享壳不开放
                （壳对象不持久化——与「编辑歌曲」等 !isShareShell 项同口径） -->
-          <div
+          <button
             v-if="!isShareShell && (menuSong?.youtube || menuSong?.bilibili)"
+            type="button"
             class="pg-menu-item"
             role="menuitem"
-            tabindex="0"
             @click="rematchLyricFromMenu"
-            @keydown.enter="rematchLyricFromMenu"
-            @keydown.space.prevent="rematchLyricFromMenu"
           >
             <PixelIcon name="m-loop" :size="13" /> 重新匹配歌词
-          </div>
+          </button>
+          <!-- 删除已下载文件：与组3「下载到服务器」同一 toggleServerDownload 动作
+               的已下载面——按 serverDownloadedStates 分位渲染，danger 项得以集中
+               尾部（在途「处理中…」仍按下载前位置算，位不随中间态跳） -->
+          <button
+            v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong) && serverDownloadedStates[showDownloadMenu]"
+            type="button"
+            class="pg-menu-item pg-menu-item--danger"
+            role="menuitem"
+            @click="toggleServerDownload(menuSong)"
+          >
+            <template v-if="serverDownloadingStates[showDownloadMenu]"><span class="pixel-loading" aria-hidden="true"></span> 处理中...</template>
+            <template v-else><PixelIcon name="warn" :size="13" /> 删除已下载文件</template>
+          </button>
+          <!-- 从歌单移除：远端曲写墓碑防同步复活，本地追加/本地单曲直接删。
+               分享壳（single_song_）隐藏——移除唯一曲只会留个待剪枝的空壳 -->
+          <button
+            v-if="selectedPlaylist && !isShareShell"
+            type="button"
+            class="pg-menu-item pg-menu-item--danger"
+            role="menuitem"
+            @click="removeFromPlaylistFromMenu"
+          >
+            <PixelIcon name="close" :size="13" /> 从歌单移除
+          </button>
         </div>
       </div>
     </Teleport>
@@ -481,9 +499,40 @@
   align-items: center;
 }
 
-/* VIP 开关 on 态：accent 字色 + ✓ 前缀表达 toggle；缩写词豁免 CTA 小写规则 */
+/* VIP 开关 on 态：实墨反白（ghost 的 on = ink-btn 实底观感）+ ✓ 前缀。
+   旧 accent-magenta-ink 字色在 sage 画布仅 ~2.8:1，违 style.css 「-ink 深档
+   勿上彩纸画布」禁令；缩写词豁免 CTA 小写规则 */
 .hero-vip-toggle { text-transform: none; }
-.hero-vip-toggle[aria-pressed="true"] { color: var(--accent-magenta-ink); }
+.hero-vip-toggle[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+/* on 态墨底上 hover 要 on-ink 档粉字——不盖则被 ink-btn--ghost:hover 的
+   -ink 深档压回去（深粉字压墨底 ≈1.6:1 隐形）。glitch 的 ghost-hover 还会
+   把底刷成 #f3f5f7 并挂灰辉光——亮 teal 字落浅灰底 ≈1.5:1，background
+   与 box-shadow 一并钉回：on 态 hover 恒为墨底反白 */
+.hero-vip-toggle[aria-pressed="true"]:hover:not(:disabled) {
+  color: var(--accent-magenta-on-ink);
+  background: var(--ink);
+  box-shadow: none;
+}
+
+/* 歌单内筛选：hero 键列尾的小字段（topnav-search-field 同族小化版） */
+.song-filter {
+  width: 200px;
+  max-width: 100%;
+}
+.song-filter-icon {
+  margin-left: 10px;
+  color: var(--ink-64);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+/* 两层类选择器压全局 .pg-field input 的 padding:8px 12px——
+   图标已贴左缘，文字距图标再留 12px 太松（topnav 同位 8px） */
+.song-filter .song-filter-input { padding-left: 8px; }
+.song-filter-clear { margin-right: 6px; }
 
 /* ── 加载 / 空态 ── */
 .song-state {
@@ -876,10 +925,36 @@ export default {
     let menuTriggerBtn = null // 最近开菜单的 ⋯键——菜单 emit 的焦点归还锚（edit-song/add-to-playlist）
 
 
-    // 过滤后的歌曲列表（根据VIP显示设置）——谓词与 App.vue 同一份（lib/song.js）
-    const filteredSongs = computed(() =>
+    // 歌单内筛选词：滑窗代价补丁——窗外行不进 DOM，Cmd+F 覆盖不了；
+    // 词绑歌单语境（切单 watch 里随 selectedPlaylist.id 重置）
+    const listQuery = ref('')
+    const listQueryTrimmed = computed(() => listQuery.value.trim())
+    const filterInputEl = ref(null)
+    // 清空钮随 v-if 卸载——不接管时焦点落 body（键盘用户漂移）。须等钮移除
+    // 后的下一帧再还焦：卸载前先聚焦 input，卸载照样把焦点丢回 body
+    const clearListQuery = () => {
+      listQuery.value = ''
+      nextTick(() => filterInputEl.value?.focus())
+    }
+    // 命中域与行内三列可见文本同口径（歌名/艺人/专辑）——搜到的保证看得见。
+    // 艺人走 ar||artists、专辑走 al||album 双形（远端单/导入壳字段形态不一）
+    const matchListQuery = (song, q) =>
+      [song?.name,
+        (song?.ar || song?.artists || []).map(a => a?.name).filter(Boolean).join(' '),
+        song?.al?.name || song?.album?.name]
+        .some(v => v && String(v).toLowerCase().includes(q))
+
+    // 两级过滤：vipVisibleSongs = VIP 开关层（谓词与 App.vue 同一份 lib/song.js），
+    // filteredSongs 再叠筛选词层。页脚「隐藏 n 首VIP」吃中间层口径，
+    // 不把筛选落差算进 VIP 账
+    const vipVisibleSongs = computed(() =>
       visibleSongs(props.songs, props.showVipSongs, serverCaps.value)
     )
+    const filteredSongs = computed(() => {
+      const q = listQueryTrimmed.value.toLowerCase()
+      if (!q) return vipVisibleSongs.value
+      return vipVisibleSongs.value.filter(s => matchListQuery(s, q))
+    })
 
     // 真虚拟滚动：滑窗渲染替代前缀窗——DOM 恒定 ~视口量级（前缀窗滚到
     // 底是全量同构，万曲单=万行+万封面 img）。行高 60px 均匀（.song-row-
@@ -965,36 +1040,43 @@ export default {
         if (showDownloadMenu.value !== null) {
           delete menuPositions.value[showDownloadMenu.value]
         }
-        // 计算菜单位置：下方空间不足时翻到按钮上方，左右越界时收回视口内
+        // 计算菜单位置：下方空间不足时翻到按钮上方；右缘锚定触发键右缘
+        //（TopNav ⋯/搜索源菜单同口径）——左锚要估宽（实测项宽 ~172 ≠ min-width
+        // 160 ≠ 长项 ~200），估不准就劈开长列或留缝；fixed 右锚天然跟手，
+        // .pg-menu max-width:calc(100vw-24px) 兜窄屏左溢
         const button = event.target.closest('button')
         menuTriggerBtn = button // ⋯键本体——菜单项要归还焦点时它是活着的锚
         const rect = button.getBoundingClientRect()
-        // 估宽按最长项实测 ~200px（「获取源文件（最优音质）」「回源·源名」），
-        // 不是 min-width 160——估低会把右缘钳点放错，长菜单右端出视口。
-        // .pg-menu 另有 max-width:calc(100vw-16px) 双保险
-        const menuWidth = 200
-        // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），头部 ≈40px。
-        // 固定项=下一首+队尾+添歌单+源文件 4 项；可分享（非 file_）多"分享歌曲"，
-        // 可回源多"回源"，有已选歌单（除分享壳）多"编辑歌曲"+"从歌单移除"两项，
-        // 可达服务端下载链多"下载到服务器"，外部有视频流的再多"下载视频到服务器"，
-        // 外源曲（bv_/yt_ provider 对象在，分享壳除外）再多"重新匹配歌词"。
+        // 菜单高度按实际项数算：实测 .pg-menu-item ≈39px（含发丝分隔），
+        // 曲目名头 ≈40px、分组头（pg-menu-head）≈36px。
+        // 固定项=播放队列组3项+获取源文件 4 项；「歌曲」组按件计：可编辑单
+        //（已选非分享壳）"编辑歌曲"、可分享（非 file_）"分享歌曲"、有源链"回源"；
+        // 服务端下载 toggle 一体两面（下载到服务器/删除已下载文件分位渲染）计 1，
+        // 有视频流再多"下载视频到服务器"；尾组：外源曲"重新匹配歌词"
+        // +可编辑单"从歌单移除"。组头只在其组有可见项时渲染——估高同口径。
         // 注意 menuSong 此刻还是上一次的值（showDownloadMenu 未赋值）——按 songId 直查
         const targetSong = props.songs.find(s => String(s.id) === String(songId))
+        const editablePl = !!(props.selectedPlaylist && !isShareShell.value)
         const serverOk = !isShareShell.value && props.selectedPlaylist && canServerDownload(targetSong)
-        const itemCount = 4
-          + (!isFileTrackId(targetSong?.id) ? 1 : 0)
-          + (songSourceUrl(targetSong) ? 1 : 0)
-          + ((props.selectedPlaylist && !isShareShell.value) ? 2 : 0)
-          + (serverOk ? 1 : 0)
-          + (serverOk && canServerVideo(targetSong) ? 1 : 0)
-          + ((!isShareShell.value && (targetSong?.youtube || targetSong?.bilibili)) ? 1 : 0)
-        const menuHeight = 40 + itemCount * 39 + 4
+        const songGroupItems = (editablePl ? 1 : 0)              // 编辑歌曲
+          + (!isFileTrackId(targetSong?.id) ? 1 : 0)             // 分享歌曲
+          + (songSourceUrl(targetSong) ? 1 : 0)                  // 回源
+        const itemCount = 4                                      // 队列3 + 获取源文件
+          + songGroupItems
+          + (serverOk ? 1 : 0)                                   // 服务端下载 toggle
+          + (serverOk && canServerVideo(targetSong) ? 1 : 0)     // 下载视频到服务器
+          + ((!isShareShell.value && (targetSong?.youtube || targetSong?.bilibili)) ? 1 : 0) // 重新匹配歌词
+          + (editablePl ? 1 : 0)                                 // 从歌单移除
+        // 播放队列/下载两组恒非空（队列3项、源文件常驻）→ 组头固定计 2；
+        //「歌曲」组头随组内项数起落
+        const groupHeads = 2 + (songGroupItems > 0 ? 1 : 0)
+        const menuHeight = 40 + groupHeads * 36 + itemCount * 39 + 4
         const vw = window.innerWidth
         const vh = window.innerHeight
         const belowFits = rect.bottom + 4 + menuHeight <= vh
         menuPositions.value[songId] = {
           top: (belowFits ? rect.bottom + 4 : Math.max(8, rect.top - menuHeight - 4)) + 'px',
-          left: Math.max(8, Math.min(rect.right - menuWidth, vw - menuWidth - 8)) + 'px'
+          right: Math.max(8, vw - rect.right) + 'px'
         }
         showDownloadMenu.value = songId
         // 菜单 teleport 到 body——不主动移焦时键盘 Tab 要翻遍整页才到菜单项；
@@ -1003,9 +1085,16 @@ export default {
       }
     }
 
-    // 获取菜单位置
+    // 「歌曲」组头只在其组有可见项时渲染——估高（toggleDownloadMenu）同口径
+    const menuHasSongGroup = computed(() =>
+      !!(props.selectedPlaylist && !isShareShell.value)   // 编辑歌曲
+      || !isFileTrackId(menuSong.value?.id)               // 分享歌曲
+      || !!menuSourceUrl.value                            // 回源
+    )
+
+    // 获取菜单位置（右缘锚定触发键右缘——无 left 键）
     const getMenuPosition = (songId) => {
-      return menuPositions.value[songId] || { top: '0px', left: '0px' }
+      return menuPositions.value[songId] || { top: '0px', right: '8px' }
     }
 
     // 关闭菜单：所有关闭路径收口到这里，顺带清位置缓存（只增不减会泄漏）。
@@ -1241,8 +1330,9 @@ export default {
         nextTick(() => sortBtn.value?.focus({ preventScroll: true }))
       }
     }
-    // 切单/曲数塌缩自动收态：滞留排序态会让新单继承错位的 displayRows 口径
-    watch(() => props.selectedPlaylist?.id, exitReorderMode)
+    // 切单/曲数塌缩自动收态：滞留排序态会让新单继承错位的 displayRows 口径。
+    // 筛选词同锚重置——词绑歌单语境，跨单残留会让新单顶着旧词呈「空列表」假象
+    watch(() => props.selectedPlaylist?.id, () => { exitReorderMode(); listQuery.value = '' })
     watch(() => props.songs.length <= 1 && reorderMode.value, (collapsed) => {
       if (collapsed) exitReorderMode()
     })
@@ -1299,6 +1389,12 @@ export default {
 
     return {
       filteredSongs,
+      vipVisibleSongs,
+      listQuery,
+      listQueryTrimmed,
+      filterInputEl,
+      clearListQuery,
+      menuHasSongGroup,
       displayRows,
       displayRowKeys,
       rowNumber,
