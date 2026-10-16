@@ -31,8 +31,16 @@ export function useSearchNav({
   const searching = ref(false)   // 仅驱动搜索结果网格的加载态（勿与歌单库 loading 混用）
   const searchResults = ref([])     // 歌单搜索结果
   const searchSongResults = ref([]) // 单曲搜索结果（与歌单结果同区展示）
+  // 结果页服务源戳（PlaylistGrid 页头「"词" · 源名」/单腿源指路行消费）：
+  // 哪个搜索 handler 立案记哪个源——不能拿 prefSearchSource 事后回读：
+  // 搜完再切源/远端回填会把旧批结果误报成新源产物
+  const searchSource = ref('netease')
   // 单曲搜索深挖态：query/total 驱动 PlaylistGrid 的「加载更多」键；
-  // total=null 表示本批结果不可深挖（上游不吐 total 时灭灯）
+  // total=null 表示本批结果不可深挖（上游不吐 total 时灭灯）。
+  // searchSongQuery 同时是结果页头「"词"·源名」与滚动记忆键的**立案词**
+  // （App 绑它而非框内活词 searchQuery——搜完改框不翻旧账）。失败口径
+  // 不追平：netease 双腿全败仍写 query（残留=实际尝试源，评审口径可接受），
+  // qq/yt/bili 失败保持 '' ——ctx 行自动隐不残留未遂词，两侧都如实
   const searchSongQuery = ref('')
   const searchSongTotal = ref(null)
   const searchSongLoadingMore = ref(false)
@@ -389,6 +397,7 @@ export function useSearchNav({
     searchSongTotal.value = null
     qqSongPage = 0 // 结果集换回网易云口径——深挖走 offset 不走页码
     ytContinuation.value = null
+    searchSource.value = 'netease' // 源戳随 handler 立案定调（结果页头/单腿 hint 的口径）
     try {
       const [plRes, songRes] = await Promise.allSettled([
         musicApi.searchPlaylists(query),
@@ -487,6 +496,7 @@ export function useSearchNav({
     searchSongTotal.value = null
     qqSongPage = 0
     ytContinuation.value = null
+    searchSource.value = 'qq' // 源戳：本批结果出自 QQ 双腿
     try {
       const [songRes, plRes] = await Promise.allSettled([
         musicApi.searchQQSongs(kw, { limit: 20, page: 1 }),
@@ -527,6 +537,7 @@ export function useSearchNav({
     searchSongTotal.value = null
     qqSongPage = 0
     ytContinuation.value = null
+    searchSource.value = 'yt' // 源戳：本批结果出自 YT 单腿
     try {
       const r = await musicApi.searchYouTubeSongs(kw, { limit: 20 })
       if (!gates.search.isCurrent(myReq)) return
@@ -559,6 +570,7 @@ export function useSearchNav({
     searchSongTotal.value = null
     qqSongPage = 0
     ytContinuation.value = null
+    searchSource.value = 'bili' // 源戳：本批结果出自 B 站单腿
     try {
       const r = await musicApi.searchBiliSongs(kw)
       if (!gates.search.isCurrent(myReq)) return
@@ -635,7 +647,7 @@ export function useSearchNav({
     centerView, sidebarOpen, searching,
     searchResults, searchSongResults,
     searchSongQuery, searchSongTotal, searchSongLoadingMore,
-    ytContinuation, searchSongHasMore,
+    ytContinuation, searchSongHasMore, searchSource,
     // 导航
     buildNavUrl, pushNavState, applyUrlNav, normalizeNavEntry,
     navHome, closeSearchView, toggleCenterView, toggleSettings, watchBack,
