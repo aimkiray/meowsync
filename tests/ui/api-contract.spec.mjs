@@ -287,6 +287,66 @@ describe('downloadsApi：队列/任务形状', () => {
     expect(body.tracks[2]).toBeNull()
   })
 
+  it('quickDownloadPlaylist/createQueue：localDelta 出键且 addedTracks 走瘦身投影', async () => {
+    setResponses({
+      post: {
+        '/downloads/playlists/777/quick': { code: 200, data: {} },
+        '/downloads/queues': { code: 200, data: {} },
+      },
+    })
+    const localDelta = {
+      addedTracks: [
+        // 投影外的字段（extra/alia 类死重）必须剥掉；artists 字符串/专辑
+        // 字符串形归一与镜像同口径
+        { id: 'yt_abc12345678', name: 'n', artists: '某艺人', al: '字符串专辑', extra: '剥', youtube: { videoId: 'abc12345678' } },
+        null,
+      ],
+      removedIds: ['111', 222], // 持久化层可能混数字形——客户端归一成串（schema 只收 string）
+    }
+    await downloadsApi.quickDownloadPlaylist(777, { localDelta })
+    let [, body] = http.post.mock.calls.at(-1)
+    expect(body.localDelta.removedIds).toEqual(['111', '222'])
+    expect(body.localDelta.addedTracks[0]).toMatchObject({
+      id: 'yt_abc12345678', ar: [{ name: '某艺人' }], al: { name: '字符串专辑' },
+      youtube: { videoId: 'abc12345678' },
+    })
+    expect('extra' in body.localDelta.addedTracks[0]).toBe(false)
+    expect(body.localDelta.addedTracks[1]).toBeNull()
+
+    await downloadsApi.createQueue(9, { localDelta: { addedTracks: [], removedIds: ['1'] } })
+    ;[, body] = http.post.mock.calls.at(-1)
+    expect(body.localDelta).toEqual({ addedTracks: [], removedIds: ['1'] })
+  })
+
+  it('quickDownloadPlaylist/createQueue：localDelta 缺省不出键（旧 body 逐位不变）', async () => {
+    setResponses({
+      post: {
+        '/downloads/playlists/777/quick': { code: 200, data: {} },
+        '/downloads/queues': { code: 200, data: {} },
+      },
+    })
+    await downloadsApi.quickDownloadPlaylist(777, {})
+    expect('localDelta' in http.post.mock.calls.at(-1)[1]).toBe(false)
+    await downloadsApi.createQueue(9)
+    expect('localDelta' in http.post.mock.calls.at(-1)[1]).toBe(false)
+  })
+
+  it('localDelta 超限静默截尾：addedTracks>500/removedIds>2000 不整单 400', async () => {
+    // 与镜像 2000 截断同哲学——schema 体量是硬边界，客户端发送前先截尾，
+    // 本地追加面超限时丢尾部而非整个建队请求被体量闸打回
+    setResponses({ post: { '/downloads/playlists/777/quick': { code: 200, data: {} } } })
+    const localDelta = {
+      addedTracks: Array.from({ length: 600 }, (_, i) => ({ id: `yt_${String(i).padStart(11, '0')}`, name: `t${i}` })),
+      removedIds: Array.from({ length: 2100 }, (_, i) => `rm${i}`),
+    }
+    await downloadsApi.quickDownloadPlaylist(777, { localDelta })
+    const [, body] = http.post.mock.calls.at(-1)
+    expect(body.localDelta.addedTracks).toHaveLength(500)
+    expect(body.localDelta.addedTracks.at(-1).id).toBe(`yt_${String(499).padStart(11, '0')}`)
+    expect(body.localDelta.removedIds).toHaveLength(2000)
+    expect(body.localDelta.removedIds.at(-1)).toBe('rm1999')
+  })
+
   it('mirrorLocalPlaylist：ar 数组成员是裸字符串不丢艺人名', async () => {
     // ar:['Jay'] 若只读 a?.name 会产 {name:undefined}——slimTrack 同口径：
     // 对象取 name、字符串透传

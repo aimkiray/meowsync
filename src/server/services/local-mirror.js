@@ -6,6 +6,76 @@ const playlistsRepo = require('../repositories/playlists');
 const playlistTracksRepo = require('../repositories/playlistTracks');
 const { deletingPlaylists, isNeteasePlaylistDeleting } = require('../lib/deletion-locks');
 const { httpError } = require('../lib/http-error');
+const {
+  QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE,
+  SONGMID_RE, BVID_RE, YT_ID_RE, NETEASE_ID_RE
+} = require('../../shared/predicates.js');
+
+// 来源侧日期合法性窗（规格要求各文件就地实现同一公式）：
+//   下限 2000-01-01（YT 2005/B 站 2009 上线前不存在真发布日，再早必脏）；
+//   上限 now+24h（容忍时钟偏差；真实未来首播/预售超出此界按未知处理——
+//   发布日尚在未来极罕见的视频此刻也播不了，损失可忽略）
+const sanePublishMs = (v) => {
+  const ms = Number(v);
+  return Number.isFinite(ms) && ms >= 946684800000 && ms <= Date.now() + 86400e3 ? ms : 0;
+};
+
+// 上载曲投影的白名单消毒：只留服务端可下载的曲目——网易云数字 id +
+// qq_<songmid>/bv_<bvid>[_pN]/yt_<videoId> 自有源前缀；其余形态计入 skipped
+// 让前端提示，不整单 400。字段逐位收窄（ar 只留 {name}、provider 只收流定位
+// 与词源字段）防任意对象整只落 raw_json。
+// 镜像路由与远端单 localDelta 建队共用同一份——先过滤后截断：
+// 前 2000 个可下载曲进入结果；skipped=不支持 id 数，truncated=超上限截尾数
+function sanitizeMirrorTracks(allTracks) {
+  const numeric = allTracks.filter(t => t && (/^\d+$/.test(String(t.id ?? ''))
+    || QQ_SONG_ID_RE.test(String(t.id ?? ''))
+    || BV_TRACK_ID_RE.test(String(t.id ?? ''))
+    || YT_TRACK_ID_RE.test(String(t.id ?? ''))));
+  const tracks = numeric.slice(0, 2000)
+    .map(t => ({
+      id: String(t.id),
+      name: String(t.name || '未知歌曲').slice(0, 200),
+      // ar 收窄成 {name} 标量组——客户端投影同口径；任意形状对象不该整只落 raw_json
+      ar: (Array.isArray(t.ar || t.artists) ? (t.ar || t.artists) : [])
+        .slice(0, 20)
+        .map(a => ({ name: String(typeof a === 'string' ? a : a?.name ?? '').slice(0, 200) })),
+      al: (t.al && typeof t.al === 'object') ? t.al
+        : (t.album && typeof t.album === 'object') ? t.album : {},
+      dt: Number.isFinite(+t.dt) ? +t.dt : (+t.duration || 0),
+      // qq 源私有字段只收 mediaMid（vkey filename 键）+ publishedAt（发行日
+      // 证据——与 bv/yt 同轴，providerData/签名域都吃）——其余下载链用不上；
+      // 形态校验防任意对象进 raw_json
+      ...(t.qq && SONGMID_RE.test(String(t.qq.mediaMid || ''))
+        ? { qq: {
+            mediaMid: String(t.qq.mediaMid),
+            publishedAt: sanePublishMs(t.qq.publishedAt) || null
+          } } : {}),
+      // bv_/yt_ 曲同理只收流定位字段（bvid/cid/page、videoId）+ neteaseId
+      // 词源 + title/author——下载链的歌词归属核验要靠来源标题与作者
+      // 构造 verdict 签名，不整只落 provider 对象
+      ...(t.bilibili && BVID_RE.test(String(t.bilibili.bvid || ''))
+        ? { bilibili: {
+            bvid: String(t.bilibili.bvid),
+            cid: /^\d+$/.test(String(t.bilibili.cid ?? '')) ? String(t.bilibili.cid) : null,
+            page: Math.max(1, parseInt(t.bilibili.page, 10) || 1),
+            title: String(t.bilibili.title || '').slice(0, 300) || null,
+            author: String(t.bilibili.author || '').slice(0, 120) || null,
+            // 发布日（epoch ms）入签名域——缺席/脏值归 null 不落 0 键，
+            // 与 title/author 的缺席归 null 同口径
+            publishedAt: sanePublishMs(t.bilibili.publishedAt) || null
+          } } : {}),
+      ...(t.youtube && YT_ID_RE.test(String(t.youtube.videoId || ''))
+        ? { youtube: {
+            videoId: String(t.youtube.videoId),
+            title: String(t.youtube.title || '').slice(0, 300) || null,
+            author: String(t.youtube.author || '').slice(0, 120) || null,
+            publishedAt: sanePublishMs(t.youtube.publishedAt) || null
+          } } : {}),
+      ...(NETEASE_ID_RE.test(String(t.neteaseId ?? ''))
+        ? { neteaseId: String(t.neteaseId) } : {})
+    }));
+  return { tracks, skipped: allTracks.length - numeric.length, truncated: numeric.length - tracks.length };
+}
 
 /**
  * @returns {object} 镜像歌单行（{id, netease_playlist_id, ...}）
@@ -74,4 +144,4 @@ function mirrorLocalPlaylist(localId, name, coverImgUrl, tracks) {
   })();
 }
 
-module.exports = { mirrorLocalPlaylist };
+module.exports = { mirrorLocalPlaylist, sanitizeMirrorTracks };

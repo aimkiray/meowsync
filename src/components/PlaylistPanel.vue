@@ -412,7 +412,18 @@ export default {
           downloadLyrics: true,
           downloadCover: true,
           downloadVideo: video === true,
-          concurrentLimit: 3
+          concurrentLimit: 3,
+          // 远端单（纯数字 id）的本地增删只活在 localStorage——随建队下发，
+          // 服务端拿 addedTracks 当权威全集对账 playlist_tracks 标记行、拿
+          // removedIds 做枚举期过滤。两键无条件发（含空数组）：「清空到零」
+          // 也是权威信号，不发则已落库的追加行成永久幽灵重复下载。
+          // local_pl_ 走上方整单镜像已含全部曲目，不重复发
+          ...(!isLocalPlaylistId(playlist.id)
+            ? { localDelta: {
+                addedTracks: playlist.addedTracks || [],
+                removedIds: playlist.removedTrackIds || []
+              } }
+            : {})
         })
 
         // 服务端对终态队列原地复活而非另立行——按复用标记与完成度分文案：

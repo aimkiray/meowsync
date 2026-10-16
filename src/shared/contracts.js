@@ -20,14 +20,25 @@ const DOWNLOAD_OPTIONS = {
   concurrentLimit: z.number().int().min(1).max(10).optional()
 };
 
+// 远端单（纯数字 id）的本地增删面：客户端 addedTracks/removedTrackIds 只活在
+// localStorage，随建队请求下发，服务端在枚举曲目前把它们落进 playlist_tracks。
+// addedTracks 收瘦身投影曲对象——逐字段白名单消毒在服务端（镜像同款口径），
+// schema 只管体量；removedIds 是墓碑 id 集。单曲下载路径不消费本键。
+// local_pl_ 本地单由 /downloads/local/mirror 整体承载，不重复走这里
+const localDeltaBody = z.object({
+  addedTracks: z.array(z.any()).max(500),
+  removedIds: z.array(z.string().max(120)).max(2000)
+}).optional();
+
 // POST /downloads/queues 与 /downloads/songs/:songId 同构
 export const downloadTaskBody = z.looseObject({
   playlistId: PLAYLIST_ID,
-  ...DOWNLOAD_OPTIONS
+  ...DOWNLOAD_OPTIONS,
+  localDelta: localDeltaBody
 });
 
 // POST /downloads/playlists/:playlistId/quick（playlistId 走路径参数）
-export const quickDownloadBody = z.looseObject({ ...DOWNLOAD_OPTIONS });
+export const quickDownloadBody = z.looseObject({ ...DOWNLOAD_OPTIONS, localDelta: localDeltaBody });
 
 // POST /downloads/local/mirror：tracks 逐项整形在路由层（瘦身投影容错过滤），
 // schema 只管顶层形状与体量上限

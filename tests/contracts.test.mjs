@@ -19,6 +19,23 @@ test('downloadTaskBody：playlistId 必填、选项量纲硬边界', () => {
   assert.ok(downloadTaskBody.safeParse({ playlistId: 1, extra: 'x' }).success);
 });
 
+test('downloadTaskBody/quickDownloadBody：localDelta 可选、体量硬边界', () => {
+  const delta = { addedTracks: [{ id: 'yt_x' }], removedIds: ['123'] };
+  assert.ok(downloadTaskBody.safeParse({ playlistId: 1, localDelta: delta }).success);
+  assert.ok(quickDownloadBody.safeParse({ localDelta: delta }).success);
+  assert.ok(quickDownloadBody.safeParse({}).success); // 缺省不收——旧 body 逐位兼容
+  // 两键都是必收形（客户端恒同发）；非对象/半残形态拒绝
+  assert.ok(!quickDownloadBody.safeParse({ localDelta: 'x' }).success);
+  assert.ok(!quickDownloadBody.safeParse({ localDelta: { addedTracks: [] } }).success);
+  assert.ok(!quickDownloadBody.safeParse({ localDelta: { addedTracks: 'x', removedIds: [] } }).success);
+  // 体量边界：addedTracks≤500、removedIds≤2000 且单 id ≤120 字符、只收字符串
+  assert.ok(quickDownloadBody.safeParse({ localDelta: { addedTracks: Array(500).fill({}), removedIds: [] } }).success);
+  assert.ok(!quickDownloadBody.safeParse({ localDelta: { addedTracks: Array(501).fill({}), removedIds: [] } }).success);
+  assert.ok(!quickDownloadBody.safeParse({ localDelta: { addedTracks: [], removedIds: Array(2001).fill('x') } }).success);
+  assert.ok(!quickDownloadBody.safeParse({ localDelta: { addedTracks: [], removedIds: ['x'.repeat(121)] } }).success);
+  assert.ok(!quickDownloadBody.safeParse({ localDelta: { addedTracks: [], removedIds: [123] } }).success);
+});
+
 test('mirrorBody：localId 必填、tracks 体量封顶', () => {
   assert.ok(mirrorBody.safeParse({ localId: 'local_pl_a', tracks: [] }).success);
   // 5000 是硬上限：上游单页 1000 曲夹×5 的极端体量，防单次 POST 灌爆内存
