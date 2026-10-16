@@ -3,8 +3,9 @@
 // lyricFetching/songSwitching/loadingLyrics 透传；点击只发 emit（逻辑在
 // usePlayer 侧，见 use-player.spec.mjs 手动词务用例）。
 // 另钉 ⋯ 溢出菜单：触发键常驻页头行 .watch-head 右端（舞台化后不再叠
-// 媒体角标），操作项全量收进 teleport 菜单（音画 radio 组/沉浸/分享/
-// 下载/回源），落位/开合/焦点/条件闸断言见下方各 describe
+// 媒体角标），操作项全量收进 teleport 菜单（沉浸/分享/下载/回源——
+// 音画组已上移顶栏常驻 .watch-av 分段，菜单只剩一次性操作项），
+// 落位/开合/焦点/条件闸断言见下方各 describe
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -77,7 +78,9 @@ const menuEl = () => document.querySelector('#watch-actions-menu')
 const menuItems = () => [...document.querySelectorAll('#watch-actions-menu .pg-menu-item')]
 const menuItemByTitle = (t) => document.querySelector(`#watch-actions-menu [title*="${t}"]`)
 const menuItemByText = (txt) => menuItems().find(el => el.textContent.includes(txt))
-const avRadios = () => [...document.querySelectorAll('#watch-actions-menu [role="menuitemradio"]')]
+// 顶栏音画分段键（原 ⋯ 菜单 menuitemradio 组上移——菜单内已无 radio 项）
+const avSegBtns = (w) => w.findAll('.watch-av-btn')
+const menuRadios = () => [...document.querySelectorAll('#watch-actions-menu [role="menuitemradio"]')]
 const clickEl = async (el) => {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   await nextTick()
@@ -94,6 +97,7 @@ beforeEach(() => {
   vi.clearAllMocks() // 只清调用记录——vi.fn(impl) 的桩实现不受影响
   downloadsApi.getSongDownloadStatus.mockImplementation(async () => null)
   musicApi.youtubeStreamUrl.mockImplementation(() => 'https://x/yt')
+  prefVideoOn.value = true // 模块级偏好显式归位——上游用例归还漏不致真空断言
 })
 
 describe('WatchView：歌词获取工具组', () => {
@@ -170,7 +174,8 @@ describe('WatchView：⋯ 菜单开合与焦点', () => {
     const menu = await openActionsMenu(w)
     expect(menu).toBeTruthy()
     expect(trigger.attributes('aria-expanded')).toBe('true')
-    // SONG（网易id）无视频位——音画组缺席，首项=沉浸
+    // SONG（网易id）无视频位——顶栏分段与菜单音画组双缺席，首项=沉浸
+    expect(w.find('.watch-av').exists()).toBe(false)
     expect(document.activeElement).toBe(menu.querySelector('.pg-menu-item'))
     expect(document.activeElement.textContent).toContain('沉浸')
   })
@@ -218,7 +223,7 @@ describe('WatchView：⋯ 菜单开合与焦点', () => {
     expect(menuEl()).toBeNull()
   })
 
-  it('menuitemradio 点选：切偏好 + 关菜单归还焦点（主题 pick 同型）', async () => {
+  it('音画分段即点即切：顶栏常驻、不涉菜单开合；菜单内已无音画组', async () => {
     const prev = prefVideoOn.value
     try {
       prefVideoOn.value = true
@@ -226,15 +231,20 @@ describe('WatchView：⋯ 菜单开合与焦点', () => {
         tab: 'queue',
         currentSong: { id: 'yt_abcdefghijk', name: 'yt', ar: [{ name: 'a' }], al: {}, dt: 0, youtube: { videoId: 'abcdefghijk', hasVideo: true } },
       })
-      const trigger = menuTrigger(w)
-      const menu = await openActionsMenu(w)
-      const group = menu.querySelector('[role="group"][aria-label="音画模式"]')
-      expect(group).toBeTruthy()
-      const audio = avRadios().find(el => el.textContent.includes('音频'))
-      await clickEl(audio)
+      // 分段常驻页头行——开不开菜单都在
+      const seg = w.find('.watch-head .watch-av')
+      expect(seg.exists()).toBe(true)
+      expect(seg.attributes('aria-label')).toBe('音画模式')
+      const audio = avSegBtns(w).find(b => b.text().includes('音频'))
+      await audio.trigger('click')
       expect(prefVideoOn.value).toBe(false) // 点选翻共享偏好
-      expect(menuEl()).toBeNull()           // 不能只切态不关菜单
-      expect(document.activeElement).toBe(trigger.element)
+      await nextTick()
+      expect(audio.attributes('aria-pressed')).toBe('true')
+      // 单一归属：菜单里不再有音画 radio 组，开菜单首项=沉浸
+      const menu = await openActionsMenu(w)
+      expect(menu.querySelector('[role="group"][aria-label="音画模式"]')).toBeNull()
+      expect(menuRadios()).toHaveLength(0)
+      expect(document.activeElement.textContent).toContain('沉浸')
     } finally { prefVideoOn.value = prev } // 断言挂也归位，不污染后续用例
   })
 })
@@ -296,7 +306,8 @@ describe('WatchView：⋯菜单下载项', () => {
     await openActionsMenu(w)
     expect(dlItem()).toBeNull()
     expect(menuItemByText('分享歌曲')).toBeUndefined()
-    expect(avRadios().length).toBe(0) // hasAudio-only 曲也无音画组
+    expect(menuRadios().length).toBe(0) // hasAudio-only 曲顶栏也不出分段
+    expect(w.find('.watch-av').exists()).toBe(false)
   })
 
   it('songDownloading busy：禁用 + 转圈 + 文案', async () => {
@@ -388,56 +399,56 @@ describe('WatchView：yt 视频位在线流', () => {
   it('hasPlayableVideo：yt 有 videoId 即计入可放（与 bv 乐观放行同口径）', async () => {
     const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
     await vi.waitFor(() => expect(w.vm.hasPlayableVideo).toBe(true))
-    // 「切到视频模式」提示只落在 videoOn=false 时视频 radio 项的 title——
+    // 「切到视频模式」提示只落在 videoOn=false 时视频分段键的 title——
     // 直接翻模块级偏好 ref（localStorage 换名不回读），用毕归位
     const prev = prefVideoOn.value
     try {
       prefVideoOn.value = false
-      await openActionsMenu(w)
-      const video = avRadios().find(el => el.textContent.includes('视频'))
+      await nextTick()
+      const video = avSegBtns(w).find(b => b.text().includes('视频'))
       expect(video).toBeTruthy()
-      expect(video.getAttribute('title')).toContain('切到视频模式')
-      expect(video.getAttribute('title')).not.toContain('需已下载视频档')
+      expect(video.attributes('title')).toContain('切到视频模式')
+      expect(video.attributes('title')).not.toContain('需已下载视频档')
     } finally { prefVideoOn.value = prev }
   })
 })
 
 describe('WatchView：yt_ 裸 id（缺 provider 对象老行）视频位', () => {
-  // videoId 内嵌在 id 里——音画组/键值/可放判定/探测门/在线位五处与
+  // videoId 内嵌在 id 里——音画分段/键值/可放判定/探测门/在线位五处与
   // bv_ 裸 id 同型防御（usePlayer 音频链同款 ytM）
   const BARE_YT = { id: 'yt_abcdefghijk', name: 'yt', ar: [{ name: 'a' }], al: {}, dt: 0 }
 
-  it('音画模式组按 id 形态出组，radio 可点选', async () => {
+  it('音画分段按 id 形态出组，双档可点选', async () => {
     try {
       const w = mountWatch({ currentSong: BARE_YT, tab: 'queue' })
-      await openActionsMenu(w)
-      const radios = avRadios()
-      expect(radios).toHaveLength(2)
-      const audio = radios.find(el => el.textContent.includes('音频'))
-      await clickEl(audio)
-      expect(prefVideoOn.value).toBe(false) // 组活着：点选翻转共享偏好
+      await nextTick()
+      const btns = avSegBtns(w)
+      expect(btns).toHaveLength(2)
+      const audio = btns.find(b => b.text().includes('音频'))
+      await audio.trigger('click')
+      expect(prefVideoOn.value).toBe(false) // 分段活着：点选翻转共享偏好
     } finally { prefVideoOn.value = true } // 归位默认开（断言挂也不污染后续用例）
   })
 
-  it('音画 radio 双项：键面=模式名，aria-checked 报当前态', async () => {
+  it('音画分段双档：键面=模式名，aria-pressed 报当前态', async () => {
     const prev = prefVideoOn.value
     try {
       prefVideoOn.value = true // 显式视频态（不赌模块序默认值）
       const w = mountWatch({ currentSong: BARE_YT, tab: 'queue' })
-      await openActionsMenu(w)
-      const audio = avRadios().find(el => el.textContent.includes('音频'))
-      const video = avRadios().find(el => el.textContent.includes('视频'))
-      // 视频态：态指示由 aria-checked/✓ 槽承担，动作提示落目标项 title
-      expect(audio.getAttribute('aria-checked')).toBe('false')
-      expect(video.getAttribute('aria-checked')).toBe('true')
-      expect(audio.getAttribute('title')).toBe('切到纯音频（省流量）')
-      expect(video.getAttribute('title')).toBeNull() // 当前态项不给「切到」动作提示
-      prefVideoOn.value = false // 翻音频态：✓ 转音频项，「切到视频」提示换位
       await nextTick()
-      expect(audio.getAttribute('aria-checked')).toBe('true')
-      expect(video.getAttribute('aria-checked')).toBe('false')
-      expect(audio.getAttribute('title')).toBeNull()
-      expect(video.getAttribute('title')).toContain('切到视频模式')
+      const audio = avSegBtns(w).find(b => b.text().includes('音频'))
+      const video = avSegBtns(w).find(b => b.text().includes('视频'))
+      // 视频态：态指示由 aria-pressed/--on 承担，动作提示落目标项 title
+      expect(audio.attributes('aria-pressed')).toBe('false')
+      expect(video.attributes('aria-pressed')).toBe('true')
+      expect(audio.attributes('title')).toBe('切到纯音频（省流量）')
+      expect(video.attributes('title')).toBeUndefined() // 当前态项不给「切到」动作提示
+      prefVideoOn.value = false // 翻音频态：on 转音频键，「切到视频」提示换位
+      await nextTick()
+      expect(audio.attributes('aria-pressed')).toBe('true')
+      expect(video.attributes('aria-pressed')).toBe('false')
+      expect(audio.attributes('title')).toBeUndefined()
+      expect(video.attributes('title')).toContain('切到视频模式')
     } finally { prefVideoOn.value = prev } // 归位
   })
 
@@ -458,25 +469,25 @@ describe('WatchView：yt_ 裸 id（缺 provider 对象老行）视频位', () =>
   })
 })
 
-describe('WatchView：音画组降级支（hasPlayableVideo=false 残余形）', () => {
+describe('WatchView：音画分段降级支（hasPlayableVideo=false 残余形）', () => {
   // bilibili 对象在但 hasVideo=false、无本地视频档（探测桩回 null）——
-  // 组照出（按 bvid 存在性出组），可放判定却五支全空：视频项 title 落
+  // 组照出（按 bvid 存在性出组），可放判定却五支全空：视频键 title 落
   // 第三支「需已下载视频档」降级提示，不乐观放行
   const BV_NO_VIDEO = {
     id: 2, name: 'bv', ar: [{ name: 'a' }], al: {}, dt: 0,
     bilibili: { bvid: 'BV1xx411c7mD', cid: 100, hasVideo: false },
   }
 
-  it('音频态 → 视频 radio 项 title 含「需已下载视频档」', async () => {
+  it('音频态 → 视频分段键 title 含「需已下载视频档」', async () => {
     const prev = prefVideoOn.value
     try {
-      prefVideoOn.value = false // 降级支只在音频态（目标=视频）落到该项 title
+      prefVideoOn.value = false // 降级支只在音频态（目标=视频）落到该键 title
       const w = mountWatch({ currentSong: BV_NO_VIDEO, tab: 'queue' })
       expect(w.vm.hasPlayableVideo).toBe(false) // 钉住残余形本身（非只测文案串）
-      await openActionsMenu(w)
-      const video = avRadios().find(el => el.textContent.includes('视频'))
+      await nextTick()
+      const video = avSegBtns(w).find(b => b.text().includes('视频'))
       expect(video).toBeTruthy()
-      expect(video.getAttribute('title')).toBe('切到视频模式（需已下载视频档）')
+      expect(video.attributes('title')).toBe('切到视频模式（需已下载视频档）')
     } finally { prefVideoOn.value = prev } // 归位
   })
 })

@@ -31,12 +31,15 @@
     <!-- 当前播放歌曲的迷你信息与走带（无歌曲时同构骨架：控件禁用、占位兜底） -->
     <div class="player-content">
       <div class="player-inner">
-        <!-- 当前歌曲缩略信息（左列）——YTM：点击回 watch 播放页（肌肉记忆入口） -->
+        <!-- 当前歌曲缩略信息（左列）——YTM：点击回 watch 播放页（肌肉记忆入口）。
+             watchOpen 时同一入口承担收起（emit 不变，toggle 分派在父级）——
+             title/aria-label 与方向 cue 随态翻转给「此刻点它会怎样」预告 -->
         <div
           class="track-meta"
           role="button"
           tabindex="0"
-          title="打开播放页"
+          :title="watchOpen ? '收起播放页' : '打开播放页'"
+          :aria-label="watchOpen ? '收起播放页' : '打开播放页'"
           @click="$emit('open-watch', 'queue')"
           @keydown.enter="$emit('open-watch', 'queue')"
           @keydown.space.prevent="$emit('open-watch', 'queue')"
@@ -55,6 +58,10 @@
             <p class="track-name">{{ currentSong?.name || '选择歌曲开始播放' }}</p>
             <p class="track-artist">{{ currentSong ? `${songArtists(currentSong)} · ${currentSong.al?.name || '未知专辑'}` : 'meowsync' }}</p>
           </div>
+          <!-- 方向 cue：hover/聚焦才露——进 Watch 的可发现性提示（点击区
+               占左列大半、无视觉锚曾是隐形入口）。chev-l 旋 90°=上=展开；
+               watchOpen 翻 -90°=下=收起。触屏无悬停预览，点击结果即展开 -->
+          <span class="track-open-cue" :class="{ 'track-open-cue--open': watchOpen }" aria-hidden="true"><PixelIcon name="chev-l" :size="12" /></span>
         </div>
 
         <!-- 走带控制（中列）：YTM 顺序 —— 随机/上一首/播放/下一首/循环 -->
@@ -209,6 +216,12 @@ export default {
     autoplayOn: {
       type: Boolean,
       default: false
+    },
+    // watch 播放页开合态（App 侧绑定在另一批——这里只消费）：
+    // 曲目区 title/方向 cue 的「展开↔收起」语义翻转
+    watchOpen: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['toggle-play', 'previous', 'next', 'update-volume', 'toggle-mute', 'toggle-shuffle', 'toggle-play-mode', 'open-watch', 'enter-fullscreen', 'seek'],
@@ -328,34 +341,30 @@ export default {
 
 .bp-progress {
   position: absolute;
-  top: -1px;
+  /* 命中带并入本体：content-box + 顶 padding 让盒体上探到 y=-6（9px
+     命中带），轨道色 bg-clip:content-box 不漫进垫层——可视轨道仍钉
+     y∈[-1,3] 原轨位，旧 ::before 隐形带退役：盒体即命中域，focus 环/
+     指针域同一事实源。取舍：底沿 y=3 不变——恰在播放键顶缘 y≈4 上留
+     1px 不窃控件点击；上探 16→5px 收窄，主区末行底缘点击不再变 seek
+     （牺牲深命中换不抢主区）。hover 加高 4→6 向上生长（transform-origin
+     钉底缘，顶缘上探——与 style.css .player-progress-bar 同口径） */
+  top: -6px;
   left: 0;
   right: 0;
-  background: var(--white-16);
+  box-sizing: content-box;
+  padding-top: 5px;
+  background-color: var(--white-16);
+  background-clip: content-box;
   cursor: pointer;
   z-index: 2;
   /* 横滑 seek 不被浏览器手势抢走；竖滑放行——命中带探进主区底缘，
-     none 会在那里造成 16px 滚动死区 */
+     none 会在那里造成滚动死区 */
   touch-action: pan-y;
 }
-/* 隐形命中带向上探：条体顶缘在 y=-1，带覆盖 y∈[-17,3]（总高 20px，
-   对齐触控目标下限）——底沿钉在 y=3，恰在播放键顶缘 y≈4 上方留 1px。
-   用 top+height 而非 inset 的 bottom——hover 加高（4→6px）向下生长时
-   带形不变；bottom 锚法会把带底拖进控件区回漏点击。
-   代价写在明处：向上探 16px 侵入主区末行底缘（song-row 下半段点击
-   会变 seek——误触面窄且竖滑仍可滚页，换取不窃控件点击） */
-.bp-progress::before {
-  content: '';
-  position: absolute;
-  top: -16px;
-  left: 0;
-  right: 0;
-  height: 20px;
-}
-/* 触屏半幅命中带：上探 16→8px（带 20→12，底沿仍钉 y=3 不窃控件点击）——
-   胖指精度不吃鼠标档的加深命中带，末行曲目点击被抢的侵入面减半 */
+/* 触屏浅命中带：上探 5→3px（带 9→7，底沿仍钉 y=3 不窃控件点击）——
+   胖指精度不吃桌面档的加深命中带，末行曲目点击被抢的侵入面再收 */
 @media (hover: none) {
-  .bp-progress::before { top: -8px; height: 12px; }
+  .bp-progress { top: -4px; padding-top: 3px; }
 }
 .bp-progress-fill { background: var(--accent-magenta); } /* 已播部分=accent 本色（retro 火烈鸟粉 / glitch teal 同覆写） */
 
@@ -414,6 +423,29 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-top: 1px;
+}
+/* 曲目区右缘方向 cue：默认隐、hover/聚焦显——track-meta 是进 Watch
+   唯一入口但无视觉锚；chev-l 左旋 90° 成向上=展开播放页，
+   watchOpen 翻转 -90° 朝下=收起。触屏点击结果即展开，cue 无预览
+   对象——(hover:none) 下直接不渲染，不留粘 hover 残影 */
+.track-open-cue {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  color: var(--label-grey);
+  opacity: 0;
+  transform: rotate(90deg);
+  transition: opacity .15s;
+}
+.track-open-cue--open { transform: rotate(-90deg); }
+.track-meta:hover .track-open-cue,
+.track-meta:focus-within .track-open-cue { opacity: 1; }
+@media (hover: none) {
+  .track-open-cue { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .track-open-cue { transition: none; }
 }
 
 /* 中列：走带 */

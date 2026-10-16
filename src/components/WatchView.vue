@@ -1,6 +1,6 @@
 <template>
   <!-- YTM /watch 沉浸舞台：近黑底 + 封面氛围场，左列媒体舞台、右列
-       待播/歌词/相关面板（无面板底）。页头行常显收 返回+⋯。
+       待播/歌词/相关面板（无面板底）。页头行常显收 返回+音画分段+⋯。
        走带/进度/音量/歌曲 meta 不重复渲染——底部播放条已覆盖 -->
   <div ref="viewEl" class="watch-view" :class="{ 'watch-view--video': mediaVideoActive }" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
     <!-- 氛围场：当前封面小图高糊放大铺全屏（fixed+z-index:-1 画在
@@ -13,10 +13,19 @@
       <div class="watch-ambient-scrim"></div>
     </div>
 
-    <!-- 页头行：返回 + ⋯ 触发键。常显在流——替代旧 sticky 顶条与媒体角
-         浮键（操作可发现性）；菜单本体仍 teleport 出 body -->
+    <!-- 页头行：返回 + 音画分段 + ⋯ 触发键。常显在流——替代旧 sticky
+         顶条与媒体角浮键（操作可发现性）；菜单本体仍 teleport 出 body -->
     <header class="watch-head">
       <button type="button" class="watch-back" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
+      <!-- 音画分段：原 ⋯ 菜单 radio 组上移顶栏常驻——模式是高频状态读数，
+           收在菜单里看不见当前态且切一次开两次。即点即切不碰菜单；
+           出场闸复用 showAvGroup（按 provider/id 形态存在性出组），
+           aria-pressed + --on 反白承担态指示，「切到…」动作提示落目标项
+           title——字符串仍出自 avToggle 单源，不另造第二套文案 -->
+      <div v-if="showAvGroup" class="watch-av" role="group" aria-label="音画模式">
+        <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': !videoOn }" :aria-pressed="!videoOn" :title="videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(false)">音频</button>
+        <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': videoOn }" :aria-pressed="videoOn" :title="!videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(true)">视频</button>
+      </div>
       <button
         ref="menuBtn"
         type="button"
@@ -40,28 +49,6 @@
           :style="menuPos"
           @keydown="cycleMenuItems"
         >
-          <!-- 音画模式组：原行内「音画切换」键改写为双 radio（TopNav 主题组
-               同式）——态指示由 aria-checked + ✓ 槽承担，键面即模式名。
-               出组闸同原出键复合条件（见 setup showAvGroup）；残余
-               「判无可放」（hasPlayableVideo=false）降级提示落目标项
-               title——字符串仍出自 avToggle 单源，不另造第二套文案 -->
-          <div v-if="showAvGroup" role="group" aria-label="音画模式">
-            <div class="pg-menu-head" role="presentation">音画模式</div>
-            <button
-              class="pg-menu-item"
-              role="menuitemradio"
-              :aria-checked="!videoOn"
-              :title="videoOn ? `切到${avToggle.action}` : undefined"
-              @click="pickAvMode(false)"
-            ><span class="watch-menu-check" aria-hidden="true"><PixelIcon v-if="!videoOn" name="check" :size="12" /></span>音频</button>
-            <button
-              class="pg-menu-item"
-              role="menuitemradio"
-              :aria-checked="videoOn"
-              :title="!videoOn ? `切到${avToggle.action}` : undefined"
-              @click="pickAvMode(true)"
-            ><span class="watch-menu-check" aria-hidden="true"><PixelIcon v-if="videoOn" name="check" :size="12" /></span>视频</button>
-          </div>
           <button class="pg-menu-item" role="menuitem" title="全屏歌词模式" :disabled="!currentSong" @click="pickFullscreen">
             <PixelIcon name="flask" :size="14" /> 沉浸
           </button>
@@ -114,10 +101,21 @@
                video+控制层同包一个 template v-if：img/fallback 的 v-else 链
                只挂这一处条件——控制层条件将来分叉不会误把 img 带出场 -->
           <template v-if="mediaVideoActive">
+            <!-- 缓冲衬底：封面大图铺在最下层——video 元素缓冲期（首帧未达/
+                 卡顿回流）透出封面而非黑场（--wait 档把 video 底色改透明）。
+                 DOM 序在 video 之前：两定位件同层叠时后绘者在上 -->
+            <img
+              v-if="stageCoverSrc"
+              :src="httpsCover(stageCoverSrc)"
+              alt=""
+              class="watch-cover watch-cover--under"
+              aria-hidden="true"
+            />
             <video
               ref="mediaVideoRef"
               :key="mediaVideoKey"
               class="watch-cover watch-cover--video"
+              :class="{ 'watch-cover--video--wait': !videoReady }"
               :src="mediaVideoUrl"
               :aria-label="`视频画面：${currentSong?.name || ''}`"
               :poster="stageCoverSrc ? httpsCover(stageCoverSrc) : undefined"
@@ -127,6 +125,8 @@
               disablepictureinpicture
               disableremoteplayback
               @error="onMediaVideoError"
+              @loadeddata="onMediaVideoReady"
+              @playing="onMediaVideoReady"
               @pointerdown="onVideoPointerDown"
               @click="onVideoClick"
             ></video>
@@ -156,6 +156,11 @@
                 :aria-pressed="videoFullscreen"
               ><PixelIcon name="expand" :size="14" /></button>
             </div>
+            <!-- 缓冲读数章：钉右上缘（全屏键在右下、控制层中央均不撞）——
+                 pointer-events:none 不吃画面点按热区；videoReady 复位链
+                 见 setup（换键/换源/卸载/error 全回「缓冲中」）；
+                 role=status 自带 polite live 区——读数章进屏 SR 即报 -->
+            <div v-if="!videoReady" class="watch-buffering" role="status"><span class="pixel-loading pixel-loading--on-ink" aria-hidden="true"></span>视频缓冲中</div>
           </template>
           <img
             v-else-if="stageCoverSrc"
@@ -264,15 +269,21 @@
                     <template v-else-if="queueStartIndex + i < currentQueueIndex"><PixelIcon name="check" :size="11" /></template>
                     <template v-else>{{ queueStartIndex + i + 1 }}</template>
                   </span>
+                  <!-- 缩略图：alt="" 读屏去重（紧邻歌名，复述是噪音）；
+                       @error 记黑换 fallback 音符壳——坏源/403 图不再每次
+                       重渲染都白打外联请求。thumbErrs 按行 key 记账 -->
                   <img
-                    v-if="songThumbUrl(song, 80)"
+                    v-if="songThumbUrl(song, 80) && !thumbErrs.has(queueKeyOf(song))"
                     :src="httpsCover(songThumbUrl(song, 80))"
-                    :alt="song.name"
+                    alt=""
                     class="watch-queue-thumb"
+                    @error="thumbErrs.add(queueKeyOf(song))"
                   />
                   <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
                   <div class="queue-row-info">
-                    <p class="queue-row-title">{{ song.name }}</p>
+                    <!-- 标题行 flex：歌名截断 + 来源徽标定宽不脱（song-title/
+                         song-tag 同构）——徽标内联不抬行高（虚拟窗按 56 算） -->
+                    <p class="queue-row-title"><span class="queue-row-title-text">{{ song.name }}</span><span v-if="songSource(song)" class="queue-src" :title="`来源：${songSource(song)} 导入`">{{ songSource(song) }}</span></p>
                     <p class="queue-row-artist">{{ songArtist(song) }}</p>
                   </div>
                   <span class="queue-row-duration">{{ formatDuration(song) }}</span>
@@ -405,11 +416,13 @@
               @click="lyricFontSize++" title="歌词字号增大" aria-label="增大字号">A+</button>
           </div>
           <div class="lyric-tools-group" role="group" aria-label="歌词时间校准">
-            <!-- 切歌/歌词在途期间禁调——此时显示的还是旧曲的词与校准值 -->
+            <!-- 切歌/歌词在途期间禁调——此时显示的还是旧曲的词与校准值。
+                 键面带方向词（延后/提前，与 title 口径一致）——裸 ±0.5s
+                 对触屏无方向语义，要靠猜哪个键让词更慢 -->
             <button type="button" class="lyric-tool"
               :disabled="!lyrics.length || songSwitching || loadingLyrics"
               @click="$emit('lyric-offset-adjust', -500)"
-              title="歌词延后 0.5 秒" aria-label="歌词延后 0.5 秒">−0.5s</button>
+              title="歌词延后 0.5 秒" aria-label="歌词延后 0.5 秒">延后 .5s</button>
             <button type="button" class="lyric-tool lyric-tool-val lyric-tool-reset"
               :disabled="!lyrics.length || lyricOffsetMs === 0 || songSwitching || loadingLyrics"
               @click="$emit('lyric-offset-reset')"
@@ -419,7 +432,7 @@
             <button type="button" class="lyric-tool"
               :disabled="!lyrics.length || songSwitching || loadingLyrics"
               @click="$emit('lyric-offset-adjust', 500)"
-              title="歌词提前 0.5 秒" aria-label="歌词提前 0.5 秒">+0.5s</button>
+              title="歌词提前 0.5 秒" aria-label="歌词提前 0.5 秒">提前 .5s</button>
           </div>
           <div class="lyric-tools-group" role="group" aria-label="歌词获取">
             <!-- 手动重打外源级联（YTM→LRCLIB→酷狗）：曲名以 song.name
@@ -479,17 +492,20 @@
               @keydown.space.prevent="$emit('play-song', song, relatedSongs)"
             >
               <span class="queue-row-index">{{ i + 1 }}</span>
+              <!-- 队列行同款：alt="" 读屏去重 + @error 记黑换 fallback；
+                   相关行 key 用 song.id 记账（队列行是 queueKeyOf uid） -->
               <img
-                v-if="songThumbUrl(song, 80)"
+                v-if="songThumbUrl(song, 80) && !thumbErrs.has(song.id)"
                 :src="httpsCover(songThumbUrl(song, 80))"
-                :alt="song.name"
+                alt=""
                 class="watch-queue-thumb"
                 loading="lazy"
                 decoding="async"
+                @error="thumbErrs.add(song.id)"
               />
               <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
               <div class="queue-row-info">
-                <p class="queue-row-title">{{ song.name }}</p>
+                <p class="queue-row-title"><span class="queue-row-title-text">{{ song.name }}</span><span v-if="songSource(song)" class="queue-src" :title="`来源：${songSource(song)} 导入`">{{ songSource(song) }}</span></p>
                 <p class="queue-row-artist">{{ songArtist(song) }}</p>
               </div>
               <span class="queue-row-duration">{{ formatDuration(song) }}</span>
@@ -532,7 +548,7 @@ import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
 import { relatedSourceOf, relatedFetch } from '../lib/related'
-import { songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
+import { songSource, songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
 import { cycleMenuItems } from '../lib/focus-trap.js'
 
@@ -1190,6 +1206,20 @@ export default {
     const mediaVideoActive = computed(() =>
       !!(mediaVideoKey.value && videoOn.value && !props.fullscreenPlayerOpen
         && !mediaVideoFailed.value && mediaVideoUrl.value))
+    // 首帧就绪戳：loadeddata/playing 任一即置位——缓冲期让 <video> 底色
+    // 透明透出封面衬底（--wait 档），就绪后回黑底做信箱遮幅。
+    // 复位链全在下挂 watcher + error 路径：换源/卸载/换曲/闩封面→
+    // 回「缓冲中」读数章，就绪戳随新源再置
+    const videoReady = ref(false)
+    // 元素身份闸同 error 路径：换 key 后旧元素的迟到 loadeddata/playing
+    // 不得把新源的缓冲戳提前点亮（detached 节点事件仍会进 handler）
+    const onMediaVideoReady = (e) => {
+      if (e?.target && e.target !== mediaVideoRef.value) return
+      videoReady.value = true
+    }
+    // 队列/相关行缩略图 error 记黑集（key=行 key）——403/坏源图换
+    // fallback 音符壳并不再重试请求；Set 直接存 reactive 模板可直读
+    const thumbErrs = ref(new Set())
     // 有无「确定可放」的视频源：bv 对象稿按 hasVideo、裸 bv_ id（缺对象
     // 老行）乐观放行（mediaVideoUrl 同口径——BV 号在 id 即视频稿）、yt 有
     // videoId 即计入（在线位经 YT_PROXY 恢复后与 bv 同口径乐观，裸 yt_ id
@@ -1201,8 +1231,8 @@ export default {
         || (!props.currentSong?.bilibili && bvM.value)
         || (!props.currentSong?.youtube && ytM.value)
         || downloadedVideoUrl.value))
-    // 音画切换文案单源：action=「切到…」动作短串，供 ⋯ 菜单音画 radio 组里
-    // 目标项的 title（当前态项不给——点它不产生动作）。残余「判无可放」
+    // 音画切换文案单源：action=「切到…」动作短串，供页头行 .watch-av 音画
+    // 分段里目标键的 title（当前态键不给——点它不产生动作）。残余「判无可放」
     // （hasPlayableVideo=false）落「需已下载视频档」降级支
     const avToggle = computed(() => ({
       action: videoOn.value
@@ -1306,12 +1336,17 @@ export default {
       // 版本——同 URL 换源 <video> 不会重载，靠它让 mediaVideoUrl 变化触发复位
       return song?.file?.hasVideo ? fileArtifactUrl(song.id, 'video', song.file.videoV) : ''
     })
+    // 出/失 <video> 元素即复位缓冲戳（active=false 时元素不存在，
+    // loadeddata 无从到——重挂新元素必须重等首帧）。
+    // 【序】必须列在 mediaVideoUrl 之后——watch source 数组建组即 eager
+    // 读元，TDZ 会炸掉整个 setup（与下方 active watcher 同坑同注释位）
+    watch([mediaVideoActive, mediaVideoKey, mediaVideoUrl], () => {
+      videoReady.value = false
+    }, { flush: 'sync' })
     // 音画开关翻转 = 舞台/分屏几何换轨（面板体恒为滚动口但可视窗骤变），
     // 词窗骤变但 scrollTop 不动——停在词表顶部等下一个 currentLyricIndex
     // 才回正，间奏空窗可达几十秒；按当前行重居中（centerCurrentRow 内部
     // 自动挑换轨后的真滚动根）
-    // 【序】必须列在 mediaVideoUrl 之后——非 immediate watch 注册即 eager
-    // 求值 source 取 oldValue，mediaVideoActive 链触到 TDZ 会炸掉整个 setup
     watch(mediaVideoActive, () => nextTick(() => {
       if (props.tab === 'queue' || props.tab === 'lyrics') centerCurrentRow()
     }))
@@ -1339,6 +1374,7 @@ export default {
         }
         return
       }
+      videoReady.value = false // 闩封面前回缓冲读数——error 后元素重挂必重等首帧
       mediaVideoFailed.value = true
       // 中途 CDN 抖一下不该把整曲打成封面——10s 后复位闩重挂真重试；
       // 每 key 至多两次（mediaRetriedKey 戳+计数），死链回闩后不再自愈。
@@ -1483,11 +1519,11 @@ export default {
     const menuBtn = ref(null)
     const menuOpen = ref(false)
     const menuPos = ref({})
-    // 音画模式组出场闸：原行内切换键的复合条件原样保留——按 provider 存在性
-    // 出项（与 mediaVideoKey 同律：导入标记可能被裁/老数据缺标，盘上躺着档
+    // 音画分段出场闸：原行内切换键的复合条件原样保留——按 provider 存在性
+    // 出组（与 mediaVideoKey 同律：导入标记可能被裁/老数据缺标，盘上躺着档
     // 的曲也要能切回音频、VIDEO_MODE=0 的用户也要有入口开视频重探）；裸
     // bv_/yt_ id（缺对象老行）凭 id 形态同出；file_ 仍按 hasVideo。抽成
-    // computed 供模板 v-if 与 menuPos 行数估算共用
+    // computed 供顶栏分段 v-if 用
     const showAvGroup = computed(() =>
       !!(props.currentSong?.bilibili?.bvid || props.currentSong?.youtube?.videoId
         || props.currentSong?.file?.hasVideo || bvM.value || ytM.value))
@@ -1496,14 +1532,14 @@ export default {
       if (menuOpen.value) { closeMenu(); return }
       const rect = menuBtn.value?.getBoundingClientRect?.()
       if (!rect) return
-      // 菜单高按可见行数估（item≈39/head≈36——TopNav 同公式）：下方放不下翻到上方
+      // 菜单高按可见行数估（item≈39——TopNav 同公式）：下方放不下翻到上方。
+      // 音画组上移顶栏后菜单只剩标准项——不再有组头 36px 偏置
       const fileTrack = isFileTrackId(props.currentSong?.id)
-      const items = (showAvGroup.value ? 2 : 0)
-        + 1                                          // 沉浸恒在
+      const items = 1                                          // 沉浸恒在
         + (fileTrack ? 0 : 1)                        // 分享（file_ 不出项）
         + (props.currentSong && !fileTrack ? 1 : 0)  // 下载（同 file_ 闸）
         + (sourceUrl.value ? 1 : 0)                  // 回源
-      const h = items * 39 + (showAvGroup.value ? 36 : 0) + 8
+      const h = items * 39 + 8
       menuPos.value = {
         top: (rect.bottom + 4 + h <= window.innerHeight
           ? rect.bottom + 4 : Math.max(8, rect.top - h - 4)) + 'px',
@@ -1523,9 +1559,11 @@ export default {
       if (restoreFocus && was) menuBtn.value?.focus({ preventScroll: true })
     }
 
+    // 顶栏音画分段=即点即切——不涉菜单开合（TopNav 主题分段同型；
+    // 原 pickAvMode 的 closeMenu 职责随 radio 组上移一并退役）
+    const setAvMode = (on) => { videoOn.value = on }
     // 点选=执行+关菜单归还焦点（TopNav pickTheme 同型：无下一跳接管焦点，
     // 与 Esc 同为解散语义——沉浸层挂载后自己收焦点，归还先行一步无碍）
-    const pickAvMode = (on) => { videoOn.value = on; closeMenu(true) }
     const pickFullscreen = () => { emit('open-fullscreen'); closeMenu(true) }
     const pickShare = () => { shareSong(); closeMenu(true) }
     const pickDownload = () => { emit('download-song'); closeMenu(true) }
@@ -1637,14 +1675,18 @@ export default {
       ytM,
       hasPlayableVideo,
       avToggle,
+      videoReady,
+      onMediaVideoReady,
       onMediaVideoError,
+      thumbErrs,
+      songSource,
       menuBtn,
       menuOpen,
       menuPos,
       showAvGroup,
       toggleMenu,
       closeMenu,
-      pickAvMode,
+      setAvMode,
       pickFullscreen,
       pickShare,
       pickDownload,
@@ -1709,13 +1751,54 @@ export default {
   .watch-ambient-fade-leave-active { transition: none; }
 }
 
-/* ── 页头行：返回 + ⋯ 触发键（常显在流 40px）── */
+/* ── 页头行：返回 + 音画分段 + ⋯ 触发键（常显在流 40px）── */
 .watch-head {
   height: 40px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+}
+.watch-back { margin-right: auto; } /* 右组（分段+⋯）推齐右缘 */
+/* 音画分段：暗面胶囊连通器——外描发丝白边、内键圆角跟随外半径；
+   态指示=--on 反白（白底黑字对暗场对比最高，优于再加色 accent）。
+   键体 36px 触控地板：容器满吃页头 40px 高（分段是顶栏常驻主控件，
+   不照次控 32px 档；padding 区视觉留白不进键盒） */
+.watch-av {
+  display: inline-flex;
+  align-items: center;
+  /* border-box 全局口径：40 外高 - 1×2 描边 = 38 内高——36 键上下各留
+     1px 呼吸；侧 padding 只收视觉留白，键盒即命中域 */
+  height: 40px;
+  padding: 0 2px;
+  border: 1px solid var(--white-16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .04);
+}
+.watch-av-btn {
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--ink-64);
+  cursor: pointer;
+  transition: background-color .12s ease, color .12s ease;
+}
+.watch-av-btn:hover:not(.watch-av-btn--on) { color: var(--ink); }
+.watch-av-btn--on {
+  background: var(--ink);
+  color: var(--stage-bg);
+  font-weight: 500;
+}
+.watch-av-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, .75);
+}
+@media (prefers-reduced-motion: reduce) {
+  .watch-av-btn { transition: none; }
 }
 .watch-back {
   display: inline-flex;
@@ -1794,10 +1877,37 @@ export default {
   object-fit: cover;
   display: block;
 }
+/* 缓冲衬底：铺在最下层（DOM 序先于 video）——video --wait 档底色透明
+   时透出封面；首帧到达后 video 回黑底自然盖住，衬底无需退场动画 */
+.watch-cover--under {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* 点按全归 video/控制层 */
+}
 .watch-cover--video {
+  position: relative; /* 抬到衬底之上（同为定位件按 DOM 序叠，显式 z 防歧义） */
   object-fit: contain;
   background: #000;
   touch-action: manipulation; /* 点画面=播放/暂停——禁双击缩放延迟 */
+}
+/* 缓冲期（首帧未达/卡顿回流）：透明底色透出封面衬底而非黑场——
+   poster 仍挂做兜底；就绪后回黑底做信箱遮幅 */
+.watch-cover--video--wait { background: transparent; }
+/* 缓冲读数章：钉右上缘——全屏键右下、控制层中央均不撞；
+   pointer-events:none 不吃画面点按 */
+.watch-buffering {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .55);
+  font-size: 11px;
+  color: var(--ink);
+  pointer-events: none;
 }
 .watch-cover--fallback {
   display: flex;
@@ -1998,7 +2108,34 @@ export default {
 /* 已播行只淡标题（缩略图/序号读数保持原亮） */
 .watch-side-body .queue-row--played { opacity: 1; }
 .watch-side-body .queue-row--played .queue-row-title { color: var(--ink-64); }
-.watch-side-body .queue-row-title { font-size: 14px; }
+/* 标题行改 flex：歌名截断 + 来源徽标定宽不脱——全局 .queue-row-title
+   是单文本 nowrap 截断，加徽标后按 song-title/song-tag 同构拆两段；
+   徽标内联在行高内，不抬 56px 虚拟行 */
+.watch-side-body .queue-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 14px;
+}
+.queue-row-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 行内来源徽标：song-tag 同型紧凑档换暗面 token（发丝边 + .64 白字，
+   11px 功能字地板线）——B站/YouTube/QQ音乐/本地上传，网易云/散曲不出牌 */
+.queue-src {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--white-16);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--ink-64);
+}
 .watch-side-body .queue-row-artist,
 .watch-side-body .queue-row-duration { font-size: 12px; }
 .watch-side-body .queue-row--dragging { background: var(--ink-10); }
@@ -2238,22 +2375,7 @@ export default {
 /* 校准值键兼复位：按最大刻度预留宽，值跳变时整组不位移 */
 .lyric-tool-reset { min-width: 56px; }
 
-/* ── ⋯ 菜单两件特件（盒模型全走全局 .pg-menu 族）── */
-/* 音画组与后续项的分隔：组内末项命中 .pg-menu-item:last-child 无底线，
-   组后还有项时由组级发丝线补上 */
-.watch-actions-menu [role="group"]:not(:last-child) {
-  border-bottom: var(--hairline-soft);
-}
-/* 音画 radio 项 ✓ 槽定宽对齐——无图标侧空槽占位，两档文字左缘对齐 */
-.watch-menu-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--accent-magenta-ink);
-}
+/* ── ⋯ 菜单无组件特件——音画组上移顶栏后菜单只剩标准 pg-menu-item ── */
 
 /* ── 双栏态：宽屏（≥901）与窄屏矮窗（≤900.98∧<600h 横屏）──
    舞台列 + 面板列；页头退居舞台列顶行、面板跨两行吃满视高——

@@ -321,7 +321,9 @@ export default {
 .lp-badge {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 9px;
+  /* 词源徽标是功能读数（词源可辨识性）——收 11px 功能字地板线，不再用
+     9px 邮票档；mono 等宽下芯片仍紧凑 */
+  font-size: 11px;
   line-height: 1;
   padding: 3px 4px;
   border: var(--hairline-soft);
@@ -330,7 +332,7 @@ export default {
 .lp-badge--lrclib { color: var(--ink); }
 .lp-badge--kugou { color: var(--accent-magenta-ink, var(--ink)); }
 /* netease 品牌红——借 danger 通道的纸面小字深档（无 --accent-red-ink token，
-   accent 本色在纸面 <4.5:1，徽标是 9px 小字须用 -ink 档） */
+   accent 本色在纸面 <4.5:1，徽标是 11px 小字须用 -ink 档） */
 .lp-badge--netease { color: var(--accent-danger-ink, var(--ink)); }
 /* qq 品牌绿——与 magenta/danger 同族深档，保持纸面小字对比度 */
 .lp-badge--qq { color: var(--accent-green-ink, var(--ink)); }
@@ -348,7 +350,7 @@ export default {
   white-space: nowrap;
 }
 .lp-preview {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-64);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -360,7 +362,7 @@ export default {
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-64);
 }
 .lp-tag {
