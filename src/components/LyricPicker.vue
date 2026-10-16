@@ -30,6 +30,45 @@
           ><PixelIcon name="close" :size="13" /></button>
         </div>
 
+        <!-- 检索条：改词重检候选池。词与自动派生口径同串（预填词回车）走自动
+             形态入池；词偏离自动口径才走手动形态——title=整串用户词、
+             artist=''，服务端 title/artist 本是自由检索词（candQueryForms
+             做变体×降轮展开），手搜词走同一通道零后端改动；id/durationSec
+             恒吃派生槽位（id 供 ytm 支路抽 videoId 与 pick 绑定，
+             durationSec 只进排序键不筛池——换词检索仍保时长排序收益）。
+             busy（绑定/解绑在飞）期整行禁用，与关窗通道同闸；song0 无 id
+             时 load 早退、提交静默无效——整行同闸禁用，不留假活控件 -->
+        <div class="lp-search" role="search">
+          <div class="pg-field lp-search-field">
+            <input
+              v-model="query"
+              type="text"
+              aria-label="搜索关键词"
+              placeholder="搜索关键词"
+              autocomplete="off"
+              spellcheck="false"
+              :disabled="busy || !song0?.id"
+              @keydown.enter.prevent="runSearch"
+            />
+          </div>
+          <button
+            type="button"
+            class="pg-icobtn lp-search-go"
+            aria-label="搜索"
+            title="搜索"
+            :disabled="busy || !song0?.id || !query.trim()"
+            @click="runSearch"
+          ><PixelIcon name="search" :size="15" /></button>
+          <!-- 词偏离自动派生口径才露：回填+立即以自动词重检一体（不是只填不搜） -->
+          <button
+            v-if="!isDefaultQuery"
+            type="button"
+            class="lp-search-reset"
+            :disabled="busy || !song0?.id"
+            @click="restoreQuery"
+          >恢复默认</button>
+        </div>
+
         <div class="lp-list" role="list" aria-label="外部词源候选">
           <p v-if="loading" class="lp-state">
             <span class="pixel-loading" aria-hidden="true"></span>
@@ -38,10 +77,10 @@
           <template v-else-if="loadFailed">
             <p class="lp-state">外部词源检索失败：{{ loadFailed }}</p>
             <div class="lp-retry">
-              <button type="button" class="ink-btn ink-btn--sm" @click="load">重试</button>
+              <button type="button" class="ink-btn ink-btn--sm" @click="retry">重试</button>
             </div>
           </template>
-          <p v-else-if="!candidates.length" class="lp-state">外部词源没有这首歌的候选歌词</p>
+          <p v-else-if="!candidates.length" class="lp-state">{{ emptyText }}</p>
           <div v-for="c in candidates" :key="c.extId" role="listitem" class="lp-item">
             <button
               type="button"
@@ -113,12 +152,29 @@ export default {
       loadFailed: '',
       hasManual: false,
       busy: false,
-      pickError: ''
+      pickError: '',
+      // 检索框现值——开窗预填自动派生词（mounted 置），提交后保留作
+      // 「当前检索词」读数不另开指示条
+      query: '',
+      // 最后一次实际提交的检索口径 {title,artist,manual}——幂等闸/重试键/
+      // 空态文案都认它不认输入框现值（框里可能是改了一半没提交的词）
+      lastFeed: null
     }
   },
   computed: {
     songName() {
       return this.song0?.name || this.song0?.title || ''
+    },
+    // 「恢复默认」只在词偏离自动派生口径时露——trim 后比较，尾部空格不唤醒
+    isDefaultQuery() {
+      return this.query.trim() === this.defaultQuery()
+    },
+    // 空态分口径：手动检索的空池念用户词（「kw」没有候选），自动首载的空
+    // 池维持原曲面文案——同一份空列表两种语境，一刀切会误导「哪次检索扑空」
+    emptyText() {
+      return this.lastFeed?.manual
+        ? `「${this.lastFeed.title}」没有候选歌词`
+        : '外部词源没有这首歌的候选歌词'
     }
   },
   mounted() {
@@ -139,6 +195,9 @@ export default {
       if (e.key === 'Escape') this.requestClose()
     }
     window.addEventListener('keydown', this._onWinKeyCapture, true)
+    // 检索框预填与首载同一份自动派生口径（defaultQuery 内部走 deriveFeed，
+    // 与 load 的 feed 同源——两处各写一份迟早口径漂移）
+    this.query = this.defaultQuery()
     this.load()
   },
   beforeUnmount() {
@@ -161,10 +220,81 @@ export default {
       if (c?.synced == null) return '未知'
       return c.synced === false ? '纯文本' : '滚动'
     },
+    // 候选扇出的喂料派生（与 usePlayer manualFetchLyrics/词载链同一份口径）：
+    // 标题序随 song.custom 分家——custom=true 才是「SongFormDialog 手改过名」
+    // 的真信号，手改曲 song.name 优先；非 custom 一律 provider 原标题
+    // （ext.title）优先，缺省回退曲面 name（错绑烘进 name 的 matched 残留名
+    // 是污染不是用户意图）；artist 取 provider author，缺省回退曲面 ar
+    // （artistsJoined）。时长只认 ms 槽位做 /1000——三槽同形才保证候选池与
+    // 词载链同批词源集。自动首载/检索条预填/恢复默认三处共用此一份派生
+    deriveFeed() {
+      const song = this.song0 || {}
+      const ext = song.youtube || song.bilibili || null
+      const durationMs = song.dt || song.duration
+      return {
+        id: song.id,
+        title: song.custom ? (song.name || ext?.title || '') : (ext?.title || song.name || ''),
+        artist: ext?.author
+          || (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/')
+          || '',
+        durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined
+      }
+    },
+    // 检索条的「自动词」读数：title+artist 拼一行（artist 缺省即纯 title）——
+    // 预填与恢复默认的「默认」判定都指这个词
+    defaultQuery() {
+      const f = this.deriveFeed()
+      return `${f.title || ''} ${f.artist || ''}`.trim()
+    },
+    // 改词重检，两形态分家：词与自动派生口径同串（预填词原样回车）→ 自动
+    // 形态入池——「提交预填词」语义是重打自动检索；若打成手动形则框显自动
+    // 词而 lastFeed.manual=true，空态念「kw」错口径、恢复钮被 isDefaultQuery
+    // 闸藏起但口径已是手动形。词偏离自动口径才走手动形态：title=整串用户
+    // 词、artist='' 入池（服务端检索词本是自由口径，手搜词与自动词同池同
+    // 展开）。空串无意义不提交；与上次实际提交同口径且非失败态 → 静默跳过
+    // 不重复扇出上游（失败态放行是重试通道）；在飞期间换词再提交允许——
+    // load 里 _aborter 重铸会掐断前一发
+    runSearch() {
+      const kw = this.query.trim()
+      if (!kw || this.busy) return
+      const last = this.lastFeed
+      if (kw === this.defaultQuery()) {
+        const f = this.deriveFeed()
+        // 自动支路的幂等闸：lastFeed 已是同形自动口径且非失败态 → 跳闸
+        if (!this.loadFailed && last && last.manual === false
+            && last.title === f.title && last.artist === f.artist) return
+        this.load({ title: f.title, artist: f.artist, manual: false })
+        return
+      }
+      // 手动支路的幂等闸比 title+artist 双槽——只比 title 会把「撞自动
+      // 标题但口径不同」的手搜词误判同口径吃掉（artist 槽是手动形的真信号）
+      if (!this.loadFailed && last && last.title === kw && last.artist === '') return
+      this.load({ title: kw, artist: '', manual: true })
+    },
+    // 恢复默认：回填自动词并立即以自动口径重检——显式传自动口径而非空参，
+    // 否则 load 会沿用 lastFeed 复打手动词（空参语义是「上次那发再来一遍」）
+    restoreQuery() {
+      if (this.busy) return
+      // 回填词吃 defaultQuery()（内部 deriveFeed 同一份派生）——与预填/
+      // isDefaultQuery 同源，内联再拼一份迟早口径漂移
+      this.query = this.defaultQuery()
+      const f = this.deriveFeed()
+      this.load({ title: f.title, artist: f.artist, manual: false })
+    },
+    // 重试复打「最后一次实际提交的口径」（lastFeed）——手动词失败重试仍打
+    // 手动词不回落自动词；自动首载失败时 lastFeed 已是自动口径，同一条路。
+    // busy 闸与 runSearch/restoreQuery 同律（绑定在飞期不允再发检索）
+    retry() {
+      if (this.busy) return
+      this.load()
+    },
     // 开屏并行：候选扇出 + 现有手动绑定读口（决定页脚「恢复自动匹配」显隐）。
-    // 检索喂料与 usePlayer 词载链同一份口径（字段抽取见下方 feed 注）——
-    // 口径漂移会让用户看到两套词源集
-    async load() {
+    // 检索喂料与 usePlayer 词载链同一份口径（字段抽取见 deriveFeed 注）——
+    // 口径漂移会让用户看到两套词源集。
+    // over 在场=本轮检索口径覆盖（手动改词 {title:用户词,artist:'',manual:true}；
+    // 恢复默认传自动口径 manual:false）；缺省沿用 lastFeed——首载为 null
+    // 落自动派生词，「重试」也走这里复打最后一次实际提交的口径
+    async load(over) {
       const song = this.song0
       if (!song?.id) { this.loading = false; return }
       this.loading = true
@@ -173,21 +303,14 @@ export default {
       this._aborter?.abort()
       this._aborter = new AbortController()
       const signal = this._aborter.signal
-      const ext = song.youtube || song.bilibili || null
-      const durationMs = song.dt || song.duration
+      const base = this.deriveFeed()
+      const eff = over || this.lastFeed || { title: base.title, artist: base.artist, manual: false }
+      this.lastFeed = { title: eff.title, artist: eff.artist, manual: eff.manual === true }
       const feed = {
-        id: song.id,
-        // 标题序随 song.custom 分家（与 usePlayer manualFetchLyrics 同口径）：
-        // custom=true 才是「SongFormDialog 手改过名」的真信号——手改曲
-        // song.name 优先；非 custom 一律 provider 原标题（ext.title）优先，
-        // 缺省回退曲面 name（错绑烘进 name 的 matched 残留名是污染不是用户
-        // 意图）；artist 取 provider author，缺省回退曲面 ar（artistsJoined）。
-        // 时长只认 ms 槽位做 /1000——三槽同形才保证候选池与词载链同批词源集
-        title: song.custom ? (song.name || ext?.title || '') : (ext?.title || song.name || ''),
-        artist: ext?.author
-          || (song.ar || song.artists || []).map(a => a?.name).filter(Boolean).join('/')
-          || '',
-        durationSec: Number.isFinite(durationMs) ? Math.round(durationMs / 1000) : undefined
+        id: base.id,
+        title: eff.title,
+        artist: eff.artist,
+        durationSec: base.durationSec
       }
       // 候选扇出 + 现有绑定读口并行开跑。两条腿都套 Promise.resolve() 再起——
       // 桩缺席（测试/契约漂移）的同步 TypeError 落进 promise 链才被 catch
@@ -288,6 +411,46 @@ export default {
 .lp-dialog {
   width: min(440px, calc(100vw - 24px));
   max-height: min(420px, calc(100vh - 48px));
+}
+/* 检索条：头行与候选列表间的改词入口。field 吃全局 pg-field（纸面发丝
+   盒 + focus-within 环——聚焦语言与 lp-clear:focus-visible 同族），本层
+   只收密实档：32px 高（--ctrl-h-sm，与同行 pg-icobtn 同盒）+ mono 11px
+   （弹内读数一律这档，pg-field 默认 13px 在 440px 窗里突兀） */
+.lp-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: var(--hairline-soft);
+}
+.lp-search-field { flex: 1; min-width: 0; height: var(--ctrl-h-sm); }
+.lp-search-field input { padding: 0 8px; font-family: var(--font-mono); font-size: 11px; }
+/* 禁用态降墨与同行钮同律（pg-icobtn/lp-search-reset 的 :disabled 都走 .45） */
+.lp-search-field input:disabled { opacity: .45; }
+/* 「恢复默认」小号文本钮：弱于搜索钮的墨档出现（次级动作不抢眼），
+   disabled/hover/focus 律与 lp-clear 同 */
+.lp-search-reset {
+  flex: none;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lp-search-reset:hover:not(:disabled) { color: var(--ink); }
+.lp-search-reset:focus-visible { outline: 1px solid var(--ink); outline-offset: -1px; }
+.lp-search-reset:disabled { opacity: .45; cursor: default; }
+@media (pointer: coarse) {
+  /* 防缩放地板线对弹内检索框同样生效——模态不豁免 iOS 聚焦整页 zoom；
+     不写则 scoped 高特异度会压住全局 pg-field 的 16px 抬档 */
+  .lp-search-field input { font-size: 16px; }
+  /* 同行 .lp-search-go（pg-icobtn 常规档）在 coarse 抬到 40px 触达盒
+     （style.css .pg-icobtn:not(--sm) 实值，非令牌）——输入盒跟到同高，
+     否则行内 32px 盒配 40px 钮高低不齐 */
+  .lp-search-field { height: 40px; }
 }
 .lp-list {
   overflow-y: auto;

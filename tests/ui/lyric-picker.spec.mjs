@@ -3,7 +3,11 @@
 //                 usePlayer.lyricSearchFeed 同口径）、词源徽标/时长/滚动性/
 //                 预览行渲染、选定→POST 绑定→applied+关窗、词源失效 404
 //                 「该词源已失效」内联留窗、恢复自动匹配解绑、Esc/遮罩三点
-//                 关窗（busy 期失效）、卸载/重载断在飞请求
+//                 关窗（busy 期失效）、卸载/重载断在飞请求；
+//                 检索条改词重检——title=用户词/artist='' 入池（预填词回车
+//                 走自动口径）、幂等闸（比 title+artist 双槽）、在飞重入
+//                 掐断前发、loading 不锁输入、失败态重试复打手动词、
+//                 恢复默认回填+重检、分口径空态文案
 //   musicApi 契约 — 真 wrapper 走假 http 层：getManualLyric HTTP 404→null、
 //                 pick/clear 调用形状与业务码闸（与 api-contract 谱同型，
 //                 收本文件避开其文件域）
@@ -70,6 +74,17 @@ const dialogEl = () => document.querySelector('.lp-dialog')
 const overlayEl = () => document.querySelector('.atp-overlay')
 const rowEls = () => [...document.querySelectorAll('.lp-row')]
 const keydown = (el, key) => el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+const searchInput = () => document.querySelector('.lp-search input')
+const searchGo = () => document.querySelector('.lp-search-go')
+const resetBtn = () => document.querySelector('.lp-search-reset')
+// v-model 直喂：设值+input 事件（组件内部 trim，原始串留在框里作读数）
+const typeQuery = (q) => {
+  const el = searchInput()
+  el.value = q
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+const submitSearch = () => keydown(searchInput(), 'Enter')
+const click = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -192,6 +207,179 @@ describe('LyricPicker：候选列表', () => {
     await flush()
     expect(document.querySelector('.lp-state')?.textContent).toContain('没有这首歌的候选歌词')
     expect(rowEls()).toHaveLength(0)
+  })
+})
+
+describe('LyricPicker：检索条', () => {
+  it('开窗预填自动派生词（title+artist 拼一行），词未偏离不露恢复默认', async () => {
+    mountPicker()
+    await flush()
+    // 非 custom：provider 块标题作者（与首载 feed 同一份 deriveFeed 口径）
+    expect(searchInput().value).toBe('YT Title YT Artist')
+    expect(searchInput().getAttribute('aria-label')).toBe('搜索关键词')
+    expect(resetBtn()).toBeNull()
+  })
+
+  it('改词 Enter 提交：{id, title:整串用户词, artist:"", durationSec} 重检并替换候选', async () => {
+    mountPicker()
+    await flush()
+    musicApi.getLyricCandidates.mockResolvedValueOnce([
+      { extId: 'manual_1', source: 'netease', title: '手动命中', artist: '', synced: true }
+    ])
+    typeQuery(' 新词 ')
+    submitSearch()
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(2)
+    // id/durationSec 恒吃派生槽位；手动词整个进 title、artist 置空入池
+    expect(musicApi.getLyricCandidates).toHaveBeenLastCalledWith(
+      { id: 'yt_abc', title: '新词', artist: '', durationSec: 205 },
+      expect.any(AbortSignal)
+    )
+    // 输入框保留原始串作「当前检索词」读数；候选列表被手动结果整体替换
+    expect(searchInput().value).toBe(' 新词 ')
+    const rows = rowEls()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain('手动命中')
+    expect(document.querySelector('.lp-badge--netease')?.textContent).toBe('163')
+    // 词偏离自动口径 → 「恢复默认」露面
+    expect(resetBtn()).toBeTruthy()
+  })
+
+  it('点搜索钮提交；手动空池念「{kw}」没有候选歌词（自动空态文案不变）', async () => {
+    musicApi.getLyricCandidates.mockResolvedValueOnce([]) // 自动首载空
+    mountPicker()
+    await flush()
+    expect(document.querySelector('.lp-state')?.textContent)
+      .toBe('外部词源没有这首歌的候选歌词')
+    musicApi.getLyricCandidates.mockResolvedValueOnce([]) // 手动检索也空
+    typeQuery('无果词')
+    click(searchGo())
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(2)
+    expect(document.querySelector('.lp-state')?.textContent).toBe('「无果词」没有候选歌词')
+  })
+
+  it('幂等闸：同词重复提交不再扇出；空串钮禁用+Enter 忽略', async () => {
+    mountPicker()
+    await flush()
+    typeQuery('新词')
+    submitSearch()
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(2)
+    // 同词 Enter / 点钮都静默跳过——与上次实际提交同口径且非失败态
+    submitSearch()
+    click(searchGo())
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(2)
+    // 空串无意义：提交钮 disabled + Enter 忽略（jsdom 不挡 disabled 点击，
+    // runSearch 内部的 !kw 闸是真防线）
+    typeQuery('   ')
+    await flush()
+    expect(searchGo().disabled).toBe(true)
+    submitSearch()
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(2)
+  })
+
+  it('手动词失败：失败态放行同词再提交；「重试」复打手动词不回落自动词', async () => {
+    mountPicker()
+    await flush()
+    musicApi.getLyricCandidates.mockRejectedValueOnce(new Error('boom'))
+    typeQuery('手动词')
+    submitSearch()
+    await flush()
+    expect(document.querySelector('.lp-state')?.textContent).toContain('检索失败')
+    expect(musicApi.getLyricCandidates).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: '手动词', artist: '' }), expect.anything())
+    // 失败态幂等闸放行：同词 Enter 是真发一发（不是静默跳过）
+    musicApi.getLyricCandidates.mockRejectedValueOnce(new Error('boom2'))
+    submitSearch()
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(3)
+    // 重试键复打「最后一次实际提交的口径」——手动词不回落自动词
+    click(document.querySelector('.lp-retry button'))
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(4)
+    expect(musicApi.getLyricCandidates).toHaveBeenLastCalledWith(
+      { id: 'yt_abc', title: '手动词', artist: '', durationSec: 205 },
+      expect.any(AbortSignal)
+    )
+    expect(rowEls()).toHaveLength(3) // 落默认候选 → 错误态退场
+  })
+
+  it('恢复默认：回填自动词并立即以自动口径重检', async () => {
+    mountPicker()
+    await flush()
+    typeQuery('新词')
+    submitSearch()
+    await flush()
+    expect(searchInput().value).toBe('新词')
+    click(resetBtn())
+    await flush()
+    // 回填自动词 + 立即以自动 feed（title/artist 分槽）重检——不是只填不搜
+    expect(searchInput().value).toBe('YT Title YT Artist')
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(3)
+    expect(musicApi.getLyricCandidates).toHaveBeenLastCalledWith(
+      { id: 'yt_abc', title: 'YT Title', artist: 'YT Artist', durationSec: 205 },
+      expect.any(AbortSignal)
+    )
+    expect(resetBtn()).toBeNull() // 回到默认词 → 钮收起
+  })
+
+  it('busy（绑定在飞）期检索条整体禁用（与关窗通道同闸）', async () => {
+    let resolvePick
+    musicApi.pickManualLyric.mockReturnValue(new Promise(r => { resolvePick = r }))
+    mountPicker()
+    await flush()
+    typeQuery('新词') // 让恢复默认露出
+    await flush()
+    rowEls()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flush()
+    expect(searchInput().disabled).toBe(true)
+    expect(searchGo().disabled).toBe(true)
+    expect(resetBtn().disabled).toBe(true)
+    resolvePick({ code: 200 })
+    await flush()
+  })
+
+  it('幂等闸边界：输入串撞自动 title 但口径不同仍真发（闸比 title+artist 双槽）', async () => {
+    mountPicker()
+    await flush()
+    // 自动首载 lastFeed={title:'YT Title',artist:'YT Artist',manual:false}——
+    // 用户词与自动 title 同串但口径不同（手动形 artist=''）：闸若只比
+    // title 会误判同口径吃掉这发，双槽比对才放行
+    typeQuery('YT Title')
+    submitSearch()
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(2)
+    expect(musicApi.getLyricCandidates).toHaveBeenLastCalledWith(
+      { id: 'yt_abc', title: 'YT Title', artist: '', durationSec: 205 },
+      expect.any(AbortSignal)
+    )
+  })
+
+  it('检索在飞期再提交：前一发的 AbortSignal 被掐断（load 重铸 _aborter）', async () => {
+    musicApi.getLyricCandidates.mockReturnValue(new Promise(() => {})) // 首载挂起
+    mountPicker()
+    await flush()
+    const firstSignal = musicApi.getLyricCandidates.mock.calls[0][1]
+    expect(firstSignal.aborted).toBe(false)
+    typeQuery('重入词')
+    submitSearch()
+    await flush()
+    expect(musicApi.getLyricCandidates).toHaveBeenCalledTimes(2)
+    // 第一发被掐——新旧两发不串话（结果回落只认新 signal）
+    expect(firstSignal.aborted).toBe(true)
+  })
+
+  it('候选检索 loading 不锁检索条（busy 闸只盖 pick/clearManual）', async () => {
+    musicApi.getLyricCandidates.mockReturnValue(new Promise(() => {})) // 挂起停在检索态
+    mountPicker()
+    await flush()
+    expect(document.querySelector('.lp-state')?.textContent).toContain('正在检索外部词源')
+    // loading 不是 busy——输入框/搜索钮照旧可用（在飞换词重提走上一条重入掐断）
+    expect(searchInput().disabled).toBe(false)
+    expect(searchGo().disabled).toBe(false)
   })
 })
 
