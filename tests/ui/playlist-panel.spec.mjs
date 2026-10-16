@@ -1,8 +1,10 @@
 // PlaylistPanel 评审修复回归：
-//   M2 copyShareLink——playlistShareUrl 返回 null（非数字远端 id 等死链拦截
-//      语义）时不得走 copyText：clipboard.writeText(null) 会被归一成字面量
-//      'null' 还报假成功 toast。复制按钮没有 shareOrCopy 的 text 兜底，
-//      null 要拦在复制前给交代
+//   M2 死链不进剪贴板——「复制分享链接」菜单项已随行内分享键去重下线，
+//      语义改钉在 sharePlaylist 路径：playlistShareUrl 返回 null（非数字远端
+//      id 等死链拦截）时 shareOrCopy 用 text 兜底复制文案，而非把字面量
+//      'null' 写进剪贴板还报假成功
+//   ⋯ 菜单换面：首项「播放歌单」（触屏封面 hover 劫持的替代入口），
+//      无重复的「复制分享链接」
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -39,14 +41,9 @@ const mountPanel = (playlist) => mount(PlaylistPanel, {
   global: { stubs: { GlitchText: true, PixelIcon: true } },
 })
 
-// 开 ⋯ 菜单 → 点「复制分享链接」menuitem（teleport 落 body）
-async function clickCopyShareLink() {
-  await wrapper.find('button[aria-label="更多操作"]').trigger('click')
-  await nextTick()
-  const item = [...document.body.querySelectorAll('.playlist-menu .pg-menu-item')]
-    .find(el => el.textContent.includes('复制分享链接'))
-  expect(item).toBeTruthy()
-  item.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+// 行内分享键点按（分享键 = 去重后的唯一分享入口）
+async function clickShareButton() {
+  await wrapper.find('button[aria-label="分享歌单"]').trigger('click')
   await nextTick()
 }
 
@@ -57,22 +54,39 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('PlaylistPanel：复制分享链接', () => {
-  it('M2：url=null 拦在复制前——不写剪贴板、报 info 而非假成功', async () => {
+describe('PlaylistPanel：分享死链拦截（M2 改道行内分享键）', () => {
+  it('url=null 兜底复制文案——不写字面量 null，报成功 toast', async () => {
     wrapper = mountPanel(oddPlaylist)
     await nextTick()
-    await clickCopyShareLink()
-    expect(writeText).not.toHaveBeenCalled() // 关键钉：不得把字面量 'null' 复制出去
-    expect(toast).toHaveBeenCalledWith('该歌单暂无可用分享链接', 'info')
+    await clickShareButton()
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalled())
+    const copied = writeText.mock.calls[0][0]
+    expect(copied).not.toBe('null')
+    expect(copied).toContain('异形单') // url=null → shareOrCopy 复制 text 兜底
+    await vi.waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(expect.stringContaining('已复制'), 'success'))
   })
 
-  it('正常单照走复制闭环——writeText 收真链 + 成功 toast', async () => {
+  it('正常单照走分享闭环——writeText 收真链 + 成功 toast', async () => {
     wrapper = mountPanel(numericPlaylist)
     await nextTick()
-    await clickCopyShareLink()
+    await clickShareButton()
     // copyText 内 await writeText——成功 toast 挂在剪贴板 resolve 之后的微任务上
     await vi.waitFor(() =>
       expect(toast).toHaveBeenCalledWith('分享链接已复制到剪贴板', 'success'))
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('?playlist=777'))
+  })
+})
+
+describe('PlaylistPanel：⋯ 菜单换面', () => {
+  it('首项「播放歌单」，无「复制分享链接」', async () => {
+    wrapper = mountPanel(numericPlaylist)
+    await nextTick()
+    await wrapper.find('button[aria-label="更多操作"]').trigger('click')
+    await nextTick()
+    const items = [...document.body.querySelectorAll('.playlist-menu .pg-menu-item')]
+    const texts = items.map(el => el.textContent)
+    expect(texts[0]).toContain('播放歌单')
+    expect(texts.some(t => t.includes('复制分享链接'))).toBe(false)
   })
 })

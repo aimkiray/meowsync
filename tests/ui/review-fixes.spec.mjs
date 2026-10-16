@@ -219,7 +219,7 @@ describe('F2：共享 Tab 钳制（lib/focus-trap.js）', () => {
     out.remove()
   })
 
-  it('SongFormDialog 实挂载：首焦 name 输入，Shift+Tab 回末键、Tab 回绕', async () => {
+  it('SongFormDialog 实挂载：首焦 name 输入；头部 ✕ 入环成首项，端点回绕', async () => {
     const wrapper = mount(SongFormDialog, {
       attachTo: document.body,
       props: { open: true, song: null, busy: false },
@@ -227,14 +227,16 @@ describe('F2：共享 Tab 钳制（lib/focus-trap.js）', () => {
     })
     await nextTick()
     const dlg = document.querySelector('.sfd-dialog')
-    const first = dlg.querySelector('input[aria-label="歌名"]')
+    const headClose = dlg.querySelector('.sfd-head button[aria-label="关闭"]')
+    const nameInput = dlg.querySelector('input[aria-label="歌名"]')
     const last = dlg.querySelector('.sfd-foot button:not([disabled])')
-    // 开窗首焦在歌名框；Shift+Tab 应绕到末位可用键（创建禁用→取消是末项）
-    expect(document.activeElement).toBe(first)
+    // 开窗首焦仍在歌名框（watcher 显式聚焦）；Tab 序首项已换成头部 ✕
+    expect(document.activeElement).toBe(nameInput)
+    headClose.focus()
     dlg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
-    expect(document.activeElement).toBe(last)
+    expect(document.activeElement).toBe(last) // 首项 Shift+Tab 回绕末位可用键（创建禁用→取消是末项）
     dlg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
-    expect(document.activeElement).toBe(first)
+    expect(document.activeElement).toBe(headClose) // 末项 Tab 回绕首项
     wrapper.unmount()
   })
 })

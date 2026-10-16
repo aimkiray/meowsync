@@ -2,7 +2,8 @@
   <!-- 歌单库侧栏："library" 媒体库列表，发丝线行排 -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
     <div class="panel-head">
-      <p class="pg-label panel-label"><GlitchText text="library 我的歌单" /></p>
+      <!-- h2 补层级链：topnav h1 → 侧栏 h2 → 歌单名 .pl-name h3（裸 p 断链） -->
+      <h2 class="pg-label panel-label"><GlitchText text="library 我的歌单" /></h2>
       <button
         class="pg-icobtn pg-icobtn--bare panel-create-btn"
         title="新建歌单"
@@ -27,7 +28,7 @@
         v-for="playlist in userPlaylists"
         :key="playlist.id"
         class="pl-row"
-        :class="{ 'pl-row--active': String(selectedPlaylist?.id) === String(playlist.id) }"
+        :class="{ 'pl-row--active': isRowActive(playlist) }"
       >
         <div
           @click="$emit('select-playlist', playlist)"
@@ -37,7 +38,7 @@
           tabindex="0"
           role="button"
           :aria-label="`打开歌单 ${playlist.name}`"
-          :aria-current="String(selectedPlaylist?.id) === String(playlist.id) ? 'true' : undefined"
+          :aria-current="isRowActive(playlist) ? 'true' : undefined"
         >
           <div class="pl-cover-wrap">
             <img
@@ -97,8 +98,18 @@
             :style="getMenuPosition(playlist.id)"
             @keydown="cycleMenuItems"
           >
+            <!-- 触屏入口：封面悬停 ▶ 在 hover:none 下已不常显（整面可点=
+                 一点就清队列播放，与点名「打开」同面双义）——播放入口收进 ⋯
+                 菜单首项；桌面 hover/focus 封面上直放不变 -->
+            <button
+              type="button"
+              @click.stop="$emit('play-playlist', playlist); closeMenu()"
+              class="pg-menu-item"
+              role="menuitem"
+            ><PixelIcon name="play" :size="13" /> 播放歌单</button>
             <button
               v-if="!isShareShell(playlist)"
+              type="button"
               @click.stop="downloadPlaylist(playlist)"
               class="pg-menu-item"
               role="menuitem"
@@ -107,6 +118,7 @@
             </button>
             <button
               v-if="!isShareShell(playlist)"
+              type="button"
               @click.stop="downloadPlaylist(playlist, { video: true })"
               class="pg-menu-item"
               role="menuitem"
@@ -115,6 +127,7 @@
             </button>
             <button
               v-if="!isShareShell(playlist)"
+              type="button"
               @click.stop="viewDownloadProgress(playlist)"
               :disabled="downloadingIds.has(String(playlist.id))"
               :title="downloadingIds.has(String(playlist.id)) ? '队列创建中，稍候' : ''"
@@ -125,22 +138,18 @@
             </button>
             <button
               v-if="isNeteasePlaylist(playlist)"
+              type="button"
               @click.stop="openInNetease(playlist)"
               class="pg-menu-item"
               role="menuitem"
             >
               打开网易云
             </button>
+            <!-- 「复制分享链接」已删——行内分享键（shareOrCopy：系统分享+
+                 复制降级）同能覆盖，菜单里两份入口是噪音 -->
             <button
               v-if="!isShareShell(playlist)"
-              @click.stop="copyShareLink(playlist)"
-              class="pg-menu-item"
-              role="menuitem"
-            >
-              复制分享链接
-            </button>
-            <button
-              v-if="!isShareShell(playlist)"
+              type="button"
               @click.stop="deletePlaylistDownloads(playlist)"
               class="pg-menu-item"
               role="menuitem"
@@ -148,6 +157,7 @@
               删除已下载歌曲
             </button>
             <button
+              type="button"
               @click.stop="removePlaylist(playlist.id)"
               class="pg-menu-item pg-menu-item--danger"
               role="menuitem"
@@ -169,7 +179,7 @@
 import { ref, reactive, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { downloadsApi } from '../api/downloads'
 import { apiErrorMessage } from '../api/http'
-import { copyText, shareOrCopy, playlistShareUrl, mixShareIds, isEmptyMixShareUrl } from '../lib/share'
+import { shareOrCopy, playlistShareUrl, mixShareIds, isEmptyMixShareUrl } from '../lib/share'
 import { httpsCover as sharedHttpsCover } from '../lib/url'
 import { isLocalPlaylistId, isSingleSongShellId, coverSizeUrl } from '../lib/song'
 import { isNeteasePlaylist } from '../shared/predicates.js'
@@ -193,6 +203,12 @@ export default {
     loading: {
       type: Boolean,
       default: false
+    },
+    // 主区视图名（songs/search/home/downloads/…）——行高亮只在歌单视图成立；
+    // 其它视图里残留高亮会把「上次选过」误读成「当前所在」
+    centerView: {
+      type: String,
+      default: ''
     }
   },
   emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted', 'open-create-playlist', 'view-download-progress'],
@@ -253,12 +269,12 @@ export default {
         menuTriggerEl = button
         const rect = button.getBoundingClientRect()
         const menuWidth = 160 // 本菜单全是短项，实际宽恒等于 pg-menu 的 min-width
-        // 菜单高度按可见项数算：临时歌单隐藏 6 项只剩"删除歌单"，
+        // 菜单高度按可见项数算：单曲分享壳只剩"播放歌单/删除歌单"两项，
         // 按全量 7 项翻转会把菜单顶到按钮上方悬空。
         // find miss（点击瞬间列表刷新）兜底按 1 项算——比按 7 项悬空更安全
         const currentPlaylist = props.userPlaylists.find(p => p.id === playlistId)
         const itemCount = !currentPlaylist ? 1
-          : isShareShell(currentPlaylist) ? 1
+          : isShareShell(currentPlaylist) ? 2
           : isNeteasePlaylist(currentPlaylist) ? 7 : 6
         const menuHeight = itemCount * 39 + 4 // 实测项高 ≈39（含发丝分隔）
         const vw = window.innerWidth
@@ -305,25 +321,6 @@ export default {
     const overBudget = (playlist) => isLocalPlaylistId(playlist.id)
       && mixShareIds(playlist).length < (playlist.tracks?.length || 0)
 
-    const copyShareLink = async (playlist) => {
-      const url = playlistShareUrl(playlist)
-      // url=null＝id 形态产不出合法链（非数字远端 id 等，share.js 拦截语义）——
-      // 复制按钮没有 shareOrCopy 的 text 兜底，copyText(null) 会被 clipboard
-      // 归一成字面量 'null' 还报成功 toast，必须拦在复制前
-      if (!url) {
-        toast('该歌单暂无可用分享链接', 'info'); closeMenu(playlist.id); return
-      }
-      if (isEmptyMixShareUrl(url)) {
-        toast('歌单里没有可分享的歌曲', 'info'); closeMenu(playlist.id); return
-      }
-      const ok = await copyText(url)
-      // 与歌曲分享同款的反馈闭环：成功也要给戳记，否则用户不知道复制生效
-      toast(ok
-        ? `分享链接已复制到剪贴板${overBudget(playlist) ? '（部分曲目因链接过长未包含）' : ''}`
-        : '复制失败，请手动复制链接', ok ? 'success' : 'error')
-      closeMenu(playlist.id)
-    }
-
     // 分享歌单（与歌曲分享一致的逻辑：Web Share API + 复制降级）
     const sharePlaylist = async (playlist) => {
       // .stop 阻断了 document click 外关——本行按钮点按也要关已开着的别行菜单
@@ -358,6 +355,12 @@ export default {
       emit('remove-playlist', playlistId)
       closeMenu(playlistId)
     }
+
+    // 行高亮闸：仅在歌单视图（centerView==='songs'）下选中行才亮——
+    // home/search/downloads 等视图里侧栏残留高亮会误导「当前位置」语义
+    const isRowActive = (playlist) =>
+      props.centerView === 'songs'
+      && String(props.selectedPlaylist?.id) === String(playlist.id)
 
     // 本地内存态歌单（单曲分享/队列存盘）服务端无对应持久行——不提供分享/下载入口
     // 歌单级入口门槛：single_song_ 壳不显示分享/下载（单曲级分享已覆盖）；
@@ -506,8 +509,8 @@ export default {
        toggleMenu,
        closeMenu,
        downloadingIds,
+       isRowActive,
        openInNetease,
-       copyShareLink,
        removePlaylist,
        sharePlaylist,
        downloadPlaylist,
@@ -697,14 +700,9 @@ export default {
   opacity: 1;
   pointer-events: auto;
 }
-
-/* 触屏无 hover——隐形可点的播放键会误触，常显（半透明遮罩版） */
-@media (hover: none) {
-  .playlist-play-overlay {
-    opacity: .85;
-    pointer-events: auto;
-  }
-}
+/* 触屏（hover:none）不再常显 overlay：整面可点的半透明罩=一点封面就清队列
+   播放整单，与点歌单名「打开」同面双义——触屏播放入口收进 ⋯ 菜单首项
+   「播放歌单」，桌面 hover/focus 直放路径不变 */
 
 .pl-foot {
   text-align: center;

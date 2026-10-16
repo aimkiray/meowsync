@@ -11,42 +11,77 @@
         @click.stop
         @keydown="onDialogKeydown"
       >
-        <div class="pg-menu-head">{{ isEdit ? '编辑歌曲' : '新建歌曲' }}</div>
+        <!-- 头部 ✕ 与底栏左键同一 onLeftBtn 入口（闲=取消、busy=中止上传）——
+             对话框无角落关闭键时 Esc/遮罩外无第三出口；pg-menu-head 转 flex 行。
+             busy 时实际动作是 abort 断 xhr（窗不关）——aria-label/title 随
+             busy 翻转，静态「关闭」在 busy 期是谎报 -->
+        <div class="pg-menu-head sfd-head">
+          <span class="sfd-head-title">{{ isEdit ? '编辑歌曲' : '新建歌曲' }}</span>
+          <button
+            type="button"
+            class="pg-icobtn pg-icobtn--bare pg-icobtn--sm sfd-head-close"
+            :aria-label="busy ? '中止上传' : '关闭'"
+            :title="busy ? '中止上传' : '关闭'"
+            @click="onLeftBtn"
+          ><PixelIcon name="close" :size="13" /></button>
+        </div>
 
         <div class="sfd-body">
-          <label class="sfd-label pg-field">
-            <input
-              ref="nameInput"
-              v-model="form.name"
-              placeholder="歌名 *"
-              aria-label="歌名"
-              @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
-            />
-          </label>
-          <label class="sfd-label pg-field">
-            <input
-              v-model="form.artist"
-              placeholder="艺术家"
-              aria-label="艺术家"
-              @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
-            />
-          </label>
-          <label class="sfd-label pg-field">
-            <input
-              v-model="form.album"
-              placeholder="专辑"
-              aria-label="专辑"
-              @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
-            />
-          </label>
-          <label class="sfd-label pg-field">
-            <input
-              v-model="form.duration"
-              placeholder="时长 mm:ss（留空自动）"
-              aria-label="时长"
-              @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
-            />
-          </label>
+          <!-- 常驻可见字段名：placeholder 只是格式示例（聚焦即空的伪标签不算
+               标签）——label[for] 关联 input[id]，aria-label 冗余保留供测试
+               与读屏器双锚；必填 * 从 placeholder 挪进可见标签。
+               sfd-name 补 aria-required：aria-label 压 label[for] 播报时
+               「*」读不到，required 补上必填语义才平权 -->
+          <div class="sfd-field">
+            <label class="sfd-field-name" for="sfd-name">歌名 <em class="sfd-req">*</em></label>
+            <div class="pg-field">
+              <input
+                id="sfd-name"
+                ref="nameInput"
+                v-model="form.name"
+                placeholder="歌名"
+                aria-label="歌名"
+                aria-required="true"
+                @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
+              />
+            </div>
+          </div>
+          <div class="sfd-field">
+            <label class="sfd-field-name" for="sfd-artist">艺术家</label>
+            <div class="pg-field">
+              <input
+                id="sfd-artist"
+                v-model="form.artist"
+                placeholder="艺术家"
+                aria-label="艺术家"
+                @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
+              />
+            </div>
+          </div>
+          <div class="sfd-field">
+            <label class="sfd-field-name" for="sfd-album">专辑</label>
+            <div class="pg-field">
+              <input
+                id="sfd-album"
+                v-model="form.album"
+                placeholder="专辑"
+                aria-label="专辑"
+                @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
+              />
+            </div>
+          </div>
+          <div class="sfd-field">
+            <label class="sfd-field-name" for="sfd-duration">时长</label>
+            <div class="pg-field">
+              <input
+                id="sfd-duration"
+                v-model="form.duration"
+                placeholder="mm:ss（留空自动）"
+                aria-label="时长"
+                @keydown.enter="!($event.isComposing || $event.keyCode === 229) && submit()"
+              />
+            </div>
+          </div>
 
           <!-- 文件位：create 全亮；edit 仅 file_ 曲可换源（在线曲无本地资产槽） -->
           <template v-if="canEditFiles">
@@ -54,9 +89,10 @@
             <div v-for="slot in fileSlots" :key="slot.kind" class="sfd-file">
               <label class="sfd-file-label" :for="`sfd-${slot.kind}`">{{ slot.label }}</label>
               <div class="sfd-file-row">
+                <!-- 文件槽钮走 ghost：次级动作降级，「保存/创建」是窗内唯一实墨 CTA -->
                 <button
                   type="button"
-                  class="ink-btn ink-btn--sm"
+                  class="ink-btn ink-btn--sm ink-btn--ghost"
                   :aria-label="`${picked[slot.kind] ? '重选' : hasExisting(slot.kind) ? '更换' : '选择文件'} · ${slot.label}`"
                   :disabled="busy"
                   @click="fileRefs[slot.kind]?.click()"
@@ -89,7 +125,7 @@
                 aria-valuemax="100"
                 :aria-valuenow="Math.round(progress[slot.kind] * 100)"
               >
-                <div class="sfd-progress-bar" :style="{ width: `${Math.round(progress[slot.kind] * 100)}%` }"></div>
+                <div class="sfd-progress-bar" :style="{ '--p': Math.round(progress[slot.kind] * 100) / 100 }"></div>
               </div>
             </div>
           </template>
@@ -315,7 +351,32 @@ export default {
   min-height: 0;
   overscroll-behavior: contain;
 }
-.sfd-label { display: flex; }
+/* 头部 ✕ 行：pg-menu-head 转 flex；题目截断语义（ellipsis 不吃 flex 子项）
+   移到 span；上下 padding 让位 24px 钮（原 9px×2 会把头撑高） */
+.sfd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.sfd-head-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sfd-head-close { flex-shrink: 0; }
+
+/* 常驻字段名（与 .sfd-file-label 同档 mono 小字）——label[for]→input[id] */
+.sfd-field { display: flex; flex-direction: column; gap: 4px; }
+.sfd-field-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
+}
+.sfd-req { font-style: normal; color: var(--accent-danger-ink); }
+
 .sfd-file { display: flex; flex-direction: column; gap: 4px; }
 .sfd-file-label {
   font-family: var(--font-mono);
@@ -343,7 +404,16 @@ export default {
   border: var(--hairline);
   background: var(--paper);
 }
-.sfd-progress-bar { height: 100%; background: var(--ink); transition: width .15s; }
+/* 进度条定宽 100% 走 scaleX：width 动画是 layout 反模式（逐帧重排），
+   transform 上合成层；--p 由模板行内样式喂 0..1 */
+.sfd-progress-bar {
+  width: 100%;
+  height: 100%;
+  background: var(--ink);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left;
+  transition: transform .15s;
+}
 .sfd-hint { font-size: 11px; color: var(--ink-64); margin: 0; }
 .sfd-error { font-size: 12px; color: var(--accent-danger-ink); margin: 0; }
 .sfd-foot {
