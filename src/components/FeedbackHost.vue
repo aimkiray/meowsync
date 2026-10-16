@@ -13,7 +13,7 @@
           @focusin="toastHold(t.id, 'focus')"
           @focusout="toastRelease(t.id, 'focus')"
         >
-          <span class="fb-toast-tag">{{ t.type }}:</span>
+          <span class="fb-toast-tag">{{ tagText(t) }}:</span>
           <span class="fb-toast-text">{{ t.text }}</span>
           <button
             v-if="t.action?.label && t.action?.onAction"
@@ -73,6 +73,11 @@ export default {
     const state = useFeedbackState()
     const cancelBtn = ref(null)
 
+    // 英文枚举戳本地化——渲染文案与 fb-toast--{type} 样式类解耦，
+    // 未知类型原样透出（未来新 type 不静默消失）
+    const TOAST_TAG = { info: '提示', success: '完成', error: '错误' }
+    const tagText = (t) => TOAST_TAG[t.type] || t.type
+
     const answer = (ok) => resolveConfirm(ok)
 
     // 动作键：执行回调后无论成败都回收 toast——动作语义是"响应即跳转"，
@@ -105,7 +110,7 @@ export default {
       }
     })
 
-    return { state, cancelBtn, answer, cycleFocus, runToastAction, toastHold, toastRelease }
+    return { state, cancelBtn, answer, cycleFocus, runToastAction, toastHold, toastRelease, tagText }
   }
 }
 </script>

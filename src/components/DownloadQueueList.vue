@@ -4,7 +4,7 @@
     <div class="dql-head">
       <div class="dql-head-info">
         <h2 class="dql-title"><GlitchText text="下载队列" /></h2>
-        <p class="pg-label pg-label--dim dql-sub">左侧选队列，右侧看详情喵~</p>
+        <p class="pg-label pg-label--dim dql-sub">选择一个队列查看任务详情喵~</p>
       </div>
       <span class="pg-chip pg-chip--static dql-count">{{ queues.length }} 条</span>
     </div>
@@ -59,12 +59,13 @@
         >
         <div class="dql-cover-wrap">
           <img
-            v-if="getQueueCover(queue)"
+            v-if="getQueueCover(queue) && !dqlCoverErrs.has(queue.id)"
             :src="getQueueCover(queue)"
             alt=""
             class="dql-cover"
             loading="lazy"
             decoding="async"
+            @error="dqlCoverErrs.add(queue.id)"
           />
           <div v-else class="dql-cover dql-cover--fb"><PixelIcon name="note" :size="18" /></div>
         </div>
@@ -82,9 +83,9 @@
             >失败 {{ queue.failedTasks }}</span>
           </div>
           <p class="dql-meta">
-            #{{ queue.id }} · 歌单 {{ queue.playlistId }} · {{ queue.completedTasks }}/{{ queue.totalTasks }} · {{ getProgress(queue) }}%
+            {{ queue.completedTasks }}/{{ queue.totalTasks }} 首 · {{ getProgress(queue) }}%
           </p>
-          <div class="dql-progress" role="progressbar" :aria-valuenow="getProgress(queue)" aria-valuemin="0" aria-valuemax="100" :aria-label="`队列 ${queue.id} 下载进度`">
+          <div class="dql-progress" role="progressbar" :aria-valuenow="getProgress(queue)" aria-valuemin="0" aria-valuemax="100" :aria-label="`「${queue.name}」下载进度`">
             <div
               class="dql-progress-fill"
               :class="{ 'dql-progress-fill--fail': queue.status === 'failed' }"
@@ -163,7 +164,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, ref, watch, nextTick } from 'vue'
+import { onBeforeUnmount, reactive, ref, watch, nextTick } from 'vue'
 import { httpsCover } from '../lib/url'
 import { coverSizeUrl } from '../lib/song'
 import { queueStatusMeta, statusChipClass, queueProgress, queueStatusFilterOptions } from '../lib/downloadStatus.js'
@@ -202,6 +203,8 @@ const emit = defineEmits(['start', 'pause', 'resume', 'cancel', 'retry', 'delete
 
 const openMenuId = ref(null)
 const menuPosition = ref({ top: '0px', left: '0px' })
+// 封面 @error 簿记：裂图位换音符兜底格（HomeFeed coverErrs 同口径——按队列 id 记账）
+const dqlCoverErrs = reactive(new Set())
 // 最近开菜单的 ⋯键本体——Esc 解散菜单时焦点归还它，不落 body
 let menuTriggerEl = null
 
@@ -493,7 +496,7 @@ function getQueueCover(queue) {
 .dql-chip {
   height: 20px;
   padding: 0 8px;
-  font-size: 10px;
+  font-size: 11px; /* 10px 微字在发丝芯片里过矮——升 11 与行内 meta 同档 */
   flex-shrink: 0;
 }
 

@@ -37,7 +37,7 @@
       />
       <!-- role=alert 自带 assertive live region——提交失败即时播报不等浏览到 -->
       <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
-      <button class="auth-btn" type="submit" :disabled="busy">
+      <button class="auth-btn ink-btn" type="submit" :disabled="busy">
         {{ busy ? '处理中…' : (effectiveSetup ? '创建并进入' : '登录') }}
       </button>
       <button
@@ -125,17 +125,25 @@ export default {
   width: 100%;
   max-width: 360px;
   background: var(--paper);
-  border: 2px solid var(--ink);
-  border-radius: 10px;
+  /* print-grid 发丝 + 直角——门页与面板同档（原 2px 墨框+10px 圆角是
+     独立皮；glitch 下按窗体族给回圆角柔影，见下条覆写） */
+  border: var(--hairline);
+  border-radius: 0;
   padding: 28px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  font-family: 'Courier New', ui-monospace, monospace;
+  /* 字族随全局 --font-body（原 Courier New 硬编码是主题外飞地） */
+  font-family: var(--font-body);
   /* 超高时 margin:auto 居中语义+可滚：顶缘不被 flex 居中裁掉 */
   margin: auto;
   max-height: calc(100vh - 32px);
   max-height: calc(100dvh - 32px);
+}
+/* glitch 窗体族：门页卡与 .pg-menu 同款 8px 柔影 + 10px 圆角（.pg-panel 窗体档） */
+:root[data-theme="glitch-restoration"] .auth-card {
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
 }
 .auth-title {
   display: flex;
@@ -153,7 +161,7 @@ export default {
 }
 .auth-input {
   border: 1.5px solid var(--ink);
-  border-radius: 6px;
+  border-radius: 0; /* print-grid 直角；glitch 下回 4px field 档（下条覆写） */
   padding: 10px 12px;
   /* ≥16px：iOS 聚焦不触发整页 zoom（autofocus 挂载即聚焦，低于 16 必中招） */
   font-size: 16px;
@@ -161,28 +169,21 @@ export default {
   background: var(--ink-06);
   outline: none;
 }
-/* 聚焦描边走纸面深档 accent 令牌——原 teal 硬编码无对应令牌；
-   accent-magenta-ink 是全站纸面文字 accent 的统一深档 */
-.auth-input:focus { border-color: var(--accent-magenta-ink); background: var(--paper); }
+:root[data-theme="glitch-restoration"] .auth-input { border-radius: 4px; }
+/* 聚焦描边走纸面深档 accent 令牌（accent-magenta-ink=纸面文字 accent 统一深档）。
+   可键盘输入的元素获焦恒匹配 :focus-visible——mounted 里程序 autofocus
+   也会让用户名框首帧亮 accent 边，这是有意的聚焦指示而非样式漏网 */
+.auth-input:focus-visible { border-color: var(--accent-magenta-ink); background: var(--paper); }
 .auth-error {
   font-size: 12px;
   color: var(--accent-danger-ink);
   margin: 0;
 }
+/* 视觉全收 .ink-btn 全局类——scoped 只剩布局残余（满宽 + 顶距） */
 .auth-btn {
+  width: 100%;
   margin-top: 4px;
-  border: 2px solid var(--ink);
-  border-radius: 6px;
-  padding: 10px;
-  font-size: 14px;
-  font-weight: 700;
-  font-family: inherit;
-  background: var(--ink);
-  color: var(--paper);
-  cursor: pointer;
 }
-.auth-btn:disabled { opacity: 0.5; cursor: default; }
-.auth-btn:not(:disabled):hover { background: var(--accent-magenta-ink); border-color: var(--accent-magenta-ink); }
 .auth-skip {
   border: none;
   background: none;

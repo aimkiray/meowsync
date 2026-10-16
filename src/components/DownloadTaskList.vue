@@ -8,12 +8,10 @@
           {{ selectedQueue.name }} · {{ tasks.length }} 条任务
         </p>
         <p v-else class="pg-label pg-label--dim dtl-sub">
-          选择左侧队列后，这里会显示任务详情喵~
+          选择一个队列查看任务详情喵~
         </p>
       </div>
-      <span v-if="selectedQueue" class="pg-chip pg-chip--static dtl-count">
-        队列 #{{ selectedQueue.id }}
-      </span>
+      <!-- 「队列 #id」chip 已删——名称+条数已在 sub 行，内部 id 是噪音 -->
     </div>
 
     <!-- 统计格列数跟面板宽而非布局断点：<xl 本列已是全宽 ~700px+，4 格塞得下（md=768 是最近档位） -->
@@ -38,7 +36,7 @@
 
     <div v-if="!selectedQueue" class="dtl-empty">
       <div class="dtl-empty-icon"><PixelIcon name="note" :size="34" /></div>
-      <p class="dtl-empty-title">先从左侧挑一个下载队列喵</p>
+      <p class="dtl-empty-title">先挑一个下载队列喵</p>
       <p class="dtl-empty-sub">选中后就能看到每首歌的下载状态、进度和失败原因。</p>
     </div>
 
@@ -263,8 +261,6 @@ const taskGroups = [
 }
 
 .dtl-sub { margin-top: 5px; }
-
-.dtl-count { flex-shrink: 0; }
 
 /* 统计格：发丝格 + display 大数字（完成=绿戳，失败=danger 红） */
 .dtl-stats {
