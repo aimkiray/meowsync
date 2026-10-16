@@ -283,7 +283,7 @@
                   <div class="queue-row-info">
                     <!-- 标题行 flex：歌名截断 + 来源徽标定宽不脱（song-title/
                          song-tag 同构）——徽标内联不抬行高（虚拟窗按 56 算） -->
-                    <p class="queue-row-title"><span class="queue-row-title-text">{{ song.name }}</span><span v-if="songSource(song)" class="queue-src" :title="`来源：${songSource(song)} 导入`">{{ songSource(song) }}</span></p>
+                    <p class="queue-row-title"><span class="queue-row-title-text">{{ song.name }}</span><span v-if="songSourceTag(song)" class="queue-src" :title="`来源：${songSourceTag(song)}`">{{ songSourceTag(song) }}</span></p>
                     <p class="queue-row-artist">{{ songArtist(song) }}</p>
                   </div>
                   <span class="queue-row-duration">{{ formatDuration(song) }}</span>
@@ -505,7 +505,7 @@
               />
               <div v-else class="watch-queue-thumb watch-queue-thumb--fallback"><PixelIcon name="note" :size="16" /></div>
               <div class="queue-row-info">
-                <p class="queue-row-title"><span class="queue-row-title-text">{{ song.name }}</span><span v-if="songSource(song)" class="queue-src" :title="`来源：${songSource(song)} 导入`">{{ songSource(song) }}</span></p>
+                <p class="queue-row-title"><span class="queue-row-title-text">{{ song.name }}</span><span v-if="songSourceTag(song)" class="queue-src" :title="`来源：${songSourceTag(song)}`">{{ songSourceTag(song) }}</span></p>
                 <p class="queue-row-artist">{{ songArtist(song) }}</p>
               </div>
               <span class="queue-row-duration">{{ formatDuration(song) }}</span>
@@ -548,7 +548,7 @@ import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
 import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
 import { relatedSourceOf, relatedFetch } from '../lib/related'
-import { songSource, songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
+import { songSourceTag, songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
 import { cycleMenuItems } from '../lib/focus-trap.js'
 
@@ -1679,7 +1679,7 @@ export default {
       onMediaVideoReady,
       onMediaVideoError,
       thumbErrs,
-      songSource,
+      songSourceTag,
       menuBtn,
       menuOpen,
       menuPos,

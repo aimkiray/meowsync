@@ -215,6 +215,24 @@ describe('SongList：歌单内筛选', () => {
   })
 })
 
+describe('SongList：行级来源徽标', () => {
+  it('全源覆盖：数字 id 行出「网易云」、yt 对象行出「YouTube」、裸 bv_ id 兜底出「B站」', async () => {
+    wrapper = mountList({
+      songs: [
+        mkSong(1, '晴天'),                                                   // 纯数字网易云 id——songSourceTag 归名
+        mkSong('yt_dQw4w9WgXcQ', 'yt曲', { youtube: { videoId: 'dQw4w9WgXcQ' } }),
+        mkSong('bv_BV1xx411c7mD', 'bv曲'),                                   // 缺 provider 对象只剩前缀 id 同兜底
+      ],
+    })
+    await nextTick()
+    const tags = wrapper.findAll('.song-tag')
+    expect(tags.map(t => t.text())).toEqual(['网易云', 'YouTube', 'B站'])
+    // title 只报出处不缀「导入」——网易云原生曲没有导入语义
+    expect(tags[0].attributes('title')).toBe('来源：网易云')
+    expect(tags[1].attributes('title')).toBe('来源：YouTube')
+  })
+})
+
 describe('SongList：⋯ 菜单结构', () => {
   it('右缘锚定：menuPositions 输出 right 键而非 left', async () => {
     wrapper = mountList()

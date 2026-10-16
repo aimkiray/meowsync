@@ -67,10 +67,10 @@
             <div v-else class="song-result-cover song-result-cover--fallback"><PixelIcon name="note" :size="16" /></div>
             <div class="song-result-info">
               <!-- 歌名行：标题+来源角标同一 flex 行——name 收缩截断、
-                   tag（B站/YouTube/QQ音乐/本地上传）恒完整钉在右缘内侧 -->
+                   tag（B站/YouTube/QQ音乐/网易云/本地上传）恒完整钉在右缘内侧 -->
               <div class="song-result-title">
                 <p class="song-result-name">{{ song.name }}</p>
-                <span v-if="songSource(song)" class="pg-chip pg-chip--static song-result-tag">{{ songSource(song) }}</span>
+                <span v-if="songSourceTag(song)" class="pg-chip pg-chip--static song-result-tag">{{ songSourceTag(song) }}</span>
               </div>
               <!-- 副行去重：songMeta 在专辑名=歌名时省略专辑段
                    （外源曲库常把标题回填成专辑名，复读一遍是噪声） -->
@@ -188,7 +188,7 @@ import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-m
 import { shareOrCopy, playlistShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { httpsCover } from '../lib/url'
-import { songCoverUrl, songThumbUrl, coverSizeUrl, songSource } from '../lib/song'
+import { songCoverUrl, songThumbUrl, coverSizeUrl, songSourceTag } from '../lib/song'
 import { SEARCH_SOURCES } from '../lib/prefs.js'
 import { formatTime } from '../lib/format'
 import PixelIcon from './PixelIcon.vue'
@@ -424,7 +424,7 @@ export default {
       songArtist,
       songAlbum,
       songMeta,
-      songSource,
+      songSourceTag,
       failedThumbs,
       sourceName,
       showPlaylistHint,
