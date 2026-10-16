@@ -16,7 +16,7 @@
       </div>
       <div class="home-songs">
         <button
-          v-for="song in recents"
+          v-for="song in visibleRecents"
           :key="song.id"
           type="button"
           class="home-songrow"
@@ -39,9 +39,9 @@
             <span class="home-songrow-artist">{{ songArtists(song) }}</span>
           </span>
           <span
-            v-if="songSource(song)"
+            v-if="songSourceTag(song)"
             class="pg-chip pg-chip--static home-src-tag"
-          >{{ songSource(song) }}</span>
+          >{{ songSourceTag(song) }}</span>
         </button>
       </div>
     </section>
@@ -135,10 +135,14 @@
 import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { httpsCover } from '../lib/url'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
-import { songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, songSource } from '../lib/song'
+import { songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, songSourceTag } from '../lib/song'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
 import GlitchText from './GlitchText.vue'
+
+// 最近播放网格展示上限：桌面 4 列×3 行=12；移动窄列行数随之浮动——
+// 限的是展示数不是数据（play-song 队列种子仍传全量 recents）
+const RECENT_DISPLAY_CAP = 12
 
 export default {
   name: 'HomeFeed',
@@ -157,6 +161,11 @@ export default {
   computed: {
     hasShelves() {
       return this.recentPlaylists.length > 0 || this.recentAlbums.length > 0
+    },
+    // 单曲卡网格只渲前 RECENT_DISPLAY_CAP 条（截尾部保原序）；
+    // 不影响 @click emit 的队列种子——那边仍给 this.recents 全量
+    visibleRecents() {
+      return this.recents.slice(0, RECENT_DISPLAY_CAP)
     },
     /* 最近播放的专辑：按专辑键去重，保留最近次序，截 12 上货架。
        伪专辑准入两闸：① 专辑键非空——netease al.id 真值才计（'0'/0/空
@@ -202,7 +211,7 @@ export default {
       cancelScrollRestore?.() // 等待窗内卸载即停轮询
       writeScrollMem('home', { top: feedEl.value?.scrollTop ?? 0 })
     })
-    return { httpsCover, songArtists, coverSizeUrl, songThumbUrl, songSource, feedEl, coverErrs }
+    return { httpsCover, songArtists, coverSizeUrl, songThumbUrl, songSourceTag, feedEl, coverErrs }
   }
 }
 </script>

@@ -353,10 +353,11 @@ export function isUgcExternalTrack(song) {
 }
 
 /**
- * 导入来源标签（行内小牌用）：provider 对象优先、本站轨道 id 前缀兜底——
+ * 导入来源标签：provider 对象优先、本站轨道 id 前缀兜底——
  * 与 songSourceName 同口径（镜像投影/旧持久化行可能缺 provider 对象但 id
  * 仍在；file_ 已由 isFileTrackId 兜）。网易云数字 id 不归名——主流曲无
- * 导入来源语义，不出徽标
+ * 导入来源语义。本函数是「导入来源」判定给逻辑侧用；行徽标展示走
+ * songSourceTag（网易云原生曲也如实标出处）
  */
 export function songSource(song) {
   const id = String(song?.id ?? '')
@@ -365,6 +366,18 @@ export function songSource(song) {
   if (song?.qq || QQ_SONG_ID_RE.test(id)) return 'QQ音乐'
   if (song?.file || isFileTrackId(song?.id)) return '本地上传'
   return null
+}
+
+/**
+ * 行级来源徽标档（展示层专用）：songSource 命中先返——外部导入源如实标；
+ * 否则纯数字 id 归名 '网易云'（本站默认源，混源列表里每行都标出处）。
+ * 两层语义分离：songSource 是「导入来源」判定——网易云是默认源、无导入
+ * 语义，其 null 留给逻辑侧消费；songSourceTag 只服务行徽标——全源覆盖。
+ * 归不了名的 id 形态（netease_ 词源命名空间 id、缺 id、垃圾串）仍返
+ * null——徽标只标可证出处
+ */
+export function songSourceTag(song) {
+  return songSource(song) || (NETEASE_ID_RE.test(String(song?.id ?? '')) ? '网易云' : null)
 }
 
 /**

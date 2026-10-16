@@ -2,8 +2,8 @@
 //   - 顶栏 .watch-av 音画分段：出组/双档/aria-pressed/即点即切
 //   - 视频缓冲衬底 img（alt=""）+ --wait 透明底 + 「缓冲中」读数章，
 //     loadeddata 置位后同步退场
-//   - 队列行来源徽标 .queue-src（YouTube 等导入源出、网易云/散曲不出；
-//     bv_/yt_/qq_ 裸 id 历史行经 songSource id 兜底同出徽标），
+//   - 队列行来源徽标 .queue-src 全源覆盖（bv_/yt_/qq_ 对象+裸 id 兜底、
+//     file_ 上传、网易云数字 id 也出「网易云」——songSourceTag 展示档），
 //     缩略图 @error 记黑换 fallback（403/坏源不再每次重渲染白打请求）
 //   - 校准键面方向词：延后 .5s / 提前 .5s（title/aria 口径不变）
 //   - BottomPlayer watchOpen 双向键面 + 方向 cue 翻转 + 唯一 open-watch 入口
@@ -150,31 +150,33 @@ describe('WatchView：视频缓冲衬底与读数章', () => {
 })
 
 describe('WatchView：队列来源徽标与缩略图记黑', () => {
-  it('YouTube 导入行出 .queue-src「YouTube」，网易云/散曲行不出牌', async () => {
+  it('来源徽标全源覆盖：yt 行出「YouTube」，网易云数字行也出「网易云」', async () => {
     const w = mountWatch({ queue: [SONG, YT_SONG], currentSong: SONG, tab: 'queue' })
     await nextTick()
     const badges = w.findAll('.queue-src')
-    expect(badges).toHaveLength(1)
-    expect(badges[0].text()).toBe('YouTube')
-    expect(badges[0].attributes('title')).toBe('来源：YouTube 导入')
+    expect(badges).toHaveLength(2)
+    expect(badges.map(b => b.text())).toEqual(['网易云', 'YouTube'])
+    // title 只报出处不缀「导入」——网易云原生曲没有导入语义，外源行同口径免双文案
+    expect(badges[0].attributes('title')).toBe('来源：网易云')
+    expect(badges[1].attributes('title')).toBe('来源：YouTube')
     // 徽标内联在标题行——不抬虚拟行高（行高仍由 .queue-row 56px 样式承担）
     const title = w.findAll('.queue-row-title')[1]
     expect(title.find('.queue-row-title-text').text()).toBe('yt歌')
     expect(title.find('.queue-src').exists()).toBe(true)
   })
 
-  it('bv_/yt_/qq_ 裸 id 历史行（缺 provider 对象）同出徽标——songSource id 兜底', async () => {
-    // 与 SongList .song-tag 同一条 songSource 收口：旧持久化行只剩前缀 id
-    // 也出徽标（lib 层全矩阵断言见 tests/song.test.mjs）；纯数字行仍不出
+  it('bv_/yt_/qq_ 裸 id 历史行（缺 provider 对象）同出徽标——songSourceTag id 兜底', async () => {
+    // 与 SongList .song-tag 同一条 songSourceTag 收口：旧持久化行只剩前缀 id
+    // 也出徽标（lib 层全矩阵断言见 tests/song.test.mjs）；纯数字行出「网易云」
     const rows = [
       { id: 'bv_BV1xx411c7mD', name: '裸bv', ar: [], al: {}, dt: 0 },
       { id: 'yt_abcdefghijk', name: '裸yt', ar: [], al: {}, dt: 0 },
       { id: 'qq_004abc123def', name: '裸qq', ar: [], al: {}, dt: 0 },
-      SONG, // 纯数字网易云 id——无导入来源语义
+      SONG, // 纯数字网易云 id——展示档归名「网易云」
     ]
     const w = mountWatch({ queue: rows, currentSong: SONG, tab: 'queue' })
     await nextTick()
-    expect(w.findAll('.queue-src').map(b => b.text())).toEqual(['B站', 'YouTube', 'QQ音乐'])
+    expect(w.findAll('.queue-src').map(b => b.text())).toEqual(['B站', 'YouTube', 'QQ音乐', '网易云'])
   })
 
   it('缩略图 @error 记黑换 fallback 音符壳，alt="" 读屏去重', async () => {

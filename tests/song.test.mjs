@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   UPLOADS_PLAYLIST_ID, fileArtifactUrl, isVipSong, isVipUnplayable,
   songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, visibleSongs,
-  songSource, songSourceName,
+  songSource, songSourceTag, songSourceName,
   songSourceUrl, externalArtistName, externalCoverUrl, applyTrackOverrides,
   isFileTrackId, isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
   proxiedCoverUrl, slimTrack
@@ -29,13 +29,40 @@ test('songSource：五形态标签 + 裸 id 前缀兜底（崩溃钉——曾 Re
   assert.equal(songSource(YT), 'YouTube')
   assert.equal(songSource(QQ), 'QQ音乐')
   // 裸 id 前缀兜底与 songSourceName 同口径：bv_/yt_/qq_ 无 provider 对象的
-  // 历史持久化行也出徽标（SongList .song-tag/队列 .queue-src 同享此收口）
+  // 历史持久化行也归名（行徽标收口在 songSourceTag——本层是逻辑侧导入判定）
   assert.equal(songSource({ id: 'bv_BV1xx411c7mD' }), 'B站')
   assert.equal(songSource({ id: 'bv_BV1xx411c7mD_p3' }), 'B站') // 分 p 形态同命中
   assert.equal(songSource({ id: 'yt_dQw4w9WgXcQ' }), 'YouTube')
   assert.equal(songSource({ id: 'qq_004abc123def' }), 'QQ音乐')
-  assert.equal(songSource({ id: '347230' }), null)   // 纯数字仍不出徽标
+  assert.equal(songSource({ id: '347230' }), null)   // 纯数字在本层仍不归名——徽标归名是 songSourceTag 的职责
   assert.equal(songSource({ id: 'x_garbage' }), null)
+})
+
+test('songSourceTag：行徽标展示档——songSource 命中面透传 + 数字 id 归名网易云', () => {
+  // songSource 命中面原样透传：provider 对象 + 裸前缀 id 兜底同口径
+  assert.equal(songSourceTag(BV), 'B站')
+  assert.equal(songSourceTag(YT), 'YouTube')
+  assert.equal(songSourceTag(QQ), 'QQ音乐')
+  assert.equal(songSourceTag(FILE_OBJ), '本地上传')
+  assert.equal(songSourceTag(FILE_NO_OBJ), '本地上传')
+  assert.equal(songSourceTag({ id: 'bv_BV1xx411c7mD' }), 'B站')
+  assert.equal(songSourceTag({ id: 'bv_BV1xx411c7mD_p3' }), 'B站')
+  assert.equal(songSourceTag({ id: 'yt_dQw4w9WgXcQ' }), 'YouTube')
+  assert.equal(songSourceTag({ id: 'qq_004abc123def' }), 'QQ音乐')
+  // 全源覆盖的核心差异位：songSource 返 null 的纯数字网易云 id 补「网易云」——
+  // 混源/纯网易云列表每行都如实标出处（songSource 的 null 语义留给逻辑侧不动）
+  assert.equal(songSourceTag(NE), '网易云')
+  assert.equal(songSourceTag({ id: '347230' }), '网易云')
+  assert.equal(songSourceTag({ id: 347230 }), '网易云')   // number 型 id 经 String 归一同命中
+  // provider 对象在而 id 非标准形：songSource 的对象优先支路先命中，与 id 形态无关
+  assert.equal(songSourceTag({ id: 'weird', youtube: { videoId: 'x' } }), 'YouTube')
+  // 'netease_xxx' 是词源命名空间 id 不是轨道 id——NETEASE_ID_RE 只认纯数字，不出牌
+  assert.equal(songSourceTag({ id: 'netease_1454432192' }), null)
+  // 归不了名的形态仍 null：垃圾前缀 / 缺 id / 裸值——徽标只标可证出处
+  assert.equal(songSourceTag({ id: 'x_garbage' }), null)
+  assert.equal(songSourceTag({ name: '没 id' }), null)
+  assert.equal(songSourceTag(null), null)
+  assert.equal(songSourceTag(undefined), null)
 })
 
 test('songSourceName：对象优先/id 兜底双通道与网易云归名', () => {

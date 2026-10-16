@@ -332,9 +332,11 @@ describe('PlaylistGrid：歌曲行', () => {
     expect(tag.element.parentElement.classList.contains('song-result-title')).toBe(true)
   })
 
-  it('网易云数字曲（无 provider 块）→ 无角标', async () => {
+  it('网易云数字曲（无 provider 块）→ 出「网易云」角标（全源覆盖，行行标出处）', async () => {
     const w = await mountGrid({ songs: [NE_SONG] })
-    expect(w.find('.song-result-tag').exists()).toBe(false)
+    const tag = w.find('.song-result-tag')
+    expect(tag.exists()).toBe(true)
+    expect(tag.text()).toBe('网易云')
   })
 
   it('专辑名==歌名（trim+大小写不敏感）→ meta 只留艺人不复读', async () => {

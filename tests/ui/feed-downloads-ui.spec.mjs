@@ -1,5 +1,6 @@
 // 发现流/下载域/系统令牌 修复轮回归：
 //   HomeFeed 最近播放单曲卡（封面/歌手/来源徽标/@error 兜底）+
+//     网格展示截 RECENT_DISPLAY_CAP=12（emit 队列种子仍全量）+
 //     recentAlbums 伪专辑准入（al.id 真值或 QQ albummid 合成键 ∧ 名≠歌名）
 //   Downloads：DQL meta 去内部 id/progressbar 具名、DTL 文案去「左侧」、
 //     DTR 去 #id/.dtr-done、err-tag 本地化、封面 @error；
@@ -111,16 +112,34 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
     const rows = w.findAll('.home-songrow')
     expect(rows).toHaveLength(5)
-    // 徽标：网易曲无来源戳，yt→YouTube，bv→B站，qq→QQ音乐
+    // 徽标全源覆盖：数字 id 网易曲也出「网易云」，yt→YouTube，bv→B站，qq→QQ音乐
     const tagText = (r) => r.find('.home-src-tag').exists() ? r.find('.home-src-tag').text() : null
     const tags = rows.map(tagText)
-    expect(tags).toEqual([null, 'YouTube', 'B站', 'QQ音乐', 'QQ音乐'])
+    expect(tags).toEqual(['网易云', 'YouTube', 'B站', 'QQ音乐', 'QQ音乐'])
     expect(rows[1].find('.home-songrow-name').text()).toBe('视频歌')
     expect(rows[1].find('.home-songrow-artist').text()).toBe('UP主')
     expect(rows[0].find('img.home-songrow-cover').exists()).toBe(true)
     await rows[0].trigger('click')
     expect(w.emitted('play-song')[0][0].id).toBe(1)
     expect(w.emitted('play-song')[0][1]).toEqual(RECENTS)
+  })
+
+  it('网格只渲前 12 条（RECENT_DISPLAY_CAP），play-song 队列种子仍给全量 recents', async () => {
+    // 15 条 > 展示上限 12；al.name==歌名 → 不上专辑架，断言面隔离在 songrow
+    const MANY = Array.from({ length: 15 }, (_, i) => ({
+      id: 1000 + i, name: `队列歌${i}`, ar: [{ name: '艺人' }],
+      al: { name: `队列歌${i}` },
+    }))
+    const w = track(mount(HomeFeed, { props: { recents: MANY, recentPlaylists: [] } }))
+    const rows = w.findAll('.home-songrow')
+    expect(rows).toHaveLength(12)
+    // 截的是尾部保原序：末位可见是第 12 条（index 11）
+    expect(rows.at(-1).find('.home-songrow-name').text()).toBe('队列歌11')
+    await rows[0].trigger('click')
+    expect(w.emitted('play-song')[0][0].id).toBe(1000)
+    // 展示截断不碰 emit 实参——队列种子仍是全量 15 条
+    expect(w.emitted('play-song')[0][1]).toEqual(MANY)
+    expect(w.emitted('play-song')[0][1]).toHaveLength(15)
   })
 
   it('封面 @error 落图标兜底（songrow 与货架卡同簿记）', async () => {
