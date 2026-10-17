@@ -68,22 +68,35 @@ const retryAfter = new Map();
 // 前先 await 它），生产路径不读此集合
 const pendingFileCleanups = new Set();
 
-// 仅查本地、绝不触发远端导入：GET/DELETE 等读/删操作不允许产生写副作用
+// 仅查本地、绝不触发远端导入：GET/DELETE 等读/删操作不允许产生写副作用。
+// 命名空间分流：netease_playlist_id 是客户端权威寻址命名空间（数字网易云
+// id / local_pl_*/saved_queue_* 镜像形态）——一律先按它解析；数字输入在
+// netease 域无主时才回落内部行 id。回落是存量兼容面而非可选优化：服务端
+// 响应把 PK 透出给客户端回转（queue.playlistId → listTasks 的 standalone
+// 查询、status 响应的 audioPlaylistId/videoPlaylistId → /file 寻址键），
+// 这批回转路径仍以内部 id 寻址。
+// 先查 netease 是承重次序（N6）：原实现 PK 先行，镜像行 PK 数值撞上客户端
+// 数字歌单 id 时会静默解析到错误歌单——netease 命名空间必须赢。残余歧义
+// 方向反转：与已入库数字 netease id 等值的 PK 回转会解到 netease 行——
+// 概率极低（真实歌单 id 为长数字串，PK 为小整数），彻底消除需前端回转链
+// 改发 neteasePlaylistId（DownloadsPanel standalone / status→/file 链）
+// 之后再摘除本回落
 function findExistingPlaylistId(playlistId) {
   if (playlistId === undefined || playlistId === null) return null;
   const str = String(playlistId).trim();
   if (!str) return null;
-  const numericId = Number(str);
-  if (Number.isInteger(numericId)) {
-    const byLocalId = playlistsRepo.findPlaylistById(numericId);
-    if (byLocalId) return byLocalId.id;
-  }
   // 与 resolvePlaylistId 同一前导零归一化：'000123' 命中已存 '123' 行，
   // 不为等价 id 多烧一次上游往返
   const byNeteaseId = playlistsRepo.findPlaylistByNeteaseId(
     str.replace(/^0+(?=\d)/, '')
   );
-  return byNeteaseId ? byNeteaseId.id : null;
+  if (byNeteaseId) return byNeteaseId.id;
+  const numericId = Number(str);
+  if (Number.isInteger(numericId)) {
+    const byLocalId = playlistsRepo.findPlaylistById(numericId);
+    if (byLocalId) return byLocalId.id;
+  }
+  return null;
 }
 
 // 写操作（创建队列/下载单曲）专用：本地未命中时尝试从网易云导入
@@ -158,7 +171,13 @@ function applyLocalTrackDelta(playlistId, localDelta) {
     }
     // 空 added 也是权威信号：「清空到零」必须能扫掉全部标记行——keep 集
     // 传消毒后的曲目 id（消毒弃件本来也不在合法追加面内）
-    playlistTracksRepo.pruneLocalAddedTracks(playlistId, tracks.map(t => t.id));
+    const keepIds = tracks.map(t => t.id);
+    playlistTracksRepo.pruneLocalAddedTracks(playlistId, keepIds);
+    // 追加序对齐客户端渲染尾序：即时追加按落库先后排位（先单点下 C 再权威
+    // 下发 [A,B,C]，服务端序成 [C,B,A]）——剪枝后幸存集已收敛，标记行按
+    // 本次消毒后 added 序列重编 position；撞上游行的 id 无标记行可动，
+    // 其位序在上游区本就由服务端序管
+    playlistTracksRepo.renumberLocalAddedPositions(playlistId, keepIds);
   })();
 }
 
@@ -407,6 +426,14 @@ async function createDownloadQueue(playlistId, options = {}) {
         downloadVideo: Boolean(queue.downloadVideo) && isExternalSongId(songId)
       });
     }
+
+    // 复活队列的陈旧成员摘离：上一轮挂在 queue.id 下、song_id 已不在本次
+    // 枚举集（对账剪掉/歌单瘦身）的任务行留队即成幽灵——队列详情多出行、
+    // 计数虚高、还可能按陈旧语义残留被重跑。摘成 standalone 落「未入队
+    // 单曲」分节：行与已下工件都保留（与「prune 不碰 download_tasks」同款
+    // 只换归属不灭迹）。crash 残留的 downloading 行同法适用——孤儿
+    // standalone 语义与 recoverStaleStates 自愈一致；新建队列此步天然空转
+    downloadTasksRepo.detachQueueTasksNotIn(queue.id, [...seen]);
 
     // 计数从任务行状态派生：收养的 completed 任务自动计入完成数，
     // 手工记数会让"跳过活跃属主"等分支漏配漂移

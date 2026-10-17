@@ -159,6 +159,39 @@ function insertTrackIfMissing(playlistId, track) {
   return true;
 }
 
+// localDelta 对账的追加序对齐：存活 local_added=1 行按本次消毒后 added
+// 序列重编 position——追加面本应按「客户端 addedTracks 数组序」落在非
+// 标记行尾部；即时追加按落库先后排位（先经单曲路径补插 C、权威 delta 再
+// 下发 [A,B,C] 时服务端序成 [C,B,A]），与客户端 [...visible, ...added]
+// 渲染尾序永久漂移（只影响建队枚举序）。基值接在非标记行 MAX(position)+1
+// ——撞 id 的上游行（标 0）原位不动，它们本就在上游序区。
+// UNIQUE(playlist_id, position) 挡中途撞位：标记行先整体抬进负位安全区
+// （-id 彼此唯一、与全部非负现位不相交），再按序落终值——终值区
+// （>= base）此刻只剩待排的标记行，必不撞。
+// 调用方须在 prune 之后调：幸存标记行集恰为 orderedIds 的有标记子集——
+// 撞上游行的 orderedId 无标记行可动，其相对序在上游区本就由服务端序管
+function renumberLocalAddedPositions(playlistId, orderedIds) {
+  const db = getDb();
+  const ordered = (Array.isArray(orderedIds) ? orderedIds : []).map(String);
+  if (!ordered.length) return;
+  db.prepare(`
+    UPDATE playlist_tracks SET position = -id
+    WHERE playlist_id = ? AND local_added = 1
+  `).run(playlistId);
+  const { base } = db.prepare(`
+    SELECT COALESCE(MAX(position), -1) + 1 AS base
+    FROM playlist_tracks
+    WHERE playlist_id = ? AND local_added = 0
+  `).get(playlistId);
+  const stmt = db.prepare(`
+    UPDATE playlist_tracks SET position = ?
+    WHERE playlist_id = ? AND song_id = ? AND local_added = 1
+  `);
+  ordered.forEach((songId, index) => {
+    stmt.run(base + index, playlistId, songId);
+  });
+}
+
 // localDelta 对账剪枝：addedTracks 是客户端本地追加面的权威全集——标过
 // local_added=1 却不在本批 keep 集里的行即「用户已删掉的追加曲」（客户端
 // 只剪数组不补墓碑），物理删行清出队列枚举。上游行（标 0）永不在打击面。
@@ -186,5 +219,6 @@ module.exports = {
   findTrackBySongId,
   upsertTrackForPlaylist,
   insertTrackIfMissing,
+  renumberLocalAddedPositions,
   pruneLocalAddedTracks
 };

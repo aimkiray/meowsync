@@ -189,7 +189,7 @@ test('队列已完成曲「补视频」翻 pending 接管——不再幂等谎�
   const res = await app.request('http://t/downloads/songs/bv_BV7770140000', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ playlistId: pl.id, downloadVideo: true })
+    body: JSON.stringify({ playlistId: pl.neteasePlaylistId, downloadVideo: true })
   });
   assert.equal(res.status, 200);
 
@@ -232,7 +232,7 @@ test('队列已完成曲补视频——videoPath 已在册时仍幂等返回不�
   const res = await app.request('http://t/downloads/songs/bv_BV7770150000', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ playlistId: pl.id, downloadVideo: true })
+    body: JSON.stringify({ playlistId: pl.neteasePlaylistId, downloadVideo: true })
   });
   assert.equal(res.status, 200);
   const row = tasksRepo.findTaskById(task.id);
@@ -250,7 +250,7 @@ test('在途协程级联：abort+排空后任务/队列/歌单行全清', async 
   playlistTracksRepo.replaceTracksForPlaylist(pl.id, [
     { id: 'song_live1', name: '活着的歌', ar: [{ name: 'a' }], al: { name: 'b' }, dt: 60000 }
   ]);
-  const queue = await dm.createDownloadQueue(pl.id, {
+  const queue = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
   });
   await dm.startQueue(queue.id);
@@ -290,7 +290,7 @@ test('幻影 videoPath 清册：登记但文件已删 + 不补视频的重跑清
   const res = await app.request('http://t/downloads/songs/bv_BV7770160000', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ playlistId: pl.id })
+    body: JSON.stringify({ playlistId: pl.neteasePlaylistId })
   });
   assert.equal(res.status, 200);
   const row = tasksRepo.findTaskById(task.id);
@@ -322,7 +322,7 @@ test('status/file 契约：body.data.task 嵌套形态 + kind=video 的 Range �
   });
 
   const st = await (await app.request(
-    `http://t/downloads/songs/bv_BV7770170000/status?playlistId=${pl.id}`)).json();
+    `http://t/downloads/songs/bv_BV7770170000/status?playlistId=${pl.neteasePlaylistId}`)).json();
   assert.equal(st.code, 200);
   assert.equal(st.data.downloaded, true);
   // toPublicTask 透相对路径（歌单目录相对）——前端探测消费的就是这个形态
@@ -330,7 +330,7 @@ test('status/file 契约：body.data.task 嵌套形态 + kind=video 的 Range �
   assert.equal(st.data.task.videoMeta.h, 1080);
 
   const file = await app.request(
-    `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.id}&kind=video`);
+    `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.neteasePlaylistId}&kind=video`);
   assert.equal(file.status, 200);
   assert.match(file.headers.get('content-type') || '', /video\/mp4/);
   // 防护三头与 media-cache 供给同口径——同性质字节走同一边界
@@ -339,7 +339,7 @@ test('status/file 契约：body.data.task 嵌套形态 + kind=video 的 Range �
   assert.equal(file.headers.get('referrer-policy'), 'no-referrer');
 
   const ranged = await app.request(
-    `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.id}&kind=video`,
+    `http://t/downloads/songs/bv_BV7770170000/file?playlistId=${pl.neteasePlaylistId}&kind=video`,
     { headers: { Range: 'bytes=0-4' } });
   assert.equal(ranged.status, 206);
   assert.equal(await ranged.text(), 'video');
@@ -354,7 +354,7 @@ test('status/file 契约：body.data.task 嵌套形态 + kind=video 的 Range �
     videoPath: join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'videos', 'gone.mp4')
   });
   const file404 = await app.request(
-    `http://t/downloads/songs/bv_BV7770180000/file?playlistId=${pl.id}&kind=video`);
+    `http://t/downloads/songs/bv_BV7770180000/file?playlistId=${pl.neteasePlaylistId}&kind=video`);
   assert.equal(file404.status, 404);
 
   const q = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'completed', totalTasks: 0 });
@@ -378,11 +378,11 @@ test('kind=audio 的 videoPath 兜底仅限 file_ 曲：bv_ 仅视频行 404', a
   writeFileSync(bvVideo, 'video-bytes');
   tasksRepo.updateTask(bvTask.id, { videoPath: bvVideo });
   const bvRes = await app.request(
-    `http://t/downloads/songs/bv_BV7770190000/file?playlistId=${pl.id}&kind=audio`);
+    `http://t/downloads/songs/bv_BV7770190000/file?playlistId=${pl.neteasePlaylistId}&kind=audio`);
   assert.equal(bvRes.status, 404, 'bv_ 仅视频行的 audio 请求应 404 而非供 mp4');
   // 同曲 kind=video 仍供档（WatchView 本地视频探测链不受影响）
   const bvVid = await app.request(
-    `http://t/downloads/songs/bv_BV7770190000/file?playlistId=${pl.id}&kind=video`);
+    `http://t/downloads/songs/bv_BV7770190000/file?playlistId=${pl.neteasePlaylistId}&kind=video`);
   assert.equal(bvVid.status, 200);
 
   // file_ completed 行：video-only 上传曲保留 audio→videoPath 兜底
@@ -394,7 +394,7 @@ test('kind=audio 的 videoPath 兜底仅限 file_ 曲：bv_ 仅视频行 404', a
   writeFileSync(fileVideo, 'upload-video-bytes');
   tasksRepo.updateTask(fileTask.id, { videoPath: fileVideo });
   const fileRes = await app.request(
-    `http://t/downloads/songs/file_abcd1234/file?playlistId=${pl.id}&kind=audio`);
+    `http://t/downloads/songs/file_abcd1234/file?playlistId=${pl.neteasePlaylistId}&kind=audio`);
   assert.equal(fileRes.status, 200, 'file_ video-only 曲的 audio 请求应回落 videoPath');
   assert.match(fileRes.headers.get('content-type') || '', /video\/mp4/);
 });
