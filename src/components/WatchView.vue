@@ -20,11 +20,17 @@
       <!-- 音画分段：原 ⋯ 菜单 radio 组上移顶栏常驻——模式是高频状态读数，
            收在菜单里看不见当前态且切一次开两次。即点即切不碰菜单；
            出场闸复用 showAvGroup（按 provider/id 形态存在性出组），
-           aria-pressed + --on 反白承担态指示，「切到…」动作提示落目标项
-           title——字符串仍出自 avToggle 单源，不另造第二套文案 -->
-      <div v-if="showAvGroup" class="watch-av" role="group" aria-label="音画模式">
-        <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': !videoOn }" :aria-pressed="!videoOn" :title="videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(false)">音频</button>
-        <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': videoOn }" :aria-pressed="videoOn" :title="!videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(true)">视频</button>
+           「切到…」动作提示落目标项 title——字符串仍出自 avToggle 单源，
+           不另造第二套文案。
+           语义升 radiogroup/radio：音画是互斥单选，aria-pressed 是两颗
+           独立开关的语义贴不上；aria-checked 报选中、--on 反白仍担视觉态。
+           键盘走最小档：button 原生 Space/Enter 触发 click 已可切，
+           Tab 双停靠（组只两档不做 roving tabindex）；方向键漫游须
+           「移焦+跟随选中」，lib/focus-trap 只有菜单 ↑↓ 移焦原语
+           （不含 ←→ 与选中跟随），不为两档组自造 -->
+      <div v-if="showAvGroup" class="watch-av" role="radiogroup" aria-label="音画模式">
+        <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': !videoOn }" role="radio" :aria-checked="!videoOn" :title="videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(false)">音频</button>
+        <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': videoOn }" role="radio" :aria-checked="videoOn" :title="!videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(true)">视频</button>
       </div>
       <button
         ref="menuBtn"

@@ -231,18 +231,20 @@ describe('WatchView：⋯ 菜单开合与焦点', () => {
         tab: 'queue',
         currentSong: { id: 'yt_abcdefghijk', name: 'yt', ar: [{ name: 'a' }], al: {}, dt: 0, youtube: { videoId: 'abcdefghijk', hasVideo: true } },
       })
-      // 分段常驻页头行——开不开菜单都在
+      // 分段常驻页头行——开不开菜单都在；互斥单选语义=radiogroup/radio
       const seg = w.find('.watch-head .watch-av')
       expect(seg.exists()).toBe(true)
+      expect(seg.attributes('role')).toBe('radiogroup')
       expect(seg.attributes('aria-label')).toBe('音画模式')
       const audio = avSegBtns(w).find(b => b.text().includes('音频'))
+      expect(audio.attributes('role')).toBe('radio')
       await audio.trigger('click')
       expect(prefVideoOn.value).toBe(false) // 点选翻共享偏好
       await nextTick()
-      expect(audio.attributes('aria-pressed')).toBe('true')
+      expect(audio.attributes('aria-checked')).toBe('true')
       // 单一归属：菜单里不再有音画 radio 组，开菜单首项=沉浸
       const menu = await openActionsMenu(w)
-      expect(menu.querySelector('[role="group"][aria-label="音画模式"]')).toBeNull()
+      expect(menu.querySelector('[aria-label="音画模式"]')).toBeNull()
       expect(menuRadios()).toHaveLength(0)
       expect(document.activeElement.textContent).toContain('沉浸')
     } finally { prefVideoOn.value = prev } // 断言挂也归位，不污染后续用例
@@ -484,7 +486,7 @@ describe('WatchView：yt_ 裸 id（缺 provider 对象老行）视频位', () =>
     } finally { prefVideoOn.value = true } // 归位默认开（断言挂也不污染后续用例）
   })
 
-  it('音画分段双档：键面=模式名，aria-pressed 报当前态', async () => {
+  it('音画分段双档：键面=模式名，radio/aria-checked 报当前态', async () => {
     const prev = prefVideoOn.value
     try {
       prefVideoOn.value = true // 显式视频态（不赌模块序默认值）
@@ -492,15 +494,20 @@ describe('WatchView：yt_ 裸 id（缺 provider 对象老行）视频位', () =>
       await nextTick()
       const audio = avSegBtns(w).find(b => b.text().includes('音频'))
       const video = avSegBtns(w).find(b => b.text().includes('视频'))
-      // 视频态：态指示由 aria-pressed/--on 承担，动作提示落目标项 title
-      expect(audio.attributes('aria-pressed')).toBe('false')
-      expect(video.attributes('aria-pressed')).toBe('true')
+      // 互斥单选语义：两键 role=radio，aria-checked 互斥（无 aria-pressed）
+      expect(audio.attributes('role')).toBe('radio')
+      expect(video.attributes('role')).toBe('radio')
+      // 视频态：态指示由 aria-checked/--on 承担，动作提示落目标项 title
+      expect(audio.attributes('aria-checked')).toBe('false')
+      expect(video.attributes('aria-checked')).toBe('true')
+      expect(audio.attributes('aria-pressed')).toBeUndefined()
+      expect(video.attributes('aria-pressed')).toBeUndefined()
       expect(audio.attributes('title')).toBe('切到纯音频（省流量）')
       expect(video.attributes('title')).toBeUndefined() // 当前态项不给「切到」动作提示
       prefVideoOn.value = false // 翻音频态：on 转音频键，「切到视频」提示换位
       await nextTick()
-      expect(audio.attributes('aria-pressed')).toBe('true')
-      expect(video.attributes('aria-pressed')).toBe('false')
+      expect(audio.attributes('aria-checked')).toBe('true')
+      expect(video.attributes('aria-checked')).toBe('false')
       expect(audio.attributes('title')).toBeUndefined()
       expect(video.attributes('title')).toContain('切到视频模式')
     } finally { prefVideoOn.value = prev } // 归位
