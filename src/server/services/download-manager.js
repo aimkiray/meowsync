@@ -1561,6 +1561,33 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
   if (deletingPlaylists.has(resolvedPlaylistId)) {
     throw httpError(409, '该歌单正在删除中');
   }
+  // 单曲路径的增量补行：远端单（纯数字 id）的客户端追加曲只活在
+  // localStorage addedTracks——不落库则下方 find(songId) 必 404。
+  // 语义与建队的 localDelta 权威对账刻意不同：这里是单曲补位不是对账，
+  // 只插不改——行已存在（上游/镜像写入或前次补插）零写返回，客户端瘦身
+  // 投影不降级服务端 richer raw_json；缺席才按 local_added=1 补尾位。
+  // 与下方 listTracksByPlaylistId 枚举同属同步段——中间不许插 await，
+  // 否则枚举可能读到写一半的曲目集。
+  // local_added=1 的一致性说明：调用方谎报（曲并不在其 addedTracks）时，
+  // 标记行靠该单下次权威 delta 建队的 prune 扫掉才自愈——该单不再建队
+  // 则行无害留存（自愈不是必然事件），本处不验真
+  if (options.track) {
+    // 载荷与路径曲不一致是客户端 bug/攻击面——如实 400，不悄悄按 songId 落库
+    if (String(options.track.id) !== String(songId)) {
+      throw httpError(400, 'track 与 songId 不一致');
+    }
+    // 与镜像/localDelta 同一份白名单消毒：弃件（file_/未知形态）跳过补插，
+    // 下方 find 自然 404——不额外报错（非法条目静默弃同哲学）
+    const [sanitized] = sanitizeMirrorTracks([options.track]).tracks;
+    // 与 applyLocalTrackDelta 同款 source='local' 闸：本地单曲目表由
+    // /downloads/local/mirror 整表重写承载，单曲补插不插手——否则谎报/
+    // 误发的 track 会在镜像表落 local_added 幽灵行（delta 对本地单早退、
+    // prune 不可及；下一次整表重写前该行一直在枚举面内）
+    if (sanitized
+        && playlistsRepo.findPlaylistById(resolvedPlaylistId)?.source !== 'local') {
+      playlistTracksRepo.insertTrackIfMissing(resolvedPlaylistId, sanitized);
+    }
+  }
   const tracks = playlistTracksRepo.listTracksByPlaylistId(resolvedPlaylistId);
   const track = tracks.find(t => String(t.id) === String(songId));
 

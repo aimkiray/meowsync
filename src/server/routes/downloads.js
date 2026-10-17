@@ -37,7 +37,7 @@ function parseIdParam(c, name = 'id') {
 
 // 队列/单曲下载的可选参数规范化：脏值回落默认，concurrentLimit 限定 1-10
 function normalizeDownloadOptions(body) {
-  const { bitrate, downloadAudio, downloadLyrics, downloadCover, downloadVideo, concurrentLimit, localDelta } = body;
+  const { bitrate, downloadAudio, downloadLyrics, downloadCover, downloadVideo, concurrentLimit, localDelta, track } = body;
   return {
     // 网易云端常见码率 128k-999k：越界值静默回落默认（上游要么忽略要么产空文件）
     bitrate: Number.isInteger(bitrate) && bitrate >= 64000 && bitrate <= 999000 ? bitrate : 320000,
@@ -52,7 +52,11 @@ function normalizeDownloadOptions(body) {
     // 远端单的本地增删面（addedTracks/removedIds，zod 已过形状与体量）——
     // 透传给 createDownloadQueue 在枚举曲目前落 playlist_tracks；
     // 单曲路径不消费它，缺省即 undefined 早退
-    localDelta
+    localDelta,
+    // 单曲路径（/downloads/songs/:songId）的增量补行载荷：远端单追加曲的
+    // 瘦身投影透传给 downloadSingleSong 补 playlist_tracks 行再枚举；
+    // 建队路径不消费它（权威对账走 localDelta），缺省即 undefined 跳过
+    track
   };
 }
 

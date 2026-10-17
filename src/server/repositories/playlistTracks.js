@@ -121,6 +121,44 @@ function upsertTrackForPlaylist(playlistId, track) {
   return true;
 }
 
+// 单曲下载路径（POST /downloads/songs/:songId 的 track 载荷）的增量补行
+// 原语——与 upsertTrackForPlaylist 同投影列写法，但刻意去掉 UPDATE 分支：
+// 行已存在（上游导入/镜像整表重写/前次补插）必须零写返回。动机：客户端
+// 发的是瘦身投影（~300B/曲），UPDATE 会把服务端更丰满的 raw_json（上游
+// 详情全字段/镜像对象）降级成瘦身形——已存在行本就不需要补任何东西。
+// 不存在才 append 到当前最大 position 之后，同打 local_added=1——标记面
+// 与 delta 对账共用：调用方谎报（曲其实不在其 addedTracks）时，下轮权威
+// delta 建队的 prune 会把标记行扫掉，自愈无需本层验真
+function insertTrackIfMissing(playlistId, track) {
+  const db = getDb();
+  const songId = String(track.id);
+  // 上游单可能重复含同曲——任一 (playlist_id, song_id) 行在即算「已存在」，
+  // 同 id 多行同样零写（与 UPDATE 命中多行同语义：都不 append 第三行）
+  const hit = db.prepare(`
+    SELECT 1 AS x
+    FROM playlist_tracks
+    WHERE playlist_id = ? AND song_id = ?
+    LIMIT 1
+  `).get(playlistId, songId);
+  if (hit) return false;
+  const name = track.name || '未知歌曲';
+  const artistJson = JSON.stringify(track.ar || track.artists || []);
+  const albumJson = JSON.stringify(track.al || track.album || {});
+  const durationMs = track.dt || track.duration || 0;
+  const rawJson = JSON.stringify(track);
+  const { nextPos } = db.prepare(`
+    SELECT COALESCE(MAX(position), -1) + 1 AS nextPos
+    FROM playlist_tracks
+    WHERE playlist_id = ?
+  `).get(playlistId);
+  db.prepare(`
+    INSERT INTO playlist_tracks (
+      playlist_id, song_id, name, artist_json, album_json, duration_ms, position, local_added, raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+  `).run(playlistId, songId, name, artistJson, albumJson, durationMs, nextPos, rawJson);
+  return true;
+}
+
 // localDelta 对账剪枝：addedTracks 是客户端本地追加面的权威全集——标过
 // local_added=1 却不在本批 keep 集里的行即「用户已删掉的追加曲」（客户端
 // 只剪数组不补墓碑），物理删行清出队列枚举。上游行（标 0）永不在打击面。
@@ -147,5 +185,6 @@ module.exports = {
   listTracksByPlaylistId,
   findTrackBySongId,
   upsertTrackForPlaylist,
+  insertTrackIfMissing,
   pruneLocalAddedTracks
 };

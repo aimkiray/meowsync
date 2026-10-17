@@ -3,7 +3,7 @@ import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { apiErrorMessage } from '../api/http.js'
 import { isResolvableTrackId } from '../lib/url.js'
-import { isFileTrackId, fileArtifactUrl } from '../lib/song.js'
+import { isFileTrackId, fileArtifactUrl, isLocalPlaylistId } from '../lib/song.js'
 import { toast, pixelConfirm } from '../lib/feedback.js'
 
 // SongList 的服务端下载子域：状态批量映射、行级下载/删除/视频补件、
@@ -20,16 +20,21 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
   let viewDisposed = false
   onBeforeUnmount(() => { viewDisposed = true }) // 终止下载轮询并屏蔽其状态写/弹窗
 
-  // 「下载到服务器」可见性：网易云数字 id 全场景可下；qq_/bv_/yt_ 自有源
-  // 曲只在本地歌单可下（镜像链带 provider 定位字段投影进曲目表），
-  // 远端歌单里的追曲不在服务端曲目表必 404
+  // 「下载到服务器」可见性：分享壳全灭（isShareShell 无落库/轮询面——
+  // 模板侧 `!isShareShell` 保留作双保险，谓词自身不再谎称可下）；网易云
+  // 数字 id 全场景可下；qq_/bv_/yt_ 外部源曲在两类上下文可下——本地歌单
+  // （镜像链带 provider 定位字段投影进曲目表）、远端数字单视图（外部源曲
+  // 能出现在远端单曲目里即必是 addedTracks 成员——上游单只有数字 id；
+  // track 载荷随单曲请求增量补行进曲目表，链可达）。single_song_/其他壳
+  // 无落库链仍不亮（file_ 上传曲本就不收）
   const canServerDownload = (song) => {
-    if (!song) return false
+    if (!song || isShareShell.value) return false
     const id = String(song.id ?? '')
     if (/^\d+$/.test(id)) return true
-    if (!isLocalPlaylist.value) return false
     // 非数字 id 只收外部源形态（qq_/bv_/yt_）——与镜像/分享链同一份白名单
-    return isResolvableTrackId(id)
+    if (!isResolvableTrackId(id)) return false
+    return isLocalPlaylist.value
+      || /^\d+$/.test(String(props.selectedPlaylist?.id ?? ''))
   }
 
   // 「下载视频到服务器」可见性：下载口径 hasDownloadableVideo 优先于
@@ -185,7 +190,12 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
       // 长下载不会被反代/浏览器超时切断，重试也不会撞出脏响应）
       try {
         serverDownloadingStates.value[song.id] = true
-        if (isLocalPlaylist.value) {
+        // 两处判定都锚定 ownerPlaylistId（进入时捕获的 id）而非活 computed
+        // isLocalPlaylist——镜像 await 窗内用户切单会把判定读成新单形态，
+        // track 载荷即打错目标（与 usePlayer 两处顶替后寻址同口径：
+        // 判定用锚定 id 不用视图态）。本点尚无 await 值相同，锚定防未来
+        // 插入挂起点
+        if (isLocalPlaylistId(ownerPlaylistId)) {
           await downloadsApi.mirrorLocalPlaylist(props.selectedPlaylist)
         }
         const response = await downloadsApi.downloadSongToServer(ownerPlaylistId, song.id, {
@@ -193,7 +203,11 @@ export function useServerDownloads({ props, closeDownloadMenu, isLocalPlaylist, 
           downloadAudio: true,
           downloadLyrics: true,
           downloadCover: true,
-          downloadVideo: wantVideo
+          downloadVideo: wantVideo,
+          // 远端单追加曲落库靠它：非本地单时把曲对象随请求下发——服务端单曲
+          // 路径在枚举 playlist_tracks 前增量补行（上游单曲目表本就没有
+          // addedTracks 成员）。local_pl_ 走镜像已含全表，不重复发
+          ...(isLocalPlaylistId(ownerPlaylistId) ? {} : { track: song })
         })
         const submittedTask = response?.data
         // completed 短路（幂等返回）才跳过轮询；pending/downloading 进入轮询
