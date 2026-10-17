@@ -78,7 +78,7 @@ test('队列级补视频：downloadVideo:true 重提交时完好完成行翻 pen
   const pl = seedPlaylistWithTrack('778801', songId, { videoId: 'vbackfill01' });
 
   // 第一遍：无视频队列真跑完成——产物真落盘，行登记真路径进终态
-  const q1 = await dm.createDownloadQueue(pl.id, {
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
   });
   await dm.startQueue(q1.id);
@@ -92,7 +92,7 @@ test('队列级补视频：downloadVideo:true 重提交时完好完成行翻 pen
 
   // 第二遍：同歌单 downloadVideo:true 重提交——终态队列原地复活，
   // 完好完成行应翻 pending 补视频而不是纯收养
-  const q2 = await dm.createDownloadQueue(pl.id, {
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: true
   });
   assert.equal(q2.id, q1.id, '终态队列应原地复活——queueId 稳定');
@@ -128,7 +128,7 @@ test('反向钉：downloadVideo:false 重提交时完好完成行仍纯收养不
   const songId = 'yt_vnovideo001';
   const pl = seedPlaylistWithTrack('778802', songId, { videoId: 'vnovideo001' });
 
-  const q1 = await dm.createDownloadQueue(pl.id, {
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
   });
   await dm.startQueue(q1.id);
@@ -138,7 +138,7 @@ test('反向钉：downloadVideo:false 重提交时完好完成行仍纯收养不
   const completedAt = doneRow.completedAt;
   assert.ok(audioPath && existsSync(audioPath));
 
-  const q2 = await dm.createDownloadQueue(pl.id, {
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
   });
   assert.equal(q2.id, q1.id);
@@ -158,7 +158,7 @@ test('幻影登记档：videoPath 在册但盘上已删的完成行重提交翻 
   const pl = seedPlaylistWithTrack('778803', songId, { videoId: 'vphantom001' });
 
   // 第一遍：带视频队列真跑完成——audio+video 工件真落盘并登记
-  const q1 = await dm.createDownloadQueue(pl.id, {
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: true
   });
   await dm.startQueue(q1.id);
@@ -176,7 +176,7 @@ test('幻影登记档：videoPath 在册但盘上已删的完成行重提交翻 
 
   // 同歌单 downloadVideo:true 重提交：幻影不算完好——翻 pending 复位重跑
   // （路径清册+旧档进 adoptedPaths），不是原样收养的 completed
-  const q2 = await dm.createDownloadQueue(pl.id, {
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: true
   });
   assert.equal(q2.id, q1.id, '终态队列应原地复活——queueId 稳定');
@@ -210,7 +210,7 @@ test('非外源曲钉：downloadVideo:true 重提交时 numeric/网易云 id 行
   ]);
 
   // 第一遍：无视频队列真跑完成——两行都只有音频档
-  const q1 = await dm.createDownloadQueue(pl.id, {
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
   });
   await dm.startQueue(q1.id);
@@ -228,7 +228,7 @@ test('非外源曲钉：downloadVideo:true 重提交时 numeric/网易云 id 行
 
   // 同歌单 downloadVideo:true 重提交：外源行翻 pending 补视频，
   // 数字 id 行被 isExternalSongId 裁掉——纯收养 completed 不动
-  const q2 = await dm.createDownloadQueue(pl.id, {
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, {
     downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: true
   });
   assert.equal(q2.id, q1.id);

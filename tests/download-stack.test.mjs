@@ -94,7 +94,7 @@ test('getTaskArtifactPath：文件级 symlink 拒供，目录级链接放行', (
     status: 'completed'
   });
   downloadTasksRepo.updateTask(t.id, { audioPath: linkLeaf });
-  assert.equal(dm.getTaskArtifactPath(pl.id, 's-flink', 'audio'), null,
+  assert.equal(dm.getTaskArtifactPath(pl.neteasePlaylistId, 's-flink', 'audio'), null,
     '叶子是符号链接的登记档不得供出——existsSync 跟链真在也拒');
 
   // 对照：目录级链接是支持的部署形态（audio/ 整目录指到挂载卷）——
@@ -113,7 +113,7 @@ test('getTaskArtifactPath：文件级 symlink 拒供，目录级链接放行', (
     status: 'completed'
   });
   downloadTasksRepo.updateTask(t2.id, { audioPath: viaDir });
-  assert.equal(dm.getTaskArtifactPath(pl2.id, 's-dlink', 'audio'), viaDir,
+  assert.equal(dm.getTaskArtifactPath(pl2.neteasePlaylistId, 's-dlink', 'audio'), viaDir,
     '目录级链接（整卷重定向部署形态）下的真文件必须放行');
 });
 
@@ -256,14 +256,14 @@ test('listTasks：standalone 旗标只在 playlistId 分支生效且精确匹配
   downloadTasksRepo.createTask({ playlistId: pl.id, queueId: null, songId: 's-d1', songName: '独立', artist: 'a' });
   downloadTasksRepo.createTask({ playlistId: pl.id, queueId: q.id, songId: 's-d2', songName: '入队', artist: 'a' });
   const onlyLone = (r) => r.map(t => t.songId);
-  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: '1' })), ['s-d1']);
-  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: 'true' })), ['s-d1']);
-  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: 1 })), ['s-d1']);
-  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: true })), ['s-d1']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.neteasePlaylistId, standalone: '1' })), ['s-d1']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.neteasePlaylistId, standalone: 'true' })), ['s-d1']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.neteasePlaylistId, standalone: 1 })), ['s-d1']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.neteasePlaylistId, standalone: true })), ['s-d1']);
   // 非白名单值按超集回落——'false'/'0' 不得误触发 standalone 模式
-  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: 'false' })), ['s-d1', 's-d2']);
-  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id, standalone: '0' })), ['s-d1', 's-d2']);
-  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.id })), ['s-d1', 's-d2']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.neteasePlaylistId, standalone: 'false' })), ['s-d1', 's-d2']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.neteasePlaylistId, standalone: '0' })), ['s-d1', 's-d2']);
+  assert.deepEqual(onlyLone(dm.listTasks({ playlistId: pl.neteasePlaylistId })), ['s-d1', 's-d2']);
   // queueId 优先级最高——与 standalone 组合也不收窄（静默超集回落）
   assert.deepEqual(onlyLone(dm.listTasks({ queueId: q.id, standalone: '1' })), ['s-d2']);
 });
@@ -318,7 +318,7 @@ test('deletePlaylistDownloadedFiles 端到端：deletedFiles 返回异步批删�
   writeFileSync(pendingSeg, 'seg');
   downloadTasksRepo.updateTask(pending.id, { audioPath: pendingSeg });
 
-  const res = await dm.deletePlaylistDownloadedFiles(pl.id);
+  const res = await dm.deletePlaylistDownloadedFiles(pl.neteasePlaylistId);
   assert.equal(res.deletedSongs, 2);
   assert.equal(res.deletedFiles, 4, '响应载荷的 deletedFiles 须是 await 后的真实 unlink 数');
   for (const p of gone) assert.ok(!existsSync(p), `${p} 应已删`);
@@ -349,7 +349,7 @@ test('getSongDownloadStatus：videoReady 跨歌单寻址且最新完成工件优
   assert.equal(stNoPl.videoReady, true);
   assert.equal(stNoPl.videoPlaylistId, plA.id);
   // 归属歌单是 B（本单无视频档）：寻址也回落到 A——借源播放能放
-  const stPlB = await dm.getSongDownloadStatus(plB.id, songId);
+  const stPlB = await dm.getSongDownloadStatus(plB.neteasePlaylistId, songId);
   assert.equal(stPlB.videoReady, true);
   assert.equal(stPlB.videoPlaylistId, plA.id);
 

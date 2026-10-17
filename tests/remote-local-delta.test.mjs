@@ -15,6 +15,8 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { seed, tmpDataDir } from './helpers.mjs';
 
 process.env.DATA_DIR = tmpDataDir('meowsync-localdelta-');
@@ -29,7 +31,7 @@ seed('../src/server/services/file-downloader.js', {
   downloadCover: async () => { throw new Error('stub cover'); },
 });
 
-let app, dm, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, getDb;
+let app, dm, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, getDb, downloadFs;
 before(() => {
   app = require('../src/server/routes/downloads.js');
   dm = require('../src/server/services/download-manager.js');
@@ -38,6 +40,7 @@ before(() => {
   playlistsRepo = require('../src/server/repositories/playlists.js');
   playlistTracksRepo = require('../src/server/repositories/playlistTracks.js');
   getDb = require('../src/server/db/client.js').getDb;
+  downloadFs = require('../src/server/services/download-fs.js');
 });
 
 // 种一张「远端单」：netease_playlist_id 为纯数字的上游导入形态
@@ -60,7 +63,7 @@ test('localDelta.addedTracks：yt_ 追加曲落 playlist_tracks 尾并入队，p
   const pl = seedRemote('779001', [
     { id: '77900101', name: '远端曲', ar: [{ name: 'a' }], al: { name: 'b' }, dt: 1000 }
   ]);
-  const queue = await dm.createDownloadQueue(pl.id, queueOpts({
+  const queue = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: {
       addedTracks: [{
         id: 'yt_vdelta00001', name: '追加曲', ar: [{ name: 'UP' }], al: { name: '' }, dt: 200000,
@@ -92,7 +95,7 @@ test('localDelta.removedIds：墓碑曲不入队但行保留（虚拟过滤）�
     { id: '77900201', name: '留', ar: [], al: {}, dt: 1 },
     { id: '77900202', name: '删', ar: [], al: {}, dt: 1 }
   ]);
-  const queue = await dm.createDownloadQueue(pl.id, queueOpts({
+  const queue = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: { addedTracks: [], removedIds: ['77900202'] }
   }));
 
@@ -103,7 +106,7 @@ test('localDelta.removedIds：墓碑曲不入队但行保留（虚拟过滤）�
 
   // 下一轮 removedIds 不再含它（用户撤销墓碑）→ 同一行重新进枚举
   queuesRepo.updateQueue(queue.id, { status: 'cancelled' });
-  const q2 = await dm.createDownloadQueue(pl.id, queueOpts({
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: { addedTracks: [], removedIds: [] }
   }));
   assert.deepEqual(queueSongIds(q2.id), ['77900201', '77900202']);
@@ -113,7 +116,7 @@ test('B1 方向一：addedTracks 清空=权威空集，对账剪掉标记行不�
   // 用户移除本地追加曲时客户端只剪 addedTracks 数组不补墓碑——没有权威
   // 对账，已落库的标记行成永久幽灵（每次建队重复下载）
   const pl = seedRemote('779010', [{ id: '77901001', name: 'x', ar: [], al: {}, dt: 1 }]);
-  const q1 = await dm.createDownloadQueue(pl.id, queueOpts({
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: {
       addedTracks: [{ id: 'yt_ghost000010', name: '追加', ar: [], al: {}, dt: 1 }],
       removedIds: []
@@ -125,7 +128,7 @@ test('B1 方向一：addedTracks 清空=权威空集，对账剪掉标记行不�
   // 整队删掉再建（任务行随 FK 级联走）——新一轮建队携带「清空到零」的
   // 权威 delta：addedTracks 空集必须把标记行扫掉
   queuesRepo.deleteQueue(q1.id);
-  const q2 = await dm.createDownloadQueue(pl.id, queueOpts({
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: { addedTracks: [], removedIds: [] }
   }));
   assert.equal(playlistTracksRepo.findTrackBySongId(pl.id, 'yt_ghost000010'), null);
@@ -136,7 +139,7 @@ test('localDelta 缺席（undefined）早退：不触发对账，标记行原样
   // localDelta 缺省 = 「无 delta 信息」而非权威空集——老客户端/单曲路径不
   // 发这个键，缺席时绝不可当空集把标记行扫掉
   const pl = seedRemote('779011', [{ id: '77901101', name: 'x', ar: [], al: {}, dt: 1 }]);
-  const q1 = await dm.createDownloadQueue(pl.id, queueOpts({
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: {
       addedTracks: [{ id: 'yt_absent00001', name: '追加', ar: [], al: {}, dt: 1 }],
       removedIds: []
@@ -145,14 +148,14 @@ test('localDelta 缺席（undefined）早退：不触发对账，标记行原样
   assert.equal(localAddedFlag(pl.id, 'yt_absent00001'), 1);
   queuesRepo.deleteQueue(q1.id);
 
-  const q2 = await dm.createDownloadQueue(pl.id, queueOpts()); // 无 localDelta 键
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts()); // 无 localDelta 键
   assert.equal(localAddedFlag(pl.id, 'yt_absent00001'), 1, '缺席 delta 不剪标记行');
   assert.deepEqual(queueSongIds(q2.id), ['77901101', 'yt_absent00001']);
 });
 
 test('localDelta 非法 id 形态静默弃：不 400 整单、脏条目不落库', async () => {
   const pl = seedRemote('779003', [{ id: '77900301', name: 'x', ar: [], al: {}, dt: 1 }]);
-  const queue = await dm.createDownloadQueue(pl.id, queueOpts({
+  const queue = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: {
       addedTracks: [
         { id: 'not-an-id!!', name: '坏曲' },      // 不认识形态 → skipped
@@ -178,7 +181,7 @@ test('localDelta 撞上游行 id：刷新投影保 position、不置 local_added
     { id: '77900401', name: '旧名', ar: [{ name: 'a' }], al: {}, dt: 1 },
     { id: '77900402', name: 'y', ar: [], al: {}, dt: 1 }
   ]);
-  const q1 = await dm.createDownloadQueue(pl.id, queueOpts({
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: {
       addedTracks: [{ id: '77900401', name: '新名', ar: [{ name: 'b' }], al: { name: 'c' }, dt: 2 }],
       removedIds: []
@@ -194,7 +197,7 @@ test('localDelta 撞上游行 id：刷新投影保 position、不置 local_added
 
   // 下一轮 delta 不再含它（本地编辑面清空）——标 0 的上游行不被对账误删
   queuesRepo.updateQueue(q1.id, { status: 'cancelled' });
-  const q2 = await dm.createDownloadQueue(pl.id, queueOpts({
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: { addedTracks: [], removedIds: [] }
   }));
   assert.notEqual(playlistTracksRepo.findTrackBySongId(pl.id, '77900401'), null);
@@ -210,12 +213,12 @@ test('localDelta 幂等重放：同 delta 二次建队不产生重复行/重复�
     }],
     removedIds: []
   };
-  const q1 = await dm.createDownloadQueue(pl.id, queueOpts({ localDelta }));
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({ localDelta }));
   assert.deepEqual(queueSongIds(q1.id), ['77900501', 'yt_idem0000005']);
 
   // 同单活跃队列在时不许再建——翻终态后重放（队列原地复活路径）
   queuesRepo.updateQueue(q1.id, { status: 'cancelled' });
-  const q2 = await dm.createDownloadQueue(pl.id, queueOpts({ localDelta }));
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({ localDelta }));
   assert.equal(q2.id, q1.id);
 
   assert.equal(playlistTracksRepo.listTracksByPlaylistId(pl.id).length, 2, 'delta 重放不增生行');
@@ -236,7 +239,7 @@ test('S2：本地镜像单（source=local）delta 两键全忽略', async () => 
     { id: '880101', name: '镜像一', ar: [], al: {}, dt: 1 },
     { id: '880102', name: '镜像二', ar: [], al: {}, dt: 1 }
   ]);
-  const queue = await dm.createDownloadQueue(pl.id, queueOpts({
+  const queue = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: {
       addedTracks: [{ id: 'yt_s2shouldnt', name: '不该落', ar: [], al: {}, dt: 1 }],
       removedIds: ['880101']
@@ -253,11 +256,11 @@ test('S3：delta 先于活跃队列 409 落库——撞 409 后行已在、可�
   // applyLocalTrackDelta 在「已有进行中队列」409 之前执行：建队被拒的
   // 请求照样把追加面落库，等队列终态后重试即正常入队
   const pl = seedRemote('779012', [{ id: '77901201', name: 'x', ar: [], al: {}, dt: 1 }]);
-  const q1 = await dm.createDownloadQueue(pl.id, queueOpts());
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts());
   assert.equal(q1.status, 'pending');
 
   await assert.rejects(
-    dm.createDownloadQueue(pl.id, queueOpts({
+    dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
       localDelta: {
         addedTracks: [{ id: 'yt_pre409ready', name: '先落', ar: [], al: {}, dt: 1 }],
         removedIds: []
@@ -269,7 +272,7 @@ test('S3：delta 先于活跃队列 409 落库——撞 409 后行已在、可�
   assert.equal(localAddedFlag(pl.id, 'yt_pre409ready'), 1);
 
   queuesRepo.updateQueue(q1.id, { status: 'cancelled' });
-  const q2 = await dm.createDownloadQueue(pl.id, queueOpts({
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
     localDelta: {
       addedTracks: [{ id: 'yt_pre409ready', name: '先落', ar: [], al: {}, dt: 1 }],
       removedIds: []
@@ -281,7 +284,7 @@ test('S3：delta 先于活跃队列 409 落库——撞 409 后行已在、可�
 test('removedIds 虚拟过滤先于判空：全曲墓碑远端单报「没有歌曲」而非建空队', async () => {
   const pl = seedRemote('779013', [{ id: '77901301', name: 'x', ar: [], al: {}, dt: 1 }]);
   await assert.rejects(
-    dm.createDownloadQueue(pl.id, queueOpts({
+    dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
       localDelta: { addedTracks: [], removedIds: ['77901301'] }
     })),
     /歌单中没有歌曲/
@@ -299,7 +302,7 @@ test('路由级：POST /downloads/queues 透传 localDelta 落库建队', async 
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       localDelta: {
         addedTracks: [{
           id: 'yt_routedelta8', name: '路由追加', ar: [{ name: 'ch' }], al: {}, dt: 1,
@@ -324,7 +327,7 @@ test('路由级：localDelta 形状越界 400（schema 体量硬边界）', asyn
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       localDelta: { addedTracks: 'not-array', removedIds: [] }
     })
   });
@@ -347,7 +350,7 @@ test('单曲 track 载荷：数字远端单 + yt_ 追加曲 → 200 任务且 pr
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       track: {
         id: 'yt_single00001', name: '追加曲', ar: [{ name: 'UP' }], al: { name: '' }, dt: 200000,
         youtube: { videoId: 'single00001', title: '源标题', author: 'UP主' }
@@ -380,7 +383,7 @@ test('单曲 track 载荷与 songId 不一致 → 400，两侧 id 都不落库',
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       track: { id: 'yt_other000001', name: '冒名', ar: [], al: {}, dt: 1 }
     })
   });
@@ -396,7 +399,7 @@ test('单曲无 track 的旧路径：曲目表无该曲仍 404（回归钉）', 
   const res = await app.request('http://t/downloads/songs/yt_absent00001', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ playlistId: pl.id })
+    body: JSON.stringify({ playlistId: pl.neteasePlaylistId })
   });
   assert.equal(res.status, 404);
   assert.equal(playlistTracksRepo.findTrackBySongId(pl.id, 'yt_absent00001'), null);
@@ -420,7 +423,7 @@ test('单曲 track 载荷撞上游已存在行 → 零写：raw_json 原样不�
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       track: { id: '77902301', name: '上游曲', ar: [{ name: 'a' }], al: { name: 'b' }, dt: 1000 }
     })
   });
@@ -444,7 +447,7 @@ test('数字 id 追加曲同链可下：addedTracks 里的另一首网易曲不�
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       track: { id: '77902499', name: '追加网易曲', ar: [{ name: 'b' }], al: {}, dt: 3000 }
     })
   });
@@ -465,7 +468,7 @@ test('单曲 track 载荷白名单弃件（file_）：跳过补插，find 自然
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       track: { id: 'file_abcd1234', name: '上传曲', ar: [], al: {}, dt: 1 }
     })
   });
@@ -491,7 +494,7 @@ test('单曲 track 载荷对 source=local 镜像单不补插：谎报曲不落 l
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       track: {
         id: 'yt_n1ghost001', name: '谎报曲', ar: [], al: {}, dt: 1,
         youtube: { videoId: 'n1ghost001' }
@@ -508,7 +511,7 @@ test('单曲 track 载荷对 source=local 镜像单不补插：谎报曲不落 l
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      playlistId: pl.id,
+      playlistId: pl.neteasePlaylistId,
       track: { id: '880301', name: '镜像一', ar: [], al: {}, dt: 1 }
     })
   });
@@ -516,4 +519,106 @@ test('单曲 track 载荷对 source=local 镜像单不补插：谎报曲不落 l
   assert.ok(tasksRepo.findAnyTaskByPlaylistAndSongId(pl.id, '880301'));
   assert.equal(playlistTracksRepo.listTracksByPlaylistId(pl.id).length, 2);
   assert.equal(localAddedFlag(pl.id, '880301'), 0, '镜像行不置 local_added');
+});
+
+// ── 命名空间撞号 / 幽灵任务摘离 / 追加序对齐（N6/幽灵行/N5）──
+
+test('N6 撞号：数字输入按 netease 命名空间解析——镜像行 PK 撞号不再错解', async () => {
+  // findExistingPlaylistId 曾先试内部 PK：镜像行 PK=K 与客户端要寻址的
+  // 数字歌单 id 'K' 撞号时静默落到镜像行（建队下错曲目）。先种镜像行拿
+  // PK，再造 netease_playlist_id=PK 的远端单——'K' 必须解到数字单。
+  // 兼容回落仍在（netease 域无主的数字才试 PK）但次序反转后 netease 恒赢
+  const mirror = playlistsRepo.upsertPlaylist({
+    neteasePlaylistId: 'local_pl_n6collide', name: '镜像单', source: 'local'
+  });
+  const pl = seedRemote(String(mirror.id), [
+    { id: '77903001', name: '数字单曲', ar: [], al: {}, dt: 1 }
+  ]);
+  assert.equal(pl.neteasePlaylistId, String(mirror.id), '测试前置：netease id 恰撞镜像行 PK');
+
+  const queue = await dm.createDownloadQueue(String(mirror.id), queueOpts());
+  assert.equal(queue.playlistId, pl.id,
+    '数字 id 必须解析到 netease 命名空间的数字单，不得撞进镜像行 PK');
+  assert.deepEqual(queueSongIds(queue.id), ['77903001']);
+
+  // PK 回落未死：netease 域无主的内部 id 仍可寻址（queue.playlistId 回转链）
+  assert.deepEqual(
+    dm.listTasks({ playlistId: pl.id }).map(t => t.songId).sort(),
+    ['77903001'],
+    'netease 域无主时内部行 id 仍回落命中（存量回转兼容面）'
+  );
+});
+
+test('复活队列的幽灵任务摘离：枚举集外陈旧行落 standalone、计数只算幸存曲', async () => {
+  const pl = seedRemote('779040', [
+    { id: '77904001', name: 'X', ar: [], al: {}, dt: 1 },
+    { id: '77904002', name: 'Y', ar: [], al: {}, dt: 1 }
+  ]);
+  const q1 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts());
+  assert.deepEqual(queueSongIds(q1.id), ['77904001', '77904002']);
+
+  // 给 Y 登记已下工件——摘离不许删行也不碰文件
+  const taskY = tasksRepo.findAnyTaskByPlaylistAndSongId(pl.id, '77904002');
+  const yPath = join(downloadFs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', '77904002.mp3');
+  mkdirSync(dirname(yPath), { recursive: true });
+  writeFileSync(yPath, 'audio-bytes');
+  tasksRepo.updateTask(taskY.id, { status: 'completed', audioPath: yPath });
+
+  // 终态队列原地复活：本轮枚举只有 X（Y 被 removedIds 虚拟过滤出枚举集）
+  queuesRepo.updateQueue(q1.id, { status: 'cancelled' });
+  const q2 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
+    localDelta: { addedTracks: [], removedIds: ['77904002'] }
+  }));
+  assert.equal(q2.id, q1.id, '终态队列应原地复活——queueId 稳定');
+
+  const yAfter = tasksRepo.findTaskById(taskY.id);
+  assert.equal(yAfter.queueId, null, '枚举集外任务行应摘成 standalone');
+  assert.equal(yAfter.status, 'completed', '行保留不删——已下工件归属保留');
+  assert.equal(yAfter.audioPath, yPath, '路径登记不动');
+  assert.ok(existsSync(yPath), '摘离不碰盘上文件');
+
+  // 队列视图/计数只算 X；Y 落「未入队单曲」分节可管可删
+  assert.deepEqual(queueSongIds(q2.id), ['77904001']);
+  assert.equal(queuesRepo.findQueueById(q2.id).totalTasks, 1);
+  assert.deepEqual(
+    tasksRepo.listStandaloneTasksByPlaylist(pl.id).map(t => t.songId),
+    ['77904002']
+  );
+
+  // 撤碑再建：standalone 行经收养重新入队（摘离非单向门）
+  queuesRepo.updateQueue(q2.id, { status: 'cancelled' });
+  const q3 = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
+    localDelta: { addedTracks: [], removedIds: [] }
+  }));
+  assert.equal(tasksRepo.findTaskById(taskY.id).queueId, q3.id);
+  assert.deepEqual(queueSongIds(q3.id), ['77904001', '77904002']);
+});
+
+test('N5 追加序对齐：先补插 C 再权威 delta [A,B,C]——标记行按 added 序列重编', async () => {
+  // 旧即时追加按落库先后排位：先单点下 C（单曲路径 insertTrackIfMissing
+  // 补尾）再整单下发 [A,B,C]，服务端序成 [C,B,A] 与客户端渲染尾序漂移。
+  // 对账事务内重编后，存活标记行按消毒后 added 序列落在非标记行尾部
+  const pl = seedRemote('779050', [{ id: '77905001', name: '上游曲', ar: [], al: {}, dt: 1 }]);
+  playlistTracksRepo.insertTrackIfMissing(pl.id, {
+    id: 'yt_ordc0000001', name: 'C', ar: [], al: {}, dt: 1
+  });
+  assert.equal(localAddedFlag(pl.id, 'yt_ordc0000001'), 1);
+
+  const queue = await dm.createDownloadQueue(pl.neteasePlaylistId, queueOpts({
+    localDelta: {
+      addedTracks: [
+        { id: 'yt_orda0000001', name: 'A', ar: [], al: {}, dt: 1 },
+        { id: 'yt_ordb0000001', name: 'B', ar: [], al: {}, dt: 1 },
+        { id: 'yt_ordc0000001', name: 'C', ar: [], al: {}, dt: 1 }
+      ],
+      removedIds: []
+    }
+  }));
+
+  assert.deepEqual(
+    playlistTracksRepo.listTracksByPlaylistId(pl.id).map(t => String(t.id)),
+    ['77905001', 'yt_orda0000001', 'yt_ordb0000001', 'yt_ordc0000001'],
+    '标记行应按 added 数组序落在非标记行尾部——不再按落库先后'
+  );
+  assert.deepEqual(queueSongIds(queue.id), ['77905001', 'yt_orda0000001', 'yt_ordb0000001', 'yt_ordc0000001']);
 });

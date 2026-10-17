@@ -236,6 +236,33 @@ function listTasksByStatus(status) {
   return rows.map(mapTaskRow);
 }
 
+// 复活队列建队的陈旧成员摘离：重建时 song_id 已不在本次枚举集（曲目被
+// 对账剪掉/歌单瘦身）的行继续挂 queue_id 即成幽灵——队列详情多出行、
+// recountQueueCounters 把它计入 total/completed、还可能按陈旧语义残留
+// 被重跑。摘成 standalone（queue_id=NULL）落「未入队单曲」分节：行与
+// 已下工件都保留（与「prune 不碰 download_tasks」同哲学——换归属不是
+// 灭迹）。crash 残留的 downloading 行同样摘离——孤儿 standalone 语义与
+// recoverStaleStates 自愈一致（standalone pending/downloading 复位成
+// failed，有重试+删除入口）。
+// NOT IN () 是非法 SQL——keep 空集语义=全摘，单独分支
+// （与 playlistTracks.pruneLocalAddedTracks 同款形态）
+function detachQueueTasksNotIn(queueId, keepSongIds) {
+  const db = getDb();
+  const keep = (Array.isArray(keepSongIds) ? keepSongIds : []).map(String);
+  const now = new Date().toISOString();
+  if (!keep.length) {
+    return db.prepare(`
+      UPDATE download_tasks SET queue_id = NULL, updated_at = ?
+      WHERE queue_id = ?
+    `).run(now, queueId).changes;
+  }
+  const placeholders = keep.map(() => '?').join(',');
+  return db.prepare(`
+    UPDATE download_tasks SET queue_id = NULL, updated_at = ?
+    WHERE queue_id = ? AND song_id NOT IN (${placeholders})
+  `).run(now, queueId, ...keep).changes;
+}
+
 // 同一曲跨歌单各有一行（(playlist_id, song_id) 唯一）——播放入口不总带
 // 歌单上下文，按曲找下载档需要全表视角
 function listTasksBySongId(songId) {
@@ -298,6 +325,7 @@ module.exports = {
   listTasksByQueue,
   listTasksByStatus,
   listTasksBySongId,
+  detachQueueTasksNotIn,
   deleteTask,
   findAnyTaskByPlaylistAndSongId,
   countTasksByQueueAndStatus
