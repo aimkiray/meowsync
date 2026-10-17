@@ -588,6 +588,15 @@ export function usePlayer({
       return p
     }
 
+    // 歌单成员谓词（两处成员预检与下方兜底扫描共用口径）：远端单视图里
+    // 本地追加曲不落 tracks 只落 addedTracks（上游曲目表本就没有它们）——
+    // 成员判定必须两表并查，与 usePlaylistLibrary 的「inList(tracks)||
+    // inList(addedTracks)」同口径。漏查 addedTracks 会把追加曲误判
+    // 「不在任何歌单」，顶替寻址自然也扫不到它
+    const plHasSong = (pl, song) =>
+      (pl?.tracks || []).some(t => String(t.id) === String(song.id))
+      || (pl?.addedTracks || []).some(t => String(t.id) === String(song.id))
+
     // 下载寻址兜底单扫描（downloadCurrentSong 与 playDownloadedCopy 成员
     // 预检共用口径）：队列插入/相关接续曲只进 playingSongs 不落户歌单，拿
     // 归属单提交服务端按单查曲必 404「歌曲不存在」——全库找一张曲目含该
@@ -597,7 +606,7 @@ export function usePlayer({
     const findDownloadAddrPlaylist = (song) =>
       userPlaylists.value.find(p =>
         (NETEASE_ID_RE.test(String(p.id)) || MIRROR_PLAYLIST_ID_RE.test(String(p.id)))
-        && p.tracks?.some(t => String(t.id) === String(song.id)))
+        && plHasSong(p, song))
 
     // 静音切换：记住静音前的音量，恢复时回填
     let mutedVolume = 0
@@ -643,12 +652,14 @@ export function usePlayer({
           // 不在（「下一首播放/队尾加入/相关接续」只进 playingSongs 不落户
           // 歌单）时提交必 404——扫全库找一张曲目含该曲的可提交单顶替寻址；
           // 扫不到直落失败终态（本链是自愈兜底不另发 toast），不白跑必败
-          // 提交。寻址对象缺席/缺 tracks 按无法验证放行，交下方形态闸与
-          // 服务端成员校验兜底
+          // 提交。成员判定走 plHasSong：远端单的 addedTracks 追加曲也算
+          // 「在歌单中」。寻址对象缺席/缺 tracks 按无法验证放行——addedTracks
+          // 孤证只能证成员不能否成员（远端曲目未摊进库时曲目仍可能是上游
+          // 成员），交下方形态闸与服务端成员校验兜底
           let pl = (selectedPlaylist.value && String(selectedPlaylist.value.id) === String(playlistId))
             ? selectedPlaylist.value
             : userPlaylists.value.find(p => String(p.id) === String(playlistId))
-          if (Array.isArray(pl?.tracks) && !pl.tracks.some(t => String(t.id) === String(song.id))) {
+          if (Array.isArray(pl?.tracks) && !plHasSong(pl, song)) {
             pl = findDownloadAddrPlaylist(song) ?? null
             if (!pl) {
               songSwitching.value = false
@@ -688,7 +699,17 @@ export function usePlayer({
               // mp4），hasVideo 兼容无新字段的旧数据；song.youtube?. 天然限定
               // YT 域，bv_/qq_ 曲该位恒 false，行为不变
               downloadVideo: song.youtube?.hasDownloadableVideo === true
-                || song.youtube?.hasVideo === true
+                || song.youtube?.hasVideo === true,
+              // 远端单追加曲落库靠它（与 useServerDownloads 同口径）：过了形态
+              // 闸的 playlistId 只剩数字与镜像两系——数字单的服务端曲目表只有
+              // 上游曲目，addedTracks 成员曲对象随请求下发后 downloadSingleSong
+              // 在枚举成员前 insertTrackIfMissing 增量补行（local_added=1，行已
+              // 存在零写）。镜像形态（含顶替寻址命中的 local_pl_）由上方
+              // mirrorLocalPlaylist 承载全表不重复发。判定用顶替后的 playlistId。
+              // 与队列 localDelta 权威对账刻意不同：单曲是增量补位不是对账——
+              // 谎报也只多补一行，该单下次 delta 建队时 prune 扫掉即自愈；
+              // 未再建队则行无害留存（自愈非必然事件，非保证）
+              ...(!isLocalPlaylistId(playlistId) ? { track: song } : {})
             })
           } catch (e) {
             // 409 = 该曲任务已在跑（含队列挡牌/歌单删除窗）——不是失败：
@@ -2113,10 +2134,12 @@ export function usePlayer({
       // 成员预检先于形态闸：归属单曲目表在而在播曲不在（「下一首播放/
       // 队尾加入/相关接续」只进 playingSongs 不落户歌单）时，服务端按单
       // 查曲必 404「歌曲不存在」——先扫全库找一张曲目含该曲的可提交单
-      // 顶替寻址；扫不到给指引早退，不白跑一次必败提交。库行缺 tracks
-      // （远端单详情未摊进库/离库悬空 id）按无法验证放行，交服务端兜底
+      // 顶替寻址；扫不到给指引早退，不白跑一次必败提交。成员判定走
+      // plHasSong：远端单的 addedTracks 追加曲也算「在歌单中」。库行缺
+      // tracks（远端单详情未摊进库/离库悬空 id）按无法验证放行——
+      // addedTracks 孤证只能证成员不能否成员，交服务端成员校验兜底
       let pl = queueOwner.value
-      if (Array.isArray(pl?.tracks) && !pl.tracks.some(t => String(t.id) === String(song.id))) {
+      if (Array.isArray(pl?.tracks) && !plHasSong(pl, song)) {
         pl = findDownloadAddrPlaylist(song) ?? null
         if (!pl) {
           toast('该歌曲不在任何歌单中，请先加入歌单再下载', 'info')
@@ -2155,6 +2178,14 @@ export function usePlayer({
             downloadVideo: song.youtube?.hasDownloadableVideo === true
               || song.youtube?.hasVideo === true
               || song.bilibili?.hasVideo === true,
+            // 远端单追加曲落库靠它（与 useServerDownloads 同口径）：数字单的
+            // 服务端曲目表只有上游曲目，addedTracks 成员曲对象随请求下发后
+            // downloadSingleSong 在枚举成员前 insertTrackIfMissing 增量补行
+            // （local_added=1，行已存在零写）。local_pl_/saved_queue_ 由上方
+            // 镜像承载全表不重复发。与队列 localDelta 权威对账刻意不同：
+            // 单曲是增量补位不是对账——谎报也只多补一行，该单下次 delta
+            // 建队时 prune 扫掉即自愈；未再建队则无害留存（非必然事件）
+            ...(!isLocalPlaylistId(playlistId) ? { track: song } : {})
           })
         } catch (e) {
           // 409 = 该曲任务已在跑——瞬时态不是失败：既有任务继续下，进轮询等终态

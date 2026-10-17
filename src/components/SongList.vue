@@ -353,8 +353,10 @@
             <PixelIcon name="download" :size="13" /> {{ isFileTrackId(menuSong?.id) ? '下载文件' : (menuSong?.bilibili || menuSong?.youtube || menuSong?.qq) ? '获取源文件（最优音质）' : '获取源文件 (320k)' }}
           </button>
           <!-- 下载到服务器（未下载面）：single_song_ 分享壳无服务端持久化意义隐藏；
-               qq_/bv_/yt_ 只在本地歌单显示（镜像链投影 provider 定位字段进曲目表
-               后 file-downloader 前缀分发可达），远端单里这些 id 必 404。
+               qq_/bv_/yt_ 除本地歌单（镜像链投影 provider 定位字段进曲目表）外，
+               远端数字单视图同样可下——能出现在远端单曲目里即必是 addedTracks
+               成员，track 载荷随单曲请求增量补行进 playlist_tracks（链可达）；
+               file_ 上传曲资产本就在服务端不收。
                已下载面（danger「删除已下载文件」）落在尾组——危险项集中尾部 -->
           <button
             v-if="!isShareShell && selectedPlaylist && canServerDownload(menuSong) && !serverDownloadedStates[showDownloadMenu]"

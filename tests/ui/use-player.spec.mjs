@@ -541,6 +541,23 @@ describe('usePlayer：YT 在线链与下载兜底', () => {
     // 全册 3 例 = a 起播 + yt 在线两例（首试+retry）——兜底链未建实例
     expect(howls).toHaveLength(3)
   })
+
+  // 远端单的本地追加曲只落 addedTracks 不落 tracks（上游曲目表没有它们）——
+  // 成员预检与兜底扫描两表并查才寻址得到；命中数字单后提交还要带 track
+  // 载荷，服务端枚举成员前增量补行才认得出这个上游没有的成员
+  it('追加曲只在远端单 addedTracks：顶替寻址命中数字单，提交带 track 落库', async () => {
+    const plR = { id: 888, name: 'R', tracks: [song(5)], addedTracks: [ytSong()] }
+    const { player } = await driveQueueInsertedFallback(plR)
+    await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalled())
+    // 数字单不镜像——曲对象随 track 载荷下发，服务端按增量补行落库
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      888, 'yt_abcdefghijk',
+      expect.objectContaining({ track: expect.objectContaining({ id: 'yt_abcdefghijk' }) }))
+    await vi.waitFor(() =>
+      expect(howls.at(-1).opts.src).toEqual(['http://api/dl/888/yt_abcdefghijk']))
+    expect(player.playbackError.value).toBe('')
+  })
 })
 
 describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', () => {
@@ -2363,6 +2380,69 @@ describe('usePlayer：downloadCurrentSong（watch 顶行键）', () => {
     expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
     expect(downloadsApi.downloadSongToServer).not.toHaveBeenCalled()
     expect(player.songDownloading.value).toBe(false)
+  })
+
+  // 远端单的本地追加曲只落 addedTracks 不落 tracks（上游曲目表没有它们）——
+  // 成员预检两表并查才算命中；数字单直提不镜像，曲对象随 track 载荷下发，
+  // 服务端枚举成员前增量补行才认得出这个上游没有的成员
+  it('yt_ 追加曲在归属远端单 addedTracks：数字单直提且 body 带 track', async () => {
+    const yt = song('yt_abcdefghijk', { youtube: { videoId: 'abcdefghijk' } })
+    const plR = { id: 888, name: 'R', tracks: [song(5)], addedTracks: [yt] }
+    const { player, deps } = makePlayer()
+    deps.userPlaylists.value = [plR]
+    deps.selectedPlaylist.value = plR
+    await player.playSong(yt) // playingPlaylistId=888——queueOwner 即远端库行
+    await player.downloadCurrentSong()
+    // 成员预检命中 addedTracks——旧口径只查 tracks 会误报「不在任何歌单」
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('不在任何歌单'), expect.anything())
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      888, 'yt_abcdefghijk', expect.objectContaining({ track: yt }))
+    expect(toast).toHaveBeenCalledWith('下载成功', 'success')
+  })
+
+  // 顶替寻址同款：队列插入曲只在别单 addedTracks 命中——扫到数字单顶替，
+  // 提交同样要带 track（服务端曲目表里没有这个本地追加成员）
+  it('队列插入曲仅命中别单 addedTracks：顶替寻址到数字单，提交带 track', async () => {
+    const plR = { id: 888, name: 'R', tracks: [song(5)], addedTracks: [song(99)] }
+    const { player } = await queueInsertedDownload(plR)
+    await player.downloadCurrentSong()
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      888, 99, expect.objectContaining({ track: expect.objectContaining({ id: 99 }) }))
+    expect(toast).toHaveBeenCalledWith('下载成功', 'success')
+  })
+
+  // queueOwner 缺 tracks 键是远端库行的持久化常态形态（持久化剥 tracks
+  // 只留 addedTracks 等壳字段）——成员预检的 Array.isArray 守卫对缺表行
+  // 放行：缺表只能证成员不能否成员，曲可能是上游成员（服务端有全表），
+  // 交服务端成员校验兜底；若守卫失效去扫兜底单，曲查无落点会误报早退
+  it('queueOwner 无 tracks 键（持久化剥壳形态）：预检放行，track 正常下发', async () => {
+    const x = song(99)
+    const plR = { id: 888, name: 'R', addedTracks: [song(5)] } // 无 tracks 键
+    const { player, deps } = makePlayer()
+    deps.userPlaylists.value = [plR]
+    deps.selectedPlaylist.value = plR
+    await player.playSong(x) // playingPlaylistId=888——queueOwner 命中剥壳行
+    await player.downloadCurrentSong()
+    // 守卫放行直提交：「不在任何歌单」早退是预检误伤路径
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('不在任何歌单'), expect.anything())
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      888, 99, expect.objectContaining({ track: expect.objectContaining({ id: 99 }) }))
+    expect(toast).toHaveBeenCalledWith('下载成功', 'success')
+  })
+
+  it('镜像形态归属（local_pl_）：提交不带 track——镜像已承载全表', async () => {
+    const { player, deps } = makePlayer()
+    const t = song(7)
+    deps.userPlaylists.value = [localPl(t)]
+    deps.selectedPlaylist.value = localPl(t)
+    await player.playSong(t) // playingPlaylistId=local_pl_1
+    await player.downloadCurrentSong()
+    expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(localPl(t))
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      'local_pl_1', 7, expect.not.objectContaining({ track: expect.anything() }))
   })
 })
 

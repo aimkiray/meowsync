@@ -313,6 +313,98 @@ describe('SongList：⋯ 菜单结构', () => {
   })
 })
 
+describe('SongList：远端单外部源曲的服务端下载入口', () => {
+  const REMOTE_PL = () => ({ id: 12345, name: '远端单', trackCount: 3 })
+  const openMenuAt = async (idx) => {
+    await wrapper.findAll('.song-menu-btn')[idx].trigger('click')
+    await nextTick()
+    return document.querySelector('.download-menu-overlay .pg-menu')
+  }
+  const itemWith = (menu, text) =>
+    [...menu.querySelectorAll('.pg-menu-item')].find(el => el.textContent.includes(text))
+
+  it('远端数字单上 qq_/bv_/yt_ 追加曲菜单出现「下载到服务器」', async () => {
+    // 外部源曲出现在远端单视图即必是 addedTracks 成员（上游单只有数字 id）——
+    // track 载荷链可达，菜单放行
+    wrapper = mountList({
+      selectedPlaylist: REMOTE_PL(),
+      songs: [
+        mkSong('qq_001mid0000xx', 'qq曲'),
+        mkSong('bv_BV1xx411c7mD', 'bv曲'),
+        mkSong('yt_dQw4w9WgXcQ', 'yt曲', { youtube: { videoId: 'dQw4w9WgXcQ' } }),
+      ],
+    })
+    await nextTick()
+    for (let i = 0; i < 3; i++) {
+      const menu = await openMenuAt(i)
+      expect(itemWith(menu, '下载到服务器'), `行 ${i} 应亮「下载到服务器」`).toBeTruthy()
+    }
+  })
+
+  it('非远端非本地上下文仍不亮（外部源曲无落库链）', async () => {
+    wrapper = mountList({
+      selectedPlaylist: { id: 'mix_view_x', name: '壳' },
+      songs: [mkSong('yt_dQw4w9WgXcQ', 'yt曲', { youtube: { videoId: 'dQw4w9WgXcQ' } })],
+    })
+    await nextTick()
+    const menu = await openMenuAt(0)
+    expect(itemWith(menu, '下载到服务器')).toBeFalsy()
+  })
+
+  it('远端单点击下发 track 载荷；本地单不发（走镜像链）', async () => {
+    const yt = mkSong('yt_dQw4w9WgXcQ', 'yt曲', { youtube: { videoId: 'dQw4w9WgXcQ' } })
+    // 远端单：曲对象随单曲请求下发（服务端补插 playlist_tracks 再枚举）
+    wrapper = mountList({ selectedPlaylist: REMOTE_PL(), songs: [yt] })
+    await nextTick()
+    let menu = await openMenuAt(0)
+    itemWith(menu, '下载到服务器').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalled())
+    expect(downloadsApi.mirrorLocalPlaylist).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      12345, 'yt_dQw4w9WgXcQ',
+      expect.objectContaining({ track: yt, downloadVideo: false }))
+    await wrapper.unmount() // 停掉在途终态轮询再挂第二个组件
+    wrapper = null
+
+    downloadsApi.downloadSongToServer.mockClear()
+
+    // 本地单：先镜像再提交（镜像链已含全表），track 键不重复发
+    const localPl = LOCAL_PL()
+    wrapper = mountList({ selectedPlaylist: localPl, songs: [yt] })
+    await nextTick()
+    menu = await openMenuAt(0)
+    itemWith(menu, '下载到服务器').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalled())
+    expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(localPl)
+    const [plId, songId, opts] = downloadsApi.downloadSongToServer.mock.calls.at(-1)
+    expect([plId, songId]).toEqual(['local_pl_1', 'yt_dQw4w9WgXcQ'])
+    expect('track' in opts).toBe(false)
+  })
+
+  it('镜像在途窗内切单：track 判定锚定 ownerPlaylistId，不向本地单打载荷', async () => {
+    // S1 回归：isLocalPlaylist.value 是活 computed——镜像 await 期间切到
+    // 远端单会把它读成 false，track 载荷就打进 local_pl_ 目标的请求；
+    // 判定必须锚定进入时捕获的 ownerPlaylistId
+    const yt = mkSong('yt_dQw4w9WgXcQ', 'yt曲', { youtube: { videoId: 'dQw4w9WgXcQ' } })
+    const localPl = LOCAL_PL()
+    wrapper = mountList({ selectedPlaylist: localPl, songs: [yt] })
+    await nextTick()
+    const menu = await openMenuAt(0)
+    let releaseMirror
+    downloadsApi.mirrorLocalPlaylist.mockImplementationOnce(
+      () => new Promise(r => { releaseMirror = () => r({}) }))
+    itemWith(menu, '下载到服务器').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await vi.waitFor(() => expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalled())
+    // 镜像挂起窗内切到远端单——活 computed 此刻已翻面成 false
+    await wrapper.setProps({ selectedPlaylist: REMOTE_PL() })
+    releaseMirror()
+    await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalled())
+    const [plId, songId, opts] = downloadsApi.downloadSongToServer.mock.calls.at(-1)
+    expect([plId, songId]).toEqual(['local_pl_1', 'yt_dQw4w9WgXcQ'])
+    expect('track' in opts).toBe(false) // 锚定 owner 单形态——不随切单改判
+  })
+})
+
 describe('PlaylistPanel：centerView 高亮闸与 ⋯ 菜单', () => {
   const PL_ITEM = () => ({ id: 123, name: '我的歌单', trackCount: 3, creator: { nickname: 'x' } })
   const mountPanel = (props = {}) => mount(PlaylistPanel, {

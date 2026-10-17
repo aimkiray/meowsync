@@ -34,7 +34,13 @@ const localDeltaBody = z.object({
 export const downloadTaskBody = z.looseObject({
   playlistId: PLAYLIST_ID,
   ...DOWNLOAD_OPTIONS,
-  localDelta: localDeltaBody
+  localDelta: localDeltaBody,
+  // 单曲下载路径的增量补行载荷：远端单客户端追加曲（addedTracks 成员）的
+  // 瘦身投影随请求下发，服务端在枚举 playlist_tracks 前补插该曲（只插不
+  // 改——已存在行零写）。仅 /downloads/songs/:songId 消费——/downloads/queues
+  // 同构收到容忍忽略（权威对账走 localDelta，单元素 delta 会误剪其他标记
+  // 行）。逐字段白名单消毒在服务端，schema 只收「存在即可」
+  track: z.any().optional()
 });
 
 // POST /downloads/playlists/:playlistId/quick（playlistId 走路径参数）

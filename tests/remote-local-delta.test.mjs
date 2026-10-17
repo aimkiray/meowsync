@@ -5,16 +5,29 @@
 // 标记，再剪枝全部缺席的标记行（用户删追加曲只剪数组不补墓碑，剪掉后
 // 「清空到零」的空 added 必须能扫掉落库行）；removedIds 只做枚举期虚拟
 // 过滤不删行（恢复墓碑曲只清数组，行删了就回不来）。
-// DATA_DIR 临时化：真 repo 真 DB。建队不跑下载协程（startQueue 才派发），
-// 无需 file-downloader 桩；路由级用例只打 /downloads/queues（建队不启动），
-// 与 quick 同一 normalizeDownloadOptions→createDownloadQueue 通路。
+// 单曲下载路径同款打通（文件尾段用例）：POST /downloads/songs/:songId 的
+// track 载荷是增量补行不是权威对账——只插不改（已存在行零写不降级
+// raw_json），缺席才 local_added=1 补尾位；单元素 delta 会误剪其他标记行
+// 故刻意不走 applyLocalTrackDelta。
+// DATA_DIR 临时化：真 repo 真 DB。建队不跑下载协程（startQueue 才派发）；
+// 单曲路径会真派 standalone 协程——file-downloader 播种抛错桩防真打网络，
+// 断言只钉提交侧行级效果（任务行/playlist_tracks 行），协程终态不归本文件管。
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { tmpDataDir } from './helpers.mjs';
+import { seed, tmpDataDir } from './helpers.mjs';
 
 process.env.DATA_DIR = tmpDataDir('meowsync-localdelta-');
 const require = createRequire(import.meta.url);
+
+// 单曲下载的 standalone 协程会真到 file-downloader——抛错桩拦网
+// （必须早于被测文件 require：require.cache 预播种）
+seed('../src/server/services/file-downloader.js', {
+  downloadAudio: async () => { throw new Error('stub audio'); },
+  downloadVideo: async () => { throw new Error('stub video'); },
+  downloadLyrics: async () => { throw new Error('stub lyrics'); },
+  downloadCover: async () => { throw new Error('stub cover'); },
+});
 
 let app, dm, tasksRepo, queuesRepo, playlistsRepo, playlistTracksRepo, getDb;
 before(() => {
@@ -316,4 +329,191 @@ test('路由级：localDelta 形状越界 400（schema 体量硬边界）', asyn
     })
   });
   assert.equal(res.status, 400);
+});
+
+// ── 单曲下载路径（POST /downloads/songs/:songId 的 track 载荷）──
+// 远端单追加曲（qq_/bv_/yt_ 与数字 id 追加曲）在服务端 playlist_tracks
+// 无行，旧路径 find(songId) 必 404——track 瘦身投影随请求下发，服务端在
+// 枚举前增量补行：只插不改（已存在行零写，瘦身投影不降级 richer raw_json），
+// 缺席才 local_added=1 补尾位。与权威对账共用标记面：谎报行（曲其实不在
+// 客户端 addedTracks）靠该单下轮 delta 建队的 prune 扫掉才自愈——该单
+// 不再建队则无害留存（自愈非必然事件），单曲段无需验真。
+
+test('单曲 track 载荷：数字远端单 + yt_ 追加曲 → 200 任务且 providerData 带 youtube 定位', async () => {
+  const pl = seedRemote('779020', [
+    { id: '77902001', name: '远端曲', ar: [{ name: 'a' }], al: { name: 'b' }, dt: 1000 }
+  ]);
+  const res = await app.request('http://t/downloads/songs/yt_single00001', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      playlistId: pl.id,
+      track: {
+        id: 'yt_single00001', name: '追加曲', ar: [{ name: 'UP' }], al: { name: '' }, dt: 200000,
+        youtube: { videoId: 'single00001', title: '源标题', author: 'UP主' }
+      }
+    })
+  });
+  assert.equal(res.status, 200);
+
+  // 行级落库：追加尾位 + local_added=1 标记 + provider 字段进 raw_json
+  const rows = playlistTracksRepo.listTracksByPlaylistId(pl.id);
+  assert.equal(rows.length, 2);
+  assert.equal(rows.at(-1).id, 'yt_single00001');
+  assert.equal(rows.at(-1).youtube.videoId, 'single00001');
+  assert.equal(localAddedFlag(pl.id, 'yt_single00001'), 1);
+  assert.equal(localAddedFlag(pl.id, '77902001'), 0); // 上游行不标
+  // providerData 由落库行派生——youtube 流定位随任务行走（自有源下载链可达）
+  const ytTask = tasksRepo.findAnyTaskByPlaylistAndSongId(pl.id, 'yt_single00001');
+  assert.ok(ytTask);
+  assert.equal(ytTask.providerData?.youtube?.videoId, 'single00001');
+  assert.equal(ytTask.providerData?.youtube?.title, '源标题');
+  assert.equal(ytTask.providerData?.youtube?.author, 'UP主');
+});
+
+test('单曲 track 载荷与 songId 不一致 → 400，两侧 id 都不落库', async () => {
+  // 载荷不一致是客户端 bug/攻击面——如实拒，不悄悄按任一 id 补行
+  const pl = seedRemote('779021', [
+    { id: '77902101', name: 'x', ar: [], al: {}, dt: 1 }
+  ]);
+  const res = await app.request('http://t/downloads/songs/yt_mismatch001', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      playlistId: pl.id,
+      track: { id: 'yt_other000001', name: '冒名', ar: [], al: {}, dt: 1 }
+    })
+  });
+  assert.equal(res.status, 400);
+  assert.equal(playlistTracksRepo.findTrackBySongId(pl.id, 'yt_mismatch001'), null);
+  assert.equal(playlistTracksRepo.findTrackBySongId(pl.id, 'yt_other000001'), null);
+});
+
+test('单曲无 track 的旧路径：曲目表无该曲仍 404（回归钉）', async () => {
+  const pl = seedRemote('779022', [
+    { id: '77902201', name: 'x', ar: [], al: {}, dt: 1 }
+  ]);
+  const res = await app.request('http://t/downloads/songs/yt_absent00001', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playlistId: pl.id })
+  });
+  assert.equal(res.status, 404);
+  assert.equal(playlistTracksRepo.findTrackBySongId(pl.id, 'yt_absent00001'), null);
+});
+
+test('单曲 track 载荷撞上游已存在行 → 零写：raw_json 原样不被瘦身投影降级', async () => {
+  // 关键不变量：单曲路径是增量补行不是权威对账——上游行 richer raw_json
+  // （上游详情全字段）绝不能被客户端瘦身投影 UPDATE 降级，也不 append 二行
+  const rich = {
+    id: '77902301', name: '上游曲', ar: [{ name: 'a', id: 7, alias: ['x'] }],
+    al: { name: 'b', picUrl: 'https://p1.music.126.net/c.jpg' }, dt: 1000,
+    privilege: { fee: 1 }, mv: 99, richField: { nested: [1, 2, 3] }
+  };
+  const pl = seedRemote('779023', [rich]);
+  const rawBefore = getDb().prepare(
+    'SELECT raw_json FROM playlist_tracks WHERE playlist_id = ? AND song_id = ?'
+  ).get(pl.id, '77902301').raw_json;
+
+  // 客户端发的瘦身投影（与 projectTrackForDownload 同形——只有投影列字段）
+  const res = await app.request('http://t/downloads/songs/77902301', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      playlistId: pl.id,
+      track: { id: '77902301', name: '上游曲', ar: [{ name: 'a' }], al: { name: 'b' }, dt: 1000 }
+    })
+  });
+  assert.equal(res.status, 200);
+
+  const rawAfter = getDb().prepare(
+    'SELECT raw_json FROM playlist_tracks WHERE playlist_id = ? AND song_id = ?'
+  ).get(pl.id, '77902301').raw_json;
+  assert.equal(rawAfter, rawBefore, '已存在上游行不得被瘦身投影改写');
+  assert.equal(localAddedFlag(pl.id, '77902301'), 0, '上游行不置 local_added 标记');
+  assert.equal(playlistTracksRepo.listTracksByPlaylistId(pl.id).length, 1, '不追加重复行');
+});
+
+test('数字 id 追加曲同链可下：addedTracks 里的另一首网易曲不再 404', async () => {
+  // 菜单本就亮着（数字 id 全场景可下）但曲目表无行必 404——track 载荷
+  // 把 addedTracks 成员增量补进 playlist_tracks
+  const pl = seedRemote('779024', [
+    { id: '77902401', name: '远端曲', ar: [{ name: 'a' }], al: {}, dt: 1 }
+  ]);
+  const res = await app.request('http://t/downloads/songs/77902499', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      playlistId: pl.id,
+      track: { id: '77902499', name: '追加网易曲', ar: [{ name: 'b' }], al: {}, dt: 3000 }
+    })
+  });
+  assert.equal(res.status, 200);
+  assert.equal(localAddedFlag(pl.id, '77902499'), 1);
+  const task = tasksRepo.findAnyTaskByPlaylistAndSongId(pl.id, '77902499');
+  assert.ok(task);
+  assert.equal(task.songName, '追加网易曲');
+});
+
+test('单曲 track 载荷白名单弃件（file_）：跳过补插，find 自然 404', async () => {
+  // file_ 上传曲资产本就在服务端——track 载荷不给它开口：消毒弃件跳过
+  // 补插后按旧路径走，曲目表无该曲 404 如实上报
+  const pl = seedRemote('779025', [
+    { id: '77902501', name: 'x', ar: [], al: {}, dt: 1 }
+  ]);
+  const res = await app.request('http://t/downloads/songs/file_abcd1234', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      playlistId: pl.id,
+      track: { id: 'file_abcd1234', name: '上传曲', ar: [], al: {}, dt: 1 }
+    })
+  });
+  assert.equal(res.status, 404);
+  assert.equal(playlistTracksRepo.findTrackBySongId(pl.id, 'file_abcd1234'), null);
+});
+
+test('单曲 track 载荷对 source=local 镜像单不补插：谎报曲不落 local_added 幽灵行', async () => {
+  // N1 纵深闸：本地单曲目表由 /downloads/local/mirror 整表重写承载——
+  // 客户端正常链不发 track（本地单走镜像链），谎报/误发的载荷也不该在
+  // 镜像表落 local_added 行：applyLocalTrackDelta 对本地单早退、prune
+  // 永不可达，幽灵行会一直躺在枚举面内直到下一次整表重写
+  const pl = playlistsRepo.upsertPlaylist({
+    neteasePlaylistId: 'local_pl_n1gate', name: '本地单', source: 'local'
+  });
+  playlistTracksRepo.replaceTracksForPlaylist(pl.id, [
+    { id: '880301', name: '镜像一', ar: [], al: {}, dt: 1 },
+    { id: '880302', name: '镜像二', ar: [], al: {}, dt: 1 }
+  ]);
+
+  // 曲不在镜像表：补插被闸 → find 落空 404，表内不增生行
+  const res404 = await app.request('http://t/downloads/songs/yt_n1ghost001', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      playlistId: pl.id,
+      track: {
+        id: 'yt_n1ghost001', name: '谎报曲', ar: [], al: {}, dt: 1,
+        youtube: { videoId: 'n1ghost001' }
+      }
+    })
+  });
+  assert.equal(res404.status, 404);
+  assert.equal(playlistTracksRepo.findTrackBySongId(pl.id, 'yt_n1ghost001'), null,
+    '本地单不落 local_added 幽灵行');
+  assert.equal(playlistTracksRepo.listTracksByPlaylistId(pl.id).length, 2);
+
+  // 曲在镜像表：跳过补插不影响提交——find 仍按镜像行解析走通
+  const res200 = await app.request('http://t/downloads/songs/880301', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      playlistId: pl.id,
+      track: { id: '880301', name: '镜像一', ar: [], al: {}, dt: 1 }
+    })
+  });
+  assert.equal(res200.status, 200);
+  assert.ok(tasksRepo.findAnyTaskByPlaylistAndSongId(pl.id, '880301'));
+  assert.equal(playlistTracksRepo.listTracksByPlaylistId(pl.id).length, 2);
+  assert.equal(localAddedFlag(pl.id, '880301'), 0, '镜像行不置 local_added');
 });

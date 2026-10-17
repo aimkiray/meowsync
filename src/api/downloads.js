@@ -158,7 +158,11 @@ export const downloadsApi = {
       downloadAudio: options.downloadAudio !== false,
       downloadLyrics: options.downloadLyrics !== false,
       downloadCover: options.downloadCover !== false,
-      downloadVideo: options.downloadVideo === true
+      downloadVideo: options.downloadVideo === true,
+      // 远端单追加曲落库靠它：瘦身投影随请求下发，服务端单曲路径在枚举前
+      // 增量补插 playlist_tracks（只插不改）。与镜像/localDelta 同一份投影
+      // 函数——服务端消毒口径只有一份真相。缺席不发键（行为逐位兼容旧端）
+      ...(options.track ? { track: projectTrackForDownload(options.track) } : {})
     }, { timeout: 60000 });
   },
 

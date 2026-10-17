@@ -347,6 +347,36 @@ describe('downloadsApi：队列/任务形状', () => {
     expect(body.localDelta.removedIds.at(-1)).toBe('rm1999')
   })
 
+  it('downloadSongToServer：options.track 出瘦身投影键，缺省不出键', async () => {
+    // 远端单追加曲落库靠它：track 与镜像/localDelta 同一份瘦身投影——
+    // provider 定位字段保留、投影外死重剥掉；缺省不发键旧 body 逐位不变
+    setResponses({
+      post: {
+        '/downloads/songs/yt_abc12345678': { code: 200, data: {} },
+        '/downloads/songs/123': { code: 200, data: {} },
+      },
+    })
+    await downloadsApi.downloadSongToServer(777, 'yt_abc12345678', {
+      track: {
+        id: 'yt_abc12345678', name: 'n', artists: '某艺人', al: '字符串专辑',
+        extra: '剥', youtube: { videoId: 'abc12345678', hasVideo: true },
+      },
+    })
+    let [, body] = http.post.mock.calls.at(-1)
+    expect(body.playlistId).toBe(777)
+    expect(body.track).toMatchObject({
+      id: 'yt_abc12345678', ar: [{ name: '某艺人' }], al: { name: '字符串专辑' },
+      youtube: { videoId: 'abc12345678' },
+    })
+    expect('extra' in body.track).toBe(false)
+    // 展示位（hasVideo）不是源定位字段——不进 provider 投影
+    expect('hasVideo' in body.track.youtube).toBe(false)
+
+    await downloadsApi.downloadSongToServer(777, '123', {})
+    ;[, body] = http.post.mock.calls.at(-1)
+    expect('track' in body).toBe(false)
+  })
+
   it('mirrorLocalPlaylist：ar 数组成员是裸字符串不丢艺人名', async () => {
     // ar:['Jay'] 若只读 a?.name 会产 {name:undefined}——slimTrack 同口径：
     // 对象取 name、字符串透传
