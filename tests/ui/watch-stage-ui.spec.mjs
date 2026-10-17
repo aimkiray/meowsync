@@ -1,5 +1,5 @@
 // 播放舞台/底栏域收口用例谱（与 watch-view.spec.mjs 同桩骨架）：
-//   - 顶栏 .watch-av 音画分段：出组/双档/aria-pressed/即点即切
+//   - 顶栏 .watch-av 音画分段：出组/双档/radiogroup+aria-checked/即点即切
 //   - 视频缓冲衬底 img（alt=""）+ --wait 透明底 + 「缓冲中」读数章，
 //     loadeddata 置位后同步退场
 //   - 队列行来源徽标 .queue-src 全源覆盖（bv_/yt_/qq_ 对象+裸 id 兜底、
@@ -75,16 +75,22 @@ beforeEach(() => {
 })
 
 describe('WatchView：顶栏音画分段', () => {
-  it('showAvGroup 真 → 双档分段渲染，aria-pressed 报当前态', async () => {
+  it('showAvGroup 真 → 双档分段渲染（radiogroup/radio 互斥语义），aria-checked 报当前态', async () => {
     const w = mountWatch({ currentSong: YT_SONG, tab: 'queue' })
     const seg = w.find('.watch-head .watch-av')
     expect(seg.exists()).toBe(true)
+    expect(seg.attributes('role')).toBe('radiogroup')
     const btns = w.findAll('.watch-av-btn')
     expect(btns).toHaveLength(2)
     expect(btns[0].text()).toBe('音频')
     expect(btns[1].text()).toBe('视频')
-    expect(btns[0].attributes('aria-pressed')).toBe('false')
-    expect(btns[1].attributes('aria-pressed')).toBe('true')
+    expect(btns[0].attributes('role')).toBe('radio')
+    expect(btns[1].attributes('role')).toBe('radio')
+    expect(btns[0].attributes('aria-checked')).toBe('false')
+    expect(btns[1].attributes('aria-checked')).toBe('true')
+    // 互斥单选非独立开关——aria-pressed 不再落键面
+    expect(btns[0].attributes('aria-pressed')).toBeUndefined()
+    expect(btns[1].attributes('aria-pressed')).toBeUndefined()
   })
 
   it('无视频位曲不出分段；即点即切翻转共享偏好', async () => {
@@ -94,7 +100,7 @@ describe('WatchView：顶栏音画分段', () => {
     await w2.findAll('.watch-av-btn')[0].trigger('click')
     expect(prefVideoOn.value).toBe(false)
     await nextTick()
-    expect(w2.findAll('.watch-av-btn')[0].attributes('aria-pressed')).toBe('true')
+    expect(w2.findAll('.watch-av-btn')[0].attributes('aria-checked')).toBe('true')
   })
 })
 
