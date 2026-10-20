@@ -266,9 +266,14 @@ describe('CSS 源钉板：命中带/字号地板/分段锚', () => {
   it('WatchView 分段/衬底/徽标锚在位，菜单 radio 组退役', () => {
     const css = readSrc('WatchView.vue')
     expect(css).toContain('.watch-av-btn--on')
-    // 分段键 36px 触控地板（页头 40px 行内满高胶囊）
+    // 分段缩进次控件 32px 档：容器对齐 .watch-back 行高，键 28/字 11
+    // （触控命中低于 36 主键档是明示的紧凑取舍；不钉玻璃底/描边值）
+    const segBlock = css.match(/\.watch-av\s*\{[\s\S]*?\}/)?.[0] || ''
+    expect(segBlock).toContain('height: 32px')
     const btnBlock = css.match(/\.watch-av-btn\s*\{[\s\S]*?\}/)?.[0] || ''
-    expect(btnBlock).toContain('height: 36px')
+    expect(btnBlock).toContain('height: 28px')
+    expect(btnBlock).toContain('padding: 0 10px')
+    expect(btnBlock).toContain('font-size: 11px')
     expect(css).toContain('.watch-cover--under')
     expect(css).toContain('.watch-cover--video--wait')
     expect(css).toContain('.watch-buffering')

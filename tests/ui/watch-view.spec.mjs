@@ -2,10 +2,11 @@
 // 纯文本词（全行非有限 time）时露脸；busy 文案与 disabled 由
 // lyricFetching/songSwitching/loadingLyrics 透传；点击只发 emit（逻辑在
 // usePlayer 侧，见 use-player.spec.mjs 手动词务用例）。
-// 另钉 ⋯ 溢出菜单：触发键常驻页头行 .watch-head 右端（舞台化后不再叠
-// 媒体角标），操作项全量收进 teleport 菜单（沉浸/分享/收藏到歌单/下载/
-// 回源——音画组已上移顶栏常驻 .watch-av 分段，菜单只剩一次性操作项），
-// 落位/开合/焦点/条件闸断言见下方各 describe
+// 另钉 ⋯ 溢出菜单：触发键常驻页头行 .watch-head（舞台化后不再叠媒体
+// 角标；页头序=返回→⋯→音画分段，分段居右缘角位），操作项全量收进
+// teleport 菜单（沉浸/分享/收藏到歌单/下载/回源——音画组已上移顶栏
+// 常驻 .watch-av 分段，菜单只剩一次性操作项），落位/开合/焦点/条件闸
+// 断言见下方各 describe
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -257,12 +258,18 @@ describe('WatchView：⋯ 触发键落位', () => {
     youtube: { videoId: 'abcdefghijk', hasVideo: true },
   }
 
-  it('常驻页头行 .watch-head 右端——全态可见、不叠媒体（舞台化后的固定触发位）', () => {
-    const w = mountWatch({ tab: 'queue' })
+  it('常驻页头行 .watch-head——⋯ 居分段左、分段居右缘角位；全态可见、不叠媒体（舞台化后的固定触发位）', () => {
+    // YT 曲出分段——次序钉要有 .watch-av 在场（默认曲无视频位不出组）
+    const w = mountWatch({ tab: 'queue', currentSong: YT_SONG })
     const head = w.find('.watch-head')
     expect(head.exists()).toBe(true)
     const btn = head.find('.watch-menu-btn')
     expect(btn.exists()).toBe(true)
+    // 次序钉：分段是 head 末位元素（右缘角位）、⋯ 触发键紧贴其左
+    const seg = head.find('.watch-av')
+    expect(seg.exists()).toBe(true)
+    expect(seg.element.nextElementSibling).toBeNull()
+    expect(btn.element.nextElementSibling).toBe(seg.element)
     // 媒体区不再叠触发键——旧 wrap 角标位（三形态共用一枚）退役
     expect(w.find('.watch-cover-wrap .watch-menu-btn').exists()).toBe(false)
     // 返回键同处页头行（左右各一）

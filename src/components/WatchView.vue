@@ -1,6 +1,6 @@
 <template>
   <!-- YTM /watch 沉浸舞台：近黑底 + 封面氛围场，左列媒体舞台、右列
-       待播/歌词/相关面板（无面板底）。页头行常显收 返回+音画分段+⋯。
+       待播/歌词/相关面板（无面板底）。页头行常显收 返回+⋯+音画分段。
        走带/进度/音量/歌曲 meta 不重复渲染——底部播放条已覆盖 -->
   <div ref="viewEl" class="watch-view" :class="{ 'watch-view--video': mediaVideoActive }" @touchstart.passive="onWatchTouchStart" @touchmove.passive="pauseLyricFollow" @wheel.passive="pauseLyricFollow">
     <!-- 氛围场：当前封面小图高糊放大铺全屏（fixed+z-index:-1 画在
@@ -13,10 +13,22 @@
       <div class="watch-ambient-scrim"></div>
     </div>
 
-    <!-- 页头行：返回 + 音画分段 + ⋯ 触发键。常显在流——替代旧 sticky
-         顶条与媒体角浮键（操作可发现性）；菜单本体仍 teleport 出 body -->
+    <!-- 页头行：返回 + ⋯ 触发键 + 音画分段（分段居右缘角位）。常显在流——
+         替代旧 sticky 顶条与媒体角浮键（操作可发现性）；菜单本体仍
+         teleport 出 body -->
     <header class="watch-head">
       <button type="button" class="watch-back" @click="$emit('back')" title="返回上一页"><PixelIcon name="chev-l" :size="14" />返回</button>
+      <button
+        ref="menuBtn"
+        type="button"
+        class="watch-menu-btn"
+        title="更多操作"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        aria-controls="watch-actions-menu"
+        @click="toggleMenu"
+      ><PixelIcon name="more" :size="18" /></button>
       <!-- 音画分段：原 ⋯ 菜单 radio 组上移顶栏常驻——模式是高频状态读数，
            收在菜单里看不见当前态且切一次开两次。即点即切不碰菜单；
            出场闸复用 showAvGroup（按 provider/id 形态存在性出组），
@@ -32,17 +44,6 @@
         <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': !videoOn }" role="radio" :aria-checked="!videoOn" :title="videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(false)">音频</button>
         <button type="button" class="watch-av-btn" :class="{ 'watch-av-btn--on': videoOn }" role="radio" :aria-checked="videoOn" :title="!videoOn ? `切到${avToggle.action}` : undefined" @click="setAvMode(true)">视频</button>
       </div>
-      <button
-        ref="menuBtn"
-        type="button"
-        class="watch-menu-btn"
-        title="更多操作"
-        aria-label="更多操作"
-        aria-haspopup="menu"
-        :aria-expanded="menuOpen"
-        aria-controls="watch-actions-menu"
-        @click="toggleMenu"
-      ><PixelIcon name="more" :size="18" /></button>
     </header>
 
     <Teleport to="body">
@@ -1775,7 +1776,7 @@ export default {
   .watch-ambient-fade-leave-active { transition: none; }
 }
 
-/* ── 页头行：返回 + 音画分段 + ⋯ 触发键（常显在流 40px）── */
+/* ── 页头行：返回 + ⋯ 触发键 + 音画分段（常显在流 40px）── */
 .watch-head {
   height: 40px;
   flex-shrink: 0;
@@ -1783,29 +1784,30 @@ export default {
   align-items: center;
   gap: 8px;
 }
-.watch-back { margin-right: auto; } /* 右组（分段+⋯）推齐右缘 */
+.watch-back { margin-right: auto; } /* 右组（⋯+分段）推齐右缘——分段居末位角位 */
 /* 音画分段：暗面胶囊连通器——外描发丝白边、内键圆角跟随外半径；
    态指示=--on 反白（白底黑字对暗场对比最高，优于再加色 accent）。
-   键体 36px 触控地板：容器满吃页头 40px 高（分段是顶栏常驻主控件，
-   不照次控 32px 档；padding 区视觉留白不进键盒） */
+   次控件 32px 档：容器对齐 .watch-back 行高、不再满吃页头 40px——
+   触控命中低于 36 主键档是用户明示的紧凑取舍；DOM 序现为 ⋯→分段，
+   分段居页头右缘角位 */
 .watch-av {
   display: inline-flex;
   align-items: center;
-  /* border-box 全局口径：40 外高 - 1×2 描边 = 38 内高——36 键上下各留
+  /* border-box 全局口径：32 外高 - 1×2 描边 = 30 内高——28 键上下各留
      1px 呼吸；侧 padding 只收视觉留白，键盒即命中域 */
-  height: 40px;
+  height: 32px;
   padding: 0 2px;
   border: 1px solid var(--white-16);
   border-radius: 999px;
   background: rgba(255, 255, 255, .04);
 }
 .watch-av-btn {
-  height: 36px;
-  padding: 0 14px;
+  height: 28px;
+  padding: 0 10px;
   border: 0;
   border-radius: 999px;
   background: transparent;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-64);
   cursor: pointer;
   transition: background-color .12s ease, color .12s ease;
