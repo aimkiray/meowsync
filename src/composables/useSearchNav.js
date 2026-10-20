@@ -587,6 +587,31 @@ export function useSearchNav({
     }
   }
 
+  // 单曲/单视频链接 resolve 结果的落点（useExternalImport 的 asResult 路径
+  // 调本函数）：与歌单搜索同区展示、只此一行——用户自行点行播放/收藏/下载，
+  // 不建 single_song_ 壳、不自动播。立案段与四 handler 同构（闸序一致）；
+  // total=1 让深挖键天然灭。行点击走既有 openWatchSearchSong/
+  // playSongFromSearch（队列=本单曲）；结果区复用 SongList 行渲染/徽标/
+  // ⋯菜单，不新增视图
+  const showSingleResult = (song, source) => {
+    gates.preview.invalidate()
+    centerView.value = 'search'
+    pushNavState()
+    gates.search.claim() // 压死在途关键词搜索——迟到回包不得盖掉本结果
+    searching.value = false // 被顶搜索的 finally 不会再复位（闸失配），这里代收
+    searchResults.value = []
+    searchSongResults.value = [song]
+    // 页头立案词=曲名（裸 URL 丑）——只供页头/ctx 行展示。切源重搜
+    // （TopNav pickSource）读的是框内活词 searchQuery 而非本词：bili/yt/qq
+    // 路径 claim 时已清框，切源 !raw 早退不重搜；netease 路径不清框，框内
+    // 残链重发仍按链接直达落回单曲行——两条路都轮不到曲名当搜索词
+    searchSongQuery.value = song.name
+    searchSongTotal.value = 1
+    qqSongPage = 0
+    ytContinuation.value = null
+    searchSource.value = source // 'netease'|'qq'|'yt'|'bili'——结果页头源戳与行徽标口径
+  }
+
   // 预览落空（未命中/拉取失败）的视图+URL 归一：popstate 路径上
   // applyUrlNav 调本函数后即 return——不补救的话视图从未按 URL 落定，
   // 地址栏还挂着 ?view=songs&pl=<失效 id> 死链，刷新/再回放必重放失败。
@@ -660,6 +685,6 @@ export function useSearchNav({
     // 搜索
     handleSearch,
     handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, handleBiliSongSearch,
-    loadMoreSearchSongs,
+    loadMoreSearchSongs, showSingleResult,
   }
 }

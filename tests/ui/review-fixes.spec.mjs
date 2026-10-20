@@ -156,7 +156,7 @@ describe('L5：单曲分享导入过期请求不打扰', () => {
     const p = imp.importNeteaseSongById('555')
     gates.mediaImport.invalidate() // 用户在途做了别的——本次失败属过期请求
     await p
-    expect(toast).not.toHaveBeenCalledWith('分享的歌曲加载失败，请稍后重试', 'error')
+    expect(toast).not.toHaveBeenCalledWith('歌曲加载失败，请稍后重试', 'error')
   })
 })
 

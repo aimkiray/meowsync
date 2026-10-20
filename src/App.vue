@@ -31,13 +31,13 @@
       @nav-home="navHome"
       @search="handleSearch"
       @search-by-id="previewPlaylistById"
-      @search-song="importNeteaseSongById"
+      @search-song="(id) => importNeteaseSongById(id, { asResult: true })"
       @search-netease="handlePlaylistSearch"
-      @search-bili="importBilibiliOrFav"
+      @search-bili="(q) => importBilibiliOrFav(q, { asResult: true })"
       @search-bili-songs="handleBiliSongSearch"
-      @search-yt="importYouTubeOrPlaylist"
+      @search-yt="(q) => importYouTubeOrPlaylist(q, { asResult: true })"
       @search-yt-songs="handleYTSongSearch"
-      @search-qq="importQQ"
+      @search-qq="(q) => importQQ(q, { asResult: true })"
       @search-qq-pl="importQQPlaylist"
       @search-qq-songs="handleQQSongSearch"
     />
@@ -931,7 +931,7 @@ export default {
       openWatchSong, openWatchSearchSong, openWatchRecent, playPlaylistAndWatch,
       handleSearch,
       handlePlaylistSearch, handleQQSongSearch, handleYTSongSearch, handleBiliSongSearch,
-      loadMoreSearchSongs,
+      loadMoreSearchSongs, showSingleResult,
     } = useSearchNav({
       gates,
       searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
@@ -1001,6 +1001,7 @@ export default {
       playSong: (s, o) => playSong(s, o),
       enterWatch: () => enterWatch(),
       selectPlaylistAndShow: (p, o) => selectPlaylistAndShow(p, o),
+      showSingleResult: (s, src) => showSingleResult(s, src),
     })
 
     // 「加入歌单」域（composables/useAddToPlaylist.js）：atp 弹窗（指定曲→选单）+
@@ -1408,6 +1409,7 @@ export default {
       addPlaylistToLibrary,
       removePlaylistFromLibrary,
       handlePlaylistDownloadsDeleted,
+      savePlaylistsToStorage,
       selectPlaylist,
       selectPlaylistAndShow,
       openSearchPlaylist,

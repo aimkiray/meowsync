@@ -16,6 +16,10 @@ const MIX_RESOLVE_CAP = 10   // bv_/yt_ 逐项 resolve——客户端预算共�
 const MIX_SHELL_CAP = 20     // mix 壳是分享导入快照，封顶个数防长期累积撞配额
 const SINGLE_SHELL_CAP = 10  // single_song_ 单曲分享壳同上
 
+// importExternalMedia 的 kind → useSearchNav searchSource 立案戳词表
+//（'netease'|'qq'|'yt'|'bili'——结果页头源戳与行徽标共用此口径）
+const RESULT_SOURCE = { bilibili: 'bili', youtube: 'yt', qq: 'qq' }
+
 // 外部导入域：单曲 resolve 导入 + 三源整单导入 + mix 内容分享导入 + 网易云单曲壳。
 //
 // deps（App 注入的跨域共享）：
@@ -23,11 +27,16 @@ const SINGLE_SHELL_CAP = 10  // single_song_ 单曲分享壳同上
 //   userPlaylists / selectedPlaylist / songs / loadingSongs / savePlaylistsToStorage — 库域
 //   searchQuery / currentSong — 顶栏输入与播放器域
 //   playSong / enterWatch / selectPlaylistAndShow — App 侧播放器与导航动作
+//   showSingleResult(song, source) — 链接 resolve 曲目的搜索结果行落点
+//     （useSearchNav；asResult 路径专用——不建壳/不自动播的顶栏粘贴导入）
 export function useExternalImport({
   gates,
   userPlaylists, selectedPlaylist, songs, loadingSongs, savePlaylistsToStorage,
   searchQuery, currentSong,
   playSong, enterWatch, selectPlaylistAndShow,
+  // 缺省空函数：未注入 dep 时 asResult 结果静默不展示——好过抛 TypeError
+  // 被外层 catch 谎报成「导入失败」；正常接线（App.vue）恒注入
+  showSingleResult = () => {},
 }) {
 
   // 单曲分享壳统一容量剪枝：倒序 splice 防下标错位
@@ -40,7 +49,10 @@ export function useExternalImport({
     }
   }
 
-  const importExternalMedia = async (input, kind) => {
+  // opts.asResult：顶栏粘链的结果行路径——resolve 出的曲目只落搜索视图
+  // 单行结果（showSingleResult），不建壳/不自动播；缺省走分享契约的
+  // 壳+即播（?bili=/?yt=/?qq= 打开链与既有顶栏调用都不带 flag）
+  const importExternalMedia = async (input, kind, opts = {}) => {
     const spec = MEDIA_IMPORT_SPECS[kind]
     const myReq = gates.mediaImport.claim()
     // 占住 select 闸：resolve 慢（远端多跳），期间在途的 selectPlaylist
@@ -58,6 +70,13 @@ export function useExternalImport({
       if (!gates.mediaImport.isCurrent(myReq)) return
       const song = spec.build(data)
       console.log(`${spec.icon} 解析完成:`, song.name, '网易云匹配:', data.matched?.id ?? '无', '提取歌名:', data.songName)
+
+      // asResult：曲目作为单行结果落搜索视图——跳过壳 upsert /
+      // selectedPlaylist/currentSong/songs 赋值 / playSong / enterWatch 整段
+      if (opts.asResult) {
+        showSingleResult(song, RESULT_SOURCE[kind])
+        return
+      }
 
       // 与 ?song= 分享壳同款的幂等壳：同视频重复导入直接复用，不重复入库
       const shellId = spec.shellIdOf(data)
@@ -116,16 +135,17 @@ export function useExternalImport({
       toastDismiss(resolving) // 进度 toast 完成即退——stale/失败/转跳路径也收
     }
   }
-  const importBilibili = (input) => importExternalMedia(input, 'bilibili')
-  const importYouTube = (input) => importExternalMedia(input, 'youtube')
-  const importQQ = (input) => importExternalMedia(input, 'qq')
+  const importBilibili = (input, opts) => importExternalMedia(input, 'bilibili', opts)
+  const importYouTube = (input, opts) => importExternalMedia(input, 'youtube', opts)
+  const importQQ = (input, opts) => importExternalMedia(input, 'qq', opts)
   // 收藏夹/歌单输入先判——favlist/medialist URL 也满足 isBilibiliInput、
   // watch?v=&list= 也满足 isYouTubeInput，顶栏分发已挡一遍，这里是
-  // ?bili=/?yt= 分享链/直调路径的双保险
-  const importBilibiliOrFav = (input) =>
-    extractBiliFavlistId(input) ? importBiliFavlist(input) : importBilibili(input)
-  const importYouTubeOrPlaylist = (input) =>
-    extractYouTubePlaylistId(input) ? importYouTubePlaylist(input) : importYouTube(input)
+  // ?bili=/?yt= 分享链/直调路径的双保险。
+  // asResult 只透单曲分支——歌单/收藏夹导入语义不变（壳+选中照旧）
+  const importBilibiliOrFav = (input, opts) =>
+    extractBiliFavlistId(input) ? importBiliFavlist(input) : importBilibili(input, opts)
+  const importYouTubeOrPlaylist = (input, opts) =>
+    extractYouTubePlaylistId(input) ? importYouTubePlaylist(input) : importYouTube(input, opts)
 
   // 整单导入共享壳 upsert：幂等归并本身在 lib/external-songs.js 的
   // upsertProviderShell（搜索卡「+ 收藏」同口——同一壳形两处不复读两套）。
@@ -240,13 +260,24 @@ export function useExternalImport({
   }
 
   // 网易云单曲导入：?song= 分享链与顶栏粘贴 music.163.com/song?id=N 同走此路。
-  // 幂等壳 single_song_<id>——重复导入复用壳、原地补齐空壳曲目
-  const importNeteaseSongById = async (songId) => {
+  // 幂等壳 single_song_<id>——重复导入复用壳、原地补齐空壳曲目。
+  // opts.asResult：顶栏路径改走单行结果（不查/不建壳、不自动播）——
+  // 壳是分享链打开（无 flag 调用）的契约
+  const importNeteaseSongById = async (songId, opts = {}) => {
     // 与 importExternalMedia 同闸：detail 回包期间用户若已点进别处，
     // 迟到的导入不得盖写 selectedPlaylist/songs 或强跳 watch
     const myReq = gates.mediaImport.claim()
     gates.select.invalidate()
+    loadingSongs.value = false // 被顶的 selectPlaylist 不会再复位 loading——收掉（与 :59 同款代收）
     try {
+      // asResult：跳过壳检查/壳复用/壳创建整段——库里既有历史壳是留存量，
+      // 不影响本路径（重粘链只显示结果行，不消费旧壳）
+      if (opts.asResult) {
+        const songDetail = await musicApi.getSongDetail(songId)
+        if (!gates.mediaImport.isCurrent(myReq)) return
+        showSingleResult(songDetail, 'netease')
+        return
+      }
       // 检查是否已经存在相同的临时歌单
       const tempPlaylistId = `single_song_${songId}`
       let existingPlaylist = userPlaylists.value.find(p => p.id === tempPlaylistId)
@@ -306,9 +337,9 @@ export function useExternalImport({
 
       console.log('✅ 单首歌曲分享加载完成并开始播放')
     } catch (error) {
-      if (!gates.mediaImport.isCurrent(myReq)) return // 与 :94/:185/:451 同口径——过期请求的失败不打扰用户
+      if (!gates.mediaImport.isCurrent(myReq)) return // 与 :114/:193/:472 同口径——过期请求的失败不打扰用户
       console.error('❌ 加载单首歌曲失败:', error)
-      toast('分享的歌曲加载失败，请稍后重试', 'error')
+      toast('歌曲加载失败，请稍后重试', 'error')
     }
   }
 
