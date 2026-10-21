@@ -153,8 +153,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     }
   }
 
-  // 存量歌单净化：滤脏条目 + healExternalAr 自愈（远端重建共用同一读盘
-  // 口径——远端落盘的库同样要走这道净化才进内存）
+  // 存量歌单净化：滤脏条目 + healExternalAr/healCoverUrl 自愈（远端重建
+  // 共用同一读盘口径——远端落盘的库同样要走这道净化才进内存）
   const sanitizeStoredPlaylists = (savedPlaylists) => {
     let healedAny = false
     const healExternalAr = (t) => {
@@ -174,10 +174,30 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       }
       return t
     }
+    // playlist 级封面协议相对形自愈：旧部署导入时服务端 logo/cover 原样
+    // 透传 '//host/...' 串落进 coverImgUrl——proxiedCoverUrl 对 '//' 恒归
+    // ''（fail-closed，语义不动），存量封面恒落 fallback。升格 https 是
+    // 唯一确定无害的归一：http/https/''/畸形一律透传原值（判死仍归
+    // display 层 httpsCover/img-proxy），缺席字段回 undefined 不注入 ''
+    // 死键（持久化指纹比对会误判「本次改过」）。远端重建
+    // （applyRemoteLibrary）同走本函数——远端落盘的 '//' 形态同样自愈。
+    // 曲目封面归 healExternalAr 管，不在这层碰
+    const healCoverUrl = (v) => {
+      const s = String(v || '').trim()
+      if (s.startsWith('//')) {
+        healedAny = true
+        return 'https:' + s
+      }
+      return v
+    }
     const list = savedPlaylists
       .filter(p => p && p.id != null)
       .map(p => ({
         ...p,
+        // picUrl 是歌单封面的历史别名（部分上游卡形态带它；useHomeFeed 兜底
+        // 读它）——与 coverImgUrl 同函数过一遍
+        coverImgUrl: healCoverUrl(p.coverImgUrl),
+        picUrl: healCoverUrl(p.picUrl),
         tracks: Array.isArray(p.tracks) ? p.tracks.map(healExternalAr) : p.tracks,
         addedTracks: Array.isArray(p.addedTracks) ? p.addedTracks.map(healExternalAr) : undefined,
         removedTrackIds: Array.isArray(p.removedTrackIds) ? p.removedTrackIds : undefined,

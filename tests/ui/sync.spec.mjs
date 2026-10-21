@@ -584,6 +584,84 @@ describe('usePlaylistLibrary：歌单 updatedAt 打点与远端重建', () => {
   })
 })
 
+describe('usePlaylistLibrary：存量封面协议相对形自愈（healCoverUrl）', () => {
+  // 旧部署导入时服务端 logo 原样透传 '//host/...' 落进 coverImgUrl——
+  // proxiedCoverUrl 对 '//' 恒归 ''（fail-closed），存量封面恒落 fallback；
+  // 读盘 sanitize 升格 https 并经 healedAny→savePlaylistsToStorage 落盘一次到位
+  it("coverImgUrl '//host' 升格 https：内存态与落盘态同愈，干净单不冤枉抬戳", () => {
+    // 种子故意不带 trackCount——存根多出的 trackCount:0 即「回写发生过」的观测口
+    writeJSON(LS_KEYS.PLAYLISTS, [
+      { id: 'q1', name: 'QQ单', coverImgUrl: '//music-file.y.qq.com/x.jpg', updatedAt: 100 },
+      { id: 'n1', name: '好单', coverImgUrl: 'https://ok.jpg', updatedAt: 100, trackCount: 3 },
+    ])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+    expect(lib.userPlaylists.value[0].coverImgUrl).toBe('https://music-file.y.qq.com/x.jpg')
+    const stored = readJSON(LS_KEYS.PLAYLISTS)
+    expect(stored[0].coverImgUrl).toBe('https://music-file.y.qq.com/x.jpg')
+    expect(stored[0].trackCount).toBe(0)   // 回写走的真是 savePlaylistsToStorage 投影
+    expect(stored[0].updatedAt).toBe(T0)   // 自愈=内容真变→抬戳，愈合形态随同步收敛他端
+    expect(stored[1].coverImgUrl).toBe('https://ok.jpg')
+    expect(stored[1].updatedAt).toBe(100)  // 无病单指纹不变——同批回写不冤枉盖戳
+  })
+
+  it('http/https/空串封面原样透传；无 heal 不触发回写', () => {
+    writeJSON(LS_KEYS.PLAYLISTS, [
+      { id: 'h1', name: 'A', coverImgUrl: 'http://qpic.y.qq.com/x', updatedAt: 100 },
+      { id: 'e1', name: 'B', coverImgUrl: '', updatedAt: 100 },
+      { id: 'u1', name: 'C', updatedAt: 100 }, // 封面字段缺席
+    ])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+    // http 形态不动——display 层 httpsCover/img-proxy 管；空串照常判死
+    expect(lib.userPlaylists.value[0].coverImgUrl).toBe('http://qpic.y.qq.com/x')
+    expect(lib.userPlaylists.value[1].coverImgUrl).toBe('')
+    expect(lib.userPlaylists.value[2].coverImgUrl).toBeUndefined()
+    const stored = readJSON(LS_KEYS.PLAYLISTS)
+    // healedAny 假 → 无回写：缺席字段没被注入 '' 死键、种子原样（连 trackCount 都没补）
+    expect('coverImgUrl' in stored[2]).toBe(false)
+    expect('trackCount' in stored[0]).toBe(false)
+    expect(stored.map(p => p.updatedAt)).toEqual([100, 100, 100])
+  })
+
+  it("picUrl 历史别名 '//' 同愈（外围空白先剥）；track 内 al.picUrl 不被误碰", () => {
+    writeJSON(LS_KEYS.PLAYLISTS, [
+      { id: 'p1', name: 'P', picUrl: '  //y.gtimg.cn/m.jpg  ', updatedAt: 100 },
+      {
+        id: 'local_pl_1', name: '本地单', isLocal: true, updatedAt: 100,
+        tracks: [{ id: 1, name: 's', ar: [{ name: 'a' }], al: { name: 'b', picUrl: '//x/y.jpg' }, dt: 1 }],
+      },
+    ])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+    expect(lib.userPlaylists.value[0].picUrl).toBe('https://y.gtimg.cn/m.jpg')
+    expect(readJSON(LS_KEYS.PLAYLISTS)[0].picUrl).toBe('https://y.gtimg.cn/m.jpg')
+    // 曲目封面归 healExternalAr 管：非 yt/bili 曲的 '//' al.picUrl 原样透传——
+    // playlist 级 heal 不误碰，回写链的 slimTrack 投影同样留不住改写
+    expect(lib.userPlaylists.value[1].tracks[0].al.picUrl).toBe('//x/y.jpg')
+    expect(readJSON(LS_KEYS.PLAYLISTS)[1].tracks[0].al.picUrl).toBe('//x/y.jpg')
+  })
+
+  it('远端落盘的 // 封面同样自愈——applyRemoteLibrary 共用 sanitize 口径', async () => {
+    writeJSON(LS_KEYS.PLAYLISTS, [{ id: 'x', name: '旧X', updatedAt: 1 }])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+    initSync()
+    syncApi.pull.mockResolvedValue({
+      code: 200,
+      items: [{
+        key: 'playlist:x',
+        value: { id: 'x', name: '远端X', coverImgUrl: '//y.gtimg.cn/r.jpg' },
+        updatedAt: 999, seq: 30,
+      }],
+      serverTime: 999,
+    })
+    await pullFromServer()
+    expect(lib.userPlaylists.value[0].coverImgUrl).toBe('https://y.gtimg.cn/r.jpg')
+    expect(readJSON(LS_KEYS.PLAYLISTS)[0].coverImgUrl).toBe('https://y.gtimg.cn/r.jpg')
+  })
+})
+
 describe('sync 引擎：歌单持久墓碑表（plTomb）', () => {
   it('删单推送失败+重启：持久表续发墓碑，远端旧值不复活', async () => {
     initSync()
