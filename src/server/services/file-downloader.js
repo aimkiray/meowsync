@@ -60,6 +60,20 @@ const COVER_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 // 省流量档，不给拉无损；>=320k（含默认）走完整档梯，归档取最优
 const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADDER);
 
+// qq 低档升级腿（hit 档低于请求档时借 relayId 回链再试一脚）的换用判据：
+// - RELAY_BR_MARGIN：可比码率要 margin 才换——~130k opus 换 128k mp3 是
+//   花整段回链流量买边际提升，平级替换不触发
+// - RELAY_LOSSLESS_EXTS：br 不可比（null）形态只认无损容器算真升级——
+//   progressive 合流档 br 恒 null（容器总码率不可当音轨码率，
+//   youtube-resolve.js L210 同语义），旧「恒赢」口径会把带视频轨的
+//   降级 mp4 换进音频工件位
+// - RELAY_DURATION_MISMATCH：relayId 是词源匹配产物（LYRIC_MATCH_CRITERIA
+//   容翻唱/live 不同录音）——回链曲声明时长与任务时长偏差超此比即疑
+//   错配录音。与 download-fs durationLooksTruncated 的 0.8 截断闸同口径
+const RELAY_BR_MARGIN = 1.25;
+const RELAY_LOSSLESS_EXTS = new Set(['flac', 'wav']);
+const RELAY_DURATION_MISMATCH = 0.2;
+
 // 外部导入曲（bv_/yt_）下载：从各自网站直取最优音轨——prefer='best' 下
 // B 站拿 Hi-Res FLAC/杜比轨（BILI_COOKIE 有权限才下发，否则回落最高码率
 // AAC），YouTube 拿 opus251；不经网易云解锁链。候选档降序铺开，单链
@@ -69,6 +83,11 @@ const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADD
 // 部分 googlevideo 流拒全量 GET（实测 403）——bytes=0- 语义等同全量，
 // 走 206 通道绕开；B 站 CDN 带上也无副作用（其防盗链只认 Referer/UA）
 const RANGE_ALL = { Range: 'bytes=0-' };
+// B 站 CDN 宿主族：bilibili 解锁源回链落在 upos-*.bilivideo.com 系——
+// 防盗链缺 Referer 恒 403。域表与 routes/proxy.js BILI_CDN_HOSTS 同口径
+// （download 白名单侧 net-guard PROXY_ALLOWED_HOSTS 已放行本族）
+const BILI_CDN_HOSTS = ['bilivideo.com', 'bilivideo.cn', 'hdslb.com'];
+const isBiliCdnHost = (h) => BILI_CDN_HOSTS.some(x => h === x || h.endsWith('.' + x));
 
 // 播放缓存档 → 下载工件的搬运：流式管线——GB 级档用 copyFileSync 会把
 // 事件循环摁住秒级 stall。先落 .part 再 rename 与 streamToFile 同口径
@@ -843,14 +862,30 @@ async function downloadNeteaseAudio(neteaseId, outputPath, bitrate, onProgress, 
 
   throwIfAborted(signal);
   // 扩展名按真实来源修正（youtube→m4a 等）：路径互斥锁仍挂在占位 .mp3 键上，
-  // 互斥语义不变（同一歌单同曲永远同键），只是落盘文件名更诚实
-  const finalPath = pathWithExt(outputPath, extFromUrl(songData.url, AUDIO_EXTS, 'mp3'));
+  // 互斥语义不变（同一歌单同曲永远同键），只是落盘文件名更诚实。
+  // fallback 吃 item.type：解锁链 resolved.ext（provider 显式供值——bilibili
+  // .m4s 链 path 尾缀/mime= 两条推导通道都拿不到真实容器）已覆写进它，
+  // URL 推导不出时不再错落 mp3 壳装 ISOBMFF/AAC 肉；AUDIO_EXTS.has 闸保持
+  // 白名单面不扩，非白名单值仍回 mp3 兜底
+  const finalPath = pathWithExt(outputPath,
+    extFromUrl(songData.url, AUDIO_EXTS,
+      AUDIO_EXTS.has(songData.type) ? songData.type : 'mp3'));
   fs.mkdirSync(path.dirname(finalPath), { recursive: true });
 
   // googlevideo 签名 URL 按请求形态记账：裸 GET 既可能 403 又会毒化该
   // URL 的后续 Range 请求——解锁链产出 googlevideo（youtube provider）
-  // 时与下行直链同口径带 bytes=0-（语义同全量，其他 CDN 无副作用）
-  const audioResponse = await fetchStream(songData.url, { timeout: 300000, signal, headers: RANGE_ALL });
+  // 时与下行直链同口径带 bytes=0-（语义同全量，其他 CDN 无副作用）。
+  // bilivideo/hdslb 族（bilibili 解锁源回链）防盗链要 UA+Referer 两件套
+  // ——与 downloadExternalAudio/downloadExternalVideo/routes/proxy.js 同一
+  // BILI_PUBLIC_HEADERS 口径；URL 解析失败按非 bili 处理（fetchStream
+  // 内 normalizeOutboundUrl 会再判合法性）
+  let audioHeaders = RANGE_ALL;
+  try {
+    if (isBiliCdnHost(new URL(songData.url).hostname)) {
+      audioHeaders = { ...BILI_PUBLIC_HEADERS, ...RANGE_ALL };
+    }
+  } catch { /* 非法 URL 按非 bili */ }
+  const audioResponse = await fetchStream(songData.url, { timeout: 300000, signal, headers: audioHeaders });
   if (audioResponse.status !== 200 && audioResponse.status !== 206) {
     audioResponse.data.destroy();
     throw fatalError(`上游返回 ${audioResponse.status}`);
@@ -874,7 +909,11 @@ async function downloadNeteaseAudio(neteaseId, outputPath, bitrate, onProgress, 
       ? (songData.unblockedBr ?? null)
       : (songData.br ?? null),
     unblocked: songData.unblocked || false,
-    unblockedSource: songData.unblockedSource || null
+    unblockedSource: songData.unblockedSource || null,
+    // 回链曲时长（ms）：song_url 项的 time 字段——解锁成功时被 resolved.timeMs
+    // 覆写（estMs 实测估值或网易声明 dt），非解锁项即原始声明时长。是解锁
+    // 回包现成字段，零额外字节——qq 升级腿拿它做换用前的错配录音预判
+    timeMs: songData.time ?? null
   };
 }
 
@@ -882,7 +921,9 @@ async function downloadNeteaseAudio(neteaseId, outputPath, bitrate, onProgress, 
 // {youtube:{videoId}}/neteaseId）——mediaMid 是 vkey filename 键，带了可省一次
 // 注定失败的 vkey 空调用 + detail 回填往返；neteaseId 是导入期词源匹配产物，
 // qq_ 腿断时充回链键。缺省/过期都安全，各解析器内部仍兜底
-async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal, providerData) {
+// expectedMs：任务行 durationMs（曲库元数据时长）——qq 升级腿换用前的
+// 错配录音预判闸；缺省跳过该闸（省流/无时长任务不降级）
+async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal, providerData, expectedMs) {
   try {
     // bv_<bvid>[_pN] / yt_<videoId> 分发：自有站直链
     const bvM = String(songId).match(BV_TRACK_ID_RE);
@@ -969,9 +1010,74 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       const saved = await streamToFile(resp, finalPath, {
         maxBytes: MAX_AUDIO_BYTES, onProgress, maxTotalMs: 300000
       });
+      // 低档升级腿：匿名 uin=0 的 vkey 对免费非 VIP 曲也只下发 M500（128k），
+      // 到手档低于请求档时借词源回链再试一脚高音质。判据是「到手档 vs
+      // 请求档」：QQ_TIER_BR null（RS01/F000 无损）已是顶格不必升级——
+      // 注意必须显式判 null，JS 里 null<bitrate 会按 0 比较误触发；
+      // <320k 的省流请求走 qqLadderFor 短梯只砍 qq 候选档、不砍本闸——
+      // 192k 请求拿到 128k M500 hit 时升级腿照常触发（回链能换到更优
+      // 就不浪费回链键）。
+      // 回链产物落 *.relay.* 旁系命名空间（outputPath 恒 .mp3 锁键占位），
+      // 胜出才换名入主档——若与 qq hit 同扩展名直落本族会先毁掉兜底件
+      const qqTierBr = QQ_TIER_BR[hit.tier] ?? null;
+      if (qqTierBr !== null && qqTierBr < bitrate && NETEASE_ID_RE.test(relayId)) {
+        throwIfAborted(signal);
+        let relayedPath = null; // 已落盘的回链产物——弃用/异常时收走防残留双档
+        try {
+          const relayed = await downloadNeteaseAudio(
+            relayId, `${outputPath}.relay.mp3`, bitrate, onProgress, signal);
+          relayedPath = relayed.path;
+          const relayedExt = path.extname(relayed.path).slice(1).toLowerCase();
+          // 时长闸先于码率择优：回链曲声明时长与任务时长差超闸即疑错配
+          // 录音（live/翻唱级偏差）。旧序先换用后由 download-manager
+          // 时长对账判剪辑 unlink 结果——而 qq 兜底档已被收走，原本
+          // M500 成功的任务反成新失败形态。声明时长是回包现成字段
+          // （零额外字节）；任一参缺失跳过该闸，不降级无时长任务
+          const durationMismatch = expectedMs > 0 && relayed.timeMs > 0
+            && Math.abs(relayed.timeMs - expectedMs) > expectedMs * RELAY_DURATION_MISMATCH;
+          // 择优：br 不可比（null）只认无损容器（RELAY_LOSSLESS_EXTS）
+          // 算真升级；可比形态要过 margin 才换（RELAY_BR_MARGIN）
+          const better = !durationMismatch && (relayed.br == null
+            ? RELAY_LOSSLESS_EXTS.has(relayedExt)
+            : relayed.br > qqTierBr * RELAY_BR_MARGIN);
+          if (better) {
+            const relayFinal = pathWithExt(outputPath, relayedExt || 'mp3');
+            fs.renameSync(relayed.path, relayFinal);
+            relayedPath = null;
+            // 胜出线就位后收走 qq 低档档（同主名时 rename 已天然顶替）
+            if (saved.path !== relayFinal) {
+              try { fs.unlinkSync(saved.path); } catch { /* 删失败留给 reap */ }
+            }
+            console.info(`[download] qq_${qqM[1]} ${hit.tier} 档低于请求码率——回链 netease ${relayId} 音质更优，换用`);
+            return {
+              ...relayed, path: relayFinal,
+              unblockedSource: relayed.unblockedSource || 'qq→netease'
+            };
+          }
+          // 回链不胜出（错配录音/码率不优）——弃回链产物保 qq hit
+          try { fs.unlinkSync(relayed.path); } catch { /* 删失败留给 reap */ }
+          relayedPath = null;
+          console.info(durationMismatch
+            ? `[download] qq_${qqM[1]} 回链曲(${relayId})时长不符疑为错配录音（声明 ${relayed.timeMs}ms vs 期望 ${expectedMs}ms）——保留 ${hit.tier} 档`
+            : `[download] qq_${qqM[1]} 回链(${relayId})码率不优于 ${hit.tier} 档——保留 qq 直链产物`);
+        } catch (e) {
+          // 收走已落盘的回链产物先于一切 rethrow——下方三条穿透（abort/
+          // fatal errno/penetratesCandidates）若先行，rename 的 EACCES/
+          // ENOTDIR 等 fatal 会把完整 *.relay.* 非 .part 件孤儿化到下次
+          // 启动 reap
+          if (relayedPath) { try { fs.unlinkSync(relayedPath); } catch { /* 留给 reap */ } }
+          throwIfAborted(signal);
+          if (e?.aborted) throw e; // 回链内 abort 穿透不兜底
+          errnoToFatal(e);
+          // 本地确定性病（ENOSPC 等）换源也救不了——穿透判死而非吃兜底
+          if (penetratesCandidates(e)) throw e;
+          // 升级是尽力腿：任何非穿透错只 console.warn 降级，qq hit 绝不丢
+          console.warn(`[download] qq_${qqM[1]} 网易回链(${relayId})升级失败，保留 ${hit.tier} 档兜底: ${describeError(e)}`);
+        }
+      }
       return {
         path: saved.path, size: saved.size, url: hit.url,
-        br: QQ_TIER_BR[hit.tier] ?? null,
+        br: qqTierBr,
         unblocked: false, unblockedSource: `qq/${hit.tier}`
       };
     }

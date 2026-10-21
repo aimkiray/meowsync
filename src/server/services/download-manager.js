@@ -930,7 +930,9 @@ async function processTask(task, queueId, signal) {
           task.bitrate,
           (progress) => reportProgress(totalProgress + Math.floor(progress * weights.audio / 100)),
           signal,
-          task.providerData
+          task.providerData,
+          // qq_ 升级腿换用前的错配录音预判入参（时长闸）；其他源不消费
+          task.durationMs
         );
         // 落盘后时长对账：HEAD 探测失败时解锁端校验会漏放预览剪辑——
         // 真实字节数+真实码率是最后一道闸门（只查"短"，见 durationLooksTruncated）。
