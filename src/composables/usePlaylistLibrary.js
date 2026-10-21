@@ -18,6 +18,14 @@ const REMOVED_DEFAULT_PLAYLISTS_KEY = LS_KEYS.REMOVED_DEFAULT_PLAYLISTS
 const SAVED_QUEUE_CAP = 5
 export const SAVED_QUEUE_TRACK_CAP = 500
 
+// 簿记写哨兵（savePlaylistsToStorage「登基线不抬戳」开关）：只认这个模块
+// 私有引用、不认载荷字段——该函数同时直绑 App.vue @song-meta-updated 模板
+// 事件，实参是上游/导入来的 track 对象；若用 opts.preserveUpdatedAt===true
+// 判定，脏 track 恰带同名字段会把真实编辑伪装成簿记写：指纹登了基线却不抬
+// updatedAt——后续 save 永不重判，该编辑在 LWW 与推送双侧隐形（恰是 heal
+// 保戳防的投毒的镜像形态）。Symbol 引用外部拿不到，任何载荷恒 !== 它
+const PRESERVE_TS = Symbol('preserveUpdatedAt')
+
 // 歌单库域：库 CRUD / 本地持久化 / selectPlaylist 单向同步合并 / 行级增删。
 //
 // deps（App 注入的跨域共享）：
@@ -107,7 +115,20 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
   }
 
   let saveFailWarned = false
-  const savePlaylistsToStorage = () => {
+  // opts===PRESERVE_TS：本批按簿记写落盘——指纹差照常登记基线（不登记
+  // 下次 save 会把同一批差异重判成「本次改过」再抬戳），但不抬任何单的
+  // updatedAt。heal 回写用它：封面协议归一是本地展示修复而非用户编辑——
+  // 抬成当前刻会让远端真实更新的版本在 per-playlist LWW（remoteTs>=
+  // localTs）里输给本机陈旧单，陈旧值再经脏推回写服务端污染全端。
+  // 调它必须满足「本批差异全是簿记差」：heal 两处调点在登基线→sanitize
+  // →save 的同步段内，用户编辑一律在自己的变更点同步落盘过，不可能夹带。
+  // 知会：簿记写仍经 writeJSON→写钩抬 libWriteAt、flush 带 lib:index——
+  // libWriteAt 盖墓碑戳/libIndex 无保戳概念是既有结构 slack，本批不扩大战面
+  const savePlaylistsToStorage = (opts) => {
+    // 本函数也是模板事件 handler（App.vue @song-meta-updated 直绑，实参是
+    // track 载荷而非 opts）——簿记位只认模块私有哨兵引用（见 PRESERVE_TS
+    // 头注）：字段判定会被脏 track 的同名字段冒充，track 载荷恒 !== 哨兵
+    const preserveUpdatedAt = opts === PRESERVE_TS
     pruneSavedQueues()
     // 持久化时剥离大体积 tracks（selectedPlaylist 切回时会重新拉取详情），
     // 本地内存态歌单（单曲分享/队列存盘）无法从接口重拉，tracks 必须保留——
@@ -127,7 +148,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       return { ...rest, trackCount: rest.trackCount ?? (Array.isArray(tracks) ? tracks.length : 0) }
     })
     // 指纹比对打点：一切增删/重排/编辑路径都汇到这个持久化收口，
-    // 内容真变的单盖当前刻 updatedAt（库对象同源打点，内存态也是判据源）
+    // 内容真变的单盖当前刻 updatedAt（库对象同源打点，内存态也是判据源）；
+    // preserveUpdatedAt 批只登记指纹基线不盖戳——heal 簿记写保原 LWW 论据
     const now = Date.now()
     const liveIds = new Set()
     for (let i = 0; i < toStore.length; i++) {
@@ -138,8 +160,10 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       const fp = storedFingerprint(stored)
       if (playlistFingerprints.get(id) !== fp) {
         playlistFingerprints.set(id, fp)
-        stored.updatedAt = now
-        userPlaylists.value[i].updatedAt = now
+        if (!preserveUpdatedAt) {
+          stored.updatedAt = now
+          userPlaylists.value[i].updatedAt = now
+        }
       }
     }
     // 出库 id 的指纹基线清掉（id 理论不复用——防手工数据复活旧基线误判未变）
@@ -215,7 +239,12 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       registerFingerprints(savedPlaylists)
       const { list, healedAny } = sanitizeStoredPlaylists(savedPlaylists)
       userPlaylists.value.push(...list)
-      if (healedAny) savePlaylistsToStorage() // 自愈结果落盘——下次启动不再依赖重算
+      // 自愈结果落盘——下次启动不再依赖重算。PRESERVE_TS 簿记写：自愈是本地
+      // 展示修复不是用户编辑，被修单保留原 updatedAt——否则伪造「当前刻」
+      // 会在 per-playlist LWW 里压死远端真实更新的版本（陈旧单反胜投毒）。
+      // 愈后脏推 diff 按 ts 判会跳过已推单：自愈逐端独立发生、远端同口径
+      // 自愈覆盖，不上行无收敛缺口（未推过的单仍按原戳上行）
+      if (healedAny) savePlaylistsToStorage(PRESERVE_TS)
     }
   }
 
@@ -250,7 +279,10 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
         && !list.some(p => String(p.id) === String(playingPlaylistId.value))) {
       playingPlaylistId.value = null
     }
-    if (healedAny) savePlaylistsToStorage()
+    // 同 loadPlaylistsFromStorage 口径：自愈簿记写保原 updatedAt——远端
+    // 采纳单的 remoteTs 戳与本机陈旧单的原戳都是真实 LWW 论据，都不该被
+    // 愈合时刻顶掉（服务端「修好版」反过来被陈旧单压死=投毒回归）
+    if (healedAny) savePlaylistsToStorage(PRESERVE_TS)
   }
   onRemoteApply(PLAYLISTS_STORAGE_KEY, applyRemoteLibrary)
 
