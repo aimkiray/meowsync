@@ -8,7 +8,7 @@ const { dataDir } = require('../db/client');
 const { estimateDuration } = require('./netease-api');
 const { sanitizeFilename } = require('./download-io');
 const { stripAbsolutePaths } = require('../lib/sanitize');
-const { BV_TRACK_ID_RE, YT_TRACK_ID_RE } = require('../../shared/predicates.js');
+const { BV_TRACK_ID_RE, YT_TRACK_ID_RE, QQ_SONG_ID_RE } = require('../../shared/predicates.js');
 
 // 下载文件根目录：<dataDir>/downloads，可用 DOWNLOAD_DIR 覆盖（容器内指到挂载卷）
 // resolve 归一化：路径安全比较依赖绝对路径
@@ -108,8 +108,10 @@ function providerDataOf(track) {
     };
   }
   // 外部曲缺 provider 定位字段（老镜像/畸形行）但已匹配词源——neteaseId
-  // 单独落 providerData，别让歌词段连词源一起丢
-  if (neteaseId && (BV_TRACK_ID_RE.test(String(track.id)) || YT_TRACK_ID_RE.test(String(track.id)))) {
+  // 单独落 providerData，别让歌词段连词源一起丢；qq_<mid> 裸 id 与
+  // bv_/yt_ 同权——mediaMid 缺位的残缺行回链键不丢
+  if (neteaseId && (BV_TRACK_ID_RE.test(String(track.id)) || YT_TRACK_ID_RE.test(String(track.id))
+      || QQ_SONG_ID_RE.test(String(track.id)))) {
     return { neteaseId };
   }
   return null;

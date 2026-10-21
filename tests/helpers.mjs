@@ -56,6 +56,9 @@ export const seedMatchModule = (matchCalls, getImpl) => {
         if (r?.song) {
           t.matched = { id: r.song.id, name: r.song.name, ar: r.song.ar || r.song.artists || [], al: r.song.al || r.song.album || {} };
           t.matchedBy = r.query;
+          // 真实现命中时写 matchScore（netease-match.js 池内打分投影）——
+          // 路由把三字段原样透传给客户端，stub 不补则断言面缺一角
+          t.matchScore = r.score ?? null;
           n++;
         }
       }

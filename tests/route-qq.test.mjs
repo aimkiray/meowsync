@@ -45,8 +45,16 @@ let suggestArgs = null;
 let suggestImpl = async () => SUGGEST;
 let hotImpl = async () => ({ hots: [{ first: '我们的歌' }] });
 let songDetailImpl = async (id) => ({ ...TRACK, mid: String(id) });
+// 凭据态/歌单内容可翻转：stream 404 文案按 hasQqCookie 分档、playlist 匹配
+// 面按曲目集断言——两处用例都要换底
+let cookieOn = false;
+const defaultPl = () => ({
+  id: '777', name: 'QQ歌单', creator: 'tester', cover: '', desc: '',
+  songCount: 1, tracks: [{ ...TRACK }], truncated: false,
+});
+let plImpl = defaultPl;
 seed('../src/server/lib/qq.js', {
-  hasQqCookie: () => false,
+  hasQqCookie: () => cookieOn,
   PLAY_LADDER: ['m800'], BEST_LADDER: ['flac'],
   SONGMID_RE: /^[0-9A-Za-z]{10,20}$/,
   getSongDetail: async (...a) => songDetailImpl(...a),
@@ -54,11 +62,9 @@ seed('../src/server/lib/qq.js', {
   getLyric: async () => ({ lyric: '[00:01.00]词', trans: '[00:01.00]译' }),
   // 与 lib/qq.js getPlaylist 真身同形（id/name/creator/cover/desc/songCount/
   // tracks/truncated）——路由显式透 truncated 契约字段，桩缺它会让该字段
-  // 恒 false 且无断言兜住
-  getPlaylist: async () => ({
-    id: '777', name: 'QQ歌单', creator: 'tester', cover: '', desc: '',
-    songCount: 1, tracks: [TRACK], truncated: false,
-  }),
+  // 恒 false 且无断言兜住。曲目克隆下发：匹配池就地写 matched/matchedBy/
+  // matchScore，共享 fixture 被写脏会跨用例漏
+  getPlaylist: async (...a) => plImpl(...a),
   searchSongs: async (q, opts, sig) => {
     searchArgs = { q, opts };
     return searchImpl(q, opts, sig);
@@ -160,6 +166,37 @@ test('qq：stream 无可用档 → 404', async () => {
   pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
 });
 
+test('qq：stream 抛 qqAnonDenied → 502 诚实文案（指引配置 Cookie）', async () => {
+  cookieOn = false;
+  pickStreamImpl = async () => {
+    const e = new Error('qq musicu vkey.GetVkeyServer code=0/1000');
+    e.qqAnonDenied = true; e.nodeCode = 1000; e.retcode = 104009;
+    throw e;
+  };
+  try {
+    const r = await json(await get('/qq/stream?mid=005DENIED0001'));
+    assert.equal(r.status, 502);
+    assert.equal(r.body.message, 'QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试');
+  } finally { pickStreamImpl = async () => pickStreamHit; }
+});
+
+test('qq：stream 无流 404 文案按凭据态分档——匿名给回链指引，有 cookie 保留 VIP/地域口径', async () => {
+  pickStreamHit = null;
+  try {
+    cookieOn = false;
+    let r = await json(await get('/qq/stream?mid=005NILxx00001'));
+    assert.equal(r.status, 404);
+    assert.equal(r.body.message, '该歌曲暂无可播流——QQ 已关闭匿名取流，配置 Cookie 或匹配网易词源后可播');
+    cookieOn = true;
+    r = await json(await get('/qq/stream?mid=005NILxx00002'));
+    assert.equal(r.status, 404);
+    assert.equal(r.body.message, '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）');
+  } finally {
+    cookieOn = false;
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+  }
+});
+
 test('qq：lyric 非法 mid 400；正常返回双语', async () => {
   assert.equal((await get('/qq/lyric?mid=!!')).status, 400);
   const r = await json(await get(`/qq/lyric?mid=${TRACK.mid}`));
@@ -258,6 +295,94 @@ test('qq：playlist 非法 disstid 400；命中回歌单+归一曲目+truncated 
   assert.equal(r.body.name, 'QQ歌单');
   assert.equal(r.body.tracks[0].mid, TRACK.mid);
   assert.equal(r.body.truncated, false); // 与 bili/yt 路由同型的契约字段
+});
+
+test('qq：playlist 匹配池——命中曲带 matched/matchedBy/matchScore、matchedCount 计数、调用面与 resolve 同口径', async () => {
+  plImpl = async () => ({
+    id: '778', name: 'QQ歌单', creator: 't', cover: '', desc: '',
+    songCount: 2, tracks: [{ ...TRACK }, { ...OTHER }], truncated: false,
+  });
+  matchCalls.length = 0;
+  matchImpl = async (candidates, dur, tag, signal, src) => {
+    assert.equal(tag, 'qq-playlist');
+    return src.trackId === `qq_${OTHER.mid}`
+      ? { song: { id: 555, name: 'Hit', ar: [{ name: '歌手' }], al: { id: 1 } }, query: 'q-hit', score: 88 }
+      : { song: null, query: null };
+  };
+  try {
+    const r = await json(await get('/qq/playlist?id=778'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.matchedCount, 1);
+    // 命中曲（OTHER）：投影三字段随曲目下发——neteaseId 回链弹药经此进
+    // buildQQSong → providerData
+    const t1 = r.body.tracks[1];
+    assert.deepEqual(t1.matched, { id: 555, name: 'Hit', ar: [{ name: '歌手' }], al: { id: 1 } });
+    assert.equal(t1.matchedBy, 'q-hit');
+    assert.equal(t1.matchScore, 88);
+    // 未命中曲：三字段归 null 照常下发（预算耗尽余曲同形态）
+    const t0 = r.body.tracks[0];
+    assert.equal(t0.matched, null);
+    assert.equal(t0.matchedBy, null);
+    assert.equal(t0.matchScore, null);
+    // 调用面钉：候选串 艺人组合→裸名、duration=intervalSec、
+    // sourceInfo.trackId/artists/publishedAt 与 /qq/resolve 同口径
+    const trackCall = matchCalls.find(c => c[4].trackId === `qq_${TRACK.mid}`);
+    assert.deepEqual(trackCall[0], ['艺人甲 艺人乙 歌名', '歌名']);
+    assert.equal(trackCall[1], 200);
+    assert.equal(trackCall[4].publishedAt, 0); // TRACK 无 publishTime → 归 0
+    const otherCall = matchCalls.find(c => c[4].trackId === `qq_${OTHER.mid}`);
+    assert.equal(otherCall[4].publishedAt, OTHER.publishTime); // 发行日时间证据透传
+    assert.equal(otherCall[4].artists.join(' '), '艺人甲 艺人乙');
+  } finally {
+    plImpl = defaultPl;
+    matchImpl = async () => ({ song: { id: 998877, name: '匹配曲', ar: [{ name: '网艺' }], al: {} }, query: 'q1' });
+  }
+});
+
+test('qq：playlist 默认桩每曲皆中——matchedCount 等于曲目数', async () => {
+  // 默认 matchImpl 恒命中：单曲歌单 matchedCount=1
+  const r = await json(await get('/qq/playlist?id=777'));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.matchedCount, 1);
+  assert.equal(r.body.tracks[0].matched.id, 998877);
+});
+
+test('qq：playlist 匹配池级异常 → 200 + matchedCount=0（匹配降级不炸导入本体）', async () => {
+  plImpl = async () => ({
+    id: '779', name: 'QQ歌单', creator: 't', cover: '', desc: '',
+    songCount: 1, tracks: [{ ...TRACK }], truncated: false,
+  });
+  // 池级故障（同步抛穿 matchTracksPool——区别于单曲落空被 stub 吞成
+  // song:null）：catch 降级 matchedCount=0，曲目照常下发只是无回链弹药
+  matchImpl = () => { throw new Error('池级故障'); };
+  try {
+    const r = await json(await get('/qq/playlist?id=779'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.matchedCount, 0);
+    assert.equal(r.body.tracks.length, 1);
+    assert.equal(r.body.tracks[0].mid, TRACK.mid);
+    assert.equal(r.body.tracks[0].matched, null);
+  } finally {
+    plImpl = defaultPl;
+    matchImpl = async () => ({ song: { id: 998877, name: '匹配曲', ar: [{ name: '网艺' }], al: {} }, query: 'q1' });
+  }
+});
+
+test('qq：playlist 匹配在途断连 → 499（abort 静默优先于导入回包）', async () => {
+  const ctrl = new AbortController();
+  plImpl = async () => ({
+    id: '780', name: 'QQ歌单', creator: 't', cover: '', desc: '',
+    songCount: 1, tracks: [{ ...TRACK }], truncated: false,
+  });
+  // 匹配在途时客户端断连——池跑完后 abort 检查先返回 499 静默
+  matchImpl = async () => { ctrl.abort(); return { song: { id: 1 }, query: 'q' }; };
+  try {
+    const res = await app.request(new Request('http://t/qq/playlist?id=780', { signal: ctrl.signal }));
+    assert.equal(res.status, 499);
+  } finally {
+    plImpl = defaultPl;
+    matchImpl = async () => ({ song: { id: 998877, name: '匹配曲', ar: [{ name: '网艺' }], al: {} }, query: 'q1' });
+  }
 });
 
 test('qq：resolve 的 sourceInfo 携 publishTime → 匹配侧 publishedAt 时间证据', async () => {

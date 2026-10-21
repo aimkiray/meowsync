@@ -8,7 +8,7 @@ const streamVault = require('../lib/stream-vault');
 // 外发 Location 必须拼回部署前缀——entryFetch 剥前缀后路由按根路径工作，
 // 裸 /audio-proxy/t/… 在 BASE_PATH 子目录部署下回客户端即 404
 const { withBasePath } = require('../lib/base-path');
-const { matchWithBudget, toMatchedJson } = require('../services/netease-match');
+const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services/netease-match');
 const {
   hasQqCookie, PLAY_LADDER, BEST_LADDER, SONGMID_RE,
   getSongDetail, pickStreamUrl, getLyric, getPlaylist, searchSongs,
@@ -152,12 +152,22 @@ app.get('/qq/stream', async (c) => {
     const hit = await pickStream(mid, mmid, prefer, c.req.raw.signal,
       c.req.query('retry') === '1');
     if (!hit) {
-      return c.json({ code: 404, message: '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）' }, 404);
+      // 无登录态下「无流」的真因几乎恒为上游已关匿名取流（vkey 凭据级拒答
+      // 或 code=0 但全档 purl 空）——文案给可执行指引；有 cookie 时保留
+      // VIP/地域口径（那时它才可能是真因）
+      return c.json({ code: 404, message: hasQqCookie()
+        ? '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）'
+        : '该歌曲暂无可播流——QQ 已关闭匿名取流，配置 Cookie 或匹配网易词源后可播' }, 404);
     }
     // 经 vault 换 opaque token——purl 明文带 uin/vkey/guid，不进 Location/前端可见面
     return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(hit.url)}`), 302);
   } catch (e) {
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    // vkey 凭据级拒答（lib 打标 qqAnonDenied——匿名取流已关停）出诚实
+    // 错误面：可执行指引而非含糊上游错；已知终态不刷错误日志
+    if (e?.qqAnonDenied) {
+      return c.json({ code: 502, message: 'QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试' }, 502);
+    }
     console.error('[qq] stream 失败:', e.message);
     return c.json({ code: 502, message: `QQ 音乐流地址获取失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
   }
@@ -289,7 +299,12 @@ app.get('/qq/similar', async (c) => {
 });
 
 // 歌单导入：disstid → 归一歌单元件（前端落成 local_pl_ 本地歌单——
-// 与手动创建歌单同等待遇：mix 分享/服务端镜像下载全链复用）
+// 与手动创建歌单同等待遇：mix 分享/服务端镜像下载全链复用）。
+// 匹配=回链弹药：QQ 匿名取流已关停，neteaseId 是匿名可播唯一腿
+//（matched 也兼封面/词兜底）——词源匹配并发池与 bilibili favlist 同构：
+// 总预算到点 abort，余曲 matched=null 照常下发可播可导
+const QQ_PL_MATCH_BUDGET_MS = 45000;
+const QQ_PL_MATCH_CONCURRENCY = 3;
 app.get('/qq/playlist', async (c) => {
   if (!rateLimit(c, 'qq-playlist', 12)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
@@ -299,10 +314,41 @@ app.get('/qq/playlist', async (c) => {
   try {
     const pl = await getPlaylist(id, c.req.raw.signal);
     if (!pl) return c.json({ code: 404, message: '歌单不存在或无权限' }, 404);
+    // 词源匹配并发池收敛进 services/netease-match.js:matchTracksPool——
+    // 对 normalizeTrack 产物就地写 matched/matchedBy/matchScore；超 1000
+    // 曲截断场景匹配照常跑（预算自控，掐断的余曲按无匹配下发）
+    const matchedCount = await matchTracksPool(pl.tracks, {
+      signal: c.req.raw.signal, budgetMs: QQ_PL_MATCH_BUDGET_MS,
+      concurrency: QQ_PL_MATCH_CONCURRENCY, tag: 'qq-playlist',
+      // 候选串/打分上下文与 /qq/resolve 同口径：艺人组合 → 裸名（≤3），
+      // artists/trackId（qq_<mid> 接 song_match 缓存键）/发行日直喂
+      candidatesOf: (t) => [...new Set(
+        [`${t.artists.join(' ')} ${t.name}`.trim(), t.name]
+          .filter(Boolean))].slice(0, 3),
+      durationOf: (t) => t.intervalSec,
+      infoOf: (t) => ({
+        title: t.name, author: t.artists.join(' '), artists: t.artists,
+        trackId: `qq_${t.mid}`, publishedAt: t.publishTime || 0,
+      }),
+      // 池级异常降级 matchedCount=0——词源匹配是增强不是门禁，
+      // 不炸歌单导入本体（曲目照常下发，只是无回链弹药）
+    }).catch(e => {
+      console.warn('[qq] playlist 匹配池异常:', e?.message || e);
+      return 0;
+    });
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     return c.json({
       code: 200,
       ...pl,
-      tracks: pl.tracks.map(trackJson),
+      matchedCount,
+      // trackJson 是共享白名单（search/resolve/similar/hot 同用）不动——
+      // 匹配三字段只在 playlist 的投影里扩展
+      tracks: pl.tracks.map((t) => ({
+        ...trackJson(t),
+        matched: toMatchedJson(t.matched),
+        matchedBy: t.matchedBy ?? null,
+        matchScore: t.matchScore ?? null,
+      })),
       // 与 bili/yt 歌单同型契约——超上限截断必须透出，不然前端按完整列表渲染
       truncated: pl.truncated === true,
     });
