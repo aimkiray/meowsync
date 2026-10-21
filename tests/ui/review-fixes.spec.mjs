@@ -22,6 +22,8 @@ vi.mock('../../src/api/music.js', () => ({
     getQQPlaylist: vi.fn(async () => ({ tracks: [] })),
     retryMatch: vi.fn(async () => null),
   },
+  // QQ 登录态惰性单飞——缺省 null=「态未知」（不触发 Cookie 引导 toast）
+  qqLoggedIn: vi.fn(async () => null),
 }))
 vi.mock('../../src/api/downloads.js', () => ({
   downloadsApi: {
@@ -57,7 +59,7 @@ vi.mock('../../src/composables/usePlayer.js', () => ({
   notifyLyricRematch: vi.fn(),
 }))
 
-import { musicApi } from '../../src/api/music.js'
+import { musicApi, qqLoggedIn } from '../../src/api/music.js'
 import { toast, toastDismiss } from '../../src/lib/feedback.js'
 import { useExternalImport } from '../../src/composables/useExternalImport.js'
 import { usePlaylistLibrary } from '../../src/composables/usePlaylistLibrary.js'
@@ -73,14 +75,15 @@ const makeGate = () => {
 }
 const makeImport = () => {
   const gates = { mediaImport: makeGate(), select: makeGate() }
-  const imp = useExternalImport({
+  const deps = {
     gates,
     userPlaylists: ref([]), selectedPlaylist: ref(null), songs: ref([]),
     loadingSongs: ref(false), savePlaylistsToStorage: vi.fn(),
     searchQuery: ref('yt=x'), currentSong: ref(null),
     playSong: vi.fn(async () => {}), enterWatch: vi.fn(), selectPlaylistAndShow: vi.fn(),
-  })
-  return { imp, gates }
+  }
+  const imp = useExternalImport(deps)
+  return { imp, gates, deps }
 }
 // 进度 toast 的返回 id：toast mock 按调用序发号，找出「正在…」那次的 id
 const progressToastId = (text) =>
@@ -511,5 +514,107 @@ describe('M1：QQ 歌单卡「+ 收藏」走 /qq/playlist 导入链产完整壳'
     musicApi.getQQPlaylist.mockRejectedValue(new Error('上游挂'))
     await lib.addPlaylistToLibrary(QQ_CARD)
     expect(lib.userPlaylists.value).toHaveLength(0) // 失败不产空壳
+  })
+})
+
+describe('QQ 歌单导入：封面修复 + 未配置 Cookie 引导（useExternalImport.importQQPlaylist）', () => {
+  // buildQQSong 入料形（routes/qq.js trackJson 同款）——cover 进曲目 al.picUrl
+  const QQ_TRACK = (extra = {}) => ({
+    mid: '002BBBbbb00002', songId: 1, name: '歌', artists: ['艺人'], album: '专',
+    duration: 200, cover: 'https://img/t.jpg', mediaMid: '002BBBbbb00002',
+    publishTime: 1193932800000, ...extra,
+  })
+  const qqData = (over = {}) => ({
+    name: '催专累了', creator: '念安娜', cover: '', tracks: [QQ_TRACK()], ...over,
+  })
+  const cookieToastHit = () =>
+    toast.mock.calls.some(c => String(c[0]).includes('Cookie') && c[1] === 'info' && c[2] === 8000)
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    qqLoggedIn.mockResolvedValue(null) // 缺省态未知
+    musicApi.getQQPlaylist.mockResolvedValue(qqData())
+  })
+
+  it('coverOf：data.cover 缺席/空串 → 壳封面落首曲 al.picUrl', async () => {
+    musicApi.getQQPlaylist.mockResolvedValue(qqData({ cover: '' }))
+    const { imp, deps } = makeImport()
+    await imp.importQQPlaylist('7097197259')
+    const pl = deps.userPlaylists.value.find(p => String(p.id) === 'local_pl_qq_7097197259')
+    expect(pl.coverImgUrl).toBe('https://img/t.jpg')
+    // selectPlaylistAndShow 拿到的同一份投影
+    expect(deps.selectPlaylistAndShow).toHaveBeenCalledWith(
+      expect.objectContaining({ coverImgUrl: 'https://img/t.jpg' }), { force: true })
+  })
+
+  it('coverOf：http 封面经 httpsCover 升格（https 页注入断言）', async () => {
+    // httpsCover 仅在 https 页升级（http 部署里服务端回链本就是合法 http）——
+    // stub location.protocol 注入 https 页语境验证升格分支被走到
+    vi.stubGlobal('location', { protocol: 'https:' })
+    try {
+      musicApi.getQQPlaylist.mockResolvedValue(qqData({ cover: 'http://y.gtimg.cn/pl.jpg' }))
+      const { imp, deps } = makeImport()
+      await imp.importQQPlaylist('7097197259')
+      const pl = deps.userPlaylists.value.find(p => String(p.id) === 'local_pl_qq_7097197259')
+      expect(pl.coverImgUrl).toBe('https://y.gtimg.cn/pl.jpg')
+      // 协议相对 //host 非 http:// 前缀——原样透传（https 页解析即 https）
+      musicApi.getQQPlaylist.mockResolvedValue(qqData({ cover: '//y.gtimg.cn/pl2.jpg' }))
+      deps.userPlaylists.value = []
+      await imp.importQQPlaylist('7097197259')
+      const pl2 = deps.userPlaylists.value.find(p => String(p.id) === 'local_pl_qq_7097197259')
+      expect(pl2.coverImgUrl).toBe('//y.gtimg.cn/pl2.jpg')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('导入成功 + 明确未登录 → Cookie 指引 toast（info/8s）', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const { imp } = makeImport()
+    await imp.importQQPlaylist('7097197259')
+    expect(cookieToastHit()).toBe(true)
+  })
+
+  it('已登录/态未知不提指引；导入失败（无壳落库）也不提', async () => {
+    qqLoggedIn.mockResolvedValue(true)
+    const { imp } = makeImport()
+    await imp.importQQPlaylist('7097197259')
+    expect(cookieToastHit()).toBe(false)
+
+    qqLoggedIn.mockResolvedValue(null) // 探测失败按「可能有」——不打扰
+    const { imp: imp2 } = makeImport()
+    await imp2.importQQPlaylist('7097197259')
+    expect(cookieToastHit()).toBe(false)
+
+    // 拉取失败：错误 toast 照报但壳未落库——指引不该跟着失败路径发
+    qqLoggedIn.mockResolvedValue(false)
+    musicApi.getQQPlaylist.mockRejectedValue(new Error('上游挂'))
+    const { imp: imp3 } = makeImport()
+    await imp3.importQQPlaylist('7097197259')
+    expect(cookieToastHit()).toBe(false)
+  })
+
+  it('历史壳在场 + 重导入失败 → 不发引导（按真成功门控，旧壳不顶包）', async () => {
+    // 上次成功导入的留存壳——旧判据「壳在且 tracks 非空」被它顶包：
+    // 重导入失败照样发引导。importProviderPlaylist 返 null 才算失败
+    qqLoggedIn.mockResolvedValue(false)
+    const { imp, deps } = makeImport()
+    deps.userPlaylists.value.push({
+      id: 'local_pl_qq_7097197259', name: '旧壳', tracks: [{ id: 'qq_old' }], isLocal: true,
+    })
+    musicApi.getQQPlaylist.mockRejectedValue(new Error('上游挂'))
+    await imp.importQQPlaylist('7097197259')
+    expect(cookieToastHit()).toBe(false)
+  })
+
+  it('历史壳在场 + 重导入成功未登录 → 照发引导（返壳=真落地）', async () => {
+    // 反例闸：返壳路径不被误收——重导入成功（原地刷新旧壳）仍发
+    qqLoggedIn.mockResolvedValue(false)
+    const { imp, deps } = makeImport()
+    deps.userPlaylists.value.push({
+      id: 'local_pl_qq_7097197259', name: '旧壳', tracks: [{ id: 'qq_old' }], isLocal: true,
+    })
+    await imp.importQQPlaylist('7097197259')
+    expect(cookieToastHit()).toBe(true)
   })
 })

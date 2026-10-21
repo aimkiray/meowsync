@@ -174,6 +174,18 @@ describe('useSearchNav：QQ 歌单卡打开（导入链）', () => {
     expect(pl.trackCount).toBe(2)
   })
 
+  it('导入成功 toast 透出词源匹配数——与 importProviderPlaylist 同口径', async () => {
+    const { nav } = makeNav()
+    musicApi.getQQPlaylist.mockResolvedValue({
+      name: '催专累了', creator: 'x', cover: '', desc: '',
+      tracks: [T('003EEEeee00003'), T('004FFFfff00004')],
+      truncated: true, matchedCount: 2,
+    })
+    await nav.openSearchPlaylist(CARD)
+    expect(toast).toHaveBeenCalledWith(
+      '已导入 QQ 歌单「催专累了」（2 首，词源匹配 2，超出上限部分未导入）', 'success', 6000)
+  })
+
   it('非 qq 卡走原 selectPlaylist 路径——不打 QQ 接口', async () => {
     const { nav, deps } = makeNav()
     const neteaseCard = { id: 12345, name: '网易单', provider: undefined }

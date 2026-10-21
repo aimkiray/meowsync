@@ -774,11 +774,18 @@ export const musicApi = {
   },
 
   // QQ 凭据状态：{loggedIn}——配了 VIP QQ_COOKIE 的部署里 qq payPlay 曲可播，
-  // 前端"隐藏VIP"过滤据此放行（失败保守回落未登录）
+  // 前端"隐藏VIP"过滤据此放行。loggedIn 三态：true/false=服务端明确判定；
+  // null=探测失败/回包缺字段的「态未知」——与「明确未登录」是两种结局：
+  // qqLoggedIn 消费面（播放选腿/死腿文案/引导 toast）把 null 按「可能有
+  // 登录态」不绕 qq 支（宁试死腿不误绕活腿）；只做真值判的消费面
+  // （caps.js serverCaps → song.js 隐藏 VIP 过滤）null/false 同走保守侧
   getQqStatus: async () => {
     // api 拦截器已剥 axios 壳——resolve 值就是 body {code, loggedIn}，无 .data 层
     const body = await api.get('/qq/status', { timeout: 5000 }).catch(() => null)
-    return { loggedIn: Boolean(body?.loggedIn) }
+    // 探测失败（catch 归 null body）/回包缺 loggedIn 布尔字段 → null 态未知，
+    // 不塌缩成 false——「探测没跑通」与「明确未登录」下游分诊不同
+    if (body == null || typeof body.loggedIn !== 'boolean') return { loggedIn: null }
+    return { loggedIn: body.loggedIn }
   },
 
   // QQ 曲库搜索（点歌台 qq: 前缀）：回 {songs,total}——total 是上游
@@ -870,6 +877,25 @@ export const musicApi = {
     return data
   }
 }
+
+// QQ 登录态惰性单飞（会话级 memo）：QQ 上游已关匿名取流后，播放选腿
+// （neteaseId 绑定的 qq 曲在「明确未登录」时直走网易支）与 qq 死腿终态
+// 文案共用这一判据——裸打会让每首 qq 曲多发一跳 /qq/status。
+// 返回 true/false/null：false=服务端明确回未配凭据；null=探测失败/回包
+// 缺 loggedIn 字段（getQqStatus 已归 null）或调用整体抛错（尾部 catch
+// 兜底）——调用方把 null 当「可能有登录态」不绕 qq 支：宁试死腿不误绕活腿。
+// 缓存语义=会话级：中途配上 Cookie 后须经下方 qqStatusReset 复位重探
+// （caps.js refreshServerCaps 已挂接——设置页存凭据即清）；不 reset 则
+// 「主动选腿」吃旧值到整页刷新（_neFallback 失败回链与登录态无关照常生效）
+let qqStatusPromise = null
+export const qqLoggedIn = () => qqStatusPromise ??= musicApi.getQqStatus()
+  .then(r => r.loggedIn)
+  .catch(() => null)
+
+// 凭据变更复位口：QQ_COOKIE 保存/清除后本 memo 不自动失效——caps.js
+// refreshServerCaps（设置页存凭据的统一刷新口）挂接清缓存，下跳
+// qqLoggedIn 重探即时生效：引导 toast/死腿文案/播放选腿不再吃陈旧 false
+export const qqStatusReset = () => { qqStatusPromise = null }
 
 // 流式落盘共用：同源 fetch（已含代理链）→ blob → a[download] 触发保存。
 // 扩展名以实际 Content-Type 为准——prefer=best 时 YouTube 音频可能是

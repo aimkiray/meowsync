@@ -42,7 +42,11 @@ const { musicApi, toast } = vi.hoisted(() => ({
   },
   toast: vi.fn(() => 1),
 }))
-vi.mock('../../src/api/music.js', () => ({ musicApi }))
+vi.mock('../../src/api/music.js', () => ({
+  musicApi,
+  // App.vue→usePlayer/useExternalImport 图按名链接——缺省 null=「态未知」
+  qqLoggedIn: vi.fn(async () => null),
+}))
 vi.mock('../../src/api/auth.js', () => ({
   authApi: {
     status: vi.fn(async () => ({ data: {} })),

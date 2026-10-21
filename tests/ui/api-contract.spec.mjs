@@ -228,6 +228,70 @@ describe('musicApi：上游业务码 code!==200 不吞成空态', () => {
   })
 })
 
+describe('qqLoggedIn：惰性单飞缓存（会话级 memo）', () => {
+  // memo 是模块级状态——各用例经 resetModules+动态 import 拿全新模块图隔离；
+  // axios 桩工厂对新图重跑，mockInstance 壳跨图共享（httpCalls 断言照旧）。
+  // server-caps.spec 同款隔离手法
+  const freshMusic = async () => {
+    vi.resetModules()
+    return import('../../src/api/music.js')
+  }
+
+  it('多次调用只发一跳 /qq/status，loggedIn 透传', async () => {
+    setResponses({ get: { '/qq/status': { code: 200, loggedIn: true } } })
+    const { qqLoggedIn } = await freshMusic()
+    const [a, b] = await Promise.all([qqLoggedIn(), qqLoggedIn()])
+    expect(a).toBe(true)
+    expect(b).toBe(true)
+    expect(httpCalls.filter(c => c.url === '/qq/status')).toHaveLength(1)
+    // 串行复用同一份 promise——不重发
+    expect(await qqLoggedIn()).toBe(true)
+    expect(httpCalls.filter(c => c.url === '/qq/status')).toHaveLength(1)
+  })
+
+  it('loggedIn:false → false（明确未配凭据）', async () => {
+    setResponses({ get: { '/qq/status': { code: 200, loggedIn: false } } })
+    const { qqLoggedIn } = await freshMusic()
+    expect(await qqLoggedIn()).toBe(false)
+  })
+
+  it('探测失败/缺字段归 null=「态未知」——与「明确未登录」不塌缩同值', async () => {
+    // api.get 拒绝被 getQqStatus 内部 .catch 收成 null body → {loggedIn:null}
+    // ——「探测没跑通」是态未知非「明确未登录」，消费面按可能有登录态不绕 qq 支
+    http.get.mockImplementationOnce(async () => { throw new Error('down') })
+    const g1 = await freshMusic()
+    expect(await g1.qqLoggedIn()).toBeNull()
+
+    // 200 但缺 loggedIn 布尔字段（契约漂移）→ 同归 null 而非塌缩 false；
+    // 非布尔值（'yes' 之类脏字段）同样不采信
+    const g2 = await freshMusic()
+    setResponses({ get: { '/qq/status': { code: 200 } } })
+    expect(await g2.qqLoggedIn()).toBeNull()
+    const g2b = await freshMusic()
+    setResponses({ get: { '/qq/status': { code: 200, loggedIn: 'yes' } } })
+    expect(await g2b.qqLoggedIn()).toBeNull()
+
+    // api.get 同步炸（连 .catch 都挂不上的层级）→ getQqStatus 整体 reject →
+    // qqLoggedIn 尾部 .catch 兜底归 null——三路出口同一「态未知」归位
+    const g3 = await freshMusic()
+    http.get.mockImplementationOnce(() => { throw new Error('sync boom') })
+    expect(await g3.qqLoggedIn()).toBeNull()
+  })
+
+  it('qqStatusReset 复位 memo：下跳 qqLoggedIn 重探而非吃会话缓存', async () => {
+    setResponses({ get: { '/qq/status': { code: 200, loggedIn: false } } })
+    const { qqLoggedIn, qqStatusReset } = await freshMusic()
+    expect(await qqLoggedIn()).toBe(false)
+    expect(httpCalls.filter(c => c.url === '/qq/status')).toHaveLength(1)
+    // 凭据落库（设置页存 Cookie → caps.refreshServerCaps 挂接本函数）后复位：
+    // 下跳重探拿新态——播放选腿/死腿文案/引导 toast 不再吃陈旧 false
+    qqStatusReset()
+    setResponses({ get: { '/qq/status': { code: 200, loggedIn: true } } })
+    expect(await qqLoggedIn()).toBe(true)
+    expect(httpCalls.filter(c => c.url === '/qq/status')).toHaveLength(2)
+  })
+})
+
 describe('downloadsApi：队列/任务形状', () => {
   it('createQueue：默认选项序列化 + 60s 超时通道', async () => {
     setResponses({ post: { '/downloads/queues': { code: 200, data: { id: 5, status: 'pending' } } } })
