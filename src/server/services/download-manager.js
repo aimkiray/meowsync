@@ -2313,9 +2313,19 @@ async function retryTask(taskId) {
   })();
   retryAfter.delete(taskId); // 人工重试即用户明确再等——退避不该挡它
   // 人工重试 = hard retry：该曲解锁负状态（缓存/死簿/冷却/verdict）一并清，
-  // 否则重跑只是复读同一条注定失败的链；best-effort——清理失败不挡重试
-  try { forgetSongUnlock(task.songId); } catch (e) {
-    console.warn(`任务 ${taskId} 重试前清理解锁负状态失败:`, e?.message || e);
+  // 否则重跑只是复读同一条注定失败的链；best-effort——清理失败不挡重试。
+  // relay 腿（qq_ 经 providerData.neteaseId 回落网易云取流）的负状态按
+  // 网易云曲 id 键控，songId 键下永无条目——旧任务快照与新镜像行两处的
+  // neteaseId 都入清理集（数字白名单闸挡脏值），Set 顺带对同键去重
+  const forgetIds = new Set([String(task.songId)]);
+  for (const pd of [task.providerData, freshProviderData]) {
+    const nid = String(pd?.neteaseId ?? '');
+    if (NETEASE_ID_RE.test(nid)) forgetIds.add(nid);
+  }
+  for (const fid of forgetIds) {
+    try { forgetSongUnlock(fid); } catch (e) {
+      console.warn(`任务 ${taskId} 重试前清理解锁负状态失败:`, e?.message || e);
+    }
   }
   deleteFiles([task.audioPath, task.lyricsPath, task.coverPath, task.videoPath]); // 行先清文件后删
 
@@ -2408,8 +2418,18 @@ async function retryQueue(queueId) {
   })();
   for (const task of failedTasks) retryAfter.delete(task.id);
   // 批量 hard retry：逐曲清解锁负状态，按 songId 去重——同曲多任务行
-  // 不重复清（各簿删除幂等，去重只是省日志与库跳）
-  for (const sid of new Set(failedTasks.map(t => String(t.songId)))) {
+  // 不重复清（各簿删除幂等，去重只是省日志与库跳）。
+  // relay 腿（qq_ → providerData.neteaseId）负状态按网易云曲 id 键控：
+  // 旧任务快照与新镜像行两处 neteaseId 一并入集（数字白名单闸挡脏值）
+  const forgetIds = new Set();
+  for (const task of failedTasks) {
+    forgetIds.add(String(task.songId));
+    for (const pd of [task.providerData, providerMap.get(String(task.songId))]) {
+      const nid = String(pd?.neteaseId ?? '');
+      if (NETEASE_ID_RE.test(nid)) forgetIds.add(nid);
+    }
+  }
+  for (const sid of forgetIds) {
     try { forgetSongUnlock(sid); } catch (e) {
       console.warn(`队列 ${queueId} 重试前清理歌曲 ${sid} 解锁负状态失败:`, e?.message || e);
     }
