@@ -1,4 +1,4 @@
-import { musicApi } from '../api/music.js'
+import { musicApi, qqLoggedIn } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { toast, toastDismiss } from '../lib/feedback.js'
 import {
@@ -158,7 +158,10 @@ export function useExternalImport({
   }
 
   // 三源公共导入骨架：闸 + 清框 + 长驻进度 toast + 拉取 + upsert + 播报。
-  // spec 提供各源差异面：拉取函数/构造器/壳 id 与壳名/封面与创建者/计数透出文案
+  // spec 提供各源差异面：拉取函数/构造器/壳 id 与壳名/封面与创建者/计数透出文案。
+  // 返回契约：成功路径回落地的壳 pl；stale 闸/空集/失败全归 null——
+  // importQQPlaylist 的 Cookie 引导 toast 按真成功门控（历史壳在场不得
+  // 替失败重导入顶包）；bili/yt 调用方不消费返回值
   const importProviderPlaylist = async (spec) => {
     gates.select.invalidate()
     const myReq = gates.mediaImport.claim()
@@ -169,11 +172,11 @@ export function useExternalImport({
     const progressToast = spec.progress && toast(spec.progress, 'info', 120000)
     try {
       const data = await spec.fetch()
-      if (!gates.mediaImport.isCurrent(myReq)) return
+      if (!gates.mediaImport.isCurrent(myReq)) return null
       const tracks = (data.tracks || []).map(spec.build)
       if (!tracks.length) {
         toast(spec.emptyMsg, 'error')
-        return
+        return null
       }
       const pl = upsertImportedShell({
         shellId: spec.shellIdOf(data),
@@ -189,10 +192,12 @@ export function useExternalImport({
         data.truncated ? '超出上限部分未导入' : '',
       ].filter(Boolean).join('，')
       toast(`已导入 ${spec.tag}「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
+      return pl
     } catch (e) {
-      if (!gates.mediaImport.isCurrent(myReq)) return
+      if (!gates.mediaImport.isCurrent(myReq)) return null
       if (spec.restoreInput) searchQuery.value = spec.input // 失败还原输入——用户可直接回车重试
       toast(`${spec.failTag}导入失败：${e.message || '请检查链接后重试'}`, 'error', 5000)
+      return null
     } finally {
       if (progressToast) toastDismiss(progressToast) // 进度 toast 完成即退——stale/失败路径也收
     }
@@ -202,7 +207,8 @@ export function useExternalImport({
   // 同权（local_pl_ 前缀全链已通：mix 内容分享链/服务端镜像下载/持久化）。
   // 重复导入原地刷新曲目与元信息而不是再复制一份
   const importQQPlaylist = async (disstid) => {
-    await importProviderPlaylist({
+    const shellId = providerPlaylistShellId('qq', disstid)
+    const pl = await importProviderPlaylist({
       tag: 'QQ 歌单',
       failTag: 'QQ 歌单',
       input: disstid,
@@ -212,11 +218,22 @@ export function useExternalImport({
       emptyMsg: 'QQ 歌单为空或全部不可解析',
       fetch: () => musicApi.getQQPlaylist(disstid),
       build: buildQQSong,
-      shellIdOf: () => providerPlaylistShellId('qq', disstid),
+      shellIdOf: () => shellId,
       nameOf: (data) => data.name || `QQ 歌单 ${disstid}`,
-      coverOf: (data, tracks) => data.cover || tracks[0]?.al?.picUrl || '',
+      // 与 bili/yt 支同构：壳封面先过 httpsCover（https 页防 http 混拦），
+      // 缺席才落首曲封面
+      coverOf: (data, tracks) => httpsCover(data.cover || '') || tracks[0]?.al?.picUrl || '',
       creatorOf: (data) => data.creator || 'QQ 音乐',
     })
+    // 上游政策变化（QQ 已关匿名取流）的新约束提示，非普通运营引导：未配
+    // QQ_COOKIE 的部署里 qq 直取腿全灭——服务端词源匹配命中的曲可经网易
+    // 词源腿播放，未匹配的只剩「配置 Cookie」恢复直取。按真成功门控
+    // （importProviderPlaylist 返壳才算落地——历史壳在场时失败重导入
+    // 不得跟着发引导）；null（探测失败/态未知）不打扰——谎报配置指引
+    // 比少报更糟
+    if (pl && (await qqLoggedIn()) === false) {
+      toast('未配置 QQ Cookie——QQ 已关闭匿名取流：匹配词源的曲目可经网易源播放，配置 Cookie 恢复 QQ 直取', 'info', 8000)
+    }
   }
 
   // B 站收藏夹导入：fid/mlN/分享链 → local_pl_bili_<fid> 幂等壳——

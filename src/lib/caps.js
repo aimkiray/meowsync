@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { musicApi } from '../api/music.js'
+import { musicApi, qqStatusReset } from '../api/music.js'
 
 // 服务端能力投影（MA provider status 同思路）：持凭据的一侧算好布尔事实，
 // 前端只消费不猜测。缺省=无凭据（保守方向——误判不可播好过展示死链）
@@ -23,9 +23,14 @@ export async function loadServerCaps() {
   }
 }
 
-// 设置页改完 cookie 类凭据后重取——loaded 闩防的是重复拉，不是终身一次
+// 设置页改完 cookie 类凭据后重取——loaded 闩防的是重复拉，不是终身一次。
+// qqStatusReset 同挂：qqLoggedIn（music.js 的 /qq/status 会话级 memo——
+// 播放选腿/死腿文案/QQ 歌单导入引导 toast 的登录态判据）是独立于
+// serverCaps 的第二份缓存，只刷 caps 不复位会让新凭据态在选腿侧继续吃
+// 陈旧 false 到整页刷新
 export function refreshServerCaps() {
   loaded = false
   capsSeq++
+  qqStatusReset()
   return loadServerCaps()
 }

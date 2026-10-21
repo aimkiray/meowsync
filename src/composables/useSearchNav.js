@@ -304,7 +304,13 @@ export function useSearchNav({
       })
       savePlaylistsToStorage()
       await selectPlaylistAndShow(pl, { force: true })
-      toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首${data.truncated ? '，超出上限部分未导入' : ''}）`, 'success', 6000)
+      // matchedCount 透出与 importProviderPlaylist 的「词源匹配 N」同口径——
+      // QQ 匿名取流关停后，匹配数就是可经网易腿播/下的曲目数
+      const note = [
+        data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
+        data.truncated ? '超出上限部分未导入' : '',
+      ].filter(Boolean).join('，')
+      toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
     } catch (e) {
       if (!gates.mediaImport.isCurrent(myReq)) return
       toast('QQ 歌单导入失败: ' + apiErrorMessage(e), 'error', 5000)

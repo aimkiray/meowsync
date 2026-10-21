@@ -55,6 +55,9 @@ vi.mock('../../src/api/music.js', () => ({
   },
   parseLyrics: vi.fn(() => []),
   mergeTranslations: vi.fn((l) => l),
+  // QQ 登录态惰性单飞——缺省 null=「态未知按可能有处理」（不绕 qq 支、不
+  // 触发死腿文案），用例按面 mockResolvedValue(true/false) 定态
+  qqLoggedIn: vi.fn(async () => null),
 }))
 vi.mock('../../src/api/downloads.js', () => ({
   downloadsApi: {
@@ -90,7 +93,7 @@ vi.mock('../../src/api/sync.js', () => ({
   syncApi: { pull: vi.fn(), push: vi.fn() },
 }))
 
-import { musicApi, parseLyrics } from '../../src/api/music.js'
+import { musicApi, parseLyrics, qqLoggedIn } from '../../src/api/music.js'
 import { downloadsApi } from '../../src/api/downloads.js'
 import { aiApi } from '../../src/api/ai.js'
 import { syncApi } from '../../src/api/sync.js'
@@ -150,6 +153,7 @@ beforeEach(() => {
   musicApi.lyricAlign.mockResolvedValue(null)
   musicApi.retryMatch.mockResolvedValue(null)
   musicApi.getMatchState.mockResolvedValue(null)
+  qqLoggedIn.mockResolvedValue(null) // mockResolvedValue 跨用例残留——归位「态未知」缺省
   aiApi.status.mockResolvedValue({ enabled: false })
   aiApi.verifyLyric.mockResolvedValue({ ok: true })
 })
@@ -676,6 +680,160 @@ describe('usePlayer：裸前缀 id（缺 provider 对象的老持久化行）', 
     expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
       'local_pl_1', 'bv_BV1xx411c7mD', expect.objectContaining({ downloadVideo: false }))
     expect(howls[2].opts.src).toEqual(['http://api/dl/local_pl_1/bv_BV1xx411c7mD'])
+  })
+})
+
+describe('usePlayer：qq_ 回链梯（QQ 匿名取流关闭）', () => {
+  // '0034M8WL3V4oHC' 合 QQ_SONG_ID_RE 形态；neteaseId=词源绑定（解锁语义）
+  const qqSong = (extra) => song('qq_0034M8WL3V4oHC', extra)
+  const localPl = (t) => ({ id: 'local_pl_1', name: 'P', tracks: [t], isLocal: true })
+
+  it('选腿三态①：neteaseId+明确未登录 → 主解析直走网易支，不烧必死的匿名 QQ 腿', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.anything())
+    expect(musicApi.qqStreamUrl).not.toHaveBeenCalled()
+    expect(howls[0].opts.src).toEqual(['https://cdn.example/online.mp3'])
+  })
+
+  it('直走网易支败亡：_neFallback 腿闸收住——同一条网易链不白跑第三跳', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const qq = qqSong({ neteaseId: 555 })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(qq)
+    await player.playSong(qq)
+    // 首败 → _streamRetried 重解代（仍网易支二打）
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    // 再败：旧腿闸只看 !options._neFallback 会把同一条网易链放成第三跳——
+    // qqUseNetease 已记「本代主解析即网易支」，回链腿收住直落下载兜底
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(3))
+    expect(musicApi.getSongUrl).toHaveBeenCalledTimes(2) // ≤2：初腿+_streamRetried 重解
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      'local_pl_1', 'qq_0034M8WL3V4oHC', expect.anything())
+    expect(howls[2].opts.src).toEqual(['http://api/dl/local_pl_1/qq_0034M8WL3V4oHC'])
+  })
+
+  it('选腿三态②：neteaseId+已登录 → 照走 QQ 支（凭据在腿活）', async () => {
+    qqLoggedIn.mockResolvedValue(true)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(howls[0].opts.src).toEqual(['https://x/qq'])
+  })
+
+  it('选腿三态③：neteaseId+态未知(null) → 留 QQ 支——宁试死腿不误绕活腿', async () => {
+    qqLoggedIn.mockResolvedValue(null)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(howls[0].opts.src).toEqual(['https://x/qq'])
+  })
+
+  it('无 neteaseId：直走 QQ 支（登录态不进门）', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const { player } = makePlayer()
+    await player.playSong(qqSong())
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(howls[0].opts.src).toEqual(['https://x/qq'])
+  })
+
+  it('QQ 取流两级败亡+neteaseId → _neFallback 回链：重进代主解析走网易支', async () => {
+    qqLoggedIn.mockResolvedValue(true) // 已登录才先走 QQ 腿——才有「败亡回链」可演
+    const qq = qqSong({ neteaseId: 555 })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(qq)
+    await player.playSong(qq)
+    expect(howls[0].opts.src).toEqual(['https://x/qq'])
+    // 首败 → _streamRetried 重解代（仍 QQ 支，retry=1 旁路服务端正缓存读）
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    expect(musicApi.qqStreamUrl).toHaveBeenLastCalledWith('0034M8WL3V4oHC', '', undefined, 1)
+    // 再败 → _neFallback 回链代：主解析换网易支建第三例
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(3))
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.anything())
+    expect(howls[2].opts.src).toEqual(['https://cdn.example/online.mp3'])
+  })
+
+  it('QQ 取流败亡无 neteaseId → 不进回链腿，直落下载兜底钉 _localFile', async () => {
+    const qq = qqSong()
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(qq)
+    await player.playSong(qq)
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
+    // 无词源可回——跳过回链直进 ownSource 下载兜底（提交→completed 短路）
+    await vi.waitFor(() => expect(howls).toHaveLength(3))
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(downloadsApi.downloadSongToServer).toHaveBeenCalledWith(
+      'local_pl_1', 'qq_0034M8WL3V4oHC', expect.anything())
+    expect(howls[2].opts.src).toEqual(['http://api/dl/local_pl_1/qq_0034M8WL3V4oHC'])
+  })
+
+  it('_neFallback 已在位再败：回链一条命——不再重进，直落下载兜底', async () => {
+    const qq = qqSong({ neteaseId: 555 })
+    const { player, deps } = makePlayer()
+    deps.selectedPlaylist.value = localPl(qq)
+    await player.playSong(qq, { _neFallback: true })
+    // 回链位主解析即走网易支
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.anything())
+    expect(musicApi.qqStreamUrl).not.toHaveBeenCalled()
+    expect(howls[0].opts.src).toEqual(['https://cdn.example/online.mp3'])
+    // 网易支首败 → _streamRetried 重解（仍网易支二打）；再败 → 回链位
+    // 已在（不循环）→ 下载兜底
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(downloadsApi.downloadSongToServer).toHaveBeenCalled())
+    expect(musicApi.getSongUrl).toHaveBeenCalledTimes(2)
+  })
+
+  it('qq_ 无词源全链败亡+明确未登录 → 终态文案指引 Cookie/重匹配非通用重试', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const qq = qqSong() // 无 neteaseId
+    const { player, deps } = makePlayer()
+    // single_song_ 壳过不了提交形态闸——兜底链直落失败终态
+    deps.selectedPlaylist.value = { id: 'single_song_9', name: 'S', tracks: [qq] }
+    await player.playSong(qq)
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/QQ 已关闭匿名取流/))
+    expect(player.playbackError.value).toMatch(/重匹配词源.*配置 QQ Cookie|配置 QQ Cookie/)
+    expect(player.playbackError.value).not.toMatch(/音频加载失败/)
+  })
+
+  it('qq_ 有词源回链代也全灭 → 终态归通用句（有词源不报 Cookie 指引）', async () => {
+    qqLoggedIn.mockResolvedValue(true)
+    const qq = qqSong({ neteaseId: 555 })
+    const { player } = makePlayer() // 无歌单上下文——下载兜底进不去直落尾部
+    await player.playSong(qq)
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')                    // → 重解代
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')                    // → _neFallback 网易支
+    await vi.waitFor(() => expect(howls).toHaveLength(3))
+    howls[2].fire('onloaderror', 0, 'MEDIA_ERR')                    // → 无腿可回直落尾
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
+    expect(player.playbackError.value).not.toMatch(/Cookie/)
+  })
+
+  it('登录态未知(null)的 qq 死腿：终态归通用句不谎报配置指引', async () => {
+    qqLoggedIn.mockResolvedValue(null)
+    const qq = qqSong()
+    const { player } = makePlayer() // 无歌单上下文——直落 onloaderror 尾
+    await player.playSong(qq)
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
+    expect(player.playbackError.value).not.toMatch(/Cookie/)
   })
 })
 

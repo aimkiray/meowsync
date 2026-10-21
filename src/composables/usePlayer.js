@@ -1,6 +1,6 @@
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { Howl, Howler } from 'howler'
-import { musicApi, parseLyrics, mergeTranslations } from '../api/music.js'
+import { musicApi, qqLoggedIn, parseLyrics, mergeTranslations } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
 import { apiErrorMessage } from '../api/http.js'
 import { aiApi } from '../api/ai.js'
@@ -619,6 +619,19 @@ export function usePlayer({
       }
     }
 
+    // qq_ 死腿终态文案：QQ 上游已关匿名取流——绑了网易词源的曲根本走不到
+    // 这（主解析/回链位已把播放换成网易腿），到这的 qq 曲必是「无词源绑
+    // 定」的纯 qq 腿；通用「点击重试」句对它指引失真（重试同样必败）。
+    // 仅「明确未配 Cookie」（===false）给可操作出口；null（探测失败/态
+    // 未知）与 true 归通用句——谎报「去配 Cookie」比少报更误导。
+    // _localFile 钉档败是盘上工件本体坏非取流死——同样归通用句。
+    // 非 qq 曲/有词源曲短路归 null——惰性单飞，不白打 /qq/status
+    const qqAnonDeadEndText = async (song, options = {}) =>
+      (song.qq || QQ_SONG_ID_RE.test(String(song.id))) && !song.neteaseId
+      && !options._localFile && (await qqLoggedIn()) === false
+        ? 'QQ 已关闭匿名取流：该曲未匹配网易词源——可在菜单重匹配词源，或在设置页配置 QQ Cookie'
+        : null
+
     // 在线流彻底失效后的兜底（SABR 闸控的 YouTube 自适应流/签名批量耗尽、
     // 本地档解码再败的实际救法）：先查服务器有没有已下载工件，没有就触发
     // 服务器下载、完成后续播本地文件——用户口径「不能在线放就先下载下来」。
@@ -630,6 +643,9 @@ export function usePlayer({
     const playDownloadedCopy = async (song, playlistId, options, seq) => {
       if (seq !== playSeq) return
       songSwitching.value = true // 下载等待期维持切换态——底栏别装死
+      // qq_ 死腿终态文案惰性单飞：非 qq/有词源曲判定内部短路归 null 不触
+      // 状态探测；下方四处失败终态共用一份不重复判
+      const qqDeadEndP = qqAnonDeadEndText(song, options)
       try {
         // audioReady 是工件维度判定（音频档在盘即可）——比全工件合取的
         // downloaded 松：歌词/封面档缺失不该挡住在盘的 mp3/m4a；跨歌单
@@ -662,8 +678,10 @@ export function usePlayer({
           if (Array.isArray(pl?.tracks) && !plHasSong(pl, song)) {
             pl = findDownloadAddrPlaylist(song) ?? null
             if (!pl) {
+              const msg = (await qqDeadEndP) || '音频加载失败，点击播放键或重新点歌可重试'
+              if (seq !== playSeq) return // qqLoggedIn await 窗内换代——旧代不盖新代
               songSwitching.value = false
-              playbackError.value = '音频加载失败，点击播放键或重新点歌可重试'
+              playbackError.value = msg
               return
             }
             playlistId = pl.id // 顶替寻址：探测/提交/轮询全换这张单
@@ -676,8 +694,10 @@ export function usePlayer({
           // audioPlaylistId 跨歌单寻址本就不消费 playlistId
           const plKey = String(playlistId ?? '')
           if (!NETEASE_ID_RE.test(plKey) && !MIRROR_PLAYLIST_ID_RE.test(plKey)) {
+            const msg = (await qqDeadEndP) || '音频加载失败，点击播放键或重新点歌可重试'
+            if (seq !== playSeq) return // qqLoggedIn await 窗内换代——旧代不盖新代
             songSwitching.value = false
-            playbackError.value = '音频加载失败，点击播放键或重新点歌可重试'
+            playbackError.value = msg
             return
           }
           toast('在线源不可用，先下载到服务器再播…', 'info')
@@ -737,8 +757,12 @@ export function usePlayer({
         }
         if (seq !== playSeq) return // 等下载期间播放已换代——静默弃
         if (audioPlId === null) {
+          // qq_ 无词源死腿到这（服务端下载链同撞匿名墙）换可操作指引——
+          // 「仍在进行」对它是不兑现的许诺
+          const msg = (await qqDeadEndP) || '在线源不可用，服务器下载仍在进行——完成后可重播'
+          if (seq !== playSeq) return // qqLoggedIn await 窗内换代——旧代不盖新代
           songSwitching.value = false
-          playbackError.value = '在线源不可用，服务器下载仍在进行——完成后可重播'
+          playbackError.value = msg
           return
         }
         toast('已切换本地已下载文件播放', 'info')
@@ -748,8 +772,10 @@ export function usePlayer({
       } catch {
         // 代次闸：同 id 连点的旧代 catch 不得把错误文案写进新代的界面
         if (seq === playSeq) {
+          const msg = (await qqDeadEndP) || '音频加载失败，点击播放键或重新点歌可重试'
+          if (seq !== playSeq) return // qqLoggedIn await 窗内又换代——二次确认
           songSwitching.value = false
-          playbackError.value = '音频加载失败，点击播放键或重新点歌可重试'
+          playbackError.value = msg
         }
       }
     }
@@ -877,6 +903,11 @@ export function usePlayer({
         // 别在各回调里重撒形态判断
         const ownSource = !!(song.bilibili || song.youtube || song.qq || bvM || ytM || qqM)
 
+        // QQ 登录态预取（惰性单飞，失败归 null 不炸）：下方 qq 支选腿
+        // （neteaseId&&明确未登录→网易支）与死腿终态文案都消费它——先点火
+        // 烧缓存，等走到消费点 promise 大多已 resolve
+        if (song.qq || qqM) void qqLoggedIn()
+
         // 获取歌曲播放URL：自有源端点每次重解签名再 302 进 audio-proxy，URL
         // 不落库——B 站 /bilibili/stream 重解 playurl、YouTube /youtube/stream
         // 重解 Innertube（YT_PROXY 恢复后在线位可用；败亡经 onloaderror→
@@ -888,6 +919,15 @@ export function usePlayer({
         // 还原；yt_ 的 videoId 即 id 内嵌段；qq_ 的 mediaMid 缺省由服务端
         // pickStreamUrl 详情回填兜底——三源参数面都能从 id 单解，放过去会落
         // getSongUrl(前缀id) 死路（网易云端点不吃这形态）
+        //
+        // qq 支选腿判定提为代内局部（songUrlData qq 支与 onloaderror 的
+        // _neFallback 腿闸同消费一份）：QQ 上游已关匿名取流——neteaseId 词源
+        // 绑定的曲在「明确未登录」时不烧必死的匿名腿直走网易支，_neFallback
+        // 回链位同样落网易支；null（探测失败/态未知）按「可能有」留 QQ 支——
+        // 宁试死腿不误绕活腿。(song.qq||qqM) 前置短路：bv_/yt_ 词源绑定曲
+        // neteaseId 同在场——不白打 /qq/status 探测（惰性单飞仍只被 qq 曲点火）
+        const qqUseNetease = !!((song.qq || qqM) && song.neteaseId
+          && (options._neFallback || (await qqLoggedIn()) === false))
         const songUrlData = localPlId !== null
           ? { url: downloadsApi.songFileUrl(localPlId, song.id, 'audio') }
           : isFileTrackId(song.id)
@@ -904,8 +944,10 @@ export function usePlayer({
               ? { url: musicApi.youtubeStreamUrl(song.youtube?.videoId || ytM?.[1],
                   'audio', '', options._streamRetried ? 1 : 0) }
             : song.qq || qqM
-              ? { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '',
-                  song.qq?.mediaMid, options._streamRetried ? 1 : 0) }
+              ? (qqUseNetease
+                ? await musicApi.getSongUrl(song.neteaseId, abortSignal)
+                : { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '',
+                    song.qq?.mediaMid, options._streamRetried ? 1 : 0) })
               : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
@@ -1018,7 +1060,9 @@ export function usePlayer({
             if (isStale()) return
             handleSongEnd()
           },
-          onloaderror: (id, error) => {
+          // async：仅尾部 qq 死腿文案一处 await——前缀（unload/isStale/各
+          // 回链腿）仍同步跑完，语义与旧同步版逐行等价
+          onloaderror: async (id, error) => {
             console.error('❌ 歌曲加载错误:', error)
             // 无论是否过期都回收实例；过期时不得触碰新歌的共享状态（含看门狗）
             newHowl.unload()
@@ -1032,7 +1076,9 @@ export function usePlayer({
               if (howl === newHowl) howl = null
               // _localTried 捎带失败档的寻址歌单：playDownloadedCopy 凭它避开
               // 再钉同一份坏档（真值语义不变——探测门照常跳过）
-              playSong(song, { ...options, _localTried: localPlId, preserveContext: true })
+              // void 标弃返 promise（同 :771 口径）：新代 playSong 同步前缀
+              // 抛错不挂 void 会成 unhandled rejection
+              void playSong(song, { ...options, _localTried: localPlId, preserveContext: true })
               return
             }
             // 流地址失效自愈：vault token 随服务重启蒸发（404）/上游签名
@@ -1043,7 +1089,23 @@ export function usePlayer({
               console.log('🔁 流地址可能已失效，重解重试:', song.name)
               if (howl === newHowl) howl = null
               clearHowlWatchdog()
-              playSong(song, { ...options, preserveContext: true, _streamRetried: true })
+              // void 标弃返 promise（同 :771 口径）：新代 playSong 同步前缀
+              // 抛错不挂 void 会成 unhandled rejection
+              void playSong(song, { ...options, preserveContext: true, _streamRetried: true })
+              return
+            }
+            // qq_ 回链：QQ 取流败亡且绑有网易词源 → 词源腿再活一次（解锁语义的
+            // 实体化——neteaseId 此前只供词/封面）。一条命防环：_neFallback
+            // 位到达后主解析即走 netease 支，再败不再回本腿。
+            // !qqUseNetease 闸：主解析已走网易支的代（明确未登录直走/
+            // _neFallback 回链位）不放行——否则同一条网易链白跑第三跳
+            if ((song.qq || qqM) && song.neteaseId && !options._neFallback && !qqUseNetease) {
+              console.log('🔁 QQ 取流败亡，回落绑定的网易词源:', song.name)
+              if (howl === newHowl) howl = null
+              clearHowlWatchdog()
+              // void 标弃返 promise（同 :771 口径）：新代 playSong 同步前缀
+              // 抛错不挂 void 会成 unhandled rejection
+              void playSong(song, { ...options, preserveContext: true, _neFallback: true })
               return
             }
             // 在线链全灭（SABR 闸控/签名耗尽）→ 外部源兜底：播服务器已下载
@@ -1062,12 +1124,18 @@ export function usePlayer({
                 return
               }
             }
+            // 先收本代看门狗——下方 await 窗内可能换代，跨代收狗会误杀新代
             clearHowlWatchdog()
+            // qq_ 死腿终态（无词源绑定+明确未登录）换可操作指引；非 qq/
+            // 有词源/态未知归 null 落通用重试句
+            const failText = (await qqAnonDeadEndText(song, options))
+              || '音频加载失败，点击播放键或重新点歌可重试'
+            if (isStale()) return // qqLoggedIn await 窗内播放已换代——旧代不盖新代共享态
             // 'error' 事件也可能在播放中途触发（CDN 断流），isPlaying 必须复位，
             // 否则 UI/MediaSession/远端都停在假播放态
             isPlaying.value = false
             songSwitching.value = false
-            playbackError.value = '音频加载失败，点击播放键或重新点歌可重试'
+            playbackError.value = failText
             if (currentAbortController === myController) currentAbortController = null
             if (howl === newHowl) howl = null
             savePlayerStateToStorage()

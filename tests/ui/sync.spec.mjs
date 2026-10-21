@@ -13,6 +13,8 @@ vi.mock('../../src/api/music.js', () => ({
     getPlaylistDetail: vi.fn(async () => null),
     getQqStatus: vi.fn(async () => null),
   },
+  // App.vue→usePlayer/useExternalImport 图按名链接——缺省 null=「态未知」
+  qqLoggedIn: vi.fn(async () => null),
 }))
 vi.mock('../../src/api/downloads.js', () => ({
   downloadsApi: { removeLocalMirror: vi.fn(async () => ({})) },
