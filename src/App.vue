@@ -64,6 +64,17 @@
 
       <!-- 主区：首页发现流 / 歌曲列表 / 搜索结果 / watch 播放页 / 下载管理 -->
       <main class="app-main">
+        <!-- 触屏下拉刷新指示：流内高跟随手势位移把内容推开（.app-main
+             flex 列首件）；刷新中钉阈高+转圈。纯视觉反馈——aria-hidden -->
+        <div
+          class="ptr-indicator"
+          :class="{ 'ptr-indicator--drag': ptrDragging }"
+          :style="{ height: `${ptrPullPx}px` }"
+          aria-hidden="true"
+        >
+          <span v-if="ptrRefreshing" class="pixel-loading"></span>
+          <i v-else class="ptr-grip" :class="{ 'ptr-grip--on': ptrPullPx >= PTR_THRESHOLD_PX }"></i>
+        </div>
         <HomeFeed
           v-if="centerView === 'home'"
           :recent-playlists="playlistHistory"
@@ -462,7 +473,7 @@ import { isConfirmOpen, resolveConfirm, toast, pixelConfirm } from './lib/feedba
 import { httpsCover, isResolvableTrackId } from './lib/url'
 import { readShareParams, consumeUrlShareParams } from './lib/share-params'
 import { LS_KEYS, readJSON, writeJSON } from './lib/storage'
-import { initSync, pullFromServer, markDirty, onRemoteApply, attachWriteHook } from './lib/sync'
+import { initSync, pullFromServer, markDirty, onRemoteApply, attachWriteHook, createPullRefresh, PTR_THRESHOLD_PX } from './lib/sync'
 import { createReqGate } from './lib/req-gate'
 import { trapTabKeydown } from './lib/focus-trap'
 import { usePlaylistLibrary } from './composables/usePlaylistLibrary'
@@ -1198,6 +1209,107 @@ export default {
     }
     window.addEventListener('keydown', onGlobalKeydown)
 
+    // ── 触屏下拉刷新（PTR）──
+    // 挂载形态：.app-main 自身不滚（flex 列），真滚动器在各视图内部——
+    // home→.home-feed、songs→.song-rows、search→.playlist-grid-wrap、
+    // settings→.settings-panel、downloads→外层网格(<xl)/.dql|.dtl-scroll(≥xl)。
+    // document 委托 + 触点祖先链向上找首个 overflow-y:auto|scroll 元素，
+    // 等价挂在每个视图的真滚动口上；不吃 app-shell 的 v-else 渲染时机
+    // 与视图切换重挂之苦。手势判定（顶缘 60px 起手/64px 触发阈/方向锁）
+    // 全收 lib/sync.js 的 createPullRefresh——本层只喂坐标与滚动态。
+    // 视图闸：只放列表类视图；watch 沉浸舞台排除（内滚口是侧栏面板体，
+    // 下拉语义是翻队列/歌词，不是刷新，且舞台主区根本无滚动器）。
+    // centerView 一切换视同 touchcancel：armed 期间 v-if 换视图会让
+    // ptrScroller 残留指向已卸载的滚动口——指示器在新视图出现、
+    // touchend 仍按旧手势判 refresh，故在途手势随旧视图一起作废。
+    // 监听全 passive——永不 preventDefault：顶缘下拉本无原生滚动位移
+    // 可抢，overscroll-behavior:contain 已兜住链式传导（style.css 注册
+    // 表），正常滚动/横滑零干扰；桌面无 touch 事件天然不触发。
+    const PTR_VIEWS = new Set(['home', 'songs', 'search', 'downloads', 'settings'])
+    const PTR_MAX_PX = 120 // 指示器跟随上限——手势位移可超过，视觉封顶
+    const ptrPullPx = ref(0)
+    const ptrDragging = ref(false)
+    const ptrRefreshing = ref(false)
+    const ptrGesture = createPullRefresh()
+    let ptrScroller = null
+
+    // 触点最近的可竖滚祖先（限 app-main 内）——overflow-y:auto|scroll
+    // 即「此刻可滚」的容器；找不到说明触点不在列表滚动口上
+    const findPtrScroller = (target, boundary) => {
+      for (let el = target; el && el !== boundary; el = el.parentElement) {
+        if (el.nodeType !== 1) continue
+        const oy = getComputedStyle(el).overflowY
+        if (oy === 'auto' || oy === 'scroll') return el
+      }
+      return null
+    }
+    const ptrReset = () => {
+      ptrGesture.cancel()
+      ptrDragging.value = false
+      ptrPullPx.value = 0
+      ptrScroller = null
+    }
+    const onPtrTouchStart = (e) => {
+      if (ptrRefreshing.value || e.touches.length !== 1) return
+      if (!PTR_VIEWS.has(centerView.value)) return
+      const main = e.target?.closest?.('.app-main')
+      if (!main) return // 侧栏抽屉/teleport 弹层/壳外区域不响应
+      const scroller = findPtrScroller(e.target, main)
+      if (!scroller) return
+      const t = e.touches[0]
+      const armed = ptrGesture.start({
+        x: t.clientX,
+        y: t.clientY,
+        topOffset: t.clientY - scroller.getBoundingClientRect().top,
+        scrollTop: scroller.scrollTop,
+      })
+      if (armed) {
+        ptrScroller = scroller
+        ptrDragging.value = true
+      }
+    }
+    const onPtrTouchMove = (e) => {
+      if (!ptrGesture.active) return
+      // 多指（捏合等）/滚动器丢失——手势作废不吞事件
+      if (e.touches.length !== 1 || !ptrScroller) { ptrReset(); return }
+      const t = e.touches[0]
+      const px = ptrGesture.move({ x: t.clientX, y: t.clientY, scrollTop: ptrScroller.scrollTop })
+      if (!ptrGesture.active) { // 横滑判负/容器被拖离顶——手势作废
+        ptrDragging.value = false
+        ptrPullPx.value = 0
+        ptrScroller = null
+        return
+      }
+      ptrPullPx.value = Math.min(px, PTR_MAX_PX)
+    }
+    const onPtrTouchEnd = () => {
+      if (!ptrGesture.active) return
+      const verdict = ptrGesture.end()
+      ptrDragging.value = false
+      ptrScroller = null
+      if (verdict !== 'refresh') { ptrPullPx.value = 0; return } // 未过阈回弹
+      ptrRefreshing.value = true
+      ptrPullPx.value = PTR_THRESHOLD_PX // 刷新期钉阈高——完成后回弹收拢
+      // pullFromServer 自带在途去重：在途即复用同一 Promise
+      Promise.resolve(pullFromServer()).finally(() => {
+        ptrRefreshing.value = false
+        ptrPullPx.value = 0
+      })
+    }
+    // 仅触屏设备注册——'ontouchstart' 判定与媒体查询 (pointer:coarse)
+    // 同域；桌面鼠标流零开销零行为变化
+    const ptrTouchDevice = 'ontouchstart' in window
+    if (ptrTouchDevice) {
+      document.addEventListener('touchstart', onPtrTouchStart, { passive: true })
+      document.addEventListener('touchmove', onPtrTouchMove, { passive: true })
+      document.addEventListener('touchend', onPtrTouchEnd, { passive: true })
+      document.addEventListener('touchcancel', ptrReset, { passive: true })
+      // 视图切换收走在途手势（与 touchcancel 同口径）——ptrScroller 残留
+      // 指向已卸载滚动口会让指示器/判定漂到新视图；桌面流手势永不武装，
+      // 本 watch 一并收在触屏闸内
+      watch(centerView, ptrReset)
+    }
+
     watch([
       showVipSongs,
       isFullscreenPlayerOpen,
@@ -1330,9 +1442,15 @@ export default {
       }
     })
 
-    // 组件卸载：音频/定时器/WS 由各 composable 自收；此处只摘全局键盘监听
+    // 组件卸载：音频/定时器/WS 由各 composable 自收；此处摘全局监听
     onBeforeUnmount(() => {
       window.removeEventListener('keydown', onGlobalKeydown)
+      if (ptrTouchDevice) {
+        document.removeEventListener('touchstart', onPtrTouchStart)
+        document.removeEventListener('touchmove', onPtrTouchMove)
+        document.removeEventListener('touchend', onPtrTouchEnd)
+        document.removeEventListener('touchcancel', ptrReset)
+      }
     })
 
     return {
@@ -1377,6 +1495,11 @@ export default {
       centerView,
       sidebarOpen,
       watchTab,
+      // 下拉刷新指示（模板消费；手势本体在 setup 内不外泄）
+      ptrPullPx,
+      ptrDragging,
+      ptrRefreshing,
+      PTR_THRESHOLD_PX,
       autoplayOn,
       searching,
       searchSongResults,
@@ -1503,6 +1626,29 @@ export default {
 </script>
 
 <style scoped>
+/* 下拉刷新指示条：app-main flex 列首件——流内高把手势位移翻译成
+   内容下移（transform 方案要另开裁口父级，流内盒最省）。默认高 0
+   不可见；--drag 关过渡保 1:1 跟手，松手走 .18s 回弹/收拢 */
+.ptr-indicator {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 0;
+  overflow: hidden;
+  transition: height .18s var(--ease-ink, ease-out);
+}
+.ptr-indicator--drag { transition: none; }
+/* 拉手：36px 墨丝块——过阈回墨提示「可放」；方角守 print-grid 零圆角律 */
+.ptr-grip {
+  width: 36px;
+  height: 3px;
+  background: var(--ink-30);
+  transition: background-color .15s;
+}
+.ptr-grip--on { background: var(--ink); }
+.ptr-indicator .pixel-loading { flex-shrink: 0; }
+
 /* 点歌台「前缀指路行」：归入搜索区——全局 .asp-search 的底发丝线
    让位给本行底缘，不然搜索行与指路行之间横一条线把「注释关系」
    切断。pg-label--dim 供 12px/mono/淡墨，这里只管盒距与折行 */

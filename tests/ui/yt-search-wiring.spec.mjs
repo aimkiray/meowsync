@@ -54,6 +54,7 @@ vi.mock('../../src/api/http.js', () => ({
 }))
 vi.mock('../../src/api/sync.js', () => ({
   syncApi: { pull: vi.fn(), push: vi.fn() },
+  openSyncEvents: vi.fn(() => null),
 }))
 vi.mock('../../src/api/ai.js', () => ({
   aiApi: {

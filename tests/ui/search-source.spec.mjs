@@ -47,7 +47,7 @@ const { musicApi, syncApi, toast } = vi.hoisted(() => ({
   toast: vi.fn(() => 1),
 }))
 vi.mock('../../src/api/music.js', () => ({ musicApi }))
-vi.mock('../../src/api/sync.js', () => ({ syncApi }))
+vi.mock('../../src/api/sync.js', () => ({ syncApi, openSyncEvents: vi.fn(() => null) }))
 vi.mock('../../src/api/auth.js', () => ({ authApi: {} }))
 vi.mock('../../src/api/downloads.js', () => ({
   downloadsApi: {

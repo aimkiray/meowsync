@@ -91,6 +91,7 @@ vi.mock('../../src/lib/theme.js', () => ({ glitchBurst: vi.fn(), applyRemoteThem
 // 同步引擎的传输层桩——远端应用用例经真 pullFromServer 送达 player-state
 vi.mock('../../src/api/sync.js', () => ({
   syncApi: { pull: vi.fn(), push: vi.fn() },
+  openSyncEvents: vi.fn(() => null),
 }))
 
 import { musicApi, parseLyrics, qqLoggedIn } from '../../src/api/music.js'
