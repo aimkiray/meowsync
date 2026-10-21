@@ -149,6 +149,23 @@ describe('F1：外部导入进度 toast 终态回收', () => {
     const id = progressToastId('正在导入分享歌单')
     expect(toastDismiss).toHaveBeenCalledWith(id)
   })
+
+  it('QQ 单曲 resolve：进度 toast 单位词是「歌曲」；bili/yt 缺省照旧「视频」', async () => {
+    // 三源共用「正在解析 X …」句式——unit 随 spec 定词，「QQ音乐 视频」
+    // 对单曲形态措辞失真；未填 unit 的源缺省回落「视频」
+    musicApi.resolveQQ.mockResolvedValue({
+      mid: '002BBBbbb00002', name: '歌', artists: ['艺人'], duration: 100,
+    })
+    const { imp } = makeImport()
+    await imp.importQQ('qq:002BBBbbb00002')
+    expect(toast).toHaveBeenCalledWith('正在解析 QQ音乐 歌曲…', 'info', 30000)
+
+    musicApi.resolveBilibili.mockResolvedValue({
+      bvid: 'BV1xx411c7XE', title: 't', owner: 'o', cover: '', duration: 10,
+    })
+    await imp.importBilibili('BV1xx411c7XE')
+    expect(toast).toHaveBeenCalledWith('正在解析 B 站 视频…', 'info', 30000)
+  })
 })
 
 describe('L5：单曲分享导入过期请求不打扰', () => {
@@ -514,6 +531,23 @@ describe('M1：QQ 歌单卡「+ 收藏」走 /qq/playlist 导入链产完整壳'
     musicApi.getQQPlaylist.mockRejectedValue(new Error('上游挂'))
     await lib.addPlaylistToLibrary(QQ_CARD)
     expect(lib.userPlaylists.value).toHaveLength(0) // 失败不产空壳
+  })
+
+  it('壳封面：data.cover 经 httpsCover 升格——与 coverOf 同口径（https 页注入断言）', async () => {
+    // addPlaylistToLibrary 路径不读 location.href——桩只需 protocol
+    vi.stubGlobal('location', { protocol: 'https:' })
+    try {
+      musicApi.getQQPlaylist.mockResolvedValue({
+        name: '催专累了', creator: '念安娜', cover: 'http://y.gtimg.cn/pl.jpg',
+        tracks: [QQ_TRACK], truncated: false,
+      })
+      const lib = makeLib()
+      await lib.addPlaylistToLibrary(QQ_CARD)
+      const pl = lib.userPlaylists.value.find(p => String(p.id) === 'local_pl_qq_7097197259')
+      expect(pl.coverImgUrl).toBe('https://y.gtimg.cn/pl.jpg')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

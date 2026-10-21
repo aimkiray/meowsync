@@ -905,8 +905,12 @@ export function usePlayer({
 
         // QQ 登录态预取（惰性单飞，失败归 null 不炸）：下方 qq 支选腿
         // （neteaseId&&明确未登录→网易支）与死腿终态文案都消费它——先点火
-        // 烧缓存，等走到消费点 promise 大多已 resolve
-        if (song.qq || qqM) void qqLoggedIn()
+        // 烧缓存，等走到消费点 promise 大多已 resolve。
+        // localPlId 钉档代不点：songUrlData 三元先取本地档根本走不到 qq 支
+        // （选腿求值下方同闸短路）；档若败——探测命中代经 _localTried 换代
+        // 重走主链（新代自己再点）、钉档代死腿文案被 !options._localFile
+        // 短路，本代探测没有消费方，点了也是白打一跳 /qq/status
+        if (localPlId === null && (song.qq || qqM)) void qqLoggedIn()
 
         // 获取歌曲播放URL：自有源端点每次重解签名再 302 进 audio-proxy，URL
         // 不落库——B 站 /bilibili/stream 重解 playurl、YouTube /youtube/stream
@@ -925,8 +929,11 @@ export function usePlayer({
         // 绑定的曲在「明确未登录」时不烧必死的匿名腿直走网易支，_neFallback
         // 回链位同样落网易支；null（探测失败/态未知）按「可能有」留 QQ 支——
         // 宁试死腿不误绕活腿。(song.qq||qqM) 前置短路：bv_/yt_ 词源绑定曲
-        // neteaseId 同在场——不白打 /qq/status 探测（惰性单飞仍只被 qq 曲点火）
-        const qqUseNetease = !!((song.qq || qqM) && song.neteaseId
+        // neteaseId 同在场——不白打 /qq/status 探测（惰性单飞仍只被 qq 曲点火）。
+        // localPlId 钉档代同不进门：songUrlData 三元先取本地档，本代根本走
+        // 不到 qq 支——等探测只会白白拖住本地档起播；消费点（本式与下方
+        // _neFallback 腿闸）对本地档代也都没有意义，短路归 false
+        const qqUseNetease = !!(localPlId === null && (song.qq || qqM) && song.neteaseId
           && (options._neFallback || (await qqLoggedIn()) === false))
         const songUrlData = localPlId !== null
           ? { url: downloadsApi.songFileUrl(localPlId, song.id, 'audio') }
@@ -944,6 +951,14 @@ export function usePlayer({
               ? { url: musicApi.youtubeStreamUrl(song.youtube?.videoId || ytM?.[1],
                   'audio', '', options._streamRetried ? 1 : 0) }
             : song.qq || qqM
+              // 网易支取址抛错（isUnavailable/lastError）直落 playSong 尾
+              // catch「播放请求失败」——越过 onloaderror 的 ownSource→
+              // playDownloadedCopy 下载兜底梯，这是有界取舍不是疏漏：
+              // 确定性 isUnavailable 时服务端下载链回链同撞 freeTrialInfo
+              // fatal（终态等价，兜底也救不回）；「绑定 qq 当网易曲对待」
+              // 即数字 id 同口径——数字曲历来取址死不进兜底（末支
+              // getSongUrl(song.id) 同款）；瞬时故障的代价只是白烧一跳
+              // 可重试点播，不为它接兜底梯
               ? (qqUseNetease
                 ? await musicApi.getSongUrl(song.neteaseId, abortSignal)
                 : { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '',

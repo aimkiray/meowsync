@@ -16,6 +16,12 @@ const MIX_RESOLVE_CAP = 10   // bv_/yt_ 逐项 resolve——客户端预算共�
 const MIX_SHELL_CAP = 20     // mix 壳是分享导入快照，封顶个数防长期累积撞配额
 const SINGLE_SHELL_CAP = 10  // single_song_ 单曲分享壳同上
 
+// 单曲 resolve 单位词表：bili/yt 解的是视频稿，qq 解的是曲库「歌曲」——
+// 三源共用「正在解析 X 视频…」句式对单曲形态措辞失真。表置本域消费点旁：
+// MEDIA_IMPORT_SPECS 属 lib/external-songs.js（本域只读不扩形），lib 侧
+// 若日后补 unit 字段经下方展开合并自然覆盖本缺省
+const RESOLVE_UNIT = { bilibili: '视频', youtube: '视频', qq: '歌曲' }
+
 // importExternalMedia 的 kind → useSearchNav searchSource 立案戳词表
 //（'netease'|'qq'|'yt'|'bili'——结果页头源戳与行徽标共用此口径）
 const RESULT_SOURCE = { bilibili: 'bili', youtube: 'yt', qq: 'qq' }
@@ -53,7 +59,8 @@ export function useExternalImport({
   // 单行结果（showSingleResult），不建壳/不自动播；缺省走分享契约的
   // 壳+即播（?bili=/?yt=/?qq= 打开链与既有顶栏调用都不带 flag）
   const importExternalMedia = async (input, kind, opts = {}) => {
-    const spec = MEDIA_IMPORT_SPECS[kind]
+    // unit 合进 spec 副本：spec.unit 模板消费，缺省回落 RESOLVE_UNIT
+    const spec = { unit: RESOLVE_UNIT[kind] ?? '视频', ...MEDIA_IMPORT_SPECS[kind] }
     const myReq = gates.mediaImport.claim()
     // 占住 select 闸：resolve 慢（远端多跳），期间在途的 selectPlaylist
     // 回包不得在落壳之后盖掉 selectedPlaylist/songs
@@ -62,9 +69,9 @@ export function useExternalImport({
     searchQuery.value = '' // 提前清框——防用户重复回车并发多个 resolve
     // 长驻进度 toast 必须终态回收——成功/失败/作废/自动转跳路径都不能让
     // 「正在解析…」挂满 30s（useAddToPlaylist :252 同款范式）
-    const resolving = toast(`正在解析 ${spec.tag} 视频…`, 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
+    const resolving = toast(`正在解析 ${spec.tag} ${spec.unit}…`, 'info', 30000) // 覆盖 resolve 最坏耗时（~25s 匹配预算）
     try {
-      console.log(`${spec.icon} 解析 ${spec.tag} 视频:`, input)
+      console.log(`${spec.icon} 解析 ${spec.tag} ${spec.unit}:`, input)
       const data = await spec.resolve(input)
       // 解析期间用户点了别的歌/再导入——过期意图不得抢播放+强跳视图
       if (!gates.mediaImport.isCurrent(myReq)) return

@@ -2151,7 +2151,8 @@ export default {
   white-space: nowrap;
 }
 /* 行内来源徽标：song-tag 同型紧凑档换暗面 token（发丝边 + .64 白字，
-   11px 功能字地板线）——B站/YouTube/QQ音乐/本地上传，网易云/散曲不出牌 */
+   11px 功能字地板线）——全源覆盖：B站/YouTube/QQ音乐/本地上传/网易云
+   （纯数字 id 归名网易云），仅归不了名的 id 形态不出牌 */
 .queue-src {
   flex-shrink: 0;
   padding: 1px 5px;
