@@ -6,6 +6,8 @@ import { ref, nextTick } from 'vue'
 
 vi.mock('../../src/api/sync.js', () => ({
   syncApi: { pull: vi.fn(), push: vi.fn() },
+  // 本 spec 不演 SSE——返回 null 等价无 EventSource 环境，initSync 不挂订阅
+  openSyncEvents: vi.fn(() => null),
 }))
 // usePlaylistLibrary 的上游依赖桩——本 spec 只用它验证 updatedAt 打点与远端重建
 vi.mock('../../src/api/music.js', () => ({
@@ -554,6 +556,29 @@ describe('usePlaylistLibrary：歌单 updatedAt 打点与远端重建', () => {
     expect(readJSON(LS_KEYS.PLAYLISTS)[0].updatedAt).toBe(T0 + 5000)
   })
 
+  it('song-meta-updated 的 track 载荷带 preserveUpdatedAt:true 不冒充簿记写', () => {
+    // App.vue @song-meta-updated 直绑 savePlaylistsToStorage——实参是上游/
+    // 导入来的 track 对象。簿记位只认模块私有哨兵：脏 track 自带的同名字段
+    // 仿不了，否则真实编辑被登基线不抬戳——fp 已更新→后续 save 永不重判，
+    // 编辑在 LWW 与推送双侧隐形（本用例钉死这个伪装回归）
+    writeJSON(LS_KEYS.PLAYLISTS, [
+      { id: 'old1', name: '旧单', updatedAt: 100, trackCount: 0 },
+    ])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+    vi.setSystemTime(T0 + 5000)
+    lib.userPlaylists.value[0].name = '真改'
+    lib.savePlaylistsToStorage({ preserveUpdatedAt: true, id: 't-1', name: '某曲' })
+    const stored = readJSON(LS_KEYS.PLAYLISTS)[0]
+    expect(stored.name).toBe('真改')
+    // 伪装载荷不触发保戳——真实编辑照常抬戳（指纹+盖戳同批完成）
+    expect(stored.updatedAt).toBe(T0 + 5000)
+    // 且上一趟已把愈后/编辑后指纹登了基线——再带脏 track 载荷空存不重判
+    vi.setSystemTime(T0 + 9000)
+    lib.savePlaylistsToStorage({ preserveUpdatedAt: true, id: 't-2' })
+    expect(readJSON(LS_KEYS.PLAYLISTS)[0].updatedAt).toBe(T0 + 5000)
+  })
+
   it('远端 playlist 落 LS 后内存库重建到同一事实源', async () => {
     const lib = makeLib()
     writeJSON(LS_KEYS.PLAYLISTS, [{ id: 'x', name: '旧X', updatedAt: 1 }])
@@ -587,8 +612,11 @@ describe('usePlaylistLibrary：歌单 updatedAt 打点与远端重建', () => {
 describe('usePlaylistLibrary：存量封面协议相对形自愈（healCoverUrl）', () => {
   // 旧部署导入时服务端 logo 原样透传 '//host/...' 落进 coverImgUrl——
   // proxiedCoverUrl 对 '//' 恒归 ''（fail-closed），存量封面恒落 fallback；
-  // 读盘 sanitize 升格 https 并经 healedAny→savePlaylistsToStorage 落盘一次到位
-  it("coverImgUrl '//host' 升格 https：内存态与落盘态同愈，干净单不冤枉抬戳", () => {
+  // 读盘 sanitize 升格 https 并经 healedAny→savePlaylistsToStorage 落盘一次到位。
+  // 回写走 preserveUpdatedAt 簿记写：自愈是本地展示修复不是用户编辑——
+  // 被修单保留原 updatedAt（抬成当前刻=伪造 LWW 论据，本机陈旧单会压死
+  // 远端真实更新的版本并脏推回写污染全端）
+  it("coverImgUrl '//host' 升格 https：内存态与落盘态同愈，updatedAt 保原戳不抬", () => {
     // 种子故意不带 trackCount——存根多出的 trackCount:0 即「回写发生过」的观测口
     writeJSON(LS_KEYS.PLAYLISTS, [
       { id: 'q1', name: 'QQ单', coverImgUrl: '//music-file.y.qq.com/x.jpg', updatedAt: 100 },
@@ -597,10 +625,11 @@ describe('usePlaylistLibrary：存量封面协议相对形自愈（healCoverUrl�
     const lib = makeLib()
     lib.loadPlaylistsFromStorage()
     expect(lib.userPlaylists.value[0].coverImgUrl).toBe('https://music-file.y.qq.com/x.jpg')
+    expect(lib.userPlaylists.value[0].updatedAt).toBe(100) // 内存态同口径保戳
     const stored = readJSON(LS_KEYS.PLAYLISTS)
     expect(stored[0].coverImgUrl).toBe('https://music-file.y.qq.com/x.jpg')
     expect(stored[0].trackCount).toBe(0)   // 回写走的真是 savePlaylistsToStorage 投影
-    expect(stored[0].updatedAt).toBe(T0)   // 自愈=内容真变→抬戳，愈合形态随同步收敛他端
+    expect(stored[0].updatedAt).toBe(100)  // 自愈≠编辑——原戳保留，远端更新版仍判赢
     expect(stored[1].coverImgUrl).toBe('https://ok.jpg')
     expect(stored[1].updatedAt).toBe(100)  // 无病单指纹不变——同批回写不冤枉盖戳
   })
@@ -642,7 +671,62 @@ describe('usePlaylistLibrary：存量封面协议相对形自愈（healCoverUrl�
     expect(readJSON(LS_KEYS.PLAYLISTS)[1].tracks[0].al.picUrl).toBe('//x/y.jpg')
   })
 
-  it('远端落盘的 // 封面同样自愈——applyRemoteLibrary 共用 sanitize 口径', async () => {
+  it('多单混合批：被修单保原戳不抬；随后真实编辑照抬（愈后指纹已登记不重判）', () => {
+    writeJSON(LS_KEYS.PLAYLISTS, [
+      { id: 'q1', name: 'QQ单', coverImgUrl: '//y.gtimg.cn/x.jpg', updatedAt: 100 },
+      { id: 'n1', name: '好单', coverImgUrl: 'https://ok.jpg', updatedAt: 200, trackCount: 1 },
+    ])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+    // 混合批同写：只有 q1 被修——连同批干净单一起，两单戳都纹丝不动
+    expect(readJSON(LS_KEYS.PLAYLISTS).map(p => p.updatedAt)).toEqual([100, 200])
+    expect(lib.userPlaylists.value.map(p => p.updatedAt)).toEqual([100, 200])
+
+    // 回归钉①：正常编辑路径照抬（preserveUpdatedAt 不得吃掉「真改过」的打点）
+    vi.setSystemTime(T0 + 1000)
+    lib.userPlaylists.value[1].name = '好单改'
+    lib.savePlaylistsToStorage()
+    let stored = readJSON(LS_KEYS.PLAYLISTS)
+    expect(stored[1].updatedAt).toBe(T0 + 1000)
+    // 且被修单仍原戳——愈后指纹已登记基线，普通 save 不会把愈合差异重判抬戳
+    expect(stored[0].updatedAt).toBe(100)
+
+    // 回归钉②：被修单自身真被编辑时照抬——保戳是「这次写不是编辑」而非永久冻结
+    vi.setSystemTime(T0 + 2000)
+    lib.userPlaylists.value[0].name = 'QQ单改'
+    lib.savePlaylistsToStorage()
+    stored = readJSON(LS_KEYS.PLAYLISTS)
+    expect(stored[0].updatedAt).toBe(T0 + 2000)
+  })
+
+  it('自愈不抬 LWW 戳：远端更新版仍赢过本机愈后陈旧单（投毒回归）', async () => {
+    // 陈旧单：封面 '//' 触发自愈，updatedAt=100 落后于远端修好版 200。
+    // 若自愈把 updatedAt 抬成当前刻 T0——remoteTs(200)<localTs(T0) 远端判输，
+    // 陈旧值永久压住修好版并脏推回写服务端（本用例钉死这个回归）
+    writeJSON(LS_KEYS.PLAYLISTS, [
+      { id: 'x', name: '陈旧X', coverImgUrl: '//y.gtimg.cn/r.jpg', updatedAt: 100 },
+    ])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+    expect(readJSON(LS_KEYS.PLAYLISTS)[0].updatedAt).toBe(100) // 自愈落盘未伪造戳
+    initSync()
+    syncApi.pull.mockResolvedValue({
+      code: 200,
+      items: [{
+        key: 'playlist:x',
+        value: { id: 'x', name: '远端修好X', coverImgUrl: 'https://ok.jpg' },
+        updatedAt: 200, seq: 30,
+      }],
+      serverTime: 200,
+    })
+    await pullFromServer()
+    // remoteTs(200) >= localTs(100) → 远端赢：陈旧单被修好版替换
+    expect(readJSON(LS_KEYS.PLAYLISTS)[0].name).toBe('远端修好X')
+    expect(readJSON(LS_KEYS.PLAYLISTS)[0].updatedAt).toBe(200)
+    expect(lib.userPlaylists.value[0].name).toBe('远端修好X')
+  })
+
+  it('远端落盘的 // 封面同样自愈——applyRemoteLibrary 共用 sanitize 口径且保 remoteTs', async () => {
     writeJSON(LS_KEYS.PLAYLISTS, [{ id: 'x', name: '旧X', updatedAt: 1 }])
     const lib = makeLib()
     lib.loadPlaylistsFromStorage()
@@ -658,7 +742,11 @@ describe('usePlaylistLibrary：存量封面协议相对形自愈（healCoverUrl�
     })
     await pullFromServer()
     expect(lib.userPlaylists.value[0].coverImgUrl).toBe('https://y.gtimg.cn/r.jpg')
-    expect(readJSON(LS_KEYS.PLAYLISTS)[0].coverImgUrl).toBe('https://y.gtimg.cn/r.jpg')
+    const stored = readJSON(LS_KEYS.PLAYLISTS)[0]
+    expect(stored.coverImgUrl).toBe('https://y.gtimg.cn/r.jpg')
+    // 远端采纳单的 remoteTs 也是真实 LWW 论据——自愈回写不得顶成愈合时刻
+    expect(stored.updatedAt).toBe(999)
+    expect(lib.userPlaylists.value[0].updatedAt).toBe(999)
   })
 })
 
