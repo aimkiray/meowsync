@@ -454,7 +454,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           // size 优先 provider/HEAD 实测值；youtube 无 size 但知道
           // br+durationSec——按 br×时长估值（标称码率，量级对即可，
           // 至少比残片字节数更接近真相）
-          ext: extOf(checked.url),
+          // ext 优先 provider 显式供值：B 站 .m4s 链 path 尾缀/mime= 参数
+          // 两条 extOf 推导通道都拿不到真实容器（会错落 mp3 壳）
+          ext: unblocked.ext || extOf(checked.url),
           size: sizeBytes
             || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null)
             || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),

@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const { ENDPOINTS } = require('../src/server/services/netease/endpoints.js');
 const { callNeteaseApi } = require('../src/server/services/netease/index.js');
 const { ALLOWED_APIS } = require('../src/server/routes/music.js');
-const { pickByDuration } = require('../src/server/services/unlock/match.js');
+const { pickByDuration, degradedKeyword } = require('../src/server/services/unlock/match.js');
 const { cookieToJson, cookieObjToString } = require('../src/server/services/netease/request.js');
 const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('../src/server/services/unlock/index.js');
 const { hasQqCookie } = require('../src/server/lib/qq.js');
@@ -52,10 +52,39 @@ test('pickByDuration：±5s 内命中、跨窗拒绝、无基准放前三', () =
   assert.deepEqual(pickByDuration([{ s: null }], 326000, c => c.s), []);
 });
 
-test('解锁源梯队只引用已注册 provider', () => {
+// 搜索真空降级词钉板：youtube/bilibili 两源共用同一实现（match.js）——
+// 剥尾缀括号群重建 name - artists；词中括号、剥后分隔符尾、无 artists
+// 形态逐钉
+test('degradedKeyword：只剥尾段连续括号群，重建 name - artists', () => {
+  const info = (name, artists, keyword) => ({ name, artists, keyword });
+  assert.equal(
+    degradedKeyword(info('ぱられループ を歌ってみた (2024 Radio Edit)', ['Jeku'])),
+    'ぱられループ を歌ってみた - Jeku');
+  // 连续尾缀括号群整串剥掉 + 全/半角混排
+  assert.equal(degradedKeyword(info('曲名【Cover】(2024 Remaster)', ['a'])), '曲名 - a');
+  // 剥后残留分隔符尾一并清（「曲名 - (Live)」→「曲名」）
+  assert.equal(degradedKeyword(info('曲名 - (Live)', ['a'])), '曲名 - a');
+  // 词中括号是合法本名成分不剥
+  assert.equal(degradedKeyword(info('Song (feat. X) 尾', ['a'])), 'Song (feat. X) 尾 - a');
+  // 无 artists → 裸 name 形态
+  assert.equal(degradedKeyword(info('曲名 (Live)', [])), '曲名');
+  // 无尾缀括号原样重建（调用方据此与 keyword 比对判「无可剥」省第二跳）
+  assert.equal(degradedKeyword(info('繭色', ['sajou no hana'])), '繭色 - sajou no hana');
+});
+
+test('解锁源梯队只引用已注册 provider，序为 pyncmd→youtube→bilibili', () => {
+  // 序即降级链：pyncmd 直解优先，youtube 兜底，bilibili 第三源收尾——
+  // 顺序错排会让更薄/更敏感的匿名面先挨打
+  assert.deepEqual(PLAYBACK_SOURCES, ['pyncmd', 'youtube', 'bilibili']);
+  assert.deepEqual(DOWNLOAD_SOURCES, ['pyncmd', 'youtube', 'bilibili']);
   for (const s of [...PLAYBACK_SOURCES, ...DOWNLOAD_SOURCES]) {
     assert.ok(PROVIDERS[s], `梯队引用了不存在的 provider: ${s}`);
     assert.equal(typeof PROVIDERS[s].resolve, 'function');
+    // forgetSong 是可选钩（编排层 p?.forgetSong?.() 调用）——pyncmd 无态不提供；
+    // 提供了就必须是函数（签名面钉板）
+    if (PROVIDERS[s].forgetSong !== undefined) {
+      assert.equal(typeof PROVIDERS[s].forgetSong, 'function', `${s}.forgetSong 须为函数`);
+    }
   }
 });
 
