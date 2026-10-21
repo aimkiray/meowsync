@@ -19,6 +19,7 @@ let aiScript = [];                 // askAiJson 依次返回
 let verdictRows = {};              // vkey → {ok}
 const verdictWrites = [];          // upsertVerdict 记录
 let askCalls = 0;
+let askArgs = null;              // 最近一次 askAiJson 实参（仲裁用例钉 prompt 候选面）
 let searchImpl = async () => ({ items: [] });
 let audioImpl = async () => [];
 const delCalls = [];               // getDb().prepare(sql).run(...args) 记录
@@ -33,7 +34,7 @@ seed('../src/server/lib/bilibili.js', {
 });
 seed('../src/server/lib/ai.js', {
   aiEnabled: () => aiOn,
-  askAiJson: async () => { askCalls += 1; return aiScript.length ? aiScript.shift() : null; },
+  askAiJson: async (opts) => { askCalls += 1; askArgs = opts; return aiScript.length ? aiScript.shift() : null; },
   aiModel: () => 'stub-model',
 });
 seed('../src/server/repositories/lyricAi.js', {
@@ -54,10 +55,18 @@ const mkInfo = (id) => ({ id, name: '目标曲', artists: ['目标歌手'], keyw
 const row = (bvid, sec = 200) => ({ bvid, title: `t-${bvid}`, author: `a-${bvid}`, durationSec: sec });
 const cand = (id) => ({ videoId: id, title: `t-${id}`, owner: `o-${id}`, durationSec: 200 });
 const reset = () => {
-  aiOn = true; aiScript = []; verdictRows = {}; verdictWrites.length = 0; askCalls = 0;
+  aiOn = true; aiScript = []; verdictRows = {}; verdictWrites.length = 0;
+  askCalls = 0; askArgs = null;
   searchImpl = async () => ({ items: [] });
   audioImpl = async () => [];
   delCalls.length = 0;
+};
+// console.info 捕获——仲裁留痕/否决语境的行断言（用完须 finally 还原）
+const captureInfo = () => {
+  const logs = [];
+  const orig = console.info;
+  console.info = (...a) => logs.push(a.join(' '));
+  return { logs, restore: () => { console.info = orig; } };
 };
 const ids = (r) => r.ordered.map(c => c.videoId);
 
@@ -102,7 +111,8 @@ test('零候选：搜索空回与时长筛全灭都回 null', async () => {
   aiOn = false;
   searchImpl = async () => ({ items: [] });
   assert.equal(await resolve(mkInfo('b4'), {}), null);
-  // 时长超窗（±5s 外）——有搜索结果但不配，照样 null
+  // 时长超窗（±5s 外）——筛空交 AI 仲裁池（新语义），AI 关闭原序放行后
+  // 取流全灭仍归 null（null 结局同、路径已换：不再是筛空早退）
   searchImpl = async () => ({ items: [row('BV1far', 240)] });
   assert.equal(await resolve(mkInfo('b5'), {}), null);
   // keyword/name 守门（youtube 同款）
@@ -327,4 +337,160 @@ test('forgetSong：死簿/冷却按曲前缀清 + bv_ 前缀 GLOB 删 verdict', 
   assert.deepEqual(delCalls[0].args, ['b16@bv_*'], 'GLOB 前缀 <sid>@bv_*');
   r = await aiRankCandidates(info, [cand('BVa'), cand('BVb')], null);
   assert.deepEqual(ids(r), ['BVa', 'BVb'], '死簿清后回原序');
+});
+
+// ── ±5s 时长筛全灭仲裁池（durationPool 三态池接线钉板，youtube 同款）───
+// ±5s 硬筛比编排层 DURATION_TOLERANCE(default 0.2)严一个量级——搬运稿件
+// 片头尾超窗却是真命候选（实机假阴性）：筛空不弃，全候选交 AI 仲裁
+test('±5s 全灭但有候选 → 不早退，全候选交 AI 仲裁，选中照常取流', async () => {
+  reset();
+  const info = mkInfo('bb1');                       // durationMs 200s
+  // 候选 215~220s 全超 ±5s 窗（7.5%~10% 偏差仍在编排层 0.2 闸内）
+  searchImpl = async () => ({ items: [row('BVx', 215), row('BVy', 220), row('BVz', 216)] });
+  aiScript = [{ pick: 2 }];
+  audioImpl = async ({ bvid }) => [{ url: `u-${bvid}`, mimeType: 'audio/mp4', br: 128000 }];
+  const cap = captureInfo();
+  let r;
+  try { r = await resolve(info, {}); } finally { cap.restore(); }
+  assert.equal(r.url, 'u-BVy', '仲裁后 AI 选中者照常取流');
+  // AI 收到全候选（非 ±5s 筛后空集）——候选行逐条在 prompt
+  assert.ok(askArgs, 'AI 必须被问到（仲裁池不该早退）');
+  for (const [i, id] of ['BVx', 'BVy', 'BVz'].entries()) {
+    assert.ok(askArgs.user.includes(`${i + 1}. t-${id}`), `候选 ${id} 应进 prompt`);
+  }
+  // 仲裁留痕：诊断链不许把「筛空交仲裁」写成「源未产出候选」
+  assert.ok(cap.logs.some(l => l.includes('bilibili: ±5s 时长筛全灭') && l.includes('3 候选交 AI 仲裁')),
+    `缺仲裁留痕，实得: ${JSON.stringify(cap.logs)}`);
+  assert.deepEqual(verdictWrites, [
+    { vkey: 'bb1@bv_BVy@stub-model', kind: 'unlock', ok: 1, detail: 't-BVy' },
+  ], 'AI 选定 + 取流验证成功 → bv_ 批准 verdict 照常落库');
+});
+
+test('仲裁池 AI 全否（pick:0）→ 照旧 null，不打 playurl', async () => {
+  reset();
+  const info = mkInfo('bb2');
+  searchImpl = async () => ({ items: [row('BVx', 215), row('BVy', 220)] });
+  aiScript = [{ pick: 0 }];
+  let audioCalls = 0;
+  audioImpl = async () => { audioCalls += 1; return [{ url: 'u', mimeType: 'audio/mp4', br: 1 }]; };
+  assert.equal(await resolve(info, {}), null);
+  assert.equal(audioCalls, 0, 'AI 全否 → ordered 空 → 不白打 playurl');
+});
+
+test('仲裁池照常过判定记忆——ok=0 候选不进 AI 池也不取流', async () => {
+  reset();
+  const info = mkInfo('bb3');
+  verdictRows['bb3@bv_BVx@stub-model'] = { ok: 0 };  // 否决记忆对仲裁池同口径
+  searchImpl = async () => ({ items: [row('BVx', 215), row('BVy', 220)] });
+  aiScript = [{ pick: 1 }];                        // 未判池只剩 BVy → pick:1
+  const seenAudio = [];
+  audioImpl = async ({ bvid }) => { seenAudio.push(bvid); return [{ url: `u-${bvid}`, mimeType: 'audio/mp4', br: 128000 }]; };
+  const r = await resolve(info, {});
+  assert.equal(r.url, 'u-BVy');
+  assert.ok(askArgs && !askArgs.user.includes('t-BVx'), 'ok=0 候选不进 AI prompt');
+  assert.deepEqual(seenAudio, ['BVy'], '被否决候选不取流');
+});
+
+test('仲裁池全被判定记忆否决 → null，否决留痕带仲裁语境', async () => {
+  reset();
+  aiOn = false;
+  const info = mkInfo('bb4');
+  verdictRows['bb4@bv_BVx@stub-model'] = { ok: 0 };
+  verdictRows['bb4@bv_BVy@stub-model'] = { ok: 0 };
+  searchImpl = async () => ({ items: [row('BVx', 215), row('BVy', 220)] });
+  const cap = captureInfo();
+  try { assert.equal(await resolve(info, {}), null); } finally { cap.restore(); }
+  assert.ok(cap.logs.some(l => l.includes('±5s 时长筛全灭')), '仲裁留痕在');
+  assert.ok(cap.logs.some(l => l.includes('全部被判定记忆否决') && l.includes('仲裁池')),
+    `否决语境须区分仲裁池，实得: ${JSON.stringify(cap.logs)}`);
+});
+
+// ── 墙期本地阈早退（WALL_EVIDENCE_CAP=2）─────────────────────────────
+// 仲裁池放宽后至多 8 候选 × ~3 跳 playurl/view/cid 自愈——墙期持续
+// -352/-412/-799 只是给风控喂信号。youtube 侧 sourceHealth.noteAuthRejected
+// 到阈 break 同口径；本域未接 sourceHealth，阈自守
+test('风控证据到阈（累计 2 记）早退：第三候选不再打，仍抛 transient 标记错', async () => {
+  reset();
+  aiOn = false;
+  const info = mkInfo('bw1');
+  searchImpl = async () => ({ items: [row('BVx'), row('BVy'), row('BVz')] });
+  const audioCalls = [];
+  audioImpl = async ({ bvid }) => { audioCalls.push(bvid); throw new Error('bilibili /x/player/playurl HTTP 412'); };
+  const err = await resolve(info, {}).then(() => null, (e) => e);
+  assert.ok(err instanceof Error, '风控全灭须抛错而非回 null');
+  assert.deepEqual(audioCalls, ['BVx', 'BVy'], '第 2 记墙证据即停打——第三候选不给风控喂信号');
+  assert.match(err.message, /2\/3/, '留痕带真实触墙计数');
+  assert.ok(TRANSIENT_LIKE_RE.test(err.message), `须归 transient，实得: ${err.message}`);
+});
+
+test('墙证据取累计数：混排死候选不抵消——第 2 记墙即停打剩余候选', async () => {
+  reset();
+  aiOn = false;
+  const info = mkInfo('bw2');
+  searchImpl = async () => ({ items: [row('BVw1'), row('BVd'), row('BVw2'), row('BVlast')] });
+  const audioCalls = [];
+  audioImpl = async ({ bvid }) => {
+    audioCalls.push(bvid);
+    if (bvid === 'BVd') return [];             // 空音轨=候选死（非墙证据）
+    throw new Error('bilibili /x/player/playurl code=-352 风控校验失败');
+  };
+  const err = await resolve(info, {}).then(() => null, (e) => e);
+  assert.deepEqual(audioCalls, ['BVw1', 'BVd', 'BVw2'],
+    '累计计数非连败——中间死候选不重置，BVlast 未出场');
+  assert.ok(TRANSIENT_LIKE_RE.test(err.message));
+  assert.equal(verdictWrites.length, 0, '墙证据与单次死都不升级 verdict');
+});
+
+// ── 仲裁池缺时长候选稳定划分（durOk 押尾）────────────────────────────
+// durationSecOf 坏形态归 0/字段缺席的候选胜出后，下游 estMs 只能走
+// br×size 的裸 HEAD 支路（upos CDN 无 Referer 必遭防盗链拦截）→ 对账
+// 静默缺位。划分保各组内相对序：可对账候选先试错，缺时长全灭后才被摸
+test('仲裁池缺时长候选稳定押尾：可对账候选保相对序在前先试错', async () => {
+  reset();
+  aiOn = false;
+  const info = mkInfo('bd1');                          // durationMs 200s
+  // 0/null 双坏形态都在池——全超 ±5s 窗进仲裁
+  searchImpl = async () => ({
+    items: [row('BVnodur', 0), row('BVx', 215), row('BVnulldur', null), row('BVy', 220)],
+  });
+  const seenAudio = [];
+  audioImpl = async ({ bvid }) => { seenAudio.push(bvid); return []; };  // 全灭看序
+  await resolve(info, {});
+  assert.deepEqual(seenAudio, ['BVx', 'BVy', 'BVnodur', 'BVnulldur'],
+    '正时长保相对序在前，缺时长（0 与 null 同病）保相对序押尾');
+});
+
+test('仲裁池划分不扰 AI 语义序：正时长选中仍在首；缺时长胜出留痕', async () => {
+  reset();
+  const info = mkInfo('bd2');
+  // unjudged=[BVnodur,BVx,BVy]，AI 选 BVy（pick:3）→ ranked=[BVy,BVnodur,BVx]
+  // 划分后 [BVy,BVx,BVnodur]——AI 选中（正时长）仍在首，缺时长只在全灭后被摸
+  searchImpl = async () => ({ items: [row('BVnodur', 0), row('BVx', 215), row('BVy', 220)] });
+  aiScript = [{ pick: 3 }];
+  const seenAudio = [];
+  audioImpl = async ({ bvid }) => {
+    seenAudio.push(bvid);
+    return bvid === 'BVnodur' ? [{ url: 'u-nodur', mimeType: 'audio/mp4', br: 128000 }] : [];
+  };
+  const cap = captureInfo();
+  let r;
+  try { r = await resolve(info, {}); } finally { cap.restore(); }
+  assert.deepEqual(seenAudio, ['BVy', 'BVx', 'BVnodur'],
+    'AI 选中的正时长候选仍首位取流；缺时长候选排最后');
+  assert.equal(r.url, 'u-nodur', '可对账候选全灭后缺时长候选兜底胜出');
+  assert.equal(r.durationSec, 0, '胜出形如实下发——缺时长字段不谎报');
+  assert.ok(cap.logs.some(l => l.includes('bilibili: 仲裁选中候选缺时长字段') && l.includes('对账缺位')),
+    `缺时长胜出须留痕，实得: ${JSON.stringify(cap.logs)}`);
+  assert.equal(verdictWrites.length, 0, 'AI 选中的 BVy 死、胜出非选定——都不落 verdict');
+});
+
+test('非仲裁池缺时长候选序不变：durationMs 缺席无对账基准——划分是仲裁池限定', async () => {
+  reset();
+  aiOn = false;
+  const info = { ...mkInfo('bd3'), durationMs: null };  // 无基准 → 前 3 原序非仲裁
+  searchImpl = async () => ({ items: [row('BVnodur', 0), row('BVx'), row('BVy')] });
+  const seenAudio = [];
+  audioImpl = async ({ bvid }) => { seenAudio.push(bvid); return []; };
+  await resolve(info, {});
+  assert.deepEqual(seenAudio, ['BVnodur', 'BVx', 'BVy'], '非仲裁路径原序不动——缺时长不押尾');
 });
