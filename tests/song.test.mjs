@@ -234,8 +234,9 @@ test('coverSizeUrl：四 provider 缩放语法 + 幂等 + 放行面', () => {
 
 test('proxiedCoverUrl：白名单包装/直通矩阵 + 幂等防腐化', () => {
   const proxied = (u) => `/img-proxy?url=${encodeURIComponent(u)}`
-  // 白名单域全包：ytimg/hdslb/126/gtimg/qpic/ggpht/kuwo；http 明文也包
-  //（服务端允许 http 回源——HTTP 部署下明文回链是合法面）
+  // 白名单域全包：ytimg/hdslb/126/gtimg/qpic/ggpht/kuwo 与 QQ 歌单封面实测
+  // 宿主 music-file./qpic.y.qq.com；http 明文也包（服务端允许 http 回源——
+  // HTTP 部署下明文回链是合法面）
   assert.equal(proxiedCoverUrl('https://i.ytimg.com/vi/x/hqdefault.jpg'),
     proxied('https://i.ytimg.com/vi/x/hqdefault.jpg'))
   assert.equal(proxiedCoverUrl('http://i0.hdslb.com/x.jpg'), proxied('http://i0.hdslb.com/x.jpg'))
@@ -245,6 +246,16 @@ test('proxiedCoverUrl：白名单包装/直通矩阵 + 幂等防腐化', () => {
   assert.equal(proxiedCoverUrl('https://p.qpic.cn/x/150.jpg'), proxied('https://p.qpic.cn/x/150.jpg'))
   assert.equal(proxiedCoverUrl('https://yt3.ggpht.com/a.jpg'), proxied('https://yt3.ggpht.com/a.jpg'))
   assert.equal(proxiedCoverUrl('https://a.kuwo.cn/x.jpg'), proxied('https://a.kuwo.cn/x.jpg'))
+  // QQ 歌单封面实机落点回归钉：music-file.y.qq.com（https）与
+  // qpic.y.qq.com（http 明文）两专用子域入白——漏收时 proxiedCoverUrl 归 ''
+  // → coverSizeUrl 假值 → 歌单封面渲染全落 pl-cover--fallback
+  assert.equal(proxiedCoverUrl('https://music-file.y.qq.com/mcover/T002R300x300M000x.jpg'),
+    proxied('https://music-file.y.qq.com/mcover/T002R300x300M000x.jpg'))
+  assert.equal(proxiedCoverUrl('http://qpic.y.qq.com/music_cover/x/150.jpg'),
+    proxied('http://qpic.y.qq.com/music_cover/x/150.jpg'))
+  // 白名单子域的下缀仍命中（===/endsWith 同口径，与其他域一致）
+  assert.equal(proxiedCoverUrl('https://cdn.qpic.y.qq.com/x.jpg'),
+    proxied('https://cdn.qpic.y.qq.com/x.jpg'))
   // 协议相对 '//host/x' 恒拒——白名单宿主也不升格（外联宿主即拒）
   assert.equal(proxiedCoverUrl('//p1.music.126.net/x.jpg'), '')
   assert.equal(proxiedCoverUrl('//i.ytimg.com/vi/x/hqdefault.jpg'), '')
@@ -257,6 +268,16 @@ test('proxiedCoverUrl：白名单包装/直通矩阵 + 幂等防腐化', () => {
   // 非标端口/userinfo 同归 ''（服务端必拒 + 凭据不外联）
   assert.equal(proxiedCoverUrl('https://example.com/x.jpg'), '')
   assert.equal(proxiedCoverUrl('https://foo.googleusercontent.com/x'), '')
+  // y.qq.com 收窄钉：白名单只收 music-file./qpic. 两个封面专用子域——
+  // 裸域与 musicu/fcg JSON 端点子域（u./c./shc）刻意不收（宽收=扩服务端
+  // 代取回源面）；白名单域作中段的尾挂与缺 . 边界的同型蹭名同归 ''
+  assert.equal(proxiedCoverUrl('https://y.qq.com/n/ryqq/playlist/8313'), '')
+  assert.equal(proxiedCoverUrl('https://u.y.qq.com/cgi-bin/musicu.fcg'), '')
+  assert.equal(proxiedCoverUrl('https://c.y.qq.com/x'), '')
+  assert.equal(proxiedCoverUrl('https://shc.y.qq.com/x'), '')
+  assert.equal(proxiedCoverUrl('https://qpic.y.qq.com.evil.com/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('https://evil-y.qq.com.attacker.com/x.jpg'), '')
+  assert.equal(proxiedCoverUrl('https://xqpic.y.qq.com/x.jpg'), '')
   assert.equal(proxiedCoverUrl('//example.com/x.jpg'), '')
   assert.equal(proxiedCoverUrl('https://example.com:8443/x.jpg'), '')
   assert.equal(proxiedCoverUrl('https://u:p@example.com/x.jpg'), '')

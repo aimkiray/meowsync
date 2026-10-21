@@ -51,6 +51,7 @@ seed('../src/server/services/netease-api.js', {
 const tasksRepo = require('../src/server/repositories/downloadTasks.js');
 const queuesRepo = require('../src/server/repositories/downloadQueues.js');
 const playlistsRepo = require('../src/server/repositories/playlists.js');
+const tracksRepo = require('../src/server/repositories/playlistTracks.js');
 const dm = require('../src/server/services/download-manager.js');
 
 const forgetCalls = () => events.filter(e => e.startsWith('forget:')).map(e => e.slice(7));
@@ -64,10 +65,11 @@ const forgetBeforeDispatch = () => {
 
 const seedPlaylist = (neteaseId) =>
   playlistsRepo.upsertPlaylist({ neteasePlaylistId: neteaseId, name: `pl-${neteaseId}` });
-const seedFailedTask = (playlistId, songId, queueId = null) => tasksRepo.createTask({
+const seedFailedTask = (playlistId, songId, queueId = null, providerData) => tasksRepo.createTask({
   playlistId, queueId, songId, songName: '歌', artist: '艺人',
   status: 'failed', errorMessage: '解锁失败，所有可用源均无匹配',
-  downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
+  downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false,
+  ...(providerData ? { providerData } : {})
 });
 // 派活发生在协程微任务链上——断言前先放一跳，等 downloadAudio 挂起点被触达
 const settleTick = () => new Promise(r => setImmediate(r));
@@ -200,4 +202,88 @@ test('retryQueue（无 failed 行早退）：pending/completed 队列零 forget 
   assert.equal(queuesRepo.findQueueById(queue.id).status, 'running');
 
   await dm.cancelQueue(queue.id); // 收尾：abort 挂起的协程
+});
+
+test('retryTask（qq_ relay 腿）：providerData.neteaseId 键一并清——旧快照口径', async () => {
+  // qq_ 任务必经 relay 腿（providerData.neteaseId → 网易云解锁链），负状态
+  // 按网易云曲 id 记账，songId 键下永无条目。无镜像行时旧任务快照是唯一
+  // neteaseId 来源——songId 键与 relay 键都必须出现在 forget 序列
+  events.length = 0; forgetThrowsOn = new Set();
+  const pl = seedPlaylist('778809');
+  const task = seedFailedTask(pl.id, 'qq_778809mid001', null,
+    { qq: { mediaMid: 'm01' }, neteaseId: '77880911' });
+
+  await dm.retryTask(task.id);
+  await settleTick();
+
+  assert.deepEqual(forgetCalls(), ['qq_778809mid001', '77880911'],
+    'songId 键与 relay neteaseId 键都要清');
+  assert.ok(forgetBeforeDispatch(), '负状态清理必须先于 dispatchStandalone');
+  assert.ok(audioCalls().includes('qq_778809mid001'), '复位后任务应真被派出去');
+});
+
+test('retryTask（qq_ relay 腿）：镜像行 neteaseId 已重匹配时新旧两键同清', async () => {
+  // 负状态按旧快照键积累；新镜像键顺带清无害——词源重匹配后两键漂移是常态
+  events.length = 0; forgetThrowsOn = new Set();
+  const pl = seedPlaylist('778810');
+  tracksRepo.replaceTracksForPlaylist(pl.id, [{
+    id: 'qq_778810mid002', name: '歌', ar: [{ name: '艺人' }],
+    qq: { mediaMid: 'm02' }, neteaseId: '77881022'
+  }]);
+  const task = seedFailedTask(pl.id, 'qq_778810mid002', null,
+    { qq: { mediaMid: 'm02' }, neteaseId: '77881011' });
+
+  await dm.retryTask(task.id);
+  await settleTick();
+
+  assert.deepEqual(forgetCalls(), ['qq_778810mid002', '77881011', '77881022'],
+    '旧快照与新镜像行的 neteaseId 键都要清');
+  // providerData 刷新照旧发生——新镜像行快照写回任务行
+  assert.equal(tasksRepo.findTaskById(task.id).providerData?.neteaseId, '77881022');
+});
+
+test('retryTask（neteaseId 白名单闸）：畸形值不进 forgetSongUnlock，只清 songId 键', async () => {
+  // providerData 是源私有 blob——脏值（非数字串）不得成为清簿键；
+  // NETEASE_ID_RE 闸后只剩 songId 键
+  events.length = 0; forgetThrowsOn = new Set();
+  const pl = seedPlaylist('778812');
+  const task = seedFailedTask(pl.id, 'qq_778812mid005', null,
+    { qq: { mediaMid: 'm05' }, neteaseId: '778812ab' });
+
+  await dm.retryTask(task.id);
+  await settleTick();
+
+  assert.deepEqual(forgetCalls(), ['qq_778812mid005'], '非数字 neteaseId 不得入清理集');
+  assert.ok(audioCalls().includes('qq_778812mid005'), '复位后任务应真被派出去');
+});
+
+test('retryQueue（qq_ relay 腿）：快照/镜像 neteaseId 入集、同键去重、脏值被闸', async () => {
+  // 批量口径同 retryTask：songId 键 + relay 键。第一行快照与镜像同键
+  // （未重匹配）——Set 去重只清一次；第二行快照是已下线的老词源 id，与
+  // 镜像新键并列；第三行快照 neteaseId 畸形被闸挡、镜像数字键仍入集
+  events.length = 0; forgetThrowsOn = new Set();
+  const pl = seedPlaylist('778811');
+  tracksRepo.replaceTracksForPlaylist(pl.id, [
+    { id: 'qq_778811mid003', name: '歌', ar: [{ name: '艺人' }], qq: { mediaMid: 'm03' }, neteaseId: '77881133' },
+    { id: 'qq_778811mid004', name: '歌2', ar: [{ name: '艺人' }], qq: { mediaMid: 'm04' }, neteaseId: '77881155' },
+    { id: 'qq_778811mid006', name: '歌3', ar: [{ name: '艺人' }], qq: { mediaMid: 'm06' }, neteaseId: '77881166' }
+  ]);
+  const queue = queuesRepo.createQueue({ playlistId: pl.id, name: pl.name, status: 'failed', totalTasks: 3 });
+  seedFailedTask(pl.id, 'qq_778811mid003', queue.id, { qq: { mediaMid: 'm03' }, neteaseId: '77881133' });
+  seedFailedTask(pl.id, 'qq_778811mid004', queue.id, { qq: { mediaMid: 'm04' }, neteaseId: '77881144' });
+  seedFailedTask(pl.id, 'qq_778811mid006', queue.id, { qq: { mediaMid: 'm06' }, neteaseId: '778811xx' });
+
+  await dm.retryQueue(queue.id);
+  await settleTick();
+
+  assert.deepEqual(forgetCalls().slice().sort(), [
+    '77881133', '77881144', '77881155', '77881166',
+    'qq_778811mid003', 'qq_778811mid004', 'qq_778811mid006'
+  ].sort(), 'songId 键 + 快照/镜像 neteaseId 键全清');
+  assert.equal(forgetCalls().filter(c => c === '77881133').length, 1, '同键去重只清一次');
+  assert.ok(!forgetCalls().includes('778811xx'), '非数字 neteaseId 不得入清理集');
+  assert.ok(forgetBeforeDispatch(), '全部负状态清理必须先于 startQueue 派活');
+  assert.equal(queuesRepo.findQueueById(queue.id).status, 'running');
+
+  await dm.cancelQueue(queue.id);
 });

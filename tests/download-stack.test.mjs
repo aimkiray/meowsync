@@ -138,6 +138,10 @@ test('file-downloader：downloadCover 非白名单/异 scheme coverUrl 按无封
     'https://ytimg.com.evil.example/x',
     'https://xytimg.com/x',
     'https://evil-126.net/x',
+    // y.qq.com 收窄同口径：裸域与 musicu/fcg 端点子域不在封面白名单
+    'https://y.qq.com/n/ryqq/playlist/8313',
+    'https://u.y.qq.com/cgi-bin/musicu.fcg',
+    'https://qpic.y.qq.com.evil.example/x',
   ]) {
     const err = await fd.downloadCover(bad, join(fs.DOWNLOAD_BASE_DIR, 't', 'covers', 'x.jpg'), null)
       .then(() => null, (e) => e);
@@ -146,10 +150,15 @@ test('file-downloader：downloadCover 非白名单/异 scheme coverUrl 按无封
   }
   // 白名单域过入口闸：用非标端口让下游 normalizeOutboundUrl 确定性快拒
   // （不打真网络）——能拿到「端口不受支持」说明闸没拦宿主
-  const okErr = await fd.downloadCover('https://i.ytimg.com:8443/vi/x/hqdefault.jpg',
-    join(fs.DOWNLOAD_BASE_DIR, 't', 'covers', 'y.jpg'), null).then(() => null, (e) => e);
-  assert.ok(okErr, '白名单域名应放行到取流阶段');
-  assert.ok(!/白名单/.test(okErr.message || ''), '白名单域名不得被入口闸误拒');
+  for (const ok of [
+    'https://i.ytimg.com:8443/vi/x/hqdefault.jpg',
+    'https://music-file.y.qq.com:8443/mcover/x.jpg', // 新入白的 QQ 歌单封面宿主同口径
+  ]) {
+    const okErr = await fd.downloadCover(ok,
+      join(fs.DOWNLOAD_BASE_DIR, 't', 'covers', 'y.jpg'), null).then(() => null, (e) => e);
+    assert.ok(okErr, `${ok} 白名单域名应放行到取流阶段`);
+    assert.ok(!/白名单/.test(okErr.message || ''), `${ok} 白名单域名不得被入口闸误拒`);
+  }
 });
 
 test('download-manager 对上层的 re-export 面完整', () => {

@@ -11,12 +11,18 @@
 //   hdslb.com              B 站图床（i0~i2.hdslb.com 封面、收藏夹图）
 //   music.126.net          网易图床 p* 子域（歌单/专辑封面；与音频白名单同款收窄口径）
 //   gtimg.cn / qpic.cn     QQ 音乐图床（y.gtimg.cn 专辑封面、p.qpic.cn 歌单封面）
+//   music-file.y.qq.com / qpic.y.qq.com
+//                          QQ 歌单封面实测宿主（imgurl/diss_cover/logo 落点——
+//                          https 侧与 http 明文侧）；收窄两个专用子域而非全
+//                          y.qq.com：u./c./shc 是 musicu/fcg JSON 端点域，
+//                          宽入会扩大「任意人让服务器代取」的回源面
 //   kuwo.cn                酷我系 CDN——与音频白名单同口径保留给可选源/自定义封面
 export const IMG_PROXY_HOSTS = [
   'ytimg.com', 'ggpht.com',
   'hdslb.com',
   'music.126.net',
   'gtimg.cn', 'qpic.cn',
+  'music-file.y.qq.com', 'qpic.y.qq.com', // QQ 歌单封面 CDN（音乐文件/封面专用子域——非全 y.qq.com，收窄服务面）
   'kuwo.cn',
 ]
 

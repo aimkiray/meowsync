@@ -120,6 +120,14 @@ test('img-proxy：白名单外域/蹭名/尾挂/IP 字面量/嵌套自链 → 40
     'https://evil.example/x.png',
     'https://xytimg.com/x.jpg',            // 蹭名：不是 .ytimg.com 后缀
     'https://ytimg.com.evil.com/x.jpg',    // 尾挂：白名单域是中间段
+    // y.qq.com 收窄钉：白名单只收 music-file./qpic. 两个封面专用子域——
+    // 裸域与 musicu/fcg JSON 端点子域（u./c./shc）不收，宽收=扩代取回源面
+    'https://y.qq.com/n/ryqq/playlist/8313', // 裸 y.qq.com 不入白
+    'https://u.y.qq.com/cgi-bin/musicu.fcg', // musicu/fcg 端点子域同拒
+    'https://shc.y.qq.com/x.jpg',            // 兄弟子域不在封面宿主之列
+    'https://qpic.y.qq.com.evil.com/x.jpg',  // 尾挂：白名单域是中间段
+    'https://evil-y.qq.com.attacker.com/x.jpg', // 尾挂 attacker.com 同理
+    'https://xqpic.y.qq.com/x.jpg',          // 蹭名：缺 . 边界的前缀同型
     'https://127.0.0.1/x.png',             // IP 字面量天然不命中后缀表
     'https://169.254.169.254/latest/meta', // 云元数据
     'http://localhost/img-proxy?url=x', // 嵌套自链：我方域不在白名单
@@ -190,6 +198,12 @@ test('img-proxy：http 明文回链放行；FQDN 尾点与 userinfo 被归一化
   assert.equal(fetchCalls.at(-1).url, 'https://i.ytimg.com/vi/x/hqdefault.jpg');
   assert.equal((await img('https://user:pw@i0.hdslb.com/x.png')).status, 200);
   assert.equal(fetchCalls.at(-1).url, 'https://i0.hdslb.com/x.png');
+  // QQ 歌单封面实测宿主过白名单闸：music-file.y.qq.com（https 侧）与
+  // qpic.y.qq.com（http 明文侧）——回源 URL 逐字节透传到上游
+  assert.equal((await img('https://music-file.y.qq.com/mcover/x.jpg')).status, 200);
+  assert.equal(fetchCalls.at(-1).url, 'https://music-file.y.qq.com/mcover/x.jpg');
+  assert.equal((await img('http://qpic.y.qq.com/mcover/x.jpg')).status, 200);
+  assert.equal(fetchCalls.at(-1).url, 'http://qpic.y.qq.com/mcover/x.jpg');
 });
 
 test('img-proxy：YT 族命中 isYoutubeHost → fetch 吃 ytDispatcher 桩且跳过公网校验', async () => {
