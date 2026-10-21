@@ -44,6 +44,13 @@ describe('proxiedCoverUrl：异 scheme 与协议相对全拒，同源/白名单�
     expect(proxiedCoverUrl('https://i.ytimg.com/vi/x/hqdefault.jpg'))
       .toBe(proxied('https://i.ytimg.com/vi/x/hqdefault.jpg'))
     expect(proxiedCoverUrl('http://i0.hdslb.com/x.jpg')).toBe(proxied('http://i0.hdslb.com/x.jpg'))
+    // QQ 歌单封面实测宿主入白（https 与 http 明文两侧）；裸 y.qq.com 收窄不收
+    expect(proxiedCoverUrl('https://music-file.y.qq.com/mcover/x.jpg'))
+      .toBe(proxied('https://music-file.y.qq.com/mcover/x.jpg'))
+    expect(proxiedCoverUrl('http://qpic.y.qq.com/mcover/x.jpg'))
+      .toBe(proxied('http://qpic.y.qq.com/mcover/x.jpg'))
+    expect(proxiedCoverUrl('https://y.qq.com/n/ryqq/playlist/8313')).toBe('')
+    expect(proxiedCoverUrl('https://u.y.qq.com/cgi-bin/musicu.fcg')).toBe('')
     expect(proxiedCoverUrl('https://example.com/x.jpg')).toBe('')
     expect(proxiedCoverUrl('https://i.ytimg.com:8443/x')).toBe('')
     expect(proxiedCoverUrl('https://u:p@i.ytimg.com/x')).toBe('')

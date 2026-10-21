@@ -7,6 +7,7 @@ import { toast } from '../lib/feedback.js'
 import { isLocalPlaylistId, isSingleSongShellId, externalArtistName, externalCoverUrl, applyTrackOverrides, slimTrack } from '../lib/song.js'
 import { SAVED_QUEUE_PREFIX, providerPlaylistShellId } from '../shared/predicates.js'
 import { applyTrackOrder, groupTracksByArtist, moveTrackByIds } from '../lib/track-order.js'
+import { httpsCover } from '../lib/url.js'
 import { buildQQSong, upsertProviderShell } from '../lib/external-songs.js'
 
 const PLAYLISTS_STORAGE_KEY = LS_KEYS.PLAYLISTS
@@ -264,7 +265,9 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
             shellId: providerPlaylistShellId('qq', disstid),
             tracks,
             name: data.name || playlist.name || `QQ 歌单 ${disstid}`,
-            coverImgUrl: data.cover || playlist.coverImgUrl || tracks[0]?.al?.picUrl || '',
+            // data.cover 与 useExternalImport.coverOf 同口径：httpsCover 包封
+            //（https 页防 http 混拦），缺席才落卡面/首曲封面
+            coverImgUrl: httpsCover(data.cover || '') || playlist.coverImgUrl || tracks[0]?.al?.picUrl || '',
             creator: data.creator || playlist.creator?.nickname || 'QQ 音乐',
           })
           savePlaylistsToStorage()

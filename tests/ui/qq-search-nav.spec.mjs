@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 
-const { musicApi, toast } = vi.hoisted(() => ({
+const { musicApi, toast, qqLoggedIn } = vi.hoisted(() => ({
   musicApi: {
     searchQQSongs: vi.fn(),
     searchQQPlaylists: vi.fn(),
@@ -17,8 +17,10 @@ const { musicApi, toast } = vi.hoisted(() => ({
     getPlaylistDetail: vi.fn(),
   },
   toast: vi.fn(() => 1),
+  // 卡路径 Cookie 引导消费的惰性单飞——缺省 null=「态未知」不触发引导
+  qqLoggedIn: vi.fn(async () => null),
 }))
-vi.mock('../../src/api/music.js', () => ({ musicApi }))
+vi.mock('../../src/api/music.js', () => ({ musicApi, qqLoggedIn }))
 vi.mock('../../src/api/http.js', () => ({
   default: { get: vi.fn(), post: vi.fn() },
   API_BASE_URL: 'http://api.test',
@@ -68,6 +70,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
   toast.mockReturnValue(1)
+  qqLoggedIn.mockResolvedValue(null) // mockResolvedValue 跨用例残留——归位「态未知」缺省
   musicApi.searchQQSongs.mockResolvedValue({ songs: [T('001AAAaaa00001')], total: 600 })
   musicApi.searchQQPlaylists.mockResolvedValue({ playlists: [CARD], total: 46689 })
   musicApi.getQQPlaylist.mockResolvedValue({
@@ -184,6 +187,58 @@ describe('useSearchNav：QQ 歌单卡打开（导入链）', () => {
     await nav.openSearchPlaylist(CARD)
     expect(toast).toHaveBeenCalledWith(
       '已导入 QQ 歌单「催专累了」（2 首，词源匹配 2，超出上限部分未导入）', 'success', 6000)
+  })
+
+  it('壳封面：data.cover 经 httpsCover 升格（https 页注入断言），缺席落卡面封面', async () => {
+    // httpsCover 仅 https 页升级——openQqPlaylistCard 真走 selectPlaylistAndShow
+    // →pushNavState→buildNavUrl 读 window.location.href，桩 location 必须
+    // 带可读 href（缺 href 会在 new URL 炸掉，把成功路径误收进 catch）
+    vi.stubGlobal('location', { protocol: 'https:', href: window.location.href })
+    try {
+      musicApi.getQQPlaylist.mockResolvedValue({
+        name: 'x', creator: 'x', cover: 'http://y.gtimg.cn/pl.jpg', tracks: [T('005GGGggg00005')],
+      })
+      const { nav, deps } = makeNav()
+      await nav.openSearchPlaylist(CARD)
+      expect(deps.userPlaylists.value[0].coverImgUrl).toBe('https://y.gtimg.cn/pl.jpg')
+
+      // data.cover 缺席/空串：落卡面 coverImgUrl（兜底链不动）
+      deps.userPlaylists.value = []
+      musicApi.getQQPlaylist.mockResolvedValue({
+        name: 'x', creator: 'x', cover: '', tracks: [T('005GGGggg00005')],
+      })
+      await nav.openSearchPlaylist({ ...CARD, coverImgUrl: 'http://card/c.jpg' })
+      expect(deps.userPlaylists.value[0].coverImgUrl).toBe('http://card/c.jpg')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('导入成功 + 明确未登录 → Cookie 引导 toast（与成功 toast 叠放同发）', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const { nav } = makeNav()
+    await nav.openSearchPlaylist(CARD)
+    // 与 importQQPlaylist 同政策：成功 toast 与引导 info 叠放是既有观感
+    expect(toast).toHaveBeenCalledWith(
+      '已导入 QQ 歌单「催专累了」（1 首）', 'success', 6000)
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringContaining('未配置 QQ Cookie'), 'info', 8000)
+  })
+
+  it('已登录/态未知/导入失败不发引导——按真成功门控', async () => {
+    const { nav } = makeNav()
+    qqLoggedIn.mockResolvedValue(true)
+    await nav.openSearchPlaylist(CARD)
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('Cookie'), 'info', 8000)
+
+    qqLoggedIn.mockResolvedValue(null) // 探测失败按「可能有」——不谎报配置指引
+    await nav.openSearchPlaylist(CARD)
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('Cookie'), 'info', 8000)
+
+    qqLoggedIn.mockResolvedValue(false) // 明确未登录但导入失败——壳未落地不发
+    musicApi.getQQPlaylist.mockRejectedValueOnce(new Error('上游挂'))
+    await nav.openSearchPlaylist(CARD)
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('Cookie'), 'info', 8000)
   })
 
   it('非 qq 卡走原 selectPlaylist 路径——不打 QQ 接口', async () => {

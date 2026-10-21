@@ -1,10 +1,10 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
-import { musicApi } from '../api/music.js'
+import { musicApi, qqLoggedIn } from '../api/music.js'
 import { apiErrorMessage } from '../api/http.js'
 import { toast, toastDismiss } from '../lib/feedback.js'
 import { writeNavParams, readNavParams, resolveNavView } from '../lib/navUrl.js'
 import { buildBilibiliSong, buildQQSong, buildYouTubeSong, upsertProviderShell } from '../lib/external-songs.js'
-import { providerPlaylistShellId } from '../lib/url.js'
+import { httpsCover, providerPlaylistShellId } from '../lib/url.js'
 import { prefSearchSource } from '../lib/prefs.js'
 
 // 导航+搜索域：URL 可寻址视图（YTM 式 history 栈）、顶栏双区搜索（歌单+单曲）、
@@ -299,7 +299,9 @@ export function useSearchNav({
         shellId: providerPlaylistShellId('qq', disstid),
         tracks,
         name: data.name || card.name || `QQ 歌单 ${disstid}`,
-        coverImgUrl: data.cover || card.coverImgUrl || tracks[0]?.al?.picUrl || '',
+        // data.cover 与 useExternalImport.coverOf 同口径：httpsCover 包封
+        //（https 页防 http 混拦），缺席才落卡面/首曲封面
+        coverImgUrl: httpsCover(data.cover || '') || card.coverImgUrl || tracks[0]?.al?.picUrl || '',
         creator: data.creator || card.creator?.nickname || 'QQ 音乐',
       })
       savePlaylistsToStorage()
@@ -311,6 +313,13 @@ export function useSearchNav({
         data.truncated ? '超出上限部分未导入' : '',
       ].filter(Boolean).join('，')
       toast(`已导入 QQ 歌单「${pl.name}」（${tracks.length} 首${note ? `，${note}` : ''}）`, 'success', 6000)
+      // 与 useExternalImport.importQQPlaylist 同政策的 Cookie 引导：QQ 已关
+      // 匿名取流——壳已落地（upsert+选中）才算真成功，明确未配 Cookie
+      // （===false）才给可操作出口；null（探测失败/态未知）不打扰。成功
+      // toast 与引导 info 叠放是既有观感（顶栏导入链同款），不去重
+      if ((await qqLoggedIn()) === false) {
+        toast('未配置 QQ Cookie——QQ 已关闭匿名取流：匹配词源的曲目可经网易源播放，配置 Cookie 恢复 QQ 直取', 'info', 8000)
+      }
     } catch (e) {
       if (!gates.mediaImport.isCurrent(myReq)) return
       toast('QQ 歌单导入失败: ' + apiErrorMessage(e), 'error', 5000)

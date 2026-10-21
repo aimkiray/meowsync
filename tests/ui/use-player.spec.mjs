@@ -835,6 +835,26 @@ describe('usePlayer：qq_ 回链梯（QQ 匿名取流关闭）', () => {
     await vi.waitFor(() => expect(player.playbackError.value).toMatch(/音频加载失败/))
     expect(player.playbackError.value).not.toMatch(/Cookie/)
   })
+
+  it('本地档代不打 /qq/status：探测命中/_localFile 钉档都跳过状态探测', async () => {
+    qqLoggedIn.mockResolvedValue(false) // 即便明确未登录——本地档代连预取点火都没有
+    const { player } = makePlayer()
+    // 探测命中代（audioReady）：songUrlData 三元先取档走不到 qq 支——
+    // 预取与选腿求值同被 localPlId 首合取短路，起播不等 /qq/status
+    downloadsApi.getSongDownloadStatus.mockResolvedValue({
+      data: { audioReady: true, audioPlaylistId: 7 },
+    })
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    expect(howls[0].opts.src).toEqual(['http://api/dl/7/qq_0034M8WL3V4oHC'])
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(musicApi.qqStreamUrl).not.toHaveBeenCalled()
+    expect(qqLoggedIn).not.toHaveBeenCalled()
+
+    // _localFile 钉档代：src 直钉 /file——同口径不探测
+    await player.playSong(qqSong({ neteaseId: 555 }), { _localFile: 'local_pl_1' })
+    expect(howls[1].opts.src).toEqual(['http://api/dl/local_pl_1/qq_0034M8WL3V4oHC'])
+    expect(qqLoggedIn).not.toHaveBeenCalled()
+  })
 })
 
 describe('usePlayer：队列与接续', () => {
