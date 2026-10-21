@@ -163,3 +163,60 @@ test('全否冷却按候选集生效：同集跳过 AI、新候选进榜即重�
   assert.equal(askCalls, 2);
   assert.equal(r.pickedId, 'w');
 });
+
+// 搜索真空降级钉板：只在 items 零条目时剥歌名尾缀版本修饰重试一次——
+// 时长筛空/AI 全否是「搜到了但不配」，换词重搜没有依据不该触发
+test('resolve：首搜零条目触发降级重试——剥尾缀括号重建 name - artists', async () => {
+  reset();
+  const info = {
+    id: 'd1', name: 'ぱられループ を歌ってみた (2024 Radio Edit)',
+    artists: ['Jeku'], keyword: 'ぱられループ を歌ってみた (2024 Radio Edit) - Jeku',
+    durationMs: 200000,
+  };
+  const seen = [];
+  searchImpl = async (kw) => { seen.push(kw); return seen.length === 1 ? [] : [cand('y')]; };
+  aiOn = false;
+  resolveStreamsImpl = async (vid) => ({ streams: [{ url: `u-${vid}`, br: 128 }] });
+  const r = await resolve(info, {});
+  assert.equal(seen.length, 2, '零条目必须起第二跳');
+  assert.equal(seen[0], info.keyword, '首跳用原 keyword');
+  assert.equal(seen[1], 'ぱられループ を歌ってみた - Jeku', '次跳剥 (2024 Radio Edit) 尾缀重建');
+  assert.equal(r.url, 'u-y');
+});
+
+test('resolve：非零条目不降级——name 带尾缀括号但首搜有候选只打一跳', async () => {
+  reset();
+  const info = {
+    id: 'd2', name: '曲名 (Live)', artists: ['a'],
+    keyword: '曲名 (Live) - a', durationMs: 200000,
+  };
+  const seen = [];
+  searchImpl = async (kw) => { seen.push(kw); return [cand('y')]; };
+  aiOn = false;
+  resolveStreamsImpl = async (vid) => ({ streams: [{ url: `u-${vid}`, br: 128 }] });
+  const r = await resolve(info, {});
+  assert.equal(seen.length, 1, '有候选即消费——版本后缀是否可剥与本路无关');
+  assert.equal(r.url, 'u-y');
+});
+
+test('resolve：剥无可剥（无尾缀括号）零条目不白打第二跳；降级仍零回 null', async () => {
+  reset();
+  // 尾缀无括号（繭色型）——剥后词与原词相同，第二跳注定同结果必须省
+  const info = {
+    id: 'd3', name: '繭色', artists: ['sajou no hana'],
+    keyword: '繭色 - sajou no hana', durationMs: 200000,
+  };
+  const seen = [];
+  searchImpl = async (kw) => { seen.push(kw); return []; };
+  assert.equal(await resolve(info, {}), null);
+  assert.equal(seen.length, 1, 'degraded===keyword 时重试无意义——只打一跳');
+  // 多段尾缀连剥 + 全/半角混排（【Cover】(2024 Remaster) 一串两段）
+  const info2 = {
+    id: 'd4', name: '曲名【Cover】(2024 Remaster)', artists: ['a'],
+    keyword: '曲名【Cover】(2024 Remaster) - a', durationMs: 200000,
+  };
+  seen.length = 0;
+  assert.equal(await resolve(info2, {}), null);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1], '曲名 - a', '连续尾缀括号群整串剥掉');
+});

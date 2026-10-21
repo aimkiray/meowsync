@@ -206,6 +206,26 @@ test('post-pass：freeTrialInfo 试听项 → url:null（试听链不外泄）�
   assert.ok(!JSON.stringify(it).includes('m701.music.126.net'), '源站串不得出现在 JSON');
 });
 
+// 编排层 ext 透传钉板：provider 显式供 ext 优先于 URL 推导——B 站 .m4s
+// 回链 path 尾缀/mime= 参数两条 extOf 通道都拿不到真实容器，缺透传会
+// 把 ISOBMFF 段错落成 mp3 壳（SF-2）；不供 ext 的源走 extOf 原路零影响
+test('provider 显式供 ext 优先于 extOf 推导（.m4s 链不错落 mp3 壳）', async () => {
+  resolveCalls.length = 0;
+  resolveImpl = async () => ({
+    url: 'https://upos-sz-m1.bilivideo.com/ugax/x-30280.m4s?s=1',
+    br: 192000, durationSec: 200, ext: 'm4a',
+  });
+  const [it] = await resolveSongUrls([mkItem(9901)], {});
+  assert.equal(it.unblocked, true);
+  assert.equal(it.type, 'm4a', 'provider 供 ext 优先——.m4s 不在 extOf 白名单');
+  // 无 ext 的源走 extOf 原路：pathname 尾缀命中
+  resolveImpl = async () => ({
+    url: 'https://upos-sz-m2.bilivideo.com/ugax/y-f.flac?s=1', br: 900000, durationSec: 200,
+  });
+  const [it2] = await resolveSongUrls([mkItem(9902)], {});
+  assert.equal(it2.type, 'flac', 'provider 不供 ext → extOf(pathname) 兜底');
+});
+
 test('unlockCache 满容逐最旧淘汰而非整表清空', async () => {
   resolveCalls.length = 0;
   resolveImpl = async (info) => ({
