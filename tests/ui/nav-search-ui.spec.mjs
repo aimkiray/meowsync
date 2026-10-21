@@ -72,6 +72,7 @@ vi.mock('../../src/api/http.js', () => ({
 }))
 vi.mock('../../src/api/sync.js', () => ({
   syncApi: { pull: vi.fn(async () => ({ code: 200, items: [] })), push: vi.fn() },
+  openSyncEvents: vi.fn(() => null),
 }))
 vi.mock('../../src/api/ai.js', () => ({
   aiApi: {

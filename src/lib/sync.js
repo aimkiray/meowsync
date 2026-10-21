@@ -10,7 +10,7 @@
 // 与时钟域互不兼任；serverTime 仅诊断不回喂；conflicts 回包 {key,item}，
 // item 内层 key/seq 是冗余可缺字段——采纳一律以外层 key 为准。
 import { LS_KEYS, readJSON, writeJSON, setWriteHook } from './storage.js'
-import { syncApi } from '../api/sync.js'
+import { syncApi, openSyncEvents } from '../api/sync.js'
 // 远端回填依赖方向：引擎 → 叶模块。叶模块（theme.js/prefs.js）不许反向
 // import 本文件——会把 api/http 的 import.meta.env 链拖进 node:test 裸跑面
 import { applyRemoteTheme } from './theme.js'
@@ -489,6 +489,9 @@ const schedulePullRetry = () => {
 // online / visibilitychange→visible 的低频补拉口：与排程重试同一节流
 // 窗（距上次发起 ≥PULL_RETRY_MS 才再拉），事件风暴不刷请求
 const onSyncForeground = () => {
+  // 死掉的 SSE 订阅趁回前台重获一次握手（401 瞬态/限流腾位可恢复）——
+  // attach 自带 syncEvents/inited 双闸，活流或无 EventSource 环境零代价
+  if (!syncEvents) attachSyncEvents()
   if (inited && Date.now() - pullLastTry >= PULL_RETRY_MS) void pullFromServer()
 }
 
@@ -693,6 +696,90 @@ const onSyncVisibility = () => {
 }
 const onSyncOnline = () => onSyncForeground()
 
+// ── 实时失效通知（SSE /sync/events）──
+// initSync 成功后挂 EventSource：服务端同桶 push 落地即广播
+// `event:changed data:{seq}`。帧只提示「有变更」不载数据——收帧走
+// pullFromServer() 本体的在途去重，绕开 onSyncForeground 的
+// PULL_RETRY_MS 节流窗（那是前台/失败补拉的低频闸；服务端已明示
+// 有变更时不该再等）。SSE_PULL_MIN_MS 是相邻拉取的最小间隔：
+// 服务端每推必广播，他端连续编辑会打一串帧——合并成 ≤1 拉/秒，
+// 窗内到帧排程窗尾一趟（trailing，末条变更不丢）；定时器到点还会
+// 复核节流钟——排程等待期间别路 pull 刚跑过则顺延剩余窗，不产
+// <1s 间隔的冗余拉。
+// EventSource 自带重连退避——瞬时断线由浏览器回连，open/收帧即把
+// error 连击清零；error 只计数防永不可恢复场景空转：连击
+// ≥SSE_MAX_ERRORS 或 readyState=CLOSED（非 2xx 拒连如 401/429，
+// 浏览器只发一次 error 不再回连）即 close 放弃。放弃不是终态——
+// onSyncForeground（回前台/回网）会把 syncEvents=null 的订阅重挂
+// 一次（attachSyncEvents 幂等闸去重），401 瞬态/限流腾位可自愈。
+let syncEvents = null
+let syncEventsErrStreak = 0
+let ssePullTimer = null
+const SSE_MAX_ERRORS = 3
+const SSE_PULL_MIN_MS = 1000
+
+const scheduleSsePull = (delay) => {
+  if (ssePullTimer || !inited) return
+  // 距上次 pull 发起（pullLastTry——首拉/手动/补拉同钟）不足 1s
+  // 的帧合并到窗尾一趟；已排程的连发不再叠加
+  const wait = delay ?? Math.max(0, SSE_PULL_MIN_MS - (Date.now() - pullLastTry))
+  ssePullTimer = setTimeout(() => {
+    ssePullTimer = null
+    if (!inited) return
+    // 到点先复核节流钟：排程等待期间 PTR/前台来源的 pull 可能刚跑过
+    //（pullLastTry 是同一只钟会被推进），照点发射会产一趟 <1s 间隔的
+    // 冗余拉——按剩余窗顺延，落点仍贴在 1s 节流边界上
+    const remain = SSE_PULL_MIN_MS - (Date.now() - pullLastTry)
+    if (remain > 0) { scheduleSsePull(remain); return }
+    // 在途 pull 会把这趟 dedup 掉——顺延一整个节流窗补拉（不能按
+    // pullLastTry 折算：在途不推进该钟，折算即 0ms 空转自旋）：
+    // 在途期到的帧若被 dedup 吃掉，本次变更要等下趟偶然拉取才收敛
+    if (pulling) { scheduleSsePull(SSE_PULL_MIN_MS); return }
+    void pullFromServer()
+  }, wait)
+}
+
+const attachSyncEvents = () => {
+  if (syncEvents || !inited) return // initSync/回前台重挂同口——重复挂 ES 去重
+  if (typeof openSyncEvents !== 'function') return // 桩模块缺该导出时静默
+  // let 预置再赋值——回调经入参交给 openSyncEvents，异形实现若在返回前
+  // 同步派发一帧，闭包引用未初始化的 const 会 TDZ 炸；null 起评让「挂接
+  // 完成前的帧」走下方 !es 守卫与死流残帧同口径丢弃
+  let es = null
+  es = openSyncEvents(() => {
+    if (!es || es !== syncEvents) return // 死流残帧（旧订阅/已 close/未挂完）不理会
+    // 收到帧=连接活着——error 连击与 open 同口径清零
+    syncEventsErrStreak = 0
+    scheduleSsePull()
+  })
+  if (!es) return // 无 EventSource 环境——前台/在线补拉照常兜底
+  syncEvents = es
+  syncEventsErrStreak = 0
+  es.addEventListener('open', () => {
+    if (es !== syncEvents) return // 死流晚发的 open 不清新订阅的连击簿记
+    syncEventsErrStreak = 0
+  })
+  es.addEventListener('error', () => {
+    if (es !== syncEvents) return
+    // readyState=CLOSED(2)=浏览器已弃连（非 2xx 响应：401/429 等）——只发
+    // 一次 error 且不再自动重连，连击簿记永远走不到上限：errStreak 恒 1、
+    // syncEvents 恒真把 attach 闸短路死。就地按放弃收口与连击上限同口
+    if (es.readyState === 2 || ++syncEventsErrStreak >= SSE_MAX_ERRORS) closeSyncEvents()
+  })
+}
+
+// 关闭事件订阅 + 清节流排程。引擎复位（resetSyncState）与测试
+// teardown 用；error 上限/readyState=CLOSED 死流触发的自闭也走本口——
+// close 后由 onSyncForeground 回前台/回网时重挂（attachSyncEvents 双闸）
+export function closeSyncEvents() {
+  const es = syncEvents
+  syncEvents = null
+  syncEventsErrStreak = 0
+  clearTimeout(ssePullTimer)
+  ssePullTimer = null
+  if (es) try { es.close() } catch { /* 异形实现不挡清理 */ }
+}
+
 // ── 引擎生命周期 ──
 // App.vue onMounted 尾部调用：注册写钩 + 补记绕钩键。此后 pullFromServer 发首拉
 export function initSync() {
@@ -745,6 +832,9 @@ export function initSync() {
     dirty.add(LS_KEYS.SETUP_DISMISSED)
   }
   if (dirty.size) scheduleFlush()
+  // 实时失效通知挂订阅（幂等——重复 initSync 不重复开 ES）：收
+  // changed 即主动拉，比等前台/失败补拉收敛快一拍
+  attachSyncEvents()
 }
 
 // 测试隔离/引擎复位：清脏集、订阅表、基线与计时器并摘掉写钩——
@@ -779,4 +869,58 @@ export function resetSyncState() {
     document.removeEventListener('visibilitychange', onSyncVisibility)
   }
   setWriteHook(null)
+  closeSyncEvents()
+}
+
+// ── 下拉刷新（PTR）手势判定 ──
+// 纯状态机零 DOM 依赖——App.vue 触层把触摸坐标与容器滚动态喂进来，
+// 阈值与方向锁收口此处可直测。armed=起手成立（触点在滚动容器可视顶缘
+// PTR_TOP_ZONE_PX 内 且 scrollTop≤0）；move 返回下拉位移 px 供指示器
+// 跟随（0=不显示）；end 按位移达 PTR_THRESHOLD_PX 判 'refresh'。
+// 全程不产副作用——preventDefault/元素位移全在 App.vue 触层（选择
+// 全 passive 不拦截：顶缘下拉本就无原生滚动位移，正常滚动零干扰）
+export const PTR_TOP_ZONE_PX = 60
+export const PTR_THRESHOLD_PX = 64
+const PTR_DIR_LOCK_PX = 8 // 方向锁行程——首段位移定横竖，横滑判负即弃手势
+
+export function createPullRefresh() {
+  let armed = false
+  let dir = null   // null=未定 | 'v' 竖向 | 'h' 横向（放弃）
+  let startX = 0
+  let startY = 0
+  let pullPx = 0
+  return {
+    // topOffset=触点距容器可视顶缘；scrollTop=容器当前滚动位
+    start({ x = 0, y = 0, topOffset = Infinity, scrollTop = 0 } = {}) {
+      armed = topOffset >= 0 && topOffset <= PTR_TOP_ZONE_PX && scrollTop <= 0
+      dir = null
+      startX = x
+      startY = y
+      pullPx = 0
+      return armed
+    },
+    // 返回当前下拉位移（指示器高度）；scrollTop>0=容器被拖离顶即作废
+    move({ x = 0, y = 0, scrollTop = 0 } = {}) {
+      if (!armed) return 0
+      if (scrollTop > 0) { armed = false; pullPx = 0; return 0 }
+      const dx = x - startX
+      const dy = y - startY
+      // 首段显著位移定方向：横向滑（列表行内手势/翻页）不截胡
+      if (dir === null && Math.max(Math.abs(dx), Math.abs(dy)) >= PTR_DIR_LOCK_PX) {
+        dir = Math.abs(dy) >= Math.abs(dx) ? 'v' : 'h'
+      }
+      if (dir === 'h') { armed = false; pullPx = 0; return 0 }
+      pullPx = Math.max(0, dy)
+      return pullPx
+    },
+    // 'refresh'=过阈触发刷新；'cancel'=未过阈/未武装回弹收起
+    end() {
+      const fire = armed && pullPx >= PTR_THRESHOLD_PX
+      armed = false
+      pullPx = 0
+      return fire ? 'refresh' : 'cancel'
+    },
+    cancel() { armed = false; pullPx = 0 },
+    get active() { return armed },
+  }
 }
