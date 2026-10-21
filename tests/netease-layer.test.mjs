@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const { ENDPOINTS } = require('../src/server/services/netease/endpoints.js');
 const { callNeteaseApi } = require('../src/server/services/netease/index.js');
 const { ALLOWED_APIS } = require('../src/server/routes/music.js');
-const { pickByDuration, degradedKeyword } = require('../src/server/services/unlock/match.js');
+const { pickByDuration, durationPool, degradedKeyword } = require('../src/server/services/unlock/match.js');
 const { cookieToJson, cookieObjToString } = require('../src/server/services/netease/request.js');
 const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('../src/server/services/unlock/index.js');
 const { hasQqCookie } = require('../src/server/lib/qq.js');
@@ -50,6 +50,34 @@ test('pickByDuration：±5s 内命中、跨窗拒绝、无基准放前三', () =
   assert.deepEqual(pickByDuration(cands, null, c => c.s), cands.slice(0, 3));
   // 候选缺时长字段不命中
   assert.deepEqual(pickByDuration([{ s: null }], 326000, c => c.s), []);
+});
+
+// durationPool 三态钉板：±5s 筛空但候选在场时不弃——全候选交 AI 仲裁
+//（±5s 比编排层 DURATION_TOLERANCE 严一个量级，官方 MV/搬运稿片头尾
+// 超窗却是真命候选的实机假阴性）；空池/无基准不触发仲裁语义
+test('durationPool：命中首选、筛空仲裁、空池与无基准不仲裁', () => {
+  const cands = [{ s: 100 }, { s: 200 }, { s: 322 }, { s: 400 }];
+  // ±5s 命中 → 首选语义不变（pool=命中集，非仲裁）
+  assert.deepEqual(durationPool(cands, 326000, c => c.s),
+    { pool: [{ s: 322 }], arbitrated: false });
+  // 全部超窗但候选在场 → 全候选兜底交 AI 仲裁（实案：dt=258.5s 曲配
+  // 279s 官方上传过 0.4 闸却死 ±5s）
+  assert.deepEqual(durationPool(cands, 60000, c => c.s),
+    { pool: cands, arbitrated: true });
+  // 候选在场但全缺时长字段 → 同样筛空在场，交 AI 语义仲裁
+  const noSec = [{ s: null }, { s: null }];
+  assert.deepEqual(durationPool(noSec, 326000, c => c.s),
+    { pool: noSec, arbitrated: true });
+  // 搜索真空 → 无池可兜（非仲裁）
+  assert.deepEqual(durationPool([], 60000, c => c.s),
+    { pool: [], arbitrated: false });
+  assert.deepEqual(durationPool(null, 60000, c => c.s),
+    { pool: [], arbitrated: false });
+  // durationMs 缺席 → 前 3 条原序（pickByDuration 既有语义），仲裁不适用
+  assert.deepEqual(durationPool(cands, null, c => c.s),
+    { pool: cands.slice(0, 3), arbitrated: false });
+  assert.deepEqual(durationPool(cands, 0, c => c.s),
+    { pool: cands.slice(0, 3), arbitrated: false });
 });
 
 // 搜索真空降级词钉板：youtube/bilibili 两源共用同一实现（match.js）——

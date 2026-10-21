@@ -6,8 +6,9 @@
 // 中转（resolveSongUrls 的 source==='youtube' 分支），直发客户端必 403
 const { innertubeSearch } = require('../../lib/youtube');
 const { resolveYoutubeStreams } = require('../youtube-resolve');
-// degradedKeyword 与 bilibili 共用（./match.js）——搜索真空降级词只此一份
-const { pickByDuration, degradedKeyword } = require('./match');
+// durationPool/degradedKeyword 与 bilibili 共用（./match.js）——
+// 时长选候选三态池与搜索真空降级词只此一份
+const { durationPool, degradedKeyword } = require('./match');
 const { upsertVerdict, deleteUnlockVerdicts } = require('../../repositories/lyricAi');
 const { cleanField, createAiRank } = require('./ai-rank');
 // 源级熔断记账——authRejected 是 IP 信誉证据而非候选死活
@@ -19,6 +20,13 @@ const sourceHealth = require('./health');
 const { aiRankCandidates, markDead, unlockVkey, forgetSong } = createAiRank({
   keyPrefix: 'yt_', sourceLabel: 'YouTube', deleteVerdicts: deleteUnlockVerdicts,
 });
+
+// 下游可对账判据：候选自带正时长——编排层 durationSec>0 时 estMs 直接
+// 取它比对（netease-api.js）。lockupItem 无角标兜底 0/videoItemOf 缺
+// 字段归 null 的候选胜出链是 googlevideo——裸 HEAD 会毒化签名链被
+// 编排层刻意跳过 → estMs null → 时长对账静默放行。仲裁池划分与胜出
+// 留痕共用这一判据（bilibili 侧同型，见 unlock/bilibili.js durOk 注）
+const durOk = (c) => Number.isFinite(c?.durationSec) && c.durationSec > 0;
 
 /**
  * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
@@ -41,14 +49,32 @@ async function resolve(info, { signal, purpose } = {}) {
       candidates = await innertubeSearch(degraded, signal, 5);
     }
   }
-  const usable = pickByDuration(candidates, info.durationMs, c => c.durationSec);
+  // ±5s 筛仍是首选；筛空但候选在场时不弃——全候选（search 截断 5 条内）
+  // 交 AI 语义仲裁。±5s 比编排层 DURATION_TOLERANCE(youtube 0.4)严一个
+  // 量级：官方上传/MV 带片头尾超窗却是真命候选（实机假阴性）；AI 的
+  // 「官方音源/MV 可算，live/remix/翻唱/短剪辑不算」判定才是错配正主闸，
+  // 下游时长对账仍是最终硬墙
+  const { pool: usable, arbitrated } = durationPool(candidates, info.durationMs, c => c.durationSec);
+  if (arbitrated) {
+    console.info(`[unlock] ${info.id} youtube: ±5s 时长筛全灭，${usable.length} 候选交 AI 仲裁`);
+  }
   if (!usable.length) return null;
   // AI 核验/排序后的候选序：批准记忆与模型选定在前，死候选押尾
-  const { ordered, pickedId } = await aiRankCandidates(info, usable, signal);
-  if (!ordered.length) {
-    console.info(`[unlock] ${info.id} youtube: ${usable.length} 候选全部被判定记忆否决`);
+  const { ordered: ranked, pickedId } = await aiRankCandidates(info, usable, signal);
+  if (!ranked.length) {
+    console.info(`[unlock] ${info.id} youtube: ${usable.length} 候选全部被判定记忆否决`
+      + `${arbitrated ? '（±5s 全灭仲裁池）' : ''}`);
     return null;
   }
+  // 仲裁池限定——缺时长候选稳定划分押尾（bilibili 同型）：不可对账
+  // 候选（durOk 注）胜出会让下游时长对账静默缺位，故只允许它们在
+  // 全灭后才被摸，缺墙暴露面压到最窄。划分保各组内相对序——AI 语义
+  // 排序（verdict/批准/冷却）已在 aiRankCandidates 内生效不受扰，
+  // 只是可对账候选先试错。非仲裁池不动：±5s 命中集自带正时长
+  // （筛子判据即 Number.isFinite），durationMs 缺席时连对账基准都不存在
+  const ordered = arbitrated
+    ? [...ranked.filter(durOk), ...ranked.filter(c => !durOk(c))]
+    : ranked;
   let failed = 0;
   let authSeen = 0;
   let wallSeen = false;
@@ -75,6 +101,12 @@ async function resolve(info, { signal, purpose } = {}) {
           try {
             upsertVerdict(unlockVkey(info.id, pickedId), 'unlock', 1, cleanField(cand.title));
           } catch { /* verdict 落库失败不阻塞解锁 */ }
+        }
+        // 胜出候选缺时长 → googlevideo 刻意跳裸 HEAD → estMs null →
+        // 对账墙缺位——诚实留痕（划分已把缺时长押尾，能走到这意味
+        // 可对账候选全灭/不在池）
+        if (arbitrated && !durOk(cand)) {
+          console.info(`[unlock] ${info.id} youtube: 仲裁选中候选缺时长字段，下游对账缺位`);
         }
         // 回链单实体：跨码率/编码的候选是不同字节文件，混排换档会把同一
         // offset 的另一文件字节拼给代理/下载器（bilibili 同字节镜像先例的

@@ -8,8 +8,9 @@
 // 下游注入（播放端 /audio-proxy 已注入，routes/proxy.js；下载端
 // file-downloader 按主机名注入），本层只产链。
 const { biliSearchVideos, resolveBiliAudio } = require('../../lib/bilibili');
-// degradedKeyword 与 youtube 共用（./match.js）——搜索真空降级词只此一份
-const { pickByDuration, degradedKeyword } = require('./match');
+// durationPool/degradedKeyword 与 youtube 共用（./match.js）——
+// 时长选候选三态池与搜索真空降级词只此一份
+const { durationPool, degradedKeyword } = require('./match');
 const { upsertVerdict } = require('../../repositories/lyricAi');
 const { cleanField, createAiRank, deleteUnlockVerdictsByPrefix } = require('./ai-rank');
 
@@ -44,6 +45,12 @@ function asTransientErr(tag, e) {
 // （youtube 侧 authRejected 不入死簿的同口径：墙证据不污染判定记忆）
 const BILI_WALL_RE = /HTTP 412|code=-(352|412|799)\b/i;
 const isWallErr = (e) => BILI_WALL_RE.test(String(e?.message || e));
+// 墙证据本地停打阈（youtube 侧 sourceHealth.noteAuthRejected 到阈 break
+// 同口径——本域未接 sourceHealth，阈自守）：仲裁池放宽后至多 8 候选 ×
+// ~3 跳 playurl/view/cid 自愈，墙期持续 -352/-412/-799 只是给风控喂
+// 信号——第 2 记墙证据即停打剩余候选（计数取累计墙数非连败：混排的
+// 普通死候选不抵消「IP 已被拦」这一事实）
+const WALL_EVIDENCE_CAP = 2;
 
 // resolveBiliAudio 把全部档（flac/杜比/AAC 多档）摊平成单列表，档界已失。
 // urls 契约 = 同一字节实体的镜像组：同档 baseUrl/backup_url 仅换 CDN
@@ -94,6 +101,13 @@ function extOfStream(s) {
   return ext && AUDIO_EXT_WHITELIST.has(ext) ? ext : null;
 }
 
+// 下游可对账判据：候选自带正时长——编排层 durationSec>0 时 estMs 直接
+// 取它比对（netease-api.js）。durationSecOf 坏形态归 0/字段缺席的候选
+// 胜出后，estMs 只能走 br×size 的 HEAD 估算支路——裸 HEAD 不带 Referer
+// 对 upos CDN 必遭防盗链拦截 → 对账墙静默缺位。仲裁池划分与胜出留痕
+// 共用这一判据（youtube 侧同型，见 unlock/youtube.js durOk 注）
+const durOk = (c) => Number.isFinite(c?.durationSec) && c.durationSec > 0;
+
 /**
  * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
  * @returns {{url: string, urls: string[], br: number|null,
@@ -140,14 +154,31 @@ async function resolve(info, { signal, purpose } = {}) {
       videoId: v.bvid, title: v.title, owner: v.author, durationSec: v.durationSec,
     });
   }
-  const usable = pickByDuration(candidates, info.durationMs, c => c.durationSec);
+  // ±5s 筛仍是首选；筛空但候选在场时不弃——全候选（上方截断 8 条内）
+  // 交 AI 语义仲裁（youtube 同款三层闸：±5s 比编排层 DURATION_TOLERANCE
+  // 严一个量级，搬运稿件片头尾超窗却是真命候选；AI 语义判定是错配正主
+  // 闸，下游时长对账仍是最终硬墙）
+  const { pool: usable, arbitrated } = durationPool(candidates, info.durationMs, c => c.durationSec);
+  if (arbitrated) {
+    console.info(`[unlock] ${info.id} bilibili: ±5s 时长筛全灭，${usable.length} 候选交 AI 仲裁`);
+  }
   if (!usable.length) return null;
   // AI 核验/排序后的候选序：批准记忆与模型选定在前，死候选押尾
-  const { ordered, pickedId } = await aiRankCandidates(info, usable, signal);
-  if (!ordered.length) {
-    console.info(`[unlock] ${info.id} bilibili: ${usable.length} 候选全部被判定记忆否决`);
+  const { ordered: ranked, pickedId } = await aiRankCandidates(info, usable, signal);
+  if (!ranked.length) {
+    console.info(`[unlock] ${info.id} bilibili: ${usable.length} 候选全部被判定记忆否决`
+      + `${arbitrated ? '（±5s 全灭仲裁池）' : ''}`);
     return null;
   }
+  // 仲裁池限定——缺时长候选稳定划分押尾（youtube 同型）：不可对账候选
+  // （durOk 注）胜出会让下游时长对账静默缺位，故只允许它们在全灭后才
+  // 被摸，缺墙暴露面压到最窄。划分保各组内相对序——AI 语义排序
+  // （verdict/批准/冷却）已在 aiRankCandidates 内生效不受扰，只是
+  // 可对账候选先试错。非仲裁池不动：±5s 命中集自带正时长（筛子判据
+  // 即 Number.isFinite），durationMs 缺席时连对账基准都不存在
+  const ordered = arbitrated
+    ? [...ranked.filter(durOk), ...ranked.filter(c => !durOk(c))]
+    : ranked;
   let failed = 0;
   let wallSeen = 0;
   for (const cand of ordered) {
@@ -182,6 +213,11 @@ async function resolve(info, { signal, purpose } = {}) {
           upsertVerdict(unlockVkey(info.id, pickedId), 'unlock', 1, cleanField(cand.title));
         } catch { /* verdict 落库失败不阻塞解锁 */ }
       }
+      // 胜出候选缺时长 → 下游 estMs 拿不到 → 对账墙缺位——诚实留痕
+      // （划分已把缺时长押尾，能走到这意味可对账候选全灭/不在池）
+      if (arbitrated && !durOk(cand)) {
+        console.info(`[unlock] ${info.id} bilibili: 仲裁选中候选缺时长字段，下游对账缺位`);
+      }
       // durationSec 取搜索行的稿件时长——对账口径与候选筛选同源
       // （pickByDuration 用的就是它），playurl 音轨时长与稿件一致
       return {
@@ -195,8 +231,14 @@ async function resolve(info, { signal, purpose } = {}) {
     } catch (e) {
       if (signal?.aborted) throw e;
       failed += 1;
-      // 风控证据不进死簿：墙期判死会污染判定记忆（候选没死，是 IP 被拦）
-      if (isWallErr(e)) { wallSeen += 1; continue; }
+      // 风控证据不进死簿：墙期判死会污染判定记忆（候选没死，是 IP 被拦）。
+      // 累计墙证据到阈即整源停打——剩余候选继续跑只是给风控喂信号
+      // （youtube authRejected 到阈 break 同口径，见 WALL_EVIDENCE_CAP 注）
+      if (isWallErr(e)) {
+        wallSeen += 1;
+        if (wallSeen >= WALL_EVIDENCE_CAP) break;
+        continue;
+      }
       markDead(info, cand);
     }
   }
