@@ -130,6 +130,15 @@ export function proxiedCoverUrl(url) {
   return `${base}/img-proxy?url=${encodeURIComponent(parsed.href)}`
 }
 
+// QQ 专辑封面 T002R{w}x{h} 尺寸段只认离散桶——上游实测（2026-04 实机
+// 逐档探测 y.gtimg.cn/music/photo_new/）仅 68/90/150/180/300/500/800
+// 返 200，96/200/240/320/1000 等任意值一律 404：列表行传 px=96 曾产出
+// T002R96x96 致 QQ 歌单全曲目封面裂图。吸附语义取向上取整——最小 ≥px
+// 的桶（retina 安全、宁大勿小：宁可多解码一点不可裂图），超最大桶钳 800
+const QQ_COVER_SIZE_BUCKETS = [68, 90, 150, 180, 300, 500, 800]
+const qqCoverBucket = (px) => QQ_COVER_SIZE_BUCKETS.find(b => b >= px)
+  ?? QQ_COVER_SIZE_BUCKETS[QQ_COVER_SIZE_BUCKETS.length - 1]
+
 // 封面按展示档位走 CDN 缩放：列表 30~48px 小位不该拉原始分辨率——
 // 网易原图动辄 600~3000px，每张解码位图 1~8MB，长歌单是 tab 内存头号
 // 驱动。按各站图片服务的缩放语法改写 URL；file_ 本地工件与未知域原样
@@ -163,9 +172,15 @@ export function coverSizeUrl(url, px = 96) {
     sized = s.replace(/(?:maxres|sd|hq)default/i, 'mqdefault')
   }
   // QQ y.gtimg.cn：T002R{w}x{h} 尺寸嵌在路径段（p.qpic.cn 无公开缩放通道，
-  // 不改写但仍在图床白名单——下游 proxiedCoverUrl 照样给它包代理）
+  // 不改写但仍在图床白名单——下游 proxiedCoverUrl 照样给它包代理）。
+  // 尺寸值不可任意直写——上游只认 QQ_COVER_SIZE_BUCKETS 离散桶，其余值
+  // 404，故 px 先吸附成桶值再落令牌（负值同归最小桶 68；NaN 经 find
+  // 全不中、?? 兜底钳到最大桶 800——任意垃圾入参都产合法桶值）
   else if (/y\.gtimg\.cn/i.test(s)) {
-    if (/T002R\d+x\d+/i.test(s)) sized = s.replace(/T002R\d+x\d+/i, `T002R${px}x${px}`)
+    if (/T002R\d+x\d+/i.test(s)) {
+      const bucket = qqCoverBucket(px)
+      sized = s.replace(/T002R\d+x\d+/i, `T002R${bucket}x${bucket}`)
+    }
   }
   return proxiedCoverUrl(sized)
 }

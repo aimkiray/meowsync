@@ -212,9 +212,40 @@ test('coverSizeUrl：四 provider 缩放语法 + 幂等 + 放行面', () => {
     proxied('https://i.ytimg.com/vi/a/mqdefault.jpg'))
   assert.equal(coverSizeUrl('https://i.ytimg.com/vi/a/mqdefault.jpg', 96),
     proxied('https://i.ytimg.com/vi/a/mqdefault.jpg'))
-  // QQ T002R 段 px 随行；T001R 不改写但仍在白名单——照样进代理
+  // QQ T002R 段只认上游离散桶（实测 68/90/150/180/300/500/800 返 200，
+  // 96/240/320/1000 等任意值 404——列表行 px=96 曾全量裂图）：px 向上
+  // 吸附最小 ≥px 桶，低于 68 归 68、超 800 钳 800；桶边界原值命中不漂移
   assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 240),
-    proxied('https://y.gtimg.cn/music/photo_new/T002R240x240M000x.jpg'))
+    proxied('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 96),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R150x150M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 320),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R500x500M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 30),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R68x68M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 68),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R68x68M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 800),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R800x800M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 1000),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R800x800M000x.jpg'))
+  // 90/180 两档此前无见证：80 是真实调用值（WatchView/App.vue 的
+  // songThumbUrl(song, 80) 与 coverSizeUrl(song.al?.picUrl, 80)）——上吸 90 档；
+  // 160 吸 180 档
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 80),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R90x90M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 160),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R180x180M000x.jpg'))
+  // 垃圾入参兜底（钉 src/lib/song.js 的注释承诺——任意垃圾入参都产合法桶值）：
+  // NaN 经 find 全不中、走 ?? 兜底钳最大桶 800；负值归最小桶 68；
+  // 小数 68.5 按真 ceil 语义上吸 90（不是 68 截断）
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', NaN),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R800x800M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', -1),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R68x68M000x.jpg'))
+  assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T002R300x300M000x.jpg', 68.5),
+    proxied('https://y.gtimg.cn/music/photo_new/T002R90x90M000x.jpg'))
+  // T001R 无令牌不改写但仍在白名单——照样进代理
   assert.equal(coverSizeUrl('https://y.gtimg.cn/music/photo_new/T001R300x300M000x.jpg', 96),
     proxied('https://y.gtimg.cn/music/photo_new/T001R300x300M000x.jpg'))
   // p.qpic.cn 无公开缩放通道不改写，但 qpic.cn 在白名单 → 代理形
