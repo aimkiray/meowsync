@@ -153,6 +153,8 @@ test('providerDataOf 边界：qq 分支带回落词源签名 / 纯网易云曲�
   assert.equal(providerDataOf({ id: '12345', name: 'x', ar: [], al: {} }), null);
   // 外部曲缺 provider 定位字段但有匹配词源——neteaseId 单独落库保词源
   assert.deepEqual(providerDataOf({ id: 'bv_BV1xx411c7mD', name: 'x', neteaseId: '88' }), { neteaseId: '88' });
+  // qq_<mid> 裸 id（mediaMid 缺位的镜像/旧数据残缺行）与 bv_/yt_ 同权——回链键不丢
+  assert.deepEqual(providerDataOf({ id: 'qq_001ABCdef234', name: 'x', neteaseId: '99' }), { neteaseId: '99' });
   // 数字 id 曲即便混进 neteaseId 字段也不产 providerData（自身即词源）
   assert.equal(providerDataOf({ id: '12345', name: 'x', neteaseId: '12345' }), null);
 });

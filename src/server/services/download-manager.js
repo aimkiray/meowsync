@@ -1087,6 +1087,13 @@ async function processTask(task, queueId, signal) {
 
     console.error(`任务 ${task.id} 失败:`, error);
 
+    // qqAnonDenied（lib/qq 凭据级拒答打标，经 file-downloader 透传到任务
+    // 层）换可执行指引落库——原始 musicu code=0/1000 对用户无诊断价值；
+    // 与 /qq/stream 502、file-downloader 终错文案同口径
+    const taskErrorMessage = error?.qqAnonDenied
+      ? 'QQ 已关闭匿名取流——请在设置页配置 QQ Cookie'
+      : sanitizeErrorMessage(error.message);
+
     // fatal（解锁失败/试听片段）是确定性失败，重试只会重复打上游；可重试错误走 retryCount 路径。
     // 每步 DB 写独立兜底：行/队列可能已被并发删除；瞬时故障下裸吞会把行钉在
     // downloading（无在途且无恢复入口）——状态迁移走有限重试，仍败则兜底
@@ -1096,7 +1103,7 @@ async function processTask(task, queueId, signal) {
         await updateTaskWithRetry(task.id, {
           retryCount: task.retryCount + 1,
           status: 'pending',
-          errorMessage: sanitizeErrorMessage(error.message)
+          errorMessage: taskErrorMessage
         });
         // 指数退避记账：瞬时错误立即重捞=全速空转打上游；pendingTasks 过滤会
         // 跳过到期前任务，进程重启后表空即立即重试。基数用递增后的新次数
@@ -1123,7 +1130,7 @@ async function processTask(task, queueId, signal) {
       try {
         await updateTaskWithRetry(task.id, {
           status: 'failed',
-          errorMessage: sanitizeErrorMessage(error.message)
+          errorMessage: taskErrorMessage
         });
       } catch { /* 行已删/DB 持续故障——收尾收敛兜底 */ }
       if (queueId !== null && queueId !== undefined) {

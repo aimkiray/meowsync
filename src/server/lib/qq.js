@@ -234,13 +234,21 @@ async function musicu(module, method, param, extraSignal, reqKey = 'req_0', cook
   const body = await res.json();
   const node = body?.[reqKey];
   // 风控信号：code=2001 + feedbackURL 要求登录——同一 body 换签名通道重试。
-  // 2001 可出现在 body 顶层或 node 层（{"req":{"code":2001}} 为 node 形态）
+  // 2001 可出现在 body 顶层或 node 层（{"req":{"code":2001}} 为 node 形态）。
+  // vkey 的匿名拒绝（node.code=1000 + data.retcode=104009）刻意不进本闸——
+  // 那是凭据级拒答而非风控墙，签名通道匿名同返 1000（实测白搭一跳），
+  // 区分只在下游打标（getStreamCandidates 的 qqAnonDenied）做
   if (!signed && (body?.code === 2001 || node?.code === 2001 || node?.data?.feedbackURL || body?.data?.feedbackURL)) {
     console.info(`[qq] musicu 风控命中(code=${body?.code ?? node?.code})→ 升级 musics.fcg 签名通道`);
     return musicu(module, method, param, extraSignal, reqKey, cookie, true);
   }
   if (body?.code !== 0 || !node || node.code !== 0) {
-    throw new Error(`qq musicu ${module} code=${body?.code}/${node?.code} ${node?.data?.msg || ''}`);
+    // node 层业务码与 data.retcode 挂上 err 不吞——vkey 匿名拒绝
+    //（req_0.code=1000 + data.retcode=104009）下游凭这两字段认凭据级拒绝
+    const err = new Error(`qq musicu ${module} code=${body?.code}/${node?.code} ${node?.data?.msg || ''}`);
+    err.nodeCode = node?.code;
+    err.retcode = node?.data?.retcode;
+    throw err;
   }
   return node.data;
 }
@@ -292,15 +300,25 @@ async function getStreamCandidates(mid, mediaMid, ladder, extraSignal) {
   const cookie = qqCookie();  // 单快照：param.uin 与 musicu 信封同源
   const fileMid = mediaMid || mid;
   const names = ladder.map(t => `${QUALITY_TIERS[t].prefix}${fileMid}.${QUALITY_TIERS[t].ext}`);
-  const data = await musicu('vkey.GetVkeyServer', 'CgiGetVkey', {
-    guid: String(Math.floor(Math.random() * 1e10)),
-    songmid: names.map(() => mid),
-    songtype: names.map(() => 0),
-    filename: names,
-    uin: qqUin(cookie) || '0',
-    loginflag: 1,
-    platform: '20',
-  }, extraSignal, 'req_0', cookie);
+  let data;
+  try {
+    data = await musicu('vkey.GetVkeyServer', 'CgiGetVkey', {
+      guid: String(Math.floor(Math.random() * 1e10)),
+      songmid: names.map(() => mid),
+      songtype: names.map(() => 0),
+      filename: names,
+      uin: qqUin(cookie) || '0',
+      loginflag: 1,
+      platform: '20',
+    }, extraSignal, 'req_0', cookie);
+  } catch (e) {
+    // QQ 已关闭匿名取流：无登录态下的凭据级拒答（retcode=104009 /
+    // node code=1000）打标上抛——/qq/stream 据此出诚实 502 文案、
+    // file-downloader 据此走 neteaseId 词源回链。带 cookie 的同码形态
+    // 是「凭据失效」另一诊断，不打标（不适用匿名口径的文案/回链）
+    if (!cookie && (e?.retcode === 104009 || e?.nodeCode === 1000)) e.qqAnonDenied = true;
+    throw e;
+  }
   // https sip 优先——明文 http 链路上 MITM 可整体替换音频内容（无完整性校验），
   // 排序后 https 宿主先被选，失败了才轮明文
   const sips = (data?.sip || []).filter(s => /^https?:\/\/[a-z0-9.-]+/i.test(s))
@@ -464,21 +482,26 @@ async function searchPlaylists(query, { page = 1, limit = 20 } = {}, extraSignal
   };
 }
 
+// 封面 URL 归一（歌单卡 imgurl / 歌单详情 logo 共用）：'//' 协议相对补
+// https:——实测 imgurl 回 //y.gtimg.cn/... 形态，裸用 <img> 会协议落空；
+// 非 http(s) 形态（ftp:/javascript:/裸串/空）一律归 ''——消费面只认 http(s)
+const normalizeCoverUrl = (v) => {
+  const s = String(v || '').trim();
+  return s.startsWith('//') ? `https:${s}` : (/^https?:\/\//i.test(s) ? s : '');
+};
+
 // 歌单卡字段归一：id 直接落 local_pl_qq_<disstid> 导入壳 id
 // （providerPlaylistShellId 同源）——前端「已收藏」判定/点卡即导入收敛
 // 同一身份，不会再复制出第二份壳；creator 用网易卡 {nickname} 形态——
-// PlaylistGrid 的 creator?.nickname 渲染面零改。imgurl 实测有
-// //y.gtimg.cn/... 协议相对形态——补 https: 防 <img> 协议落空
+// PlaylistGrid 的 creator?.nickname 渲染面零改
 function normalizePlaylistCard(item) {
   const disstid = String(item?.dissid || '').trim();
   if (!/^\d+$/.test(disstid)) return null;
-  const rawCover = String(item?.imgurl || item?.diss_cover || '').trim();
   return {
     id: providerPlaylistShellId('qq', disstid),
     disstid,
     name: String(item?.dissname || '').trim(),
-    coverImgUrl: rawCover.startsWith('//') ? `https:${rawCover}`
-      : /^https?:\/\//i.test(rawCover) ? rawCover : '',
+    coverImgUrl: normalizeCoverUrl(item?.imgurl || item?.diss_cover),
     creator: { nickname: String(item?.creator?.name || item?.creator?.nickname || item?.nick || '').trim() },
     trackCount: Number.isFinite(+item?.song_count) ? +item.song_count : 0,
     playCount: Number.isFinite(+item?.listennum) ? +item.listennum : 0,
@@ -555,7 +578,7 @@ async function getPlaylist(disstid, extraSignal, maxTracks = 1000) {
       id: String(disstid),
       name: cd.dissname || `QQ 歌单 ${disstid}`,
       creator: cd.nickname || 'QQ 音乐',
-      cover: cd.logo || cd.dir_pic_url2 || '',
+      cover: normalizeCoverUrl(cd.logo || cd.dir_pic_url2),
       desc: (cd.desc || '').slice(0, 500),
       songCount: cd.songnum || 0,
     };
