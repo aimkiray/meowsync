@@ -1,7 +1,9 @@
 <template>
   <!-- 字符腐蚀签名件（glitch-restoration 主题）：DOM 文本保持原文，
        替身符走 data-glitch 伪元素——屏幕阅读器读到的是干净文本。
-       仅 glitch 主题激活且（非 reduced-motion 或用户强制豁免）时 tick；其余状态静态透传。
+       仅 glitch 主题激活且（非 reduced-motion 或用户强制豁免）时走脉冲
+       腐蚀：3.8–5s 静默 → 腐蚀 1–2 字 → 200ms 复原（文字 ~95% 时间干净）；
+       ambient=false 的降噪区实例常驻零定时器、仅响应共享 burst。
        data-glitched 读共享计数（theme.js glitchGen）——错误事件触发
        burst 时全屏所有实例同代同闪，规范语义是共享叙事计数 -->
   <span class="glitch-text" :data-glitched="active && glitchGen ? String(glitchGen) : undefined">
@@ -29,19 +31,20 @@ import { prefGlitchMotion } from '../lib/prefs.js'
 // Noto Sans SC 非像素字形——质感更杂，对「损坏」语义反而是加分
 const POOL = [...'▓░▒ﾂﾎﾃﾄﾅﾌﾑﾒﾓﾘﾚﾖﾊﾋﾍﾐﾕﾗﾆﾇ℮†‡ΓŘ®₥§¤¥šмλθτþÐÑØÅЯИƧγÿýξ∑縺繝€∆ⅯﾉﾙΞë|+×01345!$']
 
-// 汉字专用经典乱码签名池：烫=MSVC 调试栈 0xCC 未初始化内存读出、
-// 屯=0xCD 屏障字节、锟斤拷=U+FFFD 串过 GBK 的残骸、锘=BOM 遗骸，
-// 其余为 UTF-8→GBK 整串错读的真实残片，串尾 ▓░▒█ 方块元混入——
-// 签名之外补「屏幕雪花」质感。重复项即权重，签名刻意压过泛残片。
+// 汉字专用几何/半角符池：块面符 █▓░▒▉▊▋▌ 作腐蚀主笔（观感是
+// 「字形被雪花块遮蔽」而非编码事故），几何形 ◆◇■□▲△●○◢◣◤◥▚▞
+// 与半角记号 ｱｲｳ 补杂讯——原乱码汉字残片签名整池退役。
+// 首元 '█' 是 spec 钉板（tests/ui/glitch-text.spec.mjs 断言路由）。
+// 重复项即权重，块面符刻意压过几何形。
 // 仅 Han 表意文字走此池（「中文」窄口径：假名/谚文
 // 仍走共享池，混排文本乱得更杂）
-const HAN_POOL = [...'烫烫烫烫屯屯屯屯锟斤拷锟斤拷锟斤拷锘锘浣犲ソ娴嬭瘯鏄鐨鎴戜滑鍙戝ぇ瀹闂ㄨ瘯鐮佸織榧犺阿鐢熸妸鍚庡湴鍧戝潃鍧\uFFFD▓░▒█▓░▒█']
+const HAN_POOL = [...'████▓▓▓░░▒▒▉▊▋▌▚▞◆◇■□▲△●○◢◣◤◥ｱｲｳ']
 // Han 窄判据：表意文字三区+扩展 A+兼容区——不含假名/谚文/全角标点；
 // astral 段（U+20000–U+2FA1F）实覆盖扩展 B–F/I 及兼容增补区
 // （tokenizer 的 CJK 是分行类判据，口径比本判据宽，各司其职不复用）
 const HAN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]|[\u{20000}-\u{2FA1F}]/u
 
-// 替身符按源脚本分流：Han→经典乱码签名池，其余→共享池
+// 替身符按源脚本分流：Han→几何/半角符池，其余→共享池
 const pickFor = (ch) => {
   const pool = HAN.test(ch) ? HAN_POOL : POOL
   return pool[Math.random() * pool.length | 0]
@@ -49,7 +52,12 @@ const pickFor = (ch) => {
 
 export default {
   name: 'GlitchText',
-  props: { text: { type: String, required: true } },
+  props: {
+    text: { type: String, required: true },
+    // ambient=false → 降噪区实例（页脚戳等装饰位）：常驻零定时器，
+    // 仅共享 glitchGen burst 仍响应；缺省 true 走脉冲腐蚀
+    ambient: { type: Boolean, default: true }
+  },
   setup(props) {
     // 按「断行单元」分词：字素簇粒度（Intl.Segmenter——ZWJ emoji/肤色修饰/
     // 组合符保持整簇，腐蚀不落半字符）；CJK 系（汉字/假名/谚文/注音/增补
@@ -88,56 +96,83 @@ export default {
     const active = computed(() =>
       currentTheme.value === 'glitch-restoration' && !reduced.value
     )
+    // pulsing = active ∩ ambient：active 过主题/减动闸，ambient 把
+    // 降噪区实例排除在常驻脉冲外（burst 响应不看 ambient）
+    const pulsing = computed(() => active.value && props.ambient)
 
-    let timer = 0
-    function tick() {
-      // 先快照再腐蚀——新腐蚀的字符不得成为本代恢复候选
-      // （skill 原版即此序：glitched 在 add 之前取样）
-      const glitched = [...corrupt.value.keys()]
+    // 脉冲状态机：长静默（3800 + random*1200ms）→ 瞬发腐蚀 1–2 字 →
+    // 200ms 后复原——文字 ~95% 时间干净（4–5s 静默对 200ms 显影）。
+    // 原常驻 setInterval(tick,1100) 退役：噪声节奏换成脉冲节拍
+    let pulseTimer = 0    // 静默期计时
+    let restoreTimer = 0  // 显影期计时
+    function schedulePulse() {
+      clearTimeout(pulseTimer) // 防御重入：watch 连发/burst 落定接力不叠静默表
+      pulseTimer = setTimeout(pulse, 3800 + Math.random() * 1200)
+    }
+    function pulse() {
+      // 净字集取样靶位（splice 去重——同键不重复腐蚀）。spec §4.5 门控：
+      // 净字 >6 才摇 1–2 个，≤6 恒蚀 1——短文本（2 字标题等）不再整段蚀空
       const clean = []
-      let total = 0
       words.value.forEach((word, wi) =>
-        word.chars.forEach((ch, ci) => { total++; if (!corrupt.value.has(keyOf(wi, ci))) clean.push({ k: keyOf(wi, ci), ch }) })
+        word.chars.forEach((ch, ci) => { if (!corrupt.value.has(keyOf(wi, ci))) clean.push({ k: keyOf(wi, ci), ch }) })
       )
-      // 短文本并发腐蚀封顶 ~1/6（至少 1 个）——4 字标题不会近半句皆替身
-      if (clean.length && corrupt.value.size < Math.max(1, Math.ceil(total / 6))) {
-        const { k, ch } = clean[Math.random() * clean.length | 0]
+      const count = clean.length > 6 ? 1 + (Math.random() * 2 | 0) : 1
+      const hits = []
+      for (let n = Math.min(clean.length, count); n > 0; n--) {
+        const { k, ch } = clean.splice(Math.random() * clean.length | 0, 1)[0]
         corrupt.value.set(k, pickFor(ch))
+        hits.push(k)
       }
-      // 每代随机恢复 2-3 个存量——稳态来回腐蚀而非单向累积
-      glitched.slice(0, 2 + (Math.random() * 2 | 0)).forEach(k => corrupt.value.delete(k))
+      // 空文本早退：无靶可蚀不续排静默 timer——text 回填时
+      // watch(props.text) 会重排，脉冲链不在空转中烧定时器
+      if (!hits.length) return
+      restoreTimer = setTimeout(() => {
+        // 只撤本脉冲写入的键——与 burst 交叠时不误抹 scramble 全景
+        hits.forEach(k => corrupt.value.delete(k))
+        if (pulsing.value) schedulePulse() // 复原后接力下一静默周期
+      }, 200)
     }
     // burst：全 scramble 闪回（错误张力峰值）——规范是同帧 scramble→复原，
     // 我们持留 ~480ms 肉眼可辨再整批回净，DOM 文本始终干净（比规范
     // textContent 改写更守 a11y）。错误连发时重定时，闪回不打叠
     let burstTimer = 0
     function burst() {
+      // 先掐脉冲时钟防串扰：显影中的复原表一并作废——脉冲键并入
+      // 全 scramble，由 burstTimer 统一回净
+      clearTimeout(pulseTimer)
+      clearTimeout(restoreTimer)
       words.value.forEach((word, wi) =>
         word.chars.forEach((ch, ci) =>
           corrupt.value.set(keyOf(wi, ci), pickFor(ch))
         )
       )
       clearTimeout(burstTimer)
-      burstTimer = setTimeout(() => { corrupt.value.clear() }, 480)
+      burstTimer = setTimeout(() => {
+        corrupt.value.clear()
+        if (pulsing.value) schedulePulse() // 落定后接力下一静默周期
+      }, 480)
     }
     function stop() {
-      clearInterval(timer)
+      clearTimeout(pulseTimer)
+      clearTimeout(restoreTimer)
       clearTimeout(burstTimer)
-      timer = 0
+      pulseTimer = restoreTimer = burstTimer = 0
       corrupt.value.clear()
     }
 
-    watch(active, on => {
-      if (on) { stop(); timer = setInterval(tick, 1100) }
-      else stop()
+    // 任一闸门翻动都先全停再按 pulsing 重排——主题/减动切走即净，
+    // ambient 切换也不残留显影表
+    watch([active, pulsing], () => {
+      stop()
+      if (pulsing.value) schedulePulse()
     }, { immediate: true })
-    // text 变更连 burst 回净表一起清——否则旧 timer 会误抹新文本的 tick 腐蚀
-    watch(() => props.text, () => { clearTimeout(burstTimer); corrupt.value.clear() })
+    // text 变更整表重置——否则旧脉冲/回净表会误抹或误蚀新文本
+    watch(() => props.text, () => { stop(); if (pulsing.value) schedulePulse() })
     // 共享世代爬升 → 全屏所有实例同代 burst（主题外激活也无副作用，
     // 但仍在 active 下才做 DOM 写入）
     watch(glitchGen, (n, o) => { if (n > o && active.value) burst() })
     // 注意：若宿主视图未来改用 keep-alive/v-show，active 只看主题不看
-    // 可见性——隐藏期间 interval 照跑，届时需补 onDeactivated 停表
+    // 可见性——隐藏期间脉冲表照跑，届时需补 onDeactivated 停表
 
     let mq
     const onMq = e => { mqMatches.value = e.matches }
@@ -148,7 +183,7 @@ export default {
     })
     onBeforeUnmount(() => { stop(); mq?.removeEventListener('change', onMq) })
 
-    return { words, corrupt, glitchGen, keyOf, active }
+    return { words, corrupt, glitchGen, keyOf, active, pulsing }
   }
 }
 </script>

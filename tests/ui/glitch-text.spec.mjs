@@ -6,7 +6,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import GlitchText from '../../src/components/GlitchText.vue'
+import PrintMarks from '../../src/components/PrintMarks.vue'
 import { setTheme, glitchBurst } from '../../src/lib/theme.js'
 import { prefGlitchMotion } from '../../src/lib/prefs.js'
 import { LS_KEYS } from '../../src/lib/storage.js'
@@ -82,7 +85,7 @@ describe('GlitchText 减动豁免', () => {
     const w = mount(GlitchText, { props: { text: '蚀刻' } })
     expect(w.vm.active).toBe(true)
     expect(hasMotionAttr()).toBe(true)
-    w.unmount() // active=true 起了 interval——收掉
+    w.unmount() // active=true（ambient 缺省）起了脉冲表——收掉
   })
 
   it('运行中切档：active 即时双向翻，豁免属性随 watcher 生灭', async () => {
@@ -120,7 +123,7 @@ describe('GlitchText 减动豁免', () => {
     mqReduce = false
     mqChange({ matches: false }) // 系统解除减动
     expect(w.vm.active).toBe(true)
-    await nextTick() // active 翻 true 后 watcher 起 interval——放行路跑通再收
+    await nextTick() // active 翻 true 后 watcher 起脉冲表——放行路跑通再收
 
     mqReduce = true
     mqChange({ matches: true }) // 系统恢复减动——收回
@@ -146,9 +149,9 @@ describe('GlitchText 减动豁免', () => {
   })
 })
 
-// 替身符按源字符脚本分流：Han 表意文字→HAN_POOL（经典乱码签名池），
+// 替身符按源字符脚本分流：Han 表意文字→HAN_POOL（几何/半角符池），
 // 其余（拉丁/假名/谚文等）→共享 POOL。Math.random 恒 0 取池首元——
-// '烫'/'▓' 分别是两池首元的字面量钉板（HAN_POOL/POOL 未导出，钉首元即
+// '█'/'▓' 分别是两池首元的字面量钉板（HAN_POOL/POOL 未导出，钉首元即
 // 钉路由；首元若改需同步改断言）
 describe('GlitchText 腐蚀分流', () => {
   beforeEach(() => setTheme('glitch-restoration'))
@@ -164,9 +167,9 @@ describe('GlitchText 腐蚀分流', () => {
     const w = mount(GlitchText, { props: { text: '漢a' } })
     glitchBurst() // 共享世代 +1 → watch(glitchGen) 触发全字符 scramble
     await nextTick() // watch flush:pre——世代变更落地为 corrupt 写入
-    expect(w.vm.corrupt.get('0:0')).toBe('烫') // '漢' → HAN_POOL[0]
+    expect(w.vm.corrupt.get('0:0')).toBe('█') // '漢' → HAN_POOL[0]
     expect(w.vm.corrupt.get('1:0')).toBe('▓') // 'a' → POOL[0]
-    w.unmount() // active=true 起了 interval + burst 回净表——收掉
+    w.unmount() // pulsing=true 起了脉冲表 + burst 回净表——收掉
   })
 
   it('astral 汉字路由进 HAN_POOL——判据 astral 段（20000–2FA1F）钉板', async () => {
@@ -176,18 +179,61 @@ describe('GlitchText 腐蚀分流', () => {
     const w = mount(GlitchText, { props: { text: '𠮷a' } })
     glitchBurst()
     await nextTick()
-    expect(w.vm.corrupt.get('0:0')).toBe('烫') // '𠮷' → HAN astral 段 → HAN_POOL[0]
+    expect(w.vm.corrupt.get('0:0')).toBe('█') // '𠮷' → HAN astral 段 → HAN_POOL[0]
     expect(w.vm.corrupt.get('1:0')).toBe('▓') // 'a' → POOL[0]
-    w.unmount() // active=true 起了 interval + burst 回净表——收掉
+    w.unmount() // pulsing=true 起了脉冲表 + burst 回净表——收掉
   })
 
-  it('tick 主路径同走分流（interval 驱动）', () => {
+  it('脉冲主路径：静默期干净 → 腐蚀 1–2 字 → 200ms 复原', () => {
     vi.useFakeTimers()
     vi.spyOn(Math, 'random').mockReturnValue(0)
     const w = mount(GlitchText, { props: { text: '漢a' } })
-    vi.advanceTimersByTime(1100) // 首个 tick——随机=0 命中 clean[0]='漢'
-    expect(w.vm.corrupt.get('0:0')).toBe('烫')
-    expect(w.vm.corrupt.size).toBe(1) // 封顶 ceil(2/6)=1——只腐蚀一键
+    vi.advanceTimersByTime(3799) // 静默期 3800+rand*1200（rand=0→3800）未满——不蚀
+    expect(w.vm.corrupt.size).toBe(0)
+    vi.advanceTimersByTime(1) // 脉冲点火——随机=0 命中 clean[0]='漢'
+    expect(w.vm.corrupt.get('0:0')).toBe('█')
+    expect(w.vm.corrupt.size).toBe(1) // 1+(0*2|0)=1——只腐蚀一键
+    vi.advanceTimersByTime(200) // 显影期满——本脉冲键整批复原
+    expect(w.vm.corrupt.size).toBe(0)
     w.unmount()
+  })
+
+  it('ambient=false：常态零定时器，共享 burst 仍响应且不复活脉冲', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const w = mount(GlitchText, { props: { text: '漢a', ambient: false } })
+    expect(w.vm.pulsing).toBe(false) // active 过闸但 ambient 关断脉冲链
+    expect(vi.getTimerCount()).toBe(0) // 降噪区常驻零定时器
+    vi.advanceTimersByTime(10000)
+    expect(w.vm.corrupt.size).toBe(0) // 全程无脉冲腐蚀
+
+    glitchBurst() // 共享世代 +1 → burst 不看 ambient，仍全 scramble
+    await nextTick() // watch flush:pre——世代变更落地为 corrupt 写入
+    expect(w.vm.corrupt.size).toBe(2)
+    vi.advanceTimersByTime(480) // burst 回净
+    expect(w.vm.corrupt.size).toBe(0)
+    // 落定后不复活脉冲链：推进多轮静默周期（邻实例有泄漏挂载会跑脉冲，
+    // 故按本实例 corrupt 行为钉板而非全局 getTimerCount）
+    vi.advanceTimersByTime(20000)
+    expect(w.vm.corrupt.size).toBe(0)
+    w.unmount()
+  })
+})
+
+// spec §5.3 源码契约：乱码汉字残片签名整池退役（禁字清单）；
+// PrintMarks 页脚戳三行 GlitchText 恒 ambient=false（降噪区零定时器）
+describe('GlitchText spec §5.3 契约', () => {
+  it('GlitchText.vue 源码不含乱码汉字禁字（烫/屯/锟/斤/拷/锘/�）', () => {
+    const src = readFileSync(join(process.cwd(), 'src/components/GlitchText.vue'), 'utf8')
+    for (const ch of ['烫', '屯', '锟', '斤', '拷', '锘', '\uFFFD'])
+      expect(src).not.toContain(ch)
+  })
+
+  it("PrintMarks variant='stamp' 三处 GlitchText 均绑 :ambient=\"false\"", () => {
+    const w = mount(PrintMarks, { props: { variant: 'stamp' } })
+    const instances = w.findAllComponents(GlitchText)
+    expect(instances).toHaveLength(3)
+    for (const inst of instances) expect(inst.props('ambient')).toBe(false)
+    w.unmount() // ambient=false 未起脉冲表——照常收实例
   })
 })
