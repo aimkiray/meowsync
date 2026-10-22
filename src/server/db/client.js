@@ -423,6 +423,21 @@ function initSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 手选播放源绑定（解锁链手动纠正）：用户在候选池点名挑的那条媒体，
+    -- 修「解锁链自动匹配到错翻唱」。只存指针不存回链——googlevideo/
+    -- bilivideo 链是带签名+ip绑定的易失品，落库即死链；每次播放经
+    -- resolveById 现解。song_id 只收网易数值曲（解锁链只对它生效），
+    -- 同一歌只留一条当前绑定，重挑覆盖
+    CREATE TABLE IF NOT EXISTS song_unlock_manual (
+      song_id TEXT PRIMARY KEY,        -- 网易数值曲目 id（解锁链仅服务此形态）
+      source TEXT NOT NULL,            -- 'youtube' | 'bilibili'（pyncmd 直解零错配不可绑）
+      media_id TEXT NOT NULL,          -- yt videoId(11位) / bili bvid(BV1xxxxxxxxx)
+      title TEXT NOT NULL DEFAULT '',  -- 绑定时刻候选标题（展示用快照，非权威）
+      owner TEXT NOT NULL DEFAULT '',  -- 频道/UP 主（展示用快照）
+      duration_sec INTEGER,            -- 绑定时刻候选秒数（展示+时长豁免参照；可空）
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- 外部源→网易云匹配缓存：track_id 是 bv_/yt_/qq_ 客户端曲目 id。
     -- netease_id NULL=负缓存（读查询判 7d TTL）；model 键控 AI 参与结果
     -- （''=纯启发式永命中，AI 结果只在同模型下复用）。正向行只存 id——

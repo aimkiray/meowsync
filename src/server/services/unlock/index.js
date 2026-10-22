@@ -8,15 +8,21 @@
 //   info = {id, name, artists[], keyword, durationMs}
 //   ctx  = {signal, purpose:'playback'|'download'}
 // 返回 null/抛错 = 该源不可用，编排层续下一源（与 unm match 语义对齐）
+// 可选能力（仅搜索型源实现；pyncmd 是「零错配官方直解」无候选面不加）：
+//   async search(keyword, {signal}) → 候选 [{videoId,title,owner,durationSec,cover?,...}]
+//     ——手动挑选池；provider 自管归一/去重/截断，不回 resolve 的时长筛/AI 簿
+//   async resolveById(mediaId, {signal, purpose}) → {url,urls,br,durationSec?,ext?}|null
+//     ——点名直解：跳过搜索/±5s筛/AI仲裁/verdict记忆/死簿，
+//       手动绑定唯一信任状是「此刻能否产出可用流」
 const pyncmd = require('./pyncmd');
 const youtube = require('./youtube');
 const bilibili = require('./bilibili');
 
 const PROVIDERS = {
-  pyncmd,   // GD Studio 网易聚合 API：id 直解回 *.music.126.net，零错配面
-  youtube,  // Innertube 搜索+选流：候选期有 lengthSeconds，需 /audio-proxy
+  pyncmd,   // GD Studio 网易聚合 API：id 直解回 *.music.126.net，零错配面（无 search/resolveById）
+  youtube,  // Innertube 搜索+选流：候选期有 lengthSeconds，需 /audio-proxy（+search/resolveById）
   bilibili, // SSR 岛搜索+playurl 音轨：B 站搬运第三源——bilivideo 回链需
-            // Referer（播放 /audio-proxy、下载 file-downloader 按主机名注入）
+            // Referer（播放 /audio-proxy、下载 file-downloader 按主机名注入）（+search/resolveById）
 };
 
 // 源优先级（删 unm 后）：

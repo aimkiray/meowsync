@@ -6,6 +6,9 @@
 // 中转（resolveSongUrls 的 source==='youtube' 分支），直发客户端必 403
 const { innertubeSearch } = require('../../lib/youtube');
 const { resolveYoutubeStreams } = require('../youtube-resolve');
+// videoId 形闸唯一真相源在共享谓词层（CJS require(ESM) 直读）——
+// 与路由层 POST /unlock/manual 的 mediaId 严校同一份正则，不养第二份
+const { YT_ID_RE } = require('../../../shared/predicates.js');
 // durationPool/degradedKeyword 与 bilibili 共用（./match.js）——
 // 时长选候选三态池与搜索真空降级词只此一份
 const { durationPool, degradedKeyword } = require('./match');
@@ -150,4 +153,48 @@ async function resolve(info, { signal, purpose } = {}) {
   return null;
 }
 
-module.exports = { resolve, aiRankCandidates, forgetSong };
+// ── 可选能力（仅搜索型源实现；pyncmd 是「零错配官方直解」无候选面不加）──
+//   async search(keyword, {signal}) → 候选 [{videoId,title,owner,durationSec,cover?,...}]
+//     ——手动挑选池；provider 自管归一/去重/截断，不回 resolve 的时长筛/AI 簿
+//   async resolveById(mediaId, {signal, purpose}) → {url,urls,br,durationSec?,ext?}|null
+//     ——点名直解：跳过搜索/±5s筛/AI仲裁/verdict记忆/死簿，
+//       手动绑定唯一信任状是「此刻能否产出可用流」
+
+// 手动挑选池：位置形 innertubeSearch 与 resolve 内 L41/L49 同式（回裸 items
+// 数组）。放宽到 8 条——自动链 5 条截断正是漏真命候选的来源之一；不回
+// 时长筛/AI 簿——人眼终审要看全池。cover 由 videoId 确定性推导零上行
+// （mqdefault 恒存在档），i.ytimg.com 在 IMG_PROXY_HOSTS 白名单内
+async function search(keyword, { signal } = {}) {
+  const items = await innertubeSearch(keyword, signal, 8);
+  return (items || []).map(it => ({
+    ...it,
+    cover: `https://i.ytimg.com/vi/${it.videoId}/mqdefault.jpg`,
+  }));
+}
+
+// 点名直解：YT_ID_RE 形闸前置（非法 videoId 不烧上游一跳）→ 30s 子预算
+//（与 resolve 内逐候选同口径：探测+重解病态叠加最坏 ~55s 必须封顶）→
+// 闸控感知取流 → 首流映射（跨档混排=不同字节实体，resolve 内同戒律）。
+// 不写 verdict/deadCands——候选语义 info 不在场，死簿只记自动链证据；
+// authRejected 裸抛透出由路由/编排层分类消费（本函数未逐候选记账，
+// 故不挂 authCounted——编排层会单记一次连败）
+async function resolveById(videoId, { signal, purpose } = {}) {
+  if (!YT_ID_RE.test(String(videoId || ''))) return null;
+  const candSignal = AbortSignal.any(
+    [AbortSignal.timeout(30000), ...(signal ? [signal] : [])]);
+  const { streams } = await resolveYoutubeStreams(videoId, {
+    kind: 'audio',
+    prefer: purpose === 'download' ? 'best' : '',
+    signal: candSignal,
+  });
+  const head = streams?.[0];
+  if (!head) return null;
+  return {
+    url: head.url,
+    urls: [head.url],
+    br: head.br ?? null,
+    durationSec: null,   // 点名解没有候选期时长——编排层对账取绑定行快照
+  };
+}
+
+module.exports = { resolve, search, resolveById, aiRankCandidates, forgetSong };

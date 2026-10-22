@@ -79,6 +79,20 @@ export const lyricManualPickBody = z.looseObject({
   token: z.string().max(200).optional()
 });
 
+// POST /unlock/manual：手选媒体源绑定。id 是网易数值曲目 id（路由层
+// NETEASE_ID_BOUNDED_RE），source 收窄到实现了 resolveById 的搜索型源，
+// mediaId 只收源私有 id 净形（youtube→11位 YT_ID_RE、bilibili→BVID_RE，
+// 路由层严校——服务端永不接 URL 串，粘贴解析全在客户端）。title/owner
+// 是绑定时刻展示快照（≤300/200 截断），durationSec 是展示+时长豁免参照
+export const unlockManualPickBody = z.looseObject({
+  id: z.union([z.string().min(1).max(20), z.number().int().positive()]),
+  source: z.enum(['youtube', 'bilibili']),
+  mediaId: z.string().min(1).max(80),
+  title: z.string().max(300).optional(),
+  owner: z.string().max(200).optional(),
+  durationSec: z.number().int().positive().max(7200).optional()
+});
+
 // POST /auth/setup 与 /auth/login：登录凭据契约。
 // username 白名单字符集（防注入展示/HTML），password 8-128（OWASP 建议下限 8，
 // 上限防 bcrypt 式截断语义与超长 DoS——argon2/scrypt 无截断问题但超长输入
