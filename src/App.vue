@@ -78,9 +78,15 @@
         <HomeFeed
           v-if="centerView === 'home'"
           :recent-playlists="playlistHistory"
+          :user-playlists="userPlaylists"
           :recents="playHistory"
+          :current-song-id="currentSong?.id ?? null"
+          :playing-playlist-id="playingPlaylistId"
+          :sidebar-open="sidebarOpen"
           @open="openShelfPlaylist"
           @play-song="openWatchRecent"
+          @play-playlist="playShelfPlaylist"
+          @add-to-playlist="handleOpenAddToPlaylist"
         />
         <SongList
           v-else-if="centerView === 'songs'"
@@ -1060,6 +1066,15 @@ export default {
       openAddToPlaylist(song, trigger)
     }
 
+    // 首页歌单货架卡 ▶：与 openShelfPlaylist 同律——playlistHistory 快照 stub
+    // 若歌单仍在 userPlaylists 库中，优先换带完整本地 tracks/addedTracks 的
+    // 活副本再交 playPlaylistFromSidebar（stub 直开会选单即空列表）
+    const playShelfPlaylist = (pl) => {
+      if (!pl) return
+      const live = userPlaylists.value.find(p => String(p.id) === String(pl.id))
+      return playPlaylistFromSidebar(live || pl)
+    }
+
     // 远程控制：host 模式 state_update 广播 + 指令执行 + 断线重连（composables/
     // useRemoteControl.js）。必须放在 usePlayer 之后实例化——依赖全部来自播放器域；
     // 模式判定要在播放器初始化前生效——controller 分支在下方 init 里提前 return
@@ -1565,6 +1580,8 @@ export default {
       openWatchSearchSong,
       openWatchRecent,
       openShelfPlaylist,
+      playShelfPlaylist,
+      playingPlaylistId,
       playPlaylistAndWatch,
       watchBack,
       playSongFromRelated,
