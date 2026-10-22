@@ -424,6 +424,84 @@ export const musicApi = {
     return data
   },
 
+  // 「换源」候选池：GET /unlock/candidates——服务端并发探 youtube/bilibili
+  // 搜索面把可绑媒体整列给用户挑（与解锁链同一片上游）。keyword 是客户端
+  // 镜像派生词（与服务端 baseUnlockInfo 同一条 KWFORM 规则句：name -
+  // artists.join(' / ')，artists 空回落裸 name）——显式传则服务端跳过
+  // song_detail 兜底派生零多跳；缺席时服务端自派并回显 keyword。45s 与
+  // getLyricCandidates 同档（两源扇出最坏段）。回 {keyword,candidates,
+  // errors?}——errors 是单源故障部行（他源照常下发，双源全灭才 502），
+  // 归一缺席两侧都给空数组让调用方零判空分叉
+  getUnlockCandidates: async ({ id, keyword }, abortSignal = null) => {
+    const response = await api.get('/unlock/candidates', {
+      params: { id, ...(keyword ? { keyword } : {}) },
+      signal: abortSignal,
+      timeout: 45000
+    })
+    const data = unwrapBody(response)
+    assertCode200(data, '媒体源候选')
+    return {
+      keyword: typeof data.keyword === 'string' ? data.keyword : '',
+      candidates: Array.isArray(data.candidates) ? data.candidates : [],
+      errors: Array.isArray(data.errors) ? data.errors : [],
+    }
+  },
+
+  // 媒体源绑定读口：GET /unlock/manual?id=——「换源」里选定过的绑定行，
+  // 命中回 {source,mediaId,title,owner,durationSec,updatedAt}（mediaId=
+  // 客户端面统一键：yt videoId / bili bvid）。未绑过服务端回 404——
+  // 「没绑过」是常态结局，与 getManualLyric 同口径归一成 null 不进错误
+  // 通道；其余错误（网络/超时）照常抛由调用方 .catch 归一
+  getManualUnlock: async (id, abortSignal = null) => {
+    const response = await api.get('/unlock/manual', {
+      params: { id }, signal: abortSignal
+    }).catch(err => {
+      if (err?.response?.status === 404) return null
+      throw err
+    })
+    if (response === null) return null
+    const data = unwrapBody(response)
+    // body 内 code:404（契约漂移防御，与 getManualLyric 同口径）同归 null
+    if (data.code === 404) return null
+    assertCode200(data, '手动媒体源')
+    const hit = data.hit && typeof data.hit === 'object' ? data.hit : null
+    // source/mediaId 是绑定的真值对——缺一即残行按未绑归 null
+    if (!hit?.source || !hit?.mediaId) return null
+    return hit
+  },
+
+  // 手选媒体源绑定提交：POST /unlock/manual {id,source,mediaId,title?,
+  // owner?,durationSec?}——服务端先 resolveById 真取流验证再落库（验流产
+  // 物签名 url 用完即弃不落库）。媒体失效（下架/不可播）回 404：axios
+  // 对非 2xx 直接拒，status 透传给调用方内联留窗；200 体内的业务码
+  // （含防御性 code:404 漂移）打标 bizCode 透出。timeout 35s——必须大
+  // 过服务端 30s 验流子预算，否则客户端先断让服务端白验一发
+  pickManualUnlock: async ({ id, source, mediaId, title, owner, durationSec }, abortSignal = null) => {
+    const response = await api.post('/unlock/manual',
+      { id, source, mediaId, title, owner, durationSec },
+      { signal: abortSignal, timeout: 35000 })
+    const data = unwrapBody(response)
+    if (data.code !== 200) {
+      const err = new Error(data.message || '绑定媒体源失败')
+      err.bizCode = data.code
+      throw err
+    }
+    const hit = data.hit && typeof data.hit === 'object' ? data.hit : data
+    return hit
+  },
+
+  // 解手动媒体源绑定：DELETE /unlock/manual?id=——恢复自动匹配语义（解锁
+  // 链回落 pyncmd→youtube→bilibili 自动搜索）。服务端幂等 200——没绑过
+  // 也达成目标态；code!==200 照常抛给调用方出 toast
+  clearManualUnlock: async (id, abortSignal = null) => {
+    const response = await api.delete('/unlock/manual', {
+      params: { id }, signal: abortSignal
+    })
+    const data = unwrapBody(response)
+    assertCode200(data, '解除媒体源绑定')
+    return data
+  },
+
   // 手动「生成滚动词」：POST /lyric-align——纯文本词行 + 已下载音频工件
   // （songId 寻址，服务端跨歌单查 download_tasks 的 completed 行）经
   // ffmpeg 抽包络 + LLM 行首映射产滚动 LRC。服务端最坏路径=

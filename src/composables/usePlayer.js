@@ -78,6 +78,15 @@ export const notifyLyricManualChange = (trackId) => {
   lyricManualChangeHandler?.(trackId)
 }
 
+// 手动媒体源绑定变更通知槽（WatchView 里 SourcePicker 选源/解绑后调）：
+// notifyLyricManualChange 同款单槽——emit 接线表在 App.vue 不在组件域。
+// 载荷只捎 trackId：绑定本体在服务端（且已 forgetSongUnlock），客户端
+// 要做的只是「正播同曲重走取址」——/song_url 重跑即吃到新绑定
+let unlockManualChangeHandler = null
+export const notifyUnlockManualChange = (trackId) => {
+  unlockManualChangeHandler?.(trackId)
+}
+
 // 播放器内核域：Howler 生命周期（看门狗/中止/竞态陈旧）、播放队列
 // （shuffle 物理打乱+原序备份/插播/拖拽/清空）、上一首/下一首/播完接续、
 // 歌词管线（拉取/CJK 判定/AI 校验翻译/时间校准持久化）、进度与音量、
@@ -1869,6 +1878,21 @@ export function usePlayer({
       void loadLyrics(currentSong.value)
     }
     lyricManualChangeHandler = onLyricManualChange
+    // 手动媒体源绑定变更槽（notifyUnlockManualChange 头注）：只对正播
+    // 同曲重走取址——非正播曲的绑定改动留到下次播放自然消费
+    const onUnlockManualChange = (trackId) => {
+      if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
+      // 换源即重取址：playSong 重走 getSongUrl→服务端手动步产出新链；
+      // preserveContext 保队列快照；seekTime=currentTime 保播放位、
+      // autoplay=isPlaying 保播/停态（safeSeekTime 钳位防越界）——
+      // 暂停态不拽起播放，在播则原位换源续听；非正播曲留下次播放自然消费
+      void playSong(currentSong.value, {
+        preserveContext: true,
+        seekTime: currentTime.value,
+        autoplay: isPlaying.value,
+      })
+    }
+    unlockManualChangeHandler = onUnlockManualChange
     // 遥控 seek 销账槽注册：与 lyricRematchHandler 同生命周期口径——卸载只摘
     // 自己的槽（测试多实例共存时不误摘新实例的注册）
     const onRemoteSeek = () => { pendingSeekTime = null }
@@ -1876,6 +1900,7 @@ export function usePlayer({
     onBeforeUnmount(() => {
       if (lyricRematchHandler === onLyricRematch) lyricRematchHandler = null
       if (lyricManualChangeHandler === onLyricManualChange) lyricManualChangeHandler = null
+      if (unlockManualChangeHandler === onUnlockManualChange) unlockManualChangeHandler = null
       if (remoteSeekSettleHandler === onRemoteSeek) remoteSeekSettleHandler = null
     })
 

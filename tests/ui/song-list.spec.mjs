@@ -21,6 +21,7 @@ vi.mock('../../src/lib/feedback.js', () => ({
 // 行菜单换绑通知槽是模块级单例——桩成 vi.fn() 断言载荷
 vi.mock('../../src/composables/usePlayer.js', () => ({
   notifyLyricRematch: vi.fn(),
+  notifyUnlockManualChange: vi.fn(), // WatchView 换源 applied 动态 import 单槽——半桩防模块解析
 }))
 
 import { musicApi } from '../../src/api/music.js'
