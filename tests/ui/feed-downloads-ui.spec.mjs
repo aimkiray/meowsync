@@ -1,7 +1,9 @@
 // 发现流/下载域/系统令牌 修复轮回归：
-//   HomeFeed 最近播放单曲卡（封面/歌手/来源徽标/@error 兜底）+
+//   HomeFeed 最近播放单曲卡（封面/歌手·来源副行/行尾 + 键/@error 兜底）+
 //     网格展示截 RECENT_DISPLAY_CAP=12（emit 队列种子仍全量）+
-//     recentAlbums 伪专辑准入（al.id 真值或 QQ albummid 合成键 ∧ 名≠歌名）
+//     recentAlbums 伪专辑准入（al.id 真值或 QQ albummid 合成键 ∧ 名≠歌名）+
+//     页头随机漫游/歌单货架门控与活副本富化/专辑同键聚合/
+//     播放态 --playing+aria-current/反嵌套零违规/货架翻页键
 //   Downloads：DQL meta 去内部 id/progressbar 具名、DTL 文案去「左侧」、
 //     DTR 去 #id/.dtr-done、err-tag 本地化、封面 @error；
 //     DownloadsPanel <xl 选中滚任务列
@@ -103,21 +105,21 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
     expect(names).toEqual(['真专辑', 'QQ真专辑'])
     const albums = w.vm.recentAlbums
     expect(albums).toHaveLength(2)
-    // 钉合成键形态：netease 数值 id 直用 / QQ albummid 带 'qq:' 域前缀
-    // （防字符串 albummid 与数值 id 撞键）；同名 QQ 行被名闸滤掉不入列
-    expect(albums.map(a => a.key)).toEqual([42, 'qq:abc123'])
+    // 钉合成键形态：netease id 归一成 String（数值 42 与串 '42' 同桶）/
+    // QQ albummid 带 'qq:' 域前缀；同名 QQ 行被名闸滤掉不入列
+    expect(albums.map(a => a.key)).toEqual(['42', 'qq:abc123'])
   })
 
-  it('songrow 渲封面/歌名/歌手/来源徽标，点击发 play-song', async () => {
+  it('songrow 渲封面/歌名/歌手·来源副行（行尾 chip 摘除），点击发 play-song', async () => {
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
     const rows = w.findAll('.home-songrow')
     expect(rows).toHaveLength(5)
-    // 徽标全源覆盖：数字 id 网易曲也出「网易云」，yt→YouTube，bv→B站，qq→QQ音乐
-    const tagText = (r) => r.find('.home-src-tag').exists() ? r.find('.home-src-tag').text() : null
-    const tags = rows.map(tagText)
-    expect(tags).toEqual(['网易云', 'YouTube', 'B站', 'QQ音乐', 'QQ音乐'])
+    // 来源徽标黑框摘除——来源并进副行文本：数字 id 网易曲也出「网易云」，
+    // yt→YouTube，bv→B站，qq→QQ音乐
+    for (const r of rows) expect(r.find('.home-src-tag').exists()).toBe(false)
+    const artists = rows.map(r => r.find('.home-songrow-artist').text())
+    expect(artists).toEqual(['艺人A · 网易云', 'UP主 · YouTube', 'UP乙 · B站', '艺 · QQ音乐', '艺丙 · QQ音乐'])
     expect(rows[1].find('.home-songrow-name').text()).toBe('视频歌')
-    expect(rows[1].find('.home-songrow-artist').text()).toBe('UP主')
     expect(rows[0].find('img.home-songrow-cover').exists()).toBe(true)
     await rows[0].trigger('click')
     expect(w.emitted('play-song')[0][0].id).toBe(1)
@@ -157,7 +159,196 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
     const w = track(mount(HomeFeed, {
       props: { recents: [RECENTS[1], RECENTS[2]], recentPlaylists: [] },
     }))
-    expect(w.text()).not.toContain('最近播放的专辑')
+    expect(w.text()).not.toContain('涉猎专辑')
+  })
+})
+
+describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
+  it('页头 overview + 音乐概览；随机漫游发 play-song(pool[0], 乱序全量) 且不改原数组', async () => {
+    const empty = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: [] } }))
+    expect(empty.find('.home-roam-btn').attributes('disabled')).toBeDefined()
+    empty.unmount()
+
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
+    expect(w.find('.home-head .pg-label').text()).toBe('overview')
+    expect(w.find('.home-title').text()).toContain('音乐概览')
+    const orderBefore = RECENTS.map(s => s.id)
+    await w.find('.home-roam-btn').trigger('click')
+    const emitted = w.emitted('play-song')
+    expect(emitted).toHaveLength(1)
+    const [song, queue] = emitted[0]
+    expect(queue).toHaveLength(RECENTS.length)
+    expect(queue).toContain(song) // 首曲即乱序池首元
+    // 队列是全量成员的乱序副本——非原数组引用，原历史序不被洗牌污染
+    expect(queue).not.toBe(RECENTS)
+    expect(queue.map(s => s.id).slice().sort()).toEqual(orderBefore.slice().sort())
+    expect(RECENTS.map(s => s.id)).toEqual(orderBefore)
+  })
+
+  it('歌单货架：空历史回退 userPlaylists 前 8 项（滤 single_song_ 壳）', () => {
+    const libs = [
+      { id: 'single_song_1', name: '分享壳', trackCount: 1 },
+      ...Array.from({ length: 10 }, (_, i) => ({ id: `pl_${i}`, name: `歌单${i}`, trackCount: i + 1 })),
+    ]
+    const w = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: [], userPlaylists: libs } }))
+    expect(w.text()).toContain('常听歌单')
+    expect(w.findAll('.grid-card')).toHaveLength(8)
+    expect(w.text()).not.toContain('分享壳')
+  })
+
+  it('歌单货架：recentPlaylists 快照经 userPlaylists 活副本富化（改名/曲数实时同步）', () => {
+    const w = track(mount(HomeFeed, {
+      props: {
+        recents: [],
+        recentPlaylists: [{ id: 'pl_1', name: '旧名', trackCount: 3, coverImgUrl: '' }],
+        userPlaylists: [{ id: 'pl_1', name: '新名', trackCount: 9, coverImgUrl: '' }],
+      },
+    }))
+    expect(w.find('.grid-card-name').text()).toBe('新名')
+    expect(w.find('.grid-card-meta').text()).toBe('9 首')
+  })
+
+  it('歌单货架门控：sidebarOpen && ≥901px 时收起（与展开侧栏信息重复）', () => {
+    const origMM = window.matchMedia
+    window.matchMedia = (q) => ({
+      matches: String(q).includes('901'),
+      addEventListener() {}, removeEventListener() {},
+    })
+    try {
+      const pls = [{ id: 'pl_1', name: '歌单一', trackCount: 5 }]
+      const w = track(mount(HomeFeed, {
+        props: { recents: [], recentPlaylists: pls, sidebarOpen: true },
+      }))
+      expect(w.text()).not.toContain('常听歌单')
+      expect(w.findAll('.grid-card')).toHaveLength(0)
+      w.unmount()
+      // 同宽视口但侧栏未展开 → 货架常显
+      const w2 = track(mount(HomeFeed, {
+        props: { recents: [], recentPlaylists: pls, sidebarOpen: false },
+      }))
+      expect(w2.text()).toContain('常听歌单')
+      expect(w2.findAll('.grid-card')).toHaveLength(1)
+    } finally {
+      window.matchMedia = origMM
+    }
+  })
+
+  it('专辑卡 meta 诚实（歌手 · 含《来源曲》），货架封面 alt 全空', () => {
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
+    const metas = w.findAll('.grid-card .grid-card-meta').map(n => n.text())
+    expect(metas).toEqual(['艺人A · 含《真曲》', '艺 · 含《曲》'])
+    const imgs = w.findAll('.grid-card-cover img')
+    expect(imgs.length).toBeGreaterThan(0)
+    for (const img of imgs) expect(img.attributes('alt')).toBe('')
+  })
+
+  it('专辑同键曲目跨 recents+userPlaylists 聚合：≥2 首给专辑队列，去重后仅 1 首回退 recents', async () => {
+    const sameAlbum = { id: 77, name: '同专二曲', ar: [{ name: '艺人A' }], al: { id: 42, name: '真专辑' } }
+    const w = track(mount(HomeFeed, {
+      props: {
+        recents: [RECENTS[0]],
+        recentPlaylists: [],
+        userPlaylists: [{ id: 'pl_1', name: '库单', trackCount: 1, tracks: [sameAlbum] }],
+      },
+    }))
+    const card = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
+    await card.trigger('click')
+    expect(w.emitted('play-song')[0][0].id).toBe(1)
+    expect(w.emitted('play-song')[0][1].map(s => s.id)).toEqual([1, 77]) // recents 先扫，库曲后补
+
+    // 库里只有同 id 重复曲：String(id) 去重后仍单曲 → 队列回退全量 recents 保连播
+    const w2 = track(mount(HomeFeed, {
+      props: {
+        recents: [RECENTS[0]],
+        recentPlaylists: [],
+        userPlaylists: [{ id: 'pl_2', name: '库单', trackCount: 1, tracks: [RECENTS[0]] }],
+      },
+    }))
+    const card2 = w2.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
+    await card2.trigger('click')
+    expect(w2.emitted('play-song')[0][1]).toEqual([RECENTS[0]])
+  })
+
+  it('播放态高亮：命中行/卡挂 --playing + aria-current + .grid-card-badge', () => {
+    const w = track(mount(HomeFeed, {
+      props: {
+        recents: RECENTS,
+        recentPlaylists: [{ id: 'pl_9', name: '在播单', trackCount: 4 }],
+        currentSongId: 1,
+        playingPlaylistId: 'pl_9',
+      },
+    }))
+    const rows = w.findAll('.home-songrow')
+    expect(rows[0].classes()).toContain('home-songrow--playing')
+    expect(rows[0].find('.home-songrow-main').attributes('aria-current')).toBe('true')
+    expect(rows[1].classes()).not.toContain('home-songrow--playing')
+    expect(rows[1].find('.home-songrow-main').attributes('aria-current')).toBeUndefined()
+    const plCard = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '在播单')
+    expect(plCard.classes()).toContain('grid-card--playing')
+    expect(plCard.attributes('aria-current')).toBe('true')
+    expect(plCard.find('.grid-card-main').attributes('aria-current')).toBe('true')
+    expect(plCard.find('.grid-card-badge').exists()).toBe(true)
+    // 专辑卡同律：currentSongId 命中其同键 tracks 成员
+    const alCard = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
+    expect(alCard.classes()).toContain('grid-card--playing')
+    expect(alCard.find('.grid-card-badge').exists()).toBe(true)
+    const other = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === 'QQ真专辑')
+    expect(other.classes()).not.toContain('grid-card--playing')
+  })
+
+  it('快捷操作与反嵌套零违规：行尾 + 键发 add-to-playlist、卡面 ▶ 发 play-playlist', async () => {
+    const w = track(mount(HomeFeed, {
+      props: { recents: RECENTS, recentPlaylists: [{ id: 'pl_1', name: '货架单', trackCount: 2 }] },
+    }))
+    expect(w.find('button button').exists()).toBe(false)
+    expect(w.find('[role="button"] button').exists()).toBe(false)
+    // 主激活区原生 button 点击冒泡到行壳——只发一次 play-song 不死区
+    await w.find('.home-songrow-main').trigger('click')
+    expect(w.emitted('play-song')).toHaveLength(1)
+    // 行尾 + 键 @click.stop：只发 add-to-playlist（带触发锚元素），不冒泡成 play-song
+    await w.find('.row-add-btn').trigger('click')
+    expect(w.emitted('add-to-playlist')).toHaveLength(1)
+    expect(w.emitted('add-to-playlist')[0][0].id).toBe(1)
+    expect(w.emitted('add-to-playlist')[0][1]).toBe(w.find('.row-add-btn').element)
+    expect(w.emitted('play-song')).toHaveLength(1)
+    // 卡面 ▶ @click.stop：只发 play-playlist，不冒泡成 open
+    const card = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '货架单')
+    await card.find('.grid-card-play').trigger('click')
+    expect(w.emitted('play-playlist')).toHaveLength(1)
+    expect(w.emitted('play-playlist')[0][0].id).toBe('pl_1')
+    expect(w.emitted('open')).toBeUndefined()
+  })
+
+  it('货架翻页键 [‹][›]：可滚才显、边界禁态、点击调 scrollBy', async () => {
+    const pls = Array.from({ length: 5 }, (_, i) => ({ id: `pl_${i}`, name: `单${i}`, trackCount: i }))
+    const w = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: pls } }))
+    // jsdom 默认 0 宽不可滚 → 翻页组不渲
+    expect(w.find('.home-shelf-nav').exists()).toBe(false)
+    const shelf = w.find('.home-shelf').element
+    Object.defineProperty(shelf, 'clientWidth', { value: 360, configurable: true })
+    Object.defineProperty(shelf, 'scrollWidth', { value: 900, configurable: true })
+    Object.defineProperty(shelf, 'scrollLeft', { value: 0, writable: true, configurable: true })
+    shelf.scrollBy = vi.fn()
+    window.dispatchEvent(new window.Event('resize'))
+    await nextTick()
+    expect(w.find('.home-shelf-nav').exists()).toBe(true)
+    const [prev, next] = w.findAll('.home-shelf-btn')
+    expect(prev.attributes('disabled')).toBeDefined()   // scrollLeft=0 已在左界
+    expect(next.attributes('disabled')).toBeUndefined()
+    await next.trigger('click')
+    expect(shelf.scrollBy).toHaveBeenCalledWith({ left: 360, behavior: 'smooth' })
+    // 滚到底（max=900-360=540）：上一页可用、下一页禁
+    shelf.scrollLeft = 540
+    await w.find('.home-shelf').trigger('scroll')
+    expect(prev.attributes('disabled')).toBeUndefined()
+    expect(next.attributes('disabled')).toBeDefined()
+  })
+
+  it('HomeFeed.vue .home-songrow-cover 去 image-rendering: pixelated（源码断言）', () => {
+    const src = vueSrc('HomeFeed.vue')
+    const block = src.match(/^\.home-songrow-cover\s*\{[^}]*\}/m)?.[0] ?? ''
+    expect(block).not.toContain('pixelated')
+    expect(block).not.toContain('image-rendering')
   })
 })
 
