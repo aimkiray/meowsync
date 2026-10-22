@@ -12,6 +12,9 @@ const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('./unlock');
 // seed 桩面只有 {PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES} 三字段，
 // 从门面解构 health 会在桩下拿到 undefined 崩掉
 const sourceHealth = require('./unlock/health');
+// 手选媒体源绑定簿：resolveOne 内手动插队步读它（库不可用按无绑定放行，
+// 见 resolveOne 内 try/catch）。依赖方向 netease-api→repo→db/client 无环
+const unlockManualRepo = require('../repositories/unlockManual');
 
 // 试听版判定阈值：上游返回的 url 时长不超过 60s 视为试听片段
 const TRIAL_MAX_DURATION_MS = 60000;
@@ -347,28 +350,62 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
       }
       if (!info) info = baseUnlockInfo(songRow);
     }
-    for (const source of allSources) {
+    // 手动绑定插队步：song_unlock_manual 有绑定行且其源具备 resolveById
+    // 能力时，在首个具该能力的源之前插一个 'manual' 虚拟步——pyncmd 之
+    // 后、全部搜索源之前。位序理由：(1) pyncmd 是官方直解零错配，手动
+    // 纠错的语义是「纠正搜索错配」不该压过官方源；(2) 绑 bilibili 的
+    // 场景恰是 youtube 自动链错配在先——手动步放绑定源自己的槽位
+    // （bilibili 在 youtube 后）会让前位搜索源先成功，绑定永不被消费；
+    // (3) 绑定媒体失败时回落完整自动链含绑定源自身搜索——纠错失败不
+    // 劣于现状。库不可用按无绑定放行（绑定是增强不是门禁）
+    let manual = null;
+    try { manual = unlockManualRepo.getManual(String(item.id)); } catch { /* 库不可用按无绑定放行 */ }
+    const manualOk = !!(manual && PROVIDERS[manual.source]?.resolveById);
+    const steps = [...allSources];
+    if (manualOk) {
+      const at = steps.findIndex(s => PROVIDERS[s]?.resolveById);
+      steps.splice(at === -1 ? steps.length : at, 0, 'manual');
+    }
+    for (const step of steps) {
+      const isManual = step === 'manual';
+      // 手动步把 breaker/errors/resolved 全键在绑定源名上——下游消费
+      //（unblockedSource/健康记账/日志）与自动步共享同一份口径
+      const source = isManual ? manual.source : step;
       const provider = PROVIDERS[source];
       if (!provider) continue;
       // 源级熔断闸（L2）：盖章窗内整源跳过——每次解锁重跑注定失败的
       // 完整试错链（youtube 每候选 3 形态 × 至多 2 试 + 30s 子预算）既
-      // 拖长 resolve 又持续给风控喂信号；breaker 条目记「该源本次没跑」
+      // 拖长 resolve 又持续给风控喂信号；breaker 条目记「该源本次没跑」。
+      // 手动步同撞墙——风控窗内直解同烧 30s 子预算只是喂信号
       if (sourceHealth.isOpen(source)) {
-        const msg = `源熔断中：${sourceHealth.breakerReason(source) || '连败判据'}`;
-        errors.push({ source, msg, cls: 'breaker' });
+        const msg = `源熔断中${isManual ? '（手动绑定）' : ''}：${sourceHealth.breakerReason(source) || '连败判据'}`;
+        errors.push(isManual
+          ? { source, msg, cls: 'breaker', manual: true }
+          : { source, msg, cls: 'breaker' });
         console.info(`[unlock] ${item.id} ${source}: ${msg}`);
         continue;
       }
       try {
-        const unblocked = await provider.resolve(
-          info ? { ...info } : { id: item.id, keyword: '' },
-          {
+        // 手动步点名直解绑定媒体（resolveById 跳过搜索/±5s筛/AI仲裁/
+        // verdict记忆/死簿）；自动步照旧搜索链。两路产出流经与
+        // provider.resolve 完全同一段 postcheck 管道——上游可控数据
+        // 同威胁模型，不因「用户选的」降格
+        const unblocked = isManual
+          ? await provider.resolveById(manual.mediaId, {
             purpose,
-            // 真实取消透传：provider 内每次 fetch 都吃这个 signal。
-            // 共享链不接调用方 signal（断连不陪绑）——60s 内部超时即自净上限
+            // 与兄弟分支同口径：共享链不陪绑调用方 signal——60s 内部
+            // 超时即自净上限（provider 内再叠 30s 子预算）
             signal: AbortSignal.timeout(UNBLOCK_TIMEOUT_MS),
-          },
-        );
+          })
+          : await provider.resolve(
+            info ? { ...info } : { id: item.id, keyword: '' },
+            {
+              purpose,
+              // 真实取消透传：provider 内每次 fetch 都吃这个 signal。
+              // 共享链不接调用方 signal（断连不陪绑）——60s 内部超时即自净上限
+              signal: AbortSignal.timeout(UNBLOCK_TIMEOUT_MS),
+            },
+          );
         // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，
         // 域名再逐跳过公网 IP 校验——私网解析的 URL 若选中即 break，
         // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
@@ -393,8 +430,11 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         if (!checked) {
           // 区分两类真因：源回 null/AI 全否（unblocked 空）与「有回链被
           // 归一化/公网校验杀」——下游 FAILMSG 直接消费这段文案
-          errors.push({ source, msg: unblocked ? '回链归一化/公网校验全拒' : '源未产出候选', cls: 'nomatch' });
-          console.info(`[unlock] ${item.id} ${source}: 无可用回链或归一化/公网校验全拒`);
+          const why = unblocked ? '回链归一化/公网校验全拒' : '源未产出候选';
+          errors.push(isManual
+            ? { source, msg: `手动绑定媒体：${why}`, cls: 'nomatch', manual: true }
+            : { source, msg: why, cls: 'nomatch' });
+          console.info(`[unlock] ${item.id} ${source}: ${isManual ? '手动绑定 ' : ''}无可用回链或归一化/公网校验全拒`);
           continue;
         }
 
@@ -411,8 +451,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
           }
           if (!urls.length) {
-            errors.push({ source, msg: '回链不在代理白名单', cls: 'nomatch' });
-            console.info(`[unlock] ${item.id} ${source}: 不在代理白名单`);
+            errors.push(isManual
+              ? { source, msg: '手动绑定媒体：回链不在代理白名单', cls: 'nomatch', manual: true }
+              : { source, msg: '回链不在代理白名单', cls: 'nomatch' });
+            console.info(`[unlock] ${item.id} ${source}: ${isManual ? '手动绑定 ' : ''}不在代理白名单`);
             continue;
           }
           // splice 可能换掉首链——checked 对齐过滤后的 urls[0]，
@@ -429,6 +471,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
           const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
           if (Number.isFinite(unblocked.durationSec) && unblocked.durationSec > 0) {
             estMs = unblocked.durationSec * 1000;
+          } else if (isManual && Number.isFinite(manual.durationSec) && manual.durationSec > 0) {
+            // 手动步对账参照回落绑定行快照——resolveById 恒回 null 时长
+            //（点名解没有候选期 lengthSeconds 可借）
+            estMs = manual.durationSec * 1000;
           } else if (unblocked.br) {
             // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
             // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
@@ -439,11 +485,22 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             estMs = estimateDuration(sizeBytes, unblocked.br);
           }
           if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
-            errors.push({ source, msg: `时长校验不符（估算${Math.round(estMs)}ms/原始${originalDt}ms）`, cls: 'nomatch' });
-            console.warn(
-              `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
-            );
-            continue;
+            // 时长对账对手动步只算不杀：用户在候选行看到 durationSec 后
+            // 显式点名——时长硬墙是「机器终审」，用户是更高终审，刻意挑
+            // Live/加长版是合法意图。豁免不静默：estMs 照算、留痕、
+            // resolved.timeMs 如实落绑定媒体时长
+            if (isManual) {
+              console.info(
+                `[unlock] ${item.id} purpose=${purpose} manual ${source}/${manual.mediaId} `
+                + `手动绑定媒体时长偏离（估算${Math.round(estMs)}ms/原始${originalDt}ms），按用户终审放行`
+              );
+            } else {
+              errors.push({ source, msg: `时长校验不符（估算${Math.round(estMs)}ms/原始${originalDt}ms）`, cls: 'nomatch' });
+              console.warn(
+                `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
+              );
+              continue;
+            }
           }
         }
 
@@ -461,6 +518,9 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
             || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null)
             || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),
           timeMs: estMs || originalDt || null,
+          // 手动绑定胜出标记随 resolved 进 unlockCache/下发——runUnlock
+          // 转写 item.unblockedManual/unblockedMediaId（诊断字段）
+          ...(isManual ? { manual: true, mediaId: manual.mediaId } : {}),
         };
         unlockCacheSet(purpose, item.id, !!proxyOrigin, resolved);
         // 源一次成功 = 凭据面回春——连败清零（已盖章的不撤，窗内仍跳过）
@@ -472,9 +532,17 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         // [canonical MARKER] provider 内已逐候选记过账的 authRejected
         // 不重复计——否则单 resolve 单证据计 2 次即误触盖章
         if (cls === 'authwall' && !e.authCounted) sourceHealth.noteAuthRejected(source);
-        errors.push({ source, msg: String(e?.message || e).replace(/[\r\n]+/g, ' '), cls });
+        // 手动步失败：条目形态与自动步全同外加 manual:true 标记、msg
+        // 前缀「手动绑定媒体：」——绑定行保留（一次风控/下架不该毁绑），
+        // 续跑剩余自动链（含被绑源自身搜索——纠错失败不劣于现状）；
+        // manual:true 使下载任务/排障可程序过滤真因。手动步不 markDead
+        // ——死簿只记自动链证据
+        const msg = String(e?.message || e).replace(/[\r\n]+/g, ' ');
+        errors.push(isManual
+          ? { source, msg: `手动绑定媒体：${msg}`, cls, manual: true }
+          : { source, msg, cls });
         // 该源失败，继续下一个——留一行 info 让「逐源全灭」可排障
-        console.info(`[unlock] ${item.id} ${source}: ${e?.message || e}`);
+        console.info(`[unlock] ${item.id} ${source}: ${isManual ? '手动绑定 ' : ''}${e?.message || e}`);
       }
     }
     return { resolved: null, errors };
@@ -521,6 +589,13 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         }
         item.unblocked = true;
         item.unblockedSource = resolved.source;
+        // 手动绑定胜出的诊断字段：unblockedSource 保源名原值（前端/排障
+        // 据此区分「自动命中」与「用户终审」，不记号化）；
+        // unblockedMediaId 为「当前手动源」二期角标预留
+        if (resolved.manual === true) {
+          item.unblockedManual = true;
+          item.unblockedMediaId = resolved.mediaId;
+        }
         // 解锁文件的真实码率（item.br 仍是网易声明值）：下载端落盘后时长
         // 对账以它为分母，直接用声明值会把低码率解锁误判成剪辑
         item.unblockedBr = resolved.br;
@@ -531,7 +606,10 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
         if (resolved.ext) item.type = resolved.ext;
         if (resolved.size) item.size = resolved.size;
         if (resolved.timeMs) item.time = resolved.timeMs;
-        console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${!!proxyOrigin}${wasCached ? ' (cached)' : shared ? ' (shared)' : ''}`);
+        // 成功行同样标注手动绑定来源——errors/豁免/breaker 各路径均有
+        // 「手动绑定」字样，成功行漏标会让手动命中与自动命中日志不可分
+        //（§6 观测项：source= 落绑定源名 + msg 注「手动绑定」）
+        console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${!!proxyOrigin}${resolved.manual === true ? ' (manual 手动绑定)' : ''}${wasCached ? ' (cached)' : shared ? ' (shared)' : ''}`);
       } else {
         item.unlockFailed = true;
         // 试听片段/失效链不再下发——否则下载端会把 30s 残片当完整曲落盘并标 completed
@@ -632,4 +710,7 @@ function forgetSongUnlock(songId) {
   }
 }
 
-module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock, MAX_UNLOCK_ITEMS, forgetSongUnlock };
+// baseUnlockInfo 导出给 /unlock/candidates：keyword 缺席时的兜底派生
+// （[canonical KWFORM]「name - artists.join(' / ')」公式唯一源——客户端
+// 镜像派生与这里共用同一规则句，不许另写拼接）
+module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock, MAX_UNLOCK_ITEMS, forgetSongUnlock, baseUnlockInfo };

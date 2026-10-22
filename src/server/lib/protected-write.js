@@ -14,10 +14,12 @@ const { tokenMatches } = require('./token-eq');
 // 闸只挡写）。/lyric 段覆盖手选词面的写端点（/lyric/manual POST 绑词会
 // 触发上游取词+整行落库、DELETE 解绑写库）；同段的 /lyric/candidates 与
 // /lyric/external 是 GET-only——形态在表内但方法豁免，读面不受影响。
-// /lyric-align 是独立首段（'/lyric/' 前缀匹配不到它），本就单列在表
+// /lyric-align 是独立首段（'/lyric/' 前缀匹配不到它），本就单列在表；
+// '/unlock' 同型——/unlock/manual 的 POST/DELETE 会写库+触发上游取流
+// 验证，属写面；同段 /unlock/candidates 是 GET-only 不受影响
 const PROTECTED_WRITE_PREFIXES = [
   '/downloads', '/playlists', '/ai', '/settings', '/song-meta',
-  '/match', '/uploads', '/lyric-align', '/lyric', '/sync',
+  '/match', '/uploads', '/lyric-align', '/lyric', '/unlock', '/sync',
 ];
 const isProtectedWritePath = (p) => PROTECTED_WRITE_PREFIXES
   .some((px) => p === px || String(p).startsWith(`${px}/`));

@@ -177,6 +177,8 @@ app.route('/', require('./src/server/routes/sync'));
 app.route('/', require('./src/server/routes/lyric-external'));
 // 手选词源绑定（/lyric/candidates 候选池 + /lyric/manual 绑/读/解绑）
 app.route('/', require('./src/server/routes/lyric-manual'));
+// 手选媒体源绑定（/unlock/candidates 候选池 + /unlock/manual 绑/读/解绑）
+app.route('/', require('./src/server/routes/unlock-manual'));
 const musicRoutes = require('./src/server/routes/music');
 app.route('/', musicRoutes);
 

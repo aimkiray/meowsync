@@ -8,6 +8,9 @@
 // 下游注入（播放端 /audio-proxy 已注入，routes/proxy.js；下载端
 // file-downloader 按主机名注入），本层只产链。
 const { biliSearchVideos, resolveBiliAudio } = require('../../lib/bilibili');
+// bvid 形闸唯一真相源在共享谓词层（CJS require(ESM) 直读）——
+// 与路由层 POST /unlock/manual 的 mediaId 严校同一份正则，不养第二份
+const { BVID_RE } = require('../../../shared/predicates.js');
 // durationPool/degradedKeyword 与 youtube 共用（./match.js）——
 // 时长选候选三态池与搜索真空降级词只此一份
 const { durationPool, degradedKeyword } = require('./match');
@@ -101,12 +104,47 @@ function extOfStream(s) {
   return ext && AUDIO_EXT_WHITELIST.has(ext) ? ext : null;
 }
 
+// 选档头下标（resolve 逐候选与 resolveById 共用同一判据——两份口径必
+// 漂移）：播放档优先首个 audio/mp4 通用容器轨作头——flac/杜比档（登录态
+// 才下发）经 audio-proxy 喂 <audio>，Safari 与旧浏览器放不了；下载档
+// 保 'best' 首项（无损优先是归档语义）
+function pickHeadIdx(cands, purpose) {
+  if (purpose !== 'download') {
+    const i = cands.findIndex(c => (c?.mimeType || '').startsWith('audio/mp4'));
+    if (i >= 0) return i;
+  }
+  return 0;
+}
+
 // 下游可对账判据：候选自带正时长——编排层 durationSec>0 时 estMs 直接
 // 取它比对（netease-api.js）。durationSecOf 坏形态归 0/字段缺席的候选
 // 胜出后，estMs 只能走 br×size 的 HEAD 估算支路——裸 HEAD 不带 Referer
 // 对 upos CDN 必遭防盗链拦截 → 对账墙静默缺位。仲裁池划分与胜出留痕
 // 共用这一判据（youtube 侧同型，见 unlock/youtube.js durOk 注）
 const durOk = (c) => Number.isFinite(c?.durationSec) && c.durationSec > 0;
+
+// 搜索行归一到共享候选契约 {videoId,title,owner,durationSec,pic}：bvid 作
+// 候选 id 进死簿/verdict 键；不做分区白名单过滤——搬运稿常落音乐区外
+// （动画/综合），时长筛+AI 核验即错配闸。限 8 条压 AI prompt 与取流试错
+// 面（B 站相关性排序前段才是真候选）。resolve 与 search 共用同一归一——
+// 两份归一必漂移；pic 一并携带（search 面取它作封面——videoItemToRow
+// 归一行已把协议相对形补成 https:），resolve 路径忽略它零害。
+// SSR 岛列表会重复下发同 bvid——同 videoId 在一次 resolve 内出现两次
+// 会让同一 deadKey 连死两次、直接 n=2 升级 ok=0 verdict（健康候选
+// 永久误判）；按 videoId 去重保首见序，同时滤掉无 bvid 脏行（N-7）
+function normalizeCands(items) {
+  const seenBv = new Set();
+  const candidates = [];
+  for (const v of (items || []).slice(0, 8)) {
+    if (!v?.bvid || seenBv.has(v.bvid)) continue;
+    seenBv.add(v.bvid);
+    candidates.push({
+      videoId: v.bvid, title: v.title, owner: v.author, durationSec: v.durationSec,
+      pic: v.pic,
+    });
+  }
+  return candidates;
+}
 
 /**
  * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
@@ -138,22 +176,9 @@ async function resolve(info, { signal, purpose } = {}) {
     if (signal?.aborted) throw e;
     throw asTransientErr('B 站搜索失败', e);
   }
-  // 搜索行归一到共享候选契约 {videoId,title,owner,durationSec}：bvid 作
-  // 候选 id 进死簿/verdict 键；不做分区白名单过滤——搬运稿常落音乐区外
-  // （动画/综合），时长筛+AI 核验即错配闸。限 8 条压 AI prompt 与
-  // 取流试错面（B 站相关性排序前段才是真候选）。
-  // SSR 岛列表会重复下发同 bvid——同 videoId 在一次 resolve 内出现两次
-  // 会让同一 deadKey 连死两次、直接 n=2 升级 ok=0 verdict（健康候选
-  // 永久误判）；按 videoId 去重保首见序，同时滤掉无 bvid 脏行（N-7）
-  const seenBv = new Set();
-  const candidates = [];
-  for (const v of (items || []).slice(0, 8)) {
-    if (!v?.bvid || seenBv.has(v.bvid)) continue;
-    seenBv.add(v.bvid);
-    candidates.push({
-      videoId: v.bvid, title: v.title, owner: v.author, durationSec: v.durationSec,
-    });
-  }
+  // 搜索行归一/去重/截断走模块级 normalizeCands（与 search 能力同源——
+  // 口径注释见该函数头注；pic 在 resolve 路径忽略零害）
+  const candidates = normalizeCands(items);
   // ±5s 筛仍是首选；筛空但候选在场时不弃——全候选（上方截断 8 条内）
   // 交 AI 语义仲裁（youtube 同款三层闸：±5s 比编排层 DURATION_TOLERANCE
   // 严一个量级，搬运稿件片头尾超窗却是真命候选；AI 语义判定是错配正主
@@ -197,14 +222,9 @@ async function resolve(info, { signal, purpose } = {}) {
         markDead(info, cand);
         continue;
       }
-      // 播放档优先通用容器轨：flac/杜比档（登录态才下发）经 audio-proxy
-      // 喂 <audio>，Safari 与旧浏览器放不了——首选首个 audio/mp4 项作头；
-      // 下载档保 'best' 首项（无损优先是归档语义）
-      let headIdx = 0;
-      if (purpose !== 'download') {
-        const i = cands.findIndex(c => (c?.mimeType || '').startsWith('audio/mp4'));
-        if (i >= 0) headIdx = i;
-      }
+      // 播放档优先通用容器轨、下载档保 'best' 首项——判据与 resolveById
+      // 共用模块级 pickHeadIdx（口径注释见该函数头注）
+      const headIdx = pickHeadIdx(cands, purpose);
       const urls = mirrorGroup(cands.slice(headIdx));
       // AI 选定候选取流验证成功才落批准 verdict——「批准」承诺的是
       // 「是这首歌且能播」，未经流验证的批准会把死候选永久压队首
@@ -252,4 +272,51 @@ async function resolve(info, { signal, purpose } = {}) {
   return null;
 }
 
-module.exports = { resolve, aiRankCandidates, forgetSong };
+// ── 可选能力（仅搜索型源实现；pyncmd 是「零错配官方直解」无候选面不加）──
+//   async search(keyword, {signal}) → 候选 [{videoId,title,owner,durationSec,cover?,...}]
+//     ——手动挑选池；provider 自管归一/去重/截断，不回 resolve 的时长筛/AI 簿
+//   async resolveById(mediaId, {signal, purpose}) → {url,urls,br,durationSec?,ext?}|null
+//     ——点名直解：跳过搜索/±5s筛/AI仲裁/verdict记忆/死簿，
+//       手动绑定唯一信任状是「此刻能否产出可用流」
+
+// 手动挑选池：与 resolve 同一片搜索水域（不做分区过滤——搬运稿常落音乐
+// 区外，候选池必须与自动链同水域）；归一/去重/截断共用 normalizeCands，
+// cover 取归一行 pic（已补 https:）。搜索段失败包 asTransientErr 与
+// resolve 同口径（B 站风控/瞬断归 transient 供编排层退避重试）
+async function search(keyword, { signal } = {}) {
+  let items;
+  try {
+    ({ items } = await biliSearchVideos(keyword, { signal }));
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    throw asTransientErr('B 站搜索失败', e);
+  }
+  return normalizeCands(items).map(v => ({ ...v, cover: v.pic }));
+}
+
+// 点名直解：BVID_RE 形闸前置（非法 bvid 不烧上游一跳）→ 30s 子预算
+//（与 resolve 内逐候选同口径：无 cid 时 view+playurl+cid 自愈三跳必须
+// 封顶）→ playurl 音轨 → headIdx 选档（播放=首个 audio/mp4 轨，下载=
+// best 首项）→ mirrorGroup 同字节镜像组 → ext 显式下发（.m4s 链走
+// extOf 会错落 mp3 壳）。不写 verdict/死簿——候选语义 info 不在场，
+// 死簿只记自动链证据；风控判定照旧抛（路由/编排层分类消费）
+async function resolveById(bvid, { signal, purpose } = {}) {
+  if (!BVID_RE.test(String(bvid || ''))) return null;
+  const candSignal = AbortSignal.any(
+    [AbortSignal.timeout(30000), ...(signal ? [signal] : [])]);
+  // 搜索行无 cid——resolveBiliAudio 缺 cid 自查 view 定位，cid 过期
+  // 自愈同 routes/bilibili.js 口径，全部复用不重抄
+  const cands = await resolveBiliAudio({ bvid, signal: candSignal });
+  if (!cands.length) return null;
+  const headIdx = pickHeadIdx(cands, purpose);
+  const urls = mirrorGroup(cands.slice(headIdx));
+  return {
+    url: urls[0],
+    urls,
+    br: cands[headIdx].br ?? null,
+    durationSec: null,   // 点名解没有候选期时长——编排层对账取绑定行快照
+    ext: extOfStream(cands[headIdx]),
+  };
+}
+
+module.exports = { resolve, search, resolveById, aiRankCandidates, forgetSong };

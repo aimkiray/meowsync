@@ -6,7 +6,9 @@ const PREFIXES = [
   '/downloads', '/playlists', '/audio-proxy', '/img-proxy', '/remote',
   '/ping', '/healthz', '/bilibili', '/youtube', '/qq',
   '/song-meta', '/ai', '/auth', '/uploads', '/settings', '/match', '/lyric-align',
-  '/sync'
+  // '/unlock'：手选媒体源绑定面（/unlock/candidates|manual）——不登记则
+  // authGate 把它当非 API 公开 GET、SPA 兜底喂 index.html 而非 JSON 404
+  '/unlock', '/sync'
 ];
 
 // 已摘除的上游路由家族首段——历史上这些是 API（JSON 404/鉴权），摘除后若不
