@@ -88,6 +88,15 @@
             :title="songDownloaded ? '已下载到服务器' : '下载到服务器'"
             @click="pickDownload"
           ><span v-if="songDownloading" class="pixel-loading" aria-hidden="true"></span><PixelIcon v-else :name="songDownloaded ? 'check' : 'download'" :size="14" /> {{ songDownloading ? '下载中…' : (songDownloaded ? '已下载' : '下载') }}</button>
+          <!-- 换源：解锁链自动搜索错配翻唱/剪辑时手动点名媒体源——只对
+               网易数值曲露面（bv_/yt_/qq_/file_ 自有源不进解锁链，项对
+               它们永无消费点）。归属「下载」动作群后、回源外链前 -->
+          <button
+            v-if="isNeteaseSongId"
+            class="pg-menu-item" role="menuitem"
+            title="解锁链选错源时手动挑播放媒体"
+            @click="pickSource"
+          ><PixelIcon name="broadcast" :size="14" /> 换源</button>
           <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）——
                click/auxclick 都关菜单（TopNav 控制器项同型）；noreferrer
                不给源站带去本站 Referer -->
@@ -548,6 +557,15 @@
       @close="lyricPickerOpen = false"
       @applied="onLyricPickApplied"
     />
+    <!-- 手动媒体源挑选弹层（「换源」菜单项开）：组件内 Teleport 到 body；
+         applied 上行经 onSourcePickApplied 走 usePlayer 模块级单槽对
+         正播同曲保位重取址 -->
+    <SourcePicker
+      v-if="sourcePickerOpen && currentSong"
+      :song="currentSong"
+      @close="sourcePickerOpen = false"
+      @applied="onSourcePickApplied"
+    />
   </div>
 </template>
 
@@ -560,10 +578,11 @@ import { musicApi } from '../api/music'
 import { downloadsApi } from '../api/downloads'
 import PixelIcon from './PixelIcon.vue'
 import LyricPicker from './LyricPicker.vue'
+import SourcePicker from './SourcePicker.vue'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
-import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url'
+import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE, NETEASE_ID_RE } from '../lib/url'
 import { relatedSourceOf, relatedFetch } from '../lib/related'
 import { songSourceTag, songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
@@ -582,7 +601,7 @@ const dlCacheSet = (k, v) => {
 
 export default {
   name: 'WatchView',
-  components: { PixelIcon, LyricPicker },
+  components: { PixelIcon, LyricPicker, SourcePicker },
   props: {
     currentSong: { type: Object, default: null },
     isPlaying: { type: Boolean, default: false },
@@ -1544,6 +1563,12 @@ export default {
     const showAvGroup = computed(() =>
       !!(props.currentSong?.bilibili?.bvid || props.currentSong?.youtube?.videoId
         || props.currentSong?.file?.hasVideo || bvM.value || ytM.value))
+    // 「换源」项出场闸：与服务端 /unlock/* 端点的 NETEASE_ID_BOUNDED_RE
+    // 同根正则（解锁链只服务网易数值曲——bv_/yt_/qq_/file_ 自有源无
+    // 「解锁错配」语义，项对它们恒隐）；computed 供 v-if 与菜单高估算
+    // 复用同一份
+    const isNeteaseSongId = computed(() =>
+      NETEASE_ID_RE.test(String(props.currentSong?.id ?? '')))
 
     const toggleMenu = () => {
       if (menuOpen.value) { closeMenu(); return }
@@ -1555,6 +1580,7 @@ export default {
       const items = 2                                          // 沉浸/收藏恒在
         + (fileTrack ? 0 : 1)                        // 分享（file_ 不出项）
         + (props.currentSong && !fileTrack ? 1 : 0)  // 下载（同 file_ 闸）
+        + (isNeteaseSongId.value ? 1 : 0)            // 换源（仅网易数值曲）
         + (sourceUrl.value ? 1 : 0)                  // 回源
       const h = items * 39 + 8
       menuPos.value = {
@@ -1622,6 +1648,23 @@ export default {
       if (songId == null) return
       import('../composables/usePlayer.js')
         .then(m => m.notifyLyricManualChange?.(songId))
+        .catch(() => {})
+    }
+
+    // 手动媒体源挑选弹层（SourcePicker 内 Teleport 到 body）：⋯ 菜单
+    // 「换源」项开；选源/解绑 applied（载荷=绑定曲 id）→ 上行通知播放器
+    // 对正播同曲保位重取址——onLyricPickApplied 同款动态 import 单槽
+    // 通道（半桩 usePlayer 的测试谱不被静态 import 炸解析）
+    const sourcePickerOpen = ref(false)
+    // closeMenu(true) 还焦 ⋯ 触发键——menuitem 随菜单卸载即死，归还锚
+    // 须捎活着的触发键；弹层挂载后自收 _prevFocus，归还先行一步无碍，
+    // 关窗后焦点回 ⋯ 键闭环
+    const pickSource = () => { sourcePickerOpen.value = true; closeMenu(true) }
+    const onSourcePickApplied = (songId) => {
+      sourcePickerOpen.value = false
+      if (songId == null) return
+      import('../composables/usePlayer.js')
+        .then(m => m.notifyUnlockManualChange?.(songId))
         .catch(() => {})
     }
 
@@ -1719,7 +1762,11 @@ export default {
       pauseLyricFollow,
       onWatchTouchStart,
       lyricPickerOpen,
-      onLyricPickApplied
+      onLyricPickApplied,
+      sourcePickerOpen,
+      pickSource,
+      onSourcePickApplied,
+      isNeteaseSongId
     }
   }
 }

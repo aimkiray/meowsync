@@ -487,7 +487,6 @@ describe('LyricPicker：关闭与中止', () => {
     document.body.innerHTML = ''
 
     const w2 = mountPicker()
-    mounted.push(w2)
     await flush()
     for (const type of ['mousedown', 'mouseup', 'click']) {
       overlayEl().dispatchEvent(new MouseEvent(type, { bubbles: true }))

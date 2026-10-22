@@ -55,6 +55,7 @@ vi.mock('../../src/lib/feedback.js', () => ({
 }))
 vi.mock('../../src/composables/usePlayer.js', () => ({
   notifyLyricRematch: vi.fn(),
+  notifyUnlockManualChange: vi.fn(), // WatchView 换源 applied 动态 import 单槽——半桩防模块解析
 }))
 
 import { downloadsApi } from '../../src/api/downloads.js'

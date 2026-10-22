@@ -19,6 +19,11 @@ vi.mock('../../src/api/music.js', () => ({
     searchSongs: vi.fn(async () => []),
     bilibiliStreamUrl: vi.fn(() => 'https://x/bili'),
     youtubeStreamUrl: vi.fn(() => 'https://x/yt'),
+    // 「换源」弹层四件——SourcePicker 挂载即发前两件；默认空池未绑
+    getUnlockCandidates: vi.fn(async () => ({ keyword: '', candidates: [], errors: [] })),
+    getManualUnlock: vi.fn(async () => null),
+    pickManualUnlock: vi.fn(async () => ({ code: 200, hit: {} })),
+    clearManualUnlock: vi.fn(async () => ({ code: 200 })),
   },
   parseLyrics: vi.fn(() => []),
   mergeTranslations: vi.fn((l) => l),
@@ -30,6 +35,12 @@ vi.mock('../../src/api/downloads.js', () => ({
   },
 }))
 vi.mock('../../src/lib/feedback.js', () => ({ toast: vi.fn() }))
+// usePlayer 半桩：WatchView 的 picker applied 回调走动态 import 单槽
+// （notifyUnlockManualChange）——桩成 vi.fn() 断言载荷，同 menu-focus
+// 谱先例；静态图不挂 howler/api 依赖
+vi.mock('../../src/composables/usePlayer.js', () => ({
+  notifyUnlockManualChange: vi.fn(),
+}))
 
 import WatchView from '../../src/components/WatchView.vue'
 import PixelIcon from '../../src/components/PixelIcon.vue'
@@ -37,6 +48,7 @@ import { musicApi } from '../../src/api/music.js'
 import { downloadsApi } from '../../src/api/downloads.js'
 import { prefVideoOn } from '../../src/lib/prefs.js'
 import { toast } from '../../src/lib/feedback.js'
+import { notifyUnlockManualChange } from '../../src/composables/usePlayer.js'
 
 // jsdom 缺口补丁：matchMedia（歌词跟随 watcher）、scrollIntoView/scrollTo
 // （行居中）在生产浏览器都有，这里只保证存在不报错
@@ -582,5 +594,104 @@ describe('WatchView：播放错误/时长警告走全局 toast', () => {
   it('挂载即带残留值不弹（横幅是状态语义，toast 是事件语义）', () => {
     mountWatch({ tab: 'queue', playbackError: '残留错误', durationWarning: '残留警告' })
     expect(toast).not.toHaveBeenCalled()
+  })
+})
+
+describe('WatchView：⋯菜单换源项', () => {
+  // 「换源」=解锁链错配的手动纠错入口——只对网易数值曲露面（bv_/yt_/
+  // qq_/file_ 自有源不进解锁链，项对它们永无消费点）；落位「下载」
+  // 动作群后、回源外链前；菜单高估算随行数 +1
+  const sourceItem = () => menuItemByText('换源')
+  // 菜单高估算断言要真翻顶——jsdom getBoundingClientRect 恒 0，钉触发键
+  // 落位近视口底（top:690/bottom:700，innerHeight 768 放不下往下展的菜单）
+  const pinTriggerNearBottom = (w) => {
+    menuTrigger(w).element.getBoundingClientRect = () =>
+      ({ top: 690, bottom: 700, left: 780, right: 800, width: 20, height: 10, x: 780, y: 690 })
+  }
+
+  it('网易数值 id → 「换源」项渲染 broadcast 图标，落位下载与回源之间', async () => {
+    const w = mountWatch({ tab: 'queue', currentSong: { ...SONG, id: '12345' } })
+    await openActionsMenu(w)
+    const el = sourceItem()
+    expect(el).toBeTruthy()
+    expect(el.getAttribute('title')).toContain('解锁链选错源时手动挑播放媒体')
+    const icon = w.findAllComponents(PixelIcon).find(c => el.contains(c.element))
+    expect(icon.props('name')).toBe('broadcast')
+    const texts = menuItems().map(i => i.textContent)
+    const at = texts.findIndex(t => t.includes('换源'))
+    expect(texts.findIndex(t => t.includes('下载'))).toBeLessThan(at)
+    // 回源锚是网易云链接项（数值曲 sourceUrl 在场）
+    expect(texts.findIndex(t => t.includes('网易云'))).toBeGreaterThan(at)
+  })
+
+  it('网易数值曲菜单高多算 1 行：数值 id 顶翻差 39px（bv_ 对照无此项）', async () => {
+    const w = mountWatch({ tab: 'queue', currentSong: { ...SONG, id: '12345' } })
+    pinTriggerNearBottom(w)
+    await openActionsMenu(w)
+    // 数值曲：沉浸/收藏/分享/下载/换源/回源(网易云)=6 项 → h=6*39+8=242；
+    // 底 700+4+242 放不下 768 → 顶翻 top=690-242-4=444
+    expect(menuEl().style.top).toBe('444px')
+    mounted.pop().unmount()
+    document.body.innerHTML = ''
+
+    // bv_ 曲无「换源」项（回源仍在——BV_TRACK_ID_RE id 兜底出 B站 原页）
+    // → 5 项 → h=5*39+8=203 → 顶翻 top=690-203-4=483；两例顶翻差恰 39px=1 行
+    const w2 = mountWatch({
+      tab: 'queue',
+      currentSong: { id: 'bv_BV1xx411c7mD', name: 'bv', ar: [{ name: 'a' }], al: {}, dt: 0 },
+    })
+    pinTriggerNearBottom(w2)
+    await openActionsMenu(w2)
+    expect(sourceItem()).toBeUndefined()
+    expect(menuEl().style.top).toBe('483px')
+    expect(menuItems()).toHaveLength(5)
+  })
+
+  it('bv_/yt_/qq_/file_/无 currentSong → 项恒隐（自有源无解锁错配语义）', async () => {
+    for (const [label, song] of [
+      ['bv_', { id: 'bv_BV1xx411c7mD', name: 'b', ar: [], al: {}, dt: 0 }],
+      ['yt_', { id: 'yt_abcdefghijk', name: 'y', ar: [], al: {}, dt: 0 }],
+      ['qq_', { id: 'qq_abc123defg', name: 'q', ar: [], al: {}, dt: 0 }],
+      ['file_', { id: 'file_abcd1234', name: 'f', ar: [], al: {}, dt: 0 }],
+      ['null', null],
+    ]) {
+      const w = mountWatch({ tab: 'queue', currentSong: song })
+      await openActionsMenu(w)
+      expect(sourceItem(), label).toBeUndefined()
+      mounted.pop().unmount()
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('点击「换源」→ SourcePicker 挂载 + 菜单关闭 + 焦点入弹层；applied → notifyUnlockManualChange', async () => {
+    musicApi.getUnlockCandidates.mockResolvedValue({
+      keyword: 'kw', errors: [],
+      candidates: [{ source: 'youtube', mediaId: 'abcdefghijk', title: '候选源', durationSec: 200 }],
+    })
+    const w = mountWatch({ tab: 'queue', currentSong: { ...SONG, id: '12345' } })
+    await openActionsMenu(w)
+    await clickEl(sourceItem())
+    await nextTick()
+    // 菜单已关；弹层 teleport 挂 body（sp-dialog 自收焦点——menuitem 已死，
+    // closeMenu(true) 先把焦点还给 ⋯ 触发键再交弹层 _prevFocus 记账）
+    expect(menuEl()).toBeNull()
+    const dialog = document.querySelector('.sp-dialog')
+    expect(dialog).toBeTruthy()
+    await new Promise(r => setTimeout(r, 0)) // 首载两条腿落地
+    expect(musicApi.getUnlockCandidates).toHaveBeenCalled()
+    expect(musicApi.getManualUnlock).toHaveBeenCalledWith('12345', expect.any(AbortSignal))
+
+    // 点候选行 → POST → applied 上行 → 动态 import 单槽收到 trackId；
+    // picker emit close 后弹层卸载，焦点沿 _prevFocus（=⋯触发键）归还
+    const row = document.querySelector('.sp-row')
+    expect(row).toBeTruthy()
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+    expect(musicApi.pickManualUnlock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '12345', source: 'youtube', mediaId: 'abcdefghijk' }))
+    expect(notifyUnlockManualChange).toHaveBeenCalledWith('12345')
+    expect(document.querySelector('.sp-dialog')).toBeNull()
+    expect(document.activeElement).toBe(menuTrigger(w).element)
   })
 })

@@ -99,7 +99,7 @@ import { downloadsApi } from '../../src/api/downloads.js'
 import { aiApi } from '../../src/api/ai.js'
 import { syncApi } from '../../src/api/sync.js'
 import { toast } from '../../src/lib/feedback.js'
-import { usePlayer, notifyRemoteSeek } from '../../src/composables/usePlayer.js'
+import { usePlayer, notifyRemoteSeek, notifyUnlockManualChange } from '../../src/composables/usePlayer.js'
 import { initSync, pullFromServer, resetSyncState } from '../../src/lib/sync.js'
 import { LS_KEYS } from '../../src/lib/storage.js'
 
@@ -2982,5 +2982,79 @@ describe('usePlayer：L15 看门狗与加载窗（state 可控桩驱动）', () 
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('usePlayer：手动媒体源绑定变更槽（notifyUnlockManualChange）', () => {
+  // WatchView SourcePicker 选源/解绑后调——只对正播同曲重走取址
+  // （playSong 重跑即吃到服务端新绑定）；preserveContext 保队列、
+  // seekTime=currentTime 保播放位、autoplay=isPlaying 保播/停态；
+  // 异 id / 无正播曲零调用
+  it('正播同曲：playSong 以 {preserveContext,seekTime≈currentTime,autoplay=isPlaying} 重跑', async () => {
+    const s = song(1)
+    const { player } = makePlayer({ songs: [s, song(2)] })
+    await player.playSong(s)
+    howls[0].fire('onload')
+    howls[0].fire('onplay')
+    expect(player.isPlaying.value).toBe(true)
+    const queueBefore = player.playingSongs.value
+    // 播放位推进——换源应原位续播而非回零
+    player.currentTime.value = 42
+    musicApi.getSongUrl.mockClear()
+
+    notifyUnlockManualChange(1)
+    await vi.waitFor(() => expect(howls.length).toBe(2))
+    // 重走取址——/song_url 重跑才吃到服务端新绑定（同 id）
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(1, expect.anything())
+    // preserveContext：队列快照不换（filteredSongs 仍是原 songs——
+    // 队列重拍与否的直接读数是 playingSongs 引用不被换掉）
+    expect(player.playingSongs.value).toBe(queueBefore)
+    // seekTime=currentTime 保播放位：onload 落地 seek 到 42（钳位窗内）
+    howls[1].fire('onload')
+    expect(howls[1].seek()).toBe(42)
+    expect(player.currentTime.value).toBe(42)
+    // autoplay=isPlaying：在播态换源续播（新实例 onplay 真翻 _playing）
+    expect(howls[1]._playing).toBe(true)
+    expect(player.isPlaying.value).toBe(true)
+  })
+
+  it('暂停态换源：autoplay=false 不拽起播放（原位换链待播）', async () => {
+    const { player } = makePlayer({ songs: [song(1)] })
+    await player.playSong(song(1))
+    howls[0].fire('onload')
+    howls[0].fire('onplay')
+    player.togglePlay() // 暂停——isPlaying 落 false
+    expect(player.isPlaying.value).toBe(false)
+    player.currentTime.value = 30
+    musicApi.getSongUrl.mockClear()
+
+    notifyUnlockManualChange(1)
+    await vi.waitFor(() => expect(howls.length).toBe(2))
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(1, expect.anything())
+    howls[1].fire('onload')
+    expect(howls[1].seek()).toBe(30) // 播放位仍保
+    // autoplay=isPlaying=false——新实例不起播（暂停态不拽起）
+    expect(howls[1]._playing).toBe(false)
+    expect(player.isPlaying.value).toBe(false)
+  })
+
+  it('异 id / 无正播曲 → playSong 零调用（信号丢弃）', async () => {
+    const { player } = makePlayer({ songs: [song(1)] })
+    await player.playSong(song(1))
+    howls[0].fire('onload')
+    musicApi.getSongUrl.mockClear()
+
+    notifyUnlockManualChange(999) // 非当前曲——信号被丢弃
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(howls.length).toBe(1)
+
+    // 无正播曲（currentSong==null）——全新实例同丢弃
+    const { player: p2 } = makePlayer()
+    notifyUnlockManualChange(1)
+    await new Promise(r => setTimeout(r, 0))
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(howls.length).toBe(1)
+    expect(p2.currentSong.value).toBeNull()
   })
 })
