@@ -16,9 +16,10 @@
   </svg>
 
   <div v-else-if="variant === 'stamp'" class="pg-stamp">
-    <p><GlitchText text="MeowSync · Version 1.0.0" /></p>
-    <p><GlitchText text="©2026 · All rights reserved" /></p>
-    <p><GlitchText text="Made with Love" /></p>
+    <!-- 页脚戳走 ambient=false：常驻零定时器不脉冲，仅共享 burst 仍闪回 -->
+    <p><GlitchText text="MeowSync · Version 1.0.0" :ambient="false" /></p>
+    <p><GlitchText text="©2026 · All rights reserved" :ambient="false" /></p>
+    <p><GlitchText text="Made with Love" :ambient="false" /></p>
   </div>
 </template>
 
