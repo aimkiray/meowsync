@@ -5,8 +5,10 @@
 //      'null' 写进剪贴板还报假成功
 //   ⋯ 菜单换面：首项「播放歌单」（触屏封面 hover 劫持的替代入口），
 //      无重复的「复制分享链接」
-//   主页重构 U2：侧栏首行同轴（panel-head flex-start / label 顶距 0 /
-//      create-btn 负顶距 + 窄轨复位）与 style.css 卡件退役项——
+//   主页重构 U2 + 去双语微标签：侧栏首行同轴（panel-head flex-start /
+//      label 顶距 0 / create-btn 负顶距 -6px@20px 行高 + 窄轨复位）、
+//      panel-label 去 pg-label 升 14/600 节题、library 双语签摘除、
+//      页脚计数中文化，与 style.css 卡件退役项——
 //      jsdom 不计算样式，几何锚全走源文本钉板
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
@@ -167,8 +169,22 @@ describe('PlaylistPanel 源钉板：首行同轴（B 方案）', () => {
     expect(head).toContain('align-items: flex-start')
     const label = css.match(/\.panel-label\s*\{[\s\S]*?\}/)?.[0] || ''
     expect(label).toContain('padding: 0 12px 12px')
+    // 去 pg-label 微标签后升格为 14/600 侧栏节题；行高钉 20px 供同心算式取定值
+    expect(label).toContain('font-size: 14px')
+    expect(label).toContain('font-weight: 600')
+    expect(label).toContain('line-height: 20px')
     const btn = css.match(/\.panel-create-btn\s*\{[^}]*\}/)?.[0] || ''
-    expect(btn).toContain('margin: -10px 0 4px')
+    // 32px 键中心对齐 20px 行高文本行中心：-(32/2 - 20/2) = -6
+    expect(btn).toContain('margin: -6px 0 4px')
+  })
+
+  it('侧栏标题只留中文「我的歌单」（去 library/pg-label 类），页脚计数中文化', () => {
+    const css = readSrc('src/components/PlaylistPanel.vue')
+    expect(css).toContain('<h2 class="panel-label"><GlitchText text="我的歌单" /></h2>')
+    expect(css).not.toContain('library')
+    expect(css).not.toContain('pg-label panel-label')
+    expect(css).toContain('{{ userPlaylists.length }} 个歌单')
+    expect(css).not.toContain('} playlists')
   })
 
   it('窄轨未展开态 .panel-create-btn 复位 margin: 0 0 6px', () => {

@@ -4,7 +4,6 @@
   <div ref="wrapEl" class="playlist-grid-wrap">
     <header class="grid-head">
       <div class="grid-head-text">
-        <p class="pg-label">search results</p>
         <h2 class="grid-title" data-nosnippet><GlitchText text="搜索结果" /></h2>
         <!-- 上下文行：「"词" · 源名」——多源时代结果页要自报口径，
              不然切源重搜后用户分不清眼前是哪一库的产物。
@@ -27,8 +26,8 @@
       <!-- YTM 分区结果：歌曲行在前（可直接播放），歌单卡片区在后 -->
       <section v-if="songs.length" class="result-section">
         <div class="result-section-head">
-          <p class="pg-label">songs</p>
-          <span class="result-section-sub">歌曲 · 点击即播</span>
+          <span class="result-section-sub">歌曲</span>
+          <span class="pg-label pg-label--dim result-section-hint">点击即播</span>
         </div>
         <!-- 虚拟滚动上沿 spacer（行高 56px 均匀）；曲列深挖可累积数千行 -->
         <div :ref="bindSongAnchor" :style="{ height: songTopPad + 'px' }" aria-hidden="true"></div>
@@ -104,7 +103,6 @@
 
       <section v-if="results.length" class="result-section">
         <div class="result-section-head">
-          <p class="pg-label">playlists</p>
           <span class="result-section-sub">歌单</span>
         </div>
         <div class="playlist-grid">
@@ -174,7 +172,7 @@
       </p>
 
       <div class="grid-foot">
-        <span class="pg-label pg-label--dim">{{ songs.length }} songs · {{ results.length }} playlists</span>
+        <span class="pg-label pg-label--dim">{{ songs.length }} 首歌曲 · {{ results.length }} 个歌单</span>
       </div>
     </template>
   </div>
@@ -465,7 +463,8 @@ export default {
   margin: 14px auto 0;
 }
 
-/* 页头：等宽微标签 + 大字标题 + 发丝方键关闭 */
+/* 页头：大字标题 + 发丝方键关闭（search results 微标签摘除后
+   .grid-title 顶缘直接落在全站 20 首行轴，与 .home-title 同律） */
 .grid-head {
   display: flex;
   align-items: flex-end;
@@ -479,7 +478,6 @@ export default {
 .grid-head .pg-icobtn:hover { color: var(--ink); }
 
 .grid-title {
-  margin-top: 6px;
   font-family: var(--font-display);
   font-size: 28px;
   font-weight: 700;
@@ -510,7 +508,7 @@ export default {
   color: var(--ink-64);
 }
 
-/* 分区：发丝线起头 + 微标签节题 */
+/* 分区：发丝线起头 + 节题行 */
 .result-section {
   border-top: var(--hairline-soft);
   padding-top: 12px;
@@ -524,9 +522,18 @@ export default {
   margin-bottom: 8px;
 }
 
+/* 节题：英文 pg-label 微标签摘除后中文副题升格为唯一节题——13px/600，
+   与 .home-section-sub 同律（已出彩布白名单，scoped --ink 全壳生效） */
 .result-section-sub {
-  font-size: 12px;
-  color: var(--ink-64);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* 节题行尾 dim 注记（点击即播）：挂 pg-label--dim 白嫖彩布升档白名单，
+   scoped 只压字号——11px 与行内 meta/index 同档，低于 13px 节题 */
+.result-section-hint {
+  font-size: 11px;
 }
 
 /* 歌曲行：留白节奏（无分隔线），点击区收进 -main（行是容器，行尾 + 键不落播放） */

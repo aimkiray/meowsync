@@ -1,9 +1,9 @@
 <template>
-  <!-- 歌单库侧栏："library" 媒体库列表，发丝线行排 -->
+  <!-- 歌单库侧栏：「我的歌单」节题 + 发丝线行排（中英双语微标签已摘，只留中文名） -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
     <div class="panel-head">
       <!-- h2 补层级链：topnav h1 → 侧栏 h2 → 歌单名 .pl-name h3（裸 p 断链） -->
-      <h2 class="pg-label panel-label"><GlitchText text="library 我的歌单" /></h2>
+      <h2 class="panel-label"><GlitchText text="我的歌单" /></h2>
       <button
         class="pg-icobtn pg-icobtn--bare panel-create-btn"
         title="新建歌单"
@@ -169,7 +169,7 @@
       </div>
 
       <div class="pl-foot">
-        <span class="pg-label pg-label--dim">{{ userPlaylists.length }} playlists</span>
+        <span class="pg-label pg-label--dim">{{ userPlaylists.length }} 个歌单</span>
       </div>
     </div>
   </div>
@@ -555,14 +555,22 @@ export default {
   flex-shrink: 0;
 }
 
+/* 侧栏节题：去 pg-label 双语微标签后升格为唯一标题——14px/600 与主区
+   .home-section-sub 节题同族（大 1 档示栏首地位），字族随主题 --font-body。
+   行高钉 20px：给下方 + 键同心算式一个确定行盒（CJK 标题 1 倍行高太挤） */
 .panel-label {
-  padding: 0 12px 12px; /* 顶距 0：严格落在 20px 首行轴，与主区 .home-head .pg-label 同轴 */
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--ink);
+  padding: 0 12px 12px; /* 顶距 0：顶缘严落 20px 首行轴，与主区 .home-title 同轴 */
   flex-shrink: 0;
 }
 
-/* 32px 按钮上收 10px 进入 .playlist-panel 的 20px 顶留白带：
-   按钮中心 (-10 + 16 = 6px) 与 12px 高 .panel-label 中心 (6px) 同心，且不撑高首行 */
-.panel-create-btn { margin: -10px 0 4px; }
+/* 32px 按钮上收 6px 进入 .playlist-panel 的 20px 顶留白带：
+   按钮中心 (-6 + 16 = 10px) 与 20px 行高 .panel-label 文本行中心 (10px) 同心，
+   且不撑高首行；pointer:coarse 下键盒放大到 40px 时同心点漂 +4px（原档同容差） */
+.panel-create-btn { margin: -6px 0 4px; }
 
 .panel-state {
   /* 与列表态 .playlist-scroll 同律：标题下方纯留白，无分隔线 */
