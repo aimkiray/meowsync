@@ -667,13 +667,8 @@ export default {
 /* ≥901 向 YTM gap 24 档（16→24 @936 同型） */
 @media (min-width: 901px) { .playlist-grid { gap: 24px; } }
 
-/* 卡片外壳/cover/-name/-meta 均已上收全局 style.css。
+/* 卡片外壳/cover/-name/-meta/.grid-card-main 均已上收全局 style.css。
    .grid-card-main 是 role=button 点击区——动作键是它兄弟节点，消灭嵌套可交互 */
-.grid-card-main {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
 
 .grid-card-actions {
   display: flex;

@@ -181,6 +181,13 @@
   border-radius: 10px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, .06);
 }
+/* 升权补丁带同律：上条柔影（0,3,0）压死基态 .grid-card--playing 的
+   inset 内描边环（0,1,0）——glitch 下显式登记：柔影保留、accent 内环补回 */
+:root[data-theme="glitch-restoration"] .grid-card--playing {
+  border-color: var(--accent-magenta-ink, var(--ink));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .06),
+    inset 0 0 0 1.2px var(--accent-magenta-ink, var(--ink));
+}
 :root[data-theme="glitch-restoration"] .grid-card-cover { border-radius: 6px; }
 :root[data-theme="glitch-restoration"] .watch-cover,
 :root[data-theme="glitch-restoration"] .playlist-hero-cover { border-radius: 10px; }
@@ -561,6 +568,7 @@ button {
 .song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
 .pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
 .song-result-main:focus-visible, .home-songrow:focus-visible,
+.home-songrow-main:focus-visible, .grid-card-play:focus-visible,
 .transport:focus-visible,
 .pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
 .pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
@@ -593,7 +601,8 @@ button {
   .pl-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
   .queue-row--current, .song-row--playing, .song-result-row--playing,
   .transport--active, .pg-icobtn--pressed,
-  .topnav-suggest-item--active, .rc-queue-row--current {
+  .topnav-suggest-item--active, .rc-queue-row--current,
+  .home-songrow--playing, .grid-card--playing {
     outline: 1.2px solid transparent;
   }
   /* 透明 border 被强制色刷成 ButtonText 实心条——滚动条顶部内缩车道退化为
@@ -681,6 +690,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 .app-shell .app-body .panel-state-text, .app-shell .app-body .panel-state-sub,
 .app-shell .app-body .pl-meta, .app-shell .app-body .result-section-sub,
 .app-shell .app-body .grid-state-text, .app-shell .app-body .home-section-sub, .app-shell .app-body .home-state-text,
+.app-shell .app-body .home-songrow-artist,
 .app-shell .app-body .watch-autoplay,
 .app-shell .app-body .playlist-hero-sub,
 .app-shell .app-body .song-result-index, .app-shell .app-body .song-result-meta, .app-shell .app-body .song-result-duration {
@@ -707,6 +717,12 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 }
 .app-shell .app-body .pg-panel .pg-label--dim,
 .app-shell .app-body .pg-panel .dql-kebab:not(:hover) { color: var(--ink-64); }
+/* 反白 home-songrow 内升档白名单的回收：artist/行尾 + 键在墨底上回 label-grey
+   （row-add-btn 同被白名单 ink-86 罩住，非 hover 态也需 (0,4,0) 显式登记） */
+.app-shell .app-body .home-songrow--playing .home-songrow-artist,
+.app-shell .app-body .home-songrow--playing .row-add-btn {
+  color: var(--label-grey);
+}
 
 /* 行尾动作键统一 hover：墨字 + 内陷盒环（⋯/分享/✕ 同律）。
    排在补丁带之后——同 (0,4,0) 靠后序压过 dim 回退与白名单 */
@@ -718,7 +734,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   outline-offset: -1.2px;
 }
 /* 反白行上的行尾键改纸色（排在统一律之后才不被压） */
-.app-shell .song-row--playing .song-menu-btn:hover {
+.app-shell .song-row--playing .song-menu-btn:hover,
+.app-shell .home-songrow--playing .row-add-btn:hover {
   color: var(--paper);
   outline-color: var(--paper);
 }
@@ -732,7 +749,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   outline-color: var(--accent-magenta-ink);
 }
 /* glitch 反白行尾键：accent-on-ink 字色 + 纸色环（与默认主题的 paper 法则同构） */
-:root[data-theme="glitch-restoration"] .app-shell .song-row--playing .song-menu-btn:hover {
+:root[data-theme="glitch-restoration"] .app-shell .song-row--playing .song-menu-btn:hover,
+:root[data-theme="glitch-restoration"] .app-shell .home-songrow--playing .row-add-btn:hover {
   color: var(--accent-magenta-on-ink);
   outline-color: var(--paper);
 }
@@ -1250,7 +1268,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   flex-shrink: 0;
   object-fit: cover;
   border: var(--hairline); /* 封面描边与 song-cover/pl-cover 同档墨线 */
-  image-rendering: pixelated;
 }
 .asp-text { flex: 1; min-width: 0; }
 .asp-name {
@@ -1437,7 +1454,7 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   .queue-row-remove { opacity: 1; pointer-events: auto; }
 }
 
-/* 「添加到歌单」行尾键：queue-row / song-result-row 共用（尺寸吃 pg-icobtn--sm） */
+/* 「添加到歌单」行尾键：queue-row / song-result-row / home-songrow 共用（尺寸吃 pg-icobtn--sm） */
 .row-add-btn {
   flex-shrink: 0;
   color: var(--ink-64);
@@ -1449,6 +1466,8 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
 .queue-row:focus-within .row-add-btn,
 .song-result-row:hover .row-add-btn,
 .song-result-row:focus-within .row-add-btn,
+.home-songrow:hover .row-add-btn,
+.home-songrow:focus-within .row-add-btn,
 .row-add-btn:focus-visible { opacity: 1; pointer-events: auto; }
 /* 触屏同律：hover 不可得时行尾键常显 */
 @media (hover: none){
@@ -1465,8 +1484,15 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   gap: 8px;
   transition: transform 0.15s var(--ease-ink);
 }
-/* PG 里整卡不可点——可点区是 .grid-card-main */
-.grid-card-main { cursor: pointer; }
+/* PG 里整卡不可点——可点区是 .grid-card-main；flex:1 撑起卡内余量
+   （PlaylistGrid 动作列/HomeFeed meta 借此沉底对齐，PG scoped 有同形 flex 布局） */
+.grid-card-main {
+  cursor: pointer;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
 @media (prefers-reduced-motion: no-preference) {
   .grid-card:hover { transform: translateY(-2px); }
@@ -1476,6 +1502,7 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1; /* 撑满 .grid-card-main 余量——meta 借 margin-top:auto 沉底，单行名不再留死白 */
 }
 
 .grid-card-cover {
@@ -1483,13 +1510,13 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   aspect-ratio: 1;
   overflow: hidden;
   border: var(--hairline);
+  position: relative; /* .grid-card-badge / .grid-card-play 浮层锚点 */
 }
 .grid-card-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
-  image-rendering: pixelated;
 }
 .grid-card-cover-fallback {
   background: var(--paper);
@@ -1509,7 +1536,6 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   line-height: 1.35;
-  min-height: 2.7em;
 }
 .grid-card-meta {
   font-family: var(--font-mono);
@@ -1518,6 +1544,62 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-top: auto; /* 沉到卡底——同排卡的 meta 基线对齐，单行名下不留空档 */
+}
+
+/* 播放中卡：accent 内描边（外 border 已是 hairline，inset 加粗不挤布局） */
+.grid-card--playing {
+  border-color: var(--accent-magenta-ink, var(--ink));
+  box-shadow: inset 0 0 0 1.2px var(--accent-magenta-ink, var(--ink));
+}
+/* 封面左上「播放中」戳——纯展示不吃点击 */
+.grid-card-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--paper);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  pointer-events: none;
+}
+/* 封面右下 ▶ 直播键：常态隐、hover/focus-within 显（playlist-play-overlay 同纪律） */
+.grid-card-play {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1.2px solid var(--paper);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, color .2s;
+}
+.grid-card:hover .grid-card-play,
+.grid-card:focus-within .grid-card-play,
+.grid-card-play:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.grid-card-play:hover {
+  color: var(--accent-magenta-on-ink, var(--paper));
+}
+@media (hover: none) {
+  .grid-card-play {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 /* 进度条机制（BottomPlayer/FullscreenPlayer 共用：scaleX 驱动免布局）

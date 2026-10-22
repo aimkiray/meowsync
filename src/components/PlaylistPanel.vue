@@ -549,18 +549,20 @@ export default {
    真实可视缘上，而非追逐随 gutter 漂移的同一坐标 */
 .panel-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding-right: 22px;
   flex-shrink: 0;
 }
 
 .panel-label {
-  padding: 8px 12px 10px; /* 与行块内收缘同轴（12px；封面左缘再内进 16px） */
+  padding: 0 12px 12px; /* 顶距 0：严格落在 20px 首行轴，与主区 .home-head .pg-label 同轴 */
   flex-shrink: 0;
 }
 
-.panel-create-btn { margin: 4px 0 6px; }
+/* 32px 按钮上收 10px 进入 .playlist-panel 的 20px 顶留白带：
+   按钮中心 (-10 + 16 = 6px) 与 12px 高 .panel-label 中心 (6px) 同心，且不撑高首行 */
+.panel-create-btn { margin: -10px 0 4px; }
 
 .panel-state {
   /* 与列表态 .playlist-scroll 同律：标题下方纯留白，无分隔线 */
@@ -596,6 +598,8 @@ export default {
   /* 窄轨 label/行内件全藏后头行只剩 + 键——与居中封面列对位
      （经典滚动条平台 scrollbar-gutter:auto 吐车道，封面心漂 ~5px，可接受） */
   .app-sidebar:not(.app-sidebar--open) .panel-head { justify-content: center; padding-right: 0; }
+  /* 未展开态 label 隐藏，负顶距失去同轴对象——复位回常态档避免 + 键上漂出轨 */
+  .app-sidebar:not(.app-sidebar--open) .panel-create-btn { margin: 0 0 6px; }
 }
 
 /* 歌单行：留白节奏（无分隔线），整行可点；
@@ -633,12 +637,12 @@ export default {
   margin-inline: 6px;
 }
 
+/* 照片封面不 pixelated——与规格去锯齿方向一致（songrow/货架卡同律） */
 .pl-cover {
   width: 100%;
   height: 100%;
   object-fit: cover;
   border: var(--hairline);
-  image-rendering: pixelated;
   display: block;
 }
 
