@@ -684,12 +684,13 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    升到 (0,3,0) 后与反白态 scoped 规则（同为 0,3,0）平手，
    仍靠「全局先、scoped 后」的顺序让反白态继续胜出——语义兼容。
    ⚠ 白名单机制：新增的「画布内 ink-64 次级文字/图标」类必须登记到下列，
-   否则在彩布上静默不达标（新主题改画布色后尤甚）。 */
+   否则在彩布上静默不达标（新主题改画布色后尤甚）。
+   节题 .home-section-sub/.result-section-sub 升格唯一节题（13/600）出名单——scoped --ink 生效。 */
 .app-shell .app-body .song-artist, .app-shell .app-body .song-duration, .app-shell .app-body .song-state-text,
 .app-shell .app-body .song-state-sub,
 .app-shell .app-body .panel-state-text, .app-shell .app-body .panel-state-sub,
-.app-shell .app-body .pl-meta, .app-shell .app-body .result-section-sub,
-.app-shell .app-body .grid-state-text, .app-shell .app-body .home-section-sub, .app-shell .app-body .home-state-text,
+.app-shell .app-body .pl-meta,
+.app-shell .app-body .grid-state-text, .app-shell .app-body .home-state-text,
 .app-shell .app-body .home-songrow-artist,
 .app-shell .app-body .watch-autoplay,
 .app-shell .app-body .playlist-hero-sub,

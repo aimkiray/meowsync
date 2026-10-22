@@ -4,7 +4,6 @@
   <div ref="feedEl" class="home-feed">
     <header class="home-head">
       <div class="home-head-text">
-        <p class="pg-label">overview</p>
         <h2 class="home-title" data-nosnippet><GlitchText text="音乐概览" /></h2>
       </div>
       <button
@@ -23,7 +22,6 @@
     <section v-if="recents.length" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
-          <p class="pg-label">recent</p>
           <span class="home-section-sub">最近单曲</span>
         </div>
       </div>
@@ -80,7 +78,6 @@
     <section v-if="showPlaylistShelf" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
-          <p class="pg-label">playlists</p>
           <span class="home-section-sub">常听歌单</span>
         </div>
         <div v-if="shelfNav.pl.canScroll" class="home-shelf-nav">
@@ -153,7 +150,6 @@
     <section v-if="recentAlbums.length" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
-          <p class="pg-label">albums</p>
           <span class="home-section-sub">涉猎专辑</span>
         </div>
         <div v-if="shelfNav.al.canScroll" class="home-shelf-nav">
@@ -480,8 +476,9 @@ export default {
   position: relative;
 }
 
-/* 页头：等宽微标签 + 大字标题居左，「随机漫游」键贴右——flex-end 底对齐
-   让键下缘与标题块下缘齐平。顶距 0——pg-label 落在全站 20 首行轴 */
+/* 页头：大字标题居左，「随机漫游」键贴右——flex-end 底对齐让键下缘与
+   标题块下缘齐平。顶距 0——overview 微标签摘除后 .home-title 顶缘
+   直接落在全站 20 首行轴（与侧栏 .panel-label 同轴，y≈77） */
 .home-head {
   display: flex;
   align-items: flex-end;
@@ -492,7 +489,6 @@ export default {
 }
 
 .home-title {
-  margin-top: 6px;
   font-family: var(--font-display);
   font-size: 28px;
   font-weight: 700;
@@ -500,7 +496,7 @@ export default {
   color: var(--ink);
 }
 
-/* 区块：发丝线起头 + 微标签节题 */
+/* 区块：发丝线起头 + 节题行 */
 .home-section {
   border-top: var(--hairline-soft);
   padding: 12px 0 18px;
@@ -518,6 +514,14 @@ export default {
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+}
+
+/* 节题：英文 pg-label 微标签摘除后中文副题升格为唯一节题——13px/600。
+   （已出彩布白名单——scoped --ink 全壳生效，不再被 ink-86 托档） */
+.home-section-sub {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 /* 货架翻页键组：贴节头右缘，self-center 对齐节头盒而非基线 */

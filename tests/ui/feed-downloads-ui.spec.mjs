@@ -164,13 +164,15 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
 })
 
 describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
-  it('页头 overview + 音乐概览；随机漫游发 play-song(pool[0], 乱序全量) 且不改原数组', async () => {
+  it('页头无 overview 微标签、.home-title 含音乐概览；随机漫游发 play-song(pool[0], 乱序全量) 且不改原数组', async () => {
     const empty = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: [] } }))
     expect(empty.find('.home-roam-btn').attributes('disabled')).toBeDefined()
     empty.unmount()
 
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
-    expect(w.find('.home-head .pg-label').text()).toBe('overview')
+    // overview 双语微标签已摘除——中文标题升格后页头不再有 pg-label
+    expect(w.find('.home-head .pg-label').exists()).toBe(false)
+    expect(w.findAll('.home-section .pg-label')).toHaveLength(0)
     expect(w.find('.home-title').text()).toContain('音乐概览')
     const orderBefore = RECENTS.map(s => s.id)
     await w.find('.home-roam-btn').trigger('click')
@@ -342,6 +344,24 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
     await w.find('.home-shelf').trigger('scroll')
     expect(prev.attributes('disabled')).toBeUndefined()
     expect(next.attributes('disabled')).toBeDefined()
+  })
+
+  it('主页/结果页无英文双语微标签（源钉板：label 摘除 + 中文节题升格 13/600）', () => {
+    // 中英双语微标签全摘、只留中文名——jsdom 不算样式，结构/字号全走源码钉
+    const home = vueSrc('HomeFeed.vue')
+    for (const tag of ['>overview<', '>recent<', '>playlists<', '>albums<']) {
+      expect(home).not.toContain(tag)
+    }
+    const grid = vueSrc('PlaylistGrid.vue')
+    for (const tag of ['>search results<', '>songs<', '>playlists<']) {
+      expect(grid).not.toContain(tag)
+    }
+    const homeSub = home.match(/\.home-section-sub\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(homeSub).toContain('font-size: 13px')
+    expect(homeSub).toContain('font-weight: 600')
+    const gridSub = grid.match(/\.result-section-sub\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(gridSub).toContain('font-size: 13px')
+    expect(gridSub).toContain('font-weight: 600')
   })
 
   it('HomeFeed.vue .home-songrow-cover 去 image-rendering: pixelated（源码断言）', () => {
