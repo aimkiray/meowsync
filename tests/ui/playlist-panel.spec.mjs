@@ -5,9 +5,14 @@
 //      'null' 写进剪贴板还报假成功
 //   ⋯ 菜单换面：首项「播放歌单」（触屏封面 hover 劫持的替代入口），
 //      无重复的「复制分享链接」
+//   主页重构 U2：侧栏首行同轴（panel-head flex-start / label 顶距 0 /
+//      create-btn 负顶距 + 窄轨复位）与 style.css 卡件退役项——
+//      jsdom 不计算样式，几何锚全走源文本钉板
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 vi.mock('../../src/api/downloads.js', () => ({
   downloadsApi: {
@@ -147,5 +152,57 @@ describe('PlaylistPanel：localDelta 出键条件', () => {
     expect(downloadsApi.mirrorLocalPlaylist).toHaveBeenCalledWith(localPl)
     const [, opts] = downloadsApi.quickDownloadPlaylist.mock.calls.at(-1)
     expect('localDelta' in opts).toBe(false)
+  })
+})
+
+/* ── CSS 源钉板：侧栏首行同轴 + 全局卡件新规（jsdom 不计算样式，只能源读）──
+   vitest 侧按 cwd（仓根）相对读，与 watch-stage-ui.spec.mjs 同口径 */
+const readSrc = (rel) => readFileSync(join(process.cwd(), rel), 'utf8')
+
+describe('PlaylistPanel 源钉板：首行同轴（B 方案）', () => {
+  it('.panel-head flex-start + .panel-label 顶距 0 + .panel-create-btn 负顶距', () => {
+    const css = readSrc('src/components/PlaylistPanel.vue')
+    // align-items:flex-start + 32px 键负顶距上收：label 顶缘严落 20px 首行轴
+    const head = css.match(/\.panel-head\s*\{[\s\S]*?\}/)?.[0] || ''
+    expect(head).toContain('align-items: flex-start')
+    const label = css.match(/\.panel-label\s*\{[\s\S]*?\}/)?.[0] || ''
+    expect(label).toContain('padding: 0 12px 12px')
+    const btn = css.match(/\.panel-create-btn\s*\{[^}]*\}/)?.[0] || ''
+    expect(btn).toContain('margin: -10px 0 4px')
+  })
+
+  it('窄轨未展开态 .panel-create-btn 复位 margin: 0 0 6px', () => {
+    const css = readSrc('src/components/PlaylistPanel.vue')
+    const narrow = css.match(/@media \(min-width: 768px\) and \(max-width: 1023\.98px\)[\s\S]*?\n\}/)?.[0] || ''
+    expect(narrow).toContain('.app-sidebar:not(.app-sidebar--open) .panel-create-btn')
+    expect(narrow).toContain('margin: 0 0 6px')
+  })
+})
+
+describe('style.css 源钉板：grid-card 退役项与彩布登记', () => {
+  const css = readSrc('src/style.css')
+
+  it('.grid-card-name 去 min-height 死白、封面 img 去 pixelated 锯齿', () => {
+    const name = css.match(/\.grid-card-name\s*\{[\s\S]*?\}/)?.[0] || ''
+    expect(name).not.toContain('min-height')
+    const img = css.match(/\.grid-card-cover img\s*\{[\s\S]*?\}/)?.[0] || ''
+    expect(img).not.toContain('image-rendering')
+  })
+
+  it('彩布白名单登记 .home-songrow-artist + 反白补丁带回收 label-grey', () => {
+    // 不登记 (0,3,0) 白名单的 ink-64 次级文字在彩布上静默不达标
+    expect(css).toContain('.app-shell .app-body .home-songrow-artist')
+    expect(css).toContain('.app-shell .app-body .home-songrow--playing .home-songrow-artist')
+    // 反白行尾键 hover：默认纸色 / glitch accent-on-ink 两态都要接住 playing 行
+    expect(css).toContain('.app-shell .home-songrow--playing .row-add-btn:hover')
+    expect(css).toContain(':root[data-theme="glitch-restoration"] .app-shell .home-songrow--playing .row-add-btn:hover')
+  })
+
+  it('.row-add-btn 显隐组接入 .home-songrow，grid-card 浮层件在位', () => {
+    expect(css).toContain('.home-songrow:hover .row-add-btn')
+    expect(css).toContain('.home-songrow:focus-within .row-add-btn')
+    expect(css).toContain('.grid-card--playing')
+    expect(css).toContain('.grid-card-badge')
+    expect(css).toContain('.grid-card-play')
   })
 })
