@@ -598,8 +598,10 @@ describe('WatchView：播放错误/时长警告走全局 toast', () => {
 })
 
 describe('WatchView：⋯菜单换源项', () => {
-  // 「换源」=解锁链错配的手动纠错入口——只对网易数值曲露面（bv_/yt_/
-  // qq_/file_ 自有源不进解锁链，项对它们永无消费点）；落位「下载」
+  // 「换源」=手动媒体源绑定入口——数值曲修「解锁链错配」（resolveOne
+  // 手动步消费），qq_/bv_/yt_ 自有源曲修「自有源败亡」（三个自有源
+  // 流端点失败触发步消费）：isUnlockManualTrackId 四形态同露面；
+  // file_ 上传资产无可顶替的在线链不收、无曲不露面。落位「下载」
   // 动作群后、回源外链前；菜单高估算随行数 +1
   const sourceItem = () => menuItemByText('换源')
   // 菜单高估算断言要真翻顶——jsdom getBoundingClientRect 恒 0，钉触发键
@@ -614,7 +616,7 @@ describe('WatchView：⋯菜单换源项', () => {
     await openActionsMenu(w)
     const el = sourceItem()
     expect(el).toBeTruthy()
-    expect(el.getAttribute('title')).toContain('解锁链选错源时手动挑播放媒体')
+    expect(el.getAttribute('title')).toContain('解锁链选错源或自有源失效时手动挑播放媒体')
     const icon = w.findAllComponents(PixelIcon).find(c => el.contains(c.element))
     expect(icon.props('name')).toBe('broadcast')
     const texts = menuItems().map(i => i.textContent)
@@ -624,34 +626,63 @@ describe('WatchView：⋯菜单换源项', () => {
     expect(texts.findIndex(t => t.includes('网易云'))).toBeGreaterThan(at)
   })
 
-  it('网易数值曲菜单高多算 1 行：数值 id 顶翻差 39px（bv_ 对照无此项）', async () => {
+  it('网易数值曲菜单高多算 1 行：数值 id 顶翻 6 项 242px', async () => {
     const w = mountWatch({ tab: 'queue', currentSong: { ...SONG, id: '12345' } })
     pinTriggerNearBottom(w)
     await openActionsMenu(w)
     // 数值曲：沉浸/收藏/分享/下载/换源/回源(网易云)=6 项 → h=6*39+8=242；
     // 底 700+4+242 放不下 768 → 顶翻 top=690-242-4=444
     expect(menuEl().style.top).toBe('444px')
+    expect(menuItems()).toHaveLength(6)
+  })
+
+  it('qq_/bv_/bv_分P/yt_ 外源轨道 id →「换源」项同露面（自有源败亡顶替语义）', async () => {
+    for (const [label, song] of [
+      ['qq_', { id: 'qq_0034M8WL3V4oHC', name: 'q', ar: [{ name: 'a' }], al: {}, dt: 0 }],
+      ['bv_', { id: 'bv_BV1xx411c7mD', name: 'b', ar: [{ name: 'a' }], al: {}, dt: 0 }],
+      ['bv__p3', { id: 'bv_BV1xx411c7mD_p3', name: 'b3', ar: [{ name: 'a' }], al: {}, dt: 0 }],
+      ['yt_', { id: 'yt_abcdefghijk', name: 'y', ar: [{ name: 'a' }], al: {}, dt: 0 }],
+    ]) {
+      const w = mountWatch({ tab: 'queue', currentSong: song })
+      await openActionsMenu(w)
+      const el = sourceItem()
+      expect(el, label).toBeTruthy()
+      expect(el.getAttribute('title')).toBe('解锁链选错源或自有源失效时手动挑播放媒体')
+      mounted.pop().unmount()
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('外源曲菜单高同样多算 1 行：bv_ 顶翻同高 242px；file_ 对照无此项', async () => {
+    // bv_ 曲含「换源」：沉浸/收藏/分享/下载/换源/回源(B站)=6 项 → h=242
+    // → 顶翻 top=690-242-4=444——高估算漏 +1 的话 bv_ 会落成 483/底项被裁
+    const w = mountWatch({
+      tab: 'queue',
+      currentSong: { id: 'bv_BV1xx411c7mD', name: 'bv', ar: [{ name: 'a' }], al: {}, dt: 0 },
+    })
+    pinTriggerNearBottom(w)
+    await openActionsMenu(w)
+    expect(sourceItem()).toBeTruthy()
+    expect(menuEl().style.top).toBe('444px')
+    expect(menuItems()).toHaveLength(6)
     mounted.pop().unmount()
     document.body.innerHTML = ''
 
-    // bv_ 曲无「换源」项（回源仍在——BV_TRACK_ID_RE id 兜底出 B站 原页）
-    // → 5 项 → h=5*39+8=203 → 顶翻 top=690-203-4=483；两例顶翻差恰 39px=1 行
+    // file_ 曲：分享/下载/换源/回源四闸全隐（上传资产无源链无可顶替）
+    // → 只剩沉浸/收藏 2 项 → h=2*39+8=86 → 顶翻 top=690-86-4=600
     const w2 = mountWatch({
       tab: 'queue',
-      currentSong: { id: 'bv_BV1xx411c7mD', name: 'bv', ar: [{ name: 'a' }], al: {}, dt: 0 },
+      currentSong: { id: 'file_abcd1234', name: 'f', ar: [], al: {}, dt: 0 },
     })
     pinTriggerNearBottom(w2)
     await openActionsMenu(w2)
     expect(sourceItem()).toBeUndefined()
-    expect(menuEl().style.top).toBe('483px')
-    expect(menuItems()).toHaveLength(5)
+    expect(menuEl().style.top).toBe('600px')
+    expect(menuItems()).toHaveLength(2)
   })
 
-  it('bv_/yt_/qq_/file_/无 currentSong → 项恒隐（自有源无解锁错配语义）', async () => {
+  it('file_/无 currentSong → 项恒隐（上传资产无可顶替的在线链）', async () => {
     for (const [label, song] of [
-      ['bv_', { id: 'bv_BV1xx411c7mD', name: 'b', ar: [], al: {}, dt: 0 }],
-      ['yt_', { id: 'yt_abcdefghijk', name: 'y', ar: [], al: {}, dt: 0 }],
-      ['qq_', { id: 'qq_abc123defg', name: 'q', ar: [], al: {}, dt: 0 }],
       ['file_', { id: 'file_abcd1234', name: 'f', ar: [], al: {}, dt: 0 }],
       ['null', null],
     ]) {

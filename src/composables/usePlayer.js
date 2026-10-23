@@ -638,7 +638,7 @@ export function usePlayer({
     const qqAnonDeadEndText = async (song, options = {}) =>
       (song.qq || QQ_SONG_ID_RE.test(String(song.id))) && !song.neteaseId
       && !options._localFile && (await qqLoggedIn()) === false
-        ? 'QQ 已关闭匿名取流：该曲未匹配网易词源——可在菜单重匹配词源，或在设置页配置 QQ Cookie'
+        ? 'QQ 已关闭匿名取流：该曲未匹配网易词源——可在菜单重匹配词源、换源绑定外部媒体，或在设置页配置 QQ Cookie'
         : null
 
     // 在线流彻底失效后的兜底（SABR 闸控的 YouTube 自适应流/签名批量耗尽、

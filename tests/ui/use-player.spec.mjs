@@ -796,7 +796,7 @@ describe('usePlayer：qq_ 回链梯（QQ 匿名取流关闭）', () => {
     expect(musicApi.getSongUrl).toHaveBeenCalledTimes(2)
   })
 
-  it('qq_ 无词源全链败亡+明确未登录 → 终态文案指引 Cookie/重匹配非通用重试', async () => {
+  it('qq_ 无词源全链败亡+明确未登录 → 终态文案指引 Cookie/换源/重匹配非通用重试', async () => {
     qqLoggedIn.mockResolvedValue(false)
     const qq = qqSong() // 无 neteaseId
     const { player, deps } = makePlayer()
@@ -808,6 +808,8 @@ describe('usePlayer：qq_ 回链梯（QQ 匿名取流关闭）', () => {
     howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
     await vi.waitFor(() => expect(player.playbackError.value).toMatch(/QQ 已关闭匿名取流/))
     expect(player.playbackError.value).toMatch(/重匹配词源.*配置 QQ Cookie|配置 QQ Cookie/)
+    // 「换源」第三出口：死腿终态可操作面扩成三条（绑定设施已扩到 qq_ 曲）
+    expect(player.playbackError.value).toContain('换源绑定外部媒体')
     expect(player.playbackError.value).not.toMatch(/音频加载失败/)
   })
 
@@ -3036,6 +3038,37 @@ describe('usePlayer：手动媒体源绑定变更槽（notifyUnlockManualChange�
     // autoplay=isPlaying=false——新实例不起播（暂停态不拽起）
     expect(howls[1]._playing).toBe(false)
     expect(player.isPlaying.value).toBe(false)
+  })
+
+  it('正播同 qq_ 曲（外源轨道 id）：处理器零形态分支——playSong 同参重跑自有端点取址', async () => {
+    // qq_ 曲在 song_unlock_manual 有绑定时选源/解绑 applied 同样上行本槽；
+    // 处理器对前缀 id 无形态分支——playSong 重跑即重打 /qq/stream，端点
+    // 内自有源败亡步消费新绑定
+    const qq = song('qq_0034M8WL3V4oHC')
+    const { player } = makePlayer({ songs: [qq, song(2)] })
+    await player.playSong(qq)
+    howls[0].fire('onload')
+    howls[0].fire('onplay')
+    expect(player.isPlaying.value).toBe(true)
+    const queueBefore = player.playingSongs.value
+    player.currentTime.value = 42
+    musicApi.qqStreamUrl.mockClear()
+    musicApi.getSongUrl.mockClear()
+
+    notifyUnlockManualChange('qq_0034M8WL3V4oHC')
+    await vi.waitFor(() => expect(howls.length).toBe(2))
+    // 重走自有端点取址（/qq/stream 重打——新绑定由端点内失败触发步消费），
+    // 不落网易数值链
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    // preserveContext 保队列快照（引用不换）
+    expect(player.playingSongs.value).toBe(queueBefore)
+    // seekTime=currentTime 保播放位：onload 落地 seek 到 42
+    howls[1].fire('onload')
+    expect(howls[1].seek()).toBe(42)
+    // autoplay=isPlaying：在播态续播
+    expect(howls[1]._playing).toBe(true)
+    expect(player.isPlaying.value).toBe(true)
   })
 
   it('异 id / 无正播曲 → playSong 零调用（信号丢弃）', async () => {
