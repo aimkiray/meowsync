@@ -15,6 +15,9 @@ const {
   searchPlaylists, searchSuggest, getHotkeys,
   resolveQqInput,
 } = require('../lib/qq');
+// 手选媒体源绑定消费步：自有源腿败亡时绑定点名媒体顶替（本端点天然
+// audio-only 无 kind 闸）；绑媒体 mint 裸 urls 不蹭播过路缓存键
+const { manualStreamOverride } = require('../services/unlock/manual-stream');
 
 const app = new Hono();
 
@@ -128,7 +131,10 @@ app.get('/qq/resolve', async (c) => {
 });
 
 // 播放流地址：vkey 与 (guid,uin,请求方IP) 绑定且 ~22h 过期——每次播放重取，
-// 302 进 audio-proxy 由代理回源（白名单 stream.qqmusic.qq.com 系已放行）
+// 302 进 audio-proxy 由代理回源（白名单 stream.qqmusic.qq.com 系已放行）。
+// 自有源腿败亡（无流/凭据拒答/瞬时抛错）时查 song_unlock_manual——用户
+// 在「换源」点名的绑定媒体顶替（与数值域「官方直解→手动→推导回链」同序；
+// 自有源健康时绑定休眠不触发）
 app.get('/qq/stream', async (c) => {
   if (!rateLimit(c, 'qq-stream', 60)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
@@ -149,9 +155,35 @@ app.get('/qq/stream', async (c) => {
   try {
     // ?retry=1 旁路正缓存读（治愈写照常在 pickStream 内落常规键）——
     // 前端 _streamRetried 重试不再吃到同一份死档
-    const hit = await pickStream(mid, mmid, prefer, c.req.raw.signal,
-      c.req.query('retry') === '1');
+    let hit = null;
+    let ownErr = null; // 自有源错误存外侧——绑定腿也空/死时回原分档路径
+    try {
+      hit = await pickStream(mid, mmid, prefer, c.req.raw.signal,
+        c.req.query('retry') === '1');
+    } catch (e) {
+      if (e?.aborted || c.req.raw.signal?.aborted) throw e; // 走外层 499
+      ownErr = e;                                          // 含 qqAnonDenied
+    }
+    // 搭车等待期间本客户端可能已断连——产物是共享的，写响应按自己的
+    // signal 判（bilibili/stream 同位同口径）：abort 请求不白烧绑定步的
+    // repo 读+resolveById
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
     if (!hit) {
+      // 自有源腿败亡→手动绑定媒体顶替（轨道键 qq_<mid> 与 buildQQSong id
+      // 同构）；purpose 沿令牌门终值，retry=1 旁路手动缓存读照常写
+      const manual = await manualStreamOverride(`qq_${mid}`, {
+        purpose: prefer === 'best' ? 'download' : 'playback',
+        signal: c.req.raw.signal,
+        skipCache: c.req.query('retry') === '1',
+      });
+      if (manual) {
+        console.info(`[qq/stream] qq_${mid} → 手动绑定 ${manual.source}/${manual.mediaId}`);
+        c.header('x-manual-source', manual.source);
+        // mint 不带 cacheKey/cacheMeta——resolveById 产物无 mimeType/codec
+        // 指纹材料，绑媒体不蹭播过路缓存键
+        return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(manual.urls)}`), 302);
+      }
+      if (ownErr) throw ownErr; // 回外层既有分档（qqAnonDenied 502/通用 502）
       // 无登录态下「无流」的真因几乎恒为上游已关匿名取流（vkey 凭据级拒答
       // 或 code=0 但全档 purl 空）——文案给可执行指引；有 cookie 时保留
       // VIP/地域口径（那时它才可能是真因）

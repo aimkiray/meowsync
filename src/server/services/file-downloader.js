@@ -18,6 +18,10 @@ const downloadTasksRepo = require('../repositories/downloadTasks');
 // 手选词源绑定表：用户在「手动匹配」里点名的词即终审——下载相位与播放链
 // （getManualLyric 覆盖层）同口径，绑定在场压过全部自动词源
 const lyricManualRepo = require('../repositories/lyricManual');
+// 手选媒体源绑定表（「换源」）：qq_/bv_/yt_ 自有源曲自有源腿败亡时，
+// 用户点名的媒体顶替——数值曲的绑定消费在 resolveSongUrls 手动步，
+// 本表读口只对外源前缀 id 开（双查会绕过 pyncmd 位序语义）
+const unlockManualRepo = require('../repositories/unlockManual');
 const { pathPresent, isUnderDownloadDir } = require('./download-fs');
 // 封面宿主白名单与 download-manager.deriveCoverUrl 同一闸（CJS require(ESM)）：
 // 派生点闸只能管住新落库的 cover_url——存量脏行在 downloadCover 消费点
@@ -40,7 +44,8 @@ const { alignAudioToLrc } = require('./lyric-align');
 // 回落路径与网易云链同构（fetchStream SSRF 守卫 + streamToFile .part 对账）。
 // 流地址宿主与 routes/qq.js 共用 lib/qq.js 的 QQ_STREAM_HOST_OK（sip 可能回
 // 裸 IP——后缀判定天然拒绝）
-const { QQ_SONG_ID_RE: QQ_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, NETEASE_ID_RE } = require('../../shared/predicates.js');
+const { QQ_SONG_ID_RE: QQ_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, NETEASE_ID_RE,
+  BVID_RE, YT_ID_RE } = require('../../shared/predicates.js');
 const { mergeLrcText, neteaseLyricBody } = require('../../shared/lrc.js');
 const { LYRIC_ALIGN_MAX_LINES, LYRIC_ALIGN_MAX_LINE_CHARS } = require('../../shared/contracts.js');
 // RS01/F000=null：FLAC/Hi-Res 是 VBR，无固定码率可算——download-manager 的
@@ -73,6 +78,16 @@ const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADD
 const RELAY_BR_MARGIN = 1.25;
 const RELAY_LOSSLESS_EXTS = new Set(['flac', 'wav']);
 const RELAY_DURATION_MISMATCH = 0.2;
+
+// 绑定媒体 → downloadExternalAudio 调参：bvM/ytM 合成「match 数组形」
+// （函数内只读 [1]=bvid|videoId 与 [2]=page 与 providerData 备取——
+// 取值序 providerData 优先于 match），providerData 只含绑定媒体定位：
+// 不透传任务行 providerData——bv_ 曲绑异 bvid 时里面的 bilibili.bvid/cid
+// 会把取流钉回自有源。合成 pd 无 cid/page → bv 腿走 view 自愈、恒 page 1
+// （分 P 绑定不表达——绑定媒体恒单媒体；与 resolveById 同口径）
+const manualDispatch = (m) => m.source === 'bilibili'
+  ? { bvM: [null, m.mediaId], ytM: null, pd: { bilibili: { bvid: m.mediaId } } }
+  : { bvM: null, ytM: [null, m.mediaId], pd: { youtube: { videoId: m.mediaId } } };
 
 // 外部导入曲（bv_/yt_）下载：从各自网站直取最优音轨——prefer='best' 下
 // B 站拿 Hi-Res FLAC/杜比轨（BILI_COOKIE 有权限才下发，否则回落最高码率
@@ -925,17 +940,68 @@ async function downloadNeteaseAudio(neteaseId, outputPath, bitrate, onProgress, 
 // 错配录音预判闸；缺省跳过该闸（省流/无时长任务不降级）
 async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal, providerData, expectedMs) {
   try {
-    // bv_<bvid>[_pN] / yt_<videoId> 分发：自有站直链
+    // 轨道形态解形提前共用：bv_<bvid>[_pN] / yt_<videoId> / qq_<songmid>
+    // 前缀曲分发 + 手动绑定读口都要它（qqM 原 bv/yt 判后位上移）
     const bvM = String(songId).match(BV_TRACK_ID_RE);
     const ytM = !bvM && String(songId).match(YT_TRACK_ID_RE);
+    const qqM = !bvM && !ytM && String(songId).match(QQ_ID_RE);
+    // 手选媒体源绑定读口：自有源腿败亡时用户点名媒体顶替。只对外源前缀
+    // id 生效——数值 id 的绑定经 downloadNeteaseAudio→resolveSongUrls
+    // 手动步已消费，双查会绕过 pyncmd 位序语义
+    let manual = null;
+    if (bvM || ytM || qqM) {
+      try { manual = unlockManualRepo.getManual(String(songId)); } catch { /* 库不可用按无绑定放行 */ }
+      // 绑定行防御校：source 枚举+mediaId 严形（行只能由已过严校的 POST
+      // 写入——这里防手工改库/语义漂移），脏行按无绑处理并 warn
+      if (manual && !(manual.source === 'bilibili' && BVID_RE.test(manual.mediaId))
+                && !(manual.source === 'youtube' && YT_ID_RE.test(manual.mediaId))) {
+        console.warn(`[download] ${songId} 绑定行形态非法，按无绑定放行`);
+        manual = null;
+      }
+      // 绑定声明时长与任务时长偏差 >20% 只 console.info 留痕不拦——用户
+      // 终审（与数值域时长豁免同原则）；expectedMs/durationSec 缺参跳过
+      if (manual && expectedMs > 0 && manual.durationSec > 0
+        && Math.abs(manual.durationSec * 1000 - expectedMs) > expectedMs * RELAY_DURATION_MISMATCH) {
+        console.info(`[download] ${songId} 绑定媒体声明时长 ${manual.durationSec}s 与任务期望 ${expectedMs}ms 偏差 >20%——手动终审不拦`);
+      }
+    }
+    // bv_<bvid>[_pN] / yt_<videoId> 分发：自有站直链
     if (bvM || ytM) {
-      return await downloadExternalAudio(bvM, ytM, outputPath, bitrate, onProgress, signal, providerData);
+      try {
+        return await downloadExternalAudio(bvM, ytM, outputPath, bitrate, onProgress, signal, providerData);
+      } catch (ownErr) {
+        // 自有源腿败亡→绑定媒体顶替。穿透纪律与 qq relay 段同款：abort
+        // 穿透；errnoToFatal 先打标再判 penetratesCandidates——mkdir 段
+        // 裸 errno 不打 fatal 会漏穿透（换源救不了盘满）；「无可下载音轨」
+        // 类媒体级 fatal（无 code）不拦——恰是要救的案
+        throwIfAborted(signal);
+        errnoToFatal(ownErr);
+        if (ownErr?.aborted || penetratesCandidates(ownErr)) throw ownErr;
+        if (!manual) throw ownErr;
+        const d = manualDispatch(manual);
+        try {
+          const r = await downloadExternalAudio(d.bvM, d.ytM, outputPath, bitrate, onProgress, signal, d.pd);
+          console.info(`[download] ${songId} 自有源败亡——手动绑定媒体 ${manual.source}/${manual.mediaId} 顶替成功`);
+          // 血缘烙记 'manual→<src>'（'qq→netease' 同款箭头字面量）；
+          // unblocked 保 false——产物不走解锁链不戴解锁徽章
+          return { ...r, unblockedSource: `manual→${manual.source}` };
+        } catch (be) {
+          throwIfAborted(signal);
+          errnoToFatal(be);
+          if (be?.aborted || penetratesCandidates(be)) throw be;
+          const combined = new Error(`${ownErr.message}（manual=${describeError(be)}）`);
+          // 双腿全判死才 fatal；绑定腿瞬时死保留 ≤3 重试权
+          if (ownErr?.fatal && be?.fatal) combined.fatal = true;
+          throw combined;
+        }
+      }
     }
     // qq_<songmid> 分发：QQ 源直链（BEST 档梯）→ 同一条 fetchStream 守卫管线。
     // QQ 已关闭匿名取流——pickStreamUrl 回 null（code=0 但全档 purl 空）或抛
     // qqAnonDenied（凭据级拒答打标）时，providerData.neteaseId 是匿名可播的
-    // 唯一腿：走与数字 id 支同一条网易云管线回链（providerData 只读不改）
-    const qqM = String(songId).match(QQ_ID_RE);
+    // 唯一腿：走与数字 id 支同一条网易云管线回链（providerData 只读不改）。
+    // 显式手动绑定 > 词源推导回链——回链曲是导入期词源匹配产物
+    // （LYRIC_MATCH_CRITERIA 容翻唱/live 错配录音），绑定腿插在回链之前
     if (qqM) {
       let hit = null;
       let qqErr = null;
@@ -957,8 +1023,31 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       // 下载只是把它固化。matchScore 已随 provider 块持久化留证，后续要
       // 收紧回链闸（分数阈值/时长核验）有现成判据可取
       const relayId = String(providerData?.neteaseId ?? '');
-      // relayErr 挂外侧：两腿全灭时终错要拼上回链死因，不再只留 console.warn
+      // relayErr/manualErr 挂外侧：几腿全灭时终错要拼上各腿死因，不再只留
+      // console.warn
       let relayErr = null;
+      let manualErr = null;
+      // 手动绑定腿插在 relayId 回链之前——显式终审 > 词源推导回链（回链曲
+      // 是导入期词源匹配产物，LYRIC_MATCH_CRITERIA 容翻唱/live 错配录音）。
+      // 非 qqAnonDenied 的瞬时抛错走上方原判不进本腿——瞬断上抛由任务级
+      // ≤3 重试管，不为瞬时毛刺烧绑定解析（与播放侧「每次自有源失败都查
+      // 绑定」的不对称是刻意的：播放无任务级重试——轻抖即终态）
+      if (!hit && manual) {
+        const d = manualDispatch(manual);
+        try {
+          const r = await downloadExternalAudio(d.bvM, d.ytM, outputPath, bitrate, onProgress, signal, d.pd);
+          console.info(`[download] qq_${qqM[1]} 直链败亡——手动绑定媒体 ${manual.source}/${manual.mediaId} 顶替成功`);
+          // 绑定腿 return 早于下方低档升级腿——产物是用户终审媒体，回链
+          // 择优换档=拿推导产物覆盖显式选择，语义不许；unblocked 保 false
+          return { ...r, unblockedSource: `manual→${manual.source}` };
+        } catch (e) {
+          throwIfAborted(signal);
+          errnoToFatal(e);
+          if (e?.aborted || penetratesCandidates(e)) throw e;
+          console.warn(`[download] qq_${qqM[1]} 手动绑定媒体(${manual.source}/${manual.mediaId})败亡，续走词源回链: ${describeError(e)}`);
+          manualErr = e;
+        }
+      }
       if (!hit && NETEASE_ID_RE.test(relayId)) {
         try {
           const relayed = await downloadNeteaseAudio(relayId, outputPath, bitrate, onProgress, signal);
@@ -975,13 +1064,15 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
           relayErr = e;
         }
       }
-      // neteaseId 缺席/两条腿全灭——原始 qq 错为主因重抛（含 qqAnonDenied
-      // 标记若适用）不吞因；回链已尝试的死因拼上终错消息不再只留日志。
+      // neteaseId 缺席/几条腿全灭——原始 qq 错为主因重抛（含 qqAnonDenied
+      // 标记若适用）不吞因；回链/绑定已尝试的死因拼上终错消息不再只留日志。
       // 不原地改 message：pickStreamInflight 单飞的共享错会被并发等待方
       // 重复拼接
       if (qqErr) {
-        if (!relayErr) throw qqErr;
-        const combined = new Error(`${qqErr.message}（netease=${describeError(relayErr)}）`);
+        if (!relayErr && !manualErr) throw qqErr;
+        const combined = new Error(`${qqErr.message}`
+          + `${manualErr ? `（manual=${describeError(manualErr)}）` : ''}`
+          + `${relayErr ? `（netease=${describeError(relayErr)}）` : ''}`);
         if (qqErr.qqAnonDenied) combined.qqAnonDenied = true;
         throw combined;
       }
@@ -991,12 +1082,13 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
         const base = qq.hasQqCookie()
           ? 'QQ 音乐无可用音源（可能需要 VIP 权限或地域限制）'
           : 'QQ 音乐无可用音源——QQ 已关闭匿名取流，请在设置页配置 QQ Cookie';
-        const msg = relayErr ? `${base}（netease=${describeError(relayErr)}）` : base;
-        // fatal 分档：neteaseId 缺席（根本没进回链）是确定性失败维持
-        // fatal；回链瞬时死（relayErr 非 fatal）不带 fatal 走 ≤3 重试——
-        // 与 qqErr 重抛同权，同一瞬时网易故障不该因 qq 腿死法
-        // （null vs throw）丢重试权
-        if (relayErr && !relayErr.fatal) throw new Error(msg);
+        const msg = `${base}`
+          + `${manualErr ? `（manual=${describeError(manualErr)}）` : ''}`
+          + `${relayErr ? `（netease=${describeError(relayErr)}）` : ''}`;
+        // fatal 分档：回链/绑定都没进腿（键缺席）是确定性失败维持 fatal；
+        // 任一腿瞬时死（非 fatal）不带 fatal 走 ≤3 重试——与 qqErr 重抛
+        // 同权，同一瞬时故障不该因 qq 腿死法（null vs throw）丢重试权
+        if ((relayErr && !relayErr.fatal) || (manualErr && !manualErr.fatal)) throw new Error(msg);
         throw fatalError(msg);
       }
       throwIfAborted(signal);

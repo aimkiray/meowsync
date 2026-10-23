@@ -79,6 +79,22 @@ export function isResolvableTrackId(id) {
   return NETEASE_ID_RE.test(s) || QQ_SONG_ID_RE.test(s) || BV_TRACK_ID_RE.test(s) || YT_TRACK_ID_RE.test(s);
 }
 
+// 「换源」手动媒体源绑定可作用的轨道 id 集：网易数值曲（resolveOne 手动
+// 插队步消费）+ qq_/bv_/yt_ 自有源曲（三个自有源流端点在自有源败亡时
+// 由 manualStreamOverride 消费绑定 + file-downloader 手动腿顶替）。与
+// isResolvableTrackId 今日同集合、异日未必——「接收端可解析」≠「可手动
+// 绑媒体源」是两套演进轴，刻意独立成谓词：file_ 是用户上传资产，没有可
+// 被顶替的在线链（存下=永不消费的僵尸行）；mix_ 壳 id 与 ext_ 词源命名
+// 空间同型撞名（注区 L37-61）——永不该进本集，别拿宽化当「顺手收下」。
+// 数组形态留测试谱逐条断言与将来分源闸取用面
+export const UNLOCK_MANUAL_TRACK_RES = [
+  NETEASE_ID_BOUNDED_RE, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE
+];
+export function isUnlockManualTrackId(id) {
+  const s = String(id ?? '');
+  return UNLOCK_MANUAL_TRACK_RES.some(re => re.test(s));
+}
+
 // file_ 上传曲判定：本地资产，播放/编辑面需要单独识别
 export function isFileTrackId(id) {
   return FILE_TRACK_ID_RE.test(String(id ?? ''));

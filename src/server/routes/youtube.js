@@ -10,6 +10,10 @@ const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services
 const { resolveYoutubeStreams } = require('../services/youtube-resolve');
 const { createTtlCache } = require('../lib/stream-resolve-cache');
 const { extractYouTubeId, extractYouTubePlaylistId, YT_ID_RE } = require('../../shared/predicates.js');
+// 手选媒体源绑定消费步：自有源腿败亡时绑定点名媒体顶替——只闸
+// kind==='audio'（绑定语义是音源顶替，resolveById 只产音频流，视频模式
+// 恒为自有媒体）；绑媒体 mint 裸 urls 不蹭播过路缓存键
+const { manualStreamOverride } = require('../services/unlock/manual-stream');
 
 const app = new Hono();
 
@@ -431,7 +435,9 @@ app.get('/youtube/suggest', async (c) => {
 });
 
 // 播放流地址：每次重解 player（googlevideo 签名 ~6h 过期）→ 302 进
-// audio-proxy 走统一代理（SSRF 校验 + Range 透传），不在此直接透流
+// audio-proxy 走统一代理（SSRF 校验 + Range 透传），不在此直接透流。
+// kind=audio 自有源腿败亡（空流/抛错）时查 song_unlock_manual 顶替
+//（与数值域「官方直解→手动→推导回链」同序）；kind=video 恒自有源
 app.get('/youtube/stream', async (c) => {
   if (!rateLimit(c, 'yt-stream', 60)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
@@ -451,12 +457,39 @@ app.get('/youtube/stream', async (c) => {
     // prefer 归一后再入键与传 resolve：lib 只认 'best'（pickStreamList 的
     // 位标志），垃圾值与空值产同一批候选——原样入键只会白占键基数
     const prefer = c.req.query('prefer') === 'best' ? 'best' : '';
-    const { streams } = await resolveStreamsShared(videoId, {
-      kind, prefer,
-      skipCache: c.req.query('retry') === '1'
-    });
-
-    const head = streams[0];
+    let streams = null;
+    let ownErr = null; // 自有源错误存外侧——绑定腿也空/死时回原分档路径
+    try {
+      ({ streams } = await resolveStreamsShared(videoId, {
+        kind, prefer,
+        skipCache: c.req.query('retry') === '1'
+      }));
+    } catch (e) {
+      if (e?.aborted || c.req.raw.signal?.aborted) throw e; // 走外层 499
+      ownErr = e;
+    }
+    // 搭车等待期间本客户端可能已断连——产物是共享的，写响应按自己的
+    // signal 判（bilibili/stream 同位同口径）：abort 请求不白烧绑定步的
+    // repo 读+resolveById
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    const head = streams?.[0];
+    // 自有源腿败亡→kind=audio 查手动绑定顶替（轨道键 yt_<videoId> 与
+    // buildYouTubeSong id 同构）；retry=1 旁路手动缓存读照常写
+    if (!head && kind === 'audio') {
+      const manual = await manualStreamOverride(`yt_${videoId}`, {
+        purpose: prefer === 'best' ? 'download' : 'playback',
+        signal: c.req.raw.signal,
+        skipCache: c.req.query('retry') === '1',
+      });
+      if (manual) {
+        console.info(`[youtube/stream] yt_${videoId} → 手动绑定 ${manual.source}/${manual.mediaId}`);
+        c.header('x-manual-source', manual.source);
+        // mint 不带 cacheKey/cacheMeta——resolveById 产物无 mimeType/codec
+        // 指纹材料，绑媒体不蹭播过路缓存键
+        return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(manual.urls)}`), 302);
+      }
+    }
+    if (ownErr) throw ownErr; // 回外层既有分档（499/502）
     if (!head) {
       return c.json({ code: 404, message: `该视频没有可代理的${kind === 'video' ? '视频' : '音频'}流` }, 404);
     }
