@@ -789,6 +789,31 @@ export function usePlayer({
       }
     }
 
+    // 手动媒体源绑定存在性惰性 memo（trackId→Promise<boolean>）：仅「qq 曲
+    // 绑词源+明确未登录」的捷径判定消费——qqLoggedIn()===false 先过闸才点
+    // 火，其余曲/态零额外请求。404 归 false、网络失败归「可能有绑定」true
+    // （宁试死腿不误绕活腿：误判有绑定只是 /qq/stream 白走一跳败后仍进
+    // _neFallback 网易回链；误判无绑定则用户显式绑定永不生效——P2 残口本体）
+    // onUnlockManualChange 槽里按 trackId 失效——绑/解绑后正播同曲重取址
+    // 时本 memo 已清，求值打到的是新行。失败条目同不驻 memo（catch 自愈
+    // 删除）——abort/瞬时失败别把保守 true 烙到会话终，下次播放重探
+    const manualBoundMemo = new Map()
+    const manualBoundKnown = (trackId, signal) => {
+      const key = String(trackId)
+      if (!manualBoundMemo.has(key)) {
+        const p = musicApi.getManualUnlock(key, signal)
+          .then(hit => !!hit)
+          .catch(() => {
+            // 失败条目自愈删除，守卫只删自己这代——同 trackId 在竞窗内
+            // 被新代重探时（通知失效→重求值），旧 promise 晚删不碰新条目
+            if (manualBoundMemo.get(key) === p) manualBoundMemo.delete(key)
+            return true // 探测失败按「可能有」——本代仍不绕 qq 腿
+          })
+        manualBoundMemo.set(key, p)
+      }
+      return manualBoundMemo.get(key)
+    }
+
     // 歌曲播放逻辑
     // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
     // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
@@ -937,13 +962,18 @@ export function usePlayer({
         // _neFallback 腿闸同消费一份）：QQ 上游已关匿名取流——neteaseId 词源
         // 绑定的曲在「明确未登录」时不烧必死的匿名腿直走网易支，_neFallback
         // 回链位同样落网易支；null（探测失败/态未知）按「可能有」留 QQ 支——
-        // 宁试死腿不误绕活腿。(song.qq||qqM) 前置短路：bv_/yt_ 词源绑定曲
+        // 宁试死腿不误绕活腿。明确未登录过闸后再查手动媒体源绑定：有绑让位
+        // QQ 支——/qq/stream 端点内的失败触发步自会消费绑定顶替，捷径直走
+        // 网易会把那步整段绕过（绑了外源仍放网易回链的 P2 残口）；_neFallback
+        // 回链位不查——上一跳端点内已消费过或曲本无绑，回链语义就是网易支，
+        // 不重复探测。(song.qq||qqM) 前置短路：bv_/yt_ 词源绑定曲
         // neteaseId 同在场——不白打 /qq/status 探测（惰性单飞仍只被 qq 曲点火）。
         // localPlId 钉档代同不进门：songUrlData 三元先取本地档，本代根本走
         // 不到 qq 支——等探测只会白白拖住本地档起播；消费点（本式与下方
         // _neFallback 腿闸）对本地档代也都没有意义，短路归 false
         const qqUseNetease = !!(localPlId === null && (song.qq || qqM) && song.neteaseId
-          && (options._neFallback || (await qqLoggedIn()) === false))
+          && (options._neFallback || ((await qqLoggedIn()) === false
+            && !(await manualBoundKnown(song.id, abortSignal)))))
         const songUrlData = localPlId !== null
           ? { url: downloadsApi.songFileUrl(localPlId, song.id, 'audio') }
           : isFileTrackId(song.id)
@@ -1122,7 +1152,9 @@ export function usePlayer({
             // 实体化——neteaseId 此前只供词/封面）。一条命防环：_neFallback
             // 位到达后主解析即走 netease 支，再败不再回本腿。
             // !qqUseNetease 闸：主解析已走网易支的代（明确未登录直走/
-            // _neFallback 回链位）不放行——否则同一条网易链白跑第三跳
+            // _neFallback 回链位）不放行——否则同一条网易链白跑第三跳；
+            // 让位代（手动绑定在场让出捷径）qqUseNetease 同归 false——
+            // 其 qq 腿败亡经本腿落网易末棒正是设计内语义
             if ((song.qq || qqM) && song.neteaseId && !options._neFallback && !qqUseNetease) {
               console.log('🔁 QQ 取流败亡，回落绑定的网易词源:', song.name)
               if (howl === newHowl) howl = null
@@ -1881,6 +1913,9 @@ export function usePlayer({
     // 手动媒体源绑定变更槽（notifyUnlockManualChange 头注）：只对正播
     // 同曲重走取址——非正播曲的绑定改动留到下次播放自然消费
     const onUnlockManualChange = (trackId) => {
+      // 绑定存在性 memo 先失效（不限正播曲）：非正播曲的绑/解绑下次播放
+      // 重求值须打到新行——只清正播曲会把旧 false 留给它白吃网易捷径
+      manualBoundMemo.delete(String(trackId))
       if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
       // 换源即重取址：playSong 重走 getSongUrl→服务端手动步产出新链；
       // preserveContext 保队列快照；seekTime=currentTime 保播放位、

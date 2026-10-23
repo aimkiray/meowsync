@@ -48,6 +48,9 @@ vi.mock('../../src/api/music.js', () => ({
     getExternalLyric: vi.fn(async () => null),
     // 手动绑定词读口（/lyric/manual）——默认未绑归 null 落回自动链
     getManualLyric: vi.fn(async () => null),
+    // 手动媒体源绑定读口（/unlock/manual）——默认未绑归 null；
+    // qq_ 未登录捷径的让位判定消费它
+    getManualUnlock: vi.fn(async () => null),
     lyricAlign: vi.fn(async () => null),
     retryMatch: vi.fn(async () => null),
     // /match/state 绑定态读口——默认无正绑（match=null）
@@ -151,6 +154,7 @@ beforeEach(() => {
   musicApi.getLyrics.mockResolvedValue({ lyrics: [] })
   musicApi.getExternalLyric.mockResolvedValue(null)
   musicApi.getManualLyric.mockResolvedValue(null)
+  musicApi.getManualUnlock.mockResolvedValue(null)
   musicApi.lyricAlign.mockResolvedValue(null)
   musicApi.retryMatch.mockResolvedValue(null)
   musicApi.getMatchState.mockResolvedValue(null)
@@ -852,11 +856,158 @@ describe('usePlayer：qq_ 回链梯（QQ 匿名取流关闭）', () => {
     expect(musicApi.getSongUrl).not.toHaveBeenCalled()
     expect(musicApi.qqStreamUrl).not.toHaveBeenCalled()
     expect(qqLoggedIn).not.toHaveBeenCalled()
+    // 绑定存在性探测同不进门——localPlId 首合取在 qqLoggedIn 之前已短路
+    expect(musicApi.getManualUnlock).not.toHaveBeenCalled()
 
     // _localFile 钉档代：src 直钉 /file——同口径不探测
     await player.playSong(qqSong({ neteaseId: 555 }), { _localFile: 'local_pl_1' })
     expect(howls[1].opts.src).toEqual(['http://api/dl/local_pl_1/qq_0034M8WL3V4oHC'])
     expect(qqLoggedIn).not.toHaveBeenCalled()
+    expect(musicApi.getManualUnlock).not.toHaveBeenCalled()
+  })
+})
+
+describe('usePlayer：qq_ 未登录捷径让位手动绑定', () => {
+  // 上一批 /qq/stream 端点在自有源败亡时已会自动消费 song_unlock_manual
+  // 手动绑定；但客户端「neteaseId+明确未登录→直走网易支」捷径把端点整段
+  // 绕过，绑定永不触达（P2 残口）。本批在未登录过闸后再查绑定存在性：
+  // 有绑让位 QQ 支交端点内失败触发步消费，无绑/探测失败保持原捷径或
+  // 保守让位（宁试死腿不误绕活腿）
+  const qqSong = (extra) => song('qq_0034M8WL3V4oHC', extra)
+  const boundHit = { source: 'youtube', mediaId: 'abcdefghijk', title: 'T', owner: 'O' }
+
+  it('绑定在场让位：neteaseId+未登录+getManualUnlock 命中 → 首发腿走 /qq/stream 不打网易支', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    musicApi.getManualUnlock.mockResolvedValue(boundHit)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    // 存在性探测按 String(trackId) 打 /unlock/manual（带 abortSignal 透传）
+    expect(musicApi.getManualUnlock).toHaveBeenCalledWith('qq_0034M8WL3V4oHC', expect.any(AbortSignal))
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    // 网易捷径被让位——端点内自有源败→绑定顶替，neteaseId 数字支零调用
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(howls[0].opts.src).toEqual(['https://x/qq'])
+  })
+
+  it('无绑不变：getManualUnlock 归 null → 捷径保持直走网易支（现行为回归钉）', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    musicApi.getManualUnlock.mockResolvedValue(null)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    expect(musicApi.getManualUnlock).toHaveBeenCalledWith('qq_0034M8WL3V4oHC', expect.any(AbortSignal))
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.anything())
+    expect(musicApi.qqStreamUrl).not.toHaveBeenCalled()
+    expect(howls[0].opts.src).toEqual(['https://cdn.example/online.mp3'])
+  })
+
+  it('探测失败保守侧：getManualUnlock 抛错归「可能有」→ 仍让位 QQ 支不绕活腿', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    musicApi.getManualUnlock.mockRejectedValue(new Error('network down'))
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    // 误判有绑只是 /qq/stream 白走一跳、败后仍进 _neFallback 网易回链；
+    // 误判无绑则显式绑定永不生效——保守侧归 QQ 支
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+    expect(howls[0].opts.src).toEqual(['https://x/qq'])
+  })
+
+  it('已登录零查：绑定在场照走 QQ 支且 getManualUnlock 零调用（绑定休眠不点火）', async () => {
+    qqLoggedIn.mockResolvedValue(true)
+    musicApi.getManualUnlock.mockResolvedValue(boundHit)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    // ===false 合取短路——已登录态存在性探测不进门
+    expect(musicApi.getManualUnlock).not.toHaveBeenCalled()
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+  })
+
+  it('态未知(null) 零查：按「可能有登录态」留 QQ 支，存在性探测同不点火', async () => {
+    qqLoggedIn.mockResolvedValue(null)
+    musicApi.getManualUnlock.mockResolvedValue(boundHit)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(musicApi.getManualUnlock).not.toHaveBeenCalled()
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+  })
+
+  it('通知失效·正播同曲：memo 清后重取址打到新行——绑后重播让位 QQ 支', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const qq = qqSong({ neteaseId: 555 })
+    const { player } = makePlayer({ songs: [qq, song(2)] })
+    await player.playSong(qq) // 无绑 → memo=false → 网易捷径
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.anything())
+    expect(musicApi.qqStreamUrl).not.toHaveBeenCalled()
+
+    // SourcePicker 完成绑定：读口转命中 + 上行同曲通知（处理器自动重取址）
+    musicApi.getManualUnlock.mockResolvedValue(boundHit)
+    notifyUnlockManualChange('qq_0034M8WL3V4oHC')
+    await vi.waitFor(() => expect(howls.length).toBe(2))
+    // memo 已失效——重求值打到「有绑」让位 QQ 支，不再走网易捷径
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(musicApi.getSongUrl).toHaveBeenCalledTimes(1) // 重取址未再打网易支
+    expect(howls[1].opts.src).toEqual(['https://x/qq'])
+  })
+
+  it('通知失效·非正播曲：memo 同样失效——下次播放求新行不吃旧 false', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    const qq = qqSong({ neteaseId: 555 })
+    const { player } = makePlayer({ songs: [qq, song(2)] })
+    await player.playSong(qq) // 无绑 → memo['qq_…']=false → 网易捷径
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.anything())
+    expect(musicApi.getManualUnlock).toHaveBeenCalledTimes(1)
+
+    // 切走：qq 不再正播（数字曲直走 getSongUrl，无关 qq 支）
+    await player.playSong(song(9))
+    await vi.waitFor(() => expect(howls.length).toBe(2))
+
+    // 绑定落库 + 上行非正播 trackId 通知——memo 失效须在 currentSong 校验前
+    musicApi.getManualUnlock.mockResolvedValue(boundHit)
+    notifyUnlockManualChange('qq_0034M8WL3V4oHC')
+    await new Promise(r => setTimeout(r, 0))
+    expect(howls.length).toBe(2) // 非正播不触发重取址
+
+    musicApi.getSongUrl.mockClear()
+    await player.playSong(qq) // memo 已清——求到「有绑」让位 QQ 支
+    expect(musicApi.getManualUnlock).toHaveBeenCalledTimes(2) // 旧条目已弃，新探测真打
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(musicApi.getSongUrl).not.toHaveBeenCalled()
+  })
+
+  it('_neFallback 回链位不查：getManualUnlock 零调用——回链语义就是网易支', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    musicApi.getManualUnlock.mockResolvedValue(boundHit) // 即便有绑也不查——首合取已短路
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }), { _neFallback: true })
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.anything())
+    expect(musicApi.qqStreamUrl).not.toHaveBeenCalled()
+    expect(musicApi.getManualUnlock).not.toHaveBeenCalled()
+  })
+
+  it('让位后失败级联不断链：qq 腿→retry→_neFallback 三级——网易末棒有谱可依', async () => {
+    qqLoggedIn.mockResolvedValue(false)
+    musicApi.getManualUnlock.mockResolvedValue(boundHit)
+    const { player } = makePlayer()
+    await player.playSong(qqSong({ neteaseId: 555 }))
+    // 让位代首发腿走 QQ 支（绑中交端点内失败触发步消费）
+    expect(musicApi.qqStreamUrl).toHaveBeenCalledWith('0034M8WL3V4oHC', '', undefined, 0)
+    expect(howls[0].opts.src).toEqual(['https://x/qq'])
+
+    // 首败 → _streamRetried 重解代：memo 命中零新增探测，QQ 支二调 retry=1
+    howls[0].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(2))
+    expect(musicApi.qqStreamUrl).toHaveBeenLastCalledWith('0034M8WL3V4oHC', '', undefined, 1)
+    expect(musicApi.getManualUnlock).toHaveBeenCalledTimes(1)
+
+    // 再败 → !qqUseNetease 闸放行回链腿（让位代 qqUseNetease 归 false）：
+    // 网易末棒被调——回链位 _neFallback 合取短路仍不查绑定
+    howls[1].fire('onloaderror', 0, 'MEDIA_ERR')
+    await vi.waitFor(() => expect(howls).toHaveLength(3))
+    expect(musicApi.getSongUrl).toHaveBeenCalledWith(555, expect.any(AbortSignal))
+    expect(musicApi.getManualUnlock).toHaveBeenCalledTimes(1)
+    expect(howls[2].opts.src).toEqual(['https://cdn.example/online.mp3'])
   })
 })
 
