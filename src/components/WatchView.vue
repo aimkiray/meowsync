@@ -88,13 +88,16 @@
             :title="songDownloaded ? '已下载到服务器' : '下载到服务器'"
             @click="pickDownload"
           ><span v-if="songDownloading" class="pixel-loading" aria-hidden="true"></span><PixelIcon v-else :name="songDownloaded ? 'check' : 'download'" :size="14" /> {{ songDownloading ? '下载中…' : (songDownloaded ? '已下载' : '下载') }}</button>
-          <!-- 换源：解锁链自动搜索错配翻唱/剪辑时手动点名媒体源——只对
-               网易数值曲露面（bv_/yt_/qq_/file_ 自有源不进解锁链，项对
-               它们永无消费点）。归属「下载」动作群后、回源外链前 -->
+          <!-- 换源：手动点名媒体源顶替——数值曲修「解锁链自动搜索错配
+               翻唱/剪辑」（resolveOne 手动步消费）；qq_/bv_/yt_ 自有源曲
+               修「自有源败亡」（三个自有源流端点失败触发步消费绑定）。
+               file_ 上传资产无可顶替的在线链不露面（与服务端
+               isUnlockManualTrackId 同根谓词）。归属「下载」动作群后、
+               回源外链前 -->
           <button
-            v-if="isNeteaseSongId"
+            v-if="isUnlockManualTrack"
             class="pg-menu-item" role="menuitem"
-            title="解锁链选错源时手动挑播放媒体"
+            title="解锁链选错源或自有源失效时手动挑播放媒体"
             @click="pickSource"
           ><PixelIcon name="broadcast" :size="14" /> 换源</button>
           <!-- 回源：新页打开源站原页。<a> 原生链接语义（可中键/复制链接）——
@@ -582,7 +585,7 @@ import SourcePicker from './SourcePicker.vue'
 import { shareOrCopy, songShareUrl } from '../lib/share'
 import { toast } from '../lib/feedback'
 import { formatTime } from '../lib/format'
-import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE, NETEASE_ID_RE } from '../lib/url'
+import { httpsCover, BV_TRACK_ID_RE, YT_TRACK_ID_RE, isUnlockManualTrackId } from '../lib/url'
 import { relatedSourceOf, relatedFetch } from '../lib/related'
 import { songSourceTag, songSourceUrl, songSourceName, songCoverUrl, songThumbUrl, fileArtifactUrl, isFileTrackId, proxiedCoverUrl } from '../lib/song'
 import { prefVideoOn, prefLyricFontSize, LYRIC_FS_MIN, LYRIC_FS_MAX } from '../lib/prefs'
@@ -1563,12 +1566,12 @@ export default {
     const showAvGroup = computed(() =>
       !!(props.currentSong?.bilibili?.bvid || props.currentSong?.youtube?.videoId
         || props.currentSong?.file?.hasVideo || bvM.value || ytM.value))
-    // 「换源」项出场闸：与服务端 /unlock/* 端点的 NETEASE_ID_BOUNDED_RE
-    // 同根正则（解锁链只服务网易数值曲——bv_/yt_/qq_/file_ 自有源无
-    // 「解锁错配」语义，项对它们恒隐）；computed 供 v-if 与菜单高估算
-    // 复用同一份
-    const isNeteaseSongId = computed(() =>
-      NETEASE_ID_RE.test(String(props.currentSong?.id ?? '')))
+    // 「换源」项出场闸：与服务端 isUnlockManualTrackId 同根谓词——
+    // 数值曲（解锁链纠错）与 qq_/bv_/yt_ 自有源曲（自有源败亡顶替）
+    // 都露面；file_ 上传资产无在线链不收。computed 供 v-if 与菜单
+    // 高估算复用同一份
+    const isUnlockManualTrack = computed(() =>
+      isUnlockManualTrackId(props.currentSong?.id))
 
     const toggleMenu = () => {
       if (menuOpen.value) { closeMenu(); return }
@@ -1580,7 +1583,7 @@ export default {
       const items = 2                                          // 沉浸/收藏恒在
         + (fileTrack ? 0 : 1)                        // 分享（file_ 不出项）
         + (props.currentSong && !fileTrack ? 1 : 0)  // 下载（同 file_ 闸）
-        + (isNeteaseSongId.value ? 1 : 0)            // 换源（仅网易数值曲）
+        + (isUnlockManualTrack.value ? 1 : 0)        // 换源（数值+外源轨道）
         + (sourceUrl.value ? 1 : 0)                  // 回源
       const h = items * 39 + 8
       menuPos.value = {
@@ -1766,7 +1769,7 @@ export default {
       sourcePickerOpen,
       pickSource,
       onSourcePickApplied,
-      isNeteaseSongId
+      isUnlockManualTrack
     }
   }
 }

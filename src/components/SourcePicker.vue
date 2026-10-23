@@ -150,9 +150,11 @@
 
         <p v-if="pickError" class="sp-pickerr" role="alert">{{ pickError }}</p>
 
-        <!-- 已存在手动绑定才露「恢复自动匹配」：解绑后解锁链回落
-             pyncmd→youtube→bilibili 自动搜索。摘要行如实展示绑定快照
-             （title/owner 是绑定时刻展示快照非权威，缺省回落 mediaId） -->
+        <!-- 已存在手动绑定才露解绑口，文案分轨道形态：数值曲解绑后
+             解锁链回落 pyncmd→youtube→bilibili 自动搜索（恢复自动匹配）；
+             qq_/bv_/yt_ 外源曲回落自有源腿（恢复原始源——外源无「自动
+             匹配」可恢复）。摘要行如实展示绑定快照（title/owner 是绑定
+             时刻展示快照非权威，缺省回落 mediaId） -->
         <div v-if="hasManual" class="sp-foot">
           <p class="sp-manual" :title="manualSummary">
             当前绑定：<span class="sp-badge" :class="`sp-badge--${manual.source}`" aria-hidden="true">{{ sourceBadge(manual.source) }}</span> {{ sourceName(manual.source) }} · {{ manualSummary }}
@@ -162,7 +164,7 @@
             class="sp-clear"
             :disabled="busy"
             @click="clearManual"
-          >恢复自动匹配（解除手动绑定）</button>
+          >{{ isExtTrack ? '恢复原始源（解除手动绑定）' : '恢复自动匹配（解除手动绑定）' }}</button>
         </div>
       </div>
     </div>
@@ -175,7 +177,7 @@ import { apiErrorMessage } from '../api/http.js'
 import { toast } from '../lib/feedback.js'
 import { formatTime } from '../lib/format.js'
 import { trapTabKeydown, cycleMenuItems } from '../lib/focus-trap.js'
-import { BVID_IN_TEXT_RE, extractYouTubeId } from '../lib/url.js'
+import { BVID_IN_TEXT_RE, extractYouTubeId, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url.js'
 import { proxiedCoverUrl } from '../lib/song.js'
 import PixelIcon from './PixelIcon.vue'
 
@@ -234,6 +236,14 @@ export default {
     // 「恢复默认」只在词偏离默认口径时露——trim 后比较，尾部空格不唤醒
     isDefaultQuery() {
       return this.query.trim() === this.defaultKeyword
+    },
+    // qq_/bv_/yt_ 外源轨道判定：自有源曲（自有源败亡时手动绑定媒体顶替，
+    // 服务端 isUnlockManualTrackId 的外源三段——数值段是解锁链纠错面）。
+    // 派生词基值（provider 原标题优先）与页脚/解绑文案分形态都吃它——
+    // 本组件只需「是否外源」二分，数值曲仍走原口径
+    isExtTrack() {
+      const id = String(this.song0?.id ?? '')
+      return QQ_SONG_ID_RE.test(id) || BV_TRACK_ID_RE.test(id) || YT_TRACK_ID_RE.test(id)
     },
     // 候选展示序：按时长贴近升序（|c.durationSec - song0.dt/1000|）——
     // 排序是展示态，客户端持 song0.dt 自排（服务端不收 duration 参数
@@ -331,15 +341,24 @@ export default {
       const m = this.manual
       return !!(m && c && m.source === c.source && m.mediaId === c.mediaId)
     },
-    // 默认检索词的客户端镜像派生（与服务端 baseUnlockInfo 同一条
+    // 默认检索词的客户端镜像派生（数值曲与服务端 baseUnlockInfo 同一条
     // [canonical KWFORM] 规则句：artists 在场 `${name} - ${a / b}`、
     // 空回落裸 name——客户端显式传 keyword 则服务端跳过 detail 兜底，
-    // 同一公式源不许另写拼接）
+    // 同一公式源不许另写拼接）。
+    // 外源变体：bv_/yt_ 的 song.name 可能被匹配覆写，bilibili.title /
+    // youtube.title 才是源站原标题——基值取 provider 原标题优先，比展示
+    // 名更贴源站水域；qq_ 无 provider title 字段（name 即权威曲名）自然
+    // 回落。qq_ 的 ar 是真实艺人表、bv_/yt_ 是上传者/频道净名——副词位
+    // 帮助排歧。外源 id 服务端本无 detail 派生面（keyword 缺席即 400），
+    // 首载显式传词是唯一通道
     deriveKeyword() {
-      const song = this.song0 || {}
-      const artists = (song.ar || song.artists || [])
+      const s = this.song0 || {}
+      const base = this.isExtTrack
+        ? (s.bilibili?.title || s.youtube?.title || s.name || '')
+        : (s.name || '')
+      const artists = (s.ar || s.artists || [])
         .map(a => a?.name).filter(Boolean).join(' / ')
-      return artists ? `${song.name || ''} - ${artists}` : (song.name || '')
+      return artists ? `${base} - ${artists}` : base
     },
     // 改词重检，两形态分家：词与默认口径同串（预填词原样回车）→ 默认
     // 词入池——「提交预填词」语义是重打默认检索；词偏离默认口径才记
@@ -483,16 +502,18 @@ export default {
         this.busy = false
       }
     },
-    // 解绑 → 恢复自动匹配（解锁链回落自动搜索）。与 pick 共用 busy 闸，
-    // 防双击并发；applied 上行同样走 notifyUnlockManualChange——解绑
-    // 也是绑定变更，正播同曲要重取址回自动链
+    // 解绑 → 回落原链：数值曲恢复自动匹配（解锁链自动搜索）、外源曲
+    // 恢复自有源（toast 分形态——外源无「自动匹配」可恢复，文案不许
+    // 谎报回落面）。与 pick 共用 busy 闸，防双击并发；applied 上行
+    // 同样走 notifyUnlockManualChange——解绑也是绑定变更，正播同曲
+    // 要重取址回原链
     async clearManual() {
       if (this.busy || !this.song0?.id) return
       this.busy = true
       this.pickError = ''
       try {
         await musicApi.clearManualUnlock(this.song0.id)
-        toast('已恢复自动匹配', 'success')
+        toast(this.isExtTrack ? '已解除手动绑定' : '已恢复自动匹配', 'success')
         this.$emit('applied', this.song0.id)
         this.$emit('close')
       } catch (e) {

@@ -454,6 +454,7 @@ describe('SourcePicker：选定/解绑', () => {
     click(clearBtn)
     await flush()
     expect(musicApi.clearManualUnlock).toHaveBeenCalledWith('12345')
+    expect(toast).toHaveBeenCalledWith('已恢复自动匹配', 'success')
     expect(w.emitted('applied')).toEqual([['12345']])
     expect(w.emitted('close')).toHaveLength(1)
   })
@@ -464,6 +465,84 @@ describe('SourcePicker：选定/解绑', () => {
     const sfc = readFileSync(resolve('src/components/SourcePicker.vue'), 'utf8')
     expect(sfc).toMatch(/\.sp-row--current\s*\{[^}]*--ink-10/)
     expect(sfc).not.toContain('--accent-soft')
+  })
+})
+
+describe('SourcePicker：外源轨道（qq_/bv_/yt_）', () => {
+  // 外源曲同享换源设施（自有源败亡时绑定点名媒体顶替——服务端
+  // isUnlockManualTrackId 的外源三段）。派生词基值取 provider 原标题：
+  // bv_/yt_ 的 song.name 可能被匹配覆写，bilibili.title/youtube.title
+  // 才是源站真锚；qq_ 无 provider title 字段、name 即权威曲名自然回落。
+  // 页脚解绑口与 toast 分形态——外源无「自动匹配」可恢复，回落的是自有
+  // 源腿；数值曲回归由「开屏并行拉候选」谱的 DERIVED_KW 断言盖着
+  it('bv_ 曲首载 keyword=<bilibili.title> - <UP主>（name 被匹配覆写不取）', async () => {
+    mountPicker({
+      song: {
+        id: 'bv_BV1xx411c7mD', name: '匹配覆写名', ar: [{ name: 'UP主甲' }],
+        bilibili: { bvid: 'BV1xx411c7mD', title: 'B站原标题' }, dt: 205000,
+      },
+    })
+    await flush()
+    expect(musicApi.getUnlockCandidates).toHaveBeenCalledWith(
+      { id: 'bv_BV1xx411c7mD', keyword: 'B站原标题 - UP主甲' },
+      expect.any(AbortSignal))
+    expect(searchInput().value).toBe('B站原标题 - UP主甲')
+  })
+
+  it('bv_ 裸 id（缺 bilibili 对象老行）→ 基值回落 name', async () => {
+    mountPicker({ song: { id: 'bv_BV1xx411c7mD', name: '裸bv名', ar: [{ name: 'UP乙' }], dt: 0 } })
+    await flush()
+    expect(musicApi.getUnlockCandidates).toHaveBeenCalledWith(
+      { id: 'bv_BV1xx411c7mD', keyword: '裸bv名 - UP乙' }, expect.anything())
+  })
+
+  it('yt_ 曲基值取 youtube.title（频道净名挂副词位）', async () => {
+    mountPicker({
+      song: {
+        id: 'yt_abcdefghijk', name: '匹配名', ar: [{ name: '频道净名' }],
+        youtube: { videoId: 'abcdefghijk', title: 'YT 原标题' }, dt: 0,
+      },
+    })
+    await flush()
+    expect(musicApi.getUnlockCandidates).toHaveBeenCalledWith(
+      { id: 'yt_abcdefghijk', keyword: 'YT 原标题 - 频道净名' }, expect.anything())
+  })
+
+  it('qq_ 曲=name - 真实艺人表（qq 无 provider title 字段、name 即权威曲名）', async () => {
+    mountPicker({
+      song: {
+        id: 'qq_0034M8WL3V4oHC', name: 'QQ曲名', ar: [{ name: '艺人丙' }, { name: '艺人丁' }],
+        qq: { mid: '0034M8WL3V4oHC' }, dt: 0,
+      },
+    })
+    await flush()
+    expect(musicApi.getUnlockCandidates).toHaveBeenCalledWith(
+      { id: 'qq_0034M8WL3V4oHC', keyword: 'QQ曲名 - 艺人丙 / 艺人丁' }, expect.anything())
+  })
+
+  it('外源页脚：解绑钮=「恢复原始源（解除手动绑定）」、toast=「已解除手动绑定」', async () => {
+    // 跨源绑合法（bv_ 曲绑 youtube 媒体）——页脚/toast 分形态认轨道 id
+    // 不认绑定源
+    musicApi.getManualUnlock.mockResolvedValue({
+      source: 'youtube', mediaId: 'abcdefghijk',
+      title: '绑定媒体', owner: 'O', durationSec: 200, updatedAt: 'x'
+    })
+    const w = mountPicker({
+      song: {
+        id: 'bv_BV1xx411c7mD', name: 'bv', ar: [{ name: 'UP' }],
+        bilibili: { bvid: 'BV1xx411c7mD', title: 'B站原标题' }, dt: 0,
+      },
+    })
+    await flush()
+    const clearBtn = document.querySelector('.sp-clear')
+    expect(clearBtn?.textContent).toBe('恢复原始源（解除手动绑定）')
+    click(clearBtn)
+    await flush()
+    expect(musicApi.clearManualUnlock).toHaveBeenCalledWith('bv_BV1xx411c7mD')
+    expect(toast).toHaveBeenCalledWith('已解除手动绑定', 'success')
+    expect(toast).not.toHaveBeenCalledWith('已恢复自动匹配', expect.anything())
+    expect(w.emitted('applied')).toEqual([['bv_BV1xx411c7mD']])
+    expect(w.emitted('close')).toHaveLength(1)
   })
 })
 
