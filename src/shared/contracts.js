@@ -79,13 +79,16 @@ export const lyricManualPickBody = z.looseObject({
   token: z.string().max(200).optional()
 });
 
-// POST /unlock/manual：手选媒体源绑定。id 是网易数值曲目 id（路由层
-// NETEASE_ID_BOUNDED_RE），source 收窄到实现了 resolveById 的搜索型源，
-// mediaId 只收源私有 id 净形（youtube→11位 YT_ID_RE、bilibili→BVID_RE，
-// 路由层严校——服务端永不接 URL 串，粘贴解析全在客户端）。title/owner
-// 是绑定时刻展示快照（≤300/200 截断），durationSec 是展示+时长豁免参照
+// POST /unlock/manual：手选媒体源绑定。id 是本站轨道 id（网易数值或
+// qq_/bv_/yt_ 前缀——路由层 canonManualTrackId 把关），source 收窄到
+// 实现了 resolveById 的搜索型源，mediaId 只收源私有 id 净形（youtube→
+// 11位 YT_ID_RE、bilibili→BVID_RE，路由层严校——服务端永不接 URL 串，
+// 粘贴解析全在客户端）。title/owner 是绑定时刻展示快照（≤300/200 截断），
+// durationSec 是展示+时长豁免参照。
+// id string 支 max(40)：qq_+20 位 mid=23 字符（yt_≤14、bv_+_pN≤19——
+// 40 留余量仍挡垃圾；形态闸在路由层，这里只收体量）
 export const unlockManualPickBody = z.looseObject({
-  id: z.union([z.string().min(1).max(20), z.number().int().positive()]),
+  id: z.union([z.string().min(1).max(40), z.number().int().positive()]),
   source: z.enum(['youtube', 'bilibili']),
   mediaId: z.string().min(1).max(80),
   title: z.string().max(300).optional(),

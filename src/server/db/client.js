@@ -423,13 +423,15 @@ function initSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- 手选播放源绑定（解锁链手动纠正）：用户在候选池点名挑的那条媒体，
-    -- 修「解锁链自动匹配到错翻唱」。只存指针不存回链——googlevideo/
-    -- bilivideo 链是带签名+ip绑定的易失品，落库即死链；每次播放经
-    -- resolveById 现解。song_id 只收网易数值曲（解锁链只对它生效），
-    -- 同一歌只留一条当前绑定，重挑覆盖
+    -- 手选播放源绑定（解锁链手动纠正 + 外源自有源顶替）：用户在候选池
+    -- 点名挑的那条媒体。数值曲修「解锁链自动匹配到错翻唱」；qq_/bv_/yt_
+    -- 自有源曲在自有源败亡时由绑定媒体顶替。只存指针不存回链——
+    -- googlevideo/bilivideo 链是带签名+ip绑定的易失品，落库即死链；
+    -- 每次播放经 resolveById 现解。同一歌只留一条当前绑定，重挑覆盖
     CREATE TABLE IF NOT EXISTS song_unlock_manual (
-      song_id TEXT PRIMARY KEY,        -- 网易数值曲目 id（解锁链仅服务此形态）
+      song_id TEXT PRIMARY KEY,        -- 网易数值曲目 id（resolveOne 手动步消费）
+                                       -- 或 qq_/bv_/yt_ 自有源轨道 id（流端点失败
+                                       -- 触发步 + 下载手动腿消费）
       source TEXT NOT NULL,            -- 'youtube' | 'bilibili'（pyncmd 直解零错配不可绑）
       media_id TEXT NOT NULL,          -- yt videoId(11位) / bili bvid(BV1xxxxxxxxx)
       title TEXT NOT NULL DEFAULT '',  -- 绑定时刻候选标题（展示用快照，非权威）

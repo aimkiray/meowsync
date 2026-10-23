@@ -11,6 +11,10 @@ const { matchWithBudget, matchTracksPool, toMatchedJson } = require('../services
 const { tokenMatches } = require('../lib/token-eq');
 const { createTtlCache } = require('../lib/stream-resolve-cache');
 const { BVID_RE } = require('../../shared/predicates.js');
+// 手选媒体源绑定消费步：自有源腿败亡时绑定点名媒体顶替——只闸
+// kind==='audio'（绑定语义是音源顶替，resolveById 只产音频流，视频模式
+// 恒为自有媒体）；绑媒体 mint 裸 urls 不蹭播过路缓存键
+const { manualStreamOverride } = require('../services/unlock/manual-stream');
 // 上游交互原语（cookie 头/biliFetch/选流/分P/bvid 解析）在 lib/bilibili.js——
 // file-downloader 的 bv_* 分发共用同一实现，不维护两份客户端
 const { biliFetch, pickStreamList, pickStreams, pickPageParam, pickCidFromView, flatUrls, viewQuery, resolveBiliLink, hasBiliCookie, QN_HEIGHT,
@@ -527,7 +531,9 @@ async function resolveStreamSet({ bvid, cidParam, pageWanted, kind, prefer }) {
 }
 
 // 播放流地址：每次重解 playurl（CDN 签名 ~2h 过期），302 到 audio-proxy
-// 走统一代理（Referer 注入 + Range 透传 + SSRF 校验），不在此直接透流
+// 走统一代理（Referer 注入 + Range 透传 + SSRF 校验），不在此直接透流。
+// kind=audio 自有源腿败亡（null/空 usable/抛错）时查 song_unlock_manual
+// 顶替（与数值域「官方直解→手动→推导回链」同序）；kind=video 恒自有源
 app.get('/bilibili/stream', async (c) => {
   // 同样未鉴权；kind=video 最坏扇出 5 跳（view+playurl+cid 自愈两跳+durl 探测），
   // 限流放宽些（每次播放触发一次，音频+视频分开计），只挡异常刷量
@@ -556,10 +562,36 @@ app.get('/bilibili/stream', async (c) => {
     // skipCache（?retry=1）：前端 _streamRetried 重试旁路正缓存读——缓存的
     // 死档（形态合法但上游 403/吊销）不再把重试钉在同一份产物上；写仍落
     // 常规键治愈旧档（yt/qq 同口径）
-    const set = await resolveStreamSetShared({ bvid, cidParam, pageWanted, kind, prefer,
-      skipCache: c.req.query('retry') === '1' });
+    let set = null;
+    let ownErr = null; // 自有源错误存外侧——绑定腿也空/死时回原分档路径
+    try {
+      set = await resolveStreamSetShared({ bvid, cidParam, pageWanted, kind, prefer,
+        skipCache: c.req.query('retry') === '1' });
+    } catch (e) {
+      if (e?.aborted || c.req.raw.signal?.aborted) throw e; // 走外层 499
+      ownErr = e;
+    }
     // 搭车等待期间本客户端可能已断连——产物是共享的，写响应按自己的 signal 判
     if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    // 自有源腿败亡→kind=audio 查手动绑定顶替。轨道键与 buildBilibiliSong
+    // id 编码同构：bvid 形参 /i 宽形→canonicalize BV 大写头（与
+    // canonManualTrackId 同口径），?p=N→_pN
+    if (kind === 'audio' && (ownErr || !set || set.noAvc1 || !set.usable?.length)) {
+      const trackKey = `bv_${'BV' + bvid.slice(2)}${pageWanted > 1 ? `_p${pageWanted}` : ''}`;
+      const manual = await manualStreamOverride(trackKey, {
+        purpose: prefer === 'best' ? 'download' : 'playback',
+        signal: c.req.raw.signal,
+        skipCache: c.req.query('retry') === '1',
+      });
+      if (manual) {
+        console.info(`[bilibili/stream] ${trackKey} → 手动绑定 ${manual.source}/${manual.mediaId}`);
+        c.header('x-manual-source', manual.source);
+        // mint 不带 cacheKey/cacheMeta——resolveById 产物无 mimeType/codec
+        // 指纹材料，绑媒体不蹭播过路缓存键
+        return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(manual.urls)}`), 302);
+      }
+    }
+    if (ownErr) throw ownErr; // 回外层既有分档（499/502）
     if (set.noAvc1) {
       return c.json({ code: 404, message: 'no playable (avc1) video stream' }, 404);
     }

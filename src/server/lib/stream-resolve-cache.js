@@ -40,6 +40,9 @@ function createTtlCache({ max = 256, ttlMs = 60000 } = {}) {
     delete(key) {
       return map.delete(key);
     },
+    // 活迭代器——前缀扫键类调用方（forgetManualStream 的 `trackId|` 扫）
+    // 自行 [...] 拍快照再消费，别在迭代中删键
+    keys: () => map.keys(),
     get size() {
       return map.size;
     },

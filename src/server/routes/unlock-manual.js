@@ -1,21 +1,25 @@
 // 手选媒体源绑定路由（「换源」的服务端半侧）——自动解锁链是「系统
-// 判官」，错配时用户是终审：
-//   GET    /unlock/candidates?id=<数字>&keyword=<可选>
+// 判官」，错配/败亡时用户是终审。id 收网易数值曲目 id（解锁链手动步
+// 消费）或 qq_/bv_/yt_ 自有源轨道 id（自有源流端点失败触发步+下载
+// 手动腿消费——canonManualTrackId 闸后归一入键）：
+//   GET    /unlock/candidates?id=<轨道id>&keyword=<可选>
 //     youtube/bilibili 两源并发扇出手动挑选池——单源失败进 errors 随包
-//     下发、他源照常（故障隔离），双灭 502；keyword 缺席走 song_detail +
-//     baseUnlockInfo 兜底派生并回显实际用掉的词（客户端首载恒显式传
-//     派生词，本兜底只服务直调 API——零多一跳）
-//   GET    /unlock/manual?id=<数字>
+//     下发、他源照常（故障隔离），双灭 502；keyword 缺席时数值 id 走
+//     song_detail + baseUnlockInfo 兜底派生并回显实际用掉的词（客户端
+//     首载恒显式传派生词，本兜底只服务直调 API——零多一跳）；外源 id
+//     无 detail 兜底源，缺词直接 400
+//   GET    /unlock/manual?id=<轨道id>
 //     当前手选绑定：{code:200, hit:{source,mediaId,title,owner,
 //     durationSec,updatedAt}}；未绑 404
 //   POST   /unlock/manual {id, source, mediaId, title?, owner?, durationSec?}
 //     点名绑定：先 resolveById 真取流验证（30s 子预算+请求 signal 合流）
 //     通过才落库——「绑定即承诺此刻可取流」；只存指针不存回链
 //     （googlevideo/bilivideo 签名链是易失品，落库即死链）；落库后
-//     forgetSongUnlock 清 60s 解锁缓存/判定簿让下次播放吃到新绑定
-//   DELETE /unlock/manual?id=<数字>
+//     forgetSongUnlock 清 60s 解锁缓存/判定簿 + forgetManualStream 清
+//     手动流正/负档让下次播放吃到新绑定
+//   DELETE /unlock/manual?id=<轨道id>
 //     解绑：幂等 200（没绑过也回 200——「目标状态=无绑定」已达成）+
-//     forgetSongUnlock（恢复自动链要清掉绑定期产物）
+//     forgetSongUnlock/forgetManualStream（恢复自动链要清掉绑定期产物）
 // /unlock 首段登记见 lib/api-path.js PREFIXES + lib/protected-write.js
 // PROTECTED_WRITE_PREFIXES——两处缺一即整条路由静默失守（authGate API
 // 语义 + SPA JSON 404 + DOWNLOAD_TOKEN 写闸）
@@ -34,19 +38,36 @@ const {
 const { unlockManualPickBody } = require('../../shared/contracts.js');
 const {
   NETEASE_ID_BOUNDED_RE, YT_ID_RE, BVID_RE,
+  QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE,
 } = require('../../shared/predicates.js');
+const { forgetManualStream } = require('../services/unlock/manual-stream');
 
 const app = new Hono();
 
-// songId 形闸：手动绑定只对解锁链生效，而解锁链只服务网易数值曲——刻意
-// 不复用 lyric-manual 的 SONG_ID_RES 宽集（bv_/yt_/qq_/file_ 曲走自有源
-// 不进解锁链，收下=存了永不消费的僵尸绑定）
-const songIdOk = (id) => NETEASE_ID_BOUNDED_RE.test(id);
-// id 过闸后归一数值形（'000123'→'123'）：前导零形能过 \d{1,20} 闸，
-// 但落库键 '000123' 与 resolveOne 消费键 String(item.id)='123' 不一致
-// =存了永不消费的僵尸绑定。必须在 songIdOk 之后调——Number('')=0 会
-// 把空 id 洗成过闸的 '0'。Number 舍入与消费端 JS number 同口径
-const normSongId = (id) => String(Number(id));
+// 轨道 id 闸+归一：网易数值曲照旧去前导零（'000123'→'123'，原理由不动——
+// 落库键与 resolveOne 消费键 String(item.id) 不一致=僵尸绑定）；
+// 前缀轨道 id 按各自 RE 收，bv_ 段 canonicalize 成 BV 大写头——
+// BV_TRACK_ID_RE 是 /i 宽形，'BV_xxx'/'bv_bv...' 非规范形经直调 API 可过闸，
+// 落库键与播放链 song.id/下载链 task.songId/端点轨道键的规范形错一字节=
+// 永不消费的僵尸绑定（与数值支 normSongId 同一防死道理；客户端 sp-direct
+// 行 bv.replace(/^bv/i,'BV') 同法先例）。qq_/yt_ RE 无 /i，原样即规范形。
+// file_/mix_/ext_ 词源命名空间不收（同型撞名区见 predicates L37-61）——
+// 返 null=非法形态；必须在过闸后调，Number('')=0 会洗出假 '0'
+const canonManualTrackId = (id) => {
+  const s = String(id ?? '').trim();
+  if (NETEASE_ID_BOUNDED_RE.test(s)) return String(Number(s));
+  const bvM = s.match(BV_TRACK_ID_RE);
+  if (bvM) {
+    // _p 尾段同归一：/bilibili/stream 只在 pageWanted>1 时产 _pN 轨道键
+    //（?p=0/1→裸 bv_X、?p=03→_p3；与 buildBilibiliSong id 编码及端点
+    // trackKey 同构公式）。_p0/_p1/_p01 原样落库=端点永不命中的僵尸
+    // 绑定族；parseInt 一并收掉 RE /i 放行的大写 '_P03' 与前导零
+    const p = bvM[2] ? parseInt(bvM[2], 10) : 0;
+    return `bv_${'BV' + bvM[1].slice(2)}${p > 1 ? `_p${p}` : ''}`;
+  }
+  if (QQ_SONG_ID_RE.test(s) || YT_TRACK_ID_RE.test(s)) return s;
+  return null;
+};
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 // mediaId 严校（SSRF 口径）：服务端永不接 URL 串——粘贴解析全在客户端
 // （b23.tv 短链/av 号不收：跳解需出站，本批不做）。只收源私有 id 净形
@@ -62,11 +83,10 @@ app.get('/unlock/candidates', async (c) => {
   if (!rateLimit(c, 'unlock-cand', 20)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
   }
-  let id = String(c.req.query('id') || '').trim();
-  if (!songIdOk(id)) {
+  const id = canonManualTrackId(c.req.query('id'));
+  if (!id) {
     return c.json({ code: 400, message: '非法 id' }, 400);
   }
-  id = normSongId(id);
   // 检索词上限与 /youtube/search q≤200 同口径
   let keyword = str(c.req.query('keyword'), 200);
   try {
@@ -75,6 +95,13 @@ app.get('/unlock/candidates', async (c) => {
     //（交互端点要确定性+零 AI 尾延迟；客户端镜像派生恒传词，本支路只
     // 服务直调 API）
     if (!keyword) {
+      if (!NETEASE_ID_BOUNDED_RE.test(id)) {
+        // 外源曲没有 song_detail 兜底源（detail 只认网易数值 id）——确定性
+        // 拒绝不为注定空回的派生支路白烧一跳上游；客户端首载恒显式传派生
+        // 词，本分支只服务直调 API。400 是输入缺陷的诚实归类——
+        // 502 会把「入参缺欠」谎报成「上游故障」
+        return c.json({ code: 400, message: '外源曲目须显式携带检索关键词（该曲形态无 song_detail 兜底源）' }, 400);
+      }
       let row = null;
       try {
         const detail = await callNeteaseApi('song_detail', { ids: id },
@@ -143,11 +170,10 @@ app.get('/unlock/manual', (c) => {
   if (!rateLimit(c, 'unlock-manual', 30)) {
     return c.json({ code: 429, message: '请求太频繁' }, 429);
   }
-  let id = String(c.req.query('id') || '').trim();
-  if (!songIdOk(id)) {
+  const id = canonManualTrackId(c.req.query('id'));
+  if (!id) {
     return c.json({ code: 400, message: '非法 songId' }, 400);
   }
-  id = normSongId(id);
   const hit = unlockManualRepo.getManual(id);
   if (!hit) return c.json({ code: 404, message: '未绑定手选媒体源' }, 404);
   return c.json({ code: 200, hit });
@@ -166,11 +192,10 @@ app.post('/unlock/manual', async (c) => {
   }
   const { data: body, error } = await parseJsonBody(c, unlockManualPickBody, 16 * 1024);
   if (error) return error;
-  let id = String(body.id ?? '').trim();
+  const id = canonManualTrackId(body.id);
   const source = String(body.source ?? '').trim();
   const mediaId = String(body.mediaId ?? '').trim();
-  if (!songIdOk(id)) return c.json({ code: 400, message: '非法 songId' }, 400);
-  id = normSongId(id);
+  if (!id) return c.json({ code: 400, message: '非法 songId' }, 400);
   // source 枚举已被 schema 收窄到 youtube/bilibili；再断言 provider 真
   // 具备 resolveById 能力（能力面未部署的源不许绑）
   const provider = PROVIDERS[source];
@@ -203,8 +228,12 @@ app.post('/unlock/manual', async (c) => {
         ? Math.round(body.durationSec) : null,
     });
     // 60s unlockCache/verdict 簿里的错配产物不清，绑定写了也读到旧链——
-    // 调在 upsert 成功之后（绑定落库才该清负状态）
+    // 调在 upsert 成功之后（绑定落库才该清负状态）；forgetManualStream
+    // 收手动流缓存的正/负档（同媒体重绑撞旧负档是键带绑定身份的唯一洞），
+    // 外源曲「刚绑完立刻听到绑的」靠它即时生效。前缀 id 调入
+    // forgetSongUnlock 是安全空调用（键尾段 `|<id>` 天然全不命中）照旧保门面
     forgetSongUnlock(id);
+    forgetManualStream(id);
     // 回权威行（含 updatedAt）——绑定时刻展示快照已按 str() 截断落库
     return c.json({ code: 200, hit: unlockManualRepo.getManual(id) });
   } catch (e) {
@@ -225,12 +254,13 @@ app.delete('/unlock/manual', (c) => {
   if (!rateLimit(c, 'unlock-manual:write', 15)) {
     return c.json({ code: 429, message: '请求太频繁' }, 429);
   }
-  let id = String(c.req.query('id') || '').trim();
-  if (!songIdOk(id)) return c.json({ code: 400, message: '非法 songId' }, 400);
-  id = normSongId(id);
+  const id = canonManualTrackId(c.req.query('id'));
+  if (!id) return c.json({ code: 400, message: '非法 songId' }, 400);
   unlockManualRepo.deleteManual(id);
-  // 恢复自动链必须清绑定期产物（unlockCache 里可能躺着手动步产出）
+  // 恢复自动链必须清绑定期产物（unlockCache 里可能躺着手动步产出）；
+  // 手动流缓存同点收（前缀 id 对 forgetSongUnlock 安全空转照旧）
   forgetSongUnlock(id);
+  forgetManualStream(id);
   return c.json({ code: 200 });
 });
 

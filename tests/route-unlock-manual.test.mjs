@@ -179,8 +179,9 @@ test('POST 入参闸：坏 songId/坏 source/坏 mediaId → 400（URL 串永不
   resetStubs();
   // 每桶 15/min——本用例发大量 POST，每发独立 IP 避免先撞桶（拒闸断言的
   // 是 400 而非 429）
-  // songId 闸：NETEASE_ID_BOUNDED_RE——非数字/超 20 位/前缀轨道 id 全拒
-  for (const id of ['abc', '88020 1', '9'.repeat(21), 'bv_BV1xx411c7mD', 'yt_dQw4w9WgXcQ', 'qq_abc123defg', 'file_abcdef12']) {
+  // songId 闸：canonManualTrackId——非数字/超 20 位/file_ 上传资产与
+  // 撞名命名空间全拒（qq_/bv_/yt_ 前缀轨道 id 现在收——下方专项谱钉）
+  for (const id of ['abc', '88020 1', '9'.repeat(21), 'file_abcdef12', 'mix_x', 'ext_ytm_x', 'spotify_x']) {
     assert.equal((await post({ id, source: 'youtube', mediaId: 'dQw4w9WgXcQ' })).status, 400, `id=${id}`);
   }
   // source 闸：schema 枚举外源 400
@@ -387,6 +388,164 @@ test('candidates 读桶：unlock-cand 20/min——第 21 发 429', async () => {
   }
   const res = await getCand('id=880215&keyword=k', ip);
   assert.equal(res.status, 429);
+});
+
+// ── 外源轨道 id（qq_/bv_/yt_）扩展谱：同一绑定设施对外源自有源曲开放 ──
+
+test('前缀 id 全生命周期：qq_/bv_/bv__pN/yt_ POST→GET→DELETE→GET 404，二次 DELETE 幂等', async () => {
+  resetStubs();
+  for (const tid of ['qq_0034M8WL3V4oHA', 'bv_BV1xx411c7mD', 'bv_BV1xx411c7mD_p3', 'yt_dQw4w9WgXcQ']) {
+    const ip = nextIp();
+    assert.equal((await getM(tid, ip)).status, 404, `未绑 ${tid}`);
+    const r = await json(await post({
+      id: tid, source: 'youtube', mediaId: 'dQw4w9WgXcQ',
+      title: '正曲', owner: '频道', durationSec: 212,
+    }, ip));
+    assert.equal(r.status, 200, `POST ${tid}`);
+    assert.equal(r.body.hit.mediaId, 'dQw4w9WgXcQ');
+    assert.equal(repo.getManual(tid)?.mediaId, 'dQw4w9WgXcQ', `${tid} 按规范键落库`);
+    const g = await json(await getM(tid, ip));
+    assert.equal(g.status, 200);
+    assert.equal(g.body.hit.mediaId, 'dQw4w9WgXcQ');
+    assert.equal((await del(tid, ip)).status, 200);
+    assert.equal((await getM(tid, ip)).status, 404);
+    assert.equal((await del(tid, ip)).status, 200, 'DELETE 幂等：没绑过也 200');
+  }
+});
+
+test('id 闸精确枚举：file_/mix_/ext_词源/spotify_/裸 qq_/截短/超长全 400；qq_+20位 mid（23字符）过闸', async () => {
+  resetStubs();
+  // 形态闸：精确枚举四形态之外一律 400（宽化=收下永不消费的僵尸行）
+  for (const id of ['file_abcdef12', 'mix_x', 'ext_ytm_x', 'ytm_dQw4w9WgXcQ', 'spotify_x',
+    'qq_', 'qq_short', 'yt_short', 'bv_short', 'bv_', 'p3']) {
+    assert.equal((await post({ id, source: 'youtube', mediaId: 'dQw4w9WgXcQ' })).status, 400, `POST id=${id}`);
+    assert.equal((await getM(id)).status, 400, `GET id=${id}`);
+  }
+  // qq_+20 位 mid=23 字符——schema max(40) 生效过闸（旧 max(20) 在 schema 层就拒）
+  const r = await json(await post({
+    id: `qq_${'a1'.repeat(10)}`, source: 'youtube', mediaId: 'dQw4w9WgXcQ',
+  }));
+  assert.equal(r.status, 200, 'qq_+20位 mid（23字符）须过闸');
+  // >40 字符：schema 体量闸先拒（形态闸之前）
+  assert.equal((await post({ id: `qq_${'a1'.repeat(19)}`, source: 'youtube', mediaId: 'dQw4w9WgXcQ' })).status, 400);
+  assert.equal((await post({ id: 'x'.repeat(41), source: 'youtube', mediaId: 'dQw4w9WgXcQ' })).status, 400);
+  assert.equal((await getM('x'.repeat(41))).status, 400);
+});
+
+test('canonManualTrackId 归一：BV_/小写 bvid/_PN/_p尾段 非规范形 → canonical 键落库/读口；qq_/yt_ 原样', async () => {
+  resetStubs();
+  const ip = nextIp();
+  // 'BV_bv1xxxxxxxxx'（BV_TRACK_ID_RE /i 宽形过闸）→ 落库 'bv_BV1xxxxxxxxx'
+  let r = await json(await post({
+    id: 'BV_bv1xxxxxxxxx', source: 'youtube', mediaId: 'dQw4w9WgXcQ',
+    title: 't', owner: 'o', durationSec: 200,
+  }, ip));
+  assert.equal(r.status, 200);
+  assert.equal(repo.getManual('bv_BV1xxxxxxxxx')?.mediaId, 'dQw4w9WgXcQ',
+    '落库键须归一成 BV 大写头——与 song.id/端点轨道键规范形一致');
+  assert.equal(repo.getManual('BV_bv1xxxxxxxxx'), null, '非规范键不得落库');
+  // 非规范形读口同口径归一——'bv_bv1xxxxxxxxx' 命中同一绑定
+  assert.equal((await getM('bv_bv1xxxxxxxxx', ip)).status, 200);
+  // 大写 _PN 分 P 形 → 'bv_BV1xxxxxxxxx_p2'
+  r = await json(await post({
+    id: 'bv_BV1xxxxxxxxx_P2', source: 'bilibili', mediaId: 'BV1xx411c7mD',
+    title: 't', owner: 'o', durationSec: 200,
+  }, ip));
+  assert.equal(r.status, 200);
+  assert.equal(repo.getManual('bv_BV1xxxxxxxxx_p2')?.mediaId, 'BV1xx411c7mD', '_PN 归一到 _pN');
+  assert.equal((await getM('bv_BV1xxxxxxxxx_p2', ip)).status, 200);
+  // _p 尾段数值归一（R3-SF1）：/bilibili/stream 只在 pageWanted>1 产 _pN
+  // 轨道键——_p0/_p1/_p01 原样落库=端点永不命中的僵尸绑定，须归一到裸键
+  for (const tail of ['p0', 'p1', 'p01']) {
+    r = await json(await post({
+      id: `bv_BV1zz411c7mF_${tail}`, source: 'youtube', mediaId: 'dQw4w9WgXcQ',
+      title: 't', owner: 'o', durationSec: 200,
+    }));
+    assert.equal(r.status, 200, `POST bv_..._${tail}`);
+    assert.equal(repo.getManual('bv_BV1zz411c7mF')?.mediaId, 'dQw4w9WgXcQ',
+      `_${tail} 须归一到裸键 bv_BV1zz411c7mF（端点 ?p=0/1 产裸键）`);
+    assert.equal(repo.getManual(`bv_BV1zz411c7mF_${tail}`), null,
+      `_${tail} 原形不得落库`);
+    // GET 用归一键命中——非规范尾段读口命中同一绑定
+    assert.equal((await getM(`bv_BV1zz411c7mF_${tail}`)).status, 200,
+      `GET _${tail} 归一键命中`);
+    repo.deleteManual('bv_BV1zz411c7mF');
+  }
+  // _p03/_P03（RE /i 放行大写 P）→ _p3——端点 ?p=03 产 pageWanted=3→_p3 键
+  for (const tail of ['p03', 'P03']) {
+    r = await json(await post({
+      id: `bv_BV1zz411c7mF_${tail}`, source: 'youtube', mediaId: 'dQw4w9WgXcQ',
+      title: 't', owner: 'o', durationSec: 200,
+    }));
+    assert.equal(r.status, 200, `POST bv_..._${tail}`);
+    assert.equal(repo.getManual('bv_BV1zz411c7mF_p3')?.mediaId, 'dQw4w9WgXcQ',
+      `_${tail} 须归一到 _p3（前导零/大写 P 剥掉）`);
+    assert.equal(repo.getManual(`bv_BV1zz411c7mF_${tail}`), null,
+      `_${tail} 原形不得落库`);
+    assert.equal((await getM(`bv_BV1zz411c7mF_${tail}`)).status, 200,
+      `GET _${tail} 归一键命中`);
+    repo.deleteManual('bv_BV1zz411c7mF_p3');
+  }
+  // qq_/yt_ RE 无 /i——大写前缀非规范形不收（原样即规范形，不做大小写宽化）
+  assert.equal((await post({ id: 'QQ_0034M8WL3V4oHA', source: 'youtube', mediaId: 'dQw4w9WgXcQ' })).status, 400);
+  assert.equal((await post({ id: 'YT_dQw4w9WgXcQ', source: 'youtube', mediaId: 'dQw4w9WgXcQ' })).status, 400);
+});
+
+test('candidates 外源支：keyword 在场直通双源扇出；缺席 →400 且 song_detail 零调用', async () => {
+  resetStubs();
+  const ip = nextIp();
+  ytSearchImpl = async (kw) => [{ videoId: 'dQw4w9WgXcQ', title: 't', owner: 'o', durationSec: 200 }];
+  bvSearchImpl = async () => [{ videoId: 'BV1xx411c7mD', title: 'b', owner: 'u', durationSec: 199, cover: 'https://i0.hdslb.com/x.jpg' }];
+  // keyword 在场——外源 id 照常扇出（上游桩实参=显式词）
+  const r = await json(await getCand('id=qq_0034M8WL3V4oHA&keyword=外源词', ip));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.keyword, '外源词');
+  assert.equal(r.body.candidates.length, 2);
+  assert.deepEqual(searchCalls.map(x => x.keyword), ['外源词', '外源词']);
+  assert.equal(detailCalls.length, 0, '显式词在场零 detail');
+  // keyword 缺席 → 400（外源无 song_detail 兜底源）且 detail/搜索桩零调用
+  detailCalls.length = 0; searchCalls.length = 0;
+  const r2 = await json(await getCand('id=qq_0034M8WL3V4oHA', ip));
+  assert.equal(r2.status, 400);
+  assert.match(r2.body.message, /外源曲目须显式携带检索关键词/);
+  assert.equal(detailCalls.length, 0, '400 不烧注定空回的 detail 跳');
+  assert.equal(searchCalls.length, 0, '400 不烧上游搜索');
+  // bv_/yt_ 同判
+  assert.equal((await json(await getCand('id=bv_BV1xx411c7mD', ip))).status, 400);
+  assert.equal((await json(await getCand('id=bv_BV1xx411c7mD_p3', ip))).status, 400);
+  assert.equal((await json(await getCand('id=yt_dQw4w9WgXcQ', ip))).status, 400);
+  assert.equal(detailCalls.length, 0);
+  // 数值 id 无 keyword 照旧 detail 兜底（回归不破）
+  const r3 = await json(await getCand('id=880220', ip));
+  assert.equal(r3.status, 200);
+  assert.equal(detailCalls.length, 1, '数值支 detail 兜底照旧');
+});
+
+test('POST 验流纪律回归（前缀 id 同律）：resolveById null→404 不落库；authRejected→502；签名链不落库不回包', async () => {
+  resetStubs();
+  const ip = nextIp();
+  ytResolveByIdImpl = async () => null;
+  let r = await json(await post({ id: 'qq_0034M8WL3V4oHA', source: 'youtube', mediaId: 'dQw4w9WgXcQ' }, ip));
+  assert.equal(r.status, 404);
+  assert.equal(repo.getManual('qq_0034M8WL3V4oHA'), null, '验证失败不落库');
+  const wall = new Error('Innertube LOGIN_REQUIRED');
+  wall.authRejected = true;
+  ytResolveByIdImpl = async () => { throw wall; };
+  r = await json(await post({ id: 'qq_0034M8WL3V4oHA', source: 'youtube', mediaId: 'dQw4w9WgXcQ' }, ip));
+  assert.equal(r.status, 502);
+  assert.match(r.body.message, /凭据被拒/);
+  assert.equal(repo.getManual('qq_0034M8WL3V4oHA'), null);
+  // 验流成功：签名 url 用完即弃——不落库不回包（前缀 id 同律）
+  ytResolveByIdImpl = async () => ({ url: SIGNED_YT, urls: [SIGNED_YT], br: 128000, durationSec: null });
+  r = await json(await post({ id: 'qq_0034M8WL3V4oHA', source: 'youtube', mediaId: 'dQw4w9WgXcQ' }, ip));
+  assert.equal(r.status, 200);
+  assert.ok(!JSON.stringify(r.body).includes('SECRETYT'), '验流产物签名链不得透进回包');
+  assert.ok(!JSON.stringify(repo.getManual('qq_0034M8WL3V4oHA')).includes('SECRETYT'), '签名链不得落库');
+  // bv_/yt_ 前缀 id 验流同律
+  bvResolveByIdImpl = async () => null;
+  r = await json(await post({ id: 'bv_BV1xx411c7mD', source: 'bilibili', mediaId: 'BV1xx411c7mD' }, ip));
+  assert.equal(r.status, 404);
+  assert.equal(repo.getManual('bv_BV1xx411c7mD'), null);
 });
 
 test('repo 单测面：upsert→get→覆盖写 last-write-wins→delete→null；durationSec 脏值归 NULL', async () => {
