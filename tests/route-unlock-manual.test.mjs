@@ -378,6 +378,85 @@ test('GET /unlock/candidates：单源失败故障隔离 errors 下发；双灭 5
   assert.equal(r2.status, 502);
 });
 
+test('candidates emit 预整形：durationSec 注定被 POST 拒的形态键缺席（非 null）；合法值舍入照发', async () => {
+  resetStubs();
+  const ip = nextIp();
+  // POST schema durationSec = int().positive().max(7200).optional()——只容
+  // 缺席不容 null/非整数/超限；emit 侧同构判舍入后值（resolve-media 成功支同法）
+  ytSearchImpl = async () => [
+    { videoId: 'dQw4w9WgXcQ', title: 'absent', owner: 'o' },                    // 键缺席
+    { videoId: 'abc123def45', title: 'nullv', owner: 'o', durationSec: null },  // null
+    { videoId: 'e5e5e5e5e5e', title: 'nanv', owner: 'o', durationSec: NaN },    // NaN
+    { videoId: 'k1k1k1k1k1k', title: 'strv', owner: 'o', durationSec: '200' },  // 字符串不收编
+    { videoId: 'm2m2m2m2m2m', title: 'boolv', owner: 'o', durationSec: true },  // 布尔不收编
+    { videoId: 'f6f6f6f6f6f', title: 'over', owner: 'o', durationSec: 7201 },   // >7200
+    { videoId: 'g7g7g7g7g7g', title: 'tiny', owner: 'o', durationSec: 0.4 },    // round→0
+    { videoId: 'h8h8h8h8h8h', title: 'frac', owner: 'o', durationSec: 200.6 },  // →201 对照
+    { videoId: 'i9i9i9i9i9i', title: 'edge', owner: 'o', durationSec: 7200.4 }, // 舍入回 7200 照发
+    { videoId: 'j0j0j0j0j0j', title: 'intv', owner: 'o', durationSec: 200 },    // 整数直通
+  ];
+  bvSearchImpl = async () => [];
+  const r = await json(await getCand('id=880230&keyword=k', ip));
+  assert.equal(r.status, 200);
+  const cs = r.body.candidates;
+  assert.equal(cs.length, 10);
+  // 注定被 POST 400 拒的形态一律不挂键——「无快照时长」透传，绝不发 null；
+  // '200'/true 非数值形同律不收编（isFinite 前置闸，resolve-media 同法）
+  for (const cand of cs.slice(0, 7)) {
+    assert.ok(!('durationSec' in cand),
+      `${cand.title} durationSec 键须缺席而非 null/脏值：${JSON.stringify(cand)}`);
+  }
+  assert.equal(cs[7].durationSec, 201, '200.6 → Math.round → 201 照发');
+  assert.equal(cs[8].durationSec, 7200, '7200.4 舍入回界内照发');
+  assert.equal(cs[9].durationSec, 200, '整数直通');
+});
+
+test('candidates emit 预整形：title>300 截 300 / owner>200 截 200 / 非字符串→空串', async () => {
+  resetStubs();
+  const ip = nextIp();
+  ytSearchImpl = async () => [
+    { videoId: 'dQw4w9WgXcQ', title: '长'.repeat(400), owner: '频'.repeat(300), durationSec: 200 },
+    { videoId: 'abc123def45', title: 12345, owner: 'x', durationSec: 100 }, // 数字 title
+    { videoId: 'zzzzzzzzzzz', owner: 'y', durationSec: 100 },                // title 键缺席
+  ];
+  bvSearchImpl = async () => [];
+  const r = await json(await getCand('id=880231&keyword=k', ip));
+  assert.equal(r.status, 200);
+  const cs = r.body.candidates;
+  assert.equal(cs[0].title, '长'.repeat(300), 'title 截到 POST max(300)');
+  assert.equal(cs[0].owner, '频'.repeat(200), 'owner 截到 POST max(200)');
+  assert.equal(cs[1].title, '', '非字符串 title 归空串（str 只收字符串形）');
+  assert.equal(cs[2].title, '', 'title 缺席归空串');
+  assert.equal(cs[2].owner, 'y');
+});
+
+test('candidates→POST 闭环钉：缺时长+超长快照的候选行回包直喂 POST → 200（缝闭合）', async () => {
+  resetStubs();
+  const ip = nextIp();
+  ytSearchImpl = async () => [
+    // durationSec 缺席 + title/owner 超上限——修前 POST 注定 400 的形状
+    { videoId: 'dQw4w9WgXcQ', title: '环'.repeat(400), owner: '道'.repeat(300) },
+  ];
+  bvSearchImpl = async () => [];
+  const r = await json(await getCand('id=880232&keyword=k', ip));
+  assert.equal(r.status, 200);
+  const cand = r.body.candidates[0];
+  assert.ok(!('durationSec' in cand), '无快照时长——键缺席而非 null');
+  // 客户端挑选后构造的 body 形状：id + 候选行字段原样回送（无 durationSec 键）
+  const p = await json(await post({
+    id: '880232',
+    source: cand.source,
+    mediaId: cand.mediaId,
+    title: cand.title,
+    owner: cand.owner,
+  }, ip));
+  assert.equal(p.status, 200, '候选产出即保证可 POST——不得 400');
+  assert.equal(p.body.hit.mediaId, 'dQw4w9WgXcQ');
+  assert.equal(p.body.hit.title, '环'.repeat(300));
+  assert.equal(p.body.hit.owner, '道'.repeat(200));
+  assert.equal(p.body.hit.durationSec, null, '库行时长列容 NULL（schema 只拒入包 null）');
+});
+
 test('candidates 读桶：unlock-cand 20/min——第 21 发 429', async () => {
   resetStubs();
   const ip = nextIp();

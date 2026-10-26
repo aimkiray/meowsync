@@ -7,7 +7,8 @@
 //     下发、他源照常（故障隔离），双灭 502；keyword 缺席时数值 id 走
 //     song_detail + baseUnlockInfo 兜底派生并回显实际用掉的词（客户端
 //     首载恒显式传派生词，本兜底只服务直调 API——零多一跳）；外源 id
-//     无 detail 兜底源，缺词直接 400
+//     无 detail 兜底源，缺词直接 400；快照按 POST schema 上限预整形
+//     （emitted-by-construction——候选产出即保证可 POST）
 //   GET    /unlock/resolve-media?input=<B站链接或ID≤500>
 //     SourcePicker 直绑行的只读远端解析：av 号/BV 号/b23.tv·bili2233.cn
 //     短链（含「标题+链接」包裹分享文本）/bilibili.com 链接 → 谓词收单
@@ -150,14 +151,23 @@ app.get('/unlock/candidates', async (c) => {
       if (r.status === 'fulfilled') {
         // 源组序下发（youtube 块→bilibili 块）——时长贴近排序在客户端做
         // （服务端不收 duration 参数、不掺展示态）；mediaId 是客户端面
-        // 统一键名（provider 内仍叫 videoId）
+        // 统一键名（provider 内仍叫 videoId）。
+        // 快照按 POST schema 上限预整形——emitted-by-construction，候选
+        // 产出即保证可 POST：title/owner 走 str() 截 300/200；durationSec
+        // 条件挂键判舍入后值——schema 是 optional（只容缺席不容 null）且
+        // int().positive().max(7200)：isFinite 前置闸不吃隐式转换
+        //（'200'/true 收编=脏快照，resolve-media 支同法），非数值形/
+        // 非有限/舍入出 0/超 7200 发出去注定被 400 拒（「resolve 成功
+        // →POST 必 400」死链同型），不如「无快照时长」透传；7200.x
+        // 舍入回界内的照常挂键
         for (const cand of (r.value || [])) {
+          const d = Number.isFinite(cand.durationSec) ? Math.round(cand.durationSec) : NaN;
           candidates.push({
             source,
             mediaId: cand.videoId,
-            title: String(cand.title || ''),
-            owner: String(cand.owner || ''),
-            durationSec: Number.isFinite(cand.durationSec) ? cand.durationSec : null,
+            title: str(cand.title, 300),
+            owner: str(cand.owner, 200),
+            ...(Number.isFinite(d) && d > 0 && d <= 7200 ? { durationSec: d } : {}),
             // cover 为 https 绝对形（yt 由 videoId 推导、bv 取归一 pic）——
             // 封面链路两端各自守口（客户端 proxiedCoverUrl 走 /img-proxy）
             cover: typeof cand.cover === 'string' ? cand.cover : '',
