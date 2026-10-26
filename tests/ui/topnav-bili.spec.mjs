@@ -4,9 +4,10 @@
 //     ^b23\.tv/ 锚被前缀挡必死 400；bili: 块提到整串 B 站判别之前即为此）
 //   bili:<收藏夹链>        → search-bili（kw 内 favlist 判，App 层再分）
 //   bili:<关键词>          → search-bili-songs（曲库搜索，落顶部 songs 结果区）
+//   bili:<bili2233 短链>  → search-bili（bili2233.cn 官方短链域与 b23 同档分发）
 //   bili: / bili：<空>     → 静默吞（裸前缀不发事件）
-//   无前缀回归：b23.tv/x 裸链、BV 裸号、收藏夹 URL、普通关键词、
-//   yt:/qq: 邻源前缀——全部原口径不受影响
+//   无前缀回归：b23.tv/x 裸链、bili2233.cn/x 裸链、BV 裸号、收藏夹 URL、
+//   普通关键词、yt:/qq: 邻源前缀——全部原口径不受影响
 //   bili:<异源 URL> → search-bili-songs（前缀=显式源声明，非 B 站形态
 //   一律按关键词搜——异源 URL 不送进 resolve 链）
 //   已知降级（记录在案不修）：picker 侧 'bili:b23.tv/<收藏夹短链>' 走
@@ -48,6 +49,13 @@ describe('TopNavigation：bili: 前缀分派', () => {
   it('bili:<b23 短链> → search-bili（剥前缀送达——整串连壳送进 resolve 必死）', async () => {
     const e = await mountNav('bili:b23.tv/abc123')
     expect(e['search-bili']).toEqual([['b23.tv/abc123']])
+    expect(e['search-bili-songs']).toBeUndefined()
+    expect(e.search).toBeUndefined()
+  })
+
+  it('bili:<bili2233 短链> → search-bili（官方短链域与 b23 同档分发）', async () => {
+    const e = await mountNav('bili:bili2233.cn/abc123')
+    expect(e['search-bili']).toEqual([['bili2233.cn/abc123']])
     expect(e['search-bili-songs']).toBeUndefined()
     expect(e.search).toBeUndefined()
   })
@@ -99,9 +107,11 @@ describe('TopNavigation：bili: 前缀分派', () => {
     expect(e['search-bili-songs']).toEqual([['周杰伦']])
   })
 
-  it('无前缀回归：b23.tv 裸链/BV 裸号/收藏夹 URL 照旧 search-bili', async () => {
+  it('无前缀回归：b23.tv/bili2233 裸链/BV 裸号/收藏夹 URL 照旧 search-bili', async () => {
     const e1 = await mountNav('b23.tv/abc123')
     expect(e1['search-bili']).toEqual([['b23.tv/abc123']])
+    const e1b = await mountNav('bili2233.cn/abc123')
+    expect(e1b['search-bili']).toEqual([['bili2233.cn/abc123']])
     const e2 = await mountNav('BV1xx411c7XE')
     expect(e2['search-bili']).toEqual([['BV1xx411c7XE']])
     const e3 = await mountNav('av170001')
