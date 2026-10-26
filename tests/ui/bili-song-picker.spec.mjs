@@ -7,8 +7,9 @@
 //                        resolve 失败回落关键词搜索；裸 BV 已在单本地短路
 //   bili:<收藏夹链>     → 指向性提示（整单导入走顶栏，点歌台无落点）
 //   bili:<关键词>       → searchBiliSongs → buildBilibiliSong 归一 bv_ 行
+//   bili:<bili2233 短链> → resolveBilibili 剥前缀送达（官方短链域与 b23 同档）
 //   bili:<空>           → 静默吞
-//   无前缀回归：b23.tv/BV 裸输入照旧走整串 isBilibiliInput resolve 分支
+//   无前缀回归：b23.tv/bili2233.cn/BV 裸输入照旧走整串 isBilibiliInput resolve 分支
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 
@@ -75,6 +76,13 @@ describe('useAddToPlaylist：bili: 前缀', () => {
     expect(musicApi.searchBiliSongs).not.toHaveBeenCalled()
   })
 
+  it('bili:<bili2233 短链> → resolveBilibili 剥前缀送达（官方短链域与 b23 同档）', async () => {
+    const { atp } = makeAtp()
+    await search(atp, 'bili:bili2233.cn/abc123')
+    expect(musicApi.resolveBilibili).toHaveBeenCalledWith('bili2233.cn/abc123', expect.any(AbortSignal))
+    expect(musicApi.searchBiliSongs).not.toHaveBeenCalled()
+  })
+
   it('bili:<BV/av> → resolve 直解入单（剥前缀，不烧搜索配额）', async () => {
     const { atp, deps } = makeAtp()
     await search(atp, 'bili:BV1xx411c7XE')
@@ -119,13 +127,15 @@ describe('useAddToPlaylist：bili: 前缀', () => {
     expect(toast).toHaveBeenCalledWith('该视频已在歌单里', 'info')
   })
 
-  it('bili:<空> → 静默吞；无前缀 b23.tv/BV 裸输入照旧整串 resolve 分支', async () => {
+  it('bili:<空> → 静默吞；无前缀 b23.tv/bili2233.cn/BV 裸输入照旧整串 resolve 分支', async () => {
     const { atp } = makeAtp()
     await search(atp, 'bili:   ')
     expect(musicApi.resolveBilibili).not.toHaveBeenCalled()
     expect(musicApi.searchBiliSongs).not.toHaveBeenCalled()
     await search(atp, 'b23.tv/abc123')
     expect(musicApi.resolveBilibili).toHaveBeenCalledWith('b23.tv/abc123', expect.any(AbortSignal))
+    await search(atp, 'bili2233.cn/abc123')
+    expect(musicApi.resolveBilibili).toHaveBeenCalledWith('bili2233.cn/abc123', expect.any(AbortSignal))
     await search(atp, 'BV1xx411c7XE')
     expect(musicApi.resolveBilibili).toHaveBeenCalledWith('BV1xx411c7XE', expect.any(AbortSignal))
   })

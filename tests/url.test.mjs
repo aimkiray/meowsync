@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-// url.js 是「httpsCover + 29 个谓词 re-export」桶——song.js 已踩过
+// url.js 是「httpsCover + 30 个谓词 re-export」桶——song.js 已踩过
 // export {x} from 'y' 不绑本地作用域的坑（songSource→isFileTrackId
 // ReferenceError 生产崩溃）。import+export 两段式收敛后钉住两条链：
 //   1. re-export 面全可调（名在 predicates.js 消失/改名即刻翻）
@@ -16,12 +16,12 @@ import {
   SINGLE_SONG_PREFIX, SAVED_QUEUE_PREFIX, LOCAL_PLAYLIST_PREFIX,
   isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
   isResolvableTrackId, providerPlaylistShellId, parseProviderShellId,
-  parseNumericId, isBilibiliInput, extractBiliFavlistId,
+  parseNumericId, isBilibiliInput, isBiliDirectBindInput, extractBiliFavlistId,
   extractYouTubePlaylistId, extractYouTubeId, isYouTubeInput,
   isQQInput, extractQQPlaylistId, pickQqFromUrl, extractNeteaseSongId,
 } from '../src/lib/url.js'
 
-test('url.js re-export 面：29 名全绑真实体（regex/string/function）', () => {
+test('url.js re-export 面：30 名全绑真实体（regex/string/function）', () => {
   const regexes = [
     SONGMID_RE, BVID_RE, NETEASE_ID_RE, NETEASE_ID_BOUNDED_RE,
     QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE, YT_ID_RE,
@@ -34,8 +34,8 @@ test('url.js re-export 面：29 名全绑真实体（regex/string/function）', 
   const fns = [
     isSongmidLike, isNeteasePlaylist, isLocalPlaylistId, isEphemeralPlaylistId,
     isSingleSongShellId, isResolvableTrackId, providerPlaylistShellId,
-    parseProviderShellId, parseNumericId, isBilibiliInput, extractBiliFavlistId,
-    extractYouTubePlaylistId, extractYouTubeId, isYouTubeInput, isQQInput,
+    parseProviderShellId, parseNumericId, isBilibiliInput, isBiliDirectBindInput,
+    extractBiliFavlistId, extractYouTubePlaylistId, extractYouTubeId, isYouTubeInput, isQQInput,
     extractQQPlaylistId, pickQqFromUrl, extractNeteaseSongId,
   ]
   for (const fn of fns) assert.equal(typeof fn, 'function')

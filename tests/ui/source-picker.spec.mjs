@@ -4,10 +4,12 @@
 //                 兜底）、源徽标/封面 img-proxy/时长贴近排序（客户端持
 //                 song0.dt 自排）/当前绑定标、选定→POST→applied+关窗、
 //                 404「已失效或不可播」内联留窗、errors 单源故障部行、
-//                 恢复自动匹配解绑、sp-direct 粘贴直绑四形态（BV/B站链/
-//                 youtu.be/裸 id，垃圾串内联错、空串禁按、直绑不带
-//                 title/owner）、Esc/遮罩三点/busy 闸/卸载断链；检索条
-//                 改词重检/恢复默认/失败重试复打手动词/幂等闸
+//                 恢复自动匹配解绑、sp-direct 粘贴直绑：本地净形零出站
+//                 先解（BV/B站链/youtu.be/裸 id 直 POST 不带快照），av 号/
+//                 b23·bili2233 短链/包裹分享文本交远端 resolve→同一条
+//                 POST（快照透传、kind 分诊内联、busy/abort 同闸），谓词
+//                 不收照旧内联错、空串禁按；Esc/遮罩三点/busy 闸/卸载断链；
+//                 检索条改词重检/恢复默认/失败重试复打手动词/幂等闸
 //   musicApi 契约 — 真 wrapper 走假 http 层：getManualUnlock HTTP 404→
 //                 null、getUnlockCandidates 参数形与 keyword 省略、
 //                 pick/clear 调用形状与业务码闸（与 api-contract 谱同型，
@@ -21,6 +23,7 @@ const { musicApi, toast } = vi.hoisted(() => ({
   musicApi: {
     getUnlockCandidates: vi.fn(async () => ({ keyword: '', candidates: [], errors: [] })),
     getManualUnlock: vi.fn(async () => null),
+    resolveUnlockMedia: vi.fn(async () => ({ code: 200, source: 'bilibili', mediaId: 'BV1xx411c7mD' })),
     pickManualUnlock: vi.fn(async () => ({})),
     clearManualUnlock: vi.fn(async () => ({})),
   },
@@ -96,6 +99,10 @@ beforeEach(() => {
   // lastFeed 以回显为锚，回显改写词（契约漂移面）由「keyword 回显校正」例专钉
   musicApi.getUnlockCandidates.mockImplementation(async ({ keyword }) => feed(CANDIDATES, { keyword }))
   musicApi.getManualUnlock.mockResolvedValue(null)
+  musicApi.resolveUnlockMedia.mockResolvedValue({
+    code: 200, source: 'bilibili', mediaId: 'BV1xx411c7mD',
+    title: '远端标题', owner: 'UP-C', durationSec: 200
+  })
   musicApi.pickManualUnlock.mockResolvedValue({ code: 200, hit: {} })
   musicApi.clearManualUnlock.mockResolvedValue({ code: 200 })
 })
@@ -354,7 +361,7 @@ describe('SourcePicker：检索条', () => {
     expect(firstSignal.aborted).toBe(true) // 第一发被掐——新旧两发不串话
   })
 
-  it('候选检索 loading 不锁检索条（busy 闸只盖 pick/clearManual）', async () => {
+  it('候选检索 loading 不锁检索条（busy 闸只盖提交面（pick/clear/resolve），不盖 loading）', async () => {
     musicApi.getUnlockCandidates.mockReturnValue(new Promise(() => {})) // 挂起停在检索态
     mountPicker()
     await flush()
@@ -615,17 +622,197 @@ describe('SourcePicker：sp-direct 粘贴直绑', () => {
     expect(w2.emitted('applied')).toEqual([['12345']])
   })
 
-  it('垃圾串/av 号/b23.tv 短链 → 内联「无法识别的链接或 ID」不发 POST', async () => {
+  it('av 号/b23·bili2233 短链/bilibili 视频链（无 BV 段）→ 远端解析 → 快照随 POST 透传', async () => {
     const w = mountPicker()
     await flush()
-    for (const s of ['random text', 'av12345', 'https://b23.tv/abc123', '12345678901']) {
+    for (const s of ['av170001', 'AV1', 'https://b23.tv/abc123', 'b23.tv/abc123', 'bili2233.cn/xyz9', 'https://bili2233.cn/xyz9', 'bilibili.com/video/av170001']) {
+      typeIn(directInput(), s)
+      click(directGo())
+      await flush()
+      // 本地净形 miss → 远端解析（整串原样送 input 参数）→ 回包净形
+      // mediaId+展示快照逐键进同一条 POST
+      expect(musicApi.resolveUnlockMedia).toHaveBeenLastCalledWith(s, expect.any(AbortSignal))
+      expect(musicApi.pickManualUnlock).toHaveBeenLastCalledWith({
+        id: '12345', source: 'bilibili', mediaId: 'BV1xx411c7mD',
+        title: '远端标题', owner: 'UP-C', durationSec: 200
+      })
+      expect(w.emitted('applied')?.length).toBeTruthy()
+    }
+  })
+
+  it('包裹分享文本（【标题】+短链+尾巴）→ 整串送远端解析再 POST', async () => {
+    const w = mountPicker()
+    await flush()
+    const wrapped = '【某标题】 https://b23.tv/xyz999 快来围观'
+    typeIn(directInput(), wrapped)
+    click(directGo())
+    await flush()
+    expect(musicApi.resolveUnlockMedia).toHaveBeenLastCalledWith(wrapped, expect.any(AbortSignal))
+    expect(musicApi.pickManualUnlock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ source: 'bilibili', mediaId: 'BV1xx411c7mD' }))
+    expect(w.emitted('applied')).toEqual([['12345']])
+  })
+
+  it('本地净形（BV 裸号/B 站视频链/youtu.be/裸 YT id）→ 本地直解 POST，resolve 零调用', async () => {
+    mountPicker()
+    await flush()
+    for (const s of ['BV1xx411c7mD', 'https://www.bilibili.com/video/BV1xx411c7mD/', 'https://youtu.be/abcdefghijk', 'klmnopqrstu']) {
+      typeIn(directInput(), s)
+      click(directGo())
+      await flush()
+      // 本地支先行——零出站优先，远端解析不该被碰
+      expect(musicApi.resolveUnlockMedia).not.toHaveBeenCalled()
+      expect(musicApi.pickManualUnlock).toHaveBeenCalled()
+    }
+  })
+
+  it('degraded 回包（无快照键）→ 三键 undefined 透传进 POST（schema optional 容忍缺席）', async () => {
+    musicApi.resolveUnlockMedia.mockResolvedValue({ code: 200, source: 'bilibili', mediaId: 'BV1xx411c7mD', degraded: true })
+    mountPicker()
+    await flush()
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    const call = musicApi.pickManualUnlock.mock.calls.at(-1)[0]
+    expect(call).toMatchObject({ id: '12345', source: 'bilibili', mediaId: 'BV1xx411c7mD' })
+    expect(call.title).toBeUndefined()
+    expect(call.owner).toBeUndefined()
+    expect(call.durationSec).toBeUndefined()
+  })
+
+  it('谓词不收的输入（随机文本/裸数字/异源 URL/av 尾巴/qq 系）→ 内联不识别，resolve/POST 零调用', async () => {
+    const w = mountPicker()
+    await flush()
+    for (const s of ['random text', '12345678901', 'example.com/av123', 'foo?av=1', 'notbilibili.com/x', 'xb23.tv/x', 'qq:av1', 'av170001 尾巴']) {
       typeIn(directInput(), s)
       click(directGo())
       await flush()
       expect(document.querySelector('.sp-pickerr')?.textContent).toBe('无法识别的链接或 ID')
+      expect(musicApi.resolveUnlockMedia).not.toHaveBeenCalled()
       expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
       expect(w.emitted('applied')).toBeUndefined()
     }
+  })
+
+  it('远端解析 kind 分诊：七值各出专属内联文案、不 POST；kind 缺席回落通用报错', async () => {
+    mountPicker()
+    await flush()
+    const KIND_MSG = {
+      invalid: '无法识别的链接或 ID',
+      favlist: '这是收藏夹链接，请到顶部搜索框粘贴导入',
+      live: '直播间链接不支持绑定媒体源',
+      bangumi: '番剧链接不支持绑定媒体源',
+      other: '链接指向的内容不支持绑定为媒体源',
+      unresolved: '无法解析该链接（短链失效或内容不可读）',
+      gone: '该视频不存在或已失效',
+    }
+    for (const [kind, msg] of Object.entries(KIND_MSG)) {
+      const err = new Error('server msg')
+      err.kind = kind
+      musicApi.resolveUnlockMedia.mockRejectedValueOnce(err)
+      typeIn(directInput(), 'av170001')
+      click(directGo())
+      await flush()
+      expect(document.querySelector('.sp-pickerr')?.textContent).toBe(msg)
+      expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
+    }
+    // kind 缺席（429/502/瞬断）：回落 apiErrorMessage 透出服务端/原生 message
+    musicApi.resolveUnlockMedia.mockRejectedValueOnce(new Error('B 站解析失败：上游 503'))
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    expect(document.querySelector('.sp-pickerr')?.textContent).toBe('B 站解析失败：上游 503')
+    expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
+  })
+
+  it('解析在飞期 busy 闸全包：关窗/输入全熄，signal 透传 _aborter；落地后照常 POST', async () => {
+    let resolveResolve
+    musicApi.resolveUnlockMedia.mockReturnValue(new Promise(r => { resolveResolve = r }))
+    const w = mountPicker()
+    await flush()
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    // resolve 已发、POST 未发——「解析→绑定」视作一次提交
+    expect(musicApi.resolveUnlockMedia).toHaveBeenCalledWith('av170001', expect.any(AbortSignal))
+    expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
+    // busy：Esc/遮罩三点关窗全熄；检索条/直绑行/关闭钮同闸禁用
+    keydown(dialogEl(), 'Escape')
+    for (const type of ['mousedown', 'mouseup', 'click']) {
+      overlayEl().dispatchEvent(new MouseEvent(type, { bubbles: true }))
+    }
+    expect(w.emitted('close')).toBeUndefined()
+    expect(searchInput().disabled).toBe(true)
+    expect(directInput().disabled).toBe(true)
+    expect(directGo().disabled).toBe(true)
+    // 解析落地 → 快照透传 POST → applied+close 正常出
+    resolveResolve({ code: 200, source: 'bilibili', mediaId: 'BV1xx411c7mD', title: '远端标题', owner: 'UP-C', durationSec: 200 })
+    await flush()
+    expect(musicApi.pickManualUnlock).toHaveBeenLastCalledWith({
+      id: '12345', source: 'bilibili', mediaId: 'BV1xx411c7mD',
+      title: '远端标题', owner: 'UP-C', durationSec: 200
+    })
+    expect(w.emitted('applied')).toEqual([['12345']])
+    expect(w.emitted('close')).toHaveLength(1)
+  })
+
+  it('解析在飞期卸载 → abort 送达 resolveUnlockMedia；CanceledError 拒绝静默不留文案', async () => {
+    musicApi.resolveUnlockMedia.mockReturnValue(new Promise(() => {})) // 挂起
+    const w = mountPicker()
+    await flush()
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    const sig = musicApi.resolveUnlockMedia.mock.calls[0][1]
+    expect(sig.aborted).toBe(false)
+    mounted.pop() // 手动接管 unmount，避免 afterEach 二次卸
+    w.unmount()
+    expect(sig.aborted).toBe(true)
+
+    // 窗仍在时 abort 型拒绝：静默 return 不出 pickError
+    const w2 = mountPicker()
+    await flush()
+    const cancel = new Error('canceled')
+    cancel.name = 'CanceledError'
+    cancel.code = 'ERR_CANCELED'
+    musicApi.resolveUnlockMedia.mockRejectedValue(cancel)
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    expect(document.querySelector('.sp-pickerr')).toBeNull()
+    expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
+    expect(w2.emitted('applied')).toBeUndefined()
+  })
+
+  it('resolve 回包与 unmount-abort 同 tick 竞态：迟到的成功产物不落 POST（signal.aborted 守卫支）', async () => {
+    let resolveResolve
+    musicApi.resolveUnlockMedia.mockReturnValue(new Promise(r => { resolveResolve = r }))
+    const w = mountPicker()
+    await flush()
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    expect(musicApi.resolveUnlockMedia).toHaveBeenCalledWith('av170001', expect.any(AbortSignal))
+    mounted.pop() // 手动接管 unmount，避免 afterEach 二次卸
+    w.unmount() // abort 送达——resolve 在飞期间窗已拆
+    // 回包迟到落在 aborted 信号上：守卫判 return，不碰 submitPick/POST
+    resolveResolve({ code: 200, source: 'bilibili', mediaId: 'BV1xx411c7mD', title: '远端标题', owner: 'UP-C', durationSec: 200 })
+    await flush()
+    expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
+    expect(w.emitted('applied')).toBeUndefined()
+  })
+
+  it('resolve 回包缺 mediaId（契约漂移）→ fail-fast 内联「解析结果异常」留窗，不发空 POST', async () => {
+    musicApi.resolveUnlockMedia.mockResolvedValue({ code: 200, source: 'bilibili' })
+    const w = mountPicker()
+    await flush()
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    expect(document.querySelector('.sp-pickerr')?.textContent).toBe('解析结果异常，请重试')
+    expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
+    expect(w.emitted('applied')).toBeUndefined()
+    expect(dialogEl()).toBeTruthy() // 留窗重试
   })
 
   it('空串禁按；busy 期直绑行同闸', async () => {
@@ -779,5 +966,53 @@ describe('musicApi：手动媒体源绑定契约', () => {
 
     http.delete.mockResolvedValueOnce({ code: 500 })
     await expect(real.clearManualUnlock('s9')).rejects.toThrow(/code 500/)
+  })
+
+  it('resolveUnlockMedia：GET /unlock/resolve-media {input}+35s；err.kind 冻结附件两路同达', async () => {
+    const real = (await vi.importActual('../../src/api/music.js')).musicApi
+    // 成功：回包平铺原样返回（source/mediaId+快照键），signal 透传 axios
+    const ac = new AbortController()
+    http.get.mockResolvedValueOnce({
+      code: 200, source: 'bilibili', mediaId: 'BV1xx411c7mD',
+      title: 'T', owner: 'O', durationSec: 200
+    })
+    const res = await real.resolveUnlockMedia('av170001', ac.signal)
+    expect(http.get).toHaveBeenLastCalledWith('/unlock/resolve-media',
+      expect.objectContaining({ params: { input: 'av170001' }, signal: ac.signal, timeout: 35000 }))
+    expect(res).toMatchObject({ source: 'bilibili', mediaId: 'BV1xx411c7mD', durationSec: 200 })
+
+    // 200 体内业务码（契约漂移防御）：bizCode+kind 双挂
+    http.get.mockResolvedValueOnce({ code: 400, message: '输入不是支持的 B 站链接或 ID', kind: 'invalid' })
+    await expect(real.resolveUnlockMedia('x'))
+      .rejects.toMatchObject({ bizCode: 400, kind: 'invalid', message: '输入不是支持的 B 站链接或 ID' })
+    // kind 缺席不挂键
+    http.get.mockResolvedValueOnce({ code: 500, message: 'x' })
+    const noKind = await real.resolveUnlockMedia('x').catch(e => e)
+    expect(noKind.bizCode).toBe(500)
+    expect('kind' in noKind).toBe(false)
+
+    // HTTP 错体（kind 主路径）：resolveRethrow 透出 message+e.data，kind 镜像 err.kind
+    const nf = new Error('Request failed with status code 404')
+    nf.response = { status: 404, data: { code: 404, message: '该视频不存在或已失效', kind: 'gone' } }
+    http.get.mockRejectedValueOnce(nf)
+    await expect(real.resolveUnlockMedia('https://b23.tv/dead'))
+      .rejects.toMatchObject({
+        message: '该视频不存在或已失效', kind: 'gone',
+        data: { code: 404, message: '该视频不存在或已失效', kind: 'gone' }
+      })
+
+    // 漂移角：错体有 kind 缺 message——kind 独立镜像不丢，message 落原生 axios 文案
+    const drift = new Error('Request failed with status code 400')
+    drift.response = { status: 400, data: { code: 400, kind: 'other' } }
+    http.get.mockRejectedValueOnce(drift)
+    const driftErr = await real.resolveUnlockMedia('x').catch(e => e)
+    expect(driftErr.kind).toBe('other')
+    expect(driftErr.message).toBe('Request failed with status code 400')
+    // kind/message 双缺的错体不挂 kind 键
+    const bare = new Error('Request failed with status code 500')
+    bare.response = { status: 500, data: {} }
+    http.get.mockRejectedValueOnce(bare)
+    const bareErr = await real.resolveUnlockMedia('x').catch(e => e)
+    expect('kind' in bareErr).toBe(false)
   })
 })

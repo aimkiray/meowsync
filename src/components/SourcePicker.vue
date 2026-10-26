@@ -68,19 +68,22 @@
           >恢复默认</button>
         </div>
 
-        <!-- 粘贴直绑行：不占检索框语义的独立输入——本地纯正则解析
-             （BVID_IN_TEXT_RE 命中→bilibili，extractYouTubeId 命中→
-             youtube），识别成功即走与 pick 同一条 POST（不带 title/owner
-             ——服务端存空串，读口 UI 回落显示 mediaId）；服务端永不接
-             URL 串，av 号/b23.tv 短链不解析（跳解需出站，本批不做） -->
+        <!-- 粘贴直绑行：不占检索框语义的独立输入——本地纯正则零出站
+             先解（BVID_IN_TEXT_RE 命中→bilibili，extractYouTubeId 命中→
+             youtube，本地直绑不带 title/owner——服务端存空串，读口 UI
+             回落显示 mediaId）；本地 miss 的 B 站形态（av 号/
+             b23·bili2233 短链/包裹分享文本）过 isBiliDirectBindInput 后
+             交 GET /unlock/resolve-media 远端归一成净形 mediaId+快照，
+             再走同一条 POST——服务端永不接 URL 串；谓词不收的输入照旧
+             内联拒，零出站 -->
         <div class="sp-direct">
           <div class="pg-field sp-direct-field">
             <input
               v-model="directInput"
               type="text"
               aria-label="粘贴媒体链接或 ID 直接绑定"
-              placeholder="粘贴 BV 号 / B 站链接 / YouTube 链接 / 视频 ID 直接绑定"
-              title="支持 BV 号、bilibili.com 视频链接、youtube.com/youtu.be 链接、11 位 YouTube 视频 ID；av 号与 b23.tv 短链暂不解析"
+              placeholder="粘贴 BV 号 / av 号 / B 站链接(含短链) / YouTube 链接 / 视频 ID 直接绑定"
+              title="支持 BV 号、av 号、bilibili.com 视频链接与 b23.tv/bili2233.cn 短链、youtube.com/youtu.be 链接、11 位 YouTube 视频 ID"
               autocomplete="off"
               spellcheck="false"
               :disabled="busy || !song0?.id"
@@ -177,7 +180,7 @@ import { apiErrorMessage } from '../api/http.js'
 import { toast } from '../lib/feedback.js'
 import { formatTime } from '../lib/format.js'
 import { trapTabKeydown, cycleMenuItems } from '../lib/focus-trap.js'
-import { BVID_IN_TEXT_RE, extractYouTubeId, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url.js'
+import { BVID_IN_TEXT_RE, isBiliDirectBindInput, extractYouTubeId, QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE } from '../lib/url.js'
 import { proxiedCoverUrl } from '../lib/song.js'
 import PixelIcon from './PixelIcon.vue'
 
@@ -187,6 +190,19 @@ const SOURCE_BADGE = { youtube: 'YT', bilibili: 'B站' }
 // 徽标是视觉缩写（YT）且 aria-hidden——无障碍文本/页脚摘要/textContent
 // 语境用全名口径（SR 用户要听得出这是 youtube 还是 bilibili 候选）
 const SOURCE_NAME = { youtube: 'YouTube', bilibili: 'B站' }
+
+// 直绑远端解析的分诊文案表——服务端 GET /unlock/resolve-media 错误体
+// kind 枚举（err.kind 附件是冻结接口）。kind 缺席（429/502/瞬断）时
+// 调用方回落 apiErrorMessage 通用报错
+const RESOLVE_KIND_MSG = {
+  invalid: '无法识别的链接或 ID',
+  favlist: '这是收藏夹链接，请到顶部搜索框粘贴导入',
+  live: '直播间链接不支持绑定媒体源',
+  bangumi: '番剧链接不支持绑定媒体源',
+  other: '链接指向的内容不支持绑定为媒体源',
+  unresolved: '无法解析该链接（短链失效或内容不可读）',
+  gone: '该视频不存在或已失效',
+}
 
 export default {
   name: 'SourcePicker',
@@ -457,10 +473,12 @@ export default {
         title: c.title, owner: c.owner, durationSec: c.durationSec
       })
     },
-    // 直绑行：本地纯正则解析（零出站——BVID_IN_TEXT_RE 命中→bilibili
-    // 优先，extractYouTubeId 命中→youtube，av 号/b23.tv 短链不解析），
-    // 识别成功走与 pick 同一条 POST（不带 title/owner——服务端存空串，
-    // 读口 UI 回落显示 mediaId）；都不中打内联错留窗
+    // 直绑行：本地纯正则零出站优先（BVID_IN_TEXT_RE 命中→bilibili、
+    // extractYouTubeId 命中→youtube——本地直绑不带 title/owner，服务端
+    // 存空串，读口 UI 回落显示 mediaId）；本地 miss 后过
+    // isBiliDirectBindInput 的 B 站形态（av 号/b23·bili2233 短链/包裹
+    // 分享文本）交远端只读解析归一成净形再走同一条 POST（resolveAndBind）；
+    // 谓词也不收打内联「无法识别的链接或 ID」留窗，零出站
     bindDirect() {
       const s = this.directInput.trim()
       if (!s || this.busy || !this.song0?.id) return
@@ -475,14 +493,57 @@ export default {
         if (yt) feed = { source: 'youtube', mediaId: yt }
       }
       if (!feed) {
+        // 远端解析支：只读 GET 出净形 mediaId，URL 串永不进写口
+        if (isBiliDirectBindInput(s)) {
+          void this.resolveAndBind(s)
+          return
+        }
         this.pickError = '无法识别的链接或 ID'
         return
       }
       void this.submitPick(feed)
     },
-    // pick/bindDirect 共用提交通道：busy 闸 + 404 内联 / 其余 toast
-    // 分诊 + 成功后 applied+close——两入口只有「喂料形态」差异，
-    // 绑定语义是同一条（直绑不带 title/owner 快照键）
+    // 直绑远端支：resolve+提交是一条绑定的两段——busy 闸全包，解析
+    // 在飞期关窗/输入/按钮与提交在飞同律全熄（resolve 最坏 30s 端级
+    // 预算，客户端 35s 不先掐）。回包净形 mediaId+展示快照原样喂
+    // submitPick（degraded 回包快照键缺席可容忍——POST schema 三键
+    // optional）；失败按服务端 kind 分诊出内联文案，kind 缺席回落
+    // 通用报错；abort/cancel（窗拆在飞请求）静默不留文案
+    async resolveAndBind(s) {
+      if (this.busy || !this.song0?.id) return
+      this.busy = true
+      this.pickError = ''
+      const signal = this._aborter?.signal
+      try {
+        const res = await musicApi.resolveUnlockMedia(s, signal)
+        // 解析落地时窗已拆（unmount abort 在 resolve 回包间隙）——
+        // 产物不落 POST，与 load() 的 post-await aborted 判同口径
+        if (signal?.aborted) return
+        // 契约漂移 fail-fast：200 回包缺成功真值 mediaId 时照常 POST
+        // 只换回 400 通用 toast——按解析失败内联留窗，不发空 mediaId
+        if (!res?.mediaId) {
+          this.pickError = '解析结果异常，请重试'
+          return
+        }
+        // submitPick 自管 busy/finally——「解析→绑定」整条视作一次提交
+        await this.submitPick({
+          source: res?.source || 'bilibili',
+          mediaId: res?.mediaId,
+          title: res?.title,
+          owner: res?.owner,
+          durationSec: res?.durationSec
+        })
+      } catch (e) {
+        if (e?.name === 'CanceledError' || e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return
+        this.pickError = RESOLVE_KIND_MSG[e?.kind] || apiErrorMessage(e)
+      } finally {
+        this.busy = false
+      }
+    },
+    // pick/bindDirect/resolveAndBind 共用提交通道：busy 闸 + 404 内联 /
+    // 其余 toast 分诊 + 成功后 applied+close——各入口只有「喂料形态」
+    // 差异，绑定语义是同一条（本地直绑不带快照键；远端解析的回包
+    // 快照 title/owner/durationSec 原样透传）
     async submitPick(feed) {
       this.busy = true
       this.pickError = ''

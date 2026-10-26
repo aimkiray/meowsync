@@ -470,6 +470,44 @@ export const musicApi = {
     return hit
   },
 
+  // 直绑行远端解析读口：GET /unlock/resolve-media?input=——本地正则解不出的
+  // B 站形态（av 号/b23·bili2233 短链/包裹分享文本）交服务端逐跳白名单归一成
+  // 净形 mediaId+展示快照（title/owner/durationSec），回包再走与 pick 同一条
+  // POST /unlock/manual——写口契约零改动，URL 串永不进写口。kind 是服务端
+  // 分诊枚举（invalid/favlist/live/bangumi/other/unresolved/gone），err.kind
+  // 附件语义是冻结接口——HTTP 错体（4xx/429/502 主路径）经 resolveRethrow 时
+  // 也要镜像到 err.kind 本体（它只映 e.data），调用方的 kind 文案表查的是
+  // e.kind；200 体内的 code!==200（契约漂移防御）照常挂 bizCode+kind。
+  // 35s 必须盖过端级 30s 预算——服务端错误体优先到达，客户端不先掐断
+  resolveUnlockMedia: async (input, abortSignal = null) => {
+    const response = await api.get('/unlock/resolve-media', {
+      params: { input },
+      signal: abortSignal,
+      timeout: 35000
+    }).catch(err => {
+      // 服务端错误体 {code,message,kind?} 必须透出——axios 对非 2xx 直接
+      // reject，不提取用户只看到 "status code 400" 而非具体分诊原因。
+      // kind 镜像独立成判：错体有 kind 缺 message 的漂移角也保留机读
+      // 分诊（调用方 RESOLVE_KIND_MSG 查的是 e.kind），message 缺位则
+      // 原样抛出、文案回落原生 axios message
+      if (err?.response?.data?.message) {
+        const e = resolveRethrow(err)
+        if (e.data?.kind != null) e.kind = e.data.kind
+        throw e
+      }
+      if (err?.response?.data?.kind != null) err.kind = err.response.data.kind
+      throw err
+    })
+    const data = unwrapBody(response)
+    if (data.code !== 200) {
+      const e = new Error(data.message || '媒体解析失败')
+      e.bizCode = data.code
+      if (data.kind != null) e.kind = data.kind
+      throw e
+    }
+    return data
+  },
+
   // 手选媒体源绑定提交：POST /unlock/manual {id,source,mediaId,title?,
   // owner?,durationSec?}——服务端先 resolveById 真取流验证再落库（验流产
   // 物签名 url 用完即弃不落库）。媒体失效（下架/不可播）回 404：axios
