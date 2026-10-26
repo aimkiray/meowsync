@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SONGMID_RE, isSongmidLike, isNeteasePlaylist, NETEASE_ID_RE,
-  BVID_RE, BVID_IN_TEXT_RE, isBilibiliInput,
+  BVID_RE, BVID_IN_TEXT_RE, isBilibiliInput, isBiliDirectBindInput,
   SINGLE_SONG_PREFIX, SAVED_QUEUE_PREFIX, MIRROR_PLAYLIST_ID_RE,
   isLocalPlaylistId, isEphemeralPlaylistId, isSingleSongShellId,
   parseNumericId, extractYouTubeId, isYouTubeInput,
@@ -25,6 +25,45 @@ test('BV：12 位全形态；11 位是非法', () => {
   assert.ok(isBilibiliInput('BV1GJ411x7h7'));
   assert.ok(!isBilibiliInput('https://y.qq.com/n/ryqq/songDetail/BV1GJ411x7h7'));
   assert.ok(!isBilibiliInput('qq:BV1GJ411x7h7'));
+});
+
+test('isBilibiliInput：bili2233.cn 域支收录（顶栏/导入分发宽支）', () => {
+  assert.ok(isBilibiliInput('bili2233.cn/x'));
+  assert.ok(isBilibiliInput('https://bili2233.cn/abc'));
+  assert.ok(isBilibiliInput('https://m.bili2233.cn/abc'));
+  // 宽支既有行为钉板：非 B 站域的 /avN 顶栏今已会搜 B 站——直绑面收紧
+  // 与本宽支并存，收敛与否另批评估，本批不许改行为
+  assert.ok(isBilibiliInput('example.com/av123'));
+});
+
+test('isBiliDirectBindInput：直绑行远端解析收单面（比 isBilibiliInput 更紧）', () => {
+  // 收：av/BV 净形（大小写宽容）、短链与 bilibili.com 各形态、包裹分享文本
+  for (const s of [
+    'av170001', 'AV1',
+    'BV1xx411c7mD', 'bv1xx411c7mD',
+    'b23.tv/abc', 'https://b23.tv/abc', 'http://b23.tv/abc', 'sub.b23.tv/abc',
+    'bili2233.cn/abc', 'https://bili2233.cn/abc', 'm.bili2233.cn/abc',
+    'bilibili.com/video/BV1xx411c7mD', 'https://www.bilibili.com/video/BV1xx411c7mD',
+    'live.bilibili.com/12345', 'www.bilibili.com/medialist/play/ml1052622027',
+    // B 站 App 分享常态包裹形态——内嵌短链被边界类放行
+    '【标题】 https://b23.tv/xyz 快来围观',
+    '看看这个 https://www.bilibili.com/video/BV1xx411c7mD?t=3',
+  ]) {
+    assert.ok(isBiliDirectBindInput(s), `应收：${s}`);
+  }
+  // 拒：非锚 av（非 B 站语境不误送）、域边界欺骗、qq 系、撞型、垃圾
+  for (const s of [
+    '', 'av170001 尾巴', 'example.com/av123', 'foo?av=1',
+    'notbilibili.com/x', 'xb23.tv/x', 'b23.tv.evil.com/x', 'bilibili.com.evil.com/x',
+    'qq:av1', 'qq:BV1xx411c7mD', 'https://y.qq.com/songDetail/x', 'qqmusic://qq.com/x',
+    '12345678901', 'random text', 'ml1052622027', 'b23.tv',
+  ]) {
+    assert.ok(!isBiliDirectBindInput(s), `应拒：${JSON.stringify(s)}`);
+  }
+  // 非字符串/空值
+  assert.ok(!isBiliDirectBindInput(null));
+  assert.ok(!isBiliDirectBindInput(undefined));
+  assert.ok(!isBiliDirectBindInput(170001));
 });
 
 test('B 站收藏夹链识别：favlist?fid= / medialist mlN / 裸 mlN', () => {

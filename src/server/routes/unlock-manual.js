@@ -8,6 +8,18 @@
 //     song_detail + baseUnlockInfo 兜底派生并回显实际用掉的词（客户端
 //     首载恒显式传派生词，本兜底只服务直调 API——零多一跳）；外源 id
 //     无 detail 兜底源，缺词直接 400
+//   GET    /unlock/resolve-media?input=<B站链接或ID≤500>
+//     SourcePicker 直绑行的只读远端解析：av 号/BV 号/b23.tv·bili2233.cn
+//     短链（含「标题+链接」包裹分享文本）/bilibili.com 链接 → 谓词收单
+//     → resolveBiliLink 逐跳白名单跳解 → view 存在性校验+展示快照 →
+//     {code:200, source:'bilibili', mediaId(净形BV), title, owner,
+//     durationSec} 喂既有 POST /unlock/manual（契约零改动）。
+//     错误分诊 kind 七值：invalid(400 谓词拒)/favlist(400 附 favlist 字段)
+//     /live/bangumi/other(400)/unresolved(404 跳解不出)/gone(404 view
+//     确定性码 -400/-403/-404)；BV 净形在手 view 瞬态失败 → degraded
+//     200 放行（POST resolveById 再验存在性，resolve 不谎报），aid 形
+//     无规范 BV 可降 → 502。12/min；30s 端级预算级联进跳解/view；
+//     60s TTL 只存已分类终态（degraded/unresolved/502/429 不缓存）
 //   GET    /unlock/manual?id=<轨道id>
 //     当前手选绑定：{code:200, hit:{source,mediaId,title,owner,
 //     durationSec,updatedAt}}；未绑 404
@@ -39,8 +51,13 @@ const { unlockManualPickBody } = require('../../shared/contracts.js');
 const {
   NETEASE_ID_BOUNDED_RE, YT_ID_RE, BVID_RE,
   QQ_SONG_ID_RE, BV_TRACK_ID_RE, YT_TRACK_ID_RE,
+  isBiliDirectBindInput,
 } = require('../../shared/predicates.js');
 const { forgetManualStream } = require('../services/unlock/manual-stream');
+// 直绑行远端解析的上游原语：resolveBiliLink 逐跳白名单跳解（SSRF 防线
+// 全在 lib 侧）+ biliFetch/viewQuery 查 view 存在性与展示快照
+const { resolveBiliLink, biliFetch, viewQuery } = require('../lib/bilibili');
+const { createTtlCache } = require('../lib/stream-resolve-cache');
 
 const app = new Hono();
 
@@ -69,10 +86,14 @@ const canonManualTrackId = (id) => {
   return null;
 };
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-// mediaId 严校（SSRF 口径）：服务端永不接 URL 串——粘贴解析全在客户端
-// （b23.tv 短链/av 号不收：跳解需出站，本批不做）。只收源私有 id 净形
+// mediaId 严校（SSRF 口径）：服务端永不接 URL 串——b23.tv/bili2233.cn
+// 短链与 av 号经 GET /unlock/resolve-media 远端解析归一成净形 BV 后
+// 进本面；只收源私有 id 净形
 const MEDIA_ID_RES = { youtube: YT_ID_RE, bilibili: BVID_RE };
 const mediaIdOk = (source, mediaId) => !!MEDIA_ID_RES[source]?.test(mediaId);
+// BVID 净形归一：BVID_RE 是 /i 宽形，小写 'bv…'/'bV…' 输入按规范大写头
+// 回写——POST 闸/落库键/resolveById 全链吃同一规范形，拒收非 BV1 形
+const canonBvid = (v) => (typeof v === 'string' && BVID_RE.test(v) ? `BV${v.slice(2)}` : null);
 // 候选源扇出表——与 PROVIDERS 键同名（「手动挑选池」只对搜索型源有意义，
 // pyncmd 是零错配官方直解无候选面）
 const CANDIDATE_SOURCES = ['youtube', 'bilibili'];
@@ -162,6 +183,110 @@ app.get('/unlock/candidates', async (c) => {
     if (e?.aborted || c.req.raw.signal?.aborted) return c.body(null, 499);
     console.error('[unlock-manual] 候选池查询失败:', e?.message || e);
     return c.json({ code: 502, message: '媒体源候选查询失败' }, 502);
+  }
+});
+
+// GET /unlock/resolve-media?input= —— 直绑行只读远端解析（契约见头注）。
+// 未鉴权即直连上游（跳解+view）——限流防把服务端 IP 刷进上游风控；
+// 30s 端级预算与请求 signal 合流，级联进 resolveBiliLink（每跳再叠 10s
+// 闸）与 biliFetch（再叠 15s 闸）。60s TTL 只存已分类终态——瞬态失败
+// 重试必须真打新一跳
+const resolveMediaCache = createTtlCache({ max: 128, ttlMs: 60_000 });
+app.get('/unlock/resolve-media', async (c) => {
+  if (!rateLimit(c, 'unlock-resolve', 12)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const input = str(c.req.query('input'), 500);
+  // 谓词收单：非 B 站形态/语境一律 invalid——错绑比拒绑代价大
+  if (!isBiliDirectBindInput(input)) {
+    return c.json({ code: 400, kind: 'invalid', message: '输入不是支持的 B 站链接或 ID' }, 400);
+  }
+  const cached = resolveMediaCache.get(input);
+  if (cached) return c.json(cached.body, cached.status);
+  const done = (status, body, cacheable) => {
+    if (cacheable) resolveMediaCache.set(input, { status, body });
+    return c.json(body, status);
+  };
+  // 端级 30s 预算与客户端断联合流——客户端断开/预算耗尽都不留僵尸上游
+  const sig = AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(30000)]);
+  try {
+    // 输入分诊：净形直查 view（零跳解）；其余过 resolveBiliLink 按
+    // kind 分诊——favlist/live/bangumi/other/null 各归各位
+    let id = null;
+    if (BVID_RE.test(input)) {
+      id = canonBvid(input);
+    } else if (/^av\d+$/i.test(input)) {
+      // safe-integer 闸：av+16 位以上 Number 丢精度会让 view 解出另一支
+      // 视频——错绑比拒绑代价大，非安全整数按非法输入拒
+      const aid = Number(input.slice(2));
+      if (!Number.isSafeInteger(aid)) {
+        return c.json({ code: 400, kind: 'invalid', message: '输入不是支持的 B 站链接或 ID' }, 400);
+      }
+      id = { aid };
+    } else {
+      const link = await resolveBiliLink(input, sig);
+      if (!link) {
+        return c.json({ code: 404, kind: 'unresolved', message: '无法解析该链接（短链失效或重定向链中断）' }, 404);
+      }
+      if (link.kind === 'favlist') {
+        // favlist 字段与 /bilibili/resolve 同构——前端可转歌单导入
+        return done(400, { code: 400, kind: 'favlist', message: '这是收藏夹链接，请到顶部搜索框粘贴导入', favlist: link.fid }, true);
+      }
+      if (link.kind === 'live') {
+        return done(400, { code: 400, kind: 'live', message: '直播间链接不支持绑定媒体源' }, true);
+      }
+      if (link.kind === 'bangumi') {
+        return done(400, { code: 400, kind: 'bangumi', message: '番剧链接不支持绑定媒体源' }, true);
+      }
+      if (link.kind === 'other') {
+        return done(400, { code: 400, kind: 'other', message: '链接指向的内容不支持绑定为媒体源' }, true);
+      }
+      if (link.kind === 'video') id = link.id;
+      if (!id) {
+        return c.json({ code: 404, kind: 'unresolved', message: '无法解析该链接（短链失效或重定向链中断）' }, 404);
+      }
+    }
+    // view 存在性校验+展示快照：mediaId 恒回 view.bvid 规范形——aid 输入
+    // 经 view 换取规范 BV；view.bvid 缺席防御支回 BV+净形（仅 bvid 形 id
+    // 有净形可回，aid 形拿不到规范 BV 属上游异常 → 502）
+    let view;
+    try {
+      view = await biliFetch(`/x/web-interface/view?${viewQuery(id)}`, sig);
+    } catch (e) {
+      if (e?.aborted || c.req.raw.signal?.aborted) return c.body(null, 499);
+      // 确定性业务码（/bilibili/favlist 同款码表）——稿件不存在/不可见
+      const code = Number(e?.message?.match(/code=(-?\d+)/)?.[1]);
+      if ([-400, -403, -404].includes(code)) {
+        return done(404, { code: 404, kind: 'gone', message: '该视频不存在或已失效' }, true);
+      }
+      // 瞬态失败：净形 BV 在手降级放行——POST resolveById 会再验存在性，
+      // resolve 不替它谎报；aid 形无规范 BV 可降，按瞬态 → 502
+      const bv = canonBvid(id);
+      if (bv) {
+        return c.json({ code: 200, source: 'bilibili', mediaId: bv, degraded: true });
+      }
+      throw e;
+    }
+    const mediaId = canonBvid(view?.bvid) || canonBvid(id);
+    if (!mediaId) {
+      return c.json({ code: 502, message: 'B 站解析失败：view 响应缺 bvid' }, 502);
+    }
+    // 快照按 POST schema 上限预整形：title/owner 走 str() 截 300/200；
+    // durationSec 条件挂键——schema 是 optional（只容缺席不容 null）且
+    // max 7200，发注定被 400 拒的值不如「无快照时长」透传（resolve 200
+    // → POST 必 400 是把成功解析变成必然失败的死链）
+    return done(200, {
+      code: 200, source: 'bilibili', mediaId,
+      title: str(view?.title, 300),
+      owner: str(view?.owner?.name, 200),
+      ...(Number.isFinite(view?.duration) && view.duration > 0 && view.duration <= 7200
+        ? { durationSec: Math.round(view.duration) } : {}),
+    }, true);
+  } catch (e) {
+    if (e?.aborted || c.req.raw.signal?.aborted) return c.body(null, 499);
+    const msg = String(e?.message || e || '未知错误').replace(/[\r\n]+/g, ' ').slice(0, 120);
+    console.error(`[unlock-manual] resolve-media 失败: ${msg}`);
+    return c.json({ code: 502, message: `B 站解析失败：${msg}` }, 502);
   }
 });
 

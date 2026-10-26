@@ -3,14 +3,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { tmpDataDir } from './helpers.mjs';
+import { seed, tmpDataDir } from './helpers.mjs';
 
 const require = createRequire(import.meta.url);
 
 // biliCookie 经 settings 层读 app_settings——不隔离 DATA_DIR 会开真实 dev 库
 process.env.DATA_DIR = tmpDataDir('meowsync-bili-');
 process.env.BILI_COOKIE = 'SESSDATA=fake; bili_jct=x; CURRENT_FNVAL=16';
-const { biliFetch, resolveBiliMedia, QN_HEIGHT } = require('../src/server/lib/bilibili.js');
+// net-guard 播种：resolveBiliLink 跳解谱需要 resolvesToPublicIp 可控（真 DNS
+// 在沙箱/CI 不稳）；normalizeOutboundUrl/makeGuardedLookup 保真——跳解防线
+// 本体（URL 卫生/域白名单/钉扎 lookup 构造）走真实现，只有 DNS 判定可编程
+let dnsImpl = async () => true;
+const realNetGuard = require('../src/server/lib/net-guard.js');
+seed('../src/server/lib/net-guard.js', {
+  ...realNetGuard,
+  resolvesToPublicIp: async (h) => dnsImpl(h),
+});
+const { biliFetch, resolveBiliMedia, resolveBiliLink, isBiliLinkHost, QN_HEIGHT } = require('../src/server/lib/bilibili.js');
 
 const okJson = (data) => ({ ok: true, status: 200, json: async () => ({ code: 0, data }) });
 
@@ -177,4 +186,132 @@ test('flatUrls：同值 baseUrl/base_url 去重 + 非字符串 backup 过滤', a
     backup_url: ['https://a/bk1', null, 42, 'https://a/bk1'],
   });
   assert.deepEqual(out.map(x => x.url), ['https://a/main', 'https://a/bk1']);
+});
+
+// ── resolveBiliLink：跳解谱（dnsImpl/stubFetch 可控，防线本体走真实现）──
+const redirectTo = (loc, status = 302) => ({
+  ok: false, status,
+  headers: { get: (k) => (String(k).toLowerCase() === 'location' ? loc : null) },
+  body: { cancel: async () => {} },
+});
+const terminalRes = (status) => ({
+  ok: status >= 200 && status < 300, status,
+  headers: { get: () => null },
+  body: { cancel: async () => {} },
+});
+
+test('resolveBiliLink：bili2233.cn 裸短链补 scheme 入白名单跳解 → video', async () => {
+  dnsImpl = async () => true;
+  const calls = stubFetch((u) => {
+    if (u === 'https://bili2233.cn/abc') return redirectTo('https://www.bilibili.com/video/BV1xx411c7mD');
+    return terminalRes(404);
+  });
+  const r = await resolveBiliLink('bili2233.cn/abc');
+  assert.deepEqual(r, { kind: 'video', id: 'BV1xx411c7mD' });
+  assert.equal(calls[0].url, 'https://bili2233.cn/abc');
+  assert.equal(calls.length, 1, '落地页 pick 在 fetch 前命中——不多打跳');
+});
+
+test('resolveBiliLink：bili2233 子域过白名单；仿冒域连接面为零', async () => {
+  dnsImpl = async () => true;
+  assert.ok(isBiliLinkHost('bili2233.cn'));
+  assert.ok(isBiliLinkHost('m.bili2233.cn'));
+  assert.ok(!isBiliLinkHost('xbili2233.cn'));
+  assert.ok(!isBiliLinkHost('bili2233.cn.evil.com'));
+  // 尾界欺骗域名进不了跳解循环（isBiliLinkHost 直接拒）——零 fetch
+  const calls = stubFetch(() => terminalRes(200));
+  assert.equal(await resolveBiliLink('https://bili2233.cn.evil.com/abc'), null);
+  assert.equal(calls.length, 0);
+});
+
+test('resolveBiliLink：包裹分享文本抽取内嵌短链入跳解（带/不带 scheme 两态）', async () => {
+  dnsImpl = async () => true;
+  const calls = stubFetch((u) =>
+    u === 'https://b23.tv/xyz777' ? redirectTo('https://www.bilibili.com/video/BV1xx411c7mD') : terminalRes(404));
+  const r = await resolveBiliLink('【标题】 https://b23.tv/xyz777 快来围观');
+  assert.deepEqual(r, { kind: 'video', id: 'BV1xx411c7mD' });
+  assert.equal(calls[0].url, 'https://b23.tv/xyz777');
+  // 无 scheme 包裹形态同收；中文尾随在 [A-Za-z0-9]+ 界内截断不脏链接
+  const calls2 = stubFetch((u) =>
+    u === 'https://bili2233.cn/abc9' ? redirectTo('https://www.bilibili.com/video/BV1xx411c7mD') : terminalRes(404));
+  const r2 = await resolveBiliLink('分享 bili2233.cn/abc9 看看这个视频');
+  assert.deepEqual(r2, { kind: 'video', id: 'BV1xx411c7mD' });
+  assert.equal(calls2[0].url, 'https://bili2233.cn/abc9');
+});
+
+test('resolveBiliLink：直播/番剧落地页早类——不抢 video、零跳解', async () => {
+  const calls = stubFetch(() => terminalRes(200));
+  assert.deepEqual(await resolveBiliLink('https://live.bilibili.com/12345'), { kind: 'live' });
+  assert.deepEqual(await resolveBiliLink('https://www.bilibili.com/live/12345'), { kind: 'live' });
+  assert.deepEqual(await resolveBiliLink('https://www.bilibili.com/bangumi/play/ep12345'), { kind: 'bangumi' });
+  assert.deepEqual(await resolveBiliLink('https://bangumi.bilibili.com/anime/123'), { kind: 'bangumi' });
+  assert.equal(calls.length, 0, '早类在 pick 层判定——零出站');
+  // video 判定优先于早类：URL 内嵌 BV 的罕见形态仍按视频归
+  assert.deepEqual(await resolveBiliLink('https://www.bilibili.com/live/BV1xx411c7mD'), { kind: 'video', id: 'BV1xx411c7mD' });
+});
+
+test('resolveBiliLink：终态 2xx 无可绑 id → {kind:"other"}；4xx → null', async () => {
+  dnsImpl = async () => true;
+  stubFetch((u) => (u === 'https://b23.tv/p1' ? redirectTo('https://www.bilibili.com/read/cv123') : terminalRes(200)));
+  assert.deepEqual(await resolveBiliLink('https://b23.tv/p1'), { kind: 'other' });
+  stubFetch(() => terminalRes(404));
+  assert.equal(await resolveBiliLink('https://b23.tv/dead'), null);
+});
+
+test('resolveBiliLink 安全面不回归：越域重定向零连接、跳数上限、DNS 拒则断', async () => {
+  dnsImpl = async () => true;
+  // 302 到非 B 站域（实案形态 b23.tv→qr.qq.com）：建连前域闸拒——第二跳零 fetch
+  const calls = stubFetch((u) => (u === 'https://b23.tv/YTVGHGM' ? redirectTo('https://qr.qq.com/abc') : terminalRes(200)));
+  assert.equal(await resolveBiliLink('https://b23.tv/YTVGHGM'), null);
+  assert.equal(calls.length, 1, '越域重定向不得发起第二跳连接');
+  // 跳数上限：连环 302 打满 4 跳（hop 0..3）仍 3xx → null
+  const calls2 = stubFetch(() => redirectTo('https://b23.tv/next'));
+  assert.equal(await resolveBiliLink('https://b23.tv/loop'), null);
+  assert.equal(calls2.length, 4);
+  // DNS 解析非公网 → 断链零 fetch（rebinding 防线在连接前置位）
+  dnsImpl = async () => false;
+  const calls3 = stubFetch(() => terminalRes(200));
+  assert.equal(await resolveBiliLink('https://b23.tv/abc'), null);
+  assert.equal(calls3.length, 0);
+  dnsImpl = async () => true;
+});
+
+test('resolveBiliLink：落地页 av 形态 → {kind:"video", id:{aid}}', async () => {
+  dnsImpl = async () => true;
+  stubFetch((u) => (u === 'https://b23.tv/av' ? redirectTo('https://www.bilibili.com/video/av170001') : terminalRes(404)));
+  const r = await resolveBiliLink('https://b23.tv/av');
+  assert.deepEqual(r, { kind: 'video', id: { aid: 170001 } });
+});
+
+test('resolveBiliLink：短链单子域（sub.b23.tv/m.bili2233.cn）保留前缀入跳解', async () => {
+  dnsImpl = async () => true;
+  // scheme-less 支：谓词收的子域形态不再被子域不匹配甩进包裹抽取丢前缀
+  const calls = stubFetch((u) =>
+    u === 'https://sub.b23.tv/abc' ? redirectTo('https://www.bilibili.com/video/BV1xx411c7mD') : terminalRes(404));
+  const r = await resolveBiliLink('sub.b23.tv/abc');
+  assert.deepEqual(r, { kind: 'video', id: 'BV1xx411c7mD' });
+  assert.equal(calls[0].url, 'https://sub.b23.tv/abc', '子域前缀保留——解用户贴的路径而非 apex');
+  // 包裹抽取支同捕获可选子域（m.bili2233.cn 经 isBiliLinkHost 白名单照过）
+  const calls2 = stubFetch((u) =>
+    u === 'https://m.bili2233.cn/xy' ? redirectTo('https://www.bilibili.com/video/BV1xx411c7mD') : terminalRes(404));
+  const r2 = await resolveBiliLink('看看 m.bili2233.cn/xy 这个');
+  assert.deepEqual(r2, { kind: 'video', id: 'BV1xx411c7mD' });
+  assert.equal(calls2[0].url, 'https://m.bili2233.cn/xy');
+});
+
+test('resolveBiliLink：302 中点落 live.bilibili.com → {kind:"live"} 早类——零第二跳', async () => {
+  dnsImpl = async () => true;
+  const calls = stubFetch((u) =>
+    u === 'https://b23.tv/lv1' ? redirectTo('https://live.bilibili.com/12345') : terminalRes(200));
+  const r = await resolveBiliLink('https://b23.tv/lv1');
+  assert.deepEqual(r, { kind: 'live' });
+  assert.equal(calls.length, 1, '中点早类在 pick 层判定——不发第二跳');
+});
+
+test('resolveBiliLink：落地页超精度 aid（>MAX_SAFE_INTEGER）不出 video——错绑>拒绑', async () => {
+  dnsImpl = async () => true;
+  stubFetch(() => terminalRes(200));
+  const r = await resolveBiliLink('https://www.bilibili.com/video/av9007199254740993');
+  // 精度丢失的 aid 不落 video 支——终态可达归 other 而非拿错位值问 view
+  assert.deepEqual(r, { kind: 'other' });
 });
