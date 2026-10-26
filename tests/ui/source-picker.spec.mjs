@@ -825,6 +825,49 @@ describe('SourcePicker：sp-direct 粘贴直绑', () => {
     await flush()
     expect(musicApi.pickManualUnlock).not.toHaveBeenCalled()
   })
+
+  it('解析在飞期出「正在解析链接…」状态行（busy 全熄期的读数）；resolve/reject 落地即收', async () => {
+    let resolveResolve
+    musicApi.resolveUnlockMedia.mockReturnValue(new Promise(r => { resolveResolve = r }))
+    const w = mountPicker()
+    await flush()
+    const hint = () => document.querySelector('.sp-resolving')
+    expect(hint()).toBeNull() // idle 不出
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    // resolve 挂起在飞：状态行在场——全熄期不再是静默弹层；role=status
+    // 礼貌档（进度读数非错误，不上 alert/magenta）+ pixel-loading 同语言
+    expect(hint()?.textContent).toContain('正在解析链接')
+    expect(hint()?.getAttribute('role')).toBe('status')
+    expect(hint()?.querySelector('.pixel-loading')).toBeTruthy()
+    expect(document.querySelector('.sp-pickerr')).toBeNull()
+    // resolve 落地 → 快照透传 POST → 状态行随 finally 双复位收
+    resolveResolve({ code: 200, source: 'bilibili', mediaId: 'BV1xx411c7mD', title: '远端标题', owner: 'UP-C', durationSec: 200 })
+    await flush()
+    expect(hint()).toBeNull()
+    expect(w.emitted('applied')).toEqual([['12345']])
+
+    // reject 支：在飞期状态行同样在场 → 落地收 + kind 分诊内联文案在场
+    let resolveReject
+    musicApi.resolveUnlockMedia.mockReturnValue(new Promise((_, rj) => { resolveReject = rj }))
+    typeIn(directInput(), 'av170001')
+    click(directGo())
+    await flush()
+    expect(hint()?.textContent).toContain('正在解析链接')
+    const err = new Error('server msg')
+    err.kind = 'gone'
+    resolveReject(err)
+    await flush()
+    expect(hint()).toBeNull()
+    expect(document.querySelector('.sp-pickerr')?.textContent).toBe('该视频不存在或已失效')
+  })
+
+  it('直绑输入 maxlength=500：与服务端 str(input,500) 截断同口径，超长包裹文本两侧不劈叉', async () => {
+    mountPicker()
+    await flush()
+    expect(directInput().getAttribute('maxlength')).toBe('500')
+  })
 })
 
 describe('SourcePicker：关闭与中止', () => {

@@ -75,7 +75,10 @@
              b23·bili2233 短链/包裹分享文本）过 isBiliDirectBindInput 后
              交 GET /unlock/resolve-media 远端归一成净形 mediaId+快照，
              再走同一条 POST——服务端永不接 URL 串；谓词不收的输入照旧
-             内联拒，零出站 -->
+             内联拒，零出站。maxlength=500 与服务端 str(input,500) 截断
+             对齐——客户端谓词吃的是未截断串、服务端验的是截断串，超
+             长包裹文本在截点后两侧口径会分叉（客户端放行/服务端
+             invalid 空跑一发），输入侧先拦齐 -->
         <div class="sp-direct">
           <div class="pg-field sp-direct-field">
             <input
@@ -86,6 +89,7 @@
               title="支持 BV 号、av 号、bilibili.com 视频链接与 b23.tv/bili2233.cn 短链、youtube.com/youtu.be 链接、11 位 YouTube 视频 ID"
               autocomplete="off"
               spellcheck="false"
+              maxlength="500"
               :disabled="busy || !song0?.id"
               @keydown.enter.prevent="bindDirect"
             />
@@ -151,6 +155,15 @@
           </template>
         </div>
 
+        <!-- 远端解析在飞指示：resolve 最坏 30s 期间 busy 闸全熄（输入/
+             按钮/关窗同律），没有这条用户面对的是静默弹层。状态读数非
+             错误——role=status 礼貌档播读（watch-buffering 同款），不上
+             alert/magenta；spinner 复用全局 pixel-loading，与「正在检索
+             媒体源…」同一语言 -->
+        <p v-if="resolving" class="sp-resolving" role="status">
+          <span class="pixel-loading" aria-hidden="true"></span>
+          <span>正在解析链接…</span>
+        </p>
         <p v-if="pickError" class="sp-pickerr" role="alert">{{ pickError }}</p>
 
         <!-- 已存在手动绑定才露解绑口，文案分轨道形态：数值曲解绑后
@@ -225,6 +238,11 @@ export default {
       // 失败归 null：「读不到绑定」与「没绑过」同口径不挡挑选
       manual: null,
       busy: false,
+      // 远端解析在飞标记（resolveAndBind 专属——resolve 段最坏 30s 端级
+      // 预算的静默期，模板据此出「正在解析链接…」状态行；busy 全熄语义
+      // 不变，这只是给全熄期一枚读数）。与 busy 在 resolveAndBind 同置
+      // 同复位——「解析→绑定」整条视作一次提交
+      resolving: false,
       pickError: '',
       // 检索框现值——开窗预填默认派生词（mounted 置），提交后保留作
       // 「当前检索词」读数不另开指示条
@@ -505,13 +523,16 @@ export default {
     },
     // 直绑远端支：resolve+提交是一条绑定的两段——busy 闸全包，解析
     // 在飞期关窗/输入/按钮与提交在飞同律全熄（resolve 最坏 30s 端级
-    // 预算，客户端 35s 不先掐）。回包净形 mediaId+展示快照原样喂
-    // submitPick（degraded 回包快照键缺席可容忍——POST schema 三键
-    // optional）；失败按服务端 kind 分诊出内联文案，kind 缺席回落
-    // 通用报错；abort/cancel（窗拆在飞请求）静默不留文案
+    // 预算，客户端 35s 不先掐）；resolving 位与 busy 同置——全熄期
+    // 模板出「正在解析链接…」状态行，静默弹层有读数。回包净形
+    // mediaId+展示快照原样喂 submitPick（degraded 回包快照键缺席
+    // 可容忍——POST schema 三键 optional）；失败按服务端 kind 分诊
+    // 出内联文案，kind 缺席回落通用报错；abort/cancel（窗拆在飞
+    // 请求）静默不留文案
     async resolveAndBind(s) {
       if (this.busy || !this.song0?.id) return
       this.busy = true
+      this.resolving = true
       this.pickError = ''
       const signal = this._aborter?.signal
       try {
@@ -538,12 +559,16 @@ export default {
         this.pickError = RESOLVE_KIND_MSG[e?.kind] || apiErrorMessage(e)
       } finally {
         this.busy = false
+        this.resolving = false
       }
     },
     // pick/bindDirect/resolveAndBind 共用提交通道：busy 闸 + 404 内联 /
     // 其余 toast 分诊 + 成功后 applied+close——各入口只有「喂料形态」
     // 差异，绑定语义是同一条（本地直绑不带快照键；远端解析的回包
-    // 快照 title/owner/durationSec 原样透传）
+    // 快照 title/owner/durationSec 原样透传）。.sp-resolving 与
+    // .sp-pickerr 是同槽相邻 v-if 行非 v-else——「同刻不相见」依赖
+    // resolveAndBind finally 清 resolving 与 pickError 落笔在同一
+    // tick 走完，勿在两步间插 await（插入即一帧双行同框）
     async submitPick(feed) {
       this.busy = true
       this.pickError = ''
@@ -774,6 +799,20 @@ export default {
 .sp-pub {
   padding: 2px 4px;
   border: var(--hairline-soft);
+}
+/* 解析在飞状态行：与 pickerr 同槽位（列尾发丝线之上）同字档的进度
+   读数——状态提示非错误，弱墨档不上 magenta；左挂 pixel-loading
+   spinner 与「正在检索媒体源…」空态同一语言 */
+.sp-resolving {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  border-top: var(--hairline-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-64);
 }
 .sp-pickerr {
   margin: 0;
