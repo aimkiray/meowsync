@@ -315,3 +315,26 @@ test('resolveBiliLink：落地页超精度 aid（>MAX_SAFE_INTEGER）不出 vide
   // 精度丢失的 aid 不落 video 支——终态可达归 other 而非拿错位值问 view
   assert.deepEqual(r, { kind: 'other' });
 });
+
+test('resolveBiliLink：av 右界——不透明短码不被 av(\\d+) 前缀截获，纯数字短链仍零跳解', async () => {
+  dnsImpl = async () => true;
+  // b23.tv/av4KxEp：av4 只是短码前缀——右界闸后不被本地截获，真出 fetch 跳解
+  const calls = stubFetch((u) =>
+    u === 'https://b23.tv/av4KxEp' ? redirectTo('https://www.bilibili.com/video/BV1xx411c7mD') : terminalRes(404));
+  const r = await resolveBiliLink('https://b23.tv/av4KxEp');
+  assert.deepEqual(r, { kind: 'video', id: 'BV1xx411c7mD' });
+  assert.equal(calls.length, 1, '不透明短码必须真打跳解——不得本地截获 av4 错绑 aid=4');
+  assert.equal(calls[0].url, 'https://b23.tv/av4KxEp');
+  // 包裹文本里的同型短码同律：抽取支入跳解而非 av 截获
+  const calls2 = stubFetch((u) =>
+    u === 'https://b23.tv/av9Yz' ? redirectTo('https://www.bilibili.com/video/BV1xx411c7mD') : terminalRes(404));
+  const r2 = await resolveBiliLink('看这个 https://b23.tv/av9Yz 视频');
+  assert.deepEqual(r2, { kind: 'video', id: 'BV1xx411c7mD' });
+  assert.equal(calls2.length, 1);
+  assert.equal(calls2[0].url, 'https://b23.tv/av9Yz');
+  // 对照保留：纯数字旧式短链 b23.tv/av170001 仍归 video{aid} 零跳解
+  const calls3 = stubFetch(() => terminalRes(404));
+  const r3 = await resolveBiliLink('b23.tv/av170001');
+  assert.deepEqual(r3, { kind: 'video', id: { aid: 170001 } });
+  assert.equal(calls3.length, 0, '纯数字 av 短链仍是本地 aid 快路径——零出站');
+});

@@ -40,6 +40,7 @@ const { rateLimit } = require('../lib/rate-limit');
 const { csrfOriginOk } = require('../lib/auth-gate');
 const { parseJsonBody } = require('../lib/validate');
 const { fail } = require('../lib/http-error');
+const { stripAbsolutePaths } = require('../lib/sanitize');
 const unlockManualRepo = require('../repositories/unlockManual');
 const { PROVIDERS } = require('../services/unlock');
 // 路由 require netease-api（候选兜底派生+forgetSongUnlock）；netease-api
@@ -216,10 +217,11 @@ app.get('/unlock/resolve-media', async (c) => {
     if (BVID_RE.test(input)) {
       id = canonBvid(input);
     } else if (/^av\d+$/i.test(input)) {
-      // safe-integer 闸：av+16 位以上 Number 丢精度会让 view 解出另一支
-      // 视频——错绑比拒绑代价大，非安全整数按非法输入拒
+      // safe-integer+正值闸：av+16 位以上 Number 丢精度会让 view 解出另一支
+      // 视频——错绑比拒绑代价大；av0/av00 是非法稿件号，出站前拒不白烧
+      // 一跳 view，也不把「aid=0 gone」钉进 60s 缓存
       const aid = Number(input.slice(2));
-      if (!Number.isSafeInteger(aid)) {
+      if (!Number.isSafeInteger(aid) || aid <= 0) {
         return c.json({ code: 400, kind: 'invalid', message: '输入不是支持的 B 站链接或 ID' }, 400);
       }
       id = { aid };
@@ -246,6 +248,10 @@ app.get('/unlock/resolve-media', async (c) => {
         return c.json({ code: 404, kind: 'unresolved', message: '无法解析该链接（短链失效或重定向链中断）' }, 404);
       }
     }
+    // 跳解产出的 bvid 可能带小写头（href 大小写原样带出）——调 view 前
+    // 归一到规范形，与直输 bv 支同一判决（degraded/媒体键也都吃规范形）；
+    // {aid} 对象形 canonBvid 返 null 原样放行
+    id = canonBvid(id) || id;
     // view 存在性校验+展示快照：mediaId 恒回 view.bvid 规范形——aid 输入
     // 经 view 换取规范 BV；view.bvid 缺席防御支回 BV+净形（仅 bvid 形 id
     // 有净形可回，aid 形拿不到规范 BV 属上游异常 → 502）
@@ -272,19 +278,24 @@ app.get('/unlock/resolve-media', async (c) => {
       return c.json({ code: 502, message: 'B 站解析失败：view 响应缺 bvid' }, 502);
     }
     // 快照按 POST schema 上限预整形：title/owner 走 str() 截 300/200；
-    // durationSec 条件挂键——schema 是 optional（只容缺席不容 null）且
-    // max 7200，发注定被 400 拒的值不如「无快照时长」透传（resolve 200
-    // → POST 必 400 是把成功解析变成必然失败的死链）
+    // durationSec 条件挂键判舍入后值——schema 是 optional（只容缺席不容
+    // null）且 positive().max(7200)：0<d<0.5 四舍五入出 0 注定被 400 拒，
+    // 发注定被拒的值不如「无快照时长」透传（resolve 200 → POST 必 400 是
+    // 把成功解析变成必然失败的死链）；7200.x 舍入回 7200 内的照常挂键
+    const durationSec = Number.isFinite(view?.duration) ? Math.round(view.duration) : 0;
     return done(200, {
       code: 200, source: 'bilibili', mediaId,
       title: str(view?.title, 300),
       owner: str(view?.owner?.name, 200),
-      ...(Number.isFinite(view?.duration) && view.duration > 0 && view.duration <= 7200
-        ? { durationSec: Math.round(view.duration) } : {}),
+      ...(durationSec > 0 && durationSec <= 7200 ? { durationSec } : {}),
     }, true);
   } catch (e) {
     if (e?.aborted || c.req.raw.signal?.aborted) return c.body(null, 499);
-    const msg = String(e?.message || e || '未知错误').replace(/[\r\n]+/g, ' ').slice(0, 120);
+    // 回显先过 stripAbsolutePaths（routes/bilibili 同款回显全过的本端点
+    // 家族唯一缺位对齐）再截 120——先剥后截，截断不会把半条路径留在包里
+    const msg = stripAbsolutePaths(
+      String(e?.message || e || '未知错误').replace(/[\r\n]+/g, ' ')
+    ).slice(0, 120);
     console.error(`[unlock-manual] resolve-media 失败: ${msg}`);
     return c.json({ code: 502, message: `B 站解析失败：${msg}` }, 502);
   }

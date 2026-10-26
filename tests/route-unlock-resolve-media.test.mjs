@@ -191,13 +191,18 @@ test('degraded：BV 净形+view 瞬态 → 200 degraded 无快照（不缓存，
   assert.equal(fetchCalls.length, 2);
 });
 
-test('502：aid 净形 view 瞬态无规范 BV 可降 → 502 不带 kind；view 缺 bvid 同 502', async () => {
+test('502：aid 净形 view 瞬态无规范 BV 可降 → 502 不带 kind；不缓存复问真打新跳', async () => {
   reset();
   fetchImpl = async () => { throw new Error('bilibili /x/web-interface/view HTTP 503'); };
   let r = await get('av998877');
   assert.equal(r.status, 502);
   assert.match(r.body.message, /^B 站解析失败：/);
   assert.ok(!('kind' in r.body), '502 体不带 kind');
+  // 502 不缓存（与 degraded/unresolved 同律）——同键复问必须真打新一跳 view
+  const n502 = fetchCalls.length;
+  r = await get('av998877');
+  assert.equal(r.status, 502);
+  assert.equal(fetchCalls.length, n502 + 1, '502 不入缓存：同键复问真打新跳而非回旧包');
   // view 成功但缺 bvid（aid 形无净形可回）→ 上游异常归 502
   fetchImpl = async () => ({ aid: 998877, title: 'x' });
   r = await get('av887766');
@@ -224,6 +229,12 @@ test('跳解 video {aid} → aid view → 规范 BV；跳解 bvid 瞬态同享 d
   assert.equal(r.status, 200);
   assert.equal(r.body.mediaId, 'BV1xx411c7fF');
   assert.equal(r.body.degraded, true, '净形 BV 在手瞬态降级放行——POST 再验');
+  // 跳解产出的小写 bv 在调 view 前归一——与直输 bv 支同一判决（两入口不两判）
+  linkImpl = async () => ({ kind: 'video', id: 'bv1xx411c7zZ' });
+  fetchImpl = async () => VIEW({ bvid: 'BV1xx411c7zZ' });
+  r = await get('https://b23.tv/lowerbv');
+  assert.equal(r.status, 200);
+  assert.equal(fetchCalls.at(-1).path, '/x/web-interface/view?bvid=BV1xx411c7zZ', '跳解小写 bv 须归一成规范形再问 view');
 });
 
 test('abort 归一 499：biliFetch 抛 aborted 标记不吞成 502', async () => {
@@ -233,6 +244,15 @@ test('abort 归一 499：biliFetch 抛 aborted 标记不吞成 502', async () =>
   fetchImpl = async () => { throw e; };
   const res = await app.request('http://t/unlock/resolve-media?input=BV1xx411c7gG');
   assert.equal(res.status, 499);
+});
+
+test('abort 半支：请求 signal 真断连（错误不带 aborted 标）→ 499 而非 502/unresolved', async () => {
+  reset();
+  // c.req.raw.signal?.aborted 半支钉板：上游抛普通错但客户端已在飞断连
+  const ctrl = new AbortController();
+  fetchImpl = async () => { ctrl.abort(); throw new Error('bilibili /x/web-interface/view HTTP 503'); };
+  const res = await app.request(new Request('http://t/unlock/resolve-media?input=BV1xx411c7aB', { signal: ctrl.signal }));
+  assert.equal(res.status, 499, 'raw.signal 断连须归一 499——普通错不被吞成 502');
 });
 
 test('缓存：已分类终态 60s 内同输入只打一跳（video 快照/favlist 同律）', async () => {
@@ -284,7 +304,7 @@ test('限流：桶拒 → 429 不带 kind，零出站', async () => {
 test('快照透传闸：durationSec 缺席/≤0/>7200 三形态键缺席（POST 必拒值不外发）', async () => {
   reset();
   linkImpl = async () => ({ kind: 'video', id: 'BV1xx411c7mD' });
-  for (const [label, dur] of [['缺席', undefined], ['零', 0], ['负', -5], ['超上限', 7201]]) {
+  for (const [label, dur] of [['缺席', undefined], ['零', 0], ['负', -5], ['超上限', 7201], ['零点四', 0.4]]) {
     fetchImpl = async () => VIEW({ duration: dur });
     const r = await get(`https://b23.tv/dur${label}`);
     assert.equal(r.status, 200, label);
@@ -300,17 +320,29 @@ test('快照透传闸：durationSec 缺席/≤0/>7200 三形态键缺席（POST 
   assert.equal(r.body.durationSec, 201, '合法时长取整透传');
   assert.equal(r.body.title.length, 300);
   assert.equal(r.body.owner.length, 200);
+  // 挂键判舍入后值：7200.4 舍回 7200 内照常挂键（闸在 round 后不在原值）
+  fetchImpl = async () => VIEW({ duration: 7200.4 });
+  const r2 = await get('https://b23.tv/dur7200x');
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.durationSec, 7200, '7200.4 舍入回上限内照常挂键');
 });
 
-test('av 净形 safe-integer 闸：超精度输入 → invalid 400 零出站（错绑>拒绑）', async () => {
+test('av 净形闸：超精度/aid≤0 输入 → invalid 400 零出站（错绑>拒绑）', async () => {
   reset();
   const r = await get('av9007199254740993'); // > MAX_SAFE_INTEGER——Number 丢精度会错绑另一支
   assert.equal(r.status, 400);
   assert.equal(r.body.kind, 'invalid');
-  assert.equal(fetchCalls.length, 0, '不拿错位 aid 白烧一跳 view');
+  // aid≤0 同闸：av0/av00 出站前拒——不白烧一跳 view，不把「aid=0 gone」钉缓存
+  for (const bad of ['av0', 'av00']) {
+    const r2 = await get(bad);
+    assert.equal(r2.status, 400, bad);
+    assert.equal(r2.body.kind, 'invalid');
+  }
+  assert.equal(fetchCalls.length, 0, '不拿错位/零值 aid 白烧一跳 view');
+  assert.equal(linkCalls.length, 0, '净形支零跳解');
 });
 
-test('502 message 契约：单行且 ≤120 截断（换行洗成空格）', async () => {
+test('502 message 契约：单行 ≤120 截断 + 绝对路径剥除（换行洗成空格）', async () => {
   reset();
   fetchImpl = async () => { throw new Error(`上游\n故障明细${'x'.repeat(300)}`); };
   const r = await get('av334455');
@@ -318,6 +350,12 @@ test('502 message 契约：单行且 ≤120 截断（换行洗成空格）', asy
   assert.match(r.body.message, /^B 站解析失败：/);
   assert.ok(!/[\r\n]/.test(r.body.message), 'message 单行不外泄堆栈/多行');
   assert.ok(r.body.message.length <= 'B 站解析失败：'.length + 120, `len=${r.body.message.length}`);
+  // 回显过 stripAbsolutePaths——本地 fs/上游错误里的部署目录不透给未鉴权调用方
+  fetchImpl = async () => { throw new Error(`ENOENT open '/var/lib/meowsync/secret.json'`); };
+  const r2 = await get('av334456');
+  assert.equal(r2.status, 502);
+  assert.ok(!r2.body.message.includes('/var/lib'), `路径未剥除: ${r2.body.message}`);
+  assert.ok(r2.body.message.includes('<path>'));
 });
 
 test('包裹分享文本：整串过谓词送 resolveBiliLink（端点级形态钉板）', async () => {

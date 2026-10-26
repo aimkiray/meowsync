@@ -63,7 +63,10 @@ function pickBvidFromUrl(href) {
   // bvid 本身大小写敏感，错大小写交给上游 view API 判（-404 照常报错）
   const m = href.match(BVID_IN_TEXT_RE);
   if (m) return m[0];
-  const av = href.match(/(?:^|[/?&=])av(\d+)/i);
+  // 右界 (?![0-9A-Za-z]) 防不透明短码被前缀截获——b23.tv/av4KxEp 若只截
+  // av4 会静默错绑 aid=4 而他稿（错绑>拒绑）；纯数字旧式短链
+  // b23.tv/av170001 与 /video/avN 落地页仍走本地 aid 快路径零跳解
+  const av = href.match(/(?:^|[/?&=])av(\d+)(?![0-9A-Za-z])/i);
   if (av) {
     // safe-integer 闸（与 resolve-media 的 av 净形支同口径）：超精度
     // aid 落 {kind:'other'} 而非拿错位值问 view——错绑比拒绑代价大
