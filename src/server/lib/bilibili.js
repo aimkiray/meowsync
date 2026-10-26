@@ -51,10 +51,11 @@ const BILI_PUBLIC_HEADERS = {
 };
 const BILI_TIMEOUT_MS = 15000;
 
-// 允许发起重定向解析的域：仅 b23.tv 短链与 bilibili.com 本系。
+// 允许发起重定向解析的域：b23.tv 与 bili2233.cn 短链（B 站官方短链族——
+// bili2233.cn 备案主体与 bilivideo.com 同族）+ bilibili.com 本系。
 // 严格 hostname 判定（等值或带点分隔后缀）——userinfo/尾界欺骗
 // （b23.tv@内网、bilibili.com.evil.com）在 URL parse 层挡掉
-const BILI_LINK_HOSTS = ['b23.tv', 'bilibili.com'];
+const BILI_LINK_HOSTS = ['b23.tv', 'bili2233.cn', 'bilibili.com'];
 const isBiliLinkHost = (h) => BILI_LINK_HOSTS.some(x => h === x || h.endsWith('.' + x));
 
 function pickBvidFromUrl(href) {
@@ -63,16 +64,25 @@ function pickBvidFromUrl(href) {
   const m = href.match(BVID_IN_TEXT_RE);
   if (m) return m[0];
   const av = href.match(/(?:^|[/?&=])av(\d+)/i);
-  if (av) return { aid: Number(av[1]) };
+  if (av) {
+    // safe-integer 闸（与 resolve-media 的 av 净形支同口径）：超精度
+    // aid 落 {kind:'other'} 而非拿错位值问 view——错绑比拒绑代价大
+    const aid = Number(av[1]);
+    if (Number.isSafeInteger(aid)) return { aid };
+  }
   return null;
 }
 
 // B 站链接归一化：BV/av/完整 URL 归 {kind:'video', id}，收藏夹链
-// （favlist?fid=/medialist/mlN）归 {kind:'favlist', fid}。
-// b23.tv 短链本身不含目标——手动逐跳跟随（redirect:manual），每一跳都
-// 重新过 normalizeOutboundUrl（限 80/443/剥 credentials）+ B 站域白名单
-// + 公网 IP 校验 + 钉扎建连（audio-proxy 同款防线），重定向到任何非
-// B 站域即拒绝——防 SSRF 绕道
+// （favlist?fid=/medialist/mlN）归 {kind:'favlist', fid}；直播/番剧
+// 落地页归 {kind:'live'|'bangumi'} 早类，跳解终态 2xx 但挑不出可绑 id
+// 归 {kind:'other'}——非 video 各 kind 给直绑行 resolve-media 端点做
+// 机读分诊，旧消费面（favlist 重定向/parseBvid 单曲判）一律按「非
+// video」既有支处理，行为零漂移。
+// b23.tv/bili2233.cn 短链本身不含目标——手动逐跳跟随（redirect:manual），
+// 每一跳都重新过 normalizeOutboundUrl（限 80/443/剥 credentials）+ B 站
+// 域白名单 + 公网 IP 校验 + 钉扎建连（audio-proxy 同款防线），重定向到
+// 任何非 B 站域即拒绝——防 SSRF 绕道
 async function resolveBiliLink(input, extraSignal) {
   const s = String(input || '').trim();
   if (!s) return null;
@@ -82,13 +92,31 @@ async function resolveBiliLink(input, extraSignal) {
     const fid = extractBiliFavlistId(href);
     if (fid) return { kind: 'favlist', fid };
     const v = pickBvidFromUrl(href);
-    return v ? { kind: 'video', id: v } : null;
+    if (v) return { kind: 'video', id: v };
+    // 直播/番剧落地页早类（排在 video 后不抢——直播/番剧页 URL 含 BV
+    // 的罕见形态仍按视频处理）：resolve-media 分诊「可链接但非媒体」
+    if (/live\.bilibili\.com\//i.test(href) || /bilibili\.com\/live\//i.test(href)) {
+      return { kind: 'live' };
+    }
+    if (/bilibili\.com\/bangumi/i.test(href) || /bangumi\.bilibili\.com\//i.test(href)) {
+      return { kind: 'bangumi' };
+    }
+    return null;
   };
   const direct = pick(s);
   if (direct) return direct;
   // 裸短链补协议头（b23.tv/xxx 无 scheme 时 new URL 抛错直接拒）——
   // bilibili.com 域名内容 pick 已先行命中，进循环的只有待跳转短链
-  let href = /^https?:\/\//i.test(s) ? s : (/^b23\.tv\//i.test(s) ? `https://${s}` : null);
+  let href = /^https?:\/\//i.test(s) ? s : (/^(?:[a-z0-9-]+\.)?(?:b23\.tv|bili2233\.cn)\//i.test(s) ? `https://${s}` : null);
+  // 包裹文本抽取：B 站 App 分享常态形态「【标题】 https://b23.tv/xxx
+  // 快来围观」整串不是合法 URL——抽内嵌短链段入跳解；[A-Za-z0-9]+
+  // 界内截断防中文尾随截坏链接。可选单子域段捕获（sub.b23.tv/
+  // m.bili2233.cn）——子域经 isBiliLinkHost 白名单照过，保留前缀才解
+  // 的是用户贴的那条路径而非 apex。/bilibili/resolve 顶栏导入同向收益
+  if (!href) {
+    const m = s.match(/(https?:\/\/)?(?:[a-z0-9-]+\.)?(?:b23\.tv|bili2233\.cn)\/[A-Za-z0-9]+/i);
+    if (m) href = `https://${m[0].replace(/^https?:\/\//i, '')}`;
+  }
   if (!href) return null;
   for (let hop = 0; hop <= 3; hop++) {
     if (extraSignal?.aborted) return null;
@@ -118,7 +146,10 @@ async function resolveBiliLink(input, extraSignal) {
         href = new URL(loc, u.href).toString();
         continue;
       }
-      return null;
+      // 终态分诊：落地页可达（2xx）但挑不出可绑 id → 机读 'other'
+      //（「内容非媒体」与「解析不出」是两种用户语义）；4xx/5xx/无
+      // location 的 3xx 仍 null → unresolved
+      return res.ok ? { kind: 'other' } : null;
     } catch {
       return null;
     } finally {

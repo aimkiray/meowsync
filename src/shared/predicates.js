@@ -161,7 +161,7 @@ export function extractBiliFavlistId(input) {
     || null;
 }
 
-// B 站输入识别：BV 号、av 号、bilibili.com/b23.tv 链接。\b 词边界防长 token 误吞
+// B 站输入识别：BV 号、av 号、bilibili.com/b23.tv/bili2233.cn 链接。\b 词边界防长 token 误吞
 export function isBilibiliInput(input) {
   const s = String(input || '');
   // QQ 链接/载荷里的 songmid 理论可呈 BV1xxxxxxxxx 形态——域/scheme 前置
@@ -169,9 +169,26 @@ export function isBilibiliInput(input) {
   if (/(?:^|[/:.\s'"])(?:[a-z0-9-]+\.)*qq\.com/i.test(s) || /qqmusic[:./]/i.test(s)) return false;
   if (/^qq[:：]/i.test(s.trim())) return false; // qq: 前缀语法专属于 QQ 输入，不给 BV 形 mid 抢走
   return BVID_IN_TEXT_RE.test(s) // 小写 bv 也收下——服务端会校验真实 bvid
-    || /bilibili\.com|b23\.tv/i.test(s)
+    || /bilibili\.com|b23\.tv|bili2233\.cn/i.test(s) // bili2233.cn 是 B 站官方短链族（同 isBiliLinkHost 口径）
     || /(?:^|\/)av\d+/i.test(s);
 }
+
+// SourcePicker 直绑行远端解析的收单谓词（GET /unlock/resolve-media 前置闸，
+// 前后端共享同一真相源）——比 isBilibiliInput 更紧：
+//   - av 只收裸锚形 ^av\d+$：'example.com/av123'/'foo?av=1' 这类非 B 站语境
+//     不误送远端解析（错绑比拒绑代价大）——顶栏宽支是既有行为不跟收
+//   - 域支带边界类 (?:^|[^a-zA-Z0-9-])：'notbilibili.com/x'、'xb23.tv/x' 不
+//     误捕；'.' 不在排除集内，'www.bilibili.com'/'sub.b23.tv' 子域照常过
+//   - qq 系前置排除与 isBilibiliInput 同口径（'qq:av1' 不误送）
+//   - 裸 BVID 支收入（直调 API 完备性；客户端 BV 在本地支先行拦截，
+//     本谓词的 BVID 支只服务直调）
+export const isBiliDirectBindInput = (s) => {
+  if (typeof s !== 'string' || !s) return false;
+  if (/^https?:\/\/[^/]*qq\.com/i.test(s) || /^qqmusic:\/\//i.test(s) || /^qq:/i.test(s)) return false;
+  return BVID_RE.test(s) || /^av\d+$/i.test(s)
+    || /(?:^|[^a-zA-Z0-9-])(?:b23\.tv|bili2233\.cn)\//i.test(s)
+    || /(?:^|[^a-zA-Z0-9-])bilibili\.com\//i.test(s);
+};
 
 // ── YouTube ──
 // URL 形态表（顺序敏感）——裸 11 位 id 不进本表（与搜索关键词天然歧义，
