@@ -181,4 +181,5 @@ function scoreCandidate(song, src) {
 module.exports = {
   scoreCandidate, normToken, noiseKey, stripBrackets, foldCjkCompat, QUERY_NOISE,
   ACCEPT_SCORE, GRAY_SCORE, DUR_HARD_GATE_SEC,
+  ARTIST_SPLIT_RE, artistMembers, candArtistNames,
 };

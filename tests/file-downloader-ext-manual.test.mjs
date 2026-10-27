@@ -42,12 +42,22 @@ seed('../src/server/lib/qq.js', {
   pickStreamUrl: async (...a) => { pickCalls.push(a); return pickImpl(...a); },
 });
 
-// ── netease-api 桩：回链腿/数值支的 song_url 录参回放 ──
+// ── netease-api 桩：回链腿/数值支的 song_url 录参回放；song_detail 是
+// 校验闸的上行——本文件 providerData 均无 title/author/expectedMs（期望
+// 三轴全空 → neutral→pass），固定绑条应答经闸放行照走原链。独立应答
+// 不走 callApiImpl——q3 类「全上行瞬断」场景保 netease=song_url 死因 ──
 const apiCalls = [];
 let callApiImpl = async () => ({ body: { data: [] } });
 const resolveCalls = [];
 seed('../src/server/services/netease-api.js', {
-  callNeteaseApi: (...a) => { apiCalls.push(a); return callApiImpl(...a); },
+  callNeteaseApi: (...a) => {
+    apiCalls.push(a);
+    if (a[0] === 'song_detail') {
+      return Promise.resolve({ body: { songs: [
+        { id: +a[1].ids, name: '绑条', ar: [{ name: '绑艺人' }], dt: 200000 }] } });
+    }
+    return callApiImpl(...a);
+  },
   resolveSongUrls: async (items, o) => { resolveCalls.push(o); return items; },
   needsUnlock: () => true,
   MAX_UNLOCK_ITEMS: 20,
@@ -110,6 +120,8 @@ seed('../src/server/repositories/unlockManual.js', {
 });
 
 const { downloadAudio } = require('../src/server/services/file-downloader.js');
+const { getDb } = require('../src/server/db/client.js');
+const { _resetRelayCaches } = require('../src/server/services/relay-gate.js');
 const outDir = tmpDataDir('meowsync-dl-extmanual-out-');
 
 // 升级腿胜出换名是真 fs rename——streamToFile 写穿让 relay 档有实体可换
@@ -142,6 +154,13 @@ beforeEach(() => {
   streamCalls.length = biliAudioCalls.length = biliFetchCalls.length = 0;
   ytPlayerCalls.length = getManualCalls.length = 0;
   for (const id of [BV_TRACK, YT_TRACK, QQ_TRACK]) realManualRepo.deleteManual(id);
+  // 闸账面清台：pass/block veto 行与 detail 正/负档缓存是进程级态，
+  // 跨用例驻留会让同 (trackId,nid) 走快路零上行 / 命中陈旧绑条
+  try {
+    getDb().exec("DELETE FROM song_ai_verdict WHERE kind = 'audio_relay'");
+    getDb().exec('DELETE FROM song_match');
+  } catch { /* 首发用例表未建兜底 */ }
+  _resetRelayCaches();
 });
 
 // ── bv_/yt_ 绑定顶替（用例 10/11）──
@@ -216,8 +235,11 @@ test('qq_：绑定腿先于 relayId 回链；绑定腿死→回链照走；双�
   r = await downloadAudio(QQ_TRACK, join(outDir, 'q2.mp3'), 320000, null, null,
     { neteaseId: '777001' });
   assert.equal(r.unblockedSource, 'qq→netease', '绑定腿死——词源回链兜底');
-  assert.equal(apiCalls.length, 1, '回链确实尝试过');
-  assert.deepEqual(apiCalls[0], ['song_url', { id: '777001', br: 320000 }]);
+  assert.deepEqual(
+    apiCalls.map(c => c[0]), ['song_detail', 'song_url'],
+    '回链确实尝试过——校验闸 detail 先行、song_url 消费其后');
+  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_url'),
+    [['song_url', { id: '777001', br: 320000 }]]);
   // 双腿全灭 → 终错拼 manual= 与 netease= 双死因段（不吞因）
   callApiImpl = async () => { const e = new Error('netease ECONNRESET'); e.code = 'ECONNRESET'; throw e; };
   const e = await downloadAudio(QQ_TRACK, join(outDir, 'q3.mp3'), 320000, null, null,
@@ -329,7 +351,10 @@ test('升级腿隔离：qq hit 成功低档+绑定在场 → 升级腿照旧只�
   streamImpl = streamWriteThrough;
   const r = await downloadAudio(QQ_TRACK, join(outDir, 'u1.mp3'), 320000, null, null,
     { neteaseId: '777001' });
-  assert.equal(apiCalls.length, 1, '低档 hit + neteaseId → 升级腿照常跑 relay 择优');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 1,
+    '低档 hit + neteaseId → 升级腿照常跑 relay 择优');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_detail').length, 1,
+    '升级腿消费前校验闸先取绑条 detail');
   assert.equal(r.unblockedSource, 'qq→netease', '回链更优胜出——绑定腿不抢活');
   assert.equal(ytPlayerCalls.length, 0, 'hit 在场→绑定腿不进');
 });

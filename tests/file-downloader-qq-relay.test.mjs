@@ -55,9 +55,23 @@ seed('../src/server/lib/qq.js', {
 // ── netease-api 桩面（与 file-downloader-unlockfail 同款全量解构面）─────────
 const apiCalls = [];
 let callApiImpl = async () => ({ body: { data: [] } });
+// song_detail 派发支：校验闸的绑条元数据应答做在派发层——各用例的 callApiImpl
+// 赋值点（song_url 等）零改动。detailSongs 默认绑条；detailImpl 在场按 ids
+// 分支应答（freshId 两跳不同绑条）；detailThrow 注入传输故障（deferred 面）
+let detailSongs = [{ id: 777001, name: '绑条', ar: [{ name: '绑艺人' }], dt: 200000 }];
+let detailImpl = null;
+let detailThrow = false;
 const resolveCalls = [];
 seed('../src/server/services/netease-api.js', {
-  callNeteaseApi: (...a) => { apiCalls.push(a); return callApiImpl(...a); },
+  callNeteaseApi: (...a) => {
+    apiCalls.push(a);
+    if (a[0] === 'song_detail') {
+      if (detailThrow) return Promise.reject(new Error('song_detail upstream boom'));
+      if (detailImpl) return Promise.resolve(detailImpl(a[1], a[2]));
+      return Promise.resolve({ body: { songs: detailSongs } });
+    }
+    return callApiImpl(...a);
+  },
   resolveSongUrls: async (items, o) => { resolveCalls.push(o); return items; },
   needsUnlock: () => true,
   MAX_UNLOCK_ITEMS: 20,
@@ -81,7 +95,17 @@ seed('../src/server/services/download-io.js', {
   },
 });
 
+// AI 启用态桩：freshId 自救的 song_match 模型键读侧口径 aiEnabled()?aiModel():''
+seed('../src/server/lib/ai.js', {
+  aiEnabled: () => false,
+  aiModel: () => '',
+  askAiJson: async () => null,
+});
+
 const { downloadAudio } = require('../src/server/services/file-downloader.js');
+const { getDb } = require('../src/server/db/client.js');
+const songMatchRepo = require('../src/server/repositories/songMatch.js');
+const { _resetRelayCaches } = require('../src/server/services/relay-gate.js');
 const outDir = tmpDataDir('meowsync-dl-qqrelay-out-');
 
 // 升级腿的胜出换名/弃用清理是真 fs 操作（renameSync/unlinkSync）——默认
@@ -105,9 +129,20 @@ beforeEach(() => {
   pickImpl = async () => null;
   cookieOn = false;
   callApiImpl = async () => ({ body: { data: [] } });
+  detailSongs = [{ id: 777001, name: '绑条', ar: [{ name: '绑艺人' }], dt: 200000 }];
+  detailImpl = null;
+  detailThrow = false;
   fetchImpl = async (url) => ({ status: 200, data: { destroy() {} }, headers: {}, url });
   streamImpl = async (resp, outputPath) => ({ path: outputPath, size: 4096 });
   pickCalls.length = apiCalls.length = resolveCalls.length = fetchCalls.length = streamCalls.length = 0;
+  // 闸的账面清台：veto 行按 vkey=<trackId>@<nid>@<sig> 跨用例驻留会
+  // 污染后续判定（块/放都快路零上行），freshId 用的 song_match 行同清；
+  // detail 正/负档缓存是进程级态，同 nid 跨用例会命中陈旧绑条
+  try {
+    getDb().exec("DELETE FROM song_ai_verdict WHERE kind = 'audio_relay'");
+    getDb().exec('DELETE FROM song_match');
+  } catch { /* 首发用例表未建时兜底 */ }
+  _resetRelayCaches();
 });
 
 test('qq 直链 null + providerData.neteaseId → 网易腿成功：song_url 原 id/br，产物烙 qq→netease', async () => {
@@ -119,7 +154,11 @@ test('qq 直链 null + providerData.neteaseId → 网易腿成功：song_url 原
   assert.equal(r.size, 4096);
   assert.equal(r.unblocked, false);
   assert.equal(r.unblockedSource, 'qq→netease', '解锁血缘缺席时烙回链标记——血缘不进徽章语义也不丢');
-  assert.deepEqual(apiCalls, [['song_url', { id: '777001', br: 320000 }]]);
+  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_url'), [['song_url', { id: '777001', br: 320000 }]]);
+  assert.deepEqual(
+    apiCalls.filter(c => c[0] === 'song_detail').map(c => [c[0], c[1]]),
+    [['song_detail', { ids: '777001' }]],
+    '回链消费前校验闸先取绑条 detail 做同一录音判定（第三参 signal 不比对）');
   // pickStreamUrl 吃到 providerData.qq.mediaMid + 码率档梯（省一次 vkey 空调用）
   assert.equal(pickCalls[0][0], '0034M8WL3V4oHA');
   assert.equal(pickCalls[0][1].mediaMid, 'mm9');
@@ -185,7 +224,7 @@ test('null-hit + 回链瞬时死 → 终错非 fatal（与 qqErr 重抛同权走
   assert.equal(e.fatal, false,
     '回链瞬时故障不带 fatal——同一瞬时网易故障不该因 qq 腿死法（null vs throw）丢重试权');
   assert.match(e.message, /netease=netease ECONNRESET/, '终错拼上回链死因');
-  assert.equal(apiCalls.length, 1, '回链确实尝试过');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 1, '回链确实尝试过');
 });
 
 test('qq null 且无回链（neteaseId 缺席）→ 终错文案按凭据态分档', async () => {
@@ -233,8 +272,8 @@ test('M500 hit（128k < 请求 320k）+ neteaseId → 回链被尝试且更优�
   streamImpl = streamWriteThrough;
   const r = await downloadAudio(QQ_ID, join(outDir, 'up1.mp3'), 320000, null, null,
     { neteaseId: '777001' });
-  assert.equal(apiCalls.length, 1, '到手档低于请求档该打回链升级');
-  assert.deepEqual(apiCalls[0], ['song_url', { id: '777001', br: 320000 }]);
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 1, '到手档低于请求档该打回链升级');
+  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_url')[0], ['song_url', { id: '777001', br: 320000 }]);
   assert.equal(r.path, join(outDir, 'up1.mp3'), '回链胜出后换名入主档族');
   assert.equal(r.br, 320000, '报回链真实码率而非 qq 档位');
   assert.equal(r.unblockedSource, 'qq→netease', '与既有 !hit 回链同款血缘烙记');
@@ -299,7 +338,7 @@ test('M500 hit + 回链瞬时失败 → qq hit 保留兜底（升级腿只降级
   streamImpl = streamWriteThrough;
   const r = await downloadAudio(QQ_ID, join(outDir, 'up5.mp3'), 320000, null, null,
     { neteaseId: '777001' });
-  assert.equal(apiCalls.length, 1, '回链确实尝试过');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 1, '回链确实尝试过');
   assert.equal(r.unblockedSource, 'qq/M500', '回链失败不丢已下载的 qq hit');
   assert.equal(readFileSync(r.path, 'utf8'), 'bytes:https://stream.qqmusic.qq.com/low.mp3');
   assert.deepEqual(familyOf('up5'), ['up5.mp3']);
@@ -361,6 +400,9 @@ test('bilivideo/bilivideo.cn/hdslb 回链 → fetchStream 注 UA+Referer；其�
 
 test('M500 hit + 回链声明时长与 expectedMs 差 >20% → 不换用保 qq hit（疑错配录音）', async () => {
   pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
+  // 闸的绑条时长（detail dt）须在 3%/8s 容差内先放行——本钉要考的是
+  // 闸过后旧「song_url time 差 >20%」轴照常裁决（否则用例被闸拦成假过）
+  detailSongs = [{ id: 777001, name: '绑条', ar: [{ name: '绑艺人' }], dt: 295000 }];
   callApiImpl = async () => ({ body: { data: [
     { id: 777001, url: 'https://m701.music.126.net/hi.mp3', br: 320000, time: 90000 },
   ] } });
@@ -377,6 +419,7 @@ test('M500 hit + 回链声明时长与 expectedMs 差 >20% → 不换用保 qq h
 
 test('M500 hit + 回链声明时长差 ≤20% → 时长闸放行照常择优换用', async () => {
   pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
+  detailSongs = [{ id: 777001, name: '绑条', ar: [{ name: '绑艺人' }], dt: 295000 }];
   callApiImpl = async () => ({ body: { data: [
     { id: 777001, url: 'https://m701.music.126.net/hi.mp3', br: 320000, time: 250000 },
   ] } });
@@ -403,6 +446,7 @@ test('expectedMs 缺省 → 时长闸不触发：回链 timeMs 在场也照常�
 
 test('expectedMs 在场但回链 timeMs 缺席 → 跳过闸照常择优（不误伤换用）', async () => {
   pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
+  detailSongs = [{ id: 777001, name: '绑条', ar: [{ name: '绑艺人' }], dt: 295000 }];
   callApiImpl = async () => ({ body: { data: [
     { id: 777001, url: 'https://m701.music.126.net/hi.mp3', br: 320000 }, // 无 time 字段
   ] } });
@@ -502,4 +546,184 @@ test('item.type 缺省/非白名单 → URL 推导与 mp3 兜底照旧，且 URL
   ] } });
   r = await downloadAudio('88', join(outDir, 'ext4.mp3'), 320000, null, null, {});
   assert.match(r.path, /ext4\.mp3$/, '白名单外 type 值被闸挡——仍回 mp3 兜底');
+});
+
+// ── 词源回链音频校验闸接入面（services/relay-gate.js——真判定层+真 veto 账
+// + 真 song_match 自救）──
+// providerData.title/author 是期望曲快照（download-fs 投影）：绑条 detail
+// 先过「同一录音」判定才进字节腿。block→fatal 不打 song_url（veto/sig 窗内
+// 重判恒同果）；freshId 自救换 song_match 正绑续腿；detail 不可达→deferred
+// 非 fatal 保 ≤3 重试权；升级腿 block/unknown 都保在手 hit 不进腿。
+
+test('主回链腿·闸 block：绑条艺人/时长与期望不符 → 不打 song_url，fatal 终错拼 netease= 死因', async () => {
+  detailSongs = [{ id: 777001, name: '娘子', ar: [{ name: '叶藏澈' }], dt: 326000 }];
+  const e = await downloadAudio('qq_GATEBLOCK1', join(outDir, 'gb1.mp3'), 320000, null, null,
+    { neteaseId: '777001', title: '娘子', author: '周杰伦' }, 271000)
+    .then(() => null, x => x);
+  assert.equal(e.fatal, true, '闸拒=确定性判定——不浪费任务级 ≤3 重试');
+  assert.match(e.message, /netease=词源回链音频校验未过/);
+  assert.match(e.message, /artist_mismatch/);
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 0,
+    '被拦绑条不该再付一次 song_url/字节流');
+});
+
+test('主回链腿·闸 block + qqAnonDenied → 终错拼双死因且拒答标记存活', async () => {
+  pickImpl = async () => { throw deniedErr(); };
+  detailSongs = [{ id: 777002, name: '娘子', ar: [{ name: '叶藏澈' }], dt: 326000 }];
+  const e = await downloadAudio('qq_GATEBLOCK2', join(outDir, 'gb2.mp3'), 320000, null, null,
+    { neteaseId: '777002', title: '娘子', author: '周杰伦' }, 271000)
+    .then(() => null, x => x);
+  assert.equal(e.qqAnonDenied, true, '闸拒也不吞匿名关停标记——透给上层分档');
+  assert.match(e.message, /code=0\/1000/);
+  assert.match(e.message, /netease=词源回链音频校验未过/);
+  assert.equal(e.fatal, false,
+    '有意口径：combined 终错跟主错 qqErr 的非 fatal 档（qqAnonDenied 是凭据态可修'
+    + '——补 Cookie/换绑即可翻身，重试权不因拼上闸拒死因而缩水）；与无 qqErr 时'
+    + '闸拒单发的 fatal 定档不同。重试也便宜——veto 快路零上行，换绑正行还能经'
+    + ' freshId 自救放行');
+});
+
+test('主回链腿·freshId 自救：快照绑条被拦 + song_match 正绑异 id 过闸 → song_url 入参换正绑', async () => {
+  songMatchRepo.upsertMatch('qq_FRESHID001', '777002', '娘子 周杰伦', 90, '');
+  detailImpl = (args) => ({ body: { songs: String(args.ids) === '777002'
+    ? [{ id: 777002, name: '娘子', ar: [{ name: '周杰伦' }], dt: 272000 }]
+    : [{ id: 777001, name: '娘子', ar: [{ name: '叶藏澈' }], dt: 326000 }] } });
+  callApiImpl = async () => ({ body: { data: [
+    { id: 777002, url: 'https://m701.music.126.net/fresh.mp3', br: 320000 },
+  ] } });
+  streamImpl = streamWriteThrough;
+  const r = await downloadAudio('qq_FRESHID001', join(outDir, 'gf.mp3'), 320000, null, null,
+    { neteaseId: '777001', title: '娘子', author: '周杰伦' }, 271000);
+  assert.equal(r.unblockedSource, 'qq→netease');
+  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_url'),
+    [['song_url', { id: '777002', br: 320000 }]],
+    'freshId 过闸后下载腿换 song_match 正绑 id——provider_data 快照滞后期自赎');
+  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_detail').map(c => c[1].ids),
+    ['777001', '777002'], '原绑条被拦后对正绑重判一跳');
+  assert.equal(readFileSync(r.path, 'utf8'), 'bytes:https://m701.music.126.net/fresh.mp3');
+});
+
+test('主回链腿·freshId 无解：正绑同 id/在否决簿不当候选 → 落 fatal（连 detail 跳都不付）', async () => {
+  // 正绑在 song_match 词源否决簿内——freshRelayId 明确不拿它当候选
+  songMatchRepo.upsertMatch('qq_FRESHVETO1', '777002', 'q', 90, '');
+  songMatchRepo.mergeVetoed('qq_FRESHVETO1', ['777002'], '');
+  // 777002 的 detail 即便能过也不该被问——否决簿挡候选先于判定
+  detailImpl = (args) => ({ body: { songs: [
+    { id: +String(args.ids), name: '娘子', ar: [{ name: '周杰伦' }], dt: 272000 }] } });
+  const e = await downloadAudio('qq_FRESHVETO1', join(outDir, 'gv.mp3'), 320000, null, null,
+    { neteaseId: '777001', title: '娘子', author: '叶藏澈' }, 326000)
+    .then(() => null, x => x);
+  assert.equal(e.fatal, true);
+  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_detail').map(c => c[1].ids),
+    ['777001'], '否决簿内 id 不当自救候选');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 0);
+  // 正绑与快照同 id → 自救无意义不续腿（同 nid 还吃上正档缓存零新跳）
+  songMatchRepo.upsertMatch('qq_FRESHSAME1', '777001', 'q', 90, '');
+  const e2 = await downloadAudio('qq_FRESHSAME1', join(outDir, 'gv2.mp3'), 320000, null, null,
+    { neteaseId: '777001', title: '娘子', author: '叶藏澈' }, 326000)
+    .then(() => null, x => x);
+  assert.equal(e2.fatal, true);
+  assert.equal(apiCalls.filter(c => c[0] === 'song_detail').length, 1,
+    '同 nid 二跳吃 detail 正档缓存——零边际上行');
+});
+
+test('主回链腿·freshId 自救失败（正绑也不过闸）→ 落 fatal，两跳 detail 都留痕', async () => {
+  songMatchRepo.upsertMatch('qq_FRESHBLOCK', '777002', 'q', 90, '');
+  detailImpl = (args) => ({ body: { songs: [
+    { id: +String(args.ids), name: '娘子', ar: [{ name: '叶藏澈' }], dt: 326000 }] } });
+  const e = await downloadAudio('qq_FRESHBLOCK', join(outDir, 'gb3.mp3'), 320000, null, null,
+    { neteaseId: '777001', title: '娘子', author: '周杰伦' }, 271000)
+    .then(() => null, x => x);
+  assert.equal(e.fatal, true, '自救不过闸落回原判 block——一次为限不递归');
+  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_detail').map(c => c[1].ids),
+    ['777001', '777002'], '原绑条与正绑各付一跳 detail 并各自落 veto 账');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 0);
+});
+
+test('主回链腿·detail 不可达 → deferred：终错非 fatal 保 ≤3 重试权，不打 song_url', async () => {
+  detailThrow = true;
+  const e = await downloadAudio('qq_GATEDEFER1', join(outDir, 'gd.mp3'), 320000, null, null,
+    { neteaseId: '777003', title: '娘子', author: '周杰伦' }, 271000)
+    .then(() => null, x => x);
+  assert.equal(e.fatal, false, 'detail 不可达=瞬时面——不固化未验证文件也不判死');
+  assert.match(e.message, /netease=词源回链校验上游暂不可达/);
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 0);
+});
+
+test('升级腿·闸 block → 不进 .relay 升级保 qq hit（familyOf 单档不破）', async () => {
+  pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
+  detailSongs = [{ id: 777004, name: '娘子', ar: [{ name: '叶藏澈' }], dt: 326000 }];
+  streamImpl = streamWriteThrough;
+  const r = await downloadAudio('qq_GATEUPBLK1', join(outDir, 'gu.mp3'), 320000, null, null,
+    { neteaseId: '777004', title: '娘子', author: '周杰伦' }, 271000);
+  assert.equal(r.unblockedSource, 'qq/M500', '被拦不进升级腿——在手档不丢');
+  assert.equal(readFileSync(r.path, 'utf8'), 'bytes:https://stream.qqmusic.qq.com/low.mp3');
+  assert.deepEqual(familyOf('gu'), ['gu.mp3'], '不产生 .relay.* 中间件——闸先于下载');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 0);
+});
+
+test('升级腿·detail 不可达 → 跳过升级保 hit（不为不可证证据降级在手档）', async () => {
+  pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
+  detailThrow = true;
+  streamImpl = streamWriteThrough;
+  const r = await downloadAudio('qq_GATEUPUNK1', join(outDir, 'gu2.mp3'), 320000, null, null,
+    { neteaseId: '777005' });
+  assert.equal(r.unblockedSource, 'qq/M500');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 0,
+    'detail 拿不到不打 song_url——尽力腿静默保 hit');
+  assert.deepEqual(familyOf('gu2'), ['gu2.mp3']);
+});
+
+test('同 nid 两腿只一跳 detail：主腿过后升级腿吃正档缓存/veto 账零上行', async () => {
+  callApiImpl = async () => ({ body: { data: [
+    { id: 777006, url: 'https://m701.music.126.net/leg1.mp3', br: 320000 },
+  ] } });
+  detailSongs = [{ id: 777006, name: 'X', ar: [{ name: 'Y' }], dt: 200000 }];
+  streamImpl = streamWriteThrough;
+  // 第一发 null-hit 主腿：detail 一跳 + 过闸下载
+  await downloadAudio('qq_GATETWOLEG', join(outDir, 'tl.mp3'), 320000, null, null,
+    { neteaseId: '777006' });
+  // 第二发 M500 hit 升级腿：同 nid——detail 正档命中不再上行（异 trackId
+  // 绕开 veto 快路，钉死的是 detail 缓存面；同 trackId 则 veto 零上行）
+  pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
+  await downloadAudio('qq_GATETWOLG2', join(outDir, 'tl2.mp3'), 320000, null, null,
+    { neteaseId: '777006' });
+  assert.equal(apiCalls.filter(c => c[0] === 'song_detail').length, 1,
+    '两腿同 nid 只付一跳 detail');
+});
+
+test('veto 双向账：block 落账后二次同参判定走快路零上行，否决不自动失效', async () => {
+  detailSongs = [{ id: 777007, name: '娘子', ar: [{ name: '叶藏澈' }], dt: 326000 }];
+  const pd = { neteaseId: '777007', title: '娘子', author: '周杰伦' };
+  const e1 = await downloadAudio('qq_GATEVETO01', join(outDir, 'vt.mp3'), 320000, null, null, pd, 271000)
+    .then(() => null, x => x);
+  assert.equal(e1.fatal, true);
+  assert.equal(apiCalls.filter(c => c[0] === 'song_detail').length, 1, '首判付一跳 detail');
+  const e2 = await downloadAudio('qq_GATEVETO01', join(outDir, 'vt2.mp3'), 320000, null, null, pd, 271000)
+    .then(() => null, x => x);
+  assert.equal(e2.fatal, true, 'vetoed block 仍拦——证据性判定，重试不产新证据');
+  assert.equal(apiCalls.filter(c => c[0] === 'song_detail').length, 1,
+    '二次判定 veto 快路——零上行零重判');
+});
+
+test('providerData 冻结对象下闸组装不炸（只读契约）', async () => {
+  detailSongs = [{ id: 777008, name: '娘子', ar: [{ name: '周杰伦' }], dt: 272000 }];
+  callApiImpl = async () => ({ body: { data: [
+    { id: 777008, url: 'https://m701.music.126.net/fz.mp3', br: 320000 },
+  ] } });
+  const r = await downloadAudio('qq_GATEFROZEN', join(outDir, 'fz.mp3'), 320000, null, null,
+    Object.freeze({ neteaseId: '777008', title: '娘子', author: '周杰伦',
+      qq: Object.freeze({ mediaMid: 'mm' }) }), 271000);
+  assert.equal(r.unblockedSource, 'qq→netease');
+});
+
+test('期望艺人哨兵值（QQ 音乐兜底名）→ 剔出比对不误拦（neutral→pass）', async () => {
+  detailSongs = [{ id: 777009, name: 'X', ar: [{ name: '某艺人' }], dt: 200000 }];
+  callApiImpl = async () => ({ body: { data: [
+    { id: 777009, url: 'https://m701.music.126.net/s.mp3', br: 320000 },
+  ] } });
+  const r = await downloadAudio('qq_GATESENT01', join(outDir, 'st.mp3'), 320000, null, null,
+    { neteaseId: '777009', title: 'X', author: 'QQ 音乐' });
+  assert.equal(r.unblockedSource, 'qq→netease',
+    '无艺人兜底名按无信息处理——哨兵不剔会全场误拦');
 });

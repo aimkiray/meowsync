@@ -5,8 +5,10 @@ const { csrfOriginOk } = require('../lib/auth-gate');
 const { stripAbsolutePaths } = require('../lib/sanitize');
 const { readJsonBody } = require('../lib/http-body');
 const { callNeteaseApi } = require('../services/netease-api');
+const { adjudicateRelayAudio } = require('../services/relay-gate');
 const { aiEnabled, aiModel } = require('../lib/ai');
 const songMatchRepo = require('../repositories/songMatch');
+const { NETEASE_ID_BOUNDED_RE } = require('../../shared/predicates.js');
 
 const app = new Hono();
 
@@ -163,6 +165,64 @@ app.post('/match/retry', async (c) => {
     // 裸异常消息直回会泄部署面信息（绝对路径里的用户名/目录布局）——
     // 过 stripAbsolutePaths 再下发（console.error 记原文不受影响）
     return c.json({ code: 502, message: `重匹配失败: ${stripAbsolutePaths(e?.message || '未知错误')}` }, 502);
+  }
+});
+
+// GET /match/audio-check —— 词源回链音频校验闸只读口：客户端只传期望
+// 元数据（title/artists/durMs）+ nid + 可选 trackId，判定收口在服务端
+// services/relay-gate.js（veto 快路/detail 缓存/freshId 语义一体）——
+// 客户端不复刻判定逻辑。判定本体是 shared 纯函数（艺人/时长/cover 三轴）
+// verdict=pass 时 cand.id 即核准播放 id（服务端 freshId 自救可能已换绑）
+app.get('/match/audio-check', async (c) => {
+  // 与 match-state 同档热路径宽桶：客户端每轨首播可能问，裸奔可被批量
+  // nid 刷成 song_detail 扇出（缓存/负档/单飞在桶后兜底第二道）
+  if (!rateLimit(c, 'match-audio-check', 60)) {
+    return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+  }
+  const nid = str(c.req.query('nid'), 24);
+  if (!NETEASE_ID_BOUNDED_RE.test(nid)) {
+    return c.json({ code: 400, message: '非法 nid' }, 400);
+  }
+  const title = str(c.req.query('title'), 300);
+  if (!title) {
+    return c.json({ code: 400, message: '缺少 title' }, 400);
+  }
+  const trackId = str(c.req.query('trackId'), 80);
+  if (trackId && !TRACK_ID_RE.test(trackId)) {
+    return c.json({ code: 400, message: '非法 trackId' }, 400);
+  }
+  // artists 是 JSON 数组串（成员名可含 '/'/'、'/空格——repeated param 与
+  // artist[]= 序列化都有碰撞面）；解析失败按空集——期望艺人缺席走
+  // neutral 轴不降级（脏值不 400 与 strList 对非数组同口径）
+  let artists = [];
+  const artistsRaw = str(c.req.query('artists'), 1200);
+  if (artistsRaw) {
+    try {
+      const parsed = JSON.parse(artistsRaw);
+      artists = strList(parsed, 10, 200);
+    } catch { artists = []; }
+  }
+  // durMs 数值钳 0..86400000：0/缺席/脏值=无时长证据，时长轴跳过
+  const durMs = Math.min(Math.max(Number(c.req.query('durMs')) || 0, 0), 86400000);
+  try {
+    const r = await adjudicateRelayAudio({
+      nid, trackId: trackId || null,
+      expected: { title, artists, durationMs: durMs },
+      signal: c.req.raw.signal,
+    });
+    if (c.req.raw.signal?.aborted) return c.body(null, 499);
+    return c.json({
+      code: 200,
+      verdict: r.verdict,
+      reasons: r.reasons || [],
+      cand: r.cand ?? null,
+    });
+  } catch (e) {
+    if (c.req.raw.signal?.aborted || e?.aborted) return c.body(null, 499);
+    // 上游 detail 失败/编排异常不产 5xx——收敛 unknown，fail-open 语义
+    // 由调用方执行（播放腿放行/下载腿 deferred 各有取向）
+    console.warn(`[match] audio-check 判定异常收敛 unknown: ${e?.message || e}`);
+    return c.json({ code: 200, verdict: 'unknown', reasons: ['detail_unavailable'], cand: null });
   }
 });
 
