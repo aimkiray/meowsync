@@ -36,8 +36,12 @@ const BLOCKS = [
   ['小説夏と罰(上) 多艺人绑条', exp('小説夏と罰(上)', ['EMA'], 229000),
     cand('小説夏と罰(上)', [{ name: '傘村トータ' }, { name: '猫村いろは' }, { name: 'KAITO' }], 227000),
     ['artist_mismatch']],
-  ['回る空うさぎ 唯一拦据=cover_marker', exp('回る空うさぎ', ['花譜'], 186000),
-    cand('回る空うさぎ (Cover)', [{ name: '花譜' }], 186000), ['cover_marker']],
+  // F8 修订：同艺人+单侧 cover 标不再拦——QQ 源标题常不携带 cover 注记而
+  // 源录音本身就是该 cover（下方 F8 实机钉判 pass）。本钉绑条改中性艺人
+  // 'V.A.'（isPlaceholderAuthor 哨兵→neutral）：neutral 下不对称标记仍是
+  // 唯一可用拦据——V.A. 类绑条的 cover 注记正是可用证据（§3.4 F8）
+  ['回る空うさぎ 中性艺人+单侧cover标', exp('回る空うさぎ', ['花譜'], 186000),
+    cand('回る空うさぎ (Cover)', [{ name: 'V.A.' }], 186000), ['cover_marker']],
   ['ARTIFICIAL SKIN', exp('ARTIFICIAL SKIN', ['EMA'], 0),
     cand('ARTIFICIAL SKIN', [{ name: 'PSGOZ' }], 0), ['artist_mismatch']],
   ['Meru', exp('Meru', ['Nako'], 0),
@@ -106,6 +110,40 @@ for (const [label, expected, c, score] of PASS_CASES) {
     assert.deepEqual(reasons, []);
   });
 }
+
+// ── §3.4 F8 修订（实机验收钉板）：cover_marker 不对称加艺人轴门 ──────
+// 不对称标记只在 artistAxis!=='match' 时进 reasons——同艺人+标题干相同的
+// 单侧 (Cover)/翻唱 注记是版本标注非错录音（QQ 源标题常不携带 cover 注记
+// 而源录音本身就是该 cover），改投 evidence 'cover_marker_diff' 不拦；
+// mismatch 时照进 reasons 作叠加轴；neutral（哨兵/缺失）照拦。
+test('F8 实机钉：期望「回る空うさぎ at I SCREAM LIVE」/花譜 × 绑条「…(Cover)」/花譜 → pass', () => {
+  const { verdict, reasons, evidence } = judgeRelayCand(
+    exp('回る空うさぎ at I SCREAM LIVE', ['花譜'], 186000),
+    cand('回る空うさぎ at I SCREAM LIVE (Cover)', [{ name: '花譜' }], 186499), null);
+  assert.equal(verdict, 'pass', `实机误拦样本应放行，reasons=${JSON.stringify(reasons)}`);
+  assert.deepEqual(reasons, []);
+  assert.ok(evidence.includes('cover_marker_diff'),
+    `同艺人下的单侧 cover 标差异应进 evidence 诊断，实得 ${JSON.stringify(evidence)}`);
+});
+
+test('F8 艺人 neutral+不对称照拦：V.A. 哨兵绑条 cover 注记仍是拦据', () => {
+  const { verdict, reasons, evidence } = judgeRelayCand(
+    exp('食虫植物', ['EMA'], 166000),
+    cand('食虫植物（25时声真似）', [{ name: 'V.A.' }], 162000), null);
+  assert.equal(verdict, 'block');
+  assert.deepEqual(reasons, ['cover_marker'],
+    `neutral 下不对称标记是唯一可用拦据，实得 ${JSON.stringify(reasons)}`);
+  assert.ok(evidence.includes('artist_unverifiable'), '哨兵艺人照记 artist_unverifiable');
+});
+
+test('F8 艺人 mismatch+不对称叠加：reasons 双含 artist_mismatch/cover_marker', () => {
+  const { verdict, reasons } = judgeRelayCand(
+    exp('食虫植物', ['EMA'], 166000),
+    cand('食虫植物（25时声真似）', [{ name: 'fan声真似' }], 162000), null);
+  assert.equal(verdict, 'block');
+  assert.deepEqual([...reasons].sort(), ['artist_mismatch', 'cover_marker'],
+    'mismatch 下不对称标记作叠加轴——主导拦因仍是 artist_mismatch');
+});
 
 test('P8 expected 哨兵艺人 → neutral → pass + artist_unverifiable 证据', () => {
   for (const sentinel of ['QQ 音乐', '未知艺术家', '_']) {
@@ -238,5 +276,5 @@ test('常量面冻结', () => {
   assert.equal(RELAY_DUR_ABS_MS, 8000);
   assert.equal(RELAY_DUR_RATIO, 0.03);
   assert.equal(DICE_MIN, 0.6);
-  assert.equal(RULE_VERSION, 'a1');
+  assert.equal(RULE_VERSION, 'a2'); // F8 cover_marker 艺人轴门——规则修订换盐，旧判自然失效
 });
