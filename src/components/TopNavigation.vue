@@ -100,7 +100,7 @@
           @click="toggleSrcMenu"
         ><PixelIcon name="broadcast" :size="18" /><span
           class="topnav-src-tag" aria-hidden="true"
-        >{{ srcShort }}</span></button>
+        >{{ srcTag }}</span></button>
         <Teleport to="body">
           <div
             v-if="srcMenuOpen"
@@ -675,10 +675,11 @@ export default {
     // 这里再兜底 '网易云' 是同口径双保险（查表 miss 不裸显 id）
     const srcName = computed(() =>
       SEARCH_SOURCES.find(s => s.id === prefSearchSource.value)?.name || '网易云')
-    // 钮上徽牌用源短标：顶栏寸土塞不下全名（「网易云」3字就把 32px 钮撑成
-    // 异形宽键），短记号一眼可辨；读屏走 aria-label 的全名不受影响
-    const SRC_SHORT = { netease: '163', qq: 'QQ', yt: 'YT', bili: 'B站' }
-    const srcShort = computed(() => SRC_SHORT[prefSearchSource.value] || '')
+    // 钮上徽牌显英文全称：用户指定 NetEase/QQ/YouTube/BiliBili——
+    // 短记号案（163/YT/B站）已被推翻，全名免记映射；钮宽随内容走
+    // （width:auto 档，见 .topnav-src-btn）。读屏走 aria-label 的全名不受影响
+    const SRC_TAG = { netease: 'NetEase', qq: 'QQ', yt: 'YouTube', bili: 'BiliBili' }
+    const srcTag = computed(() => SRC_TAG[prefSearchSource.value] || '')
 
     const toggleSrcMenu = () => {
       if (srcMenuOpen.value) { closeSrcMenu(); return }
@@ -834,7 +835,7 @@ export default {
       SEARCH_SOURCES,
       prefSearchSource,
       srcName,
-      srcShort,
+      srcTag,
       srcBtn,
       srcMenuOpen,
       srcMenuPos,
@@ -962,9 +963,10 @@ export default {
 /* 源切换钮：跟在字段后吃 .topnav-search 的 8px gap——中列收紧时
    字段先收（max-width:100%）；钮不被压变形的 flex-shrink:0 由
    .pg-icobtn 基类供给，此档不重复声明。
-   徽牌入钮后定宽 32 装不下「图标+短标」——放宽到内容宽（≤768
-   展开层里字段 flex:1 会让位，钮不会被顶出展开行） */
-.topnav-src-btn { width: auto; padding: 0 7px; gap: 3px; }
+   徽牌入钮后定宽 32 装不下「图标+徽牌文字」——放宽到内容宽（≤768
+   展开层里字段 flex:1 会让位，钮不会被顶出展开行）。
+   gap 6px：用户要求图标与徽牌间明显间距 */
+.topnav-src-btn { width: auto; padding: 0 8px; gap: 6px; }
 .topnav-src-tag {
   font-family: var(--font-mono);
   font-size: 10px;
