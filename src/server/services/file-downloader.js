@@ -1126,6 +1126,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
               author: providerData?.author,
               artists: providerData?.artists,
               durationMs: expectedMs > 0 ? expectedMs : null,
+              album: providerData?.album,
             }),
             signal,
           });
@@ -1218,6 +1219,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
               author: providerData?.author,
               artists: providerData?.artists,
               durationMs: expectedMs > 0 ? expectedMs : null,
+              album: providerData?.album,
             }),
             signal,
           });

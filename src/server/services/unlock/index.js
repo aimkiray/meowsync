@@ -5,7 +5,8 @@
 //     层逐条校验后整组 mint 进 vault，代理只在镜像间轮换
 //   ext  = 可选音频工件后缀——URL 推导拿不到真实容器时由 provider 显式
 //     供值（bilibili .m4s 链），编排层 unblocked.ext || extOf(url) 消费
-//   info = {id, name, artists[], keyword, durationMs}
+//   info = {id, name, artists[], keyword, durationMs, album?}
+//     album = 可选专辑名——AI 仲裁 prompt 的版本标注证据（缺席照常）
 //   ctx  = {signal, purpose:'playback'|'download'}
 // 返回 null/抛错 = 该源不可用，编排层续下一源（与 unm match 语义对齐）
 // 可选能力（仅搜索型源实现；pyncmd 是「零错配官方直解」无候选面不加）：

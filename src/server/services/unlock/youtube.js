@@ -32,7 +32,8 @@ const { aiRankCandidates, markDead, unlockVkey, forgetSong } = createAiRank({
 const durOk = (c) => Number.isFinite(c?.durationSec) && c.durationSec > 0;
 
 /**
- * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
+ * @param {{id: any, name: string, artists?: string[], keyword: string,
+ *   durationMs: number|null, album?: string|null}} info
  * @returns {{url: string, urls: string[], br: number|null, durationSec: number|null,
  *   mediaId: string}|null}
  *   mediaId = 胜出候选 videoId——编排层透传到 resolved（qq_ 端点 mint

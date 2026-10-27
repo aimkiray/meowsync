@@ -83,6 +83,17 @@ function providerDataOf(track) {
         const arts = (Array.isArray(track.ar) ? track.ar : track.artists || [])
           .map(a => a?.name ?? a).filter(Boolean).slice(0, 10);
         return arts.length ? { artists: arts } : {};
+      })()),
+      // 专辑名快照（qqUnlockInfo 可选第五键——AI 仲裁的版本标注证据）：
+      // al 对象/裸串 + album 对象/裸串四形归一（qq 归一化产 album 裸串，
+      // 镜像行/客户端投影产 al 对象，与客户端 albumObj 同口径）；空名
+      // 不出键——同 artists 的深等于零扰动纪律，老行缺此键优雅降级
+      ...((() => {
+        const pick = (v) => typeof v === 'string' ? v
+          : (v && typeof v === 'object' ? v.name : null);
+        const albumName = String(pick(track.al) || pick(track.album) || '')
+          .trim().slice(0, 300);
+        return albumName ? { album: albumName } : {};
       })())
     };
   }

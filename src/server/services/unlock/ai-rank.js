@@ -8,6 +8,9 @@
 const { aiEnabled, askAiJson, aiModel } = require('../../lib/ai');
 const { getVerdict, upsertVerdict } = require('../../repositories/lyricAi');
 const { getDb } = require('../../db/client');
+// AI 全否时的标题+时长确定性兜底（./match.js）——期望艺人≠标题署名 +
+// remix/cover 标注的系统性误杀由它接住
+const { pickTitleDurationMatch } = require('./match');
 
 // 进 prompt 的字段剥换行/方括号/控制符——候选标题/频道名是第三方数据，
 // C0/C1 控制符（ANSI 转义等）原样进日志与 verdict detail 列，一并剥除
@@ -123,10 +126,18 @@ function createAiRank({ keyPrefix, sourceLabel, deleteVerdicts }) {
           maxTokens: 32,
           system: '你是音乐解锁助手。从视频站候选里选出与目标同一首歌的正式音源'
             + '（官方音源/Official Audio/MV/自动投稿/同曲完整版可算；live/remix/翻唱'
-            + '/nightcore/8D/伴奏/卡拉OK/短剪辑不算，除非目标本身就是该版本）。'
+            + '/nightcore/8D/伴奏/卡拉OK/短剪辑不算，除非目标本身就是该版本——'
+            + '目标专辑名带版本标注（remix/cover 等）且候选带同一版本标注时，'
+            + '视为同一版本的证据）。候选标题里的歌名可以是其他语言/罗马音写法，'
+            + '艺人/频道栏可能是 UP 主、翻唱者或转载号而非原艺人——歌名对得上'
+            + '就别因署名栏不同否决。'
             + '都不像返回 {"pick":0}，能确定返回 {"pick":编号}。只输出 JSON。',
+          // info.album 是加性可选字段（qq_ 伪行/数值域 songRow.al 同链供）——
+          // 版本标注证据进 prompt 治「期望艺人≠署名+remix 标注」型误杀
           user: `目标：${cleanField(info.name)} — ${cleanField((info.artists || []).join(' / '))}`
-            + `（${Math.round((info.durationMs || 0) / 1000) || '?'}s）\n候选：\n${desc}`,
+            + `（${Math.round((info.durationMs || 0) / 1000) || '?'}s）`
+            + `${info.album ? ` 专辑：${cleanField(info.album)}` : ''}`
+            + `\n候选：\n${desc}`,
           tag: aiTag,
         });
         // 直接对原始值验类型——Number(true)/Number("0")/Number([]) 都会伪装成
@@ -142,6 +153,17 @@ function createAiRank({ keyPrefix, sourceLabel, deleteVerdicts }) {
     const ans = await inflightRank.get(fkey);
     if (signal?.aborted || ans == null) return pass([...approved, ...unjudged, ...dead]);
     if (ans.pick === 0) {
+      // 标题+时长兜底先于全否冷却：AI 在「期望艺人≠标题署名 + remix/cover
+      // 标注」形态上系统性误杀（实锤：aori 原曲 Jeku Remix 配期望艺人 Jeku），
+      // 标题含歌名+时长贴近是确定性证据，与 AI 裁决相左时以规则为准。
+      // 命中不写 rejectedAt——冷却是「AI 拒了别重问」语义，兜底选中说明
+      // AI 判断可疑，下次 resolve 应重评而非冷却吞掉；pickedId 走 resolve
+      // 取流验证成功才落 ok=1 verdict 的既有批准机制
+      const fb = pickTitleDurationMatch(unjudged, info);
+      if (fb) {
+        console.info(`[unlock] ${sid} AI 全否→标题+时长兜底选定 ${cleanField(fb.title)}`);
+        return { ordered: [...approved, fb, ...dead], pickedId: fb.videoId };
+      }
       rejectedAt.set(sid, { at: Date.now(), ids: new Set(unjudged.map(c => c.videoId)) });
       pruneExpired(rejectedAt, REJECT_TTL_MS);
       console.info(`[unlock] ${sid} AI 判定 ${unjudged.length} 条 ${sourceLabel} 候选均非目标曲`);
