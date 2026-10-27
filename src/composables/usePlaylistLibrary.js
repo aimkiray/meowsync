@@ -240,8 +240,11 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
   // al.picUrl 三条腿（cover/matched.al.picUrl/艺人重合闸）全灭落占位图。
   // 本 pass 在库加载/远端采纳/导入落库收尾扫一遍 userPlaylists，对
   // 「qq_ 前缀 + al 是对象 + picUrl 空 + 非 custom（用户手改不覆盖）」的曲
-  // 逐首发 GET /cover?id=qq_<mid>：服务端按 mid 惰性解析（专辑曲直构
-  // y.gtimg 档、无专辑走外源挑选池+白名单闸），命中才补 al.picUrl。
+  // 逐首发 GET /cover?id=qq_<mid>——曲对象带 neteaseId 词源绑定时附
+  // ?ne=<id> hint（服务端绑定腿官封比外源池权威，与歌词匹配同口径
+  // 只助封面元数据）。服务端按 mid 惰性解析（专辑曲直构 y.gtimg 档
+  // → 网易绑定官封 → 外源挑选池+白名单闸），命中才补 al.picUrl；
+  // 响应带 album 且曲 al.name 空时同补专辑名（「未知专辑」展示一并愈）。
   // 进程内 Set 记「已问过」——正（已回填）天然被 picUrl 闸挡住，负
   // （cover:null/请求失败，限流 429/超时曲同记 asked——等下次整页加载
   // 重试，规格内行为）靠 memo 挡本轮重打；不写持久态，刷新自然复位。
@@ -266,27 +269,40 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       }
     }
     // 同 id 跨歌单是多份对象（localStorage 逐单存自己的 tracks）——按 id
-    // 聚合一次上行；写回侧现查活对象回写所有持有方（见 worker 内注）
-    const ids = new Set()
-    forEachTrack(t => { if (healable(t)) ids.add(String(t.id)) })
-    const todo = [...ids].filter(id => !qqCoverAsked.has(id))
+    // 聚合一次上行；写回侧现查活对象回写所有持有方（见 worker 内注）。
+    // Map 值捎带 neteaseId 词源绑定 hint（导入期匹配产物）：任一持有方
+    // 有绑定即随参发出，全空存 '' 不发参（服务端 song_match 行仍兜）
+    const ids = new Map()
+    forEachTrack(t => {
+      if (!healable(t)) return
+      const id = String(t.id)
+      ids.set(id, ids.get(id) || String(t?.neteaseId || ''))
+    })
+    const todo = [...ids].filter(([id]) => !qqCoverAsked.has(id))
     if (!todo.length) return Promise.resolve()
-    for (const id of todo) qqCoverAsked.add(id)
+    for (const [id] of todo) qqCoverAsked.add(id)
     let healedAny = false
     let next = 0
     const worker = async () => {
       while (next < todo.length) {
-        const id = todo[next++]
+        const [id, ne] = todo[next++]
         try {
-          const data = await http.get('/cover', { params: { id }, timeout: 15000 })
+          const data = await http.get('/cover', {
+            params: { id, ...(ne ? { ne } : {}) }, timeout: 15000,
+          })
           const cover = data?.cover
           if (typeof cover !== 'string' || !/^https?:\/\//i.test(cover)) continue
+          // 官封伴随专辑名：非空串且曲 al.name 空同补「未知专辑」展示；
+          // name 在场不覆盖——与 picUrl 同「只补不夺」收口径
+          const album = String(data?.album || '').trim()
           // 按 id 现查活对象再写——不写扫描期捕获的引用（换壳脱靶，见
           // healable 注）；顺手覆盖「扫描后才入库」的同 id 新对象。收口径
           // 重查照挡 await 期间的手动补图/custom
           forEachTrack(t => {
             if (String(t?.id) !== id || !healable(t)) return
-            t.al = { ...t.al, picUrl: cover }
+            const healed = { ...t.al, picUrl: cover }
+            if (album && !String(t.al.name || '').trim()) healed.name = album
+            t.al = healed
             healedAny = true
           })
         } catch { /* 静默——封面是增强，负结果已在 qqCoverAsked 记过 */ }

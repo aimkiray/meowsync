@@ -1,7 +1,10 @@
 // routes/cover.js 冒烟：qq_ 无专辑曲封面惰性解析——专辑曲直构 y.gtimg /
+// 网易词源绑定腿（ne hint/song_match 正行 → song_detail 官封+专辑名）/
 // 外源挑选池命中回 cover / 标题双闸不中回 null / 非白名单域 fail-closed /
 // 非 qq_ id 400 / 10min memo 正负同键不重复上行。
 // lib/qq（getSongDetail 上游）与 unlock/index（PROVIDER 挑选池）全桩；
+// songMatch 库（getMatchRow/getVetoedIds）与 netease-api（song_detail
+// 上游）同桩——绑定腿候选装配、否决跳过、失败续打各语义钉在桩面上。
 // pickTitleDurationMatch 用真实现（纯函数选定器，无上游依赖——双闸语义
 // 钉在真闸上才算钉住「防无关内容当封面」的规格）。
 import { test, before, after } from 'node:test';
@@ -45,6 +48,25 @@ seed('../src/server/services/unlock/index.js', {
   },
 });
 
+// ── 桩：网易绑定腿（song_match 库行直读 + song_detail 上游）──
+// getMatchRow 正向行 / getVetoedIds 生效集 per-case 换底（默认无绑定、
+// 零否决——存量用例默认过空腿落外源池，行为不漂）；callNeteaseApi 录
+// 调用面（候选序/否决跳过/失败续打计数钉），per-case 换底回包
+const neCalls = [];
+let neDetailImpl = async () => ({ body: { songs: [] } });
+let matchRowImpl = () => undefined;
+let vetoedImpl = () => new Set();
+seed('../src/server/repositories/songMatch.js', {
+  getMatchRow: (id) => matchRowImpl(id),
+  getVetoedIds: (id) => vetoedImpl(id),
+});
+seed('../src/server/services/netease-api.js', {
+  callNeteaseApi: async (api, params) => {
+    neCalls.push([api, params]);
+    return neDetailImpl(api, params);
+  },
+});
+
 let app;
 before(() => {
   app = require('../src/server/routes/cover.js');
@@ -76,6 +98,8 @@ test('cover：有 albummid → 直构 y.gtimg.cn T002R300 封面（不走挑选�
     assert.equal(r.status, 200);
     assert.equal(r.body.cover,
       `https://y.gtimg.cn/music/photo_new/T002R300x300M000${TRACK_WITH_ALBUM.albummid}.jpg`);
+    assert.equal(r.body.album, TRACK_WITH_ALBUM.album,
+      '直构支顺带回发专辑名——客户端同补「未知专辑」');
     assert.equal(searchCalls.length, 0, '专辑支不烧外源检索扇出');
   } finally {
     detailImpl = async (id) => ({ ...TRACK_NO_ALBUM, mid: String(id) });
@@ -194,6 +218,112 @@ test('cover：detail 无 name → 免扇出直接 cover:null（选定闸恒否�
     assert.equal(searchCalls.length, 0, '无 name 不烧外源检索扇出');
   } finally {
     detailImpl = async (id) => ({ ...TRACK_NO_ALBUM, mid: String(id) });
+  }
+});
+
+// ── 网易词源绑定腿 ──
+test('cover：ne 参数 hint → song_detail 官封+专辑名回发（yt/bv 零扇出）', async () => {
+  // 客户端曲对象自带绑定随 ?ne= 上行——绑定腿最前候选，命中即终态
+  neDetailImpl = async (api, params) => {
+    assert.equal(api, 'song_detail');
+    assert.equal(params.ids, '26130076');
+    return { body: { songs: [{ al: { name: '告白 - Original Soundtrack', picUrl: 'https://p2.music.126.net/x.jpg' } }] } };
+  };
+  searchCalls.length = 0;
+  try {
+    const r = await json(await get('/cover?id=qq_000d5uID17aiNJ&ne=26130076'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.cover, 'https://p2.music.126.net/x.jpg');
+    assert.equal(r.body.album, '告白 - Original Soundtrack', '官封伴随专辑名随包');
+    assert.equal(neCalls.length, 1);
+    assert.equal(searchCalls.length, 0, '绑定腿命中不烧外源检索扇出');
+  } finally {
+    neDetailImpl = async () => ({ body: { songs: [] } });
+    neCalls.length = 0;
+  }
+});
+
+test('cover：无 ne 参 → song_match 正向行绑定照解官封', async () => {
+  // 曲对象 neteaseId 缺席（镜像行等）——服务端库行仍兜；数值列 String 化
+  matchRowImpl = (id) => (id === 'qq_003MATCHED0001' ? { netease_id: 26130076 } : undefined);
+  neDetailImpl = async (api, params) => {
+    assert.equal(params.ids, '26130076');
+    return { body: { songs: [{ al: { name: '某专', picUrl: 'https://p3.music.126.net/y.jpg' } }] } };
+  };
+  searchCalls.length = 0;
+  try {
+    const r = await json(await get('/cover?id=qq_003MATCHED0001'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.cover, 'https://p3.music.126.net/y.jpg');
+    assert.equal(r.body.album, '某专');
+    assert.equal(neCalls.length, 1);
+    assert.equal(searchCalls.length, 0);
+  } finally {
+    matchRowImpl = () => undefined;
+    neDetailImpl = async () => ({ body: { songs: [] } });
+    neCalls.length = 0;
+  }
+});
+
+test('cover：生效否决集命中的候选跳过零上行 → 落下一候选', async () => {
+  // ne hint '111' 在否决集（判过非同作品——其封面也不该贴），
+  // 库行 '222' 落为实际候选；否决者连 song_detail 都不该烧
+  vetoedImpl = () => new Set(['111']);
+  matchRowImpl = () => ({ netease_id: '222' });
+  neDetailImpl = async (api, params) => {
+    assert.equal(params.ids, '222');
+    return { body: { songs: [{ al: { picUrl: 'https://p4.music.126.net/z.jpg' } }] } };
+  };
+  try {
+    const r = await json(await get('/cover?id=qq_003VETOSKIP001&ne=111'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.cover, 'https://p4.music.126.net/z.jpg');
+    assert.equal(r.body.album, undefined, 'al.name 缺位不落 album 键');
+    assert.deepEqual(neCalls.map(c => c[1].ids), ['222'], '否决候选零上游调用');
+  } finally {
+    vetoedImpl = () => new Set();
+    matchRowImpl = () => undefined;
+    neDetailImpl = async () => ({ body: { songs: [] } });
+    neCalls.length = 0;
+  }
+});
+
+test('cover：ne 非法形静默丢——不 400、零网易上行、照常落外源兜底', async () => {
+  // hint 是增强不是契约：非数字/越界形态与缺席同处理，不判 400
+  const cases = ['abc', '1e5', '26130076;DROP', '-1', '1'.repeat(21)];
+  for (let i = 0; i < cases.length; i++) {
+    const r = await json(await get(
+      `/cover?id=qq_003BADNE00${i}X&ne=${encodeURIComponent(cases[i])}`));
+    assert.equal(r.status, 200, `ne=${cases[i]} 不应 400`);
+    assert.equal(r.body.cover, null, '空池负终态——非法 hint 无副作用');
+  }
+  assert.equal(neCalls.length, 0, '非法 hint 不产生 song_detail 上行');
+});
+
+test('cover：绑定腿候选全灭（上游抛错+空曲集）→ 回落 yt/bv 池照常', async () => {
+  // 机会腿败亡不连坐兜底：'111' 上游抛错续打 '222'、'222' 回空 songs
+  // ——两腿全灭落挑选池，双闸命中照常回缩略图
+  matchRowImpl = () => ({ netease_id: '222' });
+  neDetailImpl = async (api, params) => {
+    if (params.ids === '111') throw new Error('网易云 502');
+    return { body: { songs: [] } };
+  };
+  ytSearchImpl = async () => [
+    { videoId: 'v', title: 'EMA - 目标曲', durationSec: 200,
+      cover: 'https://i.ytimg.com/vi/v/mqdefault.jpg' },
+  ];
+  try {
+    const r = await json(await get('/cover?id=qq_003NEFALLBACK1&ne=111'));
+    assert.equal(r.status, 200);
+    assert.deepEqual(neCalls.map(c => c[1].ids), ['111', '222'],
+      '候选序 hint 先库行后，单候选失败续打下一候选');
+    assert.equal(r.body.cover, 'https://i.ytimg.com/vi/v/mqdefault.jpg');
+    assert.equal(r.body.album, undefined, '外源池支无专辑名不落键');
+  } finally {
+    matchRowImpl = () => undefined;
+    neDetailImpl = async () => ({ body: { songs: [] } });
+    ytSearchImpl = async () => [];
+    neCalls.length = 0;
   }
 });
 
