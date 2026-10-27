@@ -2535,16 +2535,11 @@ export default {
      须晚于合并态的 1/-1 跨行规则才生效；矮窗态不动，仍跨两行吃满视高 */
   .watch-side { grid-row: 2; }
 
-  /* 封面底缘对齐右列内容底缘（页脚顶线）：主列底垫取页脚高 ≈53px
-     （padding 10×2 + 键 32 + hairline 1）——封面↔播放器间距即与队列区
-     一致（53 + 视图 24px 底垫 ≈ 77px），不再是居中摆放的 ~24px。
-     视频态排除：16:9 盒不参与封面底缘对齐，维持居中。
-     底垫同步收缩 container-type:size 的内容盒（100cqh 减小），
-     矮窗下封面按余量自动再缩，无溢出风险 */
-  .watch-main:not(.watch-main--video) {
-    justify-content: flex-end;
-    padding-bottom: 53px;
-  }
+  /* 封面在页头↔播放器间竖直居中：视图 24px 底垫使底距恒多 24px——
+     主列顶部补同额垫，封面上下边距相等（同为 24px+余量对半）。
+     视频态排除：16:9 盒维持原摆放。container-type:size 下顶垫同向
+     收缩 cqh——矮窗封面按余量自动再缩，无溢出风险 */
+  .watch-main:not(.watch-main--video) { padding-top: 24px; }
 }
 /* 容器单位缺席的老内核：回旧式视口高预算 */
 @supports not (width: 1cqh) {
