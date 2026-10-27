@@ -17,13 +17,16 @@ import { prefSearchSource } from '../lib/prefs.js'
 //   userPlaylists / selectedPlaylist / loadingSongs / selectPlaylist /
 //     savePlaylistsToStorage — 库域（落盘收口唯一实现：指纹簿记/队列剪枝/
 //     瘦身投影都在它内部，本域不再自备投影——两份持久化实现会漂簿记）
+//   healMissingQqCovers — 库域 qq_ 无专辑曲封面惰性回填：点卡导入落库
+//     收尾 fire-and-forget 补跑（缺省空函数——缺 dep 静默不补，裸调
+//     TypeError 会被外层 catch 谎报成导入失败）
 //   playSong / playSongFromSearch / playSongFromRelated / playPlaylist —
 //     播放器域（usePlayer 先实例化；惰性转发是双向循环依赖下的惯例写法）
 export function useSearchNav({
   gates,
   searchQuery, currentSong, watchTab, isFullscreenPlayerOpen,
   userPlaylists, selectedPlaylist, loadingSongs, selectPlaylist,
-  savePlaylistsToStorage,
+  savePlaylistsToStorage, healMissingQqCovers = () => {},
   playSong, playSongFromSearch, playSongFromRelated, playPlaylist,
 }) {
   const centerView = ref('home') // 'home' | 'songs' | 'search' | 'watch' | 'downloads' | 'settings'
@@ -305,6 +308,10 @@ export function useSearchNav({
         creator: data.creator || card.creator?.nickname || 'QQ 音乐',
       })
       savePlaylistsToStorage()
+      // 落库收尾即跑封面回填（幂等 asked 判重，fire-and-forget）——
+      // 与 usePlaylistLibrary.addPlaylistToLibrary 的「+ 收藏」链同口径，
+      // 消点卡导入即占位的封面空窗
+      healMissingQqCovers()
       await selectPlaylistAndShow(pl, { force: true })
       // matchedCount 透出与 importProviderPlaylist 的「词源匹配 N」同口径——
       // 匹配只服务歌词/封面兜底；音频可播性由外源解锁承担，未匹配不等于不可播

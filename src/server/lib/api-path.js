@@ -8,7 +8,10 @@ const PREFIXES = [
   '/song-meta', '/ai', '/auth', '/uploads', '/settings', '/match', '/lyric-align',
   // '/unlock'：手选媒体源绑定面（/unlock/candidates|manual）——不登记则
   // authGate 把它当非 API 公开 GET、SPA 兜底喂 index.html 而非 JSON 404
-  '/unlock', '/sync'
+  '/unlock', '/sync',
+  // '/cover'：qq_ 无专辑曲封面惰性解析（GET-only）——不登记则登录态部署里
+  // 未鉴权也能打它做上游扇出，且未命中子路径吃 SPA index.html 而非 JSON 404
+  '/cover'
 ];
 
 // 已摘除的上游路由家族首段——历史上这些是 API（JSON 404/鉴权），摘除后若不

@@ -1,6 +1,9 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { musicApi } from '../api/music.js'
 import { downloadsApi } from '../api/downloads.js'
+// /cover 惰性封面解析走统一 axios 实例——登录态部署需要 withCredentials 会话
+// 与拦截器注入的 download-token 头；裸 fetch 会吃上闸 API 的 401
+import http from '../api/http.js'
 import { readJSON, writeJSON, LS_KEYS } from '../lib/storage.js'
 import { onRemoteApply } from '../lib/sync.js'
 import { toast } from '../lib/feedback.js'
@@ -232,6 +235,73 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     return { list, healedAny }
   }
 
+  // ── qq_ 无专辑曲封面惰性回填（异步 pass，与 healExternalAr 同纪律）─────
+  // QQ 上游对无专辑单曲回 album/albummid/cover 全空——buildQQSong 的
+  // al.picUrl 三条腿（cover/matched.al.picUrl/艺人重合闸）全灭落占位图。
+  // 本 pass 在库加载/远端采纳/导入落库收尾扫一遍 userPlaylists，对
+  // 「qq_ 前缀 + al 是对象 + picUrl 空 + 非 custom（用户手改不覆盖）」的曲
+  // 逐首发 GET /cover?id=qq_<mid>：服务端按 mid 惰性解析（专辑曲直构
+  // y.gtimg 档、无专辑走外源挑选池+白名单闸），命中才补 al.picUrl。
+  // 进程内 Set 记「已问过」——正（已回填）天然被 picUrl 闸挡住，负
+  // （cover:null/请求失败，限流 429/超时曲同记 asked——等下次整页加载
+  // 重试，规格内行为）靠 memo 挡本轮重打；不写持久态，刷新自然复位。
+  // 整轮静默：封面是增强不是阻塞，任何失败都不打扰 UI
+  const qqCoverAsked = new Set()
+  const healMissingQqCovers = () => {
+    // 收集闸与写回闸共用同一谓词：qq_ 前缀 + 非 custom + al 对象 + picUrl
+    // 空。写回不拿扫描期捕获的引用——await 期间 applyRemoteLibrary 会
+    // 整单重建（userPlaylists 换壳），旧对象 detached 写空气且 asked
+    // 已记账本会话不重问（封面永久丢）；al 可能是字符串形态
+    // （healExternalAr 注已提）——只对对象形态写
+    const healable = (t) =>
+      String(t?.id || '').startsWith('qq_') && !t?.custom
+      && !!t?.al && typeof t.al === 'object' && !t.al.picUrl
+    // tracks + addedTracks 双侧同口径（远端单里的本地追加位也可躺 qq_ 曲）
+    const forEachTrack = (fn) => {
+      for (const p of userPlaylists.value) {
+        for (const arr of [p?.tracks, p?.addedTracks]) {
+          if (!Array.isArray(arr)) continue
+          for (const t of arr) fn(t)
+        }
+      }
+    }
+    // 同 id 跨歌单是多份对象（localStorage 逐单存自己的 tracks）——按 id
+    // 聚合一次上行；写回侧现查活对象回写所有持有方（见 worker 内注）
+    const ids = new Set()
+    forEachTrack(t => { if (healable(t)) ids.add(String(t.id)) })
+    const todo = [...ids].filter(id => !qqCoverAsked.has(id))
+    if (!todo.length) return Promise.resolve()
+    for (const id of todo) qqCoverAsked.add(id)
+    let healedAny = false
+    let next = 0
+    const worker = async () => {
+      while (next < todo.length) {
+        const id = todo[next++]
+        try {
+          const data = await http.get('/cover', { params: { id }, timeout: 15000 })
+          const cover = data?.cover
+          if (typeof cover !== 'string' || !/^https?:\/\//i.test(cover)) continue
+          // 按 id 现查活对象再写——不写扫描期捕获的引用（换壳脱靶，见
+          // healable 注）；顺手覆盖「扫描后才入库」的同 id 新对象。收口径
+          // 重查照挡 await 期间的手动补图/custom
+          forEachTrack(t => {
+            if (String(t?.id) !== id || !healable(t)) return
+            t.al = { ...t.al, picUrl: cover }
+            healedAny = true
+          })
+        } catch { /* 静默——封面是增强，负结果已在 qqCoverAsked 记过 */ }
+      }
+    }
+    // 并发上限 3：每首背后是上游 detail+双源检索扇出，别把服务端
+    // /cover 桶（12/min）瞬时空透成 429 墙
+    return Promise.all([worker(), worker(), worker()]).then(() => {
+      // 簿记写收口与 healExternalAr 同款 PRESERVE_TS——封面回填是本地
+      // 展示修复不是用户编辑，远端采纳路径顶掉 updatedAt 会拿愈合时刻
+      // 参与 per-playlist LWW 竞争
+      if (healedAny) savePlaylistsToStorage(PRESERVE_TS)
+    }).catch(() => {})
+  }
+
   const loadPlaylistsFromStorage = () => {
     const savedPlaylists = readJSON(PLAYLISTS_STORAGE_KEY)
     if (Array.isArray(savedPlaylists)) {
@@ -246,6 +316,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
       // 自愈覆盖，不上行无收敛缺口（未推过的单仍按原戳上行）
       if (healedAny) savePlaylistsToStorage(PRESERVE_TS)
     }
+    // qq_ 无专辑曲封面惰性回填——fire-and-forget 异步 pass，不阻塞库加载
+    healMissingQqCovers()
   }
 
   // 远端歌单库应用（同步引擎 per-playlist LWW 已合进 LS）：把内存态重建到
@@ -283,6 +355,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     // 采纳单的 remoteTs 戳与本机陈旧单的原戳都是真实 LWW 论据，都不该被
     // 愈合时刻顶掉（服务端「修好版」反过来被陈旧单压死=投毒回归）
     if (healedAny) savePlaylistsToStorage(PRESERVE_TS)
+    // 远端采纳后同样跑惰性封面回填——他端落下的 qq_ 空封面曲本端自愈
+    healMissingQqCovers()
   }
   onRemoteApply(PLAYLISTS_STORAGE_KEY, applyRemoteLibrary)
 
@@ -323,6 +397,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
             creator: data.creator || playlist.creator?.nickname || 'QQ 音乐',
           })
           savePlaylistsToStorage()
+          // 导入落库即跑惰性封面回填——幂等（asked 集判重），消「导入即占位」空窗
+          healMissingQqCovers()
         } catch (error) {
           console.error('❌ QQ 歌单收藏失败:', error)
         }
@@ -349,6 +425,8 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
 
       userPlaylists.value.push(fullPlaylist)
       savePlaylistsToStorage()
+      // 同上：收藏快照的 addedTracks 也可带 qq_ 空封面曲——落库即触发回填
+      healMissingQqCovers()
     } catch (error) {
       console.error('❌ 添加歌单失败:', error)
     }
@@ -1024,6 +1102,9 @@ export function usePlaylistLibrary({ gates, playingPlaylistId, loading }) {
     loadPlaylistById,
     collectSelectedPlaylist,
     selectedPlaylistInLibrary,
+    // qq_ 空封面惰性回填：导入域（upsertProviderShell/单曲壳）落库收尾可
+    // 注入直调——幂等，asked 集判重
+    healMissingQqCovers,
     // 新建空白歌单（侧栏 + 弹窗）
     createPlaylistOpen, createPlaylistName, createPlaylistInput,
     openCreatePlaylist, closeCreatePlaylist, createLocalPlaylist,
