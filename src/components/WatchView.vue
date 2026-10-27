@@ -487,7 +487,7 @@
               :disabled="songSwitching || loadingLyrics || lyricFetching"
               @click="lyricPickerOpen = true"
               title="从外部词源候选中手动挑词" aria-label="手动匹配歌词"
-            ><PixelIcon name="edit" :size="11" /> 换词</button>
+            ><PixelIcon name="lyric" :size="11" /> 换词</button>
           </div>
         </div>
 
