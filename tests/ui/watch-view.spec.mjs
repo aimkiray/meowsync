@@ -726,3 +726,48 @@ describe('WatchView：⋯菜单换源项', () => {
     expect(document.activeElement).toBe(menuTrigger(w).element)
   })
 })
+
+describe('WatchView：封面整盒点按（音频态播放/暂停钮）', () => {
+  // 音频态 wrap 充当 role=button：click 与 enter/space 键激活同走
+  // onCoverClick → toggle-play；e.repeat 闸与全局空格/k 同律——聚焦后
+  // 长按连打不以 repeat 速率反复 toggle（MouseEvent 无 repeat 字段，
+  // 点击路径天然放行）。视频态守卫早退：画面点按归 onVideoClick 首触语义
+  const VIDEO_SONG = {
+    id: 'yt_abcdefghijk', name: 'yt', ar: [{ name: 'a' }], al: {}, dt: 0,
+    youtube: { videoId: 'abcdefghijk', hasVideo: true },
+  }
+
+  it('音频态：wrap 是 role=button 可聚焦，封面 img 禁原生拖拽 ghost', () => {
+    // picUrl 用同源相对形——proxiedCoverUrl 对非白名单域 fail-closed 回 ''，
+    // SONG 默认的 https://c/p.jpg 出不了 img（watch-stage-ui 同口径）
+    const w = mountWatch({ tab: 'queue', currentSong: { ...SONG, al: { picUrl: '/cover.jpg' } } })
+    const wrap = w.find('.watch-cover-wrap')
+    expect(wrap.attributes('role')).toBe('button')
+    expect(wrap.attributes('tabindex')).toBe('0')
+    expect(wrap.find('img.watch-cover').attributes('draggable')).toBe('false')
+  })
+
+  it('音频态 click → toggle-play 一发', async () => {
+    const w = mountWatch({ tab: 'queue' })
+    await w.find('.watch-cover-wrap').trigger('click')
+    expect(w.emitted('toggle-play')).toHaveLength(1)
+  })
+
+  it('音频态 keydown.enter → toggle-play；repeat 连打被闸不再发', async () => {
+    const w = mountWatch({ tab: 'queue' })
+    const wrap = w.find('.watch-cover-wrap')
+    await wrap.trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('toggle-play')).toHaveLength(1)
+    await wrap.trigger('keydown', { key: 'Enter', repeat: true })
+    expect(w.emitted('toggle-play')).toHaveLength(1) // 长按自重复被 repeat 闸截停
+  })
+
+  it('视频态（mediaVideoActive）wrap click → 不 emit（早退守卫）', async () => {
+    const w = mountWatch({ currentSong: VIDEO_SONG, tab: 'queue' })
+    await vi.waitFor(() => expect(w.vm.mediaVideoUrl).toBe('https://x/yt'))
+    await nextTick()
+    expect(w.find('video').exists()).toBe(true) // 确认已进媒体视频态
+    await w.find('.watch-cover-wrap').trigger('click')
+    expect(w.emitted('toggle-play')).toBeUndefined()
+  })
+})
