@@ -128,7 +128,9 @@ const titleKey = (s) => normKey(String(s || '').replace(BRACKET_MARK_RE, ' '))
  *   c) 歌名最长 token（≥4 字符）出现在候选标题里——译名/罗马音混排
  *      标题只保留歌名主干时兜底（上例即此形）。残余面：常见英文词
  *      （take/love/life 类 4 字符 token）在 ±10s 内仍有子串误选面——
- *      规格取舍已裁决，下游时长对账+人工 veto 是最后闸。
+ *      规格取舍已裁决，下游时长对账+人工 veto 是最后闸。a) 整串针同
+ *      有部分 token 误选面：歌名「My Love」→ 针 mylove 可中
+ *      mylovelyday 类标题——同一规格取舍、同一末闸。
  * 已知边界（诚实不命中）：跨语言完全翻译（纯「Parallel Loop」无日文
  * 残留）确定性规则无法判等——宁可走 AI 全否原路径，不拿翻译语义赌。
  * @param {Array} cands 候选 [{videoId,title,durationSec,...}]

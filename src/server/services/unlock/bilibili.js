@@ -147,7 +147,8 @@ function normalizeCands(items) {
 }
 
 /**
- * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
+ * @param {{id: any, name: string, artists?: string[], keyword: string,
+ *   durationMs: number|null, album?: string|null}} info
  * @returns {{url: string, urls: string[], br: number|null,
  *   durationSec: number|null, ext: string|null, mediaId: string}|null}
  *   ext = 选定流真实容器的音频工件后缀（m4a/flac 等）——编排层优先于
