@@ -208,6 +208,7 @@
             :alt="currentSong?.name"
             class="watch-cover"
             :class="{ 'playing-animation': isPlaying }"
+            draggable="false"
           />
           <div v-else class="watch-cover watch-cover--fallback"><PixelIcon name="note" :size="40" /></div>
         </div>
@@ -1198,7 +1199,10 @@ export default {
     const onVideoClick = () => { if (tapWasVisible) emit('toggle-play') }
     // 音频封面态：点封面/键盘激活同走 toggle-play；视频态守卫早退——
     // 画面点按已由 onVideoClick 首触语义分管，双通道会连 emit 两次
-    const onCoverClick = () => {
+    const onCoverClick = (e) => {
+      // e.repeat 闸与全局空格/k 同律：聚焦后长按连打会以 repeat 速率反复
+      // toggle；click 路的 MouseEvent 无 repeat 字段（undefined→falsy）不受影响
+      if (e?.repeat) return
       if (mediaVideoActive.value) return
       emit('toggle-play')
     }
@@ -1967,7 +1971,12 @@ export default {
 }
 /* 音频封面态：整盒点按切播放/暂停——手型提示可点（视频态点按归 video/控制层，
    --idle 的 cursor:none 也只挂 --video，两边不相交） */
-.watch-cover-wrap:not(.watch-cover-wrap--video) { cursor: pointer; }
+.watch-cover-wrap:not(.watch-cover-wrap--video) {
+  cursor: pointer;
+  /* 点封面=播放/暂停——禁双击缩放延迟（与 .watch-cover--video 同律；
+     viewport 无 user-scalable=no，缺这条移动端双击封面会触发缩放） */
+  touch-action: manipulation;
+}
 /* 整盒 role=button 的焦点环：白环+墨晕同圆形键组，墨晕叠在原投影上
    （不盖掉封面浮起影，免得聚焦瞬间封面塌一截） */
 .watch-cover-wrap:focus-visible {
