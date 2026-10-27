@@ -540,3 +540,83 @@ test('getSongDownloadStatus：audioArtifactAt/audioEtag 与 /file 实发同源�
   assert.equal(st3.audioEtag, null);
   assert.equal(st3.boundUpdatedAt, null);
 });
+
+// audio_br（br-gate 音质对账列）：完成行落 downloadAudio 实到码率 result.br——
+// bitrate 是「请求的档」，audio_br 是「到手的档」，降档/换源无痕正是本列要
+// 钉的案；status 把命中音频工件行的 audio_br 回带成 audioBitrate。
+// 存量行/无档 NULL=未知（无证据不降级，老档不误判）
+const waitTerminalRow = async (taskId, ms = 3000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const t = downloadTasksRepo.findTaskById(taskId);
+    if (!t || t.status === 'completed' || t.status === 'failed') return t;
+    if (Date.now() - t0 > ms) return t;
+    await new Promise(r => setTimeout(r, 20));
+  }
+};
+
+test('audio_br：完成行落库实到码率，status/HTTP 回带 audioBitrate', async (t) => {
+  const songId = 'yt_braudit0001';
+  // fd.downloadAudio 原位打桩：download-manager 经模块对象动态调它（同一
+  // exports 面）——写真档再报 path/size/br，走通 processTask 整段落库链
+  const realDownloadAudio = fd.downloadAudio;
+  fd.downloadAudio = async (sid, outputPath) => {
+    mkdirSync(dirname(outputPath), { recursive: true });
+    writeFileSync(outputPath, 'fake-audio-bytes');
+    return { path: outputPath, size: 1234567, br: 192000 };
+  };
+  t.after(() => { fd.downloadAudio = realDownloadAudio; });
+
+  const mirror = require('../src/server/services/local-mirror.js');
+  const pl = mirror.mirrorLocalPlaylist('local_pl_br', '歌单', '', [
+    { id: songId, name: '歌', ar: [{ name: 'a' }], al: { name: 'z' }, dt: 200000 }
+  ]);
+  const submitted = await dm.downloadSingleSong('local_pl_br', songId, {
+    downloadAudio: true, downloadLyrics: false, downloadCover: false, downloadVideo: false
+  });
+  const done = await waitTerminalRow(submitted.id);
+  assert.equal(done.status, 'completed', `实跑行未达终态: ${done?.errorMessage || done?.status}`);
+  // 192k ≠ 请求档默认 320k——落库必须是 result.br 实到值而非请求值
+  assert.equal(done.audioBr, 192000);
+  const raw = require('../src/server/db/client.js').getDb()
+    .prepare('SELECT audio_br FROM download_tasks WHERE id = ?').get(done.id);
+  assert.equal(raw.audio_br, 192000, 'audio_br 列须持久化实到码率到 sqlite');
+
+  const st = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(st.audioReady, true);
+  assert.equal(st.audioPlaylistId, pl.id);
+  assert.equal(st.audioBitrate, 192000, '命中音频工件的行须回带其 audio_br');
+
+  // HTTP 线型钉：契约键名是 data.audioBitrate（app 侧 DTO 按此解码）
+  const downloadsRoute = require('../src/server/routes/downloads.js');
+  const res = await downloadsRoute.request(`http://t/downloads/songs/${songId}/status`);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).data.audioBitrate, 192000);
+});
+
+test('getSongDownloadStatus.audioBitrate：存量行未登记 / 无档 → NULL', async () => {
+  // 存量行形态：completed + 工件在盘但 audio_br 从未写（本列后加，老行
+  // 天然 NULL）——请求档 bitrate 不得冒充实到码率回带
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_brnull', name: 'brnull' });
+  const aud = join(fs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', 'x.mp3');
+  mkdirSync(dirname(aud), { recursive: true });
+  writeFileSync(aud, 'a');
+  const tk = downloadTasksRepo.createTask({
+    playlistId: pl.id, queueId: null, songId: 'br_legacy_song', songName: 'n', artist: 'a'
+  });
+  downloadTasksRepo.updateTask(tk.id, {
+    status: 'completed', audioPath: aud, completedAt: '2024-04-01T00:00:00.000Z'
+  });
+  const row = downloadTasksRepo.findTaskById(tk.id);
+  assert.equal(row.bitrate, 320000, '对照：请求档在库但与实到码率无涉');
+  assert.equal(row.audioBr, null);
+
+  const st = await dm.getSongDownloadStatus(null, 'br_legacy_song');
+  assert.equal(st.audioReady, true);
+  assert.equal(st.audioBitrate, null, 'audio_br 未登记的存量档按未知回 NULL——闸放行不误降');
+
+  // 无档：连命中行都没有——audioReady/audioBitrate 双双归空
+  const stNone = await dm.getSongDownloadStatus(null, 'br_no_artifact');
+  assert.equal(stNone.audioReady, false);
+  assert.equal(stNone.audioBitrate, null);
+});

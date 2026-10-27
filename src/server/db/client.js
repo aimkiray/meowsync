@@ -78,6 +78,10 @@ const DOWNLOAD_TASK_COLUMNS = {
   video_meta: 'TEXT',
   bitrate: 'INTEGER DEFAULT 320000',
   file_size: 'INTEGER',
+  // 实到音频码率快照（bps，downloadAudio 返回的 result.br）：bitrate 是
+  // 「请求的档」，audio_br 是「到手的档」——降档/解锁换源后客户端音质闸
+  // 按它对账。可空=未知：存量行与源端无 br 情报的档都是 NULL，不误判低质
+  audio_br: 'INTEGER',
   // 源私有履约数据快照（Music Assistant provider_mappings.details 同思路）：
   // qq 的 mediaMid（vkey filename 键）等——opaque blob，下载协程原样取用
   provider_data: 'TEXT',
@@ -379,6 +383,7 @@ function initSchema(database) {
       provider_data TEXT,
       bitrate INTEGER DEFAULT 320000,
       file_size INTEGER,
+      audio_br INTEGER,
       duration_ms INTEGER,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

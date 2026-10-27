@@ -955,6 +955,9 @@ async function processTask(task, queueId, signal) {
         const audioRow = downloadTasksRepo.updateTask(task.id, {
           audioPath: result.path,
           fileSize: result.size,
+          // 实到码率随工件登记——bitrate 记的是请求档，到手档（降档/解锁换源
+          // 后的真实产物）音质对账靠它；源端无 br 情报落 NULL=未知不谎报
+          audioBr: result.br ?? null,
           progress: totalProgress + weights.audio
         });
         // 行在此窗口被删：新文件永不登记——就地回收（等同剪辑处理路径）
@@ -1212,6 +1215,7 @@ const resetTaskFields = (extra = {}) => ({
   videoPath: null,
   videoMeta: null,
   fileSize: null,
+  audioBr: null,
   ...extra
 });
 
@@ -1815,11 +1819,11 @@ async function downloadSingleSong(playlistId, songId, options = {}) {
         && task.coverPath && !pathPresent(task.coverPath)
         ? { coverPath: null } : {}),
       // audioPath 幻影同口径——只在音频相位显式关闭时清（开着会由
-      // processTask 的 existsSync 幂等真补回）；fileSize 是音频档的
-      // 体积登记，连同清掉
+      // processTask 的 existsSync 幂等真补回）；fileSize/audioBr 是音频档的
+      // 体积/码率登记，连同清掉
       ...(options.downloadAudio === false
         && task.audioPath && !pathPresent(task.audioPath)
-        ? { audioPath: null, fileSize: null } : {}),
+        ? { audioPath: null, fileSize: null, audioBr: null } : {}),
       providerData: providerDataOf(track)
     }) || task;
   } else {
@@ -1864,9 +1868,12 @@ async function getSongDownloadStatus(playlistId, songId) {
   // 躺着早期下载的劣化/旧版本档，新下载的档该赢。在盘判定用 pathPresent：
   // EPERM/EIO/挂载抖动一律判「在」（误回落在线流的方向比误报在盘安全）。
   // 音/视频各持一枚游标：最新行可能只有其一，按工件维度各自取新——
-  // audioReady 给播放链本地优先用（播放只看音频档在不在盘，不看全工件）
+  // audioReady 给播放链本地优先用（播放只看音频档在不在盘，不看全工件）。
+  // audioBitrate 同游标取命中行的 audio_br（实到码率快照）——客户端音质闸
+  // 按它判「本地档 < 请求档」；无命中/存量行未登记归 NULL=未知放行
   let videoPlaylistId = null;
   let audioPlaylistId = null;
+  let audioBitrate = null;
   for (const t of downloadTasksRepo.listTasksBySongId(String(songId))) {
     if (t.status !== 'completed') continue;
     // file_ 行的 kind=audio 有 videoPath 回落（上传曲 video-only 工件，
@@ -1879,6 +1886,7 @@ async function getSongDownloadStatus(playlistId, songId) {
     if (audioPlaylistId === null && audioCandidate
       && isUnderDownloadDir(audioCandidate) && pathPresent(audioCandidate)) {
       audioPlaylistId = t.playlistId;
+      audioBitrate = t.audioBr ?? null;
     }
     if (videoPlaylistId !== null && audioPlaylistId !== null) break;
   }
@@ -1929,6 +1937,7 @@ async function getSongDownloadStatus(playlistId, songId) {
     videoPlaylistId,
     audioReady: audioPlaylistId !== null,
     audioPlaylistId,
+    audioBitrate,
     audioArtifactAt,
     audioEtag,
     boundUpdatedAt,
