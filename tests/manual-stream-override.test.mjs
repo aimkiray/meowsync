@@ -1,14 +1,17 @@
 // 外源曲手动媒体源绑定的流端点消费步钉板（「自有源败亡→绑定顶替」失败触发
-// 位序——与数值域「官方直解→手动→推导回链」同构投影）：
+// 位序——与数值域「官方直解→手动→外源解锁」同构投影）：
 //   - /qq/stream：自有源 null/qqAnonDenied → 绑定 302+x-manual-source 头；
 //     自有源健康+绑定在场 → 302 自有源、resolveById 零调用（核心位序断言）；
-//     绑定死 → 原 404/502 分档文案（ownErr 回抛）；retry=1 旁路手动缓存
+//     绑定死 → 续走外源解锁腿，全灭后 404/502 分档文案（ownErr 回抛）；
+//     retry=1 旁路手动缓存
 //   - /bilibili/stream：kind=audio 空 usable → 绑定 302；轨道键
 //     ?p=N→bv_…_pN、小写 bvid→BV canonicalize；kind=video 闸外豁免
 //   - /youtube/stream：自有空流+跨源绑定 → 302；未绑 → 原 404
 //   - 手动缓存 60s 正/负档；POST/DELETE 调 forgetManualStream 即时生效
 // 桩面对表 stream-resolve-cache.test.mjs（三端点 app 直挂+上游桩）+
 // route-unlock-manual.test.mjs（unlock 门面桩+真 repo/真库）。
+// qq 外源腿环境：unlock/index 桩的 provider 无 resolve 方法 → 真 F1 链
+// 逐源 TypeError 全灭（零上行）；lib/qq.getSongDetail 桩死防 detail 上行。
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -63,6 +66,7 @@ seed('../src/server/services/unlock/index.js', {
   },
   PLAYBACK_SOURCES: ['pyncmd', 'youtube', 'bilibili'],
   DOWNLOAD_SOURCES: ['pyncmd', 'youtube', 'bilibili'],
+  QQ_UNLOCK_SOURCES: ['youtube', 'bilibili'],
 });
 
 // qq lib：pickStreamUrl 可编程（自有源腿死活开关）；hasQqCookie=false 走匿名文案
@@ -73,6 +77,10 @@ seed('../src/server/lib/qq.js', {
   ...realQq,
   hasQqCookie: () => false,
   pickStreamUrl: async (...a) => { pickCalls.push(a); return pickImpl(...a); },
+  // 外源解锁腿 buildInfo 的 detail 上行——桩死防真打 fcg 上游（本文件
+  // 不种子 netease-api：真 F1 链跑桩 provider（无 resolve 方法→逐源
+  // TypeError 全灭），forgetSongUnlock 真身驱动下方 forgetCalls 断言）
+  getSongDetail: async () => null,
 });
 
 // bili lib：biliFetch 可编程——默认 EMPTY_PLAYURL 自有源空 usable
@@ -163,21 +171,6 @@ test('/qq/stream 自有源 null + 绑定在场 → 302 绑媒体；pickStream �
   repo.deleteManual('qq_qqMANUAL0001');
 });
 
-test('/qq/stream 自有源抛 qqAnonDenied → 同样消费绑定 302（凭据拒答也触发）', async () => {
-  reset();
-  bind('qq_qqDENIED0002', 'bilibili', BVID);
-  pickImpl = async () => {
-    const e = new Error('qq musicu vkey.GetVkeyServer code=0/1000');
-    e.qqAnonDenied = true;
-    throw e;
-  };
-  const r = await probe(qqApp, '/qq/stream?mid=qqDENIED0002');
-  assert.equal(r.status, 302);
-  assert.equal(r.manual, 'bilibili');
-  assert.ok(r.urls?.[0]?.includes('BOUND_BV'));
-  repo.deleteManual('qq_qqDENIED0002');
-});
-
 test('/qq/stream 自有源健康+绑定在场 → 302 自有源，resolveById 零调用（失败触发核心位序）', async () => {
   reset();
   bind('qq_qqHEALTHY003', 'youtube', VID);
@@ -191,28 +184,16 @@ test('/qq/stream 自有源健康+绑定在场 → 302 自有源，resolveById �
   repo.deleteManual('qq_qqHEALTHY003');
 });
 
-test('/qq/stream 绑定死 → 原 404/502 分档文案原样（ownErr 回抛既有路径）', async () => {
+test('/qq/stream 绑定死 → 404 分档文案（绑定败亡续走外源腿，全灭回原分档）', async () => {
   reset();
-  // null-hit + 绑定 resolveById 回 null → 原 404 匿名指引
+  // null-hit + 绑定 resolveById 回 null → 外源腿全灭 → 404 匿名指引新文案
   bind('qq_qqDEAD000004', 'youtube', VID);
   ytResolveByIdImpl = async () => null;
-  let r = await probe(qqApp, '/qq/stream?mid=qqDEAD000004');
+  const r = await probe(qqApp, '/qq/stream?mid=qqDEAD000004');
   assert.equal(r.status, 404);
-  assert.match(r.body.message, /QQ 已关闭匿名取流，配置 Cookie 或匹配网易词源后可播/);
+  assert.match(r.body.message, /QQ 已关闭匿名取流且外源解锁未命中（可配置 Cookie 或绑定手动媒体源）/);
   assert.equal(r.manual, null);
-  // qqAnonDenied + 绑定 resolveById 抛 → 原 502 拒答文案（ownErr 优先于 404）
-  bind('qq_qqDEAD000005', 'youtube', VID);
-  pickImpl = async () => {
-    const e = new Error('vkey denied');
-    e.qqAnonDenied = true;
-    throw e;
-  };
-  ytResolveByIdImpl = async () => { throw new Error('upstream 412'); };
-  r = await probe(qqApp, '/qq/stream?mid=qqDEAD000005');
-  assert.equal(r.status, 502);
-  assert.match(r.body.message, /QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试/);
   repo.deleteManual('qq_qqDEAD000004');
-  repo.deleteManual('qq_qqDEAD000005');
 });
 
 test('/qq/stream ?retry=1 旁路手动缓存读、照常写（治愈写同口径）', async () => {
@@ -414,4 +395,39 @@ test('POST/DELETE 调 forgetManualStream：同媒体重绑后旧负档即刻失�
   r = await probe(qqApp, '/qq/stream?mid=qqFORGET0009');
   assert.equal(r.status, 404);
   assert.equal(resolveByIdCalls.length, 3, '解绑后 repo 读 null——绑定步不进缓存');
+});
+
+// ── qqAnonDenied 实锤会盖进程级负 memo（10min TTL 内无 cookie 自有腿整跳）
+// ——本组用例必须排在所有依赖自有腿实况的 /qq/stream 用例之后 ──
+
+test('/qq/stream 自有源抛 qqAnonDenied → 同样消费绑定 302（凭据拒答也触发）', async () => {
+  reset();
+  bind('qq_qqDENIED0002', 'bilibili', BVID);
+  pickImpl = async () => {
+    const e = new Error('qq musicu vkey.GetVkeyServer code=0/1000');
+    e.qqAnonDenied = true;
+    throw e;
+  };
+  const r = await probe(qqApp, '/qq/stream?mid=qqDENIED0002');
+  assert.equal(r.status, 302);
+  assert.equal(r.manual, 'bilibili');
+  assert.ok(r.urls?.[0]?.includes('BOUND_BV'));
+  repo.deleteManual('qq_qqDENIED0002');
+});
+
+test('/qq/stream 绑定死+qqAnonDenied → 外源全灭回 ownErr 502 拒答文案（ownErr 优先于 404）', async () => {
+  reset();
+  // 负 memo 已在上一用例盖章——本组 ownErr 可能是合成标也可能是实锤，
+  // 终错分档同口径（qqAnonDenied 502 诚实文案 + unlockErrors 机读面）
+  bind('qq_qqDEAD000005', 'youtube', VID);
+  pickImpl = async () => {
+    const e = new Error('vkey denied');
+    e.qqAnonDenied = true;
+    throw e;
+  };
+  ytResolveByIdImpl = async () => { throw new Error('upstream 412'); };
+  const r = await probe(qqApp, '/qq/stream?mid=qqDEAD000005');
+  assert.equal(r.status, 502);
+  assert.match(r.body.message, /QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试/);
+  repo.deleteManual('qq_qqDEAD000005');
 });

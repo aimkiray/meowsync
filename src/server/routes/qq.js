@@ -18,6 +18,12 @@ const {
 // 手选媒体源绑定消费步：自有源腿败亡时绑定点名媒体顶替（本端点天然
 // audio-only 无 kind 闸）；绑媒体 mint 裸 urls 不蹭播过路缓存键
 const { manualStreamOverride } = require('../services/unlock/manual-stream');
+// 外源解锁腿（第三腿）：F1 共享解锁链 + F2 qq 伪行装配——qq_<mid> 键域
+// 直通（[canonical:ID-PASSTHROUGH]）；源序恒 youtube→bilibili
+//（QQ_UNLOCK_SOURCES——pyncmd 是数值 id 直解器，对 qq_<mid> 无语义永不入集）
+const { resolveTrackUnlock, qqUnlockInfo } = require('../services/netease-api');
+const { QQ_UNLOCK_SOURCES } = require('../services/unlock');
+const mediaCache = require('../services/media-cache');
 
 const app = new Hono();
 
@@ -130,11 +136,30 @@ app.get('/qq/resolve', async (c) => {
   }
 });
 
+// QQ 匿名取流关停是上游凭据级事实（2026-04 实测 104009/1000）——无 cookie
+// 每次播放都打一发注定拒答的 vkey 纯属喂风控信号。进程级标量负 memo：
+// 实锤后 TTL 内直接跳过自有腿；有 cookie / retry=1 / 过期不查 memo
+//（凭据变了/显式重试要重探 reopening）。下载腿不挂 memo——任务级
+// 延迟不敏感且 task retry 已兜瞬时毛刺。
+let qqAnonDeniedAt = 0;
+const QQ_ANON_DENY_TTL_MS = 10 * 60 * 1000;
+// 外源腿等待方预算：双源串行最坏 ~120s+AI，75s 内单源命中即回——预算
+// 断只让本等待方离场（共享链后台续跑产物照落缓存，retry 搭 inflight/60s
+// 正档不二次烧上游，[canonical:SHARED-GATE]）
+const QQ_UNLOCK_ENDPOINT_BUDGET_MS = 75_000;
+// googlevideo URL 恒带 itag 参数——指纹段防同 codec 同 br 的不同上游流
+// 撞键（routes/youtube.js 同款取法）；畸形 URL 不落指纹段
+const itagOf = (u) => {
+  try { return new URL(u).searchParams.get('itag') || ''; } catch { return ''; }
+};
+
 // 播放流地址：vkey 与 (guid,uin,请求方IP) 绑定且 ~22h 过期——每次播放重取，
 // 302 进 audio-proxy 由代理回源（白名单 stream.qqmusic.qq.com 系已放行）。
-// 自有源腿败亡（无流/凭据拒答/瞬时抛错）时查 song_unlock_manual——用户
-// 在「换源」点名的绑定媒体顶替（与数值域「官方直解→手动→推导回链」同序；
-// 自有源健康时绑定休眠不触发）
+// 腿序「官方直解 → 手动绑定 → 外源解锁（yt→bv）」：自有源腿败亡（无流/
+// 凭据拒答/瞬时抛错）时先查 song_unlock_manual——用户「换源」点名的
+// 绑定媒体顶替（绑定不压过活的自有源，休眠不触发）；绑定缺席/失败再走
+// F1 共享解锁链（youtube→bilibili 串行），产物一律 vault 化下发——
+// 词源 neteaseId/song_match 不入音频链任何判据
 app.get('/qq/stream', async (c) => {
   if (!rateLimit(c, 'qq-stream', 60)) {
     return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
@@ -155,14 +180,24 @@ app.get('/qq/stream', async (c) => {
   try {
     // ?retry=1 旁路正缓存读（治愈写照常在 pickStream 内落常规键）——
     // 前端 _streamRetried 重试不再吃到同一份死档
+    const retried = c.req.query('retry') === '1';
+    // 匿名拒答负 memo：实锤后 TTL 内、无 cookie、非显式重试时整腿跳过——
+    // 合成 ownErr 让终错分档与实锤同口径（qqAnonDenied 502 诚实面）
+    const skipDoomedAnon = !hasQqCookie() && !retried
+      && Date.now() - qqAnonDeniedAt < QQ_ANON_DENY_TTL_MS;
     let hit = null;
-    let ownErr = null; // 自有源错误存外侧——绑定腿也空/死时回原分档路径
-    try {
-      hit = await pickStream(mid, mmid, prefer, c.req.raw.signal,
-        c.req.query('retry') === '1');
-    } catch (e) {
-      if (e?.aborted || c.req.raw.signal?.aborted) throw e; // 走外层 499
-      ownErr = e;                                          // 含 qqAnonDenied
+    let ownErr = null; // 自有源错误存外侧——绑定腿/外源腿也空/死时回原分档路径
+    if (skipDoomedAnon) {
+      ownErr = { qqAnonDenied: true };
+    } else {
+      try {
+        hit = await pickStream(mid, mmid, prefer, c.req.raw.signal, retried);
+      } catch (e) {
+        if (e?.aborted || c.req.raw.signal?.aborted) throw e; // 走外层 499
+        ownErr = e;                                          // 含 qqAnonDenied
+        // 无 cookie 的拒答实锤盖 memo 章——凭据级事实 TTL 内免重打
+        if (e?.qqAnonDenied && !hasQqCookie()) qqAnonDeniedAt = Date.now();
+      }
     }
     // 搭车等待期间本客户端可能已断连——产物是共享的，写响应按自己的
     // signal 判（bilibili/stream 同位同口径）：abort 请求不白烧绑定步的
@@ -174,7 +209,7 @@ app.get('/qq/stream', async (c) => {
       const manual = await manualStreamOverride(`qq_${mid}`, {
         purpose: prefer === 'best' ? 'download' : 'playback',
         signal: c.req.raw.signal,
-        skipCache: c.req.query('retry') === '1',
+        skipCache: retried,
       });
       if (manual) {
         console.info(`[qq/stream] qq_${mid} → 手动绑定 ${manual.source}/${manual.mediaId}`);
@@ -183,13 +218,72 @@ app.get('/qq/stream', async (c) => {
         // 指纹材料，绑媒体不蹭播过路缓存键
         return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(manual.urls)}`), 302);
       }
-      if (ownErr) throw ownErr; // 回外层既有分档（qqAnonDenied 502/通用 502）
-      // 无登录态下「无流」的真因几乎恒为上游已关匿名取流（vkey 凭据级拒答
-      // 或 code=0 但全档 purl 空）——文案给可执行指引；有 cookie 时保留
-      // VIP/地域口径（那时它才可能是真因）
-      return c.json({ code: 404, message: hasQqCookie()
-        ? '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）'
-        : '该歌曲暂无可播流——QQ 已关闭匿名取流，配置 Cookie 或匹配网易词源后可播' }, 404);
+      // 绑定缺席/败亡→外源解锁腿：qq_<mid> 键域直通 F1 共享链，
+      // includeManual=false——绑定已被上一步专职消费（[canonical:MANUAL-ONCE]），
+      // 链内 repo 读与手动步全省。独立限流桶——重放烧不起上游检索扇出
+      if (!rateLimit(c, 'qq-unlock', 20)) {
+        return c.json({ code: 429, message: '请求太频繁，稍后再试' }, 429);
+      }
+      // AbortSignal.any 并预算——请求断连与 75s 阈值任一先到都让本等待方
+      // 离场；signal 只门控消费权，不进共享 produce 链
+      const budget = AbortSignal.any([
+        c.req.raw.signal,
+        AbortSignal.timeout(QQ_UNLOCK_ENDPOINT_BUDGET_MS),
+      ]);
+      let unlocked = null;
+      try {
+        unlocked = await resolveTrackUnlock(`qq_${mid}`, {
+          purpose: prefer === 'best' ? 'download' : 'playback',
+          sources: QQ_UNLOCK_SOURCES,
+          proxied: true,
+          includeManual: false,
+          skipCache: retried,
+          buildInfo: () => qqUnlockInfo(mid, {}),
+          signal: budget,
+        });
+      } catch (e) {
+        if (c.req.raw.signal?.aborted) return c.body(null, 499);
+        if (e?.aborted || budget.aborted) {
+          // 预算断：等待方离场，共享链后台续跑——诚实文案引导重试
+          return c.json({ code: 502, message: '外源解锁超时——可稍后重试' }, 502);
+        }
+        throw e; // 其余异常回外层 502 分档
+      }
+      const resolved = unlocked?.resolved;
+      if (resolved) {
+        console.info(`[qq/stream] qq_${mid} 自有源败亡——外源解锁 ${resolved.source}/${resolved.mediaId || '-'} 命中`);
+        c.header('x-unlock-source', resolved.source);
+        if (resolved.mediaId) {
+          // mediaId 在场 → 挂播过路缓存键：媒体 id+字节实体指纹（codec/br/
+          // itag 段）——重解换签名不变键，同曲重播/下载相位直吃盘上档
+          //（bilibili.js :602-614 先例）
+          const fp = mediaCache.fingerprintOf(null, resolved.br, resolved.ext,
+            resolved.source === 'youtube' ? itagOf(resolved.url) : null);
+          const cacheKey = resolved.source === 'bilibili'
+            ? mediaCache.keyOf('bv', resolved.mediaId, 'p1', 'a', fp)
+            : mediaCache.keyOf('yt', resolved.mediaId, 'a', fp);
+          const cacheMeta = {
+            muxed: false, codec: resolved.ext || null, br: resolved.br ?? null, h: 0, w: 0,
+          };
+          return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(resolved.urls, { cacheKey, cacheMeta })}`), 302);
+        }
+        // mediaId 缺席 → 裸 mint 降级（与手动腿绑媒体同口径——不蹭缓存键）
+        return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(resolved.urls)}`), 302);
+      }
+      // 全灭：逐源归因留痕 + body.unlockErrors 加性机读面（排障/客户端可
+      // 程序区分 nomatch/authwall/breaker）
+      const unlockErrors = unlocked?.errors || [];
+      console.warn(`[qq/stream] qq_${mid} 外源解锁全灭（unlock=${
+        unlockErrors.map(x => `${x.source}: ${x.msg}`).join('；') || '无逐源记录'}）`);
+      if (ownErr?.qqAnonDenied) {
+        return c.json({ code: 502, unlockErrors, message: 'QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试' }, 502);
+      }
+      if (ownErr) throw ownErr; // 回外层既有分档（stripPaths 502 verbatim）
+      // 无登录态下「无流」的真因几乎恒为上游已关匿名取流——文案给可执行
+      // 指引；有 cookie 时保留 VIP/地域口径（那时它才可能是真因）
+      return c.json({ code: 404, unlockErrors, message: hasQqCookie()
+        ? '该歌曲没有可用的播放流（自有档与外源解锁均未命中——可能需 VIP 权限或存在地域限制）'
+        : '该歌曲暂无可播流——QQ 已关闭匿名取流且外源解锁未命中（可配置 Cookie 或绑定手动媒体源）' }, 404);
     }
     // 经 vault 换 opaque token——purl 明文带 uin/vkey/guid，不进 Location/前端可见面
     return c.redirect(withBasePath(`/audio-proxy/t/${streamVault.mint(hit.url)}`), 302);
@@ -332,8 +426,8 @@ app.get('/qq/similar', async (c) => {
 
 // 歌单导入：disstid → 归一歌单元件（前端落成 local_pl_ 本地歌单——
 // 与手动创建歌单同等待遇：mix 分享/服务端镜像下载全链复用）。
-// 匹配=回链弹药：QQ 匿名取流已关停，neteaseId 是匿名可播唯一腿
-//（matched 也兼封面/词兜底）——词源匹配并发池与 bilibili favlist 同构：
+// matched 兼封面/词兜底；音频可播性由 /qq/stream 外源解锁腿承担——
+// 词源匹配并发池与 bilibili favlist 同构：
 // 总预算到点 abort，余曲 matched=null 照常下发可播可导
 const QQ_PL_MATCH_BUDGET_MS = 45000;
 const QQ_PL_MATCH_CONCURRENCY = 3;
