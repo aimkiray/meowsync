@@ -206,6 +206,71 @@ describe('usePlaylistLibrary：qq_ 空封面惰性回填', () => {
     expect(stale.al.picUrl).toBe('') // 脱壳旧对象无幽灵写回
   })
 
+  it('neteaseId 词源绑定作 ne 参随请求发出；无绑定的曲不发参', async () => {
+    writeJSON(LS_KEYS.PLAYLISTS, [{
+      id: 'local_pl_nehint', name: 'H', updatedAt: 100,
+      tracks: [
+        qqTrack('qq_003NEHINT00001', { neteaseId: 26130076 }), // 数值形态 String 化
+        qqTrack('qq_003NEHINT00002'),                        // 无绑定 → 空值不发参
+      ],
+    }])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledTimes(2))
+    const paramsOf = (id) =>
+      http.get.mock.calls.find(call => call[1]?.params?.id === id)?.[1]?.params
+    // 绑定作 hint 上行——服务端绑定腿官封比外源池权威
+    expect(paramsOf('qq_003NEHINT00001'))
+      .toEqual({ id: 'qq_003NEHINT00001', ne: '26130076' })
+    // 无绑定不发 ne 参——服务端 song_match 行仍兜
+    expect(paramsOf('qq_003NEHINT00002')).toEqual({ id: 'qq_003NEHINT00002' })
+  })
+
+  it('同 id 跨歌单任一持有方有绑定即随参发出（无绑副本不吞 hint）', async () => {
+    // A 单副本无 neteaseId、B 单副本有——id 聚合上行时 hint 取非空者
+    writeJSON(LS_KEYS.PLAYLISTS, [
+      { id: 'local_pl_nea', name: 'A', updatedAt: 100, tracks: [qqTrack('qq_003NEDUP000001')] },
+      { id: 'local_pl_neb', name: 'B', updatedAt: 200, tracks: [qqTrack('qq_003NEDUP000001', { neteaseId: '777' })] },
+    ])
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledTimes(1))
+    expect(http.get).toHaveBeenCalledWith('/cover',
+      expect.objectContaining({
+        params: { id: 'qq_003NEDUP000001', ne: '777' },
+      }))
+  })
+
+  it('响应带 album：al.name 空同补专辑名，name 在场不覆盖（只补不夺）', async () => {
+    writeJSON(LS_KEYS.PLAYLISTS, [{
+      id: 'local_pl_alname', name: '官封单', updatedAt: 100,
+      tracks: [
+        qqTrack('qq_003ALNAMEFILL'),                          // al.name '' → 补
+        { ...qqTrack('qq_003ALNAMEKEEP'), al: { id: 9, name: '已有专', picUrl: '' } },
+      ],
+    }])
+    http.get.mockResolvedValue({
+      code: 200, cover: 'https://p2.music.126.net/x.jpg', album: '告白 - Original Soundtrack',
+    })
+    const lib = makeLib()
+    lib.loadPlaylistsFromStorage()
+
+    // 锚在持久化形态——slimTrack 白名单留 al.name（song.js 同口径）
+    await vi.waitFor(() => {
+      const tracks = readJSON(LS_KEYS.PLAYLISTS)[0].tracks
+      expect(tracks[0].al.name).toBe('告白 - Original Soundtrack')
+      expect(tracks[1].al.name).toBe('已有专')
+    })
+    const live = lib.userPlaylists.value[0].tracks
+    expect(live[0].al.picUrl).toBe('https://p2.music.126.net/x.jpg')
+    expect(live[1].al.picUrl).toBe('https://p2.music.126.net/x.jpg',
+      'name 在场的曲 picUrl 照常愈——补名不抢补图位')
+    const stored = readJSON(LS_KEYS.PLAYLISTS)[0]
+    expect(stored.updatedAt).toBe(100)
+  })
+
   it('导入落库收尾即触发回填——addPlaylistToLibrary → upsertProviderShell 后的 qq_ 曲即问 /cover', async () => {
     const lib = makeLib()
     lib.loadPlaylistsFromStorage()
