@@ -51,10 +51,11 @@ function upsertMatch(trackId, neteaseId, matchedBy, score, model = '') {
 const VETOED_CAP = 50;
 
 // 原始行直读：不套 getMatch 命中条件——写决策（条件化负行）要见「任何
-// 形态的行」，含跨模/陈旧正行与 stub 行
+// 形态的行」，含跨模/陈旧正行与 stub 行。score 列只作诊断透传
+// （audio_relay 闸的 detail 证据），不进任何读路径判定
 function getMatchRow(trackId) {
   return getDb().prepare(`
-    SELECT netease_id, vetoed_json, model, updated_at FROM song_match
+    SELECT netease_id, vetoed_json, model, score, updated_at FROM song_match
     WHERE track_id = ?
   `).get(trackId);
 }

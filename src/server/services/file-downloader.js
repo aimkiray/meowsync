@@ -38,6 +38,10 @@ const mediaCache = require('./media-cache');
 // 纯文本词自动补轴：包络+LLM/启发式对齐的进程内入口（不走 HTTP——与
 // routes/lyric-align 同一条 alignAudioToLrc 编排）
 const { alignAudioToLrc } = require('./lyric-align');
+// 词源回链音频校验闸：provider_data.neteaseId 是「词同作品」匹配产物
+// （容翻唱/live 错配录音），当音频源消费前先对绑条做同一录音判定——
+// 编排/veto 账/detail 缓存放收口在 services/relay-gate.js
+const { adjudicateRelayAudio, relayExpectedOf } = require('./relay-gate');
 
 // qq_<songmid> / bv_<bvid>[_pN] / yt_<videoId> 曲目的服务端下载分发：
 // 各源自有流直取（不经网易云解锁链——别家曲库不是它们的源），
@@ -1050,8 +1054,29 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       }
       if (!hit && NETEASE_ID_RE.test(relayId)) {
         try {
-          const relayed = await downloadNeteaseAudio(relayId, outputPath, bitrate, onProgress, signal);
-          console.info(`[download] qq_${qqM[1]} 直链不可达——词源回链 netease ${relayId} 成功`);
+          // 词源回链音频校验闸——判定先于字节搬运（省错文件落盘+省一次
+          // song_url/字节流全链）：block → fatal（闸拒在 veto/sig 窗内确定，
+          // 重试不产新证据）；detail 不可达 → deferred 非 fatal Err 保 ≤3
+          // 重试权（固化工件宁缺毋滥）；pass → 原样下载。闸内部已做
+          // freshId 自救一跳（song_match 正绑 ≠ 快照绑条时换绑续腿一次）
+          const gate = await adjudicateRelayAudio({
+            nid: relayId, trackId: String(songId),
+            expected: relayExpectedOf(providerData, expectedMs), signal,
+          });
+          if (gate.verdict === 'block') {
+            const band = gate.cand
+              ? `（绑条「${gate.cand.name || '?'}/${(gate.cand.artists || []).join(' ') || '?'}」）` : '';
+            throw fatalError(`词源回链音频校验未过：${(gate.reasons || []).join('、')}${band}（可在菜单换源绑定外部媒体）`);
+          }
+          if (gate.verdict !== 'pass') {
+            throw new Error('词源回链校验上游暂不可达');
+          }
+          const effId = String(gate.effectiveId || relayId);
+          if (effId !== relayId) {
+            console.info(`[download] qq_${qqM[1]} 词源绑条(${relayId})被拦——song_match 正绑 ${effId} 过闸续腿`);
+          }
+          const relayed = await downloadNeteaseAudio(effId, outputPath, bitrate, onProgress, signal);
+          console.info(`[download] qq_${qqM[1]} 直链不可达——词源回链 netease ${effId} 成功`);
           // 回链产物照数字支语义如实报 unblocked/br；unblockedSource 缺席时
           // 烙 qq→netease——它本质就是解锁回链，血缘不进徽章语义也不丢
           return { ...relayed, unblockedSource: relayed.unblockedSource || 'qq→netease' };
@@ -1114,57 +1139,81 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       const qqTierBr = QQ_TIER_BR[hit.tier] ?? null;
       if (qqTierBr !== null && qqTierBr < bitrate && NETEASE_ID_RE.test(relayId)) {
         throwIfAborted(signal);
-        let relayedPath = null; // 已落盘的回链产物——弃用/异常时收走防残留双档
+        // 升级腿同一校验闸先行——detail 进程内缓存热，零边际上行；尽力腿
+        // 不引 freshId 二次候选（allowFreshId=false）。block → 记因不进腿
+        // 保在手 hit；detail 不可达 → 跳过升级保 hit（不为不可证证据降级
+        // 在手档）；pass → 下方下载→择优链原样（时长/码率双轨不动）
+        let upGate = { verdict: 'unknown', reasons: ['detail_unavailable'] };
         try {
-          const relayed = await downloadNeteaseAudio(
-            relayId, `${outputPath}.relay.mp3`, bitrate, onProgress, signal);
-          relayedPath = relayed.path;
-          const relayedExt = path.extname(relayed.path).slice(1).toLowerCase();
-          // 时长闸先于码率择优：回链曲声明时长与任务时长差超闸即疑错配
-          // 录音（live/翻唱级偏差）。旧序先换用后由 download-manager
-          // 时长对账判剪辑 unlink 结果——而 qq 兜底档已被收走，原本
-          // M500 成功的任务反成新失败形态。声明时长是回包现成字段
-          // （零额外字节）；任一参缺失跳过该闸，不降级无时长任务
-          const durationMismatch = expectedMs > 0 && relayed.timeMs > 0
-            && Math.abs(relayed.timeMs - expectedMs) > expectedMs * RELAY_DURATION_MISMATCH;
-          // 择优：br 不可比（null）只认无损容器（RELAY_LOSSLESS_EXTS）
-          // 算真升级；可比形态要过 margin 才换（RELAY_BR_MARGIN）
-          const better = !durationMismatch && (relayed.br == null
-            ? RELAY_LOSSLESS_EXTS.has(relayedExt)
-            : relayed.br > qqTierBr * RELAY_BR_MARGIN);
-          if (better) {
-            const relayFinal = pathWithExt(outputPath, relayedExt || 'mp3');
-            fs.renameSync(relayed.path, relayFinal);
-            relayedPath = null;
-            // 胜出线就位后收走 qq 低档档（同主名时 rename 已天然顶替）
-            if (saved.path !== relayFinal) {
-              try { fs.unlinkSync(saved.path); } catch { /* 删失败留给 reap */ }
-            }
-            console.info(`[download] qq_${qqM[1]} ${hit.tier} 档低于请求码率——回链 netease ${relayId} 音质更优，换用`);
-            return {
-              ...relayed, path: relayFinal,
-              unblockedSource: relayed.unblockedSource || 'qq→netease'
-            };
-          }
-          // 回链不胜出（错配录音/码率不优）——弃回链产物保 qq hit
-          try { fs.unlinkSync(relayed.path); } catch { /* 删失败留给 reap */ }
-          relayedPath = null;
-          console.info(durationMismatch
-            ? `[download] qq_${qqM[1]} 回链曲(${relayId})时长不符疑为错配录音（声明 ${relayed.timeMs}ms vs 期望 ${expectedMs}ms）——保留 ${hit.tier} 档`
-            : `[download] qq_${qqM[1]} 回链(${relayId})码率不优于 ${hit.tier} 档——保留 qq 直链产物`);
-        } catch (e) {
-          // 收走已落盘的回链产物先于一切 rethrow——下方三条穿透（abort/
-          // fatal errno/penetratesCandidates）若先行，rename 的 EACCES/
-          // ENOTDIR 等 fatal 会把完整 *.relay.* 非 .part 件孤儿化到下次
-          // 启动 reap
-          if (relayedPath) { try { fs.unlinkSync(relayedPath); } catch { /* 留给 reap */ } }
+          const g = await adjudicateRelayAudio({
+            nid: relayId, trackId: String(songId),
+            expected: relayExpectedOf(providerData, expectedMs), signal,
+            allowFreshId: false,
+          });
+          upGate = { verdict: g.verdict, reasons: g.reasons || [] };
+        } catch (ge) {
           throwIfAborted(signal);
-          if (e?.aborted) throw e; // 回链内 abort 穿透不兜底
-          errnoToFatal(e);
-          // 本地确定性病（ENOSPC 等）换源也救不了——穿透判死而非吃兜底
-          if (penetratesCandidates(e)) throw e;
-          // 升级是尽力腿：任何非穿透错只 console.warn 降级，qq hit 绝不丢
-          console.warn(`[download] qq_${qqM[1]} 网易回链(${relayId})升级失败，保留 ${hit.tier} 档兜底: ${describeError(e)}`);
+          if (ge?.aborted) throw ge;
+          // 闸自身异常按不可达同口径——升级是尽力腿，在手档不陪绑
+          console.warn(`[download] qq_${qqM[1]} 回链校验异常，跳过升级保 ${hit.tier} 档: ${describeError(ge)}`);
+        }
+        if (upGate.verdict === 'block') {
+          console.info(`[download] qq_${qqM[1]} 回链(${relayId})音频校验未过（${upGate.reasons.join('、')}）——不进升级腿，保留 ${hit.tier} 档`);
+        } else if (upGate.verdict !== 'pass') {
+          console.info(`[download] qq_${qqM[1]} 回链校验上游暂不可达——跳过升级，保留 ${hit.tier} 档`);
+        } else {
+          let relayedPath = null; // 已落盘的回链产物——弃用/异常时收走防残留双档
+          try {
+            const relayed = await downloadNeteaseAudio(
+              relayId, `${outputPath}.relay.mp3`, bitrate, onProgress, signal);
+            relayedPath = relayed.path;
+            const relayedExt = path.extname(relayed.path).slice(1).toLowerCase();
+            // 时长闸先于码率择优：回链曲声明时长与任务时长差超闸即疑错配
+            // 录音（live/翻唱级偏差）。旧序先换用后由 download-manager
+            // 时长对账判剪辑 unlink 结果——而 qq 兜底档已被收走，原本
+            // M500 成功的任务反成新失败形态。声明时长是回包现成字段
+            // （零额外字节）；任一参缺失跳过该闸，不降级无时长任务
+            const durationMismatch = expectedMs > 0 && relayed.timeMs > 0
+              && Math.abs(relayed.timeMs - expectedMs) > expectedMs * RELAY_DURATION_MISMATCH;
+            // 择优：br 不可比（null）只认无损容器（RELAY_LOSSLESS_EXTS）
+            // 算真升级；可比形态要过 margin 才换（RELAY_BR_MARGIN）
+            const better = !durationMismatch && (relayed.br == null
+              ? RELAY_LOSSLESS_EXTS.has(relayedExt)
+              : relayed.br > qqTierBr * RELAY_BR_MARGIN);
+            if (better) {
+              const relayFinal = pathWithExt(outputPath, relayedExt || 'mp3');
+              fs.renameSync(relayed.path, relayFinal);
+              relayedPath = null;
+              // 胜出线就位后收走 qq 低档档（同主名时 rename 已天然顶替）
+              if (saved.path !== relayFinal) {
+                try { fs.unlinkSync(saved.path); } catch { /* 删失败留给 reap */ }
+              }
+              console.info(`[download] qq_${qqM[1]} ${hit.tier} 档低于请求码率——回链 netease ${relayId} 音质更优，换用`);
+              return {
+                ...relayed, path: relayFinal,
+                unblockedSource: relayed.unblockedSource || 'qq→netease'
+              };
+            }
+            // 回链不胜出（错配录音/码率不优）——弃回链产物保 qq hit
+            try { fs.unlinkSync(relayed.path); } catch { /* 删失败留给 reap */ }
+            relayedPath = null;
+            console.info(durationMismatch
+              ? `[download] qq_${qqM[1]} 回链曲(${relayId})时长不符疑为错配录音（声明 ${relayed.timeMs}ms vs 期望 ${expectedMs}ms）——保留 ${hit.tier} 档`
+              : `[download] qq_${qqM[1]} 回链(${relayId})码率不优于 ${hit.tier} 档——保留 qq 直链产物`);
+          } catch (e) {
+            // 收走已落盘的回链产物先于一切 rethrow——下方三条穿透（abort/
+            // fatal errno/penetratesCandidates）若先行，rename 的 EACCES/
+            // ENOTDIR 等 fatal 会把完整 *.relay.* 非 .part 件孤儿化到下次
+            // 启动 reap
+            if (relayedPath) { try { fs.unlinkSync(relayedPath); } catch { /* 留给 reap */ } }
+            throwIfAborted(signal);
+            if (e?.aborted) throw e; // 回链内 abort 穿透不兜底
+            errnoToFatal(e);
+            // 本地确定性病（ENOSPC 等）换源也救不了——穿透判死而非吃兜底
+            if (penetratesCandidates(e)) throw e;
+            // 升级是尽力腿：任何非穿透错只 console.warn 降级，qq hit 绝不丢
+            console.warn(`[download] qq_${qqM[1]} 网易回链(${relayId})升级失败，保留 ${hit.tier} 档兜底: ${describeError(e)}`);
+          }
         }
       }
       return {

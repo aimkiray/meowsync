@@ -16,6 +16,10 @@ test('normToken/normKey：日文新字体与简体正字同键——懐中道標
   // 剥除集含全/半角波浪号；全角 ／： 不在剥除集——那是 normName 的
   // 分隔符域（NAME_SEP_CH），token 归一各管一段
   assert.equal(normToken('测试～曲'), normToken('测试~曲'));
+  // 恵→惠 增补行（回链闸「杉惠=杉恵」实锤样本驱动，共享表同吃红利）
+  assert.equal(foldCjkCompat('恵'), '惠');
+  assert.equal(normToken('杉恵'), normToken('杉惠'));
+  assert.equal(normKey('杉恵'), normKey('杉惠'));
 });
 
 test('normName：全角斜杠/「」等分隔符整组剥除——A／B 与 A 艺人面命中', () => {
