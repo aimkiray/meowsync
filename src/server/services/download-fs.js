@@ -73,7 +73,17 @@ function providerDataOf(track) {
       neteaseId: /^\d+$/.test(String(track.neteaseId ?? '')) ? String(track.neteaseId) : null,
       title: String(track.name || '').slice(0, 300) || null,
       author: String((Array.isArray(track.ar) ? track.ar : track.artists || [])
-        .map(a => a?.name).filter(Boolean).join(' ')).slice(0, 120) || null
+        .map(a => a?.name ?? a).filter(Boolean).join(' ')).slice(0, 120) || null,
+      // 艺人名数组快照（外源解锁 qqUnlockInfo 的 artists 检索料——比 author
+      // 拼接串更利于外站候选逐艺人比对）：ar/artists 同名异构兼容、裸串项
+      // 直通（a?.name ?? a——artist_json 可为 ['周杰伦'] 形）、滤空名、
+      // ≤10 封顶（同 buildUnlockInfo 口径），全空不出键——providerData
+      // 投影面有既有深等于断言，无字段曲目不产键才能零扰动
+      ...((() => {
+        const arts = (Array.isArray(track.ar) ? track.ar : track.artists || [])
+          .map(a => a?.name ?? a).filter(Boolean).slice(0, 10);
+        return arts.length ? { artists: arts } : {};
+      })())
     };
   }
   const neteaseId = /^\d+$/.test(String(track.neteaseId ?? '')) ? String(track.neteaseId) : null;

@@ -314,8 +314,8 @@ async function getStreamCandidates(mid, mediaMid, ladder, extraSignal) {
   } catch (e) {
     // QQ 已关闭匿名取流：无登录态下的凭据级拒答（retcode=104009 /
     // node code=1000）打标上抛——/qq/stream 据此出诚实 502 文案、
-    // file-downloader 据此走 neteaseId 词源回链。带 cookie 的同码形态
-    // 是「凭据失效」另一诊断，不打标（不适用匿名口径的文案/回链）
+    // file-downloader 据此走外源解锁腿。带 cookie 的同码形态
+    // 是「凭据失效」另一诊断，不打标（不适用匿名口径的文案/解锁）
     if (!cookie && (e?.retcode === 104009 || e?.nodeCode === 1000)) e.qqAnonDenied = true;
     throw e;
   }

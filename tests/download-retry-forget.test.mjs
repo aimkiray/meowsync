@@ -204,10 +204,10 @@ test('retryQueue（无 failed 行早退）：pending/completed 队列零 forget 
   await dm.cancelQueue(queue.id); // 收尾：abort 挂起的协程
 });
 
-test('retryTask（qq_ relay 腿）：providerData.neteaseId 键一并清——旧快照口径', async () => {
-  // qq_ 任务必经 relay 腿（providerData.neteaseId → 网易云解锁链），负状态
-  // 按网易云曲 id 记账，songId 键下永无条目。无镜像行时旧任务快照是唯一
-  // neteaseId 来源——songId 键与 relay 键都必须出现在 forget 序列
+test('retryTask（qq_ 外源解锁腿）：providerData.neteaseId 不入集——songId=qq_<mid> 是权威键', async () => {
+  // qq_ 外源解锁负状态键控在 qq_<mid> 本身（resolveTrackUnlock trackId
+  // 直通）。providerData.neteaseId 是词源嫁接字段——拿它当解锁键会误清
+  // 另一首网易数值曲的解锁状态，再不得入集
   events.length = 0; forgetThrowsOn = new Set();
   const pl = seedPlaylist('778809');
   const task = seedFailedTask(pl.id, 'qq_778809mid001', null,
@@ -216,14 +216,16 @@ test('retryTask（qq_ relay 腿）：providerData.neteaseId 键一并清——�
   await dm.retryTask(task.id);
   await settleTick();
 
-  assert.deepEqual(forgetCalls(), ['qq_778809mid001', '77880911'],
-    'songId 键与 relay neteaseId 键都要清');
+  assert.deepEqual(forgetCalls(), ['qq_778809mid001'],
+    '只按 qq_<mid> 清——neteaseId 键不入集（误清数值网易曲解锁态）');
+  assert.ok(!forgetCalls().includes('77880911'));
   assert.ok(forgetBeforeDispatch(), '负状态清理必须先于 dispatchStandalone');
   assert.ok(audioCalls().includes('qq_778809mid001'), '复位后任务应真被派出去');
 });
 
-test('retryTask（qq_ relay 腿）：镜像行 neteaseId 已重匹配时新旧两键同清', async () => {
-  // 负状态按旧快照键积累；新镜像键顺带清无害——词源重匹配后两键漂移是常态
+test('retryTask（qq_ 外源解锁腿）：镜像行 neteaseId 重匹配后 providerData 刷新照旧、清理仍只按 songId', async () => {
+  // providerData 刷新逻辑与清理键域无关——词源重匹配照旧写回新快照；
+  // 但新旧两个 neteaseId 键都不再进 forget 集
   events.length = 0; forgetThrowsOn = new Set();
   const pl = seedPlaylist('778810');
   tracksRepo.replaceTracksForPlaylist(pl.id, [{
@@ -236,31 +238,15 @@ test('retryTask（qq_ relay 腿）：镜像行 neteaseId 已重匹配时新旧�
   await dm.retryTask(task.id);
   await settleTick();
 
-  assert.deepEqual(forgetCalls(), ['qq_778810mid002', '77881011', '77881022'],
-    '旧快照与新镜像行的 neteaseId 键都要清');
-  // providerData 刷新照旧发生——新镜像行快照写回任务行
+  assert.deepEqual(forgetCalls(), ['qq_778810mid002'],
+    '新旧 neteaseId 键都不入集——清理域只有 songId');
+  // providerData 刷新照旧发生——新镜像行快照写回任务行（含 artists 投影）
   assert.equal(tasksRepo.findTaskById(task.id).providerData?.neteaseId, '77881022');
 });
 
-test('retryTask（neteaseId 白名单闸）：畸形值不进 forgetSongUnlock，只清 songId 键', async () => {
-  // providerData 是源私有 blob——脏值（非数字串）不得成为清簿键；
-  // NETEASE_ID_RE 闸后只剩 songId 键
-  events.length = 0; forgetThrowsOn = new Set();
-  const pl = seedPlaylist('778812');
-  const task = seedFailedTask(pl.id, 'qq_778812mid005', null,
-    { qq: { mediaMid: 'm05' }, neteaseId: '778812ab' });
-
-  await dm.retryTask(task.id);
-  await settleTick();
-
-  assert.deepEqual(forgetCalls(), ['qq_778812mid005'], '非数字 neteaseId 不得入清理集');
-  assert.ok(audioCalls().includes('qq_778812mid005'), '复位后任务应真被派出去');
-});
-
-test('retryQueue（qq_ relay 腿）：快照/镜像 neteaseId 入集、同键去重、脏值被闸', async () => {
-  // 批量口径同 retryTask：songId 键 + relay 键。第一行快照与镜像同键
-  // （未重匹配）——Set 去重只清一次；第二行快照是已下线的老词源 id，与
-  // 镜像新键并列；第三行快照 neteaseId 畸形被闸挡、镜像数字键仍入集
+test('retryQueue（qq_ 外源解锁腿）：只按 songId 集去重——快照/镜像 neteaseId 一律不入集', async () => {
+  // 批量口径同 retryTask：清理域只有 songId。三行任务各带数字
+  // neteaseId（含镜像行重匹配键）——全部不得出现在 forget 序列
   events.length = 0; forgetThrowsOn = new Set();
   const pl = seedPlaylist('778811');
   tracksRepo.replaceTracksForPlaylist(pl.id, [
@@ -277,11 +263,10 @@ test('retryQueue（qq_ relay 腿）：快照/镜像 neteaseId 入集、同键去
   await settleTick();
 
   assert.deepEqual(forgetCalls().slice().sort(), [
-    '77881133', '77881144', '77881155', '77881166',
     'qq_778811mid003', 'qq_778811mid004', 'qq_778811mid006'
-  ].sort(), 'songId 键 + 快照/镜像 neteaseId 键全清');
-  assert.equal(forgetCalls().filter(c => c === '77881133').length, 1, '同键去重只清一次');
-  assert.ok(!forgetCalls().includes('778811xx'), '非数字 neteaseId 不得入清理集');
+  ].sort(), '清理域只有 songId——任何 neteaseId 键（快照/镜像/脏值）都不入集');
+  assert.ok(!forgetCalls().some(c => /^\d+$/.test(c)),
+    '纯数字键零出现——neteaseId 永不成清簿键');
   assert.ok(forgetBeforeDispatch(), '全部负状态清理必须先于 startQueue 派活');
   assert.equal(queuesRepo.findQueueById(queue.id).status, 'running');
 

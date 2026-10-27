@@ -143,12 +143,24 @@ test('镜像链：qq publishedAt 穿透 raw_json 到 providerData；缺席/脏�
     providerDataOf(tracksRepo.listTracksByPlaylistId(row.id)[0]).qq.publishedAt, ms);
 });
 
-test('providerDataOf 边界：qq 分支带回落词源签名 / 纯网易云曲为 null / 缺 provider 字段的外部曲保底 neteaseId', () => {
-  // qq 曲：mediaMid + 回落核验签名（名/艺人）+ neteaseId 全带
-  const qqPd = providerDataOf({ id: 'qq_001', name: 'QQ曲', ar: [{ name: '歌手甲' }], qq: { mediaMid: 'mid1' }, neteaseId: '555' });
+test('providerDataOf 边界：qq 分支带回落词源签名+artists 数组 / 纯网易云曲为 null / 缺 provider 字段的外部曲保底 neteaseId', () => {
+  // qq 曲：mediaMid + 回落核验签名（名/艺人）+ neteaseId + artists 数组
+  // （外源解锁 qqUnlockInfo 的检索料——比 author 拼接串更利于逐艺人比对）
+  const qqPd = providerDataOf({ id: 'qq_001', name: 'QQ曲', ar: [{ name: '歌手甲' }, { name: '歌手乙' }], qq: { mediaMid: 'mid1' }, neteaseId: '555' });
   assert.deepEqual(qqPd, {
-    qq: { mediaMid: 'mid1' }, neteaseId: '555', title: 'QQ曲', author: '歌手甲'
+    qq: { mediaMid: 'mid1' }, neteaseId: '555', title: 'QQ曲', author: '歌手甲 歌手乙',
+    artists: ['歌手甲', '歌手乙']
   });
+  // artists 缺席面：无艺人字段/空名滤净 → 不出键（深等于面零扰动）
+  const noArts = providerDataOf({ id: 'qq_002', name: 'QQ曲', ar: [{ name: '' }], qq: { mediaMid: 'mid2' } });
+  assert.equal('artists' in noArts, false, 'ar 全空名→artists 不产键');
+  const arObj = providerDataOf({ id: 'qq_003', name: 'QQ曲', artists: [{ name: '歌手丙' }], qq: { mediaMid: 'mid3' } });
+  assert.deepEqual(arObj.artists, ['歌手丙'], 'artists 同名异构兼容（track.artists 支）');
+  // 裸串艺人项（artist_json 可为 ['周杰伦'] 形）：a?.name 全 undefined 会把
+  // artists 键饿死→qqUnlockInfo fed 径退成 title-only——a?.name ?? a 直通
+  const bareStr = providerDataOf({ id: 'qq_004', name: 'QQ曲', ar: ['歌手丁', { name: '歌手戊' }], qq: { mediaMid: 'mid4' } });
+  assert.deepEqual(bareStr.artists, ['歌手丁', '歌手戊'], 'ar 裸串项直通');
+  assert.equal(bareStr.author, '歌手丁 歌手戊', 'author 同款裸串兼容');
   // 纯网易云曲：providerData 为 null（词源=自身 id，无需快照）
   assert.equal(providerDataOf({ id: '12345', name: 'x', ar: [], al: {} }), null);
   // 外部曲缺 provider 定位字段但有匹配词源——neteaseId 单独落库保词源
