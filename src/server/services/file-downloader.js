@@ -1160,6 +1160,10 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
           + `${manualErr ? `（manual=${describeError(manualErr)}）` : ''}`
           + `${unlockErr ? `（unlock=${describeError(unlockErr)}）` : ''}`);
         if (qqErr.qqAnonDenied) combined.qqAnonDenied = true;
+        // fatal 分档与下方 !hit 全灭同权：任一腿瞬时死保 ≤3 重试权，全腿
+        // 窗内确定性归 fatal——匿名主流败亡（qqAnonDenied+全源确定性败）
+        // 丢 fatal 会让每次任务级重试白烧整条解锁链
+        if (unlockErr?.fatal && (!manualErr || manualErr.fatal)) combined.fatal = true;
         throw combined;
       }
       if (!hit) {
@@ -1239,11 +1243,13 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
             if (saved.path !== relayFinal) {
               try { fs.unlinkSync(saved.path); } catch { /* 删失败留给 reap */ }
             }
-            console.info(`[download] ${trackId} ${hit.tier} 档低于请求码率——外源解锁 bilibili 音质更优，换用`);
+            console.info(`[download] ${trackId} ${hit.tier} 档低于请求码率——外源解锁 ${res.source} 音质更优，换用`);
             return {
               ...relayed, path: relayFinal,
               br: res.br ?? null,
-              unblocked: true, unblockedSource: 'qq→bilibili',
+              // 血缘按 res.source 实烙不硬编码 bilibili：unlockCache 键不带
+              // sources 段，本腿可吃到 ext 腿留下的 youtube 正档
+              unblocked: true, unblockedSource: `qq→${res.source}`,
               timeMs: res.timeMs ?? null,
             };
           }

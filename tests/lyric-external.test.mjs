@@ -59,15 +59,23 @@ seed('../src/server/lib/ai.js', {
   },
 });
 
-// file-downloader 的网易云 API 桩：callNeteaseApi('lyric') 回包可控
+// file-downloader 的网易云 API 桩：callNeteaseApi('lyric') 回包可控。
+// 桩面给全量顶层解构成员（file-downloader/其链上 download-fs 都会摸到
+// 本模块）——qq_ 外源解锁两出口词相用例不触达，throw 桩兜底防静默
+// 拿到 undefined
 let neResponse = null;
 const neCalls = [];
 seed('../src/server/services/netease-api.js', {
   apiModules: { lyric: {} },
   callNeteaseApi: async (name, q) => { neCalls.push({ name, q }); return neResponse; },
   resolveSongUrls: async () => {},
+  resolveTrackUnlock: async () => { throw new Error('netease-api 桩：resolveTrackUnlock 不应被词相触达'); },
+  qqUnlockInfo: async () => { throw new Error('netease-api 桩：qqUnlockInfo 不应被词相触达'); },
   needsUnlock: () => false,
   MAX_UNLOCK_ITEMS: 20,
+  estimateDuration: () => null,
+  forgetSongUnlock: () => {},
+  baseUnlockInfo: () => null,
 });
 
 // 纯文本词补轴桩：file-downloader 的对齐相位走进程内 alignAudioToLrc——

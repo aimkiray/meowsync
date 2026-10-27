@@ -233,13 +233,13 @@ export function useExternalImport({
       creatorOf: (data) => data.creator || 'QQ 音乐',
     })
     // 上游政策变化（QQ 已关匿名取流）的新约束提示，非普通运营引导：未配
-    // QQ_COOKIE 的部署里 qq 直取腿全灭——服务端词源匹配命中的曲可经网易
-    // 词源腿播放，未匹配的只剩「配置 Cookie」恢复直取。按真成功门控
-    // （importProviderPlaylist 返壳才算落地——历史壳在场时失败重导入
-    // 不得跟着发引导）；null（探测失败/态未知）不打扰——谎报配置指引
-    // 比少报更糟
+    // QQ_COOKIE 的部署里 qq 直取腿全灭——音频可播性由外源解锁（yt→bv）
+    // 与手动绑定媒体源承担；服务端词源匹配只服务歌词/封面兜底，「未匹配
+    // ≠ 不可播」。按真成功门控（importProviderPlaylist 返壳才算落地——
+    // 历史壳在场时失败重导入不得跟着发引导）；null（探测失败/态未知）
+    // 不打扰——谎报配置指引比少报更糟
     if (pl && (await qqLoggedIn()) === false) {
-      toast('未配置 QQ Cookie——QQ 已关闭匿名取流：匹配词源的曲目可经网易源播放，配置 Cookie 恢复 QQ 直取', 'info', 8000)
+      toast('未配置 QQ Cookie——QQ 已关闭匿名取流：音频经外源解锁或绑定手动媒体源播放（词源匹配只供歌词/封面），配置 Cookie 恢复 QQ 直取', 'info', 8000)
     }
   }
 

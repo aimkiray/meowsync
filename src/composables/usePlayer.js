@@ -150,7 +150,10 @@ export function usePlayer({
     // 自有腿→手动腿→外源解锁（yt→bv 串行+AI 规整）最坏 ~135s 远超通用 20s；
     // 端点 75s 预算到场回 502/超时分档落 onloaderror，_streamRetried 代
     // retry=1 搭 inflight/60s 正档共享链后台产物——首代 90s+重试代 90s
-    // 覆盖（75+90=165 > ~135 最坏链尾），qq 支各代恒带本值
+    // 覆盖（75+90=165 > ~135 最坏链尾），qq 支各代恒带本值。
+    // nuance：165s 覆盖算术以自有+手动腿 <15s 收尾为前提——cookie 在场
+    // 自有腿上游挂起时端点预算尚未起算，看门狗可先于预算触发（早兜底
+    // 不丢语义：onloaderror→_streamRetried 照搭 inflight/正档）
     const QQ_STREAM_LOAD_TIMEOUT_MS = 90_000
 
     const PLAYER_STATE_STORAGE_KEY = LS_KEYS.PLAYER_STATE
