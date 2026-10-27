@@ -37,4 +37,9 @@ const PROVIDERS = {
 const PLAYBACK_SOURCES = ['pyncmd', 'youtube', 'bilibili'];
 const DOWNLOAD_SOURCES = ['pyncmd', 'youtube', 'bilibili'];
 
-module.exports = { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES };
+// qq_ 解锁源集：pyncmd 永不在列（它是「网易数值 id → 126 CDN」直解器，
+// 对 qq_<mid> 无语义；反向口径见上方源优先级注释——qq 也不是网易曲的
+// 解锁源，方向对称）。qq_ 音频外源解锁 = youtube → bilibili 两源串行
+const QQ_UNLOCK_SOURCES = ['youtube', 'bilibili'];
+
+module.exports = { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES, QQ_UNLOCK_SOURCES };

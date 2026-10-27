@@ -397,8 +397,8 @@ test('resolveById 单测 youtube：形闸前置 null / streams[0] 映射 {url,ur
     return { streams: [{ url: 'u1', br: 128000 }, { url: 'u2', br: 64000 }] };
   };
   const r = await ytProvider.resolveById('dQw4w9WgXcQ', { purpose: 'playback' });
-  assert.deepEqual(r, { url: 'u1', urls: ['u1'], br: 128000, durationSec: null },
-    '首流映射——跨档候选是不同字节实体只下发首链');
+  assert.deepEqual(r, { url: 'u1', urls: ['u1'], br: 128000, durationSec: null, mediaId: 'dQw4w9WgXcQ' },
+    '首流映射——跨档候选是不同字节实体只下发首链；mediaId 回传入值');
   assert.equal(seen.videoId, 'dQw4w9WgXcQ');
   assert.equal(seen.opts.kind, 'audio');
   assert.equal(seen.opts.prefer, '', 'playback 档 prefer 空');
