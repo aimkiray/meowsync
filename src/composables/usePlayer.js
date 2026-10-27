@@ -146,6 +146,12 @@ export function usePlayer({
     // Howler 加载看门狗：CDN 黑洞时 onload/onloaderror 都不会触发，
     // 没有它 songSwitching 会永久卡住播放键
     const PLAYBACK_LOAD_TIMEOUT_MS = 20000
+    // qq_ 域专属看门狗（songUrlData qq 支 loadTimeoutMs）：/qq/stream 端点内
+    // 自有腿→手动腿→外源解锁（yt→bv 串行+AI 规整）最坏 ~135s 远超通用 20s；
+    // 端点 75s 预算到场回 502/超时分档落 onloaderror，_streamRetried 代
+    // retry=1 搭 inflight/60s 正档共享链后台产物——首代 90s+重试代 90s
+    // 覆盖（75+90=165 > ~135 最坏链尾），qq 支各代恒带本值
+    const QQ_STREAM_LOAD_TIMEOUT_MS = 90_000
 
     const PLAYER_STATE_STORAGE_KEY = LS_KEYS.PLAYER_STATE
 
@@ -628,17 +634,17 @@ export function usePlayer({
       }
     }
 
-    // qq_ 死腿终态文案：QQ 上游已关匿名取流——绑了网易词源的曲根本走不到
-    // 这（主解析/回链位已把播放换成网易腿），到这的 qq 曲必是「无词源绑
-    // 定」的纯 qq 腿；通用「点击重试」句对它指引失真（重试同样必败）。
-    // 仅「明确未配 Cookie」（===false）给可操作出口；null（探测失败/态
-    // 未知）与 true 归通用句——谎报「去配 Cookie」比少报更误导。
-    // _localFile 钉档败是盘上工件本体坏非取流死——同样归通用句。
-    // 非 qq 曲/有词源曲短路归 null——惰性单飞，不白打 /qq/status
+    // qq_ 死腿终态文案：QQ 上游已关匿名取流——端点内自有腿/手动腿/外源
+    // 解锁（yt→bv）全灭后走到这的都是纯死腿；neteaseId 词源绑定对音频链
+    // 零消费（回链全形态废除）不再是前提。通用「点击重试」句对它指引
+    // 失真（重试同样必败）。仅「明确未配 Cookie」（===false）给可操作
+    // 出口；null（探测失败/态未知）与 true 归通用句——谎报「去配
+    // Cookie」比少报更误导。_localFile 钉档败是盘上工件本体坏非取流
+    // 死——同样归通用句。非 qq 曲短路归 null——惰性单飞，不白打 /qq/status
     const qqAnonDeadEndText = async (song, options = {}) =>
-      (song.qq || QQ_SONG_ID_RE.test(String(song.id))) && !song.neteaseId
+      (song.qq || QQ_SONG_ID_RE.test(String(song.id)))
       && !options._localFile && (await qqLoggedIn()) === false
-        ? 'QQ 已关闭匿名取流：该曲未匹配网易词源——可在菜单重匹配词源、换源绑定外部媒体，或在设置页配置 QQ Cookie'
+        ? 'QQ 已关闭匿名取流且外源解锁未命中——可在设置页配置 QQ Cookie 或绑定手动媒体源'
         : null
 
     // 在线流彻底失效后的兜底（SABR 闸控的 YouTube 自适应流/签名批量耗尽、
@@ -652,7 +658,7 @@ export function usePlayer({
     const playDownloadedCopy = async (song, playlistId, options, seq) => {
       if (seq !== playSeq) return
       songSwitching.value = true // 下载等待期维持切换态——底栏别装死
-      // qq_ 死腿终态文案惰性单飞：非 qq/有词源曲判定内部短路归 null 不触
+      // qq_ 死腿终态文案惰性单飞：非 qq 曲判定内部短路归 null 不触
       // 状态探测；下方四处失败终态共用一份不重复判
       const qqDeadEndP = qqAnonDeadEndText(song, options)
       try {
@@ -789,128 +795,6 @@ export function usePlayer({
       }
     }
 
-    // 手动媒体源绑定存在性惰性 memo（trackId→Promise<boolean>）：仅「qq 曲
-    // 绑词源+明确未登录」的捷径判定消费——qqLoggedIn()===false 先过闸才点
-    // 火，其余曲/态零额外请求。404 归 false、网络失败归「可能有绑定」true
-    // （宁试死腿不误绕活腿：误判有绑定只是 /qq/stream 白走一跳败后仍进
-    // _neFallback 网易回链；误判无绑定则用户显式绑定永不生效——P2 残口本体）
-    // onUnlockManualChange 槽里按 trackId 失效——绑/解绑后正播同曲重取址
-    // 时本 memo 已清，求值打到的是新行。失败条目同不驻 memo（catch 自愈
-    // 删除）——abort/瞬时失败别把保守 true 烙到会话终，下次播放重探
-    const manualBoundMemo = new Map()
-    const manualBoundKnown = (trackId, signal) => {
-      const key = String(trackId)
-      if (!manualBoundMemo.has(key)) {
-        const p = musicApi.getManualUnlock(key, signal)
-          .then(hit => !!hit)
-          .catch(() => {
-            // 失败条目自愈删除，守卫只删自己这代——同 trackId 在竞窗内
-            // 被新代重探时（通知失效→重求值），旧 promise 晚删不碰新条目
-            if (manualBoundMemo.get(key) === p) manualBoundMemo.delete(key)
-            return true // 探测失败按「可能有」——本代仍不绕 qq 腿
-          })
-        manualBoundMemo.set(key, p)
-      }
-      return manualBoundMemo.get(key)
-    }
-
-    // 词源回链校验闸拒专属终态文案（neteaseId 在场但闸拒的形态）：
-    // qqAnonDeadEndText 对本形态归 null 不管用（其前提 !song.neteaseId）。
-    // 可操作出口只写两路——qq_ 无「重匹配词源」菜单入口（SongList.vue:389
-    // 闸 youtube||bilibili 实勘），文案不写它
-    const RELAY_GATE_REJECTED_TEXT =
-      '绑定的网易词源音频与曲目元数据不符（疑似错配录音）已拦截——可在菜单换源绑定外部媒体，或配置 QQ Cookie'
-
-    // 词源回链音频校验闸惰性 memo（`${song.id}|${nid}`→{gen,verified,p:
-    // Promise<{verdict,effectiveId}>}）：判定唯一实现在服务端（GET
-    // /match/audio-check——客户端只传期望元数据不复刻逻辑，规格否决项
-    // #6）。qq_ 词源绑定曲在 playSong :947 旁预热点火（endpoint RTT 与
-    // qq 状态探测并行不入关键路径），qqUseNetease 选腿与 onloaderror
-    // _neFallback/gateRejected 多消费点共享同一 promise——已证判定
-    // (verdict pass/block 有服务端背书) 是 (song|nid) 属性非代属性，
-    // 跨代常驻单跳零额外上行。
-    // fail-open：abort/429/网络错与 verdict 'unknown'（服务端 detail
-    // 不可达的收敛态）都归 {verdict:'pass'}——播放腿不固化工件，证据
-    // 缺席时放行比错拦更伤。此类「未证」条目不落 settle 自删（那会让
-    // 同代各消费点各自重发把单跳打回多跳）——按代记账：gen 印记旧于
-    // 本代读点的条目弃之重探（竞态守卫同 manualBoundMemo：旧档晚删不
-    // 碰竞窗内新档），瞬断/unknown 后的下代播放值得一次真判定；在途
-    // 旧代档同弃——其 signal 属上一控制域已随换代 abort，落定必归
-    // fail-open，共享只是白等。
-    // verdict 'pass' 时 effectiveId 取回包核准播放 id：端点内 freshId
-    // 自救的生效 id 随 cand.id 下发（域 B 契约；带显式 effectiveId
-    // 字段时以它为准），veto 快路 cand 缺 id/无 cand 归 nid 直取——
-    // song.neteaseId 不改写（持久纠正归既有重匹配链路）。
-    // verdict 'block' 末位自救〔B〕：provider_data 快照滞后于服务端纠错
-    // 覆写——getMatchState 现行正绑 ≠ 快照 nid 时端点复查新绑，pass 则
-    // freshId 为本代播放 id（一次为限不递归，新绑同撞闸归 block）；
-    // 自救探测链失败按「未证」口径下代重探，本代仍归 block
-    const relayGateMemo = new Map()
-    const relayGateOk = (song, signal) => {
-      const nid = song?.neteaseId
-      if (nid == null) return Promise.resolve({ verdict: 'pass', effectiveId: nid })
-      const key = `${song.id}|${nid}`
-      const cur = relayGateMemo.get(key)
-      // 未证条目（fail-open/unknown/在途旧代）跨代弃之重探——gen 印记旧于
-      // 本代读点即删；同步读删无竞窗，不需 manualBoundMemo 异步 catch 式
-      // 的晚删再校验（旧档晚删不碰新档的守卫语义由 gen 承担）
-      if (cur && !cur.verified && cur.gen !== playSeq) {
-        relayGateMemo.delete(key)
-      }
-      let entry = relayGateMemo.get(key)
-      if (!entry) {
-        entry = { gen: playSeq, verified: false, p: null }
-        entry.p = (async () => {
-          try {
-            const feed = {
-              nid, trackId: song.id, title: song.name || '',
-              // artists 预截 10 项——端点 strList(10,200) 与 artists 参
-              // ≤1200B 截断窗；超窗 JSON 被截成非法串会按空集退 neutral
-              artists: (song.ar || song.artists || [])
-                .map(a => a?.name).filter(Boolean).slice(0, 10),
-              durMs: Number.isFinite(song.dt) ? song.dt
-                : (Number.isFinite(song.duration) ? song.duration : 0),
-            }
-            const body = await musicApi.checkRelayAudio?.(feed, signal)
-            if (body?.verdict === 'pass') {
-              entry.verified = true
-              return { verdict: 'pass', effectiveId: body.effectiveId ?? body.cand?.id ?? nid }
-            }
-            if (body?.verdict === 'block') {
-              try {
-                const match = await musicApi.getMatchState?.(song.id, signal)
-                const freshId = match?.id
-                if (freshId != null && String(freshId) !== String(nid)) {
-                  const re = await musicApi.checkRelayAudio?.({ ...feed, nid: freshId }, signal)
-                  if (re?.verdict === 'pass') {
-                    entry.verified = true
-                    return { verdict: 'pass', effectiveId: re.effectiveId ?? re.cand?.id ?? freshId }
-                  }
-                  if (re?.verdict !== 'block') {
-                    // fresh 复查不可证（unknown/缺 verdict）：fresh 是库现行
-                    // 正绑、原绑是已证错绑——未证新绑好过已证错绑，放行以
-                    // freshId 播；verified 留 false 不驻 memo 下代重探
-                    return { verdict: 'pass', effectiveId: freshId }
-                  }
-                }
-                // 无自救候选（无正绑/正绑即 nid）或 fresh 同被证 block——
-                // 终态有判定背书，驻 memo
-                entry.verified = true
-              } catch { /* 自救探测失败——verified 留 false，本代仍归 block */ }
-              return { verdict: 'block' }
-            }
-            // 'unknown'/契约漂移缺 verdict → fail-open（verified 留 false）
-            return { verdict: 'pass', effectiveId: nid }
-          } catch {
-            // abort/429/网络错 → fail-open（verified 留 false）
-            return { verdict: 'pass', effectiveId: nid }
-          }
-        })()
-        relayGateMemo.set(key, entry)
-      }
-      return entry.p
-    }
-
     // 歌曲播放逻辑
     // 注意竞态防护：controller/howl 均使用局部引用，所有回调只操作自己的实例，
     // 每个 await 之后都必须重新检查 abortSignal.aborted / currentPlayingId。
@@ -1034,22 +918,15 @@ export function usePlayer({
         // 别在各回调里重撒形态判断
         const ownSource = !!(song.bilibili || song.youtube || song.qq || bvM || ytM || qqM)
 
-        // QQ 登录态预取（惰性单飞，失败归 null 不炸）：下方 qq 支选腿
-        // （neteaseId&&明确未登录→网易支）与死腿终态文案都消费它——先点火
-        // 烧缓存，等走到消费点 promise 大多已 resolve。
-        // localPlId 钉档代不点：songUrlData 三元先取本地档根本走不到 qq 支
-        // （选腿求值下方同闸短路）；档若败——探测命中代经 _localTried 换代
-        // 重走主链（新代自己再点）、钉档代死腿文案被 !options._localFile
-        // 短路，本代探测没有消费方，点了也是白打一跳 /qq/status
+        // QQ 登录态预取（惰性单飞，失败归 null 不炸）：选腿消费面已随
+        // 外源解锁批撤除，只剩死腿终态文案（qqAnonDeadEndText「明确未配
+        // Cookie→可操作指引」分档）一个消费方——先点火烧缓存，等走到
+        // 消费点 promise 大多已 resolve。
+        // localPlId 钉档代不点：songUrlData 三元先取本地档根本走不到 qq 支；
+        // 档若败——探测命中代经 _localTried 换代重走主链（新代自己再点）、
+        // 钉档代死腿文案被 !options._localFile 短路，本代探测没有消费方，
+        // 点了也是白打一跳 /qq/status
         if (localPlId === null && (song.qq || qqM)) void qqLoggedIn()
-        // 词源回链校验闸预热点火（与 qqLoggedIn 同款惰性 memo）：neteaseId
-        // 在场才可能走网易回链腿——endpoint RTT 与 qq 状态探测并行不入关键
-        // 路径；下方 qqUseNetease 与 onloaderror 腿闸/gateRejected 消费时
-        // 这份 promise 大多已 resolve。无词源曲不点火（无谓上行）；
-        // localPlId 钉档代同不点——走不到 qq 支自然没有闸的消费点
-        if (localPlId === null && (song.qq || qqM) && song.neteaseId) {
-          void relayGateOk(song, abortSignal)
-        }
 
         // 获取歌曲播放URL：自有源端点每次重解签名再 302 进 audio-proxy，URL
         // 不落库——B 站 /bilibili/stream 重解 playurl、YouTube /youtube/stream
@@ -1063,27 +940,11 @@ export function usePlayer({
         // pickStreamUrl 详情回填兜底——三源参数面都能从 id 单解，放过去会落
         // getSongUrl(前缀id) 死路（网易云端点不吃这形态）
         //
-        // qq 支选腿判定提为代内局部（songUrlData qq 支与 onloaderror 的
-        // _neFallback 腿闸同消费一份）：QQ 上游已关匿名取流——neteaseId 词源
-        // 绑定的曲在「明确未登录」时不烧必死的匿名腿直走网易支，_neFallback
-        // 回链位同样落网易支；null（探测失败/态未知）按「可能有」留 QQ 支——
-        // 宁试死腿不误绕活腿。明确未登录过闸后再查手动媒体源绑定：有绑让位
-        // QQ 支——/qq/stream 端点内的失败触发步自会消费绑定顶替，捷径直走
-        // 网易会把那步整段绕过（绑了外源仍放网易回链的 P2 残口）；_neFallback
-        // 回链位不查——上一跳端点内已消费过或曲本无绑，回链语义就是网易支，
-        // 不重复探测。(song.qq||qqM) 前置短路：bv_/yt_ 词源绑定曲
-        // neteaseId 同在场——不白打 /qq/status 探测（惰性单飞仍只被 qq 曲点火）。
-        // localPlId 钉档代同不进门：songUrlData 三元先取本地档，本代根本走
-        // 不到 qq 支——等探测只会白白拖住本地档起播；消费点（本式与下方
-        // _neFallback 腿闸）对本地档代也都没有意义，短路归 false。
-        // 末位合取=词源回链校验闸（判定收口服务端 /match/audio-check）：
-        // 'block' 收住网易捷径转走 QQ 支——已证错录音不放行；fail-open
-        // 态（探测错/unknown）归 'pass' 不拦。memo 命中上方预热点火的同一
-        // promise，本处求值不新增上行
-        const qqUseNetease = !!(localPlId === null && (song.qq || qqM) && song.neteaseId
-          && (options._neFallback || ((await qqLoggedIn()) === false
-            && !(await manualBoundKnown(song.id, abortSignal))))
-          && (await relayGateOk(song, abortSignal)).verdict !== 'block')
+        // qq 支单形态塌缩：neteaseId 词源绑定对音频链零消费（QQ→网易回链
+        // 全形态废除——「同作品」不确立「同录音」），手动绑定/外源解锁
+        // （yt→bv）全由 /qq/stream 端点内腿序收口，客户端恒直挂端点不预
+        // 判。loadTimeoutMs 是 qq 域专属看门狗预算——端点内三腿串行远
+        // 超通用 20s，看门狗按支取值
         const songUrlData = localPlId !== null
           ? { url: downloadsApi.songFileUrl(localPlId, song.id, 'audio') }
           : isFileTrackId(song.id)
@@ -1100,24 +961,9 @@ export function usePlayer({
               ? { url: musicApi.youtubeStreamUrl(song.youtube?.videoId || ytM?.[1],
                   'audio', '', options._streamRetried ? 1 : 0) }
             : song.qq || qqM
-              // 网易支取址抛错（isUnavailable/lastError）直落 playSong 尾
-              // catch「播放请求失败」——越过 onloaderror 的 ownSource→
-              // playDownloadedCopy 下载兜底梯，这是有界取舍不是疏漏：
-              // 确定性 isUnavailable 时服务端下载链回链同撞 freeTrialInfo
-              // fatal（终态等价，兜底也救不回）；「绑定 qq 当网易曲对待」
-              // 即数字 id 同口径——数字曲历来取址死不进兜底（末支
-              // getSongUrl(song.id) 同款）；瞬时故障的代价只是白烧一跳
-              // 可重试点播，不为它接兜底梯
-              ? (qqUseNetease
-                // effectiveId：词源闸核准的播放 id——端点内 freshId 自救
-                // 生效时随 cand.id 下发，缺席归 song.neteaseId（持久纠正
-                // 归重匹配链路，本地字段不改写）。relayGateOk 是 memo
-                // 共享 promise——与上方 qqUseNetease 求值同一跳非第二发
-                ? await musicApi.getSongUrl(
-                    (await relayGateOk(song, abortSignal)).effectiveId || song.neteaseId,
-                    abortSignal)
-                : { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '',
-                    song.qq?.mediaMid, options._streamRetried ? 1 : 0) })
+              ? { url: musicApi.qqStreamUrl(song.qq?.mid || qqM?.[1], '',
+                  song.qq?.mediaMid, options._streamRetried ? 1 : 0),
+                  loadTimeoutMs: QQ_STREAM_LOAD_TIMEOUT_MS }
               : await musicApi.getSongUrl(song.id, abortSignal)
 
         // 检查请求是否被取消
@@ -1231,7 +1077,7 @@ export function usePlayer({
             handleSongEnd()
           },
           // async：仅尾部 qq 死腿文案一处 await——前缀（unload/isStale/各
-          // 回链腿）仍同步跑完，语义与旧同步版逐行等价
+          // 腿与兜底转交）仍同步跑完，语义与旧同步版逐行等价
           onloaderror: async (id, error) => {
             console.error('❌ 歌曲加载错误:', error)
             // 无论是否过期都回收实例；过期时不得触碰新歌的共享状态（含看门狗）
@@ -1264,34 +1110,8 @@ export function usePlayer({
               void playSong(song, { ...options, preserveContext: true, _streamRetried: true })
               return
             }
-            // 词源回链校验闸拒代内标：neteaseId 在场的 qq 曲取本代判定——
-            // memo 命中 :947 预热/qqUseNetease 求值共享的同一 promise，零
-            // 额外上行。下方 _neFallback 腿闸、ownSource 兜底分支与尾部
-            // 终态文案三处同消费这一标。await 窗内可能换代——落地重验
-            // stale，防旧代替新代回链/写态
-            const gateRejected = !!(song.neteaseId && (song.qq || qqM)
-              && (await relayGateOk(song, abortSignal)).verdict === 'block')
-            if (isStale()) return
-            // qq_ 回链：QQ 取流败亡且绑有网易词源 → 词源腿再活一次（解锁语义的
-            // 实体化——neteaseId 此前只供词/封面）。一条命防环：_neFallback
-            // 位到达后主解析即走 netease 支，再败不再回本腿。
-            // !qqUseNetease 闸：主解析已走网易支的代（明确未登录直走/
-            // _neFallback 回链位）不放行——否则同一条网易链白跑第三跳；
-            // 让位代（手动绑定在场让出捷径）qqUseNetease 同归 false——
-            // 其 qq 腿败亡经本腿落网易末棒正是设计内语义。
-            // !gateRejected 闸：词源校验闸判 block（已证错录音）回链腿
-            // 收住——服务端下载链同撞此闸，回链已非活路
-            if ((song.qq || qqM) && song.neteaseId && !options._neFallback && !qqUseNetease
-                && !gateRejected) {
-              console.log('🔁 QQ 取流败亡，回落绑定的网易词源:', song.name)
-              if (howl === newHowl) howl = null
-              clearHowlWatchdog()
-              // void 标弃返 promise（同 :771 口径）：新代 playSong 同步前缀
-              // 抛错不挂 void 会成 unhandled rejection
-              void playSong(song, { ...options, preserveContext: true, _neFallback: true })
-              return
-            }
-            // 在线链全灭（SABR 闸控/签名耗尽）→ 外部源兜底：播服务器已下载
+            // 在线链全灭（SABR 闸控/签名耗尽/qq 端点内自有+手动+外源三腿
+            // 全灭的 5xx·404 同样在此落点）→ 外部源兜底：播服务器已下载
             // 工件；没下过则先触发下载、完成后续播本地文件。_localFile 档
             // 再败说明工件本体坏了——不再兜，走正常报错出口。
             // ownSource 判据含裸前缀 id——bv_/qq_ 老行在线重建败亡后同有资格
@@ -1299,35 +1119,20 @@ export function usePlayer({
             if (ownSource && !options._localFile) {
               const plId = playingPlaylistId.value || selectedPlaylist.value?.id
               if (plId) {
-                // 闸拒代取舍：服务端下载链回链腿同撞此闸必败——无手动媒体
-                // 绑定即无活路，跳过注定失败的下载提交（省一次
-                // downloadSongToServer+「先下载到服务器再播…」误导 toast+
-                // 数秒轮询）直落尾部专属终态；有绑定仍走兜底——服务端
-                // manual 腿先于回链腿且 downloadExternalAudio 与
-                // /qq/stream resolveById 是另一解析径，真可能救回
-                const skipDownload = gateRejected
-                  && !(await manualBoundKnown(song.id, abortSignal))
-                // manualBound await 窗内可能换代——闸拒代落终态前先验
-                // stale，旧代不盖新代（非闸代 skipDownload 同步求值零窗）
-                if (gateRejected && isStale()) return
-                if (!skipDownload) {
-                  // 转入下载兜底前必须解除看门狗+置空 howl——下载轮询最长 ~3min，
-                  // 20s 看门狗到时会把兜底误判成加载超时（abort 歌词请求/报超时文案）
-                  clearHowlWatchdog()
-                  if (howl === newHowl) howl = null
-                  void playDownloadedCopy(song, plId, options, mySeq)
-                  return
-                }
+                // 转入下载兜底前必须解除看门狗+置空 howl——下载轮询最长 ~3min，
+                // 看门狗到时会把兜底误判成加载超时（abort 歌词请求/报超时文案）
+                clearHowlWatchdog()
+                if (howl === newHowl) howl = null
+                void playDownloadedCopy(song, plId, options, mySeq)
+                return
               }
             }
             // 先收本代看门狗——下方 await 窗内可能换代，跨代收狗会误杀新代
             clearHowlWatchdog()
-            // qq_ 死腿终态（无词源绑定+明确未登录）换可操作指引；非 qq/
-            // 有词源/态未知归 null 落通用重试句。闸拒代优先专属文案——
-            // qqAnonDeadEndText 对本形态归 null（其前提 !song.neteaseId）
-            const failText = gateRejected ? RELAY_GATE_REJECTED_TEXT
-              : ((await qqAnonDeadEndText(song, options))
-                || '音频加载失败，点击播放键或重新点歌可重试')
+            // qq_ 死腿终态（明确未登录）换可操作指引；非 qq/态未知归 null
+            // 落通用重试句
+            const failText = (await qqAnonDeadEndText(song, options))
+              || '音频加载失败，点击播放键或重新点歌可重试'
             if (isStale()) return // qqLoggedIn await 窗内播放已换代——旧代不盖新代共享态
             // 'error' 事件也可能在播放中途触发（CDN 断流），isPlaying 必须复位，
             // 否则 UI/MediaSession/远端都停在假播放态
@@ -1363,7 +1168,9 @@ export function usePlayer({
 
         // CDN 黑洞/握手挂死时 onload/onloaderror 均不触发，songSwitching 会永久
         // 卡死播放键——看门狗兜底：超时按加载失败收尾（仅未过期时动共享状态）。
-        // 必须在 howl 赋值后武装，否则 Howl 构造同步抛错时计时器会撞上 newHowl TDZ
+        // 必须在 howl 赋值后武装，否则 Howl 构造同步抛错时计时器会撞上 newHowl TDZ。
+        // 预算按支取：qq_ 支带 loadTimeoutMs（QQ_STREAM_LOAD_TIMEOUT_MS 90s——
+        // 端点内自有+手动+外源腿串行远超通用档），其余支走通用 20s
         howlWatchdog = setTimeout(() => {
           howlWatchdog = null
           if (isStale()) return
@@ -1394,7 +1201,7 @@ export function usePlayer({
           loadingLyrics.value = false
           playbackError.value = '歌曲加载超时，请检查网络后重试'
           if (currentAbortController === myController) currentAbortController = null
-        }, PLAYBACK_LOAD_TIMEOUT_MS)
+        }, songUrlData?.loadTimeoutMs ?? PLAYBACK_LOAD_TIMEOUT_MS)
 
         // 加载歌词（可随播放请求一起被取消）
         await loadLyrics(song, abortSignal)
@@ -2055,11 +1862,8 @@ export function usePlayer({
     // 手动媒体源绑定变更槽（notifyUnlockManualChange 头注）：只对正播
     // 同曲重走取址——非正播曲的绑定改动留到下次播放自然消费
     const onUnlockManualChange = (trackId) => {
-      // 绑定存在性 memo 先失效（不限正播曲）：非正播曲的绑/解绑下次播放
-      // 重求值须打到新行——只清正播曲会把旧 false 留给它白吃网易捷径
-      manualBoundMemo.delete(String(trackId))
       if (!currentSong.value || String(currentSong.value.id) !== String(trackId)) return
-      // 换源即重取址：playSong 重走 getSongUrl→服务端手动步产出新链；
+      // 换源即重取址：playSong 重打流端点→服务端手动步产出新链；
       // preserveContext 保队列快照；seekTime=currentTime 保播放位、
       // autoplay=isPlaying 保播/停态（safeSeekTime 钳位防越界）——
       // 暂停态不拽起播放，在播则原位换源续听；非正播曲留下次播放自然消费
@@ -2556,7 +2360,9 @@ export function usePlayer({
         return
       }
 
-      // 加载窗（howl 已建、onload 未至，最长看门狗 ~20s）：此时 howl.play()
+      // 加载窗（howl 已建、onload 未至，最长看门狗通用 20s/qq 域 90s——
+      // 端点内三腿串行超通用档，songUrlData qq 支带 loadTimeoutMs 双档取值）：
+      // 此时 howl.play()
       // 走 Howler 内部 _queue 排队，onload 的 autoplay 分支又补一次 play——
       // 两条 _inactiveSound 各起一个轨道叠加成双音轨。加载中本就无声可听，
       // 播放键按了也无可闻反馈——吞掉这次点击是唯一不叠轨的口径
