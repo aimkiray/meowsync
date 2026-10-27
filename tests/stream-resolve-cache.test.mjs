@@ -71,6 +71,14 @@ const realQq = require('../src/server/lib/qq.js');
 seed('../src/server/lib/qq.js', {
   ...realQq,
   pickStreamUrl: async (...a) => { qqCalls++; return qqImpl(...a); },
+  // 外源解锁腿 buildInfo 的 detail 上行——桩死防真打 fcg 上游
+  getSongDetail: async () => null,
+});
+// qq 外源解锁兜底桩：provider 表空 → 共享链逐源零调用即全灭——null-hit
+// 用例会走到 F1 链，真 provider 图会打上游检索扇出（本文件只钉正缓存语义）
+seed('../src/server/services/unlock/index.js', {
+  PROVIDERS: {},
+  QQ_UNLOCK_SOURCES: ['youtube', 'bilibili'],
 });
 
 let biliApp, ytApp, qqApp, streamVault;

@@ -1,7 +1,10 @@
 // routes/qq.js 冒烟：状态透出 / resolve 解析分流（disstid 歌单跳）/
-// stream 302 进 vault / lyric/search/playlist 成功形状 + 入参 400。
+// stream 三腿（自有→手动绑定→外源解锁）302 进 vault / anon 拒答负 memo /
+// lyric/search/playlist 成功形状 + 入参 400。
 // lib/qq（musicu 上游）与 netease-match（词源匹配）全桩——桩面走
 // helpers.seedMatchModule 保持与 netease-match.test.mjs 同口径。
+// netease-api 整模块桩（resolveTrackUnlock 必桩——外源腿真模块会真打
+// 上游检索扇出）；unlock/index 桩挡 provider 图，QQ_UNLOCK_SOURCES 同值。
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -9,6 +12,9 @@ import { rmSync } from 'node:fs';
 import { seed, seedMatchModule, tmpDataDir } from './helpers.mjs';
 
 process.env.DATA_DIR = tmpDataDir('meowsync-route-qq-');
+// 限流桶按 IP 分：XFF 独立 IP 防跨用例配额互耗（qq-unlock 20/min 桶的
+// 钉板需要同 IP 计数确定——manual-stream-override 同款手法）
+process.env.TRUST_PROXY = '1';
 const require = createRequire(import.meta.url);
 
 // ── 桩：QQ 上游 lib ──
@@ -81,11 +87,58 @@ const matchCalls = [];
 let matchImpl = async () => ({ song: { id: 998877, name: '匹配曲', ar: [{ name: '网艺' }], al: {} }, query: 'q1' });
 seedMatchModule(matchCalls, () => matchImpl);
 
-let app;
-before(() => { app = require('../src/server/routes/qq.js'); });
-after(() => { rmSync(process.env.DATA_DIR, { recursive: true, force: true }); });
+// F1 共享解锁链整桩：外源腿调用面全录（trackId/opts），impl 用例内可换——
+// 命中产物/全灭 errors/预算 abort 三态都从这出
+const unlockCalls = [];
+let unlockImpl = async () => ({ resolved: null, errors: [] });
+const qqInfoCalls = [];
+seed('../src/server/services/netease-api.js', {
+  resolveTrackUnlock: async (trackId, opts) => {
+    unlockCalls.push([trackId, opts]);
+    return unlockImpl(trackId, opts);
+  },
+  qqUnlockInfo: async (mid, opts) => {
+    qqInfoCalls.push([mid, opts]);
+    return { id: `qq_${mid}`, name: TRACK.name, artists: TRACK.artists, keyword: 'k', durationMs: 200000 };
+  },
+});
+// unlock 源注册表整桩：真 index 拉整条 provider 图（yt/bv 检索 client、
+// repo、AI 层）——路由取 QQ_UNLOCK_SOURCES 常量、manual-stream 取
+// PROVIDERS.resolveById 都走本桩（绑定命中腿的产物流）
+const resolveByIdCalls = [];
+let ytResolveByIdImpl = async (mediaId) => ({
+  url: `https://rr1---sn-t.googlevideo.com/v?itag=251&sig=BOUND_${mediaId}`,
+  urls: [`https://rr1---sn-t.googlevideo.com/v?itag=251&sig=BOUND_${mediaId}`],
+  br: 128000,
+});
+seed('../src/server/services/unlock/index.js', {
+  PROVIDERS: {
+    youtube: {
+      resolveById: async (mediaId, o) => {
+        resolveByIdCalls.push([mediaId, o]);
+        return ytResolveByIdImpl(mediaId, o);
+      },
+    },
+    bilibili: { resolveById: async () => null },
+  },
+  QQ_UNLOCK_SOURCES: ['youtube', 'bilibili'],
+});
 
-const get = (path) => app.request(`http://t${path}`);
+let app, unlockManualRepo;
+before(() => {
+  app = require('../src/server/routes/qq.js');
+  unlockManualRepo = require('../src/server/repositories/unlockManual.js');
+});
+after(() => {
+  delete process.env.TRUST_PROXY;
+  rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+});
+
+let ipSeq = 200;
+const nextIp = () => `10.77.${++ipSeq}.1`;
+// 每发独立 XFF——限流桶互不染（只有 429 钉板用例传固定 ip 共桶计数）
+const get = (path, ip) => app.request(`http://t${path}`,
+  { headers: { 'x-forwarded-for': ip || nextIp() } });
 const json = async (res) => ({ status: res.status, body: await res.json().catch(() => null) });
 
 test('qq：/qq/status 只回凭据布尔——不带本体', async () => {
@@ -115,18 +168,22 @@ test('qq：resolve 成功形状——trackJson 投影 + matched 兜底源', asyn
   assert.equal(r.body.matchedBy, 'q1');
 });
 
-test('qq：stream 非法 mid 400；命中 → 302 进 vault 令牌而非裸链', async () => {
+test('qq：stream 非法 mid 400；自有源命中 → 302 进 vault（外源腿不触发）', async () => {
   const bad = await get('/qq/stream?mid=!!');
   assert.equal(bad.status, 400);
 
+  unlockCalls.length = 0;
   const r = await get(`/qq/stream?mid=${TRACK.mid}`);
   assert.equal(r.status, 302);
   const loc = r.headers.get('location');
   assert.match(loc, /^\/audio-proxy\/t\//);
+  assert.equal(r.headers.get('x-unlock-source'), null, '自有源命中不带外源头');
+  assert.equal(r.headers.get('x-manual-source'), null, '自有源命中不带绑定头');
   // vault token 能解出原 URL——mint 语义钉住（purl 不出前端）
   const streamVault = require('../src/server/lib/stream-vault.js');
   const entry = streamVault.resolve(loc.split('/audio-proxy/t/')[1]);
   assert.equal(entry.urls[0], 'https://stream.qqmusic.qq.com/x.m4a?u=1');
+  assert.equal(unlockCalls.length, 0, '自有源腿命中——外源解锁零调用（腿序钉）');
 });
 
 test('qq：stream 的 Location 在 BASE_PATH 子目录部署下带前缀', async () => {
@@ -158,42 +215,241 @@ test('qq：stream 502 消息剥离绝对路径——不泄服务器文件系统�
   } finally { pickStreamImpl = async () => pickStreamHit; }
 });
 
-test('qq：stream 无可用档 → 404', async () => {
+test('qq：stream 无可用档 + 外源全灭 → 404 + unlockErrors 机读面', async () => {
   pickStreamHit = null;
   // 同上——null 不缓存，但也得用没被 302 用例写过的键
-  const r = await get('/qq/stream?mid=001NILxxx23456');
+  const r = await json(await get('/qq/stream?mid=001NILxxx23456'));
   assert.equal(r.status, 404);
+  assert.deepEqual(r.body.unlockErrors, []);
   pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
 });
 
-test('qq：stream 抛 qqAnonDenied → 502 诚实文案（指引配置 Cookie）', async () => {
-  cookieOn = false;
-  pickStreamImpl = async () => {
-    const e = new Error('qq musicu vkey.GetVkeyServer code=0/1000');
-    e.qqAnonDenied = true; e.nodeCode = 1000; e.retcode = 104009;
+test('qq：外源腿——自有源败亡+绑定缺席 → yt 命中 302 + x-unlock-source + cacheKey 指纹 mint', async () => {
+  pickStreamHit = null;
+  unlockCalls.length = 0;
+  qqInfoCalls.length = 0;
+  const mid = '006EXTyt00001';
+  const ytUrl = 'https://rr1---sn-t.googlevideo.com/videoplayback?itag=251&expire=9';
+  unlockImpl = async (trackId, opts) => {
+    // buildInfo 惰性装配钉：实跑链才调，且经 qqUnlockInfo 桩（F2 接线）
+    const info = await opts.buildInfo();
+    assert.equal(info?.id, `qq_${mid}`);
+    return { resolved: {
+      url: ytUrl, urls: [ytUrl], br: 130000, source: 'youtube',
+      ext: 'webm', size: 4000000, timeMs: 200000, mediaId: 'dQw4w9WgXcQ',
+    }, errors: [] };
+  };
+  try {
+    const r = await get(`/qq/stream?mid=${mid}`);
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get('x-unlock-source'), 'youtube');
+    const loc = r.headers.get('location');
+    assert.match(loc, /^\/audio-proxy\/t\//);
+    const streamVault = require('../src/server/lib/stream-vault.js');
+    const entry = streamVault.resolve(loc.split('/audio-proxy/t/')[1]);
+    assert.deepEqual(entry.urls, [ytUrl]);
+    // 媒体 id+字节实体指纹（codec/br/itag 段）挂播过路缓存键——与
+    // routes/youtube.js 指纹口径同轴（yt_<id>_a_<codec>_<br>_i<itag>）
+    assert.equal(entry.cacheKey, 'yt_dQw4w9WgXcQ_a_webm_130000_i251');
+    assert.deepEqual(entry.cacheMeta, { muxed: false, codec: 'webm', br: 130000, h: 0, w: 0 });
+    // 调用面钉：qq_<mid> 键域直通、恒 QQ_UNLOCK_SOURCES 源序、proxied、
+    // includeManual=false（MANUAL-ONCE）、AbortSignal.any 预算腿
+    const [tid, opts] = unlockCalls.at(-1);
+    assert.equal(tid, `qq_${mid}`);
+    assert.deepEqual(opts.sources, ['youtube', 'bilibili']);
+    assert.equal(opts.proxied, true);
+    assert.equal(opts.includeManual, false);
+    assert.equal(opts.purpose, 'playback');
+    assert.equal(opts.skipCache, false);
+    assert.ok(opts.signal instanceof AbortSignal, '预算腿 signal 在位');
+    assert.equal(typeof opts.buildInfo, 'function');
+    assert.deepEqual(qqInfoCalls.at(-1), [mid, {}], 'buildInfo 经 qqUnlockInfo(mid,{})');
+  } finally {
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+    unlockImpl = async () => ({ resolved: null, errors: [] });
+  }
+});
+
+test('qq：外源腿——bv 命中挂 bv_<bvid>_p1_a_ 键；mediaId 缺席退裸 mint', async () => {
+  pickStreamHit = null;
+  const bvUrl = 'https://upos-sz-m1.bilivideo.com/x.m4s?sig=B';
+  const streamVault = require('../src/server/lib/stream-vault.js');
+  try {
+    unlockImpl = async () => ({ resolved: {
+      url: bvUrl, urls: [bvUrl], br: 192000, source: 'bilibili',
+      ext: 'm4a', size: 5000000, timeMs: 200000, mediaId: 'BV1xx411c7mD',
+    }, errors: [] });
+    const r = await get('/qq/stream?mid=006EXTbv00002');
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get('x-unlock-source'), 'bilibili');
+    const t1 = /\/audio-proxy\/t\/([^\s]+)/.exec(r.headers.get('location'))?.[1];
+    const e1 = streamVault.resolve(t1);
+    assert.equal(e1.cacheKey, 'bv_BV1xx411c7mD_p1_a_m4a_192000');
+    assert.deepEqual(e1.cacheMeta, { muxed: false, codec: 'm4a', br: 192000, h: 0, w: 0 });
+
+    // mediaId 缺席 → 绑媒体同款裸 mint（cacheKey/cacheMeta 不编，不蹭缓存键）
+    unlockImpl = async () => ({ resolved: {
+      url: 'https://upos-sz-m1.bilivideo.com/y.m4s?sig=C',
+      urls: ['https://upos-sz-m1.bilivideo.com/y.m4s?sig=C'],
+      br: null, source: 'bilibili', ext: null, size: null, timeMs: null,
+    }, errors: [] });
+    const r2 = await get('/qq/stream?mid=006EXTno0003');
+    assert.equal(r2.status, 302);
+    const t2 = /\/audio-proxy\/t\/([^\s]+)/.exec(r2.headers.get('location'))?.[1];
+    const e2 = streamVault.resolve(t2);
+    assert.equal(e2.cacheKey, null);
+    assert.equal(e2.cacheMeta, null);
+  } finally {
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+    unlockImpl = async () => ({ resolved: null, errors: [] });
+  }
+});
+
+test('qq：外源腿 retry=1 → skipCache 透传给共享链', async () => {
+  pickStreamHit = null;
+  unlockCalls.length = 0;
+  try {
+    const r = await get('/qq/stream?mid=006RETRY00004&retry=1');
+    assert.equal(r.status, 404); // 全灭终态不重要——钉的是透传位
+    const [, opts] = unlockCalls.at(-1);
+    assert.equal(opts.skipCache, true);
+  } finally {
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+  }
+});
+
+test('qq：腿序钉——自有败亡+手动绑定命中 → 302+x-manual-source，外源腿零调用', async () => {
+  pickStreamHit = null;
+  unlockCalls.length = 0;
+  resolveByIdCalls.length = 0;
+  const mid = '007MANUAL0001';
+  unlockManualRepo.upsertManual(`qq_${mid}`, {
+    source: 'youtube', mediaId: 'dQw4w9WgXcQ', title: '', owner: '', durationSec: null,
+  });
+  try {
+    const r = await get(`/qq/stream?mid=${mid}`);
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get('x-manual-source'), 'youtube');
+    assert.equal(resolveByIdCalls.length, 1, '绑定媒体经 resolveById 现解');
+    assert.equal(unlockCalls.length, 0, '手动腿命中——外源解锁零调用（MANUAL-ONCE 位序）');
+  } finally {
+    unlockManualRepo.deleteManual(`qq_${mid}`);
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+  }
+});
+
+test('qq：外源腿全灭 → unlockErrors 逐源机读面透传（分档文案外排障用）', async () => {
+  pickStreamHit = null;
+  unlockImpl = async () => ({ resolved: null, errors: [
+    { source: 'youtube', msg: '风控', cls: 'authwall' },
+    { source: 'bilibili', msg: '无候选', cls: 'nomatch' },
+  ] });
+  try {
+    const r = await json(await get('/qq/stream?mid=007ERRFUL0001'));
+    assert.equal(r.status, 404);
+    assert.deepEqual(r.body.unlockErrors, [
+      { source: 'youtube', msg: '风控', cls: 'authwall' },
+      { source: 'bilibili', msg: '无候选', cls: 'nomatch' },
+    ]);
+  } finally {
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+    unlockImpl = async () => ({ resolved: null, errors: [] });
+  }
+});
+
+test('qq：外源腿预算 abort → 502 超时文案（重试搭 inflight/正档）', async () => {
+  pickStreamHit = null;
+  unlockImpl = async () => {
+    const e = new Error('aborted');
+    e.aborted = true;
     throw e;
   };
   try {
-    const r = await json(await get('/qq/stream?mid=005DENIED0001'));
+    const r = await json(await get('/qq/stream?mid=007BUDGET0001'));
     assert.equal(r.status, 502);
-    assert.equal(r.body.message, 'QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试');
-  } finally { pickStreamImpl = async () => pickStreamHit; }
+    assert.equal(r.body.message, '外源解锁超时——可稍后重试');
+  } finally {
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+    unlockImpl = async () => ({ resolved: null, errors: [] });
+  }
 });
 
-test('qq：stream 无流 404 文案按凭据态分档——匿名给回链指引，有 cookie 保留 VIP/地域口径', async () => {
+test('qq：qq-unlock 独立桶 20/min——第 21 发 429 且不再进共享链', async () => {
+  pickStreamHit = null;
+  const ip = '10.66.0.1'; // 固定 IP 共桶计数——钉死 20/min 配额界
+  const n0 = unlockCalls.length;
+  try {
+    for (let i = 0; i < 20; i++) {
+      const r = await get('/qq/stream?mid=008RATE00001', ip);
+      assert.equal(r.status, 404, `第 ${i + 1} 发应走通外源腿后 404`);
+    }
+    assert.equal(unlockCalls.length - n0, 20, '20 发各进一次共享链');
+    const r = await get('/qq/stream?mid=008RATE00002', ip);
+    assert.equal(r.status, 429);
+    const b = await r.json();
+    assert.equal(b.code, 429);
+    assert.equal(unlockCalls.length - n0, 20, '超限请求不进 resolveTrackUnlock');
+  } finally {
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+  }
+});
+
+test('qq：stream 无流 404 文案按凭据态分档——匿名给外源/绑定指引，有 cookie 保留 VIP/地域口径', async () => {
   pickStreamHit = null;
   try {
     cookieOn = false;
     let r = await json(await get('/qq/stream?mid=005NILxx00001'));
     assert.equal(r.status, 404);
-    assert.equal(r.body.message, '该歌曲暂无可播流——QQ 已关闭匿名取流，配置 Cookie 或匹配网易词源后可播');
+    assert.equal(r.body.message, '该歌曲暂无可播流——QQ 已关闭匿名取流且外源解锁未命中（可配置 Cookie 或绑定手动媒体源）');
+    assert.ok(!/网易|词源/.test(r.body.message), '旧「匹配网易词源」文案必须消灭');
     cookieOn = true;
     r = await json(await get('/qq/stream?mid=005NILxx00002'));
     assert.equal(r.status, 404);
-    assert.equal(r.body.message, '该歌曲没有可用的播放流（可能需要 VIP 权限或存在地域限制）');
+    assert.equal(r.body.message, '该歌曲没有可用的播放流（自有档与外源解锁均未命中——可能需 VIP 权限或存在地域限制）');
   } finally {
     cookieOn = false;
     pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+  }
+});
+
+// ── anon 拒答负 memo（本用例盖章进程级 qqAnonDeniedAt——必须排在所有
+//    依赖自有腿实况的 /qq/stream 用例之后，后续用例只走非流路由）──
+test('qq：qqAnonDenied → 502 诚实文案+memo 章（TTL 内不重打 pickStream；retry=1/cookie 绕 memo）', async () => {
+  cookieOn = false;
+  let pickN = 0;
+  pickStreamImpl = async () => {
+    pickN++;
+    const e = new Error('qq musicu vkey.GetVkeyServer code=0/1000');
+    e.qqAnonDenied = true; e.nodeCode = 1000; e.retcode = 104009;
+    throw e;
+  };
+  try {
+    // 实锤盖章：自有腿真打一次拒答 → 502 + unlockErrors 机读面
+    let r = await json(await get('/qq/stream?mid=005DENIED0001'));
+    assert.equal(r.status, 502);
+    assert.equal(r.body.message, 'QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试');
+    assert.deepEqual(r.body.unlockErrors, []);
+    assert.equal(pickN, 1);
+
+    // TTL 内无 cookie：合成 ownErr 整腿跳过——pickStream 零新调用仍 502
+    r = await json(await get('/qq/stream?mid=005DENIED0002'));
+    assert.equal(r.status, 502);
+    assert.equal(r.body.message, 'QQ 已关闭匿名取流——请在设置页配置 QQ Cookie 后重试');
+    assert.equal(pickN, 1, '负 memo 生效——注定拒答的 vkey 不再喂风控信号');
+
+    // retry=1 显式重探 reopening：绕 memo 重打自有腿
+    r = await json(await get('/qq/stream?mid=005DENIED0003&retry=1'));
+    assert.equal(r.status, 502);
+    assert.equal(pickN, 2, 'retry=1 绕 memo——显式重试要重探');
+
+    // cookie 在场同绕 memo（凭据变了必须重探）
+    cookieOn = true;
+    r = await json(await get('/qq/stream?mid=005DENIED0004'));
+    assert.equal(r.status, 502);
+    assert.equal(pickN, 3, 'cookie 在场绕 memo——拒答可能是旧凭据态');
+  } finally {
+    cookieOn = false;
+    pickStreamImpl = async () => pickStreamHit;
   }
 });
 
