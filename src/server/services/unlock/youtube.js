@@ -33,7 +33,10 @@ const durOk = (c) => Number.isFinite(c?.durationSec) && c.durationSec > 0;
 
 /**
  * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
- * @returns {{url: string, urls: string[], br: number|null, durationSec: number|null}|null}
+ * @returns {{url: string, urls: string[], br: number|null, durationSec: number|null,
+ *   mediaId: string}|null}
+ *   mediaId = 胜出候选 videoId——编排层透传到 resolved（qq_ 端点 mint
+ *   cacheKey 用），数值域消费者不读它
  * @throws 候选含 authRejected 证据（authSeen>0 全灭）时抛带 err.authRejected/
  *         err.authCounted 的 Error——编排层据此归 authwall 且不重复记连败
  */
@@ -119,7 +122,8 @@ async function resolve(info, { signal, purpose } = {}) {
           url: head.url,
           urls: [head.url],
           br: head.br,
-          durationSec: cand.durationSec
+          durationSec: cand.durationSec,
+          mediaId: cand.videoId,
         };
       }
       failed += 1;
@@ -156,9 +160,9 @@ async function resolve(info, { signal, purpose } = {}) {
 // ── 可选能力（仅搜索型源实现；pyncmd 是「零错配官方直解」无候选面不加）──
 //   async search(keyword, {signal}) → 候选 [{videoId,title,owner,durationSec,cover?,...}]
 //     ——手动挑选池；provider 自管归一/去重/截断，不回 resolve 的时长筛/AI 簿
-//   async resolveById(mediaId, {signal, purpose}) → {url,urls,br,durationSec?,ext?}|null
+//   async resolveById(mediaId, {signal, purpose}) → {url,urls,br,durationSec?,ext?,mediaId?}|null
 //     ——点名直解：跳过搜索/±5s筛/AI仲裁/verdict记忆/死簿，
-//       手动绑定唯一信任状是「此刻能否产出可用流」
+//       手动绑定唯一信任状是「此刻能否产出可用流」；mediaId 回传入值
 
 // 手动挑选池：位置形 innertubeSearch 与 resolve 内 L41/L49 同式（回裸 items
 // 数组）。放宽到 8 条——自动链 5 条截断正是漏真命候选的来源之一；不回
@@ -194,6 +198,7 @@ async function resolveById(videoId, { signal, purpose } = {}) {
     urls: [head.url],
     br: head.br ?? null,
     durationSec: null,   // 点名解没有候选期时长——编排层对账取绑定行快照
+    mediaId: videoId,
   };
 }
 

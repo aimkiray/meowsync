@@ -149,9 +149,11 @@ function normalizeCands(items) {
 /**
  * @param {{id: any, name: string, artists?: string[], keyword: string, durationMs: number|null}} info
  * @returns {{url: string, urls: string[], br: number|null,
- *   durationSec: number|null, ext: string|null}|null}
+ *   durationSec: number|null, ext: string|null, mediaId: string}|null}
  *   ext = 选定流真实容器的音频工件后缀（m4a/flac 等）——编排层优先于
  *   URL 推导消费；推导不出归 null（extOf 兜底，行为同旧路径）
+ *   mediaId = 胜出候选 bvid（归一候选 videoId 即 bvid）——编排层透传到
+ *   resolved（qq_ 端点 mint cacheKey 用），数值域消费者不读它
  * @throws 搜索段失败抛 transient 标记错；候选取流全灭且含风控证据时抛
  *         transient 标记错——编排层归 transient 走退避重试而非 fatal
  */
@@ -247,6 +249,8 @@ async function resolve(info, { signal, purpose } = {}) {
         durationSec: cand.durationSec,
         // 选定档真实容器显式下发——.m4s 链走编排层 extOf 会错落 mp3 壳
         ext: extOfStream(cands[headIdx]),
+        // 归一候选 videoId 即 bvid——与死簿/vkey 键域同源，供编排层透传
+        mediaId: cand.videoId,
       };
     } catch (e) {
       if (signal?.aborted) throw e;
@@ -275,9 +279,9 @@ async function resolve(info, { signal, purpose } = {}) {
 // ── 可选能力（仅搜索型源实现；pyncmd 是「零错配官方直解」无候选面不加）──
 //   async search(keyword, {signal}) → 候选 [{videoId,title,owner,durationSec,cover?,...}]
 //     ——手动挑选池；provider 自管归一/去重/截断，不回 resolve 的时长筛/AI 簿
-//   async resolveById(mediaId, {signal, purpose}) → {url,urls,br,durationSec?,ext?}|null
+//   async resolveById(mediaId, {signal, purpose}) → {url,urls,br,durationSec?,ext?,mediaId?}|null
 //     ——点名直解：跳过搜索/±5s筛/AI仲裁/verdict记忆/死簿，
-//       手动绑定唯一信任状是「此刻能否产出可用流」
+//       手动绑定唯一信任状是「此刻能否产出可用流」；mediaId 回传入值（bvid）
 
 // 手动挑选池：与 resolve 同一片搜索水域（不做分区过滤——搬运稿常落音乐
 // 区外，候选池必须与自动链同水域）；归一/去重/截断共用 normalizeCands，
@@ -316,6 +320,7 @@ async function resolveById(bvid, { signal, purpose } = {}) {
     br: cands[headIdx].br ?? null,
     durationSec: null,   // 点名解没有候选期时长——编排层对账取绑定行快照
     ext: extOfStream(cands[headIdx]),
+    mediaId: bvid,
   };
 }
 

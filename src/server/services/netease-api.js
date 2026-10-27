@@ -12,9 +12,15 @@ const { PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES } = require('./unlock');
 // seed 桩面只有 {PROVIDERS, PLAYBACK_SOURCES, DOWNLOAD_SOURCES} 三字段，
 // 从门面解构 health 会在桩下拿到 undefined 崩掉
 const sourceHealth = require('./unlock/health');
-// 手选媒体源绑定簿：resolveOne 内手动插队步读它（库不可用按无绑定放行，
-// 见 resolveOne 内 try/catch）。依赖方向 netease-api→repo→db/client 无环
+// 手选媒体源绑定簿：共享链内手动插队步读它（库不可用按无绑定放行，
+// 见 resolveTrackUnlock produce 内 try/catch）。依赖方向
+// netease-api→repo→db/client 无环
 const unlockManualRepo = require('../repositories/unlockManual');
+// qq_ 外源解锁腿的检索元数据源：getSongDetail→normalizeTrack 真 artists[]
+// 装配伪 songRow（见 qqUnlockInfo）。依赖方向 netease-api→lib/qq 与
+// file-downloader 同向——lib/qq 只 require net-guard/shared/settings/undici
+// 无环
+const { getSongDetail } = require('../lib/qq');
 
 // 试听版判定阈值：上游返回的 url 时长不超过 60s 视为试听片段
 const TRIAL_MAX_DURATION_MS = 60000;
@@ -241,6 +247,24 @@ function baseUnlockInfo(songRow) {
   return buildUnlockInfo(songRow, { name: songRow.name, artists });
 }
 
+// 解锁检索元数据装配（数值域 song_detail 行与 qq_ 伪行共用同一管线）：
+// songRow → aiUnlockInfo 规整 → buildUnlockInfo；规整失败/无 AI →
+// baseUnlockInfo 回落；无 songRow → null——搜索型源拿不到 keyword，
+// 仅 id 直解源（pyncmd）仍可用。qq_ 伪行旁路 AI 规整会把
+// Live/Remaster/翻自xx 等版本修饰噪声带进检索词——正是规整要治的
+async function buildInfoForRow(songRow) {
+  if (!songRow) return null;
+  let info = null;
+  if (aiEnabled()) {
+    try {
+      const normalized = await aiUnlockInfo(songRow, null);
+      if (normalized) info = buildUnlockInfo(songRow, normalized);
+    } catch { /* AI 规整失败不阻塞解锁主路径 */ }
+  }
+  if (!info) info = baseUnlockInfo(songRow);
+  return info;
+}
+
 // 试听判定：freeTrialInfo 是明确标记；时长启发式只对付费曲目生效——
 // 免费短歌（intro/间奏 <60s）fee=0 且 url 即完整曲，误判会错误触发解锁。
 // 模块级导出给 routes/music.js 的批量上限判定——400 阈值该数「待解锁项」
@@ -288,7 +312,6 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   if (!Array.isArray(items)) return items;
   const throwIfAborted = () => { if (signal?.aborted) throw new Error('aborted'); };
 
-  const allSources = purpose === 'download' ? DOWNLOAD_SOURCES : PLAYBACK_SOURCES;
   const unlockTargets = items.filter(needsUnlock);
   if (unlockTargets.length > MAX_UNLOCK_ITEMS) {
     // 路由层已限量；这里截断是兜底——丢弃项必须标失败并清链，
@@ -325,297 +348,59 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
     }
   }
 
-  // 单 id 解锁链本体：AI 规整 → 逐源 resolve → 回链校验/白名单预筛/时长
-  // 对账 → 写缓存，产出 {url,urls,br,source,ext,size,timeMs} | null。
-  // 产出经 unlockInflight 键共享给并发搭车者，故本函数不消费调用方
-  // signal（自净上限靠每次 provider 调用的 UNBLOCK_TIMEOUT_MS）；并发等待
-  // 方在 await 共享 promise 后自查自己的 signal 决定吃不吃结果
-  const resolveOne = async (item, originalDt) => {
-    // 逐源失败归因——不直写 item：产出经 unlockInflight 键共享给并发
-    // 搭车者，errors 必须随共享结果 {resolved, errors} 一起走，否则
-    // 搭车 item 无归因（L1）
-    const errors = [];
-    // AI 规整检索元数据：一次提取全源复用（provider 拿 keyword 去外站
-    // 搜候选，干净的 name/artists 让候选选择更准）。失败 → 退回
-    // song_detail 原始字段拼 keyword；连 songRow 都没有时 info=null——
-    // 搜索型源会拿不到 keyword，仅 id 直解源（pyncmd）仍可用
-    let info = null;
-    const songRow = songRows[item.id];
-    if (songRow) {
-      if (aiEnabled()) {
-        try {
-          const normalized = await aiUnlockInfo(songRow, null);
-          if (normalized) info = buildUnlockInfo(songRow, normalized);
-        } catch { /* AI 规整失败不阻塞解锁主路径 */ }
-      }
-      if (!info) info = baseUnlockInfo(songRow);
-    }
-    // 手动绑定插队步：song_unlock_manual 有绑定行且其源具备 resolveById
-    // 能力时，在首个具该能力的源之前插一个 'manual' 虚拟步——pyncmd 之
-    // 后、全部搜索源之前。位序理由：(1) pyncmd 是官方直解零错配，手动
-    // 纠错的语义是「纠正搜索错配」不该压过官方源；(2) 绑 bilibili 的
-    // 场景恰是 youtube 自动链错配在先——手动步放绑定源自己的槽位
-    // （bilibili 在 youtube 后）会让前位搜索源先成功，绑定永不被消费；
-    // (3) 绑定媒体失败时回落完整自动链含绑定源自身搜索——纠错失败不
-    // 劣于现状。库不可用按无绑定放行（绑定是增强不是门禁）
-    let manual = null;
-    try { manual = unlockManualRepo.getManual(String(item.id)); } catch { /* 库不可用按无绑定放行 */ }
-    const manualOk = !!(manual && PROVIDERS[manual.source]?.resolveById);
-    const steps = [...allSources];
-    if (manualOk) {
-      const at = steps.findIndex(s => PROVIDERS[s]?.resolveById);
-      steps.splice(at === -1 ? steps.length : at, 0, 'manual');
-    }
-    for (const step of steps) {
-      const isManual = step === 'manual';
-      // 手动步把 breaker/errors/resolved 全键在绑定源名上——下游消费
-      //（unblockedSource/健康记账/日志）与自动步共享同一份口径
-      const source = isManual ? manual.source : step;
-      const provider = PROVIDERS[source];
-      if (!provider) continue;
-      // 源级熔断闸（L2）：盖章窗内整源跳过——每次解锁重跑注定失败的
-      // 完整试错链（youtube 每候选 3 形态 × 至多 2 试 + 30s 子预算）既
-      // 拖长 resolve 又持续给风控喂信号；breaker 条目记「该源本次没跑」。
-      // 手动步同撞墙——风控窗内直解同烧 30s 子预算只是喂信号
-      if (sourceHealth.isOpen(source)) {
-        const msg = `源熔断中${isManual ? '（手动绑定）' : ''}：${sourceHealth.breakerReason(source) || '连败判据'}`;
-        errors.push(isManual
-          ? { source, msg, cls: 'breaker', manual: true }
-          : { source, msg, cls: 'breaker' });
-        console.info(`[unlock] ${item.id} ${source}: ${msg}`);
-        continue;
-      }
-      try {
-        // 手动步点名直解绑定媒体（resolveById 跳过搜索/±5s筛/AI仲裁/
-        // verdict记忆/死簿）；自动步照旧搜索链。两路产出流经与
-        // provider.resolve 完全同一段 postcheck 管道——上游可控数据
-        // 同威胁模型，不因「用户选的」降格
-        const unblocked = isManual
-          ? await provider.resolveById(manual.mediaId, {
-            purpose,
-            // 与兄弟分支同口径：共享链不陪绑调用方 signal——60s 内部
-            // 超时即自净上限（provider 内再叠 30s 子预算）
-            signal: AbortSignal.timeout(UNBLOCK_TIMEOUT_MS),
-          })
-          : await provider.resolve(
-            info ? { ...info } : { id: item.id, keyword: '' },
-            {
-              purpose,
-              // 真实取消透传：provider 内每次 fetch 都吃这个 signal。
-              // 共享链不接调用方 signal（断连不陪绑）——60s 内部超时即自净上限
-              signal: AbortSignal.timeout(UNBLOCK_TIMEOUT_MS),
-            },
-          );
-        // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，
-        // 域名再逐跳过公网 IP 校验——私网解析的 URL 若选中即 break，
-        // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
-        // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）。
-        // 逐源失败必须留痕——全静默 continue 下线上「该解的歌不解」无法
-        // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛。
-        // unblocked.urls（同字节镜像组）：整条候选链逐条过同一套校验，
-        // 活链集随 resolved 下发——代理逐试钉位，首链死掉自动换镜像；
-        // 无 urls 的源退化为单链（契约向后兼容）。跨字节实体的候选
-        // （不同分辨率/编码）不允许混排——代理换档语义见 proxy.js
-        const rawUrls = Array.isArray(unblocked?.urls) && unblocked.urls.length
-          ? unblocked.urls : [unblocked?.url];
-        const urls = [];
-        let checked = null;
-        for (const u of rawUrls) {
-          const chk = typeof u === 'string' && u ? normalizeOutboundUrl(u) : null;
-          if (!chk?.ok) continue;
-          if (!(await resolvesToPublicIp(chk.url.hostname))) continue;
-          if (!checked) checked = chk;
-          urls.push(chk.url.toString());
-        }
-        if (!checked) {
-          // 区分两类真因：源回 null/AI 全否（unblocked 空）与「有回链被
-          // 归一化/公网校验杀」——下游 FAILMSG 直接消费这段文案
-          const why = unblocked ? '回链归一化/公网校验全拒' : '源未产出候选';
-          errors.push(isManual
-            ? { source, msg: `手动绑定媒体：${why}`, cls: 'nomatch', manual: true }
-            : { source, msg: why, cls: 'nomatch' });
-          console.info(`[unlock] ${item.id} ${source}: ${isManual ? '手动绑定 ' : ''}无可用回链或归一化/公网校验全拒`);
-          continue;
-        }
-
-        // proxyOrigin 在场即过代理白名单预筛：发射收口（return 前 post-pass）
-        // 把一切回链统一 vault 化，名单外候选注定是"已解析却 403"的死链——
-        // 整条候选都须过，漏一条等于往 vault 里混一条空打一跳的死链或裸
-        // 凭据外发。googlevideo 的 ip= 绑定签名链本就必须代理；https
-        // 官方/解锁裸链现同口径（post-pass 统一 mint）。
-        // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
-        // 明文签名链进 JSON 等于把链内签名/出口 IP 发给访客；进程内调用方
-        // （file-downloader）不传 proxyOrigin，天然仍拿明文直链
-        if (proxyOrigin) {
-          for (let i = urls.length - 1; i >= 0; i--) {
-            if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
-          }
-          if (!urls.length) {
-            errors.push(isManual
-              ? { source, msg: '手动绑定媒体：回链不在代理白名单', cls: 'nomatch', manual: true }
-              : { source, msg: '回链不在代理白名单', cls: 'nomatch' });
-            console.info(`[unlock] ${item.id} ${source}: ${isManual ? '手动绑定 ' : ''}不在代理白名单`);
-            continue;
-          }
-          // splice 可能换掉首链——checked 对齐过滤后的 urls[0]，
-          // extOf/HEAD 探测的口径必须是最终下发链而非被滤掉的链
-          checked = normalizeOutboundUrl(urls[0]);
-        }
-
-        // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
-        // 候选期已知秒数的源（youtube）直接比对原始时长；
-        // 其余按 size×br 估算（unm range 探测已随库删除，回落 HEAD）
-        let estMs = null;
-        let sizeBytes = null;
-        if (originalDt) {
-          const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
-          if (Number.isFinite(unblocked.durationSec) && unblocked.durationSec > 0) {
-            estMs = unblocked.durationSec * 1000;
-          } else if (isManual && Number.isFinite(manual.durationSec) && manual.durationSec > 0) {
-            // 手动步对账参照回落绑定行快照——resolveById 恒回 null 时长
-            //（点名解没有候选期 lengthSeconds 可借）
-            estMs = manual.durationSec * 1000;
-          } else if (unblocked.br) {
-            // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
-            // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
-            sizeBytes = Number.isFinite(unblocked.size) && unblocked.size > 0
-              ? unblocked.size
-              : await withTimeout(getContentLength(checked.url.toString()), 8000, 'HEAD 探测')
-                .catch(() => null);
-            estMs = estimateDuration(sizeBytes, unblocked.br);
-          }
-          if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
-            // 时长对账对手动步只算不杀：用户在候选行看到 durationSec 后
-            // 显式点名——时长硬墙是「机器终审」，用户是更高终审，刻意挑
-            // Live/加长版是合法意图。豁免不静默：estMs 照算、留痕、
-            // resolved.timeMs 如实落绑定媒体时长
-            if (isManual) {
-              console.info(
-                `[unlock] ${item.id} purpose=${purpose} manual ${source}/${manual.mediaId} `
-                + `手动绑定媒体时长偏离（估算${Math.round(estMs)}ms/原始${originalDt}ms），按用户终审放行`
-              );
-            } else {
-              errors.push({ source, msg: `时长校验不符（估算${Math.round(estMs)}ms/原始${originalDt}ms）`, cls: 'nomatch' });
-              console.warn(
-                `[unlock] ${item.id} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
-              );
-              continue;
-            }
-          }
-        }
-
-        const resolved = {
-          url: urls[0], urls, br: unblocked.br || null, source,
-          // 真实文件形态写回：试听片的 time/size/type 透给下载端会
-          // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件。
-          // size 优先 provider/HEAD 实测值；youtube 无 size 但知道
-          // br+durationSec——按 br×时长估值（标称码率，量级对即可，
-          // 至少比残片字节数更接近真相）
-          // ext 优先 provider 显式供值：B 站 .m4s 链 path 尾缀/mime= 参数
-          // 两条 extOf 推导通道都拿不到真实容器（会错落 mp3 壳）
-          ext: unblocked.ext || extOf(checked.url),
-          size: sizeBytes
-            || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null)
-            || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),
-          timeMs: estMs || originalDt || null,
-          // 手动绑定胜出标记随 resolved 进 unlockCache/下发——runUnlock
-          // 转写 item.unblockedManual/unblockedMediaId（诊断字段）
-          ...(isManual ? { manual: true, mediaId: manual.mediaId } : {}),
-        };
-        unlockCacheSet(purpose, item.id, !!proxyOrigin, resolved);
-        // 源一次成功 = 凭据面回春——连败清零（已盖章的不撤，窗内仍跳过）
-        sourceHealth.noteSourceOk(source);
-        // errors 可能非空：前序源失败留痕随成功结果一起下发
-        return { resolved, errors };
-      } catch (e) {
-        const cls = classifyUnlockError(e);
-        // [canonical MARKER] provider 内已逐候选记过账的 authRejected
-        // 不重复计——否则单 resolve 单证据计 2 次即误触盖章
-        if (cls === 'authwall' && !e.authCounted) sourceHealth.noteAuthRejected(source);
-        // 手动步失败：条目形态与自动步全同外加 manual:true 标记、msg
-        // 前缀「手动绑定媒体：」——绑定行保留（一次风控/下架不该毁绑），
-        // 续跑剩余自动链（含被绑源自身搜索——纠错失败不劣于现状）；
-        // manual:true 使下载任务/排障可程序过滤真因。手动步不 markDead
-        // ——死簿只记自动链证据
-        const msg = String(e?.message || e).replace(/[\r\n]+/g, ' ');
-        errors.push(isManual
-          ? { source, msg: `手动绑定媒体：${msg}`, cls, manual: true }
-          : { source, msg, cls });
-        // 该源失败，继续下一个——留一行 info 让「逐源全灭」可排障
-        console.info(`[unlock] ${item.id} ${source}: ${isManual ? '手动绑定 ' : ''}${e?.message || e}`);
-      }
-    }
-    return { resolved: null, errors };
-  };
-
+  // 单 id 解锁委托 F1 共享链（模块级 resolveTrackUnlock——原 resolveOne
+  // 本体逐字抽移到那里）——数值域键与 qq_<mid> 键同一条链不同域；
+  // 缓存/合流/熔断/归因/时长对账语义一处维护
   const runUnlock = async (item) => {
-    throwIfAborted();
-    if (item.id) {
-      // song_url 返回项无 dt 字段——基准时长只可能来自 song_detail
-      const originalDt = originalDurations[item.id] || null;
-      let resolved = unlockCacheGet(purpose, item.id, !!proxyOrigin);
-      const wasCached = Boolean(resolved);
-      let shared = false;
-      if (!resolved) {
-        // in-flight 合流：同键已有在途链则搭车共享（批量重复 id/并发双发
-        // 不再各跑一遍完整解锁链）；无则本调用方建链，结果照常进缓存。
-        // 共享 promise 不吃本调用方 signal——await 后自查 abort 才消费结果
-        const gateKey = unlockCacheKey(purpose, item.id, !!proxyOrigin);
-        let gate = unlockInflight.get(gateKey);
-        if (!gate) {
-          gate = resolveOne(item, originalDt)
-            // 身份守卫：forgetSongUnlock 会在旧链在途时清键——旧 gate 的
-            // finally 无条件删会把后注册的新 gate 误逐（同键双链破坏单飞）
-            .finally(() => { if (unlockInflight.get(gateKey) === gate) unlockInflight.delete(gateKey); });
-          unlockInflight.set(gateKey, gate);
-        } else {
-          shared = true;
-        }
-        const out = await gate;
-        resolved = out?.resolved ?? null;
-        // errors 随共享结果下发——本 item 可能是搭车者（resolveOne 跑的是
-        // 首调用方的 item），归因不能落在别人对象上
-        if (out?.errors?.length) item.unlockErrors = out.errors;
-        throwIfAborted();
+    if (!item.id) return item;
+    // song_url 返回项无 dt 字段——基准时长只可能来自 song_detail
+    const { resolved, errors, cached, shared } = await resolveTrackUnlock(item.id, {
+      purpose,
+      proxied: !!proxyOrigin,
+      signal,
+      originalDt: originalDurations[item.id] || null,
+      buildInfo: () => buildInfoForRow(songRows[item.id]),
+    });
+    // errors 随共享结果下发——本 item 可能是搭车者（共享链跑的是首调用方
+    // 的 buildInfo），归因不能落空（L1）
+    if (errors?.length) item.unlockErrors = errors;
+    if (resolved) {
+      // vault 化统一收在 return 前的发射 post-pass——此处只落原始回链。
+      // 镜像组经 item.urls 递交给 post-pass 做 mint(urls[])（保代理逐试
+      // failover 语义）；proxyOrigin 缺席时进程内调用方（file-downloader）
+      // 拿明文直链，urls 字段不落地避免污染其消费面
+      item.url = resolved.url;
+      if (proxyOrigin && Array.isArray(resolved.urls) && resolved.urls.length > 1) {
+        item.urls = resolved.urls;
       }
-      if (resolved) {
-        // vault 化统一收在 return 前的发射 post-pass——此处只落原始回链。
-        // 镜像组经 item.urls 递交给 post-pass 做 mint(urls[])（保代理逐试
-        // failover 语义）；proxyOrigin 缺席时进程内调用方（file-downloader）
-        // 拿明文直链，urls 字段不落地避免污染其消费面
-        item.url = resolved.url;
-        if (proxyOrigin && Array.isArray(resolved.urls) && resolved.urls.length > 1) {
-          item.urls = resolved.urls;
-        }
-        item.unblocked = true;
-        item.unblockedSource = resolved.source;
-        // 手动绑定胜出的诊断字段：unblockedSource 保源名原值（前端/排障
-        // 据此区分「自动命中」与「用户终审」，不记号化）；
-        // unblockedMediaId 为「当前手动源」二期角标预留
-        if (resolved.manual === true) {
-          item.unblockedManual = true;
-          item.unblockedMediaId = resolved.mediaId;
-        }
-        // 解锁文件的真实码率（item.br 仍是网易声明值）：下载端落盘后时长
-        // 对账以它为分母，直接用声明值会把低码率解锁误判成剪辑
-        item.unblockedBr = resolved.br;
-        item.usedAudioProxy = false;
-        item.freeTrialInfo = null;
-        // 解锁回链的真实形态覆写试听片字段（type 影响前端下载扩展名、
-        // time/size 影响展示与字节对账）——上游原值是残片/空链的元数据
-        if (resolved.ext) item.type = resolved.ext;
-        if (resolved.size) item.size = resolved.size;
-        if (resolved.timeMs) item.time = resolved.timeMs;
-        // 成功行同样标注手动绑定来源——errors/豁免/breaker 各路径均有
-        // 「手动绑定」字样，成功行漏标会让手动命中与自动命中日志不可分
-        //（§6 观测项：source= 落绑定源名 + msg 注「手动绑定」）
-        console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${!!proxyOrigin}${resolved.manual === true ? ' (manual 手动绑定)' : ''}${wasCached ? ' (cached)' : shared ? ' (shared)' : ''}`);
-      } else {
-        item.unlockFailed = true;
-        // 试听片段/失效链不再下发——否则下载端会把 30s 残片当完整曲落盘并标 completed
-        item.url = null;
-        console.warn(`[unlock] ${item.id} purpose=${purpose} all sources failed or duration mismatch`);
+      item.unblocked = true;
+      item.unblockedSource = resolved.source;
+      // 手动绑定胜出的诊断字段：unblockedSource 保源名原值（前端/排障
+      // 据此区分「自动命中」与「用户终审」，不记号化）；
+      // unblockedMediaId 为「当前手动源」二期角标预留
+      if (resolved.manual === true) {
+        item.unblockedManual = true;
+        item.unblockedMediaId = resolved.mediaId;
       }
+      // 解锁文件的真实码率（item.br 仍是网易声明值）：下载端落盘后时长
+      // 对账以它为分母，直接用声明值会把低码率解锁误判成剪辑
+      item.unblockedBr = resolved.br;
+      item.usedAudioProxy = false;
+      item.freeTrialInfo = null;
+      // 解锁回链的真实形态覆写试听片字段（type 影响前端下载扩展名、
+      // time/size 影响展示与字节对账）——上游原值是残片/空链的元数据
+      if (resolved.ext) item.type = resolved.ext;
+      if (resolved.size) item.size = resolved.size;
+      if (resolved.timeMs) item.time = resolved.timeMs;
+      // 成功行同样标注手动绑定来源——errors/豁免/breaker 各路径均有
+      // 「手动绑定」字样，成功行漏标会让手动命中与自动命中日志不可分
+      //（§6 观测项：source= 落绑定源名 + msg 注「手动绑定」）
+      console.info(`[unlock] ${item.id} purpose=${purpose} source=${resolved.source} proxy=${!!proxyOrigin}${resolved.manual === true ? ' (manual 手动绑定)' : ''}${cached ? ' (cached)' : shared ? ' (shared)' : ''}`);
+    } else {
+      item.unlockFailed = true;
+      // 试听片段/失效链不再下发——否则下载端会把 30s 残片当完整曲落盘并标 completed
+      item.url = null;
+      console.warn(`[unlock] ${item.id} purpose=${purpose} all sources failed or duration mismatch`);
     }
     return item;
   };
@@ -689,6 +474,348 @@ async function resolveSongUrls(items, { purpose = 'playback', proxyOrigin = null
   return items;
 }
 
+// ── F1 共享解锁链 ────────────────────────────────────────────────
+// resolveTrackUnlock：数值域 resolveSongUrls 与 qq_ 外源腿（routes/qq.js
+// 播放腿 / file-downloader 下载腿）共用的单键解锁本体。
+// produce 本体 = 原 resolveOne 逐字抽移 + 捕获态→参数机械改绑
+//（songRows[item.id]→info/buildInfo、allSources→sources、proxyOrigin→
+// proxied 布尔位、item.id→trackId、手动步以 includeManual 门控）；
+// 外壳 = 原 runUnlock 的 unlockCache 读 + unlockInflight 合流 + 身份守卫
+// finally（skipCache 仅旁路正档读——写/合流不变）。
+// 共享链绝不消费调用方 signal（[canonical:SHARED-GATE]）——provider 调用
+// 恒吃 AbortSignal.timeout(UNBLOCK_TIMEOUT_MS) 自净；signal 只门控
+// 「本等待方是否消费结果」：入链前与 await gate 后各查一次，命中抛
+// aborted（等待方离场不杀链——链续跑、产物照常落缓存，retry 搭
+// inflight/60s 正档，绝不二次烧上游）。
+// → {resolved: {url,urls,br,source,ext,size,timeMs,manual?,mediaId?}|null,
+//    errors: [{source,msg,cls,manual?}], cached: bool, shared: bool}
+async function resolveTrackUnlock(trackId, {
+  purpose = 'playback',           // 'playback' | 'download'
+  sources = null,                 // null → purpose 默认集（PLAYBACK/DOWNLOAD_SOURCES 同表）；qq_ 调用方恒传 QQ_UNLOCK_SOURCES
+  proxied = false,                // 白名单预筛 + 缓存键 'px'|'direct' 段（原 !!proxyOrigin 位）
+  info: infoParam = null,         // 成品 info（buildUnlockInfo 兼容形）；与 buildInfo 二选一
+  buildInfo = null,               // async () => info|null；仅「新链实跑」时被调——缓存命中/搭车者均不触发（播放腿 detail 不白打）
+  originalDt: originalDtArg = null, // 时长对账基准 ms；null → info?.durationMs 回落
+  includeManual = true,           // false → 跳过 unlockManualRepo.getManual 整读+无手动步
+  skipCache = false,              // retry=1：旁路正档读；治愈写照常落；inflight 照常合流
+  signal = null,                  // 等待方 signal——只门控本调用方消费权，不进共享链
+} = {}) {
+  const throwIfAborted = () => { if (signal?.aborted) throw new Error('aborted'); };
+  throwIfAborted();
+  const allSources = sources ?? (purpose === 'download' ? DOWNLOAD_SOURCES : PLAYBACK_SOURCES);
+
+  // 单键解锁链本体：检索 info → 逐源 resolve → 回链校验/白名单预筛/时长
+  // 对账 → 写缓存，产出 {resolved, errors}。产出经 unlockInflight 键共享给
+  // 并发搭车者，故本段不消费调用方 signal（自净上限靠每次 provider 调用的
+  // UNBLOCK_TIMEOUT_MS）；并发等待方在 await 共享 promise 后自查自己的
+  // signal 决定吃不吃结果
+  const produce = async () => {
+    // 逐源失败归因——产出经 unlockInflight 键共享给并发搭车者，errors
+    // 必须随共享结果 {resolved, errors} 一起走，否则搭车调用方无归因（L1）
+    const errors = [];
+    // 检索元数据：一次装配全源复用（provider 拿 keyword 去外站搜候选，
+    // 干净的 name/artists 让候选选择更准）。info 直供或 buildInfo 惰性
+    // 装配；装配失败/缺席 → info=null——搜索型源拿不到 keyword，仅 id
+    // 直解源（pyncmd）仍可用
+    let info = infoParam;
+    if (!info && buildInfo) {
+      try { info = await buildInfo(); } catch { info = null; }
+    }
+    // 时长对账基准：显传优先，缺省回落 info.durationMs——数值域两侧同源
+    //（都是 song_detail dt）零差；qq_ 伪行靠它兜 detail 时长
+    const originalDt = originalDtArg ?? info?.durationMs ?? null;
+    // 手动绑定插队步：song_unlock_manual 有绑定行且其源具备 resolveById
+    // 能力时，在首个具该能力的源之前插一个 'manual' 虚拟步——pyncmd 之
+    // 后、全部搜索源之前。位序理由：(1) pyncmd 是官方直解零错配，手动
+    // 纠错的语义是「纠正搜索错配」不该压过官方源；(2) 绑 bilibili 的
+    // 场景恰是 youtube 自动链错配在先——手动步放绑定源自己的槽位
+    //（bilibili 在 youtube 后）会让前位搜索源先成功，绑定永不被消费；
+    // (3) 绑定媒体失败时回落完整自动链含绑定源自身搜索——纠错失败不
+    // 劣于现状。库不可用按无绑定放行（绑定是增强不是门禁）。
+    // includeManual=false（qq_ 共享链——绑定由外层腿专职消费，
+    // [canonical:MANUAL-ONCE]）连 repo 读都跳过，手动步缺席
+    let manual = null;
+    if (includeManual) {
+      try { manual = unlockManualRepo.getManual(String(trackId)); } catch { /* 库不可用按无绑定放行 */ }
+    }
+    const manualOk = !!(manual && PROVIDERS[manual.source]?.resolveById);
+    const steps = [...allSources];
+    if (manualOk) {
+      const at = steps.findIndex(s => PROVIDERS[s]?.resolveById);
+      steps.splice(at === -1 ? steps.length : at, 0, 'manual');
+    }
+    for (const step of steps) {
+      const isManual = step === 'manual';
+      // 手动步把 breaker/errors/resolved 全键在绑定源名上——下游消费
+      //（unblockedSource/健康记账/日志）与自动步共享同一份口径
+      const source = isManual ? manual.source : step;
+      const provider = PROVIDERS[source];
+      if (!provider) continue;
+      // 源级熔断闸（L2）：盖章窗内整源跳过——每次解锁重跑注定失败的
+      // 完整试错链（youtube 每候选 3 形态 × 至多 2 试 + 30s 子预算）既
+      // 拖长 resolve 又持续给风控喂信号；breaker 条目记「该源本次没跑」。
+      // 手动步同撞墙——风控窗内直解同烧 30s 子预算只是喂信号
+      if (sourceHealth.isOpen(source)) {
+        const msg = `源熔断中${isManual ? '（手动绑定）' : ''}：${sourceHealth.breakerReason(source) || '连败判据'}`;
+        errors.push(isManual
+          ? { source, msg, cls: 'breaker', manual: true }
+          : { source, msg, cls: 'breaker' });
+        console.info(`[unlock] ${trackId} ${source}: ${msg}`);
+        continue;
+      }
+      try {
+        // 手动步点名直解绑定媒体（resolveById 跳过搜索/±5s筛/AI仲裁/
+        // verdict记忆/死簿）；自动步照旧搜索链。两路产出流经与
+        // provider.resolve 完全同一段 postcheck 管道——上游可控数据
+        // 同威胁模型，不因「用户选的」降格
+        const unblocked = isManual
+          ? await provider.resolveById(manual.mediaId, {
+            purpose,
+            // 与兄弟分支同口径：共享链不陪绑调用方 signal——60s 内部
+            // 超时即自净上限（provider 内再叠 30s 子预算）
+            signal: AbortSignal.timeout(UNBLOCK_TIMEOUT_MS),
+          })
+          : await provider.resolve(
+            info ? { ...info } : { id: trackId, keyword: '' },
+            {
+              purpose,
+              // 真实取消透传：provider 内每次 fetch 都吃这个 signal。
+              // 共享链不接调用方 signal（断连不陪绑）——60s 内部超时即自净上限
+              signal: AbortSignal.timeout(UNBLOCK_TIMEOUT_MS),
+            },
+          );
+        // 选源期就排除不合规回链：协议/端口过 normalizeOutboundUrl，
+        // 域名再逐跳过公网 IP 校验——私网解析的 URL 若选中即 break，
+        // 下载端 fatal 整任务死、可用源被白跳（pyncmd 是第三方 API，
+        // 其回链属攻击者可影响数据，校验严格度必须与下载端一致）。
+        // 逐源失败必须留痕——全静默 continue 下线上「该解的歌不解」无法
+        // 区分是搜索空回/风控/SSRF 拦截还是白名单预筛。
+        // unblocked.urls（同字节镜像组）：整条候选链逐条过同一套校验，
+        // 活链集随 resolved 下发——代理逐试钉位，首链死掉自动换镜像；
+        // 无 urls 的源退化为单链（契约向后兼容）。跨字节实体的候选
+        // （不同分辨率/编码）不允许混排——代理换档语义见 proxy.js
+        const rawUrls = Array.isArray(unblocked?.urls) && unblocked.urls.length
+          ? unblocked.urls : [unblocked?.url];
+        const urls = [];
+        let checked = null;
+        for (const u of rawUrls) {
+          const chk = typeof u === 'string' && u ? normalizeOutboundUrl(u) : null;
+          if (!chk?.ok) continue;
+          if (!(await resolvesToPublicIp(chk.url.hostname))) continue;
+          if (!checked) checked = chk;
+          urls.push(chk.url.toString());
+        }
+        if (!checked) {
+          // 区分两类真因：源回 null/AI 全否（unblocked 空）与「有回链被
+          // 归一化/公网校验杀」——下游 FAILMSG 直接消费这段文案
+          const why = unblocked ? '回链归一化/公网校验全拒' : '源未产出候选';
+          errors.push(isManual
+            ? { source, msg: `手动绑定媒体：${why}`, cls: 'nomatch', manual: true }
+            : { source, msg: why, cls: 'nomatch' });
+          console.info(`[unlock] ${trackId} ${source}: ${isManual ? '手动绑定 ' : ''}无可用回链或归一化/公网校验全拒`);
+          continue;
+        }
+
+        // proxied=true 即过代理白名单预筛：发射收口（resolveSongUrls return
+        // 前 post-pass 或 /qq/stream 端点 mint）把一切回链统一 vault 化，
+        // 名单外候选注定是"已解析却 403"的死链——整条候选都须过，漏一条
+        // 等于往 vault 里混一条空打一跳的死链或裸凭据外发。googlevideo 的
+        // ip= 绑定签名链本就必须代理；https 官方/解锁裸链现同口径
+        //（post-pass 统一 mint）。
+        // purpose 不设限：download 场景（浏览器拉 blob）同样拿 vault token——
+        // 明文签名链进 JSON 等于把链内签名/出口 IP 发给访客；进程内调用方
+        //（file-downloader）proxied=false，天然仍拿明文直链
+        if (proxied) {
+          for (let i = urls.length - 1; i >= 0; i--) {
+            if (!isProxyAllowedHost(new URL(urls[i]).hostname)) urls.splice(i, 1);
+          }
+          if (!urls.length) {
+            errors.push(isManual
+              ? { source, msg: '手动绑定媒体：回链不在代理白名单', cls: 'nomatch', manual: true }
+              : { source, msg: '回链不在代理白名单', cls: 'nomatch' });
+            console.info(`[unlock] ${trackId} ${source}: ${isManual ? '手动绑定 ' : ''}不在代理白名单`);
+            continue;
+          }
+          // splice 可能换掉首链——checked 对齐过滤后的 urls[0]，
+          // extOf/HEAD 探测的口径必须是最终下发链而非被滤掉的链
+          checked = normalizeOutboundUrl(urls[0]);
+        }
+
+        // 时长校验对所有源生效——剪辑/错配文件下发会被当完整曲播放/落盘。
+        // 候选期已知秒数的源（youtube）直接比对原始时长；
+        // 其余按 size×br 估算（unm range 探测已随库删除，回落 HEAD）
+        let estMs = null;
+        let sizeBytes = null;
+        if (originalDt) {
+          const tolerance = DURATION_TOLERANCE[source] ?? DURATION_TOLERANCE.default;
+          if (Number.isFinite(unblocked.durationSec) && unblocked.durationSec > 0) {
+            estMs = unblocked.durationSec * 1000;
+          } else if (isManual && Number.isFinite(manual.durationSec) && manual.durationSec > 0) {
+            // 手动步对账参照回落绑定行快照——resolveById 恒回 null 时长
+            //（点名解没有候选期 lengthSeconds 可借）
+            estMs = manual.durationSec * 1000;
+          } else if (unblocked.br) {
+            // HEAD 探测超时应视为"拿不到 size"（null），与 getContentLength 的
+            // 失败降级契约对齐——慢而健康的 CDN 不该因探测超时被整条否决
+            sizeBytes = Number.isFinite(unblocked.size) && unblocked.size > 0
+              ? unblocked.size
+              : await withTimeout(getContentLength(checked.url.toString()), 8000, 'HEAD 探测')
+                .catch(() => null);
+            estMs = estimateDuration(sizeBytes, unblocked.br);
+          }
+          if (estMs && Math.abs(estMs - originalDt) / originalDt > tolerance) {
+            // 时长对账对手动步只算不杀：用户在候选行看到 durationSec 后
+            // 显式点名——时长硬墙是「机器终审」，用户是更高终审，刻意挑
+            // Live/加长版是合法意图。豁免不静默：estMs 照算、留痕、
+            // resolved.timeMs 如实落绑定媒体时长
+            if (isManual) {
+              console.info(
+                `[unlock] ${trackId} purpose=${purpose} manual ${source}/${manual.mediaId} `
+                + `手动绑定媒体时长偏离（估算${Math.round(estMs)}ms/原始${originalDt}ms），按用户终审放行`
+              );
+            } else {
+              errors.push({ source, msg: `时长校验不符（估算${Math.round(estMs)}ms/原始${originalDt}ms）`, cls: 'nomatch' });
+              console.warn(
+                `[unlock] ${trackId} purpose=${purpose} source=${source} duration mismatch: estimated=${Math.round(estMs)}ms original=${originalDt}ms, skipping`
+              );
+              continue;
+            }
+          }
+        }
+
+        const resolved = {
+          url: urls[0], urls, br: unblocked.br || null, source,
+          // 真实文件形态写回：试听片的 time/size/type 透给下载端会
+          // 落出「mp3 壳装 flac/m4a 肉、30s 残片时长」的错文件。
+          // size 优先 provider/HEAD 实测值；youtube 无 size 但知道
+          // br+durationSec——按 br×时长估值（标称码率，量级对即可，
+          // 至少比残片字节数更接近真相）
+          // ext 优先 provider 显式供值：B 站 .m4s 链 path 尾缀/mime= 参数
+          // 两条 extOf 推导通道都拿不到真实容器（会错落 mp3 壳）
+          ext: unblocked.ext || extOf(checked.url),
+          size: sizeBytes
+            || (Number.isFinite(unblocked.size) && unblocked.size > 0 ? unblocked.size : null)
+            || (estMs && unblocked.br ? Math.round(unblocked.br * estMs / 8000) : null),
+          timeMs: estMs || originalDt || null,
+          // 手动绑定胜出标记随 resolved 进 unlockCache/下发——runUnlock
+          // 转写 item.unblockedManual/unblockedMediaId（诊断字段）
+          ...(isManual ? { manual: true, mediaId: manual.mediaId } : {}),
+          // provider 加性 mediaId（yt videoId/bv bvid——/qq/stream 端点
+          // mint cacheKey 去重消费）：在场直通，缺席不编
+          ...(unblocked.mediaId ? { mediaId: unblocked.mediaId } : {}),
+        };
+        unlockCacheSet(purpose, trackId, proxied, resolved);
+        // 源一次成功 = 凭据面回春——连败清零（已盖章的不撤，窗内仍跳过）
+        sourceHealth.noteSourceOk(source);
+        // errors 可能非空：前序源失败留痕随成功结果一起下发
+        return { resolved, errors };
+      } catch (e) {
+        const cls = classifyUnlockError(e);
+        // [canonical MARKER] provider 内已逐候选记过账的 authRejected
+        // 不重复计——否则单 resolve 单证据计 2 次即误触盖章
+        if (cls === 'authwall' && !e.authCounted) sourceHealth.noteAuthRejected(source);
+        // 手动步失败：条目形态与自动步全同外加 manual:true 标记、msg
+        // 前缀「手动绑定媒体：」——绑定行保留（一次风控/下架不该毁绑），
+        // 续跑剩余自动链（含被绑源自身搜索——纠错失败不劣于现状）；
+        // manual:true 使下载任务/排障可程序过滤真因。手动步不 markDead
+        // ——死簿只记自动链证据
+        const msg = String(e?.message || e).replace(/[\r\n]+/g, ' ');
+        errors.push(isManual
+          ? { source, msg: `手动绑定媒体：${msg}`, cls, manual: true }
+          : { source, msg, cls });
+        // 该源失败，继续下一个——留一行 info 让「逐源全灭」可排障
+        console.info(`[unlock] ${trackId} ${source}: ${isManual ? '手动绑定 ' : ''}${e?.message || e}`);
+      }
+    }
+    return { resolved: null, errors };
+  };
+
+  // 外壳：unlockCache 正档读 + unlockInflight 合流 + 身份守卫 finally
+  //（skipCache 仅旁路正档读——retry=1 的意图是绕已死的签名链，
+  // 写/合流照旧：治愈写照常落、同键并发搭车不变）
+  let resolved = skipCache ? null : unlockCacheGet(purpose, trackId, proxied);
+  const cached = Boolean(resolved);
+  let shared = false;
+  let errors = [];
+  if (!resolved) {
+    // in-flight 合流：同键已有在途链则搭车共享（批量重复 id/并发双发、
+    // qq_ 端点预算离场后的 retry 不再各跑一遍完整解锁链）；无则本调用方
+    // 建链，结果照常进缓存。共享 promise 不吃本调用方 signal——await 后
+    // 自查 abort 才消费结果
+    const gateKey = unlockCacheKey(purpose, trackId, proxied);
+    let gate = unlockInflight.get(gateKey);
+    if (!gate) {
+      gate = produce()
+        // 身份守卫：forgetSongUnlock 会在旧链在途时清键——旧 gate 的
+        // finally 无条件删会把后注册的新 gate 误逐（同键双链破坏单飞）
+        .finally(() => { if (unlockInflight.get(gateKey) === gate) unlockInflight.delete(gateKey); });
+      unlockInflight.set(gateKey, gate);
+    } else {
+      shared = true;
+    }
+    const out = await gate;
+    resolved = out?.resolved ?? null;
+    // errors 随共享结果下发——本调用方可能是搭车者
+    errors = out?.errors ?? [];
+    throwIfAborted();
+  }
+  return { resolved, errors, cached, shared };
+}
+
+// F2 qq_ 解锁检索元数据装配：伪 songRow → buildInfoForRow（aiUnlockInfo →
+// buildUnlockInfo）——与数值域同一管线（禁止旁路 AI 规整——版本修饰噪声
+// 正是它要治的）。mid = 裸 songmid（非 qq_ 前缀）；内部拼伪行
+// id='qq_<mid>' 保键域（[canonical:ID-PASSTHROUGH]）。
+// 两种喂法（调用方二选一，以「providerData 键是否出现」区分——值空也算喂
+// 了快照）：
+// - 播放腿（/qq/stream）：qqUnlockInfo(mid, {}) 一键不传 → getSongDetail
+//   上行取 normalizeTrack 真 artists[] + intervalSec 装伪行（detail 自备
+//   QQ_TIMEOUT_MS=15s 上限，共享链不吃调用方 signal）
+// - 下载腿（file-downloader）：恒传 {title, author, artists, durationMs}
+//   四键 providerData 快照零上行；ar 取 artists（≤10 名），author 整串
+//   单元素兜底（绝不按空格切 author——「A B / C」型合并作者切碎比不切
+//   更糟）
+// detail 不可达/字段全空 → null——共享链按既有口径全灭 nomatch
+async function qqUnlockInfo(mid, opts = {}) {
+  const {
+    title = null, author = null, artists = null, durationMs = null, signal = null,
+  } = opts || {};
+  const fed = opts && typeof opts === 'object'
+    && ('title' in opts || 'author' in opts || 'artists' in opts || 'durationMs' in opts);
+  let songRow;
+  if (fed) {
+    const names = (Array.isArray(artists) && artists.length
+        ? artists
+        : (author ? [author] : []))
+      .map(a => typeof a === 'string' ? a.trim() : '')
+      .filter(Boolean)
+      .slice(0, 10);
+    songRow = {
+      id: `qq_${mid}`,
+      name: typeof title === 'string' && title.trim() ? title.trim() : null,
+      ar: names.map(n => ({ name: n })),
+      al: { name: null },
+      dt: Number.isFinite(durationMs) && durationMs > 0 ? durationMs : null,
+    };
+  } else {
+    // 'mid' keyHint：mid 命名空间的纯数字串先按 songmid 试——先 songid 会在
+    // 恰好撞上别的歌的 songid 时静默拿错歌元数据
+    const t = await getSongDetail(mid, signal, 'mid').catch(() => null);
+    if (!t) return null;
+    songRow = {
+      id: `qq_${mid}`,
+      name: t.name,
+      ar: t.artists.map(n => ({ name: n })),
+      al: { name: t.album },
+      dt: t.intervalSec * 1000,
+    };
+  }
+  // 字段全空 → null——「注入即承诺」info.name 必须非空，名字都没有的伪行
+  // 喂给 AI 规整只是白烧一次上游
+  if (!String(songRow?.name || '').trim()) return null;
+  return buildInfoForRow(songRow);
+}
+
 // 手动重试 = hard retry：把该曲在解锁链各层的负状态一次清掉——否则重跑
 // 只是复读同一条注定失败的链（60s unlockCache 里可能是已死签名链、
 // deadCands/verdict 里躺着墙期误判、rejectedAt 冷却挡住 AI 重评）。
@@ -713,4 +840,4 @@ function forgetSongUnlock(songId) {
 // baseUnlockInfo 导出给 /unlock/candidates：keyword 缺席时的兜底派生
 // （[canonical KWFORM]「name - artists.join(' / ')」公式唯一源——客户端
 // 镜像派生与这里共用同一规则句，不许另写拼接）
-module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock, MAX_UNLOCK_ITEMS, forgetSongUnlock, baseUnlockInfo };
+module.exports = { callNeteaseApi, apiModules, resolveSongUrls, estimateDuration, needsUnlock, MAX_UNLOCK_ITEMS, forgetSongUnlock, baseUnlockInfo, resolveTrackUnlock, qqUnlockInfo };
