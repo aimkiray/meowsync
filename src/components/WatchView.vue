@@ -122,9 +122,20 @@
     <div class="watch-layout">
       <!-- ══ 媒体舞台列 ══ -->
       <div ref="mainColEl" class="watch-main" :class="{ 'watch-main--video': mediaVideoActive }">
+        <!-- 音频封面态：整盒充当播放/暂停钮（role/tabindex/aria/title 全按
+             媒体态挂——视频态点按归 video 元素与悬停控制层，wrap 不叠第二套
+             语义与点按通道）。keydown 带 .self：视频态内层聚焦键（中央键/全屏
+             键）冒泡来的 enter/space 不能截——.prevent 会吃掉原生键激活 -->
         <div ref="coverWrapRef" class="watch-cover-wrap"
           :class="{ 'watch-cover-wrap--video': mediaVideoActive, 'watch-cover-wrap--idle': videoFullscreen && !controlsVisible }"
-          @mousemove="pokeControls" @pointerdown="pokeControls">
+          :role="mediaVideoActive ? undefined : 'button'"
+          :tabindex="mediaVideoActive ? undefined : 0"
+          :aria-label="mediaVideoActive ? undefined : (isPlaying ? '暂停' : '播放')"
+          :title="mediaVideoActive ? undefined : (isPlaying ? '暂停' : '播放')"
+          @mousemove="pokeControls" @pointerdown="pokeControls"
+          @click="onCoverClick"
+          @keydown.enter.self.prevent="onCoverClick"
+          @keydown.space.self.prevent="onCoverClick">
           <!-- 外部导入曲视频模式：封面区渲染视频流（静音，时钟锚 Howler 音频）；
                音频模式回落网易云匹配封面——不加载视频即省流量。
                video+控制层同包一个 template v-if：img/fallback 的 v-else 链
@@ -1185,6 +1196,12 @@ export default {
     let tapWasVisible = false
     const onVideoPointerDown = () => { tapWasVisible = controlsVisible.value }
     const onVideoClick = () => { if (tapWasVisible) emit('toggle-play') }
+    // 音频封面态：点封面/键盘激活同走 toggle-play；视频态守卫早退——
+    // 画面点按已由 onVideoClick 首触语义分管，双通道会连 emit 两次
+    const onCoverClick = () => {
+      if (mediaVideoActive.value) return
+      emit('toggle-play')
+    }
     watch(videoFullscreen, (on) => {
       clearTimeout(controlsHideTimer)
       // 进全屏走 poke（亮一轮＋播放中顺便挂上自隐计时）；退出即清态
@@ -1737,6 +1754,7 @@ export default {
       pokeControls,
       onVideoPointerDown,
       onVideoClick,
+      onCoverClick,
       videoOn,
       mediaVideoActive,
       mediaVideoKey,
@@ -1946,6 +1964,16 @@ export default {
   width: 100%;
   aspect-ratio: 16 / 9;
   box-shadow: none;
+}
+/* 音频封面态：整盒点按切播放/暂停——手型提示可点（视频态点按归 video/控制层，
+   --idle 的 cursor:none 也只挂 --video，两边不相交） */
+.watch-cover-wrap:not(.watch-cover-wrap--video) { cursor: pointer; }
+/* 整盒 role=button 的焦点环：白环+墨晕同圆形键组，墨晕叠在原投影上
+   （不盖掉封面浮起影，免得聚焦瞬间封面塌一截） */
+.watch-cover-wrap:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .5), 0 0 0 4px rgba(0, 0, 0, .75);
 }
 .watch-cover {
   width: 100%;
