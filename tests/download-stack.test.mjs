@@ -7,7 +7,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync, existsSync, symlinkSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, symlinkSync, readdirSync, statSync } from 'node:fs';
 import { tmpDataDir } from './helpers.mjs';
 
 process.env.DATA_DIR = tmpDataDir('meowsync-dlstack-');
@@ -471,4 +471,72 @@ test('getSongDownloadStatus：纯视频档行不误报 audioReady（bv/yt 的 vi
   assert.equal(st.videoReady, true);
   assert.equal(st.audioReady, false, 'bv_/yt_ 行的 videoPath 不得算作音频工件');
   assert.equal(st.audioPlaylistId, null);
+});
+
+test('getSongDownloadStatus：audioArtifactAt/audioEtag 与 /file 实发同源，boundUpdatedAt 回带绑定戳', async () => {
+  const songId = 'yt_stamp_probe';
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_stamp', name: 'stamp' });
+  const aud = join(fs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', 's.mp3');
+  mkdirSync(dirname(aud), { recursive: true });
+  writeFileSync(aud, 'audio-bytes');
+  const t = downloadTasksRepo.createTask({ playlistId: pl.id, queueId: null, songId, songName: 'n', artist: 'a' });
+  downloadTasksRepo.updateTask(t.id, {
+    status: 'completed', audioPath: aud, completedAt: '2024-04-01T00:00:00.000Z'
+  });
+
+  const st = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(st.audioReady, true);
+  const stat = statSync(aud);
+  // 线型整数契约：audioArtifactAt 是 trunc(mtimeMs)——浮点直发会让客户端
+  // Long 型解码炸；etag 侧仍保浮点逐字（与 /file 实发对账，截断会让同毫秒
+  // 换源撞 tag）
+  assert.equal(st.audioArtifactAt, Math.trunc(stat.mtimeMs),
+    '工件戳须是命中档 mtimeMs 的截断整数');
+  assert.ok(Number.isInteger(st.audioArtifactAt), 'audioArtifactAt 必须是整数');
+  assert.equal(st.audioEtag, `W/"${stat.size}-${stat.mtimeMs}"`, 'etag 生成式须与 /file 同款');
+  assert.equal(st.boundUpdatedAt, null, '未绑定歌曲绑定戳归 null');
+  // 与 /file 实发 ETag 逐字节一致——客户端拿它对账本地档，偏一个字节都会误换源
+  const downloadsRoute = require('../src/server/routes/downloads.js');
+  const fileRes = await downloadsRoute.request(
+    `http://t/downloads/songs/${songId}/file?playlistId=${pl.neteasePlaylistId}`);
+  assert.equal(fileRes.status, 200);
+  assert.equal(fileRes.headers.get('etag'), st.audioEtag, 'status 回带 etag 须等于 /file 实发值');
+
+  // HTTP 面回包钉：线型必须是 JSON 整数字面量（非仅服务层数值——序列化出
+  // 1700000000123.4 形如浮点即违约），且值与服务层戳一致
+  const statusRes = await downloadsRoute.request(
+    `http://t/downloads/songs/${songId}/status?playlistId=${pl.neteasePlaylistId}`);
+  assert.equal(statusRes.status, 200);
+  const raw = await statusRes.text();
+  const wireAt = /"audioArtifactAt":(-?\d+(?:\.\d+)?)/.exec(raw);
+  assert.ok(wireAt, 'status 回包须带 audioArtifactAt');
+  assert.ok(!wireAt[1].includes('.'), `audioArtifactAt 线型须为整数字面量，实发 ${wireAt[1]}`);
+  assert.equal(Number(wireAt[1]), Math.trunc(stat.mtimeMs));
+
+  // 绑定落库后回带 song_unlock_manual.updated_at 的 UTC epoch ms——
+  // sqlite CURRENT_TIMESTAMP 裸串补 'Z' 解析。updated_at 钉成已知裸串、
+  // 断言固定 UTC 值：两侧同式对拍（实现与断言都写 `串+Z`）证不了时区——
+  // 若实现丢了 'Z'，裸串落本地时区，与 UTC 固定值差 UTC 偏移小时数
+  const unlockManualRepo = require('../src/server/repositories/unlockManual.js');
+  const { getDb } = require('../src/server/db/client.js');
+  unlockManualRepo.upsertManual(songId, {
+    source: 'bilibili', mediaId: 'BV1xx411c7mD', title: 't', owner: 'o', durationSec: 200
+  });
+  try {
+    getDb().prepare(
+      `UPDATE song_unlock_manual SET updated_at = '2020-01-01 00:00:00' WHERE song_id = ?`
+    ).run(songId);
+    const st2 = await dm.getSongDownloadStatus(null, songId);
+    assert.equal(st2.boundUpdatedAt, Date.parse('2020-01-01 00:00:00Z'),
+      'sqlite UTC 裸串须按 UTC 解析为 1577836800000（丢 Z 会落本地时区）');
+  } finally {
+    unlockManualRepo.deleteManual(songId);
+  }
+
+  // audioReady 未命中（无档曲目）→ 工件戳/etag 双 null；无绑定同归 null
+  const st3 = await dm.getSongDownloadStatus(null, 'yt_no_artifact_probe');
+  assert.equal(st3.audioReady, false);
+  assert.equal(st3.audioArtifactAt, null);
+  assert.equal(st3.audioEtag, null);
+  assert.equal(st3.boundUpdatedAt, null);
 });
