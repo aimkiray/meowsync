@@ -26,6 +26,7 @@ function mapTaskRow(row) {
     videoMeta: parseProviderData(row.video_meta),
     bitrate: row.bitrate,
     fileSize: row.file_size,
+    audioBr: row.audio_br,
     durationMs: row.duration_ms,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -142,6 +143,10 @@ function updateTask(id, updates) {
   if (updates.fileSize !== undefined) {
     fields.push('file_size = @file_size');
     params.file_size = updates.fileSize;
+  }
+  if (updates.audioBr !== undefined) {
+    fields.push('audio_br = @audio_br');
+    params.audio_br = updates.audioBr;
   }
   if (updates.bitrate !== undefined) {
     fields.push('bitrate = @bitrate');
