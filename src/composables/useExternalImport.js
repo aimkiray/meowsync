@@ -31,6 +31,8 @@ const RESULT_SOURCE = { bilibili: 'bili', youtube: 'yt', qq: 'qq' }
 // deps（App 注入的跨域共享）：
 //   gates.mediaImport / gates.select — 互作废闸（选单顶掉在途导入，导入反向占住选单）
 //   userPlaylists / selectedPlaylist / songs / loadingSongs / savePlaylistsToStorage — 库域
+//   healMissingQqCovers — 库域 qq_ 无专辑曲封面惰性回填：壳落库收尾 fire-
+//     and-forget 补跑（幂等 asked 集判重），不等下次整页加载才补图
 //   searchQuery / currentSong — 顶栏输入与播放器域
 //   playSong / enterWatch / selectPlaylistAndShow — App 侧播放器与导航动作
 //   showSingleResult(song, source) — 链接 resolve 曲目的搜索结果行落点
@@ -43,6 +45,9 @@ export function useExternalImport({
   // 缺省空函数：未注入 dep 时 asResult 结果静默不展示——好过抛 TypeError
   // 被外层 catch 谎报成「导入失败」；正常接线（App.vue）恒注入
   showSingleResult = () => {},
+  // 同款缺省：heal 是后台增强不是导入成败论据，缺 dep 静默不补——
+  // 调用点在 try 内，裸调 TypeError 会被外层 catch 谎报成导入失败
+  healMissingQqCovers = () => {},
 }) {
 
   // 单曲分享壳统一容量剪枝：倒序 splice 防下标错位
@@ -110,6 +115,9 @@ export function useExternalImport({
         pruneSingleSongShells()
         savePlaylistsToStorage()
       }
+      // 内联壳双支落库收尾同跑封面回填（qq_ 无专辑曲即问 /cover，幂等
+      // asked 判重）——fire-and-forget 不 await，不挡后续选中/播放
+      healMissingQqCovers()
 
       selectedPlaylist.value = shell
       currentSong.value = song
@@ -160,6 +168,9 @@ export function useExternalImport({
   const upsertImportedShell = ({ shellId, tracks, name, coverImgUrl, creator }) => {
     const pl = upsertProviderShell(userPlaylists.value, { shellId, tracks, name, coverImgUrl, creator })
     savePlaylistsToStorage()
+    // 整单落库收尾同跑封面回填——与 usePlaylistLibrary 三处既有触发点
+    // 同口径（幂等 fire-and-forget），消 QQ 单导入即占位的封面空窗
+    healMissingQqCovers()
     selectPlaylistAndShow(pl, { force: true })
     return pl
   }

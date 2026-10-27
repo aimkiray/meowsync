@@ -158,6 +158,9 @@ app.route('/', require('./src/server/routes/proxy'));
 // 封面图代取（/img-proxy）：白名单图床经本端回源，YT 族换道 yt_proxy 出口——
 // 浏览器不再直连外链图床（直连不了 YouTube 的网络里封面裂图）
 app.route('/', require('./src/server/routes/img-proxy'));
+// qq_ 无专辑曲封面惰性解析（/cover）：构建期三腿全灭的存量曲按需补封面——
+// 专辑曲直构 y.gtimg 档，无专辑走 yt/bv 挑选池+白名单闸（routes/cover.js 头注）
+app.route('/', require('./src/server/routes/cover'));
 app.route('/', require('./src/server/routes/playlists'));
 app.route('/', require('./src/server/routes/downloads'));
 app.route('/', require('./src/server/routes/uploads'));
