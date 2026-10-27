@@ -8,7 +8,9 @@
 // 判据三轴（§3.6 伪码顺序）：
 //   axis1 艺人一致性三态（match/mismatch/neutral——tns/alias 跨文字桥第一通道）
 //   axis2 时长偏差（|Δ| > max(8s, 3%·expected) → duration_off，严格大于）
-//   axis3 cover 族标记不对称（拉丁 token 限括号群，CJK 子串全串）
+//   axis3 cover 族标记不对称（拉丁 token 限括号群，CJK 子串全串；F8 修订
+//     加艺人轴门——artistAxis='match' 时不对称降级 evidence 'cover_marker_diff'
+//     不拦，mismatch/neutral 照拦/叠加）
 // reasons 可多重命中，任一非空即 block；'neutral'/version 族/score 只进
 // evidence 诊断不进判定（§3.4/§3.5）。
 // ─────────────────────────────────────────────────────────────────────────
@@ -17,7 +19,9 @@ import { foldCjkCompat } from './text-norm.js';
 import { isPlaceholderAuthor } from './title-variants.js';
 
 // ── 常量面（§4.2 冻结）──────────────────────────────────────────────────
-const RULE_VERSION = 'a1';        // 规则版本盐：修订换键，旧判自动失效
+const RULE_VERSION = 'a2';        // 规则版本盐：修订换键，旧判自动失效
+                                  // （a2=§3.4 F8 cover_marker 艺人轴门——
+                                  // 刚落账的同艺人单侧cover误拦 veto 靠此失效）
 const RELAY_DUR_ABS_MS = 8000;    // 时长绝对阈 8s（§3.3 短曲地板）
 const RELAY_DUR_RATIO = 0.03;     // 时长比例阈 3%（取两者较大者）
 const DICE_MIN = 0.6;             // 跨文字 romajiKey bigram Dice 阈（§3.2c）
@@ -275,8 +279,9 @@ const versionMarkerPresent = (title) => {
 };
 
 // 两侧标题任一缺席 → 本轴整体跳过（缺参不降级，与时长闸同口径）。
-// 双向不对称都拦：期望无标+候选有=绑到翻唱条目；期望有标+候选无=
-// 源曲是翻唱版却绑到原曲录音——同为错录音。
+// 双向不对称都报 'cover_marker'，是否进 reasons 由 judgeRelayCand 按艺人
+// 轴裁决（§3.4 F8）：期望无标+候选有=疑绑到翻唱条目；期望有标+候选无=
+// 源曲是翻唱版却绑到原曲录音——但同艺人时单侧注记是版本标注非错录音。
 const markerAxis = (expectedTitle, candName) => {
   if (!expectedTitle || !candName) return null;
   return markerPresent(candName) !== markerPresent(expectedTitle)
@@ -299,9 +304,17 @@ function judgeRelayCand(expected, cand, score) {
     cand?.dt ?? cand?.dtMs ?? cand?.duration);
   if (dur) reasons.push(dur);
 
+  // §3.4 F8 修订·实机验收：不对称标记只在 artistAxis!=='match' 时构成否决
+  // 证据——同艺人+标题干相同的单侧 (Cover)/翻唱 注记是版本标注非错录音
+  // （QQ 源标题常不携带 cover 注记而源录音本身就是该 cover：「回る空うさぎ
+  // at I SCREAM LIVE」/花譜 × 「…(Cover)」/花譜 实机误拦），改投 evidence
+  // 'cover_marker_diff'；mismatch 时照进 reasons 作叠加轴、neutral 照拦
+  // （V.A. 类绑条的 cover 注记正是可用证据）
   const mk = markerAxis(expected?.title, cand?.name);
-  if (mk) reasons.push(mk);
-  else if (expected?.title && cand?.name
+  if (mk) {
+    if (av === 'match') evidence.push('cover_marker_diff');
+    else reasons.push(mk);
+  } else if (expected?.title && cand?.name
     && versionMarkerPresent(expected.title) !== versionMarkerPresent(cand.name)) {
     evidence.push('version_marker_diff');
   }
