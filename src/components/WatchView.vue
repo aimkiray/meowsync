@@ -2497,6 +2497,17 @@ export default {
   /* 宽屏面板让位页头行（顶缘与媒体列行 2 对齐、底缘吃 24px 底垫）——
      须晚于合并态的 1/-1 跨行规则才生效；矮窗态不动，仍跨两行吃满视高 */
   .watch-side { grid-row: 2; }
+
+  /* 封面底缘对齐右列内容底缘（页脚顶线）：主列底垫取页脚高 ≈53px
+     （padding 10×2 + 键 32 + hairline 1）——封面↔播放器间距即与队列区
+     一致（53 + 视图 24px 底垫 ≈ 77px），不再是居中摆放的 ~24px。
+     视频态排除：16:9 盒不参与封面底缘对齐，维持居中。
+     底垫同步收缩 container-type:size 的内容盒（100cqh 减小），
+     矮窗下封面按余量自动再缩，无溢出风险 */
+  .watch-main:not(.watch-main--video) {
+    justify-content: flex-end;
+    padding-bottom: 53px;
+  }
 }
 /* 容器单位缺席的老内核：回旧式视口高预算 */
 @supports not (width: 1cqh) {
