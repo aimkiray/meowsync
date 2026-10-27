@@ -2,7 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 const { spawn, spawnSync } = require('child_process');
-const { callNeteaseApi, resolveSongUrls } = require('./netease-api');
+const { callNeteaseApi, resolveSongUrls, resolveTrackUnlock, qqUnlockInfo } = require('./netease-api');
+// qq_ 外源解锁源集（恒 ['youtube','bilibili']——pyncmd 是网易数值 id
+// 直解器对 qq_<mid> 无语义，[canonical:QQ-UNLOCK-ORDER]）
+const { QQ_UNLOCK_SOURCES } = require('./unlock');
 // 字节流原语（fetchStream/streamToFile/fatalError 等）在 download-io.js——
 // 本文件只做 provider 媒体编排与四类工件下载入口
 const {
@@ -38,10 +41,10 @@ const mediaCache = require('./media-cache');
 // 纯文本词自动补轴：包络+LLM/启发式对齐的进程内入口（不走 HTTP——与
 // routes/lyric-align 同一条 alignAudioToLrc 编排）
 const { alignAudioToLrc } = require('./lyric-align');
-// 词源回链音频校验闸：provider_data.neteaseId 是「词同作品」匹配产物
-// （容翻唱/live 错配录音），当音频源消费前先对绑条做同一录音判定——
-// 编排/veto 账/detail 缓存放收口在 services/relay-gate.js
-const { adjudicateRelayAudio, relayExpectedOf } = require('./relay-gate');
+// providerData.neteaseId 对 qq 音频零消费（否决项红线）：词源匹配确立
+// 「同作品」不确立「同录音」，回链曾固化错配录音——qq_ 音频腿序 =
+// 自有 pickStream → 手动绑定 → 外源解锁（resolveTrackUnlock 共享链）；
+// neteaseId/song_match 只留词源嫁接/封面兜底/匹配面板用途（词相 :1469 仍用）
 
 // qq_<songmid> / bv_<bvid>[_pN] / yt_<videoId> 曲目的服务端下载分发：
 // 各源自有流直取（不经网易云解锁链——别家曲库不是它们的源），
@@ -69,19 +72,21 @@ const COVER_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 // 省流量档，不给拉无损；>=320k（含默认）走完整档梯，归档取最优
 const qqLadderFor = (br) => (br && br < 320000 ? ['M500', 'C400'] : qq.BEST_LADDER);
 
-// qq 低档升级腿（hit 档低于请求档时借 relayId 回链再试一脚）的换用判据：
-// - RELAY_BR_MARGIN：可比码率要 margin 才换——~130k opus 换 128k mp3 是
+// qq 低档升级腿（hit 档低于请求档时借外源解锁——只解 bilibili，裁决 D2：
+// yt ~130-160k opus 对 M500 128k ×1.25 margin 永不胜）的换用判据：
+// - UPGRADE_BR_MARGIN：可比码率要 margin 才换——~130k opus 换 128k mp3 是
 //   花整段回链流量买边际提升，平级替换不触发
-// - RELAY_LOSSLESS_EXTS：br 不可比（null）形态只认无损容器算真升级——
+// - UPGRADE_LOSSLESS_EXTS：br 不可比（null）形态只认无损容器算真升级——
 //   progressive 合流档 br 恒 null（容器总码率不可当音轨码率，
 //   youtube-resolve.js L210 同语义），旧「恒赢」口径会把带视频轨的
 //   降级 mp4 换进音频工件位
-// - RELAY_DURATION_MISMATCH：relayId 是词源匹配产物（LYRIC_MATCH_CRITERIA
-//   容翻唱/live 不同录音）——回链曲声明时长与任务时长偏差超此比即疑
-//   错配录音。与 download-fs durationLooksTruncated 的 0.8 截断闸同口径
-const RELAY_BR_MARGIN = 1.25;
-const RELAY_LOSSLESS_EXTS = new Set(['flac', 'wav']);
-const RELAY_DURATION_MISMATCH = 0.2;
+// - BINDING_DURATION_MISMATCH：绑定声明时长与任务时长偏差超此比留痕——
+//   现存唯一消费者是 :1028-1031 手动绑定闸（升级腿的错配录音时长判定已被
+//   共享链 originalDt 对账吸收，不再单判）。与 download-fs
+//   durationLooksTruncated 的 0.8 截断闸同口径
+const UPGRADE_BR_MARGIN = 1.25;
+const UPGRADE_LOSSLESS_EXTS = new Set(['flac', 'wav']);
+const BINDING_DURATION_MISMATCH = 0.2;
 
 // 绑定媒体 → downloadExternalAudio 调参：bvM/ytM 合成「match 数组形」
 // （函数内只读 [1]=bvid|videoId 与 [2]=page 与 providerData 备取——
@@ -833,9 +838,106 @@ async function downloadVideo(songId, outputPath, onProgress, signal, providerDat
   }
 }
 
+// 解锁/回链产物落盘尾段（downloadNeteaseAudio 尾段 verbatim 抽出为模块级 +
+// urls 镜像组逐试）：扩展名按 item.url 推导（item.type 白名单回落 'mp3'）、
+// mkdir -p、bili 宿主 BILI_PUBLIC_HEADERS+RANGE_ALL / 其余 RANGE_ALL、
+// fetchStream 300s、镜像组首个 200/206 胜、全灭 fatal('上游返回 <status>')、
+// streamToFile MAX_AUDIO_BYTES/300s。
+// 输入 item {url, urls?, type?, br?, unblocked?, unblockedBr?,
+//   unblockedSource?, timeMs?} → {path,size,url,br,unblocked,
+//   unblockedSource,timeMs}（与旧 downloadNeteaseAudio return 同形）。
+// urls[] 是同字节镜像组（与代理侧 mint 逐试同语义——首链死掉自动换镜像，
+// abort/本地确定性 errno 不陪跑）；数值域调用方只传单 url 零行为差。
+// 委托面：downloadNeteaseAudio 尾段、qq 外源腿、qq 升级腿三用。
+async function persistResolvedItem(item, outputPath, onProgress, signal) {
+  throwIfAborted(signal);
+  // 扩展名按真实来源修正（youtube→m4a 等）：路径互斥锁仍挂在占位 .mp3 键上，
+  // 互斥语义不变（同一歌单同曲永远同键），只是落盘文件名更诚实。
+  // fallback 吃 item.type：解锁链 resolved.ext（provider 显式供值——bilibili
+  // .m4s 链 path 尾缀/mime= 两条推导通道都拿不到真实容器）已覆写进它，
+  // URL 推导不出时不再错落 mp3 壳装 ISOBMFF/AAC 肉；AUDIO_EXTS.has 闸保持
+  // 白名单面不扩，非白名单值仍回 mp3 兜底
+  const finalPath = pathWithExt(outputPath,
+    extFromUrl(item.url, AUDIO_EXTS,
+      AUDIO_EXTS.has(item.type) ? item.type : 'mp3'));
+  fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+  const mirrors = Array.isArray(item.urls) && item.urls.length ? item.urls : [item.url];
+  let audioResponse = null;
+  let usedUrl = item.url;
+  let lastErr = null;
+  for (const u of mirrors) {
+    // googlevideo 签名 URL 按请求形态记账：裸 GET 既可能 403 又会毒化该
+    // URL 的后续 Range 请求——解锁链产出 googlevideo（youtube provider）
+    // 时与下行直链同口径带 bytes=0-（语义同全量，其他 CDN 无副作用）。
+    // bilivideo/hdslb 族（bilibili 解锁源回链）防盗链要 UA+Referer 两件套
+    // ——与 downloadExternalAudio/downloadExternalVideo/routes/proxy.js 同一
+    // BILI_PUBLIC_HEADERS 口径；URL 解析失败按非 bili 处理（fetchStream
+    // 内 normalizeOutboundUrl 会再判合法性）
+    let audioHeaders = RANGE_ALL;
+    try {
+      if (isBiliCdnHost(new URL(u).hostname)) {
+        audioHeaders = { ...BILI_PUBLIC_HEADERS, ...RANGE_ALL };
+      }
+    } catch { /* 非法 URL 按非 bili */ }
+    try {
+      const resp = await fetchStream(u, { timeout: 300000, signal, headers: audioHeaders });
+      if (resp.status === 200 || resp.status === 206) {
+        audioResponse = resp;
+        usedUrl = u;
+        break;
+      }
+      resp.data.destroy();
+      lastErr = fatalError(`上游返回 ${resp.status}`);
+    } catch (e) {
+      throwIfAborted(signal);   // abort 不陪跑剩余镜像——与代理侧 halt 同语义
+      // 本地确定性病（fatal errno——ENOSPC 等）换镜像也救不了，穿透；
+      // ERR_DNS_GUARD_BLOCKED 等 URL 级拦截/上游 4xx 只死本条镜像照常逐试
+      if (penetratesCandidates(e)) throw e;
+      lastErr = e;
+    }
+  }
+  if (!audioResponse) {
+    throw lastErr || fatalError('上游无可用镜像');
+  }
+  const saved = await streamToFile(audioResponse, finalPath, {
+    maxBytes: MAX_AUDIO_BYTES,
+    onProgress,
+    maxTotalMs: 300000 // 总时长与头超时对齐 5min
+  });
+  return {
+    path: saved.path,
+    size: saved.size,
+    url: usedUrl,
+    // 落盘后时长对账需要**文件真实码率**：解锁源的 item.br 仍是网易声明值
+    // （请求 320k 时恒 320000），真实码率在 unblockedBr（youtube 常 130k）——
+    // 用错分母会把完整文件误判成剪辑。unblockedBr 为 null（progressive 合流
+    // 兜底链——容器总码率不可当音轨码率）时保持 null 跳过对账，别拿声明值
+    // 复活成假分母（闸控链码率与声明值差 2-3 倍，截断闸会名存实亡）
+    br: item.unblocked
+      ? (item.unblockedBr ?? null)
+      : (item.br ?? null),
+    unblocked: item.unblocked || false,
+    unblockedSource: item.unblockedSource || null,
+    // 回链曲时长（ms）：解锁成功时是 resolved.timeMs（estMs 实测估值或声明
+    // dt）；非解锁项即原始声明时长
+    timeMs: item.timeMs ?? null
+  };
+}
+
+// r.errors[] → 终错对象（下载腿专用）：逐源归因拼成全角分号串；
+// L4 同款分档——任一 transient → 非 fatal 保 ≤3 重试；全
+// nomatch/authwall/breaker 是窗内确定性 → fatal（与 downloadNeteaseAudio
+// 全灭分支同口径）
+const errorsToError = (errors) => {
+  const e = new Error((errors || []).map(x => `${x.source}: ${x.msg}`).join('；')
+    || '外源解锁无逐源记录');
+  if (!(errors || []).some(x => x.cls === 'transient')) e.fatal = true;
+  return e;
+};
+
 // 数字 id（网易云）取流管线：song_url → resolveSongUrls 共享解锁 →
-// fetchStream → streamToFile .part 对账。qq_ 腿断时的 neteaseId 词源回链
-// 复用同一函数——不复制两遍
+// persistResolvedItem 落盘（fetchStream → streamToFile .part 对账）。
+// qq_ 外源腿/升级腿复用同一落盘尾段——不复制两遍
 async function downloadNeteaseAudio(neteaseId, outputPath, bitrate, onProgress, signal) {
   // 进程内直调上游模块 + 共享解锁后处理（purpose=download：不走 audio-proxy），
   // 不经过 HTTP 自调——避免依赖服务端口配置，也省去一圈 loopback 开销
@@ -879,69 +981,28 @@ async function downloadNeteaseAudio(neteaseId, outputPath, bitrate, onProgress, 
     throw fatalError('无法获取歌曲链接');
   }
 
-  throwIfAborted(signal);
-  // 扩展名按真实来源修正（youtube→m4a 等）：路径互斥锁仍挂在占位 .mp3 键上，
-  // 互斥语义不变（同一歌单同曲永远同键），只是落盘文件名更诚实。
-  // fallback 吃 item.type：解锁链 resolved.ext（provider 显式供值——bilibili
-  // .m4s 链 path 尾缀/mime= 两条推导通道都拿不到真实容器）已覆写进它，
-  // URL 推导不出时不再错落 mp3 壳装 ISOBMFF/AAC 肉；AUDIO_EXTS.has 闸保持
-  // 白名单面不扩，非白名单值仍回 mp3 兜底
-  const finalPath = pathWithExt(outputPath,
-    extFromUrl(songData.url, AUDIO_EXTS,
-      AUDIO_EXTS.has(songData.type) ? songData.type : 'mp3'));
-  fs.mkdirSync(path.dirname(finalPath), { recursive: true });
-
-  // googlevideo 签名 URL 按请求形态记账：裸 GET 既可能 403 又会毒化该
-  // URL 的后续 Range 请求——解锁链产出 googlevideo（youtube provider）
-  // 时与下行直链同口径带 bytes=0-（语义同全量，其他 CDN 无副作用）。
-  // bilivideo/hdslb 族（bilibili 解锁源回链）防盗链要 UA+Referer 两件套
-  // ——与 downloadExternalAudio/downloadExternalVideo/routes/proxy.js 同一
-  // BILI_PUBLIC_HEADERS 口径；URL 解析失败按非 bili 处理（fetchStream
-  // 内 normalizeOutboundUrl 会再判合法性）
-  let audioHeaders = RANGE_ALL;
-  try {
-    if (isBiliCdnHost(new URL(songData.url).hostname)) {
-      audioHeaders = { ...BILI_PUBLIC_HEADERS, ...RANGE_ALL };
-    }
-  } catch { /* 非法 URL 按非 bili */ }
-  const audioResponse = await fetchStream(songData.url, { timeout: 300000, signal, headers: audioHeaders });
-  if (audioResponse.status !== 200 && audioResponse.status !== 206) {
-    audioResponse.data.destroy();
-    throw fatalError(`上游返回 ${audioResponse.status}`);
-  }
-
-  const saved = await streamToFile(audioResponse, finalPath, {
-    maxBytes: MAX_AUDIO_BYTES,
-    onProgress,
-    maxTotalMs: 300000 // 总时长与头超时对齐 5min
-  });
-  return {
-    path: saved.path,
-    size: saved.size,
+  // 落盘尾段委托 persistResolvedItem（数值域只传单 url——urls 缺席时镜像
+  // 组退化为原单链行为，零行为差）。songData.time（song_url 回包现成字段，
+  // 零额外字节）喂 timeMs——解锁成功时它已是 resolved.timeMs
+  // （estMs 实测估值或网易声明 dt），非解锁项即原始声明时长
+  return persistResolvedItem({
     url: songData.url,
-    // 落盘后时长对账需要**文件真实码率**：解锁源的 item.br 仍是网易声明值
-    // （请求 320k 时恒 320000），真实码率在 unblockedBr（youtube 常 130k）——
-    // 用错分母会把完整文件误判成剪辑。unblockedBr 为 null（progressive 合流
-    // 兜底链——容器总码率不可当音轨码率）时保持 null 跳过对账，别拿声明值
-    // 复活成假分母（闸控链码率与声明值差 2-3 倍，截断闸会名存实亡）
-    br: songData.unblocked
-      ? (songData.unblockedBr ?? null)
-      : (songData.br ?? null),
-    unblocked: songData.unblocked || false,
-    unblockedSource: songData.unblockedSource || null,
-    // 回链曲时长（ms）：song_url 项的 time 字段——解锁成功时被 resolved.timeMs
-    // 覆写（estMs 实测估值或网易声明 dt），非解锁项即原始声明时长。是解锁
-    // 回包现成字段，零额外字节——qq 升级腿拿它做换用前的错配录音预判
-    timeMs: songData.time ?? null
-  };
+    type: songData.type,
+    br: songData.br,
+    unblocked: songData.unblocked,
+    unblockedBr: songData.unblockedBr,
+    unblockedSource: songData.unblockedSource,
+    timeMs: songData.time,
+  }, outputPath, onProgress, signal);
 }
 
 // providerData：任务行快照的源私有字段（{qq:{mediaMid}}/{bilibili:{bvid,cid,page}}/
 // {youtube:{videoId}}/neteaseId）——mediaMid 是 vkey filename 键，带了可省一次
 // 注定失败的 vkey 空调用 + detail 回填往返；neteaseId 是导入期词源匹配产物，
-// qq_ 腿断时充回链键。缺省/过期都安全，各解析器内部仍兜底
-// expectedMs：任务行 durationMs（曲库元数据时长）——qq 升级腿换用前的
-// 错配录音预判闸；缺省跳过该闸（省流/无时长任务不降级）
+// 只供词源嫁接/封面兜底（qq 音频链零消费）。缺省/过期都安全，各解析器内部仍兜底
+// expectedMs：任务行 durationMs（曲库元数据时长）——qq 外源解锁/升级腿的
+// 共享链时长对账基准（originalDt——错配录音在链内被逐源拒）；缺省跳过该闸
+// （省流/无时长任务不降级）
 async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, signal, providerData, expectedMs) {
   try {
     // 轨道形态解形提前共用：bv_<bvid>[_pN] / yt_<videoId> / qq_<songmid>
@@ -965,7 +1026,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       // 绑定声明时长与任务时长偏差 >20% 只 console.info 留痕不拦——用户
       // 终审（与数值域时长豁免同原则）；expectedMs/durationSec 缺参跳过
       if (manual && expectedMs > 0 && manual.durationSec > 0
-        && Math.abs(manual.durationSec * 1000 - expectedMs) > expectedMs * RELAY_DURATION_MISMATCH) {
+        && Math.abs(manual.durationSec * 1000 - expectedMs) > expectedMs * BINDING_DURATION_MISMATCH) {
         console.info(`[download] ${songId} 绑定媒体声明时长 ${manual.durationSec}s 与任务期望 ${expectedMs}ms 偏差 >20%——手动终审不拦`);
       }
     }
@@ -974,7 +1035,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       try {
         return await downloadExternalAudio(bvM, ytM, outputPath, bitrate, onProgress, signal, providerData);
       } catch (ownErr) {
-        // 自有源腿败亡→绑定媒体顶替。穿透纪律与 qq relay 段同款：abort
+        // 自有源腿败亡→绑定媒体顶替。穿透纪律与 qq 外源段同款：abort
         // 穿透；errnoToFatal 先打标再判 penetratesCandidates——mkdir 段
         // 裸 errno 不打 fatal 会漏穿透（换源救不了盘满）；「无可下载音轨」
         // 类媒体级 fatal（无 code）不拦——恰是要救的案
@@ -986,7 +1047,7 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
         try {
           const r = await downloadExternalAudio(d.bvM, d.ytM, outputPath, bitrate, onProgress, signal, d.pd);
           console.info(`[download] ${songId} 自有源败亡——手动绑定媒体 ${manual.source}/${manual.mediaId} 顶替成功`);
-          // 血缘烙记 'manual→<src>'（'qq→netease' 同款箭头字面量）；
+          // 血缘烙记 'manual→<src>'（'qq→<src>' 同款箭头字面量）；
           // unblocked 保 false——产物不走解锁链不戴解锁徽章
           return { ...r, unblockedSource: `manual→${manual.source}` };
         } catch (be) {
@@ -1001,12 +1062,12 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       }
     }
     // qq_<songmid> 分发：QQ 源直链（BEST 档梯）→ 同一条 fetchStream 守卫管线。
-    // QQ 已关闭匿名取流——pickStreamUrl 回 null（code=0 但全档 purl 空）或抛
-    // qqAnonDenied（凭据级拒答打标）时，providerData.neteaseId 是匿名可播的
-    // 唯一腿：走与数字 id 支同一条网易云管线回链（providerData 只读不改）。
-    // 显式手动绑定 > 词源推导回链——回链曲是导入期词源匹配产物
-    // （LYRIC_MATCH_CRITERIA 容翻唱/live 错配录音），绑定腿插在回链之前
+    // 自有源败亡腿序：手动绑定（显式终审）→ 外源解锁（resolveTrackUnlock 共享
+    // 链，QQ_UNLOCK_SOURCES=youtube→bilibili——pyncmd 是网易数值 id 直解器，
+    // 对 qq_<mid> 无语义）。neteaseId 词源回链全形态废除（否决项红线：词源
+    // 匹配确立「同作品」不确立「同录音」，回链曾固化错配录音——9 错件实锤）
     if (qqM) {
+      const trackId = `qq_${qqM[1]}`;
       let hit = null;
       let qqErr = null;
       try {
@@ -1016,88 +1077,88 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
           signal
         });
       } catch (e) {
-        // 非匿名拒答形态（瞬断/风控/abort）不进回链判定——照旧穿透
+        // 非匿名拒答形态（瞬断/风控/abort）不进解锁判定——照旧穿透：
+        // 任务级 ≤3 重试是瞬时毛刺的正解，不为它烧解锁链
         if (!e?.qqAnonDenied) throw e;
         qqErr = e;
       }
-      // 回链把「词源匹配」的 matched.id 当音频源——产品取舍在案：
-      // LYRIC_MATCH_CRITERIA 验收的是词同作品（翻唱/live 词同录音不同也收），
-      // 回链下载会把错录音固化成本地工件。匹配器的验收闸（matchScore）是
-      // 当前唯一可信判据；播放链（usePlayer 的 neteaseId 回落支）同暴露面，
-      // 下载只是把它固化。matchScore 已随 provider 块持久化留证，后续要
-      // 收紧回链闸（分数阈值/时长核验）有现成判据可取
-      const relayId = String(providerData?.neteaseId ?? '');
-      // relayErr/manualErr 挂外侧：几腿全灭时终错要拼上各腿死因，不再只留
+      // unlockErr/manualErr 挂外侧：几腿全灭时终错要拼上各腿死因，不再只留
       // console.warn
-      let relayErr = null;
+      let unlockErr = null;
       let manualErr = null;
-      // 手动绑定腿插在 relayId 回链之前——显式终审 > 词源推导回链（回链曲
-      // 是导入期词源匹配产物，LYRIC_MATCH_CRITERIA 容翻唱/live 错配录音）。
-      // 非 qqAnonDenied 的瞬时抛错走上方原判不进本腿——瞬断上抛由任务级
-      // ≤3 重试管，不为瞬时毛刺烧绑定解析（与播放侧「每次自有源失败都查
-      // 绑定」的不对称是刻意的：播放无任务级重试——轻抖即终态）
+      // 手动绑定腿插在外源解锁之前——绑定媒体是「用户终审替换物」
+      //（[canonical:MANUAL-ONCE]：绑定由外层腿专职消费，共享链内手动步对
+      // qq_ 恒 includeManual:false 连 repo 读都跳过）。非 qqAnonDenied 的
+      // 瞬时抛错走上方原判不进本腿——瞬断上抛由任务级 ≤3 重试管，不为
+      // 瞬时毛刺烧绑定解析
       if (!hit && manual) {
         const d = manualDispatch(manual);
         try {
           const r = await downloadExternalAudio(d.bvM, d.ytM, outputPath, bitrate, onProgress, signal, d.pd);
-          console.info(`[download] qq_${qqM[1]} 直链败亡——手动绑定媒体 ${manual.source}/${manual.mediaId} 顶替成功`);
-          // 绑定腿 return 早于下方低档升级腿——产物是用户终审媒体，回链
+          console.info(`[download] ${trackId} 直链败亡——手动绑定媒体 ${manual.source}/${manual.mediaId} 顶替成功`);
+          // 绑定腿 return 早于下方低档升级腿——产物是用户终审媒体，外源
           // 择优换档=拿推导产物覆盖显式选择，语义不许；unblocked 保 false
           return { ...r, unblockedSource: `manual→${manual.source}` };
         } catch (e) {
           throwIfAborted(signal);
           errnoToFatal(e);
           if (e?.aborted || penetratesCandidates(e)) throw e;
-          console.warn(`[download] qq_${qqM[1]} 手动绑定媒体(${manual.source}/${manual.mediaId})败亡，续走词源回链: ${describeError(e)}`);
+          console.warn(`[download] ${trackId} 手动绑定媒体(${manual.source}/${manual.mediaId})败亡，续走外源解锁: ${describeError(e)}`);
           manualErr = e;
         }
       }
-      if (!hit && NETEASE_ID_RE.test(relayId)) {
+      // 外源腿：F1 共享链以 qq_<mid> 键直通（[canonical:ID-PASSTHROUGH]）。
+      // proxied:false 拿明文直链（进程内下载侧——白名单预筛/vault 化是播放
+      // 侧的事）；includeManual:false——绑定已被上方手动腿消费；
+      // originalDt 喂共享链时长对账（错配录音在链内被逐源拒，不落到下载后
+      // 单判）；buildInfo 惰性装配——缓存命中/搭车者均不触（providerData
+      // 快照零上行，artists 缺席时 qqUnlockInfo 内落 [author] 单元素兜底）
+      if (!hit) {
         try {
-          // 词源回链音频校验闸——判定先于字节搬运（省错文件落盘+省一次
-          // song_url/字节流全链）：block → fatal（闸拒在 veto/sig 窗内确定，
-          // 重试不产新证据）；detail 不可达 → deferred 非 fatal Err 保 ≤3
-          // 重试权（固化工件宁缺毋滥）；pass → 原样下载。闸内部已做
-          // freshId 自救一跳（song_match 正绑 ≠ 快照绑条时换绑续腿一次）
-          const gate = await adjudicateRelayAudio({
-            nid: relayId, trackId: String(songId),
-            expected: relayExpectedOf(providerData, expectedMs), signal,
+          const r = await resolveTrackUnlock(trackId, {
+            purpose: 'download',
+            sources: QQ_UNLOCK_SOURCES,
+            proxied: false,
+            includeManual: false,
+            originalDt: expectedMs > 0 ? expectedMs : null,
+            buildInfo: () => qqUnlockInfo(qqM[1], {
+              title: providerData?.title,
+              author: providerData?.author,
+              artists: providerData?.artists,
+              durationMs: expectedMs > 0 ? expectedMs : null,
+            }),
+            signal,
           });
-          if (gate.verdict === 'block') {
-            const band = gate.cand
-              ? `（绑条「${gate.cand.name || '?'}/${(gate.cand.artists || []).join(' ') || '?'}」）` : '';
-            throw fatalError(`词源回链音频校验未过：${(gate.reasons || []).join('、')}${band}（可在菜单换源绑定外部媒体）`);
+          if (r?.resolved) {
+            const unblockedItem = await persistResolvedItem({
+              url: r.resolved.url, urls: r.resolved.urls, type: r.resolved.ext,
+              unblockedBr: r.resolved.br, timeMs: r.resolved.timeMs,
+            }, outputPath, onProgress, signal);
+            console.info(`[download] ${trackId} 自有源败亡——外源解锁 ${r.resolved.source} 成功`);
+            return {
+              ...unblockedItem, br: r.resolved.br ?? null, unblocked: true,
+              unblockedSource: `qq→${r.resolved.source}`,
+              timeMs: r.resolved.timeMs ?? null,
+            };
           }
-          if (gate.verdict !== 'pass') {
-            throw new Error('词源回链校验上游暂不可达');
-          }
-          const effId = String(gate.effectiveId || relayId);
-          if (effId !== relayId) {
-            console.info(`[download] qq_${qqM[1]} 词源绑条(${relayId})被拦——song_match 正绑 ${effId} 过闸续腿`);
-          }
-          const relayed = await downloadNeteaseAudio(effId, outputPath, bitrate, onProgress, signal);
-          console.info(`[download] qq_${qqM[1]} 直链不可达——词源回链 netease ${effId} 成功`);
-          // 回链产物照数字支语义如实报 unblocked/br；unblockedSource 缺席时
-          // 烙 qq→netease——它本质就是解锁回链，血缘不进徽章语义也不丢
-          return { ...relayed, unblockedSource: relayed.unblockedSource || 'qq→netease' };
+          unlockErr = errorsToError(r?.errors);
         } catch (e) {
           throwIfAborted(signal);
           errnoToFatal(e);
-          // 本地确定性病（ENOSPC 等）换源也救不了——穿透判死而非报 qq 错
-          if (penetratesCandidates(e)) throw e;
-          console.warn(`[download] qq_${qqM[1]} 网易回链(${relayId})失败: ${describeError(e)}`);
-          relayErr = e;
+          // 穿透纪律与手动腿同款：abort 穿透；本地确定性病（ENOSPC 等）
+          // 换源也救不了——穿透判死而非报 qq 错
+          if (e?.aborted || penetratesCandidates(e)) throw e;
+          unlockErr = e;
         }
       }
-      // neteaseId 缺席/几条腿全灭——原始 qq 错为主因重抛（含 qqAnonDenied
-      // 标记若适用）不吞因；回链/绑定已尝试的死因拼上终错消息不再只留日志。
-      // 不原地改 message：pickStreamInflight 单飞的共享错会被并发等待方
-      // 重复拼接
+      // 几腿全灭——原始 qq 错为主因重抛（含 qqAnonDenied 标记若适用）不吞因；
+      // 解锁/绑定已尝试的死因拼上终错消息不再只留日志。不原地改 message：
+      // pickStreamInflight 单飞的共享错会被并发等待方重复拼接
       if (qqErr) {
-        if (!relayErr && !manualErr) throw qqErr;
+        if (!unlockErr && !manualErr) throw qqErr;
         const combined = new Error(`${qqErr.message}`
           + `${manualErr ? `（manual=${describeError(manualErr)}）` : ''}`
-          + `${relayErr ? `（netease=${describeError(relayErr)}）` : ''}`);
+          + `${unlockErr ? `（unlock=${describeError(unlockErr)}）` : ''}`);
         if (qqErr.qqAnonDenied) combined.qqAnonDenied = true;
         throw combined;
       }
@@ -1105,15 +1166,15 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
         // 文案分档：无登录态下「无流」的真因几乎恒为匿名取流关停——可执行
         // 指引与 /qq/stream 404 同口径；配了 cookie 才轮到 VIP/地域解释
         const base = qq.hasQqCookie()
-          ? 'QQ 音乐无可用音源（可能需要 VIP 权限或地域限制）'
-          : 'QQ 音乐无可用音源——QQ 已关闭匿名取流，请在设置页配置 QQ Cookie';
+          ? 'QQ 音乐无可用音源（自有档与外源解锁均未命中——VIP/地域或外源无候选）'
+          : 'QQ 音乐无可用音源——QQ 已关闭匿名取流且外源解锁未命中（配置 Cookie 或绑定手动媒体源）';
         const msg = `${base}`
           + `${manualErr ? `（manual=${describeError(manualErr)}）` : ''}`
-          + `${relayErr ? `（netease=${describeError(relayErr)}）` : ''}`;
-        // fatal 分档：回链/绑定都没进腿（键缺席）是确定性失败维持 fatal；
-        // 任一腿瞬时死（非 fatal）不带 fatal 走 ≤3 重试——与 qqErr 重抛
-        // 同权，同一瞬时故障不该因 qq 腿死法（null vs throw）丢重试权
-        if ((relayErr && !relayErr.fatal) || (manualErr && !manualErr.fatal)) throw new Error(msg);
+          + `${unlockErr ? `（unlock=${describeError(unlockErr)}）` : ''}`;
+        // fatal 分档 verbatim：任一腿瞬时死（非 fatal）不带 fatal 走 ≤3
+        // 重试——与 qqErr 重抛同权，同一瞬时故障不该因 qq 腿死法
+        //（null vs throw）丢重试权；全灭确定性归 fatal
+        if ((unlockErr && !unlockErr.fatal) || (manualErr && !manualErr.fatal)) throw new Error(msg);
         throw fatalError(msg);
       }
       throwIfAborted(signal);
@@ -1127,93 +1188,81 @@ async function downloadAudio(songId, outputPath, bitrate = 320000, onProgress, s
       const saved = await streamToFile(resp, finalPath, {
         maxBytes: MAX_AUDIO_BYTES, onProgress, maxTotalMs: 300000
       });
-      // 低档升级腿：匿名 uin=0 的 vkey 对免费非 VIP 曲也只下发 M500（128k），
-      // 到手档低于请求档时借词源回链再试一脚高音质。判据是「到手档 vs
-      // 请求档」：QQ_TIER_BR null（RS01/F000 无损）已是顶格不必升级——
-      // 注意必须显式判 null，JS 里 null<bitrate 会按 0 比较误触发；
-      // <320k 的省流请求走 qqLadderFor 短梯只砍 qq 候选档、不砍本闸——
-      // 192k 请求拿到 128k M500 hit 时升级腿照常触发（回链能换到更优
-      // 就不浪费回链键）。
+      // bv-only 升级腿：到手档低于请求档时借外源解锁再试一脚——只解
+      // bilibili（裁决 D2：yt ~130-160k opus 对 M500 128k ×1.25 margin 永不
+      // 胜；bv 匿名 AAC 132/192k+cookie flac 是唯一真升级通道）。判据是
+      // 「到手档 vs 请求档」：QQ_TIER_BR null（RS01/F000 无损）已是顶格不必
+      // 升级——必须显式判 null，JS 里 null<bitrate 会按 0 比较误触发；
+      // <320k 的省流请求走 qqLadderFor 短梯只砍 qq 候选档、不砍本闸。
+      // resolve 期 br/ext 早退根治旧腿「整件下载再比」的浪费——候选不胜出
+      // 零字节下载；错配录音时长判定被共享链 originalDt 对账吸收不再单判。
       // 回链产物落 *.relay.* 旁系命名空间（outputPath 恒 .mp3 锁键占位），
       // 胜出才换名入主档——若与 qq hit 同扩展名直落本族会先毁掉兜底件
       const qqTierBr = QQ_TIER_BR[hit.tier] ?? null;
-      if (qqTierBr !== null && qqTierBr < bitrate && NETEASE_ID_RE.test(relayId)) {
+      if (qqTierBr !== null && qqTierBr < bitrate) {
         throwIfAborted(signal);
-        // 升级腿同一校验闸先行——detail 进程内缓存热，零边际上行；尽力腿
-        // 不引 freshId 二次候选（allowFreshId=false）。block → 记因不进腿
-        // 保在手 hit；detail 不可达 → 跳过升级保 hit（不为不可证证据降级
-        // 在手档）；pass → 下方下载→择优链原样（时长/码率双轨不动）
-        let upGate = { verdict: 'unknown', reasons: ['detail_unavailable'] };
+        let relayedPath = null; // 已落盘的回链产物——弃用/异常时收走防残留双档
         try {
-          const g = await adjudicateRelayAudio({
-            nid: relayId, trackId: String(songId),
-            expected: relayExpectedOf(providerData, expectedMs), signal,
-            allowFreshId: false,
+          const r = await resolveTrackUnlock(trackId, {
+            purpose: 'download',
+            sources: ['bilibili'],
+            proxied: false,
+            includeManual: false,
+            originalDt: expectedMs > 0 ? expectedMs : null,
+            buildInfo: () => qqUnlockInfo(qqM[1], {
+              title: providerData?.title,
+              author: providerData?.author,
+              artists: providerData?.artists,
+              durationMs: expectedMs > 0 ? expectedMs : null,
+            }),
+            signal,
           });
-          upGate = { verdict: g.verdict, reasons: g.reasons || [] };
-        } catch (ge) {
-          throwIfAborted(signal);
-          if (ge?.aborted) throw ge;
-          // 闸自身异常按不可达同口径——升级是尽力腿，在手档不陪绑
-          console.warn(`[download] qq_${qqM[1]} 回链校验异常，跳过升级保 ${hit.tier} 档: ${describeError(ge)}`);
-        }
-        if (upGate.verdict === 'block') {
-          console.info(`[download] qq_${qqM[1]} 回链(${relayId})音频校验未过（${upGate.reasons.join('、')}）——不进升级腿，保留 ${hit.tier} 档`);
-        } else if (upGate.verdict !== 'pass') {
-          console.info(`[download] qq_${qqM[1]} 回链校验上游暂不可达——跳过升级，保留 ${hit.tier} 档`);
-        } else {
-          let relayedPath = null; // 已落盘的回链产物——弃用/异常时收走防残留双档
-          try {
-            const relayed = await downloadNeteaseAudio(
-              relayId, `${outputPath}.relay.mp3`, bitrate, onProgress, signal);
+          const res = r?.resolved;
+          const resExt = String(res?.ext || '').toLowerCase();
+          // br 可比要 margin、br 缺省只认无损容器（UPGRADE_* 判据原值沿用）
+          // ——progressive 合流档 br 恒 null（容器总码率不可当音轨码率），
+          // 旧「恒赢」口径会把带视频轨的降级 mp4 换进音频工件位
+          const better = res && (res.br != null
+            ? res.br > qqTierBr * UPGRADE_BR_MARGIN
+            : UPGRADE_LOSSLESS_EXTS.has(resExt));
+          if (better) {
+            const relayed = await persistResolvedItem({
+              url: res.url, urls: res.urls, type: res.ext,
+              unblockedBr: res.br, timeMs: res.timeMs,
+            }, `${outputPath}.relay.mp3`, onProgress, signal);
             relayedPath = relayed.path;
             const relayedExt = path.extname(relayed.path).slice(1).toLowerCase();
-            // 时长闸先于码率择优：回链曲声明时长与任务时长差超闸即疑错配
-            // 录音（live/翻唱级偏差）。旧序先换用后由 download-manager
-            // 时长对账判剪辑 unlink 结果——而 qq 兜底档已被收走，原本
-            // M500 成功的任务反成新失败形态。声明时长是回包现成字段
-            // （零额外字节）；任一参缺失跳过该闸，不降级无时长任务
-            const durationMismatch = expectedMs > 0 && relayed.timeMs > 0
-              && Math.abs(relayed.timeMs - expectedMs) > expectedMs * RELAY_DURATION_MISMATCH;
-            // 择优：br 不可比（null）只认无损容器（RELAY_LOSSLESS_EXTS）
-            // 算真升级；可比形态要过 margin 才换（RELAY_BR_MARGIN）
-            const better = !durationMismatch && (relayed.br == null
-              ? RELAY_LOSSLESS_EXTS.has(relayedExt)
-              : relayed.br > qqTierBr * RELAY_BR_MARGIN);
-            if (better) {
-              const relayFinal = pathWithExt(outputPath, relayedExt || 'mp3');
-              fs.renameSync(relayed.path, relayFinal);
-              relayedPath = null;
-              // 胜出线就位后收走 qq 低档档（同主名时 rename 已天然顶替）
-              if (saved.path !== relayFinal) {
-                try { fs.unlinkSync(saved.path); } catch { /* 删失败留给 reap */ }
-              }
-              console.info(`[download] qq_${qqM[1]} ${hit.tier} 档低于请求码率——回链 netease ${relayId} 音质更优，换用`);
-              return {
-                ...relayed, path: relayFinal,
-                unblockedSource: relayed.unblockedSource || 'qq→netease'
-              };
-            }
-            // 回链不胜出（错配录音/码率不优）——弃回链产物保 qq hit
-            try { fs.unlinkSync(relayed.path); } catch { /* 删失败留给 reap */ }
+            const relayFinal = pathWithExt(outputPath, relayedExt || 'mp3');
+            fs.renameSync(relayed.path, relayFinal);
             relayedPath = null;
-            console.info(durationMismatch
-              ? `[download] qq_${qqM[1]} 回链曲(${relayId})时长不符疑为错配录音（声明 ${relayed.timeMs}ms vs 期望 ${expectedMs}ms）——保留 ${hit.tier} 档`
-              : `[download] qq_${qqM[1]} 回链(${relayId})码率不优于 ${hit.tier} 档——保留 qq 直链产物`);
-          } catch (e) {
-            // 收走已落盘的回链产物先于一切 rethrow——下方三条穿透（abort/
-            // fatal errno/penetratesCandidates）若先行，rename 的 EACCES/
-            // ENOTDIR 等 fatal 会把完整 *.relay.* 非 .part 件孤儿化到下次
-            // 启动 reap
-            if (relayedPath) { try { fs.unlinkSync(relayedPath); } catch { /* 留给 reap */ } }
-            throwIfAborted(signal);
-            if (e?.aborted) throw e; // 回链内 abort 穿透不兜底
-            errnoToFatal(e);
-            // 本地确定性病（ENOSPC 等）换源也救不了——穿透判死而非吃兜底
-            if (penetratesCandidates(e)) throw e;
-            // 升级是尽力腿：任何非穿透错只 console.warn 降级，qq hit 绝不丢
-            console.warn(`[download] qq_${qqM[1]} 网易回链(${relayId})升级失败，保留 ${hit.tier} 档兜底: ${describeError(e)}`);
+            // 胜出线就位后收走 qq 低档档（同主名时 rename 已天然顶替）
+            if (saved.path !== relayFinal) {
+              try { fs.unlinkSync(saved.path); } catch { /* 删失败留给 reap */ }
+            }
+            console.info(`[download] ${trackId} ${hit.tier} 档低于请求码率——外源解锁 bilibili 音质更优，换用`);
+            return {
+              ...relayed, path: relayFinal,
+              br: res.br ?? null,
+              unblocked: true, unblockedSource: 'qq→bilibili',
+              timeMs: res.timeMs ?? null,
+            };
           }
+          // 外源候选不胜出（全灭/码率不优/非无损容器）——保在手 hit，无字节
+          // 下载发生（resolve 期早退）
+          console.info(`[download] ${trackId} 外源候选不胜 ${hit.tier} 档——保留`);
+        } catch (e) {
+          // 收走已落盘的回链产物先于一切 rethrow——下方三条穿透（abort/
+          // fatal errno/penetratesCandidates）若先行，rename 的 EACCES/
+          // ENOTDIR 等 fatal 会把完整 *.relay.* 非 .part 件孤儿化到下次
+          // 启动 reap
+          if (relayedPath) { try { fs.unlinkSync(relayedPath); } catch { /* 留给 reap */ } }
+          throwIfAborted(signal);
+          if (e?.aborted) throw e; // 解锁/落盘内 abort 穿透不兜底
+          errnoToFatal(e);
+          // 本地确定性病（ENOSPC 等）换源也救不了——穿透判死而非吃兜底
+          if (penetratesCandidates(e)) throw e;
+          // 升级是尽力腿：任何非穿透错只 console.warn 降级，qq hit 绝不丢
+          console.warn(`[download] ${trackId} 外源升级失败，保留 ${hit.tier} 档兜底: ${describeError(e)}`);
         }
       }
       return {

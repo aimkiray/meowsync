@@ -5,15 +5,15 @@
 //     任务行 providerData，cid/bvid 会把取流钉回自有源）→ 成功烙
 //     unblockedSource 'manual→<src>' 且 unblocked 恒 false；双腿全灭拼
 //     （manual=<err>）终错，双腿同 fatal 才判死
-//   - qq_：绑定腿插在词源回链（providerData.neteaseId）之前——显式终审 >
-//     导入期词源匹配产物；绑定腿死→回链照走；hit 在场→绑定腿不进、
-//     低档升级腿照旧只比 relay（升级腿隔离）
+//   - qq_：绑定腿插在外源解锁（resolveTrackUnlock 共享链）之前——显式终审 >
+//     推导解锁；绑定腿死→外源照走；hit 在场→绑定腿不进、低档升级腿照旧
+//     只比 bilibili 独源回链（升级腿隔离）
 //   - 穿透纪律：abort/errnoToFatal 前置打标的 ENOSPC/EROFS 不触发绑定腿；
 //     绑定腿 abort 穿透不拼 combined
 //   - 读口收敛：只外源前缀 id 查表（数值 id 的绑定消费在 resolveSongUrls
 //     手动步，双查绕过 pyncmd 位序）；脏行（source 枚举外/mediaId 不严形）
 //     warn 按无绑走原链
-// 桩面同 file-downloader-qq-relay：qq/netease-api 整模块桩、download-io
+// 桩面同 file-downloader-qq-unlock：qq/netease-api/unlock 索引整模块桩、download-io
 // 留真身助手只桩字节腿（errnoToFatal/penetratesCandidates 是被测语义
 // 一部分）；lib/bilibili 桩 resolveBiliAudio+biliFetch（缓存键 page 反解
 // 走它）；lib/youtube 桩 fetchPlayer/With 保 pickStreamList 真身；真库
@@ -28,7 +28,7 @@ import { seed, tmpDataDir } from './helpers.mjs';
 process.env.DATA_DIR = tmpDataDir('meowsync-dl-extmanual-');
 const require = createRequire(import.meta.url);
 
-// ── lib/qq 桩：pickStreamUrl 可翻转（同 file-downloader-qq-relay 面）──
+// ── lib/qq 桩：pickStreamUrl 可翻转（同 file-downloader-qq-unlock 面）──
 let pickImpl = async () => null;
 let cookieOn = false;
 const pickCalls = [];
@@ -42,28 +42,36 @@ seed('../src/server/lib/qq.js', {
   pickStreamUrl: async (...a) => { pickCalls.push(a); return pickImpl(...a); },
 });
 
-// ── netease-api 桩：回链腿/数值支的 song_url 录参回放；song_detail 是
-// 校验闸的上行——本文件 providerData 均无 title/author/expectedMs（期望
-// 三轴全空 → neutral→pass），固定绑条应答经闸放行照走原链。独立应答
-// 不走 callApiImpl——q3 类「全上行瞬断」场景保 netease=song_url 死因 ──
+// ── netease-api 桩：数值支 song_url 录参回放 + resolveTrackUnlock 是 qq_
+// 外源/升级两腿唯一通道（录参回放 {resolved,errors}）——qq 音频对
+// callNeteaseApi 零消费红线由 qq-unlock 钉板主责 ──
 const apiCalls = [];
 let callApiImpl = async () => ({ body: { data: [] } });
 const resolveCalls = [];
+const unlockCalls = [];
+let unlockImpl = async () => ({ resolved: null, errors: [] });
 seed('../src/server/services/netease-api.js', {
-  callNeteaseApi: (...a) => {
-    apiCalls.push(a);
-    if (a[0] === 'song_detail') {
-      return Promise.resolve({ body: { songs: [
-        { id: +a[1].ids, name: '绑条', ar: [{ name: '绑艺人' }], dt: 200000 }] } });
-    }
-    return callApiImpl(...a);
-  },
+  callNeteaseApi: (...a) => { apiCalls.push(a); return callApiImpl(...a); },
   resolveSongUrls: async (items, o) => { resolveCalls.push(o); return items; },
+  resolveTrackUnlock: async (trackId, o) => {
+    unlockCalls.push([trackId, o]); return unlockImpl(trackId, o);
+  },
+  qqUnlockInfo: (mid, o) => ({ id: `qq_${mid}`, name: o?.title ?? null,
+    artists: (o?.artists?.length ? o.artists : [o?.author].filter(Boolean)),
+    durationMs: o?.durationMs ?? null }),
   needsUnlock: () => true,
   MAX_UNLOCK_ITEMS: 20,
   apiModules: {},
   estimateDuration: () => null,
   forgetSongUnlock: () => {},
+});
+
+// ── unlock 索引桩：只钉 QQ_UNLOCK_SOURCES 常量面 ──
+seed('../src/server/services/unlock/index.js', {
+  PROVIDERS: {},
+  PLAYBACK_SOURCES: ['pyncmd', 'youtube', 'bilibili'],
+  DOWNLOAD_SOURCES: ['pyncmd', 'youtube', 'bilibili'],
+  QQ_UNLOCK_SOURCES: ['youtube', 'bilibili'],
 });
 
 // ── download-io：真身助手 + 桩字节腿 ──
@@ -120,8 +128,6 @@ seed('../src/server/repositories/unlockManual.js', {
 });
 
 const { downloadAudio } = require('../src/server/services/file-downloader.js');
-const { getDb } = require('../src/server/db/client.js');
-const { _resetRelayCaches } = require('../src/server/services/relay-gate.js');
 const outDir = tmpDataDir('meowsync-dl-extmanual-out-');
 
 // 升级腿胜出换名是真 fs rename——streamToFile 写穿让 relay 档有实体可换
@@ -151,16 +157,11 @@ beforeEach(() => {
   biliAudioImpl = async () => [];
   ytPlayerImpl = async () => ({ streamingData: { adaptiveFormats: [], formats: [] } });
   pickCalls.length = apiCalls.length = resolveCalls.length = fetchCalls.length = 0;
+  unlockCalls.length = 0;
+  unlockImpl = async () => ({ resolved: null, errors: [] });
   streamCalls.length = biliAudioCalls.length = biliFetchCalls.length = 0;
   ytPlayerCalls.length = getManualCalls.length = 0;
   for (const id of [BV_TRACK, YT_TRACK, QQ_TRACK]) realManualRepo.deleteManual(id);
-  // 闸账面清台：pass/block veto 行与 detail 正/负档缓存是进程级态，
-  // 跨用例驻留会让同 (trackId,nid) 走快路零上行 / 命中陈旧绑条
-  try {
-    getDb().exec("DELETE FROM song_ai_verdict WHERE kind = 'audio_relay'");
-    getDb().exec('DELETE FROM song_match');
-  } catch { /* 首发用例表未建兜底 */ }
-  _resetRelayCaches();
 });
 
 // ── bv_/yt_ 绑定顶替（用例 10/11）──
@@ -213,39 +214,42 @@ test('跨源双向：yt_ 死+绑 BV → bilibili 管线；bv_ 死+绑 videoId �
     '绑定腿解绑定 videoId——合成 ytM 不拿自有 bvid');
 });
 
-// ── qq_ 位序：绑定腿先于词源回链（用例 12）──
+// ── qq_ 位序：绑定腿先于外源解锁（用例 12）──
 
-test('qq_：绑定腿先于 relayId 回链；绑定腿死→回链照走；双腿全灭终错拼 manual=+netease=', async () => {
+test('qq_：绑定腿先于外源解锁；绑定腿死→外源照走；双腿全灭终错拼 manual=+unlock=', async () => {
   bind(QQ_TRACK, 'youtube', BOUND_VID);
   pickImpl = async () => null; // 自有源「健康空」——code=0 全档 purl 空形态
   ytPlayerImpl = async (v) => ytAdaptive(`https://rr1---sn-x.googlevideo.com/v?sig=${v}`);
-  callApiImpl = async (name, args) => ({ body: { data: [
-    { id: +args.id, url: 'https://m701.music.126.net/relay.mp3', br: 320000 },
-  ] } });
-  // 绑定腿成功 → 回链根本不被触达（显式绑定 > 词源推导回链）
+  unlockImpl = async () => ({ resolved: {
+    source: 'youtube', url: 'https://rr1---sn-x.googlevideo.com/u?mime=audio/mp4',
+    br: 130000, ext: 'm4a', timeMs: 200000 }, errors: [] });
+  // 绑定腿成功 → 外源解锁根本不被触达（显式绑定 > 推导解锁）
   let r = await downloadAudio(QQ_TRACK, join(outDir, 'q1.mp3'), 320000, null, null,
     { neteaseId: '777001', qq: { mediaMid: 'mm9' } });
   assert.equal(r.unblockedSource, 'manual→youtube');
   assert.equal(r.unblocked, false);
-  assert.equal(apiCalls.length, 0, '绑定腿成功——词源回链不该被触达');
+  assert.equal(unlockCalls.length, 0, '绑定腿成功——外源解锁不该被触达');
+  assert.equal(apiCalls.length, 0, 'neteaseId 在场也不打 song_url');
   assert.equal(ytPlayerCalls.at(-1)[1], BOUND_VID);
-  // 绑定腿死（瞬时）→ 回链照走兜底
+  // 绑定腿死（瞬时）→ 外源解锁照走兜底
   ytPlayerImpl = async () => { const e = new Error('yt ECONNRESET'); e.code = 'ECONNRESET'; throw e; };
-  apiCalls.length = 0;
   r = await downloadAudio(QQ_TRACK, join(outDir, 'q2.mp3'), 320000, null, null,
     { neteaseId: '777001' });
-  assert.equal(r.unblockedSource, 'qq→netease', '绑定腿死——词源回链兜底');
-  assert.deepEqual(
-    apiCalls.map(c => c[0]), ['song_detail', 'song_url'],
-    '回链确实尝试过——校验闸 detail 先行、song_url 消费其后');
-  assert.deepEqual(apiCalls.filter(c => c[0] === 'song_url'),
-    [['song_url', { id: '777001', br: 320000 }]]);
-  // 双腿全灭 → 终错拼 manual= 与 netease= 双死因段（不吞因）
-  callApiImpl = async () => { const e = new Error('netease ECONNRESET'); e.code = 'ECONNRESET'; throw e; };
+  assert.equal(r.unblockedSource, 'qq→youtube', '绑定腿死——外源解锁兜底');
+  assert.equal(unlockCalls.length, 1, '共享链确实跑过一跳');
+  assert.equal(unlockCalls[0][0], QQ_TRACK, 'trackId=qq_<mid> 直通');
+  assert.deepEqual(unlockCalls[0][1].sources, ['youtube', 'bilibili'],
+    'QQ_UNLOCK_SOURCES——pyncmd 永不入列');
+  assert.equal(unlockCalls[0][1].includeManual, false,
+    '绑定已被外层腿消费——链内手动步恒关');
+  assert.equal(apiCalls.length, 0, '外源链路全程零 song_url');
+  // 双腿全灭 → 终错拼 manual= 与 unlock= 双死因段（不吞因）
+  unlockImpl = async () => ({ resolved: null, errors: [
+    { source: 'youtube', msg: 'yt boom', cls: 'transient' }] });
   const e = await downloadAudio(QQ_TRACK, join(outDir, 'q3.mp3'), 320000, null, null,
     { neteaseId: '777001' }).then(() => null, x => x);
   assert.match(e.message, /manual=yt ECONNRESET/, '绑定腿死因拼上终错');
-  assert.match(e.message, /netease=netease ECONNRESET/, '回链死因拼上终错');
+  assert.match(e.message, /unlock=youtube: yt boom/, '解锁死因拼上终错');
   assert.equal(e.fatal, false, '两腿皆瞬时——不带 fatal 走 ≤3 重试');
 });
 
@@ -258,7 +262,8 @@ test('qq_：pickStreamUrl 抛未标记瞬断 → 原错穿透不进绑定腿（�
   assert.equal(e.qqAnonDenied, undefined);
   assert.equal(ytPlayerCalls.length, 0,
     '非拒答瞬断照旧穿透——不为瞬时毛刺烧绑定解析（与播放侧不对称是刻意的）');
-  assert.equal(apiCalls.length, 0, '瞬断也不进回链（既有行为不动）');
+  assert.equal(unlockCalls.length, 0, '瞬断也不进外源解锁');
+  assert.equal(apiCalls.length, 0);
 });
 
 // ── 穿透纪律（用例 13）──
@@ -342,19 +347,20 @@ test('数值曲不查绑定表：getManual 零调用（绑定消费在 resolveSo
 
 // ── 升级腿隔离（用例 17）──
 
-test('升级腿隔离：qq hit 成功低档+绑定在场 → 升级腿照旧只比 relay，绑定腿不进', async () => {
+test('升级腿隔离：qq hit 成功低档+绑定在场 → 升级腿照旧只比 bilibili 回链，绑定腿不进', async () => {
   bind(QQ_TRACK, 'youtube', BOUND_VID);
   pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
-  callApiImpl = async (name, args) => ({ body: { data: [
-    { id: +args.id, url: 'https://m701.music.126.net/hi.mp3', br: 320000 },
-  ] } });
+  unlockImpl = async () => ({ resolved: {
+    source: 'bilibili', url: 'https://upos-sz-m1.bilivideo.com/hi.m4s',
+    urls: ['https://upos-sz-m1.bilivideo.com/hi.m4s'],
+    br: 192000, ext: 'm4a', timeMs: 200000 }, errors: [] });
   streamImpl = streamWriteThrough;
   const r = await downloadAudio(QQ_TRACK, join(outDir, 'u1.mp3'), 320000, null, null,
     { neteaseId: '777001' });
-  assert.equal(apiCalls.filter(c => c[0] === 'song_url').length, 1,
-    '低档 hit + neteaseId → 升级腿照常跑 relay 择优');
-  assert.equal(apiCalls.filter(c => c[0] === 'song_detail').length, 1,
-    '升级腿消费前校验闸先取绑条 detail');
-  assert.equal(r.unblockedSource, 'qq→netease', '回链更优胜出——绑定腿不抢活');
+  assert.equal(unlockCalls.length, 1, '低档 hit → 升级腿照常跑外源择优');
+  assert.deepEqual(unlockCalls[0][1].sources, ['bilibili'],
+    '升级腿只解 bilibili 独源（yt ~130k opus 对 M500×1.25 永不胜）');
+  assert.equal(r.unblockedSource, 'qq→bilibili', '回链更优胜出——绑定腿不抢活');
   assert.equal(ytPlayerCalls.length, 0, 'hit 在场→绑定腿不进');
+  assert.equal(apiCalls.length, 0, '全程零 song_url');
 });
