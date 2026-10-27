@@ -4,6 +4,9 @@ const downloadTasksRepo = require('../repositories/downloadTasks');
 const downloadQueuesRepo = require('../repositories/downloadQueues');
 const playlistTracksRepo = require('../repositories/playlistTracks');
 const playlistsRepo = require('../repositories/playlists');
+// 状态端点回带手选绑定戳用（song_unlock_manual.updated_at）；本模块依赖它
+// 不成环——repositories 层只回指 db/client
+const unlockManualRepo = require('../repositories/unlockManual');
 const { importPlaylistFromNetease } = require('./playlist-sync');
 // 远端单 localDelta 落库用的逐曲白名单消毒——与 /downloads/local/mirror
 // 镜像路由共用同一份（local-mirror 不回 require 本模块，无环）
@@ -1880,6 +1883,44 @@ async function getSongDownloadStatus(playlistId, songId) {
     if (videoPlaylistId !== null && audioPlaylistId !== null) break;
   }
 
+  // 工件戳与 /file 同源：寻址走 getTaskArtifactPath 而非裸 stat 命中行的
+  // 登记路径——/file 的供给闸（叶子符号链接拒供等）比 audioReady 的
+  // pathPresent 判定多一道收口，拿登记路径报戳会与实发工件不一致。
+  // 两枚戳同 inode 但精度口径刻意不同：
+  // - audioArtifactAt 是线型整数契约（客户端 DTO 按整毫秒消费）——mtimeMs
+  //   截断取整，浮点直发会让 Long 型解码炸；
+  // - audioEtag 生成式与 /file 端点（routes/downloads.js）逐字同式
+  //   W/"<size>-<mtimeMs>"——mtimeMs 保留浮点不截断（同 size + 同毫秒内
+  //   的两次换源不撞 tag），客户端拿它跟 /file 实发 ETag 对账。
+  // lstatSync 与 /file 的 O_NOFOLLOW 同向：getTaskArtifactPath 的 lstat
+  // 闸到本读之间的纳秒窗里叶子被换成链接时，报链接自身的戳（保守——/file
+  // 此刻会拒供）而非跟链摸到下载根外目标的戳。
+  // audioReady 未命中/竞态读败/寻址 404 一律 null——热路径
+  // 不为一枚戳炸整请求
+  let audioArtifactAt = null;
+  let audioEtag = null;
+  if (audioPlaylistId !== null) {
+    try {
+      const artifactPath = getTaskArtifactPath(audioPlaylistId, songId, 'audio');
+      if (artifactPath) {
+        const stat = fs.lstatSync(artifactPath);
+        audioArtifactAt = Math.trunc(stat.mtimeMs);
+        audioEtag = `W/"${stat.size}-${stat.mtimeMs}"`;
+      }
+    } catch { /* 竞态消失/不可读——按无戳收敛 */ }
+  }
+
+  // 手选绑定戳：song_unlock_manual.updated_at 是 sqlite CURRENT_TIMESTAMP
+  // 裸串（'YYYY-MM-DD HH:MM:SS'，UTC 但无时区后缀）——补 'Z' 再按 UTC 解析；
+  // 无绑定/库抖动/畸形串一律 null（库不可用按无绑定收敛，与 file-downloader
+  // 手动步的 getManual 调用同口径）
+  let boundUpdatedAt = null;
+  try {
+    const manual = unlockManualRepo.getManual(String(songId));
+    const ms = manual?.updatedAt ? new Date(`${manual.updatedAt}Z`).getTime() : NaN;
+    boundUpdatedAt = Number.isFinite(ms) ? ms : null;
+  } catch { /* 库不可用按无绑定收敛 */ }
+
   return {
     // completed 行但文件被外部删掉 → 如实报未下载，让前端重新露出下载入口
     // （行不预改：下次下载走幂等校验/收养路径会自愈重跑）
@@ -1888,6 +1929,9 @@ async function getSongDownloadStatus(playlistId, songId) {
     videoPlaylistId,
     audioReady: audioPlaylistId !== null,
     audioPlaylistId,
+    audioArtifactAt,
+    audioEtag,
+    boundUpdatedAt,
     task: toPublicTask(task || null)
   };
 }
