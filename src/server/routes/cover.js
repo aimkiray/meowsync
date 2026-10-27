@@ -33,6 +33,9 @@ const { pickTitleDurationMatch } = require('../services/unlock/match');
 // 网易绑定腿两件套：song_match 直读绑定行/生效否决集 + song_detail 官封上游
 const { getMatchRow, getVetoedIds } = require('../repositories/songMatch');
 const { callNeteaseApi } = require('../services/netease-api');
+// 生效否决集按当前 AI 模型键控——读侧键与 /match/state（match.js）
+// 同口径 aiEnabled()?aiModel():''
+const { aiEnabled, aiModel } = require('../lib/ai');
 const { QQ_SONG_ID_RE, NETEASE_ID_BOUNDED_RE } = require('../../shared/predicates.js'); // CJS require(ESM)
 // 封面白名单与 img-proxy 回源闸/客户端 proxiedCoverUrl 同一张表——
 // 本端点发出的 cover 必然走 /img-proxy 回源，非名单域在这里掐死
@@ -109,14 +112,18 @@ app.get('/cover', async (c) => {
       // 绑定存在即「同作品」证据，封面语义不受负行 TTL/换模作废约束
       const bound = getMatchRow(trackId)?.netease_id;
       if (bound != null) neIds.push(String(bound));
-      // 生效否决集（默认 '' 模型=永生效条目）：判过非同作品的 id
-      // 其封面也不该贴——hint 与库行同口径排除
-      const vetoed = getVetoedIds(trackId);
+      // 生效否决集按当前 AI 模型键控（与 /match/state 读侧同口径
+      // aiEnabled()?aiModel():''）：'' 条目永生效+同模条目同排——
+      // 缺省 '' 在 AI 部署下读不回模型键控条目，否决簿成死代码。
+      // 判过非同作品的 id 其封面也不该贴——hint 与库行同口径排除
+      const vetoed = getVetoedIds(trackId, aiEnabled() ? (aiModel() || '') : '');
       for (const neId of new Set(neIds)) {
         if (vetoed.has(neId)) continue;
         try {
+          // song_detail 正常 <1s——5s 掐断：上游默认 30s 超时会让慢网易
+          // 吃满客户端 15s 窗，把下方 yt/bv 兜底扇出预算挤死
           const res = await callNeteaseApi('song_detail', { ids: neId },
-            { signal: c.req.raw.signal });
+            { signal: c.req.raw.signal, timeoutMs: 5000 });
           const al = res?.body?.songs?.[0]?.al;
           // picUrl 与候选池同走 okCover 白名单闸（p*.music.126.net 在册）；
           // al.name 随包——客户端顺带愈「未知专辑」

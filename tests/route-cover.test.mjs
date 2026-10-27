@@ -3,8 +3,9 @@
 // 外源挑选池命中回 cover / 标题双闸不中回 null / 非白名单域 fail-closed /
 // 非 qq_ id 400 / 10min memo 正负同键不重复上行。
 // lib/qq（getSongDetail 上游）与 unlock/index（PROVIDER 挑选池）全桩；
-// songMatch 库（getMatchRow/getVetoedIds）与 netease-api（song_detail
-// 上游）同桩——绑定腿候选装配、否决跳过、失败续打各语义钉在桩面上。
+// songMatch 库（getMatchRow/getVetoedIds）、netease-api（song_detail
+// 上游）与 lib/ai（否决集模型键读侧）同桩——绑定腿候选装配、模型键控
+// 否决、失败续打各语义钉在桩面上。
 // pickTitleDurationMatch 用真实现（纯函数选定器，无上游依赖——双闸语义
 // 钉在真闸上才算钉住「防无关内容当封面」的规格）。
 import { test, before, after } from 'node:test';
@@ -58,13 +59,26 @@ let matchRowImpl = () => undefined;
 let vetoedImpl = () => new Set();
 seed('../src/server/repositories/songMatch.js', {
   getMatchRow: (id) => matchRowImpl(id),
-  getVetoedIds: (id) => vetoedImpl(id),
+  // 第二参=读侧模型键（aiEnabled()?aiModel():''）——透传给 per-case impl
+  // 钉「cover 端是否把当前模型名带进来」
+  getVetoedIds: (id, model) => vetoedImpl(id, model),
 });
 seed('../src/server/services/netease-api.js', {
-  callNeteaseApi: async (api, params) => {
-    neCalls.push([api, params]);
+  callNeteaseApi: async (api, params, options) => {
+    neCalls.push([api, params, options]);
     return neDetailImpl(api, params);
   },
+});
+
+// ── 桩：AI 启用态/模型名（生效否决集的读侧模型键来源）──
+// aiEnabled()?aiModel():'' 与 /match/state 读侧同口径——per-case 开合
+// 钉「AI 部署下同模否决条目亦被排除」「关断部署键=''」两侧
+let aiOn = false;
+let aiModelName = 'stub';
+seed('../src/server/lib/ai.js', {
+  aiEnabled: () => aiOn,
+  aiModel: () => aiModelName,
+  askAiJson: async () => null,
 });
 
 let app;
@@ -236,6 +250,8 @@ test('cover：ne 参数 hint → song_detail 官封+专辑名回发（yt/bv 零�
     assert.equal(r.body.cover, 'https://p2.music.126.net/x.jpg');
     assert.equal(r.body.album, '告白 - Original Soundtrack', '官封伴随专辑名随包');
     assert.equal(neCalls.length, 1);
+    assert.equal(neCalls[0][2]?.timeoutMs, 5000,
+      'song_detail 5s 掐断——慢网易不吃满客户端 15s 窗');
     assert.equal(searchCalls.length, 0, '绑定腿命中不烧外源检索扇出');
   } finally {
     neDetailImpl = async () => ({ body: { songs: [] } });
@@ -268,7 +284,8 @@ test('cover：无 ne 参 → song_match 正向行绑定照解官封', async () =
 test('cover：生效否决集命中的候选跳过零上行 → 落下一候选', async () => {
   // ne hint '111' 在否决集（判过非同作品——其封面也不该贴），
   // 库行 '222' 落为实际候选；否决者连 song_detail 都不该烧
-  vetoedImpl = () => new Set(['111']);
+  let modelSeen;
+  vetoedImpl = (id, model) => { modelSeen = model; return new Set(['111']); };
   matchRowImpl = () => ({ netease_id: '222' });
   neDetailImpl = async (api, params) => {
     assert.equal(params.ids, '222');
@@ -279,6 +296,7 @@ test('cover：生效否决集命中的候选跳过零上行 → 落下一候选'
     assert.equal(r.status, 200);
     assert.equal(r.body.cover, 'https://p4.music.126.net/z.jpg');
     assert.equal(r.body.album, undefined, 'al.name 缺位不落 album 键');
+    assert.equal(modelSeen, '', 'AI 关断部署读侧键=纯启发式 \'\'');
     assert.deepEqual(neCalls.map(c => c[1].ids), ['222'], '否决候选零上游调用');
   } finally {
     vetoedImpl = () => new Set();
@@ -288,16 +306,76 @@ test('cover：生效否决集命中的候选跳过零上行 → 落下一候选'
   }
 });
 
+test('cover：AI 部署下否决按当前模型键控——同模条目排除、异模不误排', async () => {
+  // 修复钉：getVetoedIds 缺省 '' 在 AI 部署下读不回模型键控条目
+  // （否决簿成死代码）——读侧键必须走 aiEnabled()?aiModel():''。
+  // 桩内收窄真 getVetoedIds 生效口径：m==='' 永生效 + m===currentModel
+  aiOn = true; aiModelName = 'm1';
+  const book = [{ id: '111', m: 'm1' }, { id: '444', m: 'm0' }];
+  let modelSeen;
+  vetoedImpl = (id, model) => {
+    modelSeen = model;
+    return new Set(book.filter(e => e.m === '' || e.m === model).map(e => e.id));
+  };
+  matchRowImpl = () => ({ netease_id: '444' });
+  neDetailImpl = async (api, params) => {
+    assert.equal(params.ids, '444');
+    return { body: { songs: [{ al: { picUrl: 'https://p5.music.126.net/m1.jpg' } }] } };
+  };
+  try {
+    const r = await json(await get('/cover?id=qq_003VETOMODEL01&ne=111'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.cover, 'https://p5.music.126.net/m1.jpg');
+    assert.equal(modelSeen, 'm1', '读侧否决键=当前 AI 模型名');
+    assert.deepEqual(neCalls.map(c => c[1].ids), ['444'],
+      'm1 同模否决的 hint 零上行；m0 异模条目不误排照常打');
+  } finally {
+    aiOn = false; aiModelName = 'stub';
+    vetoedImpl = () => new Set();
+    matchRowImpl = () => undefined;
+    neDetailImpl = async () => ({ body: { songs: [] } });
+    neCalls.length = 0;
+  }
+});
+
+test('cover：detail 缺 name/intervalSec 本应被免扇出闸拒 + 有效绑定 → 官封仍回（绑定腿在闸前）', async () => {
+  // 绑定腿刻意位在 name/时长免扇出闸之前：id 直查不依赖检索词——
+  // QQ 元数据稀薄的绑定曲不该被闸错杀
+  detailImpl = async () => ({ ...TRACK_NO_ALBUM, mid: '003NOGATE00001', name: '', intervalSec: 0 });
+  neDetailImpl = async (api, params) => {
+    assert.equal(params.ids, '26130076');
+    return { body: { songs: [{ al: { name: '闸前官封', picUrl: 'https://p6.music.126.net/g.jpg' } }] } };
+  };
+  searchCalls.length = 0;
+  try {
+    const r = await json(await get('/cover?id=qq_003NOGATE00001&ne=26130076'));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.cover, 'https://p6.music.126.net/g.jpg');
+    assert.equal(r.body.album, '闸前官封');
+    assert.equal(neCalls.length, 1);
+    assert.equal(searchCalls.length, 0, '绑定腿在闸前命中终态——不烧外源扇出');
+  } finally {
+    detailImpl = async (id) => ({ ...TRACK_NO_ALBUM, mid: String(id) });
+    neDetailImpl = async () => ({ body: { songs: [] } });
+    neCalls.length = 0;
+  }
+});
+
 test('cover：ne 非法形静默丢——不 400、零网易上行、照常落外源兜底', async () => {
   // hint 是增强不是契约：非数字/越界形态与缺席同处理，不判 400
   const cases = ['abc', '1e5', '26130076;DROP', '-1', '1'.repeat(21)];
-  for (let i = 0; i < cases.length; i++) {
-    const r = await json(await get(
-      `/cover?id=qq_003BADNE00${i}X&ne=${encodeURIComponent(cases[i])}`));
-    assert.equal(r.status, 200, `ne=${cases[i]} 不应 400`);
-    assert.equal(r.body.cover, null, '空池负终态——非法 hint 无副作用');
+  const n0 = neCalls.length;
+  try {
+    for (let i = 0; i < cases.length; i++) {
+      const r = await json(await get(
+        `/cover?id=qq_003BADNE00${i}X&ne=${encodeURIComponent(cases[i])}`));
+      assert.equal(r.status, 200, `ne=${cases[i]} 不应 400`);
+      assert.equal(r.body.cover, null, '空池负终态——非法 hint 无副作用');
+    }
+    assert.equal(neCalls.length - n0, 0, '非法 hint 不产生 song_detail 上行');
+  } finally {
+    neCalls.length = 0;
   }
-  assert.equal(neCalls.length, 0, '非法 hint 不产生 song_detail 上行');
 });
 
 test('cover：绑定腿候选全灭（上游抛错+空曲集）→ 回落 yt/bv 池照常', async () => {
