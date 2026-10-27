@@ -318,6 +318,35 @@ test('qq：外源腿 retry=1 → skipCache 透传给共享链', async () => {
   }
 });
 
+test('qq：prefer=best（cookieOn=false 直通令牌门）→ 手动腿/共享链同收 purpose=download', async () => {
+  cookieOn = false; // !hasQqCookie() → prefer='best' 直通（best 无凭据可耗）
+  pickStreamHit = null;
+  unlockCalls.length = 0;
+  resolveByIdCalls.length = 0;
+  const mid = '009PURPOSE001';
+  // 绑定腿在场但 resolveById 落空——手动腿调用面录到 purpose 后照走外源腿
+  unlockManualRepo.upsertManual(`qq_${mid}`, {
+    source: 'youtube', mediaId: 'dQw4w9WgXcQ', title: '', owner: '', durationSec: null,
+  });
+  const savedYtImpl = ytResolveByIdImpl;
+  ytResolveByIdImpl = async () => null;
+  try {
+    const r = await get(`/qq/stream?mid=${mid}&prefer=best`);
+    assert.equal(r.status, 404); // 自有空+绑定落空+外源全灭
+    assert.equal(resolveByIdCalls.length, 1, '绑定腿确实进过 resolveById');
+    const [, mOpts] = resolveByIdCalls.at(-1);
+    assert.equal(mOpts.purpose, 'download',
+      'prefer=best → manualStreamOverride 收 purpose=download（令牌门终值沿传）');
+    const [, opts] = unlockCalls.at(-1);
+    assert.equal(opts.purpose, 'download',
+      'prefer=best → resolveTrackUnlock 收 purpose=download');
+  } finally {
+    ytResolveByIdImpl = savedYtImpl;
+    unlockManualRepo.deleteManual(`qq_${mid}`);
+    pickStreamHit = { url: 'https://stream.qqmusic.qq.com/x.m4a?u=1' };
+  }
+});
+
 test('qq：腿序钉——自有败亡+手动绑定命中 → 302+x-manual-source，外源腿零调用', async () => {
   pickStreamHit = null;
   unlockCalls.length = 0;

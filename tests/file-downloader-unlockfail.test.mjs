@@ -4,8 +4,9 @@
 // 退避 ≤3 次；全 nomatch/authwall/breaker/空归因 → fatal 不白打。
 // netease-api 整模块桩——被测面是 downloadAudio 的全灭分支而非解锁链本体；
 // download-io.fatalError 用真身（fatal 标记即被测面）。桩面须给全量顶层
-// 解构成员：file-downloader 顶部解构 {callNeteaseApi, resolveSongUrls}，
-// 缺成员会让未来扩展在桩下静默拿到 undefined
+// 解构成员：file-downloader 顶部解构 {callNeteaseApi, resolveSongUrls,
+// resolveTrackUnlock, qqUnlockInfo}，缺成员会让未来扩展在桩下静默拿到
+// undefined
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -19,6 +20,10 @@ let callApiImpl = async () => ({ body: { data: [] } });
 seed('../src/server/services/netease-api.js', {
   callNeteaseApi: (...a) => callApiImpl(...a),
   resolveSongUrls: async (items) => items, // 恒等桩——items 自带 unlockFailed/unlockErrors
+  // qq_ 外源解锁两出口——数值域用例永不触达；throw 桩钉死「不得静默
+  // 拿到 undefined 后悄悄走通」
+  resolveTrackUnlock: async () => { throw new Error('netease-api 桩：resolveTrackUnlock 不应被数值域触达'); },
+  qqUnlockInfo: async () => { throw new Error('netease-api 桩：qqUnlockInfo 不应被数值域触达'); },
   needsUnlock: () => true,
   MAX_UNLOCK_ITEMS: 20,
   apiModules: {},

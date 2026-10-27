@@ -25,7 +25,9 @@ seed('../src/server/services/lyric-external.js', {
     return { lrc: '[00:01.00]级联词', source: 'lrclib', extId: 'lrclib_casc', synced: true };
   },
 });
-// 网易云 API 桩：绑定在场的数字 id 连 lyric 端点都不该打
+// 网易云 API 桩：绑定在场的数字 id 连 lyric 端点都不该打。
+// 桩面给全量顶层解构成员（file-downloader 链上 download-fs 也摸本模块）
+// ——qq_ 外源解锁两出口词相不触达，throw 桩兜底防静默拿到 undefined
 const neCalls = [];
 seed('../src/server/services/netease-api.js', {
   apiModules: { lyric: {} },
@@ -34,8 +36,13 @@ seed('../src/server/services/netease-api.js', {
     return { body: { code: 200, lrc: { lyric: '[00:01.00]网易词' } } };
   },
   resolveSongUrls: async () => {},
+  resolveTrackUnlock: async () => { throw new Error('netease-api 桩：resolveTrackUnlock 不应被词相触达'); },
+  qqUnlockInfo: async () => { throw new Error('netease-api 桩：qqUnlockInfo 不应被词相触达'); },
   needsUnlock: () => false,
   MAX_UNLOCK_ITEMS: 20,
+  estimateDuration: () => null,
+  forgetSongUnlock: () => {},
+  baseUnlockInfo: () => null,
 });
 // 归属核验桩：录参——绑定路径不该问到判官（核验面可能正压着当年错判
 // 该词源的 verdict/署名闸记录，复核会把用户终审挡回门外）

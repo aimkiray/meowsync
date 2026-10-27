@@ -378,6 +378,8 @@ test('qqAnonDenied + 外源全灭 → 原始拒答错重抛：标记存活 + unl
   const e = await downloadAudio(QQ_ID, join(outDir, 'd1.mp3'), 320000, null, null, {})
     .then(() => null, x => x);
   assert.equal(e.qqAnonDenied, true, '外源败亡不吞匿名关停标记——透给上层分档');
+  assert.equal(e.fatal, true,
+    'qqAnonDenied+全源确定性败 → combined 带 fatal——任务级重试不白烧解锁链');
   assert.match(e.message, /code=0\/1000/, '原始 qq 错为主因不吞');
   assert.match(e.message, /unlock=youtube: no match；bilibili: breaker 窗内拒/);
 });
@@ -525,6 +527,20 @@ test('省流短梯请求（bitrate<320k）砍 qq 候选档但不砍升级闸—�
   assert.equal(unlockCalls.length, 1, '192k 请求拿到 128k hit——升级闸照旧');
   assert.deepEqual(unlockCalls[0][1].sources, ['bilibili']);
   assert.equal(r.unblockedSource, 'qq→bilibili');
+});
+
+test('升级腿产物源如实烙：同键缓存可回 yt 命中 → qq→youtube（不硬编码 bilibili）', async () => {
+  pickImpl = async () => ({ url: 'https://stream.qqmusic.qq.com/low.mp3', tier: 'M500' });
+  // unlockCache 键不带 sources 段——bv-only 一跳可吃到 ext 腿留下的 yt 正档；
+  // 血缘按 res.source 实烙而非腿名硬编码
+  unlockImpl = async () => resolvedOf({ source: 'youtube',
+    url: 'https://rr1---sn-x.googlevideo.com/v?mime=audio/mp4',
+    br: 200000, ext: 'webm', timeMs: 271000 });
+  streamImpl = streamWriteThrough;
+  const r = await downloadAudio(QQ_ID, join(outDir, 'u9.mp3'), 320000, null, null, {});
+  assert.deepEqual(unlockCalls[0][1].sources, ['bilibili'], '升级腿请求面仍 bv-only');
+  assert.equal(r.unblockedSource, 'qq→youtube',
+    '缓存供档 yt 命中——血缘烙实际源不硬编码 bilibili');
 });
 
 // ── 只读契约 / abort 纪律 ──

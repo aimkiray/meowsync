@@ -307,7 +307,7 @@ export function useSearchNav({
       savePlaylistsToStorage()
       await selectPlaylistAndShow(pl, { force: true })
       // matchedCount 透出与 importProviderPlaylist 的「词源匹配 N」同口径——
-      // QQ 匿名取流关停后，匹配数就是可经网易腿播/下的曲目数
+      // 匹配只服务歌词/封面兜底；音频可播性由外源解锁承担，未匹配不等于不可播
       const note = [
         data.matchedCount ? `词源匹配 ${data.matchedCount}` : '',
         data.truncated ? '超出上限部分未导入' : '',
@@ -318,7 +318,7 @@ export function useSearchNav({
       // （===false）才给可操作出口；null（探测失败/态未知）不打扰。成功
       // toast 与引导 info 叠放是既有观感（顶栏导入链同款），不去重
       if ((await qqLoggedIn()) === false) {
-        toast('未配置 QQ Cookie——QQ 已关闭匿名取流：匹配词源的曲目可经网易源播放，配置 Cookie 恢复 QQ 直取', 'info', 8000)
+        toast('未配置 QQ Cookie——QQ 已关闭匿名取流：音频经外源解锁或绑定手动媒体源播放（词源匹配只供歌词/封面），配置 Cookie 恢复 QQ 直取', 'info', 8000)
       }
     } catch (e) {
       if (!gates.mediaImport.isCurrent(myReq)) return
