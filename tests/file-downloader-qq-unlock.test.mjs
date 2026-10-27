@@ -71,7 +71,8 @@ seed('../src/server/services/netease-api.js', {
     unlockCalls.push([trackId, o]); return unlockImpl(trackId, o);
   },
   // qqUnlockInfo 真身做伪 songRow 装配+detail 回探——桩只录参回形，
-  // 钉死的是「下载腿喂它什么」（title/author/artists/durationMs 四字段）
+  // 钉死的是「下载腿喂它什么」（title/author/artists/durationMs + 可选
+  // 第五键 album——专辑名是 AI 仲裁的版本标注证据）
   qqUnlockInfo: (mid, o) => {
     qqInfoCalls.push([mid, o]);
     return { id: `qq_${mid}`, name: o?.title ?? null,
@@ -230,7 +231,7 @@ test('绑定腿死（瞬时）→ 外源解锁兜底成功：includeManual:false
 test('resolveTrackUnlock 调参：trackId 直通 + sources=[youtube,bilibili] + proxied:false + includeManual:false + originalDt', async () => {
   unlockImpl = async () => resolvedOf();
   const r = await downloadAudio(QQ_ID, join(outDir, 's1.mp3'), 320000, null, null,
-    { title: '娘子', author: '周杰伦', artists: ['周杰伦'],
+    { title: '娘子', author: '周杰伦', artists: ['周杰伦'], album: '范特西',
       qq: { mediaMid: 'mm9' }, neteaseId: '777001' }, 271000);
   assert.equal(r.unblockedSource, 'qq→youtube');
   assert.equal(unlockCalls.length, 1);
@@ -242,10 +243,12 @@ test('resolveTrackUnlock 调参：trackId 直通 + sources=[youtube,bilibili] + 
   assert.equal(opts.proxied, false, '下载侧进程内——拿明文直链不过 vault');
   assert.equal(opts.includeManual, false);
   assert.equal(opts.originalDt, 271000, 'expectedMs → 共享链时长对账基准');
-  // buildInfo 惰性装配：providerData 快照 → qqUnlockInfo 四字段
+  // buildInfo 惰性装配：providerData 快照 → qqUnlockInfo 五字段
+  //（album 是可选第五键——专辑名供 AI 仲裁的版本标注证据）
   const info = await opts.buildInfo();
   assert.deepEqual(qqInfoCalls, [['0034M8WL3V4oHA', {
     title: '娘子', author: '周杰伦', artists: ['周杰伦'], durationMs: 271000,
+    album: '范特西',
   }]]);
   assert.equal(info.id, 'qq_0034M8WL3V4oHA');
   // pickStreamUrl 照吃 providerData.qq.mediaMid + 档梯（省一次 vkey 空调用）

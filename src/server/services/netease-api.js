@@ -224,11 +224,13 @@ async function aiUnlockInfo(songRow, signal) {
   return data;
 }
 
-// 解锁检索 info：{id, name, artists[], keyword, durationMs}
+// 解锁检索 info：{id, name, artists[], keyword, durationMs, album?}
 // ——provider 拿 keyword 去外站搜候选。keyword 形态对齐 unm 的
 // 「name - artists.join(' / ')」（外站检索的多年实证形态）
 // 「注入即承诺」：info.name 必须非空 + artists 恒为字符串数组，
-// malformed 形态会让全部搜索型源同因失败——name 缺失直接返回 null
+// malformed 形态会让全部搜索型源同因失败——name 缺失直接返回 null。
+// album 是加性可选字段：AI 仲裁 prompt 的版本标注证据（专辑名常带
+// 「Jeku Remix」类标注，治期望艺人≠署名型误杀），旧调用方无 album 照常
 function buildUnlockInfo(songRow, info) {
   if (!info.name) return null;
   const artists = Array.isArray(info.artists) ? info.artists : [];
@@ -237,6 +239,7 @@ function buildUnlockInfo(songRow, info) {
     name: info.name,
     artists,
     keyword: artists.length ? `${info.name} - ${artists.join(' / ')}` : info.name,
+    album: songRow.al?.name || null,
     durationMs: songRow.dt || null,
   };
 }
@@ -772,13 +775,14 @@ async function resolveTrackUnlock(trackId, {
 //   上行取 normalizeTrack 真 artists[] + intervalSec 装伪行（detail 自备
 //   QQ_TIMEOUT_MS=15s 上限，共享链不吃调用方 signal）
 // - 下载腿（file-downloader）：恒传 {title, author, artists, durationMs}
-//   四键 providerData 快照零上行；ar 取 artists（≤10 名），author 整串
+//   四键 providerData 快照零上行（album 可选第五键——专辑名供 AI 仲裁
+//   版本标注证据）；ar 取 artists（≤10 名），author 整串
 //   单元素兜底（绝不按空格切 author——「A B / C」型合并作者切碎比不切
 //   更糟）
 // detail 不可达/字段全空 → null——共享链按既有口径全灭 nomatch
 async function qqUnlockInfo(mid, opts = {}) {
   const {
-    title = null, author = null, artists = null, durationMs = null, signal = null,
+    title = null, author = null, artists = null, durationMs = null, album = null, signal = null,
   } = opts || {};
   const fed = opts && typeof opts === 'object'
     && ('title' in opts || 'author' in opts || 'artists' in opts || 'durationMs' in opts);
@@ -794,7 +798,9 @@ async function qqUnlockInfo(mid, opts = {}) {
       id: `qq_${mid}`,
       name: typeof title === 'string' && title.trim() ? title.trim() : null,
       ar: names.map(n => ({ name: n })),
-      al: { name: null },
+      // 专辑名加性可选：providerData 快照带 album 即收（AI 仲裁的版本标注
+      // 证据），不带归 null——单 album 不构成快照故不进 fed 判据
+      al: { name: typeof album === 'string' && album.trim() ? album.trim() : null },
       dt: Number.isFinite(durationMs) && durationMs > 0 ? durationMs : null,
     };
   } else {
