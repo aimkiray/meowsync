@@ -573,6 +573,34 @@ export const musicApi = {
     return data.match ?? null
   },
 
+  // 词源回链音频校验闸读口：GET /match/audio-check——服务端收口的「同一
+  // 录音」判定（词源匹配管"同一作品"，回链把 neteaseId 当音频源消费前
+  // 过本闸；判定唯一实现驻服务端，客户端只传期望元数据不复刻逻辑）。
+  // artists 期望艺人成员数组按冻结契约形态序列化为 JSON 单参下发——
+  // 非 repeated param（仓库无 c.req.queries 先例，axios 数组序列化会
+  // 产 artists[]= 脏键）。回 {verdict:'pass'|'block'|'unknown',
+  // reasons:[], cand:{id,name,artists,dtMs}|null} 原样透传——verdict
+  // 'unknown' 是上游 detail 不可达的收敛态（端点不产 5xx），fail-open
+  // 语义归调用方执行；400 参数非法/429 限流/499 断连照常抛由调用方
+  // 分诊。cand.id 携带端点内 freshId 自救核准的播放 id（veto 快路回包
+  // cand 可能缺 id——调用方 nid 兜底）；端点内完成一次上游 song_detail
+  // 最坏段，超时给 15s（该跳有 :947 预热并行，通常不入关键路径）。
+  // 15s<服务端 detail 30s 兜底是刻意的：客户端先断不白费——服务端
+  // 共享跳续跑照落正/负档缓存，同 nid 后来者直接吃档零新上行
+  checkRelayAudio: async ({ nid, trackId, title, artists, durMs }, abortSignal = null) => {
+    const response = await api.get('/match/audio-check', {
+      params: {
+        nid, trackId, title, durMs,
+        artists: JSON.stringify(Array.isArray(artists) ? artists : []),
+      },
+      signal: abortSignal,
+      timeout: 15000
+    })
+    const data = unwrapBody(response)
+    assertCode200(data, '词源回链校验')
+    return data
+  },
+
   // 错配纠正口：POST /match/retry——前端拿持久化 provider 字段组匹配材料，
   // excludeIds 把当前判否的词源 id 并进请求级否决集重跑云搜+AI 复核链，
   // 命中即服务端覆写 song_match 行。回命中对象 {id,name,ar,al} 并透传同层
