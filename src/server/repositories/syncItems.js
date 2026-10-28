@@ -34,21 +34,37 @@ function parseValueJson(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
+// updated_at 是 SQLite 动态类型列（声明 INTEGER，TEXT/REAL 可入——
+// 手工改库/迁移事故/浮点 push 都可混入非整形态）。下发前一律归一：
+// 数字与数字串按整数毫秒；无时区文本按 UTC 解析（已带 Z/±HH:MM 的
+// ISO 形原样交给 Date.parse，不重复加 Z）；全不可解回退 recv_at——
+// 单脏行不该把客户端整页 pull 解析炸掉，且 TEXT 在 LWW 比较里
+// 恒赢会让该 key 永久拒更新
+function normUpdatedAt(u, recvAt) {
+  const s = String(u).trim();
+  const n = Number(s);
+  if (s !== '' && Number.isFinite(n)) return Math.min(Math.max(Math.round(n), -9e18), 9e18);
+  const t = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+  return Number.isFinite(t) ? t : recvAt;
+}
+
 // 行 → 线格式：value 回包时已解析成 JSON 值（不是双重编码字符串）；
 // seq 随每条 item 下发——客户端的续拉游标就是回包末行 seq 喂回 since
 function toItem(row) {
   return {
     key: row.item_key,
     value: parseValueJson(row.value_json),
-    updatedAt: row.updated_at,
-    deleted: Boolean(row.deleted),
-    seq: row.seq
+    updatedAt: normUpdatedAt(row.updated_at, row.recv_at),
+    // deleted/seq 同一动态类型类风险：'0' 文本会 Boolean() 伪造成真墓碑；
+    // seq 是迁移补列，存量行可 NULL——两侧都按值域严格归一再下发
+    deleted: row.deleted === 1 || row.deleted === '1' || row.deleted === true,
+    seq: row.seq ?? 0
   };
 }
 
 function getItem(userId, key) {
   const row = getDb().prepare(
-    'SELECT item_key, value_json, updated_at, deleted, seq FROM sync_items WHERE user_id = ? AND item_key = ?'
+    'SELECT item_key, value_json, updated_at, recv_at, deleted, seq FROM sync_items WHERE user_id = ? AND item_key = ?'
   ).get(String(userId), String(key));
   return row ? toItem(row) : undefined;
 }
@@ -84,7 +100,7 @@ function listChanges(userId, { since = 0, limit = 2000, maxBytes = Infinity } = 
   ).get(uid).m;
   const reset = since > maxSeq;
   const stmt = db.prepare(`
-    SELECT item_key, value_json, updated_at, deleted, seq FROM sync_items
+    SELECT item_key, value_json, updated_at, recv_at, deleted, seq FROM sync_items
     WHERE user_id = ? AND seq > ?
     ORDER BY seq LIMIT ?
   `);
@@ -128,7 +144,8 @@ function applyChanges(userId, changes) {
     UPDATE sync_meta SET v = v + 1
     WHERE k = 'sync_seq'
       AND (NOT EXISTS (SELECT 1 FROM sync_items WHERE user_id = ? AND item_key = ?)
-           OR (SELECT updated_at FROM sync_items WHERE user_id = ? AND item_key = ?) < ?)
+           OR (SELECT updated_at FROM sync_items WHERE user_id = ? AND item_key = ?) < ?
+           OR typeof((SELECT updated_at FROM sync_items WHERE user_id = ? AND item_key = ?)) != 'integer')
     RETURNING v
   `);
   const upsert = db.prepare(`
@@ -142,7 +159,7 @@ function applyChanges(userId, changes) {
       seq = excluded.seq
   `);
   const sel = db.prepare(
-    'SELECT value_json, updated_at, deleted, seq FROM sync_items WHERE user_id = ? AND item_key = ?'
+    'SELECT value_json, updated_at, recv_at, deleted, seq FROM sync_items WHERE user_id = ? AND item_key = ?'
   );
   const applied = [];
   const conflicts = [];
@@ -151,7 +168,7 @@ function applyChanges(userId, changes) {
   db.transaction(() => {
     ensureSeq.run();
     for (const ch of changes) {
-      const ticket = takeSeq.get(uid, ch.key, uid, ch.key, ch.updatedAt);
+      const ticket = takeSeq.get(uid, ch.key, uid, ch.key, ch.updatedAt, uid, ch.key);
       if (ticket) {
         upsert.run(uid, ch.key, valueJsonOf(ch), ch.updatedAt, recvAt, ch.deleted ? 1 : 0, ticket.v);
         applied.push(ch.key);
@@ -164,9 +181,9 @@ function applyChanges(userId, changes) {
           item: {
             key: ch.key,
             value: parseValueJson(existing.value_json),
-            updatedAt: existing.updated_at,
-            deleted: Boolean(existing.deleted),
-            seq: existing.seq
+            updatedAt: normUpdatedAt(existing.updated_at, existing.recv_at),
+            deleted: existing.deleted === 1 || existing.deleted === '1' || existing.deleted === true,
+            seq: existing.seq ?? 0
           }
         });
       }
