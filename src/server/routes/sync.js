@@ -263,7 +263,9 @@ app.post('/sync/push', async (c) => {
     if (batchBytes > MAX_BATCH_VALUE_BYTES) {
       return fail(c, 400, `整批 value 总字节超过 ${MAX_BATCH_VALUE_BYTES / 1024 / 1024}MB 上限`);
     }
-    valid.push({ key, value: ch.value, updatedAt: ch.updatedAt, deleted });
+    // Math.round 整化：契约是整数毫秒，浮点 push 若不取整会把 REAL 写进
+    // INTEGER 语义列，pull 下发小数再击穿客户端 longOrNull（同事故类）
+    valid.push({ key, value: ch.value, updatedAt: Math.round(ch.updatedAt), deleted });
   }
   try {
     const userId = syncUserId(c, sessionsRepo.resolveSession);
