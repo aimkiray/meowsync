@@ -6,7 +6,8 @@
 // （Cache-Control public 86400、ACAO、nosniff、CSP sandbox、ETag 透传、
 // Content-Length 按实读重计）/ 304 条件请求链 / fetch 抛错 502 / 超时 504 /
 // 限流 key=img-proxy 429 / YT 族 dispatcher 换道且跳过公网校验 /
-// isApiPath('/img-proxy') PREFIXES 命中。
+// 代理道 fetch 失败回落钉扎直连一次（直连成 200、回落也败 502、非公网不直连、
+// 超时已燃不回落）/ isApiPath('/img-proxy') PREFIXES 命中。
 // net-guard 半桩：真 normalizeOutboundUrl/isImgProxyHost 策略面就是要测的，
 // resolvesToPublicIp 换可控桩（离网可跑）；rate-limit/yt-proxy 可控桩；
 // 上游 fetch 全桩，不打真网络。
@@ -224,6 +225,68 @@ test('img-proxy：YT 族命中 isYoutubeHost → fetch 吃 ytDispatcher 桩且�
   assert.ok(sent.init.dispatcher && sent.init.dispatcher !== ytAgent);
   assert.equal(sent.init.dispatcher.constructor.name, 'Agent'); // makeGuardedLookup 钉扎 Agent
   assert.deepEqual(publicIpCalls, ['yt3.ggpht.com']);
+});
+
+test('img-proxy：YT 代理道 fetch 失败回落直连一次——直连成 200、回落也败/超时已燃走原出口、非公网 403', async (t) => {
+  reset();
+  ytAgent = { marker: 'yt-proxy-agent' };
+  // 代理道抛错（CONNECT 接得进、隧道死到 abort 的形态）、直连道正常回图
+  upstreamHandler = async (url, init) => {
+    if (init.dispatcher === ytAgent) throw new Error('proxy tunnel dead');
+    return new Response(PNG, {
+      status: 200,
+      headers: { 'content-type': 'image/png', 'content-length': String(PNG.byteLength) },
+    });
+  };
+  const res = await img('https://i.ytimg.com/vi/x/hqdefault.jpg');
+  assert.equal(res.status, 200);
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), PNG);
+  assert.equal(fetchCalls.length, 2); // 代理一发 + 回落直连一发，串行不并发
+  assert.equal(fetchCalls[0].init.dispatcher, ytAgent); // 首发吃代理道
+  const direct = fetchCalls[1].init.dispatcher;
+  assert.notEqual(direct, ytAgent);
+  assert.equal(direct.constructor.name, 'Agent'); // 回落道是钉扎直连 Agent
+  assert.deepEqual(publicIpCalls, ['i.ytimg.com']); // 回落前补跑公网闸（代理支本来跳过）
+
+  // 回落直连也败 → 原 502 出口；代理+直连各一发
+  reset();
+  ytAgent = { marker: 'yt-proxy-agent' };
+  upstreamHandler = async () => { throw new Error('both dead'); };
+  let r = await json(await img('https://i.ytimg.com/vi/x/hqdefault.jpg'));
+  assert.equal(r.status, 502);
+  assert.equal(r.body.message, 'upstream request failed');
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(fetchCalls[0].init.dispatcher, ytAgent);
+  assert.notEqual(fetchCalls[1].init.dispatcher, ytAgent);
+  assert.deepEqual(publicIpCalls, ['i.ytimg.com']);
+
+  // 回落前公网闸判非公网 → 不发直连（SSRF 防线不因回落跳过），同无代理支 403
+  reset();
+  ytAgent = { marker: 'yt-proxy-agent' };
+  publicIpImpl = async () => false;
+  upstreamHandler = async () => { throw new Error('proxy tunnel dead'); };
+  r = await json(await img('https://i.ytimg.com/vi/x/hqdefault.jpg'));
+  assert.equal(r.status, 403);
+  assert.equal(r.body.message, 'forbidden address');
+  assert.equal(fetchCalls.length, 1); // 直连一发未发
+  assert.deepEqual(publicIpCalls, ['i.ytimg.com']); // 公网闸真跑了
+
+  // 代理道挂到超时 abort → 不回落（回落吃同一组已燃信号必败，纯烧 DNS），原 504
+  reset();
+  ytAgent = { marker: 'yt-proxy-agent' };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  upstreamHandler = (url, init) => new Promise((_, reject) => {
+    init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  const p = img('https://i.ytimg.com/vi/x/hqdefault.jpg').then((res2) => json(res2));
+  await new Promise((res2) => setImmediate(res2)); // 让链路推进到挂起的 fetch
+  t.mock.timers.tick(10000);
+  r = await p;
+  assert.equal(r.status, 504);
+  assert.equal(r.body.message, 'upstream timeout');
+  assert.equal(fetchCalls.length, 1); // 超时已燃不再发直连
+  assert.equal(publicIpCalls.length, 0); // 公网闸也没空跑
 });
 
 test('img-proxy：302 逐跳重验——白名单跟随、出白 403、私网 403、超 3 跳 502、畸形/缺 location 502', async () => {

@@ -104,6 +104,7 @@ app.get('/img-proxy', async (c) => {
     // YT 族目标且代理在位 → 走共享 ProxyAgent（跨请求缓存资产，错误路径不
     // destroy）：代理 host 常是私网字面量，本机 DNS 答案对墙内 googlevideo
     // 族域也常是污染结果——公网校验随之跳过，SSRF 面收敛在上方归一化+白名单
+    // （代理道 fetch 失败回落直连时，公网校验在下方回落分支补跑）
     const viaYtProxy = isYoutubeHost(hostname) ? ytDispatcher() : null;
     // 域名解析出的地址必须全公网（SSRF/DNS-rebinding 兜底，见 net-guard 注释）
     if (!viaYtProxy && !(await resolvesToPublicIp(hostname))) {
@@ -137,28 +138,55 @@ app.get('/img-proxy', async (c) => {
 
     // socket 层钉扎：URL 阶段校验与建连是两次独立解析（TOCTOU）——guarded
     // lookup 强制每次建连落在钉住的全公网集。keepAliveTimeout 短池化：
-    // 代理是一次性转发，空闲 socket 1s 后自关，pin 表随 agent GC
-    const dispatcher = viaYtProxy || new Agent({
-      connect: { lookup: makeGuardedLookup() },
-      keepAliveTimeout: 1000,
-    });
+    // 代理是一次性转发，空闲 socket 1s 后自关，pin 表随 agent GC。
+    // viaProxy = 共享 ProxyAgent（跨请求缓存资产，错误路径不 destroy）；
+    // null = 直连道：本跳自建一次性 guarded Agent，fetch 抛错即毁
+    const fetchOnce = async (viaProxy) => {
+      const dispatcher = viaProxy || new Agent({
+        connect: { lookup: makeGuardedLookup() },
+        keepAliveTimeout: 1000,
+      });
+      try {
+        return await fetch(targetUrl, {
+          method: 'GET',
+          headers: proxyHeaders,
+          redirect: 'manual',
+          signal: AbortSignal.any(signals),
+          dispatcher,
+        });
+      } catch (e) {
+        if (!viaProxy) dispatcher.destroy().catch(() => {});
+        throw e;
+      }
+    };
     let upstream;
     try {
-      upstream = await fetch(targetUrl, {
-        method: 'GET',
-        headers: proxyHeaders,
-        redirect: 'manual',
-        signal: AbortSignal.any(signals),
-        dispatcher,
-      });
+      upstream = await fetchOnce(viaYtProxy);
     } catch {
-      if (!viaYtProxy) dispatcher.destroy().catch(() => {});
-      clearTimeout(timeout);
-      // 客户端断开触发的 abort：响应已无法送达，区分出来避免把正常断流
-      // 记成上游故障（状态码对死连接无意义）
-      if (c.req.raw.signal?.aborted) return c.body(null, 499);
-      const status = timeoutController.signal.aborted ? 504 : 502;
-      return failJson(c, status, status === 504 ? 'upstream timeout' : 'upstream request failed');
+      // 代理道 fetch 失败回落直连一次：代理进程可死/隧道可断（CONNECT 接得
+      // 进、上游挂死到超时 abort），封面属增强面不该因此全灭——本机直连
+      // ytimg 常反而通。客户端已断/超时已燃不回落（回落吃同一组信号必败，
+      // 纯烧 DNS）；公网校验此处补跑——代理支在上文有意跳过（代理 host
+      // 常私网/本机 DNS 答案多污染），直连道 SSRF 防线不因回落缺位；
+      // 非公网判定 → 不发起直连，与上方 :110-111 同 verdict 403——
+      // 被策略拒而非上游失败，排障语义不同，不落下方 502 出口
+      if (viaYtProxy && !c.req.raw.signal?.aborted && !timeoutController.signal.aborted) {
+        if (!(await resolvesToPublicIp(hostname))) {
+          clearTimeout(timeout);
+          return failJson(c, 403, 'forbidden address');
+        }
+        try {
+          upstream = await fetchOnce(null);
+        } catch { /* 回落也败——统一走下方既有出口 */ }
+      }
+      if (!upstream) {
+        clearTimeout(timeout);
+        // 客户端断开触发的 abort：响应已无法送达，区分出来避免把正常断流
+        // 记成上游故障（状态码对死连接无意义）
+        if (c.req.raw.signal?.aborted) return c.body(null, 499);
+        const status = timeoutController.signal.aborted ? 504 : 502;
+        return failJson(c, status, status === 504 ? 'upstream timeout' : 'upstream request failed');
+      }
     }
     clearTimeout(timeout);
 
