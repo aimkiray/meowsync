@@ -13,11 +13,14 @@
 //   - 兼容面：窗内回 200（服务端无视 Range）丢弃已收前缀后追加收齐
 //   - 病态上游：206 报 /3000 后续窗 200 无 CL 短件拉低 total——不产假完成
 //   - 负向闸：全量腿非 403 上游 fatal（404）不转续拉（fetch 调用数=1）
+//   - 客户端轮次翻转：首轮 VISIONOS 签名批先行（配额自由批——ANDROID 批
+//     ~2MB/URL 即焚注定全灭），首批空/瞬断时次轮常规客户端链兜底，其
+//     ANDROID 批 formats 填 progressiveCarry 供合流相位
+//   - BV 回归：bvM 分支零扰动——yt 解析链一次不触
 // 桩面与 file-downloader-ext-manual 同构，但字节通路更「真」：download-io
 // 只桩 fetchStream（网络面唯一出口），streamToFile/streamRangeWindow 全真
-// ——.part 落盘/对账/rename 整条是真件。lib/youtube 桩 fetchPlayer/With 出
-// progressive-only 夹具（videos 空→bestH=0→winners 直落 fetchTo——ffmpeg
-// 在场与否无干）；urls 不打真网络。
+// ——.part 落盘/对账/rename 整条是真件。lib/youtube 桩 fetchPlayer/With
+// 分入口录参可编程（缺省同回落 ytPlayerImpl）；urls 不打真网络。
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -66,28 +69,42 @@ seed('../src/server/services/download-io.js', {
   fetchStream: (url, o) => { fetchCalls.push([url, o]); return fetchImpl(url, o); },
 });
 
-// ── lib/bilibili：真身展开，取流函数桩死（yt 用例不触达，防误打真网络）──
+// ── lib/bilibili：真身展开，取流函数桩可编程（yt 用例不触达，防误打真
+// 网络；resolveBiliMedia 供 BV 回归用例出合流档）──
 const realBv = require('../src/server/lib/bilibili.js');
+let biliMediaImpl = async () => ({ videos: [], audios: [], progressive: async () => [] });
 seed('../src/server/lib/bilibili.js', {
   ...realBv,
   resolveBiliAudio: async () => [],
-  resolveBiliMedia: async () => ({ videos: [], audios: [], progressive: async () => [] }),
+  resolveBiliMedia: async (o) => biliMediaImpl(o),
   biliFetch: async () => ({ pages: [] }),
 });
 
-// ── lib/youtube：fetchPlayer/With 可编程，pickStreamList 保真身 ──
+// ── lib/youtube：fetchPlayer/With 分入口录参可编程，pickStreamList 保真身。
+// 轮次翻转后两入口分工不同：VISIONOS 首轮走 fetchPlayerWith、常规链次轮走
+// fetchPlayer——ytVisionosImpl/ytRegularImpl 缺省同回落 ytPlayerImpl ──
+const ytPlayerCalls = [];
 let ytPlayerImpl = async () => ({ streamingData: { adaptiveFormats: [], formats: [] } });
+let ytVisionosImpl = null;
+let ytRegularImpl = null;
 const realYt = require('../src/server/lib/youtube.js');
 seed('../src/server/lib/youtube.js', {
   ...realYt,
-  fetchPlayer: async () => ytPlayerImpl(),
-  fetchPlayerWith: async () => ytPlayerImpl(),
+  fetchPlayer: async (videoId) => {
+    ytPlayerCalls.push(['player', videoId]);
+    return (ytRegularImpl || ytPlayerImpl)(videoId);
+  },
+  fetchPlayerWith: async (videoId, signal, client) => {
+    ytPlayerCalls.push([client, videoId]);
+    return ((client === 'VISIONOS' && ytVisionosImpl) || ytPlayerImpl)(videoId);
+  },
 });
 
 const { downloadVideo } = require('../src/server/services/file-downloader.js');
 const outDir = tmpDataDir('meowsync-dl-vresume-out-');
 
 const YT_TRACK = 'yt_dQw4w9WgXcQ';
+const BV_TRACK = 'bv_BV1xx411c7mD';
 const RANGE_WINDOW = 4 * 1024 * 1024; // VIDEO_RANGE_WINDOW（4MiB 窗宽）
 const rangeEnd = (off) => off + RANGE_WINDOW - 1;
 
@@ -138,7 +155,9 @@ const rangeStart = (o) => +(/^bytes=(\d+)-/.exec(o.headers.Range) || [])[1];
 beforeEach(() => {
   fetchImpl = async () => { throw new Error('unstubbed fetch'); };
   ytPlayerImpl = async () => ({ streamingData: { adaptiveFormats: [], formats: [] } });
-  fetchCalls.length = 0;
+  ytVisionosImpl = ytRegularImpl = null;
+  biliMediaImpl = async () => ({ videos: [], audios: [], progressive: async () => [] });
+  fetchCalls.length = ytPlayerCalls.length = 0;
 });
 
 test('断流续拉：全量腿半截断流 → 首窗放 1500B 断 → 次窗按已收字节续传 → 文件字节完整对账', async () => {
@@ -311,4 +330,70 @@ test('全量腿非 403 上游 fatal（404）：负向闸判死——不转续拉
     'resumableVideoError 负向闸——不得进续拉烧窗口');
   assert.ok(!existsSync(dest));
   assert.ok(!existsSync(`${dest}.part`));
+});
+
+// ── 客户端轮次翻转钉板（ANDROID 批 ~2MB/URL 焚 → VISIONOS 先行）──
+
+test('轮次翻转：首轮 VISIONOS 签名批（formats 恒空）→ 次轮常规链批兜底——其 formats 填合流相位', async () => {
+  const vUrl = 'https://rr9---sn-x.googlevideo.com/v?itag=137&batch=visionos';
+  const aUrl = 'https://rr9---sn-x.googlevideo.com/v?itag=140&batch=visionos';
+  const pUrl = 'https://rr9---sn-x.googlevideo.com/v?itag=22&batch=android';
+  // 首轮 VISIONOS 批：自适应视频轨+音轨齐、formats 恒空（实测批形态），
+  // 流全部 403 造「首轮批不可用」促二轮（实测 VISIONOS 无墙——这里纯
+  // 钉轮次语义，不是复刻配额焚批）
+  ytVisionosImpl = async () => ({ streamingData: { adaptiveFormats: [
+    { url: vUrl, mimeType: 'video/mp4; codecs="avc1.640028"',
+      bitrate: 4000000, itag: 137, height: 720, width: 1280 },
+    { url: aUrl, mimeType: 'audio/mp4', bitrate: 128000, itag: 140 },
+  ], formats: [] } });
+  // 次轮常规链批（ANDROID 档）：formats 带合流——carry 跨轮填它的
+  ytRegularImpl = async () => progOnly(pUrl);
+  fetchImpl = async (u) => {
+    if (u === vUrl || u === aUrl) throw err403();
+    if (u === pUrl) return resp200(2048, okStream(Buffer.alloc(2048, 0x61)));
+    throw new Error(`unexpected ${u}`);
+  };
+  const dest = join(outDir, 'r1.mp4');
+  const r = await downloadVideo(YT_TRACK, dest, null, null, {});
+  assert.deepEqual(ytPlayerCalls.map(c => c[0]), ['VISIONOS', 'player'],
+    '首轮 VISIONOS 直解批 → 次轮常规客户端链');
+  assert.deepEqual(ytPlayerCalls.map(c => c[1]), ['dQw4w9WgXcQ', 'dQw4w9WgXcQ']);
+  assert.equal(r.size, 2048);
+  assert.equal(r.videoMeta.source, 'progressive',
+    'VISIONOS 批 formats 恒空——次轮 ANDROID 批 formats 填 carry 供合流兜底');
+  assert.equal(fetchCalls.at(-1)[0], pUrl);
+  assert.equal(readFileSync(dest).length, 2048);
+});
+
+test('VISIONOS 首轮解析自身瞬断 → 次轮照常走常规链（名额派发即消费，不重试 VISIONOS）', async () => {
+  const pUrl = 'https://rrA---sn-x.googlevideo.com/v?itag=22&batch=android';
+  ytVisionosImpl = async () => { throw errReset(); }; // visitor/innertube 瞬断形态
+  ytRegularImpl = async () => progOnly(pUrl);
+  fetchImpl = async (u) => {
+    assert.equal(u, pUrl);
+    return resp200(1024, okStream(Buffer.alloc(1024, 0x62)));
+  };
+  const dest = join(outDir, 'r2.mp4');
+  const r = await downloadVideo(YT_TRACK, dest, null, null, {});
+  assert.deepEqual(ytPlayerCalls.map(c => c[0]), ['VISIONOS', 'player'],
+    'VISIONOS 解析级瞬断——次轮回落常规链（其内链已含 VISIONOS 档）');
+  assert.equal(r.size, 1024);
+  assert.equal(r.videoMeta.source, 'progressive');
+  assert.equal(fetchCalls.length, 1, '瞬断轮零死请求——常规链批合流直落');
+});
+
+test('BV 回归：bv_ 走 resolveBiliMedia 合流档直落——yt 解析链零触达', async () => {
+  const pUrl = 'https://upos-sz-m1.bilivideo.com/prog.mp4';
+  biliMediaImpl = async () => ({ videos: [], audios: [],
+    progressive: async () => [{ url: pUrl, mimeType: 'video/mp4', br: null, h: 720 }] });
+  fetchImpl = async (u) => {
+    assert.equal(u, pUrl);
+    return resp200(1500, okStream(Buffer.alloc(1500, 0x63)));
+  };
+  const dest = join(outDir, 'r3.mp4');
+  const r = await downloadVideo(BV_TRACK, dest, null, null, {});
+  assert.equal(r.size, 1500);
+  assert.equal(r.videoMeta.source, 'progressive');
+  assert.equal(ytPlayerCalls.length, 0, 'bvM 分支零扰动——yt 解析链一次不触');
+  assert.equal(fetchCalls.length, 1);
 });

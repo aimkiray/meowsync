@@ -680,8 +680,14 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     if (penetratesCandidates(e)) throw e;
     console.warn('[media-cache] 视频缓存复用探测失败，回落下载链:', e?.message || e);
   }
-  // 一轮解析给三类物料：自适应视频轨、合流用 AAC 音轨、MP4 合流兜底
-  let clientEscalated = false;
+  // 一轮解析给三类物料：自适应视频轨、合流用 AAC 音轨、MP4 合流兜底。
+  // yt 签名批配额实测：ANDROID 签名批 ~2MB/URL 即焚（连 Range 窗也 403），
+  // VISIONOS 签名批同 URL 连拉 6MB+ 无墙——但 formats 恒空。首轮 VISIONOS
+  // 抢自适应轨，省掉 ANDROID 批注定全灭的一整轮死请求（每候选全量 403+
+  // 3 窗 403）；首批空/瞬断时二轮回落常规客户端链兜底，其 ANDROID 批
+  // formats 顺带填合流兜底表。名额派发即消费：VISIONOS 解析自身瞬断时
+  // 二轮照常走常规链——其 ANDROID→IOS→VISIONOS 内链含它，兜底更宽
+  let visionosRound = true;
   let progressiveCarry = [];
   const resolveMedia = async () => {
     if (bvM) {
@@ -691,15 +697,14 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
       });
     }
     const videoId = providerData?.youtube?.videoId || ytM[1];
-    // 同音频侧口径：第二轮升级 VISIONOS 签名批，闸控视频换它才拿得到
-    // 自适应高画质轨
-    if (clientEscalated) {
-      console.info(`[youtube] ${videoId} 自适应视频批不可用——升级 VISIONOS 签名批重解`);
+    const visionos = visionosRound;
+    visionosRound = false;
+    if (!visionos) {
+      console.info(`[youtube] ${videoId} VISIONOS 批不可用——回落常规客户端链重解`);
     }
-    const player = clientEscalated
+    const player = visionos
       ? await ytFetchPlayerWith(videoId, signal, 'VISIONOS')
       : await ytFetchPlayer(videoId, signal);
-    clientEscalated = true;
     const sd = player.streamingData || {};
     const prog = pickYtProgressive(sd);
     if (prog.length) progressiveCarry = prog;
@@ -794,7 +799,7 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
         console.info(`[video-dl] 合流档 ${winners[0].h}p 反超自适应 ${bestH}p——直落合流`);
         for (const cand of winners) {
           throwIfAborted(signal);
-          // 记已试——尾部兜底与下一轮 VISIONOS 的 winners 都消费同一批
+          // 记已试——尾部兜底与下一轮重解批的 winners 都消费同一批
           // URL，确定性失败不重复整段下载（单文件可达 GB 级）
           if (triedProgressive.has(cand.url)) continue;
           triedProgressive.add(cand.url);
@@ -899,10 +904,13 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
         if (audioTmp) { try { fs.unlinkSync(audioTmp); } catch { /* 已清 */ } }
       }
     }
-    // 本轮自适应全灭不动 progressive——下一轮 VISIONOS 升级批可能拿回
-    // 不受闸的高画质轨；合流兜底只在客户端阶梯用尽后出场。
-    // 无 ffmpeg 时自适应相位整体跳过，第二轮重解纯属白打一跳——直连
-    if (!FFMPEG_OK) break;
+    // 本轮自适应全灭不动 progressive——下一轮常规链重解批可能带回
+    // formats 合流档（VISIONOS 批 formats 恒空时它是唯一兜底来源）；
+    // 合流兜底只在客户端阶梯用尽后出场。
+    // 无 ffmpeg 时自适应相位整体跳过，第二轮重解只值 formats 兜底表：
+    // bv thunk 轮轮同料照旧白打一跳；yt 首轮 VISIONOS 批 formats 恒空，
+    // carry 仍空时第二轮常规链是合流兜底唯一来源——放它跑完
+    if (!FFMPEG_OK && (bvM || progressiveCarry.length)) break;
   }
   // 自适应阶梯用尽/无 ffmpeg → MP4 合流兜底（B 站 thunk 懒取 durl；
   // yt 走跨轮结转的 formats 批——VISIONOS 不回 formats 时仍有 ANDROID 的）。
