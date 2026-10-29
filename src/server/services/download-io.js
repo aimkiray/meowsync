@@ -5,6 +5,7 @@ const axios = require('axios');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const { Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 const { checkHostPublic, normalizeOutboundUrl, makeGuardedLookup } = require('../lib/net-guard');
 // YouTube 出站代理（yt_proxy）：googlevideo 拉流/SABR 探测/ytimg 封面命中
@@ -376,6 +377,109 @@ async function streamToFile(response, outputPath, { maxBytes, onProgress, maxTot
   }
 }
 
+// 窗口化续拉的单窗写原语：一个 fetchStream 响应 → partPath 追加段——
+// file-downloader 视频腿的 SABR 续拉循环（resumeByRangeWindows）逐窗调用。
+// 与 streamToFile 同闸：O_NOFOLLOW 开 .part（续拉前缀不变量下 O_APPEND 落点
+// 即文件尾）、非 identity content-encoding 拒收、watchStall 失速看门狗、
+// 上限闸、声明总长与落盘对账的职责划分（总长判死在头期，字节级对账归循环）。
+// offset = 该窗在资源内的起点（=已落盘字节数）：
+// - 206：Content-Range 起点必须等于 offset，起点不符/缺总长的窗字节落盘
+//   即错位——窗报废抛错由调用方计零进展重试（与 streamToFile 206 闸同口径：
+//   `*`/畸形头按可重试错而非 fatal，换边节点可能给正确窗）；
+// - 200：服务端无视 Range 回全量——流起点是 0 不是 offset，丢弃前 offset
+//   字节后追加，前缀不变量不破。
+// win 出参 {written,total} 由调用方传入：written=本窗真实落盘字节
+//（writer.bytesWritten——断流已收的部分也算，缓冲未刷的不计，宁可多拉
+// 不错位）；total=探明的资源总长（206 的 Content-Range / 200 的
+// content-length 头期即记，断流也带出；200 无总长但干净收尾时=
+// offset+written——全量已齐的完成标记）。
+async function streamRangeWindow(response, partPath, { offset, maxBytes, maxTotalMs, onProgress, win }) {
+  let skip = 0;
+  let total = 0;
+  if (response.status === 206) {
+    const rangeHeader = String(response.headers['content-range'] || '').trim();
+    const m = /^bytes (\d+)-(\d+)\/(\d+|\*)$/i.exec(rangeHeader);
+    const start = m ? parseInt(m[1], 10) : NaN;
+    const rangeTotal = m && m[3] !== '*' ? parseInt(m[3], 10) : NaN;
+    if (!m || start !== offset || !Number.isFinite(rangeTotal) || rangeTotal <= 0) {
+      response.data.destroy();
+      throw new Error(`上游 206 与续传偏移不符（${rangeHeader || '无 Content-Range'}，期望起点 ${offset}）`);
+    }
+    total = rangeTotal;
+  } else if (response.status === 200) {
+    skip = offset;
+    const cl = parseInt(response.headers['content-length'], 10);
+    if (Number.isFinite(cl) && cl > 0) total = cl;
+  } else {
+    response.data.destroy();
+    throw new Error(`上游返回 ${response.status}`);
+  }
+  // 声明就已超限：headers 到手即拒，不把上限先流一遍（与 streamToFile 同判）
+  if (total > maxBytes) {
+    response.data.destroy();
+    throw fatalError(`文件超过大小上限 ${maxBytes}`);
+  }
+  // decompress:false 下编码可见——与 streamToFile 同闸
+  if (hasNonIdentityEncoding(response.headers)) {
+    response.data.destroy();
+    throw fatalError('上游返回了压缩内容，无法校验完整性');
+  }
+  if (win) win.total = total;
+  // O_APPEND 落点恒为文件尾：续拉循环保证盘上恒为资源前缀，尾即 offset——
+  // 与 streamToFile 同闸 O_NOFOLLOW（预埋符号链接不得把写引到下载树外）
+  const fd = fs.openSync(partPath,
+    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW);
+  let writer;
+  try {
+    writer = fs.createWriteStream(partPath, { fd, autoClose: true });
+  } catch (e) {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+    throw e;
+  }
+  // 与 streamToFile 同纪律：watchStall 附着与 pipeline 之间不得插 await
+  watchStall(response.data, STALL_MS, maxTotalMs);
+  let got = 0;
+  let lastProgress = -1;
+  // 前缀丢弃（200 兼容路径）+ 字节计数 + 上限闸 + 进度上报全进 Transform——
+  // pipeline 统一接管三段流的销毁，任一环节出错不留悬挂 socket
+  const skipper = new Transform({
+    transform(chunk, enc, cb) {
+      if (skip > 0) {
+        if (chunk.length <= skip) { skip -= chunk.length; return cb(); }
+        chunk = chunk.subarray(skip); skip = 0;
+      }
+      got += chunk.length;
+      if (offset + got > maxBytes) {
+        return cb(fatalError(`文件超过大小上限 ${maxBytes}`));
+      }
+      if (onProgress && total > 0) {
+        const p = Math.min(Math.round((offset + got) / total * 100), 100);
+        if (p !== lastProgress) {
+          lastProgress = p;
+          try {
+            onProgress(p);
+          } catch {
+            // 回调异常不得穿透 Transform 成流错误
+          }
+        }
+      }
+      cb(null, chunk);
+    }
+  });
+  try {
+    await pipeline(response.data, skipper, writer);
+  } catch (e) {
+    if (win) win.written = writer.bytesWritten;
+    throw e;
+  }
+  if (win) {
+    win.written = writer.bytesWritten;
+    // 200 干净收尾=全量资源已齐：无 content-length 时落盘字节即完成总长；
+    // 206 的总长在头期已记（断流路径也带出去了）
+    if (response.status === 200) win.total = total || offset + writer.bytesWritten;
+  }
+}
+
 // googlevideo 等 URL path 无后缀，扩展名藏在 mime=audio/mp4 查询参数里
 const MIME_EXT = { 'audio/mp4': 'm4a', 'video/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/webm': 'webm', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' };
 
@@ -416,6 +520,7 @@ module.exports = {
   fetchStream,
   removePartial,
   streamToFile,
+  streamRangeWindow,
   extFromUrl,
   pathWithExt,
 };

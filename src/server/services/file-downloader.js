@@ -11,7 +11,7 @@ const { QQ_UNLOCK_SOURCES } = require('./unlock');
 const {
   MIME_EXT, mergeLrcTrans, fatalError, errnoToFatal, penetratesCandidates,
   throwIfAborted, describeError, fetchStream, removePartial, streamToFile,
-  extFromUrl, pathWithExt,
+  streamRangeWindow, extFromUrl, pathWithExt,
 } = require('./download-io');
 const qq = require('../lib/qq');
 const { resolveBiliAudio, resolveBiliMedia, biliFetch, BILI_PUBLIC_HEADERS } = require('../lib/bilibili');
@@ -380,6 +380,106 @@ const MAX_VIDEO_BYTES = 8 * 1024 * 1024 * 1024;
 // 视频整段总时长闸 30min：2GB 需 ~9Mbps、8GB 需 ~36Mbps 持续带宽——慢链
 // 上 5min 闸会把能拉完的高档硬生生降级
 const MAX_VIDEO_MS = 30 * 60 * 1000;
+// SABR 限流的窗口化续拉（实测形态与 :106-109 RANGE_ALL 注同一份）：自适应视频流
+// 拒裸全量 GET（上游 403——`bytes=0-` 无界 Range 同判全量）；有界 Range 窗回
+// 206，但每连接放量 ~1-2MB 即 RST/断流。续拉 = 每窗新连接发有界 Range、以
+// 已落盘字节续传——新连接=新放量额度，断流不丢已收前缀
+const VIDEO_RANGE_WINDOW = 4 * 1024 * 1024; // 4MB/窗：大于实测单连接放量即够用
+// 连续零进展窗的重试上限：断流但有字节落盘是正常 SABR 节奏不耗重试；
+// 零字节窗（连接即断/反复同错）重试耗尽才判该 URL 死走既有降档
+const VIDEO_RANGE_RETRIES = 2;
+
+// 全量腿死法里值得转窗口续拉的只有两类：上游 403（拒全量的闸控形态——
+// fatal 但换有界窗可能放行）与非 fatal 的传输级失败（ECONNRESET/socket
+// 断流/提前 EOF 的「下载不完整」/停滞/超时——SABR 限量断流全在这族）。
+// abort/本地确定性 errno（换窗同果）/非 403 的上游 fatal 死法不烧窗口
+const resumableVideoError = (e, signal) => {
+  if (!e || e.aborted || signal?.aborted || e.code === 'ERR_CANCELED') return false;
+  if (e.fatal) return e.upstreamStatus === 403;
+  return true;
+};
+
+// Range 窗口续拉循环：每窗新连接发 `bytes=off-(off+窗宽-1)`，已落盘 .part
+// 字节即续传偏移（盘上恒为资源的合法前缀）；窗内断流/提前 EOF 以新窗续传，
+// 连续零进展窗重试耗尽判该 URL 死。fetchStream 每调用一张新 socket pin 表
+// ——天然一窗一守卫。.part→rename 终态与 streamToFile 同口径（半成品永不
+// 以终名出现，失败候选残片照样清）。返回与 streamToFile 同形 {path,size}
+// total 合并只许单调上调：206 Content-Range 的总长是硬声明，但 200 无
+// content-length 干净收尾时 win.total=offset+written 只是弱推断——病态
+// 边沿节点无视 Range 回短件时它小于真实总长；后期 200/206 报小总长都
+// 不得拉低已学值（收下=截断件过 stats.size===total 对账的假完成）。
+// 病态输入不进 total：后续窗对该节点零进展耗尽抛错，走既有降档
+async function resumeByRangeWindows(cand, dest, { onProgress, deadline, signal, headers }) {
+  const partPath = `${dest}.part`;
+  try {
+    // 续拉前先清 stale .part：崩溃残留/上一候选残片不得以「旧前缀」混进追加
+    const initFd = fs.openSync(partPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+    fs.closeSync(initFd);
+    let off = 0;          // 已落盘字节 = 续传偏移
+    let total = 0;        // 已探明的资源总长（0=未知——206 必带，200 视 content-length）
+    let zeroWindows = 0;  // 连续零进展窗计数
+    let lastErr = null;
+    while (!total || off < total) {
+      throwIfAborted(signal);
+      const remainMs = deadline - Date.now();
+      if (remainMs <= 0) throw lastErr || new Error('下载总时长超限');
+      const win = { written: 0, total: 0 }; // 本窗战果——成败路径都带出真值
+      try {
+        const resp = await fetchStream(cand.url, {
+          timeout: 300000, signal,
+          // 有界窗必须覆盖调用方 RANGE_ALL 的 `bytes=0-`（无界即全量形态，
+          // 闸控下回 403）；B 站防盗链头经 headers 透传不打折
+          headers: { ...headers, Range: `bytes=${off}-${off + VIDEO_RANGE_WINDOW - 1}` },
+        });
+        await streamRangeWindow(resp, partPath, {
+          offset: off, maxBytes: MAX_VIDEO_BYTES,
+          maxTotalMs: remainMs, onProgress, win,
+        });
+      } catch (e) {
+        // 断流前已落盘的字节仍是真进展（bytesWritten 是盘上真值）
+        off += win.written;
+        // total 只许上调不许下调（函数头注）——病态窗报小总长不收
+        if (win.total) total = Math.max(total, win.total);
+        throwIfAborted(signal);
+        errnoToFatal(e);
+        // abort 立即穿透不续拉；本地确定性 errno（ENOSPC 等）换窗同果穿透
+        if (e?.aborted || penetratesCandidates(e)) throw e;
+        // 无 upstreamStatus 的 fatal 是确定性死法（超限/压缩内容/URL 级
+        // 拦截）——窗窗同果不烧重试；带 upstreamStatus 的上游码（403/416
+        // 等）换边节点可能放行，照零进展窗计
+        if (e.fatal && e.upstreamStatus === undefined) throw e;
+        zeroWindows = win.written > 0 ? 0 : zeroWindows + 1;
+        lastErr = e;
+        if (zeroWindows > VIDEO_RANGE_RETRIES) throw e;
+        continue;
+      }
+      off += win.written;
+      // total 只许上调不许下调（函数头注）——病态窗报小总长不收
+      if (win.total) total = Math.max(total, win.total);
+      zeroWindows = win.written > 0 ? 0 : zeroWindows + 1;
+      if (zeroWindows > VIDEO_RANGE_RETRIES) {
+        throw lastErr || new Error('续拉窗口连续无进展');
+      }
+    }
+    const stats = fs.statSync(partPath);
+    // 与 streamToFile 同口径对账：空件 fatal、声明总长与落盘不符=截断
+    if (stats.size === 0) {
+      throw fatalError('下载内容为空');
+    }
+    if (total > 0 && stats.size > total) {
+      throw fatalError(`上游虚报长度（${stats.size}/${total} 字节）`);
+    }
+    if (total > 0 && stats.size !== total) {
+      throw new Error(`下载不完整（${stats.size}/${total} 字节）`);
+    }
+    fs.renameSync(partPath, dest);
+    return { path: dest, size: stats.size };
+  } catch (e) {
+    removePartial(partPath);
+    throw errnoToFatal(e);
+  }
+}
 
 const FFMPEG_OK = (() => {
   try {
@@ -615,17 +715,34 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
       progressive: async () => progressiveCarry
     };
   };
+  // 视频候选拉流：先按现状全量 GET 一次——progressive 合流流与未受闸 URL
+  // 零成本直通；SABR 闸控形态（自适应流拒全量 403/限量断流，见 RANGE_ALL
+  // 注的实测语境）落 catch 转 resumeByRangeWindows 窗口化 Range 续拉。
+  // 续拉与全量腿共用同一条 MAX_VIDEO_MS 终点——总时长闸不因断流形态变味；
+  // MAX_VIDEO_BYTES/进度上报（累计落盘字节）契约同口径
   const fetchTo = async (cand, dest, base, span) => {
-    const resp = await fetchStream(cand.url, { timeout: 300000, signal, headers });
-    if (resp.status !== 200 && resp.status !== 206) {
-      resp.data.destroy();
-      throw new Error(`上游返回 ${resp.status}`);
+    const progress = onProgress && ((p) => onProgress(base + Math.floor(p * span / 100)));
+    const deadline = Date.now() + MAX_VIDEO_MS;
+    try {
+      const resp = await fetchStream(cand.url, { timeout: 300000, signal, headers });
+      if (resp.status !== 200 && resp.status !== 206) {
+        resp.data.destroy();
+        throw new Error(`上游返回 ${resp.status}`);
+      }
+      return await streamToFile(resp, dest, {
+        maxBytes: MAX_VIDEO_BYTES,
+        onProgress: progress,
+        maxTotalMs: Math.max(deadline - Date.now(), 1)
+      });
+    } catch (e) {
+      throwIfAborted(signal);
+      // 判据外的死法（abort/本地 errno/非 403 上游 fatal）走既有降档语义
+      if (!resumableVideoError(e, signal)) throw e;
+      console.info(`[video-dl] 全量拉取失败（${e.message}）——转 Range 窗口续拉`);
+      return await resumeByRangeWindows(cand, dest, {
+        onProgress: progress, deadline, signal, headers
+      });
     }
-    return await streamToFile(resp, dest, {
-      maxBytes: MAX_VIDEO_BYTES,
-      onProgress: onProgress && ((p) => onProgress(base + Math.floor(p * span / 100))),
-      maxTotalMs: MAX_VIDEO_MS
-    });
   };
   // 候选失败即降档是静默路径——日志留痕让"实际到手档位"可回溯
   const downgradeWarn = (cand, e) =>
