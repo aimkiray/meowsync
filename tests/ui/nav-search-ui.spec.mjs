@@ -245,14 +245,14 @@ describe('TopNavigation：抽屉开着时搜索键禁用', () => {
   })
 })
 
-describe('TopNavigation：源短标徽牌', () => {
+describe('TopNavigation：源徽牌显英文全称', () => {
   it.each([
-    ['netease', '163'], ['qq', 'QQ'], ['yt', 'YT'], ['bili', 'B站'],
-  ])('源=%s → 徽牌 %s（title/aria-label 仍报全名）', async (src, short) => {
+    ['netease', 'NetEase'], ['qq', 'QQ'], ['yt', 'YouTube'], ['bili', 'BiliBili'],
+  ])('源=%s → 徽牌 %s（title/aria-label 仍报中文全名）', async (src, tag) => {
     prefSearchSource.value = src
     const w = await mountNav()
     const btn = w.find('.topnav-src-btn')
-    expect(btn.find('.topnav-src-tag').text()).toBe(short)
+    expect(btn.find('.topnav-src-tag').text()).toBe(tag)
     const nameMap = { netease: '网易云', qq: 'QQ 音乐', yt: 'YouTube', bili: 'Bilibili' }
     expect(btn.attributes('title')).toBe(`搜索源：${nameMap[src]}`)
     expect(btn.find('.topnav-src-tag').attributes('aria-hidden')).toBe('true')
