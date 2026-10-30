@@ -389,6 +389,7 @@ test('getSongDownloadStatus：audioReady 跨歌单寻址且独立于全工件合
   const st = await dm.getSongDownloadStatus(null, songId);
   assert.equal(st.audioReady, true);
   assert.equal(st.audioPlaylistId, plB.id);
+  assert.equal(st.audioFormat, 'm4a', 'audioFormat 须随命中档回带其扩展名');
   assert.equal(st.downloaded, false, '无 playlistId 时本单 task 缺席——downloaded 不参与播放判定');
   assert.equal(st.videoReady, false);
 
@@ -494,6 +495,8 @@ test('getSongDownloadStatus：audioArtifactAt/audioEtag 与 /file 实发同源�
     '工件戳须是命中档 mtimeMs 的截断整数');
   assert.ok(Number.isInteger(st.audioArtifactAt), 'audioArtifactAt 必须是整数');
   assert.equal(st.audioEtag, `W/"${stat.size}-${stat.mtimeMs}"`, 'etag 生成式须与 /file 同款');
+  // 命中工件容器扩展名（小写不带点）——客户端平台可解码性闸消费
+  assert.equal(st.audioFormat, 'mp3', 'audioFormat 须回带命中工件扩展名');
   assert.equal(st.boundUpdatedAt, null, '未绑定歌曲绑定戳归 null');
   // 与 /file 实发 ETag 逐字节一致——客户端拿它对账本地档，偏一个字节都会误换源
   const downloadsRoute = require('../src/server/routes/downloads.js');
@@ -512,6 +515,8 @@ test('getSongDownloadStatus：audioArtifactAt/audioEtag 与 /file 实发同源�
   assert.ok(wireAt, 'status 回包须带 audioArtifactAt');
   assert.ok(!wireAt[1].includes('.'), `audioArtifactAt 线型须为整数字面量，实发 ${wireAt[1]}`);
   assert.equal(Number(wireAt[1]), Math.trunc(stat.mtimeMs));
+  // 线型键名钉：契约键是 data.audioFormat（app 侧 DTO 按此解码）
+  assert.match(raw, /"audioFormat":"mp3"/, 'status 回包须带 audioFormat 扩展名');
 
   // 绑定落库后回带 song_unlock_manual.updated_at 的 UTC epoch ms——
   // sqlite CURRENT_TIMESTAMP 裸串补 'Z' 解析。updated_at 钉成已知裸串、
@@ -533,12 +538,38 @@ test('getSongDownloadStatus：audioArtifactAt/audioEtag 与 /file 实发同源�
     unlockManualRepo.deleteManual(songId);
   }
 
-  // audioReady 未命中（无档曲目）→ 工件戳/etag 双 null；无绑定同归 null
+  // audioReady 未命中（无档曲目）→ 工件戳/etag/扩展名齐 null；无绑定同归 null
   const st3 = await dm.getSongDownloadStatus(null, 'yt_no_artifact_probe');
   assert.equal(st3.audioReady, false);
   assert.equal(st3.audioArtifactAt, null);
   assert.equal(st3.audioEtag, null);
+  assert.equal(st3.audioFormat, null);
   assert.equal(st3.boundUpdatedAt, null);
+});
+
+test('getSongDownloadStatus.audioFormat：webm 容器如实回带且大写扩展名归一', async () => {
+  // iOS AVPlayer 不解 webm/ogg/opus——客户端拿本字段做可解码性闸，
+  // 容器名必须是原样扩展名（不得猜 mime/改口径）且小写不带点
+  const songId = 'yt_fmt_probe';
+  const pl = playlistsRepo.upsertPlaylist({ neteasePlaylistId: 'local_pl_fmt', name: 'fmt' });
+  const aud = join(fs.DOWNLOAD_BASE_DIR, String(pl.id), 'audio', 's.WEBM');
+  mkdirSync(dirname(aud), { recursive: true });
+  writeFileSync(aud, 'webm-bytes');
+  const t = downloadTasksRepo.createTask({ playlistId: pl.id, queueId: null, songId, songName: 'n', artist: 'a' });
+  downloadTasksRepo.updateTask(t.id, {
+    status: 'completed', audioPath: aud, completedAt: '2024-04-02T00:00:00.000Z'
+  });
+
+  const st = await dm.getSongDownloadStatus(null, songId);
+  assert.equal(st.audioReady, true);
+  assert.equal(st.audioFormat, 'webm',
+    'webm 工件须回带小写容器扩展名——客户端闸靠它拒播 iOS 不可解码档');
+
+  // HTTP 线型钉：契约键名 data.audioFormat（与 audioBitrate 同解码位）
+  const downloadsRoute = require('../src/server/routes/downloads.js');
+  const res = await downloadsRoute.request(`http://t/downloads/songs/${songId}/status`);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).data.audioFormat, 'webm');
 });
 
 // audio_br（br-gate 音质对账列）：完成行落 downloadAudio 实到码率 result.br——

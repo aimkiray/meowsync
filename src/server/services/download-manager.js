@@ -1903,10 +1903,14 @@ async function getSongDownloadStatus(playlistId, songId) {
   // lstatSync 与 /file 的 O_NOFOLLOW 同向：getTaskArtifactPath 的 lstat
   // 闸到本读之间的纳秒窗里叶子被换成链接时，报链接自身的戳（保守——/file
   // 此刻会拒供）而非跟链摸到下载根外目标的戳。
+  // audioFormat 同语义位：命中工件的容器扩展名（小写不带点），客户端平台
+  // 可解码性闸消费（iOS AVPlayer 不解 webm/ogg/opus）——与戳同源取
+  // artifactPath 而非登记列，保证与实发工件一致；无扩展名归 null。
   // audioReady 未命中/竞态读败/寻址 404 一律 null——热路径
   // 不为一枚戳炸整请求
   let audioArtifactAt = null;
   let audioEtag = null;
+  let audioFormat = null;
   if (audioPlaylistId !== null) {
     try {
       const artifactPath = getTaskArtifactPath(audioPlaylistId, songId, 'audio');
@@ -1914,6 +1918,7 @@ async function getSongDownloadStatus(playlistId, songId) {
         const stat = fs.lstatSync(artifactPath);
         audioArtifactAt = Math.trunc(stat.mtimeMs);
         audioEtag = `W/"${stat.size}-${stat.mtimeMs}"`;
+        audioFormat = path.extname(artifactPath).slice(1).toLowerCase() || null;
       }
     } catch { /* 竞态消失/不可读——按无戳收敛 */ }
   }
@@ -1940,6 +1945,7 @@ async function getSongDownloadStatus(playlistId, songId) {
     audioBitrate,
     audioArtifactAt,
     audioEtag,
+    audioFormat,
     boundUpdatedAt,
     task: toPublicTask(task || null)
   };
