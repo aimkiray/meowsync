@@ -280,6 +280,32 @@ describe('TopNavigation：⋯ 菜单 remote 指路文案', () => {
   })
 })
 
+describe('TopNavigation：⋯ 菜单收敛（U3）', () => {
+  it('remote=off → 菜单无「下载」「设置」项（已迁侧栏主导航）；主题组两项 + remote 双行指路照在', async () => {
+    const w = await mountNav({ remoteMode: 'off' })
+    await w.find('.topnav-menu-btn').trigger('click')
+    await nextTick()
+    const menu = document.querySelector('#topnav-menu')
+    expect(menu).toBeTruthy()
+    expect(menu.textContent).not.toContain('下载')
+    expect(menu.textContent).not.toContain('设置')
+    // 主题组两项 radio（retro/glitch 均挂 pg-menu-item）
+    expect(menu.querySelectorAll('[role="group"] .pg-menu-item').length).toBe(2)
+    expect(menu.querySelector('.topnav-menu-remote-line')?.textContent).toContain('远程控制 · 未启用')
+    expect(menu.querySelector('.topnav-menu-remote-note')?.textContent).toContain('?mode=host')
+  })
+
+  it('remote=host → 同样无下载/设置，「控制器」外链项在', async () => {
+    const w = await mountNav({ remoteMode: 'host' })
+    await w.find('.topnav-menu-btn').trigger('click')
+    await nextTick()
+    const menu = document.querySelector('#topnav-menu')
+    expect(menu.textContent).not.toContain('下载')
+    expect(menu.textContent).not.toContain('设置')
+    expect(menu.querySelector('.pg-menu-item[href]')?.textContent).toContain('控制器')
+  })
+})
+
 // ═══ PlaylistGrid ═══
 const NE_SONG = { id: 777, name: '晴天花海', ar: [{ name: '艺人甲' }], al: { name: '花海专辑', picUrl: 'https://p1.music.126.net/x.jpg' }, dt: 200000 }
 const YT_SONG = {

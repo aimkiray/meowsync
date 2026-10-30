@@ -127,7 +127,7 @@
       </div>
 
       <div class="topnav-actions" :inert="searchOpen">
-        <!-- 右簇全量收进单个 ⋯ 菜单：下载/控制器/主题/退出——顶栏只留
+        <!-- 右簇全量收进单个 ⋯ 菜单：控制器/主题/退出——顶栏只留
              一个触发键；菜单走 pg-menu 族（PlaylistPanel 同口径：
              pointerdown 外关、Esc 焦点归还、fixed 翻上兜底）。
              顺带解开 640px 以下主题胶囊被隐藏后无处可切的死角 -->
@@ -165,19 +165,6 @@
             :style="menuPos"
             @keydown="cycleMenuItems"
           >
-            <!-- 下载页入口（与 toast「查看进度」/歌单菜单「下载进度」同视图）；
-                 host 模式藏入口但深链仍可切进来——downloads 视图下保留「返回」逃生 -->
-            <button
-              v-if="remoteMode === 'off' || isDownloadsView"
-              class="pg-menu-item" role="menuitem"
-              @click="pickCenterView"
-            >{{ isDownloadsView ? '返回' : '下载' }}</button>
-            <!-- 设置页入口：AI/凭据服务端配置 + 本机偏好集中面；
-                 视图内再点变「返回」（与下载入口同型往返） -->
-            <button
-              class="pg-menu-item" role="menuitem"
-              @click="pickSettings"
-            >{{ isSettingsView ? '返回' : '设置' }}</button>
             <a
               v-if="remoteMode === 'host'"
               class="pg-menu-item" role="menuitem"
@@ -238,10 +225,6 @@ export default {
   name: 'TopNavigation',
   components: { PixelIcon, GlitchText },
   props: {
-    isDownloadsView: {
-      type: Boolean,
-      default: false
-    },
     searchQuery: {
       type: String,
       default: ''
@@ -257,10 +240,6 @@ export default {
       type: String,
       default: 'off'
     },
-    isSettingsView: {
-      type: Boolean,
-      default: false
-    },
     // 「当前屏是结果页」戳：切源要不要原地重搜只认它——页外切源只调
     // 偏好不打扰当前视图（watch/歌单均无「重搜」语义可消费）
     isSearchView: {
@@ -268,7 +247,7 @@ export default {
       default: false
     }
   },
-  emits: ['toggle-center-view', 'toggle-sidebar', 'nav-home', 'open-settings', 'search', 'search-by-id', 'search-song', 'search-netease', 'search-bili', 'search-bili-songs', 'search-yt', 'search-yt-songs', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
+  emits: ['toggle-sidebar', 'nav-home', 'search', 'search-by-id', 'search-song', 'search-netease', 'search-bili', 'search-bili-songs', 'search-yt', 'search-yt-songs', 'search-qq', 'search-qq-pl', 'search-qq-songs', 'update:searchQuery'],
   setup(props, { emit }) {
     const controllerUrl = window.location.origin + window.location.pathname + '?mode=controller'
 
@@ -632,9 +611,7 @@ export default {
       const rect = menuBtn.value?.getBoundingClientRect?.()
       if (!rect) return
       // 菜单高按可见行数估（item≈39/head≈36）：下方放不下翻到上方
-      const rows = (props.remoteMode === 'off' || props.isDownloadsView ? 1 : 0)
-        + 1 // 设置项恒在
-        + (props.remoteMode === 'host' || props.remoteMode === 'off' ? 1 : 0)
+      const rows = (props.remoteMode === 'host' || props.remoteMode === 'off' ? 1 : 0)
         + 1 + THEMES.length
         + (authState.enabled && authState.authenticated ? 1 : 0)
       // remote 指路格是双行块（状态+注脚）——比单行 head 多占 ~14px
@@ -659,8 +636,6 @@ export default {
       if (restoreFocus && was) menuBtn.value?.focus({ preventScroll: true })
     }
 
-    const pickCenterView = () => { emit('toggle-center-view'); closeMenu() }
-    const pickSettings = () => { emit('open-settings'); closeMenu() }
     // 主题切换没有「下一跳」接管焦点——与 Esc 同为解散语义，归还触发键
     const pickTheme = (id) => { setTheme(id); closeMenu(true) }
     const pickLogout = () => { closeMenu(); logout() }
@@ -810,8 +785,6 @@ export default {
       menuPos,
       toggleMenu,
       closeMenu,
-      pickCenterView,
-      pickSettings,
       pickTheme,
       pickLogout,
       cycleMenuItems,

@@ -165,6 +165,7 @@ describe('M1：TopNavigation ⋯ 菜单补 ↑↓ 循环', () => {
     await nextTick()
 
     const menu = document.querySelector('#topnav-menu')
+    // U3 收敛后菜单项=主题组两项（下载/设置已迁侧栏；remote 指路/外链非循环项语义不变）
     const items = [...menu.querySelectorAll('.pg-menu-item')]
     expect(items.length).toBeGreaterThan(1)
     expect(document.activeElement).toBe(items[0])

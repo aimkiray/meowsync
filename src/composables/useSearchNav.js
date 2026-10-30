@@ -204,7 +204,7 @@ export function useSearchNav({
     pushNavState()
   }
 
-  // 顶栏「下载」键：在 下载页 ⇄ 上一视图 之间往返；搜索态点它应进下载页。
+  // 侧栏主导航行「下载」（App onSidebarNav 分发至此）：在 下载页 ⇄ 上一视图 之间往返；搜索态点它应进下载页。
   // 通用入口无预选目标——清掉残留意图，否则旧深链的 pl 会借尸还魂进 URL
   const toggleCenterView = () => {
     if (centerView.value === 'downloads') {
@@ -222,7 +222,7 @@ export function useSearchNav({
     pushNavState()
   }
 
-  // 顶栏 ⋯ 菜单「设置」：与 toggleCenterView 同型往返——设置页再点「返回」
+  // 侧栏主导航行「设置」（App onSidebarNav 分发至此）：与 toggleCenterView 同型往返——设置页再点「返回」
   // 走 back 回放上一视图，无站内历史才落确定性路由
   const toggleSettings = () => {
     if (centerView.value === 'settings') {

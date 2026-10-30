@@ -1,9 +1,38 @@
 <template>
   <!-- 歌单库侧栏：「我的歌单」节题 + 发丝线行排（中英双语微标签已摘，只留中文名） -->
   <div class="playlist-panel flex flex-col h-full min-h-0">
+    <!-- 主导航组：页面级路由（「下载」「设置」自顶栏 ⋯ 迁入，「首页」补位）。
+         当前页高亮 = App.vue centerView——与歌单行高亮同源；下载项的
+         remoteMode 闸与旧 ⋯ 菜单同口径（host 藏入口、downloads 视图留逃生） -->
+    <nav class="side-nav" aria-label="主导航">
+      <button
+        type="button"
+        class="side-nav-row"
+        :class="{ 'side-nav-row--active': centerView === 'home' }"
+        :aria-current="centerView === 'home' ? 'page' : undefined"
+        @click="$emit('nav-view', 'home')"
+      ><PixelIcon name="home" :size="15" /><span class="side-nav-label">首页</span></button>
+      <button
+        v-if="remoteMode !== 'host' || centerView === 'downloads'"
+        type="button"
+        class="side-nav-row"
+        :class="{ 'side-nav-row--active': centerView === 'downloads' }"
+        :aria-current="centerView === 'downloads' ? 'page' : undefined"
+        @click="$emit('nav-view', 'downloads')"
+      ><PixelIcon name="download" :size="15" /><span class="side-nav-label">下载</span></button>
+      <button
+        type="button"
+        class="side-nav-row"
+        :class="{ 'side-nav-row--active': centerView === 'settings' }"
+        :aria-current="centerView === 'settings' ? 'page' : undefined"
+        @click="$emit('nav-view', 'settings')"
+      ><PixelIcon name="settings" :size="15" /><span class="side-nav-label">设置</span></button>
+    </nav>
+    <div class="side-nav-sep" aria-hidden="true"></div>
+
     <div class="panel-head">
       <!-- h2 补层级链：topnav h1 → 侧栏 h2 → 歌单名 .pl-name h3（裸 p 断链） -->
-      <h2 class="panel-label"><GlitchText text="我的歌单" /></h2>
+      <h2 class="panel-label"><GlitchText text="我的歌单" /><span class="panel-count">{{ userPlaylists.length }}</span></h2>
       <button
         class="pg-icobtn pg-icobtn--bare panel-create-btn"
         title="新建歌单"
@@ -28,7 +57,7 @@
         v-for="playlist in userPlaylists"
         :key="playlist.id"
         class="pl-row"
-        :class="{ 'pl-row--active': isRowActive(playlist) }"
+        :class="{ 'pl-row--active': isRowActive(playlist), 'pl-row--menu-open': openMenuId === playlist.id }"
       >
         <div
           @click="$emit('select-playlist', playlist)"
@@ -58,9 +87,9 @@
               @click.stop="$emit('play-playlist', playlist); closeMenu()"
             ><PixelIcon name="play" :size="22" /></button>
           </div>
-          <div class="pl-info">
+          <div class="pl-info" :title="`${playlist.name} · ${playlist.creator?.nickname || '神秘创建者'}`">
             <h3 class="pl-name">{{ playlist.name }}</h3>
-            <p class="pl-meta">{{ playlist.creator?.nickname || '神秘创建者' }} · {{ playlist.trackCount ?? 0 }} 首</p>
+            <p class="pl-meta">{{ playlist.trackCount ?? 0 }} 首</p>
           </div>
         </div>
         <!-- 菜单与分享按钮 -->
@@ -167,10 +196,6 @@
           </div>
         </Teleport>
       </div>
-
-      <div class="pl-foot">
-        <span class="pg-label pg-label--dim">{{ userPlaylists.length }} 个歌单</span>
-      </div>
     </div>
   </div>
 </template>
@@ -209,9 +234,14 @@ export default {
     centerView: {
       type: String,
       default: ''
+    },
+    // host 模式藏「下载」入口（与旧 ⋯ 菜单同口径）；controller 不渲本壳
+    remoteMode: {
+      type: String,
+      default: 'off'
     }
   },
-  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted', 'open-create-playlist', 'view-download-progress'],
+  emits: ['select-playlist', 'play-playlist', 'remove-playlist', 'playlist-downloads-deleted', 'open-create-playlist', 'view-download-progress', 'nav-view'],
   setup(props, { emit }) {
     const openMenuId = ref(null)
     const menuPositions = ref({})
@@ -543,6 +573,38 @@ export default {
   padding: 20px 0 0; /* 与主区首行同轴：全站 masthead→内容 = 20 */
 }
 
+/* 主导航：与歌单行同律的留白节奏 + 激活态 accent 缘标尺（pl-row--active 同族） */
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  margin: 0 12px;
+}
+.side-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s;
+}
+.side-nav-row:hover { background: var(--ink-06); }
+.side-nav-row--active {
+  background: var(--ink-10);
+  box-shadow: inset 2.4px 0 0 var(--accent-magenta-ink);
+  font-weight: 600;
+}
+/* 导航区与歌单区之间唯一发丝线——层级靠分组不靠框 */
+.side-nav-sep { border-bottom: var(--hairline-soft); margin: 4px 0 8px; }
+/* 「我的歌单」标题并入计数：ink-86 直取升档值（彩布白名单口径——
+   新 ink-64 类才需登记 style.css 白名单，ink-86 本就达标不用） */
+.panel-count { color: var(--ink-86); font-weight: 500; margin-left: 6px; }
+
 /* 头行：label 左 + 新建键右。右缘 22px 的取舍：overlay 滚动条平台（macOS 默认）
    对齐行内 ⋯ 列缘（行块内收 12 + .pl-actions right:10）；经典滚动条平台
    （scrollbar-gutter 车道 10px 把整行左推）恰好对齐行块可视缘——两平台都落在
@@ -608,6 +670,11 @@ export default {
   .app-sidebar:not(.app-sidebar--open) .panel-head { justify-content: center; padding-right: 0; }
   /* 未展开态 label 隐藏，负顶距失去同轴对象——复位回常态档避免 + 键上漂出轨 */
   .app-sidebar:not(.app-sidebar--open) .panel-create-btn { margin: 0 0 6px; }
+  /* 窄轨导航列：藏文字留图标（下载项 remoteMode 闸可能只剩 2 枚），
+     与封面列同律居中；展开态（--open 280）文字回归 */
+  .app-sidebar:not(.app-sidebar--open) .side-nav-label { display: none; }
+  .app-sidebar:not(.app-sidebar--open) .side-nav-row { justify-content: center; padding: 7px 4px; }
+  .app-sidebar:not(.app-sidebar--open) .side-nav { margin: 0 4px; }
 }
 
 /* 歌单行：留白节奏（无分隔线），整行可点；
@@ -622,8 +689,8 @@ export default {
   align-items: center;
   gap: 10px;
   /* 卡内节奏：封面左右各 +6 margin（左缘→封面 16 = 封面→歌名 16）；
-     右 64px 留给常显 .pl-actions（right:10 + 双 24px 键 + 2gap = 60，+4 气隙） */
-  padding: 9px 64px 9px 10px;
+     右槽常态 16——.pl-actions 已改浮出式不再常驻占宽（触屏 hover:none 常显态见下条媒体块回填 64） */
+  padding: 9px 16px 9px 10px;
   cursor: pointer;
   transition: background .12s;
 }
@@ -685,7 +752,10 @@ export default {
   margin-top: 2px;
 }
 
-/* 行尾操作组（分享 + ⋯）：垂直居中，与 dql 行尾键同法则 */
+/* 行尾操作组（分享 + ⋯）：垂直居中，与 dql 行尾键同法则。
+   浮出式：常态收隐（行内只留歌单名+N 首），行 hover/focus-within 浮出；
+   触屏（hover:none）常显——无悬停预览面，隐藏即永不可得。
+   focus-within 兜底键盘 Tab 进键也浮出（row-add-btn/playlist-play-overlay 同纪律） */
 .pl-actions {
   position: absolute;
   top: 50%;
@@ -694,6 +764,17 @@ export default {
   transform: translateY(-50%);
   display: flex;
   gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+.pl-row:hover .pl-actions,
+.pl-row:focus-within .pl-actions,
+.pl-row--menu-open .pl-actions { opacity: 1; pointer-events: auto; } /* 菜单开态持显：⋯ 菜单 teleport 到 body，指针移入菜单时行已失 hover */
+@media (hover: none) {
+  .pl-actions { opacity: 1; pointer-events: auto; }
+  /* 常显态动作键仍在原位——行块右槽回填 64 防文字压键 */
+  .pl-row-main { padding-right: 64px; }
 }
 
 .pl-action {
@@ -726,9 +807,4 @@ export default {
 /* 触屏（hover:none）不再常显 overlay：整面可点的半透明罩=一点封面就清队列
    播放整单，与点歌单名「打开」同面双义——触屏播放入口收进 ⋯ 菜单首项
    「播放歌单」，桌面 hover/focus 直放路径不变 */
-
-.pl-foot {
-  text-align: center;
-  padding: 12px 0;
-}
 </style>

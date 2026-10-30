@@ -760,11 +760,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   display: flex;
   flex-direction: column;
   /* 主区容器：home 双栏阈值 @container(min-width:960) 与 100cqw 对齐
-     公式（§1.4）都解析到本盒内联宽。inline-size 包含令本盒成后代
-     abspos+fixed 共同包含块——现有 abspos 后代均有更近定位父级；
-     树内 fixed 件仅 WatchView 的 .watch-ambient，改锚本盒后上下
-     差带被不透明 chrome 遮住、左右与主区同缘无侧向差带；
-     ptr-indicator/各视图内滚器均安全 */
+     公式（§1.4）都解析到本盒内联宽。container-type 仅建 inline-size
+     查询容器，不含 layout CB——fixed 后代（.watch-ambient）仍锚视口 */
   container-type: inline-size;
 }
 
@@ -902,7 +899,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   .app-sidebar:not(.app-sidebar--open) .panel-label,
   .app-sidebar:not(.app-sidebar--open) .pl-info,
   .app-sidebar:not(.app-sidebar--open) .pl-actions,
-  .app-sidebar:not(.app-sidebar--open) .pl-foot,
   .app-sidebar:not(.app-sidebar--open) .panel-state { display: none; }
   /* 窄轨 padding 归组件侧媒体块管（PlaylistPanel.vue ~:392，特异度更高）——
      这里只留居中兜底（经典滚动条平台上车道还会吃行宽，center 实有功） */

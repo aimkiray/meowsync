@@ -47,6 +47,8 @@ const ICONS = {
   'menu': 'M18 6H4V4h14m0 5H4V7h14m0 5H4v-2h14m0 5H4v-2h14m0 5H4v-2h14Z',  // memory:format-align-justify
   'playlist': 'M3 4h10v2H3zM3 8h10v2H3zM3 12h10v2H3zM3 16h6v2H3zM16 10h4v3h-2v6h-2v-9zM12 17h6v4h-6zM14 18v2h2v-2z',  // 像素歌单：左列表杠+右下音符（memory 集无 playlist 源——手拼，音符裁缩自 note 路径）
   'external': 'M5 8v11h11v-5h-2v3H7v-8h3V8H5zm8-4h8v8h-3V9h-1V8h-1V7h-1V6h-3V4zM9 14h1v-1h1v-1h1v-1h1v-1h1v-1h1v-1h1v-1h1v1h-1v1h-1v1h-1v1h-1v1h-1v1h-1v1h-1v1h-1z',  // memory:open-in-new——回源外链：左下窗口+右上出箭头
+  'home': 'M10 3h2v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1v10H4v-10h1V8h1V7h1V6h1V5h1V4h1V3z',  // 手拼：阶梯屋顶+实身小屋（22 网格 1px 步进，memory 风格同 playlist 先例）
+  'settings': 'M3 5h16v2H3V5zM3 10h16v2H3v-2zM3 15h16v2H3v-2zM6 4h4v4H6V4zM13 9h4v4h-4V9zM8 14h4v4H8v-4z',  // 手拼：三档滑杆组=设置（2px 道 + 4px 钮，与 'more' 同例手拼）
   'chev-l': 'M12 16v1h1v1h2v-2h-1v-1h-1v-1h-1v-1h-1v-1h-1v-2h1V9h1V8h1V7h1V6h1V4h-2v1h-1v1h-1v1h-1v1H9v1H8v1H7v2h1v1h1v1h1v1h1v1',  // memory:chevron-left
   'chev-r': 'M10 6V5H9V4H7v2h1v1h1v1h1v1h1v1h1v2h-1v1h-1v1H9v1H8v1H7v2h2v-1h1v-1h1v-1h1v-1h1v-1h1v-1h1v-2h-1V9h-1V8h-1V7h-1V6',  // memory:chevron-right
   /* 播放模式：顺序(列表+右箭) / 循环(顺时针) / 单曲(逆时针) */

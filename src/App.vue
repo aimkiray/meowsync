@@ -19,14 +19,10 @@
     <!-- 顶部导航（含歌单搜索） -->
     <TopNavigation
       ref="topNavRef"
-      :is-downloads-view="centerView === 'downloads'"
-      :is-settings-view="centerView === 'settings'"
       :is-search-view="centerView === 'search'"
       v-model:search-query="searchQuery"
       :sidebar-open="sidebarOpen"
       :remote-mode="remoteMode"
-      @toggle-center-view="toggleCenterView"
-      @open-settings="toggleSettings"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @nav-home="navHome"
       @search="handleSearch"
@@ -53,12 +49,14 @@
           :selected-playlist="selectedPlaylist"
           :user-playlists="userPlaylists"
           :center-view="centerView"
+          :remote-mode="remoteMode"
           @select-playlist="selectPlaylistAndShow"
           @play-playlist="playPlaylistFromSidebar"
           @remove-playlist="handleRemovePlaylist"
           @open-create-playlist="handleOpenCreatePlaylist"
           @playlist-downloads-deleted="handlePlaylistDownloadsDeleted"
           @view-download-progress="openDownloadsForPlaylist"
+          @nav-view="onSidebarNav"
         />
       </aside>
 
@@ -962,6 +960,15 @@ export default {
       playPlaylist: (sh) => playPlaylist(sh),
     })
 
+    // 侧栏主导航（首页/下载/设置）：复用 nav 域既有入口——navHome/
+    // toggleCenterView/toggleSettings 已含 sidebarOpen 自闭、URL 同步与
+    // 站史回放语义；同视图重复点击空操作（导航栏语义非往返键）
+    const onSidebarNav = (view) => {
+      if (view === 'home') navHome()
+      else if (view === 'downloads' && centerView.value !== 'downloads') toggleCenterView()
+      else if (view === 'settings' && centerView.value !== 'settings') toggleSettings()
+    }
+
     // 底栏 ☰/队列入口的双态（@open-watch 唯一落点）：watch 页内点 =
     // 「返回」上一视图（watchBack 走站内历史回放）；页外 = 开 watch
     // 对应 tab。openWatchPanel 自带的「watch 内同 tab 再点→返回」只认
@@ -1565,6 +1572,7 @@ export default {
       openSearchPlaylist,
       closeSearchView,
       navHome,
+      onSidebarNav,
       handleSearch,
       handlePlaylistSearch,
       handleQQSongSearch,

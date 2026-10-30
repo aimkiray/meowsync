@@ -8,8 +8,10 @@
 //   主页重构 U2 + 去双语微标签：侧栏首行同轴（panel-head flex-start /
 //      label 顶距 0 / create-btn 负顶距 -6px@20px 行高 + 窄轨复位）、
 //      panel-label 去 pg-label 升 14/600 节题、library 双语签摘除、
-//      页脚计数中文化，与 style.css 卡件退役项——
+//      页脚计数退役并入节题（.panel-count），与 style.css 卡件退役项——
 //      jsdom 不计算样式，几何锚全走源文本钉板
+//   U3：侧栏主导航组（首页/下载/设置，centerView 高亮 + remoteMode 闸）+
+//      歌单行降噪（pl-actions 浮出式、pl-meta 只留 N 首）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -43,9 +45,9 @@ const oddPlaylist = { id: 'x_odd', name: '异形单', trackCount: 2, tracks: [{ 
 const numericPlaylist = { id: 777, name: '正常单', trackCount: 2, tracks: [{ id: 1 }] }
 
 let wrapper = null
-const mountPanel = (playlist) => mount(PlaylistPanel, {
+const mountPanel = (playlist, extraProps = {}) => mount(PlaylistPanel, {
   attachTo: document.body, // ⋯菜单 Teleport 到 body——挂上才能查
-  props: { userPlaylists: [playlist] },
+  props: { userPlaylists: [playlist], ...extraProps },
   global: { stubs: { GlitchText: true, PixelIcon: true } },
 })
 
@@ -178,12 +180,13 @@ describe('PlaylistPanel 源钉板：首行同轴（B 方案）', () => {
     expect(btn).toContain('margin: -6px 0 4px')
   })
 
-  it('侧栏标题只留中文「我的歌单」（去 library/pg-label 类），页脚计数中文化', () => {
+  it('侧栏标题只留中文「我的歌单」（去 library/pg-label 类），计数并入节题', () => {
     const css = readSrc('src/components/PlaylistPanel.vue')
-    expect(css).toContain('<h2 class="panel-label"><GlitchText text="我的歌单" /></h2>')
+    expect(css).toContain('<span class="panel-count">{{ userPlaylists.length }}</span>')
     expect(css).not.toContain('library')
     expect(css).not.toContain('pg-label panel-label')
-    expect(css).toContain('{{ userPlaylists.length }} 个歌单')
+    expect(css).not.toContain('pl-foot')
+    expect(css).toContain('panel-count')
     expect(css).not.toContain('} playlists')
   })
 
@@ -192,6 +195,82 @@ describe('PlaylistPanel 源钉板：首行同轴（B 方案）', () => {
     const narrow = css.match(/@media \(min-width: 768px\) and \(max-width: 1023\.98px\)[\s\S]*?\n\}/)?.[0] || ''
     expect(narrow).toContain('.app-sidebar:not(.app-sidebar--open) .panel-create-btn')
     expect(narrow).toContain('margin: 0 0 6px')
+  })
+})
+
+describe('PlaylistPanel：侧栏主导航 + 行降噪（U3）', () => {
+  it('主导航三行（首页/下载/设置）渲在歌单区上方，centerView 命中行挂 --active', async () => {
+    wrapper = mountPanel(numericPlaylist, { centerView: 'home' })
+    await nextTick()
+    const rows = wrapper.findAll('.side-nav-row')
+    expect(rows.length).toBe(3)
+    expect(rows.map(r => r.text())).toEqual(['首页', '下载', '设置'])
+    expect(rows[0].classes()).toContain('side-nav-row--active')
+    expect(wrapper.find('.side-nav-sep').exists()).toBe(true)
+  })
+
+  it('remoteMode=host 藏「下载」行；centerView=downloads 时保留逃生且高亮', async () => {
+    wrapper = mountPanel(numericPlaylist, { remoteMode: 'host' })
+    await nextTick()
+    expect(wrapper.findAll('.side-nav-row').map(r => r.text())).toEqual(['首页', '设置'])
+    wrapper.unmount()
+
+    wrapper = mountPanel(numericPlaylist, { remoteMode: 'host', centerView: 'downloads' })
+    await nextTick()
+    const dl = wrapper.findAll('.side-nav-row').find(r => r.text() === '下载')
+    expect(dl).toBeTruthy()
+    expect(dl.classes()).toContain('side-nav-row--active')
+  })
+
+  it('remoteMode=off 下「下载」行同渲染（闸只挡 host）', async () => {
+    wrapper = mountPanel(numericPlaylist, { remoteMode: 'off' })
+    await nextTick()
+    expect(wrapper.findAll('.side-nav-row').map(r => r.text())).toContain('下载')
+  })
+
+  it('点「设置」行发 nav-view emit 载荷 settings（同型 home/downloads 同约定）', async () => {
+    wrapper = mountPanel(numericPlaylist)
+    await nextTick()
+    const settings = wrapper.findAll('.side-nav-row').find(r => r.text() === '设置')
+    await settings.trigger('click')
+    expect(wrapper.emitted('nav-view')).toEqual([['settings']])
+  })
+
+  it('计数并入「我的歌单」节题（.panel-count），页脚 .pl-foot 已摘', async () => {
+    wrapper = mountPanel(numericPlaylist)
+    await nextTick()
+    expect(wrapper.find('.panel-count').text()).toBe('1')
+    expect(wrapper.find('.pl-foot').exists()).toBe(false)
+  })
+
+  it('行降噪源钉板：.pl-actions 浮出式（opacity:0 + hover/focus-within/菜单开态 显 + hover:none 常显），.pl-meta 只留 N 首', () => {
+    const css = readSrc('src/components/PlaylistPanel.vue')
+    const actions = css.match(/\.pl-actions\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(actions).toContain('opacity: 0')
+    expect(css).toContain('.pl-row:hover .pl-actions')
+    expect(css).toContain('.pl-row:focus-within .pl-actions')
+    // 菜单开态持显：⋯ 菜单 teleport 到 body，指针移入菜单时行已失 hover——态类兜底
+    expect(css).toContain('.pl-row--menu-open .pl-actions')
+    expect(css).toContain("'pl-row--menu-open': openMenuId === playlist.id")
+    const hoverNone = css.match(/@media \(hover: none\)\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
+    expect(hoverNone).toContain('opacity: 1')
+    expect(hoverNone).toContain('padding-right: 64px')
+    // 行块右槽常态 16（动作键不再常驻占宽）
+    expect(css).toContain('padding: 9px 16px 9px 10px')
+    // meta 行只剩「N 首」——创建者并入 .pl-info 的 title 提示
+    expect(css).toContain('<p class="pl-meta">{{ playlist.trackCount ?? 0 }} 首</p>')
+    expect(css).toContain(':title="`${playlist.name} · ${playlist.creator?.nickname')
+  })
+
+  it('窄轨导航源钉板：.side-nav-label display:none 藏字留图标；home/settings PixelIcon 已注册', () => {
+    const css = readSrc('src/components/PlaylistPanel.vue')
+    // 窄轨未展开态藏文字留图标列——断言窄轨媒体块内的藏字规则存在
+    const narrow = css.match(/@media \(min-width: 768px\) and \(max-width: 1023\.98px\)[\s\S]*?\n\}/)?.[0] || ''
+    expect(narrow).toContain('.side-nav-label { display: none')
+    // 导航行引用的两枚图标必须在 PixelIcon ICONS 表注册（缺注册渲空 path 静默失守）
+    const icons = readSrc('src/components/PixelIcon.vue')
+    expect(icons).toContain("'home':")
+    expect(icons).toContain("'settings':")
   })
 })
 
