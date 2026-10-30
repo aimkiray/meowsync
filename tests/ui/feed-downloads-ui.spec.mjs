@@ -417,7 +417,7 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     expect(next.attributes('disabled')).toBeDefined()
   })
 
-  it('主页/结果页无英文双语微标签（源钉板：label 摘除 + 中文节题升格 首页 15/600、结果页 13/600）', () => {
+  it('主页/结果页无英文双语微标签（源钉板：label 摘除 + 中文节题升格 首页 16/600、结果页 13/600）', () => {
     // 中英双语微标签全摘、只留中文名——jsdom 不算样式，结构/字号全走源码钉
     const home = vueSrc('HomeFeed.vue')
     for (const tag of ['>overview<', '>recent<', '>playlists<', '>albums<']) {
@@ -428,8 +428,8 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
       expect(grid).not.toContain(tag)
     }
     const homeSub = home.match(/\.home-section-sub\s*\{[^}]*\}/)?.[0] ?? ''
-    // 首页发丝线摘除后节题升到 15px 撑区块边界
-    expect(homeSub).toContain('font-size: 15px')
+    // 首页发丝线摘除后节题升到 16px 撑区块边界
+    expect(homeSub).toContain('font-size: var(--fs-section, 16px)')
     expect(homeSub).toContain('font-weight: 600')
     const gridSub = grid.match(/\.result-section-sub\s*\{[^}]*\}/)?.[0] ?? ''
     expect(gridSub).toContain('font-size: 13px')
@@ -535,6 +535,61 @@ describe('HomeFeed：「接着听」主角区', () => {
     // 在播态翻转：同一实例主键随 isPlaying 切回「打开播放页」
     await w.setProps({ isPlaying: true })
     expect(w.find('.home-hero-primary').text()).toContain('打开播放页')
+  })
+})
+
+describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更多」展开', () => {
+  it('源钉板：容器阈值 960 / 网格 5fr:7fr / n+7 隐藏 / 封面 240·280 / 货架卡 200', () => {
+    const src = vueSrc('HomeFeed.vue')
+    // 阈值走容器轴（.app-main container-type:inline-size 在 style.css 登记）
+    expect(src).toContain('@container (min-width: 960px)')
+    // 「更多」键基规则恒藏——仅双栏档 @container 块内翻 display:flex
+    expect(src).toMatch(/\.home-more-wrap\s*\{\s*display:\s*none;\s*\}/)
+    expect(src).toContain('grid-template-columns: minmax(0, 5fr) minmax(0, 7fr)')
+    expect(src).toContain('nth-child(n+7)')
+    expect(src).toContain('width: 240px')
+    // hero 封面 ≥1600 视口再升档（视口轴非容器轴，冻结决策）
+    expect(src).toContain('@media (min-width: 1600px)')
+    expect(src).toContain('width: 280px')
+    // 货架卡 ≥641 档 160→200
+    expect(src).toContain('grid-auto-columns: 200px')
+  })
+
+  it('DOM 断言：12 行全量挂载（CSS 隐藏不改 DOM），「更多」翻 home-topgrid--open', async () => {
+    // hero + 12 = 13 条 → visibleRecents 打满 RECENT_DISPLAY_CAP
+    const MANY = Array.from({ length: 13 }, (_, i) => ({
+      id: 2000 + i, name: `展开歌${i}`, ar: [{ name: '艺人' }],
+      al: { name: `展开歌${i}` }, // al.name==歌名 → 不入专辑架，断言面隔离在双栏件
+    }))
+    const w = track(mount(HomeFeed, { props: { recents: MANY, recentPlaylists: [] } }))
+    const grid = w.find('.home-topgrid')
+    expect(grid.exists()).toBe(true)
+    expect(grid.classes()).not.toContain('home-topgrid--open')
+    // 行数显隐归 CSS 容器阈值——DOM 恒渲 12 行不截
+    expect(w.findAll('.home-songrow')).toHaveLength(12)
+    const btn = w.find('.home-more-btn')
+    expect(btn.exists()).toBe(true)
+    expect(btn.text()).toBe('更多')
+    await btn.trigger('click')
+    expect(w.find('.home-topgrid').classes()).toContain('home-topgrid--open')
+    expect(w.find('.home-more-btn').text()).toBe('收起')
+    await w.find('.home-more-btn').trigger('click')
+    expect(w.find('.home-topgrid').classes()).not.toContain('home-topgrid--open')
+    expect(w.find('.home-more-btn').text()).toBe('更多')
+  })
+
+  it('可见 ≤6 条时无「更多」键（v-if=visibleRecents.length>6 边界）', () => {
+    const SEVEN = Array.from({ length: 7 }, (_, i) => ({
+      id: 3000 + i, name: `歌${i}`, ar: [{ name: '艺人' }],
+      al: { name: `歌${i}` },
+    }))
+    const w = track(mount(HomeFeed, { props: { recents: SEVEN, recentPlaylists: [] } }))
+    // hero 占 1 → 网格恰 6 行，不越 >6 门
+    expect(w.findAll('.home-songrow')).toHaveLength(6)
+    expect(w.find('.home-more-btn').exists()).toBe(false)
+    // 包裹层仍在（hero 存在即渲）但无 open 类
+    expect(w.find('.home-topgrid').exists()).toBe(true)
+    expect(w.find('.home-topgrid').classes()).not.toContain('home-topgrid--open')
   })
 })
 

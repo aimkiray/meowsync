@@ -8,6 +8,7 @@
          当前曲且在播 → 打开播放页（open-watch 不重播——play-song 会重置队列从头放）；
          当前曲但暂停 → 继续播放（resume-watch：进播放页并原地续播，不重置队列）。
          随机漫游作用于最近单曲，挂在这里作次键 -->
+    <div v-if="hero" class="home-topgrid" :class="{ 'home-topgrid--open': recentsOpen }">
     <section v-if="hero" class="home-hero" aria-labelledby="home-hero-title">
       <!-- alt 留空：封面与紧邻歌名同源 -->
       <img
@@ -62,7 +63,7 @@
           <span class="home-section-sub">最近单曲</span>
         </div>
       </div>
-      <div class="home-songs">
+      <div id="home-songs" class="home-songs">
         <div
           v-for="song in visibleRecents"
           :key="song.id"
@@ -102,7 +103,19 @@
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
       </div>
+      <!-- 「更多」展开其余 6 首：双栏档 6 行默认、点击放全量（≤6 条无键）；
+           显隐由 CSS 容器阈值接管（窄档 auto-fill 网格本就全量直排） -->
+      <div v-if="visibleRecents.length > 6" class="home-more-wrap">
+        <button
+          type="button"
+          class="ink-btn ink-btn--sm ink-btn--ghost home-more-btn"
+          :aria-expanded="recentsOpen"
+          aria-controls="home-songs"
+          @click="recentsOpen = !recentsOpen"
+        >{{ recentsOpen ? '收起' : '更多' }}</button>
+      </div>
     </section>
+    </div>
 
     <!-- 空态以实际可见内容为准：宽屏货架收起时库里有歌单也算空（专辑货架
          由 recents 派生，recents 空即无专辑，不另判） -->
@@ -431,6 +444,9 @@ export default {
     const feedEl = ref(null)
     // 封面 @error 簿记：裂图位换回图标兜底（前缀键 s:/pl:/al: 防 id 撞名）
     const coverErrs = reactive(new Set())
+    // 「更多」展开态：双栏档最近单曲默认 6 行，点击放其余（RECENT_DISPLAY_CAP 内）；
+    // 只翻类不改数据——visibleRecents 恒 12，行数显隐归 CSS 容器阈值管
+    const recentsOpen = ref(false)
     let cancelScrollRestore = null
 
     // 宽视口判定（≥901px）：歌单货架门控的唯一外源——桌面侧栏常驻，
@@ -500,7 +516,8 @@ export default {
     })
     return {
       httpsCover, songArtists, coverSizeUrl, songThumbUrl, feedEl, coverErrs,
-      wideViewport, plShelfEl, alShelfEl, shelfNav, updateShelfNav, scrollShelf
+      wideViewport, plShelfEl, alShelfEl, shelfNav, updateShelfNav, scrollShelf,
+      recentsOpen
     }
   }
 }
@@ -521,13 +538,13 @@ export default {
 }
 
 /* 「接着听」主角区：左封面 + 右信息列。顶距 0——封面顶缘直接落在全站
-   20 首行轴（与侧栏 .panel-label 同轴）。与下方区块隔全页最大间距 40，
+   20 首行轴（与侧栏 .panel-label 同轴）。与下方区块隔区块距 --rhythm-section(48)，
    不用发丝线——层级靠留白与体量分，不靠框 */
 .home-hero {
   display: flex;
   align-items: center;
   gap: 20px;
-  padding-bottom: 40px;
+  padding-bottom: var(--rhythm-section, 48px);
   min-width: 0;
 }
 .home-hero-cover {
@@ -578,7 +595,7 @@ export default {
   text-overflow: ellipsis;
 }
 .home-hero-actions {
-  margin-top: 14px;
+  margin-top: var(--rhythm-intra, 8px);
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -606,22 +623,63 @@ export default {
   .home-hero-actions { margin-top: 10px; }
 }
 
-/* 区块：间距分组（无发丝线）——区块间 32，节题→内容 10 */
+/* 「接着听｜最近单曲」双栏：阈值走容器轴（.app-main container-type:inline-size，
+   style.css 登记）——主区 <960 保持现状堆叠（平板 auto-fill、≤640.98 三行横滑
+   不动）。hero 上方 32 = .home-feed 20 车道 + 本列 12 顶槽；区块间 48 由
+   .home-topgrid 承底（内层两节底距归零防叠双）。右栏一列默认 6 行、
+   「更多」开 RECENT_DISPLAY_CAP(12) 全量 */
+.home-topgrid {
+  display: block;
+  padding-top: calc(var(--rhythm-hero-top, 32px) - 20px);
+  padding-bottom: var(--rhythm-section, 48px);
+}
+/* 包内末节底距归零交还给本层承底——否则堆叠态 hero 底距与 recents
+   节底距各自 48 与包裹层 48 叠双（两栏态内层两节已由容器规则归零） */
+.home-topgrid > :last-child { padding-bottom: 0; }
+/* 「更多」键只服务于双栏档——窄档 auto-fill/三行轨全量直排，键藏。
+   基规则须排在 @container 块【之前】：同特异度 (0,1,0) 后序者胜，
+   容器命中时块内 display:flex 压过基规则 */
+.home-more-wrap { display: none; }
+@container (min-width: 960px) {
+  .home-topgrid {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    column-gap: 32px;
+    align-items: start;
+  }
+  .home-topgrid .home-hero { padding-bottom: 0; }
+  .home-topgrid .home-section { padding-bottom: 0; }
+  /* 仅 1 条历史（hero 有、recents 空）时 hero 占满整行——单栏 5fr
+     会把孤 hero 挤成 ~41% 宽 */
+  .home-topgrid > .home-hero:only-child { grid-column: 1 / -1; }
+  .home-topgrid .home-songs { grid-template-columns: 1fr; }
+  .home-topgrid:not(.home-topgrid--open) .home-songrow:nth-child(n+7) { display: none; }
+  .home-hero-cover { width: 240px; height: 240px; }
+  .home-hero-name { font-size: var(--fs-hero, 28px); }
+  .home-more-wrap { display: flex; padding-top: var(--rhythm-intra, 8px); }
+}
+/* ≥1600 视口 hero 封面再升档 240→280（冻结档：视口轴非容器轴；
+   ≥1600 主区恒 ≥960 阈值，无需叠加容器条件） */
+@media (min-width: 1600px) {
+  .home-hero-cover { width: 280px; height: 280px; }
+}
+
+/* 区块：间距分组（无发丝线）——区块间 --rhythm-section(48)，节题→内容 --rhythm-head(12) */
 .home-section {
-  padding-bottom: 32px;
+  padding-bottom: var(--rhythm-section, 48px);
 }
 
 .home-section-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: var(--rhythm-intra, 8px);
+  margin-bottom: var(--rhythm-head, 12px);
 }
 .home-section-title {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--rhythm-intra, 8px);
   min-width: 0;
 }
 
@@ -629,7 +687,7 @@ export default {
    （发丝线摘除后区块边界全靠节题体量撑）。
    （已出彩布白名单——scoped --ink 全壳生效，不再被 ink-86 托档） */
 .home-section-sub {
-  font-size: 15px;
+  font-size: var(--fs-section, 16px);
   font-weight: 600;
   color: var(--ink);
 }
@@ -763,8 +821,8 @@ export default {
   margin-right: calc(-1 * var(--page-pad-x, 20px));
   padding-right: var(--page-pad-x, 20px);
 }
-/* ≥641 货架卡 160→180（YTM carousel ≤615=160/mid=180 阶梯） */
-@media (min-width: 641px) { .home-shelf { grid-auto-columns: 180px; gap: 24px; } }
+/* ≥641 货架卡 160→200（新节奏档：卡体升一档撑全宽首屏） */
+@media (min-width: 641px) { .home-shelf { grid-auto-columns: 200px; gap: 24px; } }
 
 /* 卡片外壳已上收全局 style.css——这里只留「整卡可点」语义 */
 .grid-card { cursor: pointer; }

@@ -763,6 +763,14 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 主区容器：home 双栏阈值 @container(min-width:960) 与 100cqw 对齐
+     公式（§1.4）都解析到本盒内联宽。inline-size 包含令本盒成后代
+     abspos+fixed 共同包含块——现有 abspos 后代均有更近定位父级；
+     树内 fixed 件仅 WatchView 的 .watch-ambient，改锚本盒后上下
+     差带被不透明 chrome 遮住、两侧差带仅本批 U1→U2 过渡期
+     vp>2200 可辨，U2 全宽落地后左右同缘自愈；
+     ptr-indicator/各视图内滚器均安全 */
+  container-type: inline-size;
 }
 
 /* 桌面端：歌单库常驻侧栏（与主区同一张纸，发丝线分栏） */
@@ -799,6 +807,26 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
    home/grid 滞留 20；watch 舞台走自带 --watch-pad-x，不吃本令牌） */
 :root { --page-pad-x: 20px; }
 @media (max-width: 640.98px) { :root { --page-pad-x: 12px; } }
+
+/* 壳列令牌：全宽壳三列同一事实源（U2 消费）；
+   --view-max=非首页内容帽（等价旧 1440−280−2×20=1120 主内容列）；
+   --feed-max=首页内容帽，≥1600 升 1360 */
+:root { --sidebar-w: 260px; --view-max: 1120px; --feed-max: 1280px; }
+@media (min-width: 1600px) { :root { --sidebar-w: 300px; --feed-max: 1360px; } }
+
+/* 首页节奏/字号阶令牌（U1）：组内 8 / 节题→内容 12 / 区块间 48 /
+   hero 上方 32；字号阶 28/16/13/11。声明在此、消费在 HomeFeed scoped——
+   主题侧（glitch）无需覆写 */
+:root {
+  --rhythm-intra: 8px;
+  --rhythm-head: 12px;
+  --rhythm-section: 48px;
+  --rhythm-hero-top: 32px;
+  --fs-hero: 28px;
+  --fs-section: 16px;
+  --fs-row: 13px;
+  --fs-meta: 11px;
+}
 
 /* 内容帽令牌：app-body 限宽值（顶栏内列/底栏内列同轴消费） */
 :root { --content-max: 1440px; }
