@@ -560,21 +560,24 @@ button {
   outline-offset: 2px;
 }
 
-/* 盒件内环（印刷签名）：发丝线内收 4px 的描边 */
+/* 盒件内环（印刷签名）：发丝线内收 4px 的描边。
+   名单只收真可聚焦元素——非交互外壳（.song-row/.pl-row/.home-songrow 行壳、
+   .song-result-main/.grid-card-main 点击区、.topnav-suggest-item 这类
+   role=option 无 tabindex 项）永不自焦，曾是死选择器已剔；键盘激活点在
+   各自内嵌真按钮（.song-row-main/.pl-name-btn/.home-songrow-main/
+   .song-result-name-btn/.grid-card-name-btn），焦点环走 +2px 外环不入此单 */
 .ink-btn:focus-visible, .pg-icobtn:focus-visible, .pg-tab:focus-visible,
 .pg-chip:focus-visible, .pg-field:focus-within,
-.song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
+.song-row-main:focus-visible,
 .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
-.song-result-main:focus-visible, .home-songrow:focus-visible,
 .home-songrow-main:focus-visible, .grid-card-play:focus-visible,
 .transport:focus-visible,
 .pg-menu [role="menuitem"]:focus-visible, .pg-menu button:focus-visible,
 .pg-menu-item:focus-visible, .topnav-search-clear:focus-visible,
 .song-menu-btn:focus-visible, .queue-row-remove:focus-visible, .row-add-btn:focus-visible,
 .lyric-tool:focus-visible,
-.playlist-play-overlay:focus-visible, .topnav-suggest-item:focus-visible,
+.playlist-play-overlay:focus-visible,
 .pl-action:focus-visible, .watch-grip:focus-visible, .pg-check:focus-visible,
-.grid-card-main:focus-visible,
 .rc-btn:focus-visible, .rc-queue-row:focus-visible, .player-progress-bar:focus-visible {
   outline-offset: -4px;
   /* 零圆角世界：环贴形走，不圆角化实底（border-radius 会同时圆掉反白行底色） */
@@ -587,12 +590,8 @@ button {
 
 /* 激活侧栏行是淡底（ink-10）：canonical 墨色环本就可见，无需纸色覆写 */
 
-/* 大面件用 canonical 环：-8px 内收 + 12px 圆角——全系统唯一的圆角许可
-   （swag-card 源流形）。行/小件保持方形 -4px 环：圆角会肉眼圆掉反白行底色 */
-.grid-card:focus-visible {
-  outline-offset: -8px;
-  border-radius: 12px;
-}
+/* （已删 .grid-card:focus-visible 死规则——.grid-card 外壳无 tabindex 永不
+     自焦，可聚焦的是卡内 .grid-card-play/.grid-card-name-btn 真按钮） */
 
 /* forced-colors：只靠底色表达的状态加透明 outline——HC 模式下被强制显色 */
 @media (forced-colors: active) {
@@ -1504,7 +1503,8 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   gap: 8px;
   transition: transform 0.15s var(--ease-ink);
 }
-/* PG 里整卡不可点——可点区是 .grid-card-main；flex:1 撑起卡内余量
+/* PG 里整卡不可点——鼠标可点区是 .grid-card-main（非交互 div+@click 合法，
+   键盘激活点在卡名真按钮 .grid-card-name-btn）；flex:1 撑起卡内余量
    （PlaylistGrid 动作列/HomeFeed meta 借此沉底对齐，PG scoped 有同形 flex 布局） */
 .grid-card-main {
   cursor: pointer;
@@ -1551,11 +1551,24 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
-  overflow: hidden;
+  line-height: 1.35;
+  /* 两行 clamp 不在 h3 上——h3 若留 overflow:hidden 会裁掉内嵌
+     .grid-card-name-btn 的 :focus-visible 外环（祖先 overflow 裁后代
+     outline）；clamp 由键自负 */
+}
+
+/* 卡名=「打开」激活点（h3 内嵌真按钮，PlaylistGrid/HomeFeed 三处共用）。
+   -webkit-box+clamp:2 自备两行截断面；font/color/background/border/cursor
+   已由全局 button 基重置（:549）覆盖；焦点环走全局 :focus-visible +2px
+   外环，不入 -4px 内环名单（内陷环会横穿 13px 文本） */
+.grid-card-name-btn {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  line-height: 1.35;
+  overflow: hidden;
+  width: 100%;
+  padding: 0;
+  text-align: left;
 }
 .grid-card-meta {
   font-family: var(--font-mono);

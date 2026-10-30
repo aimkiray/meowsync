@@ -42,6 +42,7 @@
       <!-- h2 补层级链：topnav h1 → 侧栏 h2 → 歌单名 .pl-name h3（裸 p 断链） -->
       <h2 class="panel-label"><GlitchText text="我的歌单" /><span class="panel-count">{{ userPlaylists.length }}</span></h2>
       <button
+        type="button"
         class="pg-icobtn pg-icobtn--bare panel-create-btn"
         title="新建歌单"
         aria-label="新建歌单"
@@ -92,6 +93,7 @@
             <div v-else class="pl-cover pl-cover--fallback"><PixelIcon name="note" :size="16" /></div>
             <!-- 悬停 ▶ 直接播放整个歌单 -->
             <button
+              type="button"
               class="playlist-play-overlay"
               title="播放歌单"
               aria-label="播放歌单"
@@ -115,6 +117,7 @@
           <!-- single_song_ 壳是单曲分享容器非歌单，藏分享/下载；local_pl_ 走 ?mix= 内容链 -->
           <button
             v-if="!isShareShell(playlist)"
+            type="button"
             @click.stop="sharePlaylist(playlist)"
             class="pl-action pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             title="分享歌单"
@@ -125,6 +128,7 @@
 
           <!-- 更多菜单按钮 -->
           <button
+            type="button"
             @click.stop="toggleMenu(playlist.id, $event)"
             class="pl-action pg-icobtn pg-icobtn--bare pg-icobtn--sm"
             title="更多操作"
@@ -756,9 +760,8 @@ export default {
   font-size: 12px;
   font-weight: 500;
   color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* 截断三件套不在 h3 上——h3 若留 overflow:hidden 会裁掉内嵌 .pl-name-btn
+     的 :focus-visible 外环（祖先 overflow 裁后代 outline）；截断由键自负 */
 }
 
 /* 歌单名=「打开歌单」激活点（h3 内嵌真按钮）。重置余量只剩块级满宽+左对齐

@@ -416,6 +416,41 @@ describe('PlaylistGrid：歌曲行', () => {
   })
 })
 
+describe('PlaylistGrid：点击区重排（深评 F-a）', () => {
+  const PL = { id: 'pl_x', name: '结果单', trackCount: 9, coverImgUrl: '', creator: { nickname: '阿喵' } }
+
+  it('.song-result-main/.grid-card-main 摘 role=button/tabindex：激活点收进名内真按钮', async () => {
+    const w = await mountGrid({ songs: [NE_SONG], results: [PL] })
+    // 非交互点击区：无 role/tabindex（role=button 的 children presentational
+    // 曾抹平歌名/卡名标题语义且套行内原生键违规）；整区 @click 保留鼠标可点
+    const sMain = w.find('.song-result-main')
+    expect(sMain.attributes('role')).toBeUndefined()
+    expect(sMain.attributes('tabindex')).toBeUndefined()
+    // 歌名内嵌真按钮是键盘可达的「播放」激活点；.stop 阻冒泡不双发
+    const sBtn = w.find('.song-result-name .song-result-name-btn')
+    expect(sBtn.element.tagName).toBe('BUTTON')
+    expect(sBtn.attributes('type')).toBe('button')
+    expect(sBtn.text()).toBe('晴天花海')
+    await sBtn.trigger('click')
+    expect(w.emitted('play-song')).toHaveLength(1)
+    expect(w.emitted('play-song')[0][0].id).toBe(777)
+    // 整区 @click 保留——鼠标点行内任意处仍发 play-song
+    await sMain.trigger('click')
+    expect(w.emitted('play-song')).toHaveLength(2)
+
+    const gMain = w.find('.grid-card-main')
+    expect(gMain.attributes('role')).toBeUndefined()
+    expect(gMain.attributes('tabindex')).toBeUndefined()
+    const gBtn = w.find('.grid-card-name .grid-card-name-btn')
+    expect(gBtn.element.tagName).toBe('BUTTON')
+    expect(gBtn.attributes('type')).toBe('button')
+    expect(gBtn.text()).toBe('结果单')
+    await gBtn.trigger('click')
+    expect(w.emitted('open')).toHaveLength(1)
+    expect(w.emitted('open')[0][0].id).toBe('pl_x')
+  })
+})
+
 describe('PlaylistGrid：单腿源歌单 hint', () => {
   it.each(['yt', 'bili'])('源=%s 有曲无单 → 指路行出现', async (src) => {
     const w = await mountGrid({ songs: [YT_SONG], results: [], searchSource: src })

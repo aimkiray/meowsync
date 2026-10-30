@@ -356,6 +356,8 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     expect(plCard.classes()).toContain('grid-card--playing')
     expect(plCard.attributes('aria-current')).toBe('true')
     expect(plCard.find('.grid-card-main').attributes('aria-current')).toBe('true')
+    // aria-current 双挂：行壳 + 新激活点（卡名真按钮）同亮
+    expect(plCard.find('.grid-card-name-btn').attributes('aria-current')).toBe('true')
     expect(plCard.find('.grid-card-badge').exists()).toBe(true)
     // 专辑卡同律：currentSongId 命中其同键 tracks 成员
     const alCard = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
@@ -390,6 +392,19 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     expect(w.emitted('play-playlist')).toHaveLength(1)
     expect(w.emitted('play-playlist')[0][0].id).toBe('pl_1')
     expect(w.emitted('open')).toBeUndefined()
+    // .grid-card-main 摘 role/tabindex：键盘激活点收进卡名真按钮
+    // .grid-card-name-btn（h3 内嵌 button，原生 Enter/Space→click），
+    // .stop 阻冒泡——点名键不再触发外壳 click 双发 open
+    const gmain = card.find('.grid-card-main')
+    expect(gmain.attributes('role')).toBeUndefined()
+    expect(gmain.attributes('tabindex')).toBeUndefined()
+    const nameBtn = card.find('.grid-card-name .grid-card-name-btn')
+    expect(nameBtn.element.tagName).toBe('BUTTON')
+    expect(nameBtn.attributes('type')).toBe('button')
+    expect(nameBtn.text()).toBe('货架单')
+    await nameBtn.trigger('click')
+    expect(w.emitted('open')).toHaveLength(1)
+    expect(w.emitted('open')[0][0].id).toBe('pl_1')
   })
 
   it('货架翻页键 [‹][›]：可滚才显、边界禁态、点击调 scrollBy', async () => {

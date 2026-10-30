@@ -180,16 +180,22 @@
               @click.stop="$emit('play-playlist', pl)"
             ><PixelIcon name="play" :size="14" /></button>
           </div>
+          <!-- body 不再扮 role=button：children presentational 会抹平 h3 标题
+               语义。键盘「打开」激活点收进卡名真按钮 .grid-card-name-btn
+               （原生 Enter/Space→click 无需 keydown 绑），.stop 防冒泡到
+               外壳 @click 双 emit；aria-current 卡壳+激活点双挂
+               （PlaylistPanel .pl-row-main/.pl-name-btn 同例） -->
           <div
             class="grid-card-body grid-card-main"
-            role="button"
-            tabindex="0"
             :aria-current="isPlaylistPlaying(pl) ? 'true' : undefined"
-            :title="`打开《${pl.name}》`"
-            @keydown.enter="$emit('open', pl)"
-            @keydown.space.prevent="$emit('open', pl)"
           >
-            <h3 class="grid-card-name">{{ pl.name }}</h3>
+            <h3 class="grid-card-name"><button
+              type="button"
+              class="grid-card-name-btn"
+              :aria-current="isPlaylistPlaying(pl) ? 'true' : undefined"
+              :title="`打开《${pl.name}》`"
+              @click.stop="$emit('open', pl)"
+            >{{ pl.name }}</button></h3>
             <p class="grid-card-meta">{{ pl.trackCount ? `${pl.trackCount} 首` : '歌单' }}</p>
           </div>
         </div>
@@ -245,14 +251,15 @@
           </div>
           <div
             class="grid-card-body grid-card-main"
-            role="button"
-            tabindex="0"
             :aria-current="isAlbumPlaying(al) ? 'true' : undefined"
-            :title="`播放《${al.name}》来源曲 ${al.song.name}`"
-            @keydown.enter="playAlbum(al)"
-            @keydown.space.prevent="playAlbum(al)"
           >
-            <h3 class="grid-card-name">{{ al.name }}</h3>
+            <h3 class="grid-card-name"><button
+              type="button"
+              class="grid-card-name-btn"
+              :aria-current="isAlbumPlaying(al) ? 'true' : undefined"
+              :title="`播放《${al.name}》来源曲 ${al.song.name}`"
+              @click.stop="playAlbum(al)"
+            >{{ al.name }}</button></h3>
             <p class="grid-card-meta">{{ `${al.artist} · 含《${al.song.name}》` }}</p>
           </div>
         </div>

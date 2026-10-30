@@ -10,7 +10,7 @@
              query/source 任一缺席即无完整语境，整行不渲 -->
         <p v-if="query && sourceName" class="pg-label pg-label--dim grid-head-ctx">“{{ query }}” · {{ sourceName }}</p>
       </div>
-      <button class="pg-icobtn" @click="$emit('close')" title="返回首页" aria-label="返回首页"><PixelIcon name="close" :size="16" /></button>
+      <button type="button" class="pg-icobtn" @click="$emit('close')" title="返回首页" aria-label="返回首页"><PixelIcon name="close" :size="16" /></button>
     </header>
 
     <div v-if="loading" class="grid-state">
@@ -37,15 +37,14 @@
           class="song-result-row"
           :class="{ 'song-result-row--playing': String(currentSong?.id) === String(song.id) }"
         >
-          <!-- 点击区收进 -main：行是容器，避免 button 嵌 role=button -->
+          <!-- -main 不再扮 role=button：children presentational 抹平歌名
+               语义（行尾 + 键也本属嵌套违规面）。整区 @click 保留——非交互
+               div 上的 click 监听合法，鼠标整行可播不变；键盘「播放」激活
+               点收进歌名真按钮 .song-result-name-btn（原生 Enter/Space→
+               click 无需 keydown 绑），.stop 防冒泡双 emit -->
           <div
             class="song-result-main"
-            role="button"
-            tabindex="0"
-            :title="`播放 ${song.name}`"
             @click="$emit('play-song', song)"
-            @keydown.enter="$emit('play-song', song)"
-            @keydown.space.prevent="$emit('play-song', song)"
           >
             <span class="song-result-index">
               <span class="song-result-index-num">{{ songStartIndex + i + 1 }}</span>
@@ -68,7 +67,13 @@
               <!-- 歌名行：标题+来源角标同一 flex 行——name 收缩截断、
                    tag（B站/YouTube/QQ音乐/网易云/本地上传）恒完整钉在右缘内侧 -->
               <div class="song-result-title">
-                <p class="song-result-name">{{ song.name }}</p>
+                <!-- 歌名即「播放」激活点：原生 button 键盘可达；title 随激活点落键上 -->
+                <p class="song-result-name"><button
+                  type="button"
+                  class="song-result-name-btn"
+                  :title="`播放 ${song.name}`"
+                  @click.stop="$emit('play-song', song)"
+                >{{ song.name }}</button></p>
                 <span v-if="songSourceTag(song)" class="pg-chip pg-chip--static song-result-tag">{{ songSourceTag(song) }}</span>
               </div>
               <!-- 副行去重：songMeta 在专辑名=歌名时省略专辑段
@@ -95,6 +100,7 @@
              每次点击=一次上游请求，滚动到底自动连发会打爆上游配额/风控 -->
         <button
           v-if="songHasMore"
+          type="button"
           class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
           :disabled="songLoadingMore"
           @click="$emit('load-more-songs')"
@@ -111,27 +117,32 @@
             :key="playlist.id"
             class="grid-card"
           >
+            <!-- -main 不再扮 role=button：children presentational 抹平 h3 标题
+                 语义。整区 @click 保留——鼠标整卡可开不变；键盘「打开」激活点
+                 收进卡名真按钮 .grid-card-name-btn（原生 Enter/Space→click），
+                 .stop 防冒泡双 emit；title 随激活点落键上 -->
             <div
               class="grid-card-main"
               @click="$emit('open', playlist)"
-              @keydown.enter="$emit('open', playlist)"
-              @keydown.space.prevent="$emit('open', playlist)"
-              tabindex="0"
-              role="button"
-              :title="`打开《${playlist.name}》`"
             >
             <div class="grid-card-cover">
+              <!-- alt 置空：封面与紧邻卡名同源——名键 .grid-card-name-btn 已把名报给 SR -->
               <img
                 v-if="coverSizeUrl(playlist.coverImgUrl, 320)"
                 :src="httpsCover(coverSizeUrl(playlist.coverImgUrl, 320))"
-                :alt="playlist.name"
+                alt=""
                 loading="lazy"
                 decoding="async"
               />
               <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             </div>
             <div class="grid-card-body">
-              <h3 class="grid-card-name">{{ playlist.name }}</h3>
+              <h3 class="grid-card-name"><button
+                type="button"
+                class="grid-card-name-btn"
+                :title="`打开《${playlist.name}》`"
+                @click.stop="$emit('open', playlist)"
+              >{{ playlist.name }}</button></h3>
               <p class="grid-card-meta">{{ playlist.creator?.nickname || '神秘创建者' }} · {{ playlist.trackCount }} 首</p>
             </div>
             </div>
@@ -139,6 +150,7 @@
               <!-- 已入库的歌单换成静态戳记（语义同原 disabled 态，只是不再伪装成按钮） -->
               <button
                 v-if="!inLibrary(playlist)"
+                type="button"
                 class="ink-btn ink-btn--sm grid-add"
                 :disabled="adding.has(playlist.id)"
                 @click.stop="handleAdd(playlist)"
@@ -146,6 +158,7 @@
               >{{ adding.has(playlist.id) ? '…' : '+ 收藏' }}</button>
               <span v-else class="pg-chip pg-chip--static grid-added" title="已在歌单库中"><PixelIcon name="check" :size="11" /> 已收藏</span>
               <button
+                type="button"
                 class="pg-icobtn grid-share"
                 @click.stop="sharePlaylist(playlist)"
                 title="分享歌单"
@@ -159,6 +172,7 @@
         <!-- 渐进渲染哨兵：IO 命中或点按扩窗（歌单卡上限 100，40/批） -->
         <button
           v-if="gridHasMore"
+          type="button"
           :ref="bindSentinel"
           class="ink-btn ink-btn--ghost ink-btn--sm grid-more"
           @click="loadMoreGrid()"
@@ -583,7 +597,7 @@ export default {
 }
 
 /* 序号 ↔ ▶ 互换（与 song-row 同构）；用行级 :focus-within——焦点移到 + 键时
-   ▶ 保持（SongList 同构选择器语义），焦点在 -main 上时同样命中 */
+   ▶ 保持（SongList 同构选择器语义），焦点在 -main 内名键上时同样命中 */
 .song-result-row:hover .song-result-index-num,
 .song-result-row:focus-within .song-result-index-num,
 .song-result-row--playing .song-result-index-num {
@@ -630,6 +644,19 @@ export default {
   font-size: 13px;
   font-weight: 500;
   color: var(--ink);
+}
+
+/* 歌名=「播放」激活点（p 内嵌真按钮）。同 .pl-name-btn 法则（PlaylistPanel）：
+   块级满宽+左对齐+截断三件套；font/color/background/border/cursor 已由全局
+   button 基重置（style.css）覆盖。截断三件套钉在键上而非 p——p 若留
+   overflow:hidden 会把键的 :focus-visible 外环裁掉（祖先 overflow 裁后代
+   outline）；键自带 overflow 不裁自身 outline，环走全局 :focus-visible
+   +2px 外环可见。hover 借行 hover 底色不自绘 */
+.song-result-name-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -675,7 +702,9 @@ export default {
 @media (min-width: 901px) { .playlist-grid { gap: 24px; } }
 
 /* 卡片外壳/cover/-name/-meta/.grid-card-main 均已上收全局 style.css。
-   .grid-card-main 是 role=button 点击区——动作键是它兄弟节点，消灭嵌套可交互 */
+   .grid-card-main 是鼠标整卡点击区（非交互 div+@click 合法）；键盘激活点在
+   卡名真按钮 .grid-card-name-btn（全局样式）——动作键是它叔辈节点，
+   无嵌套可交互、无 children-presentational 吃 h3 语义 */
 
 .grid-card-actions {
   display: flex;
