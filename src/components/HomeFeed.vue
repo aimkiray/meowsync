@@ -570,7 +570,7 @@ export default {
 }
 /* 区块名（这个区的 h2），与下方节题同族但降一档灰——让位给歌名 */
 .home-hero-label {
-  font-size: 13px;
+  font-size: var(--fs-row, 13px);
   font-weight: 600;
   line-height: 1.3;
   color: var(--ink-64);
@@ -808,7 +808,7 @@ export default {
   gap: 1px;
 }
 .home-songrow-name {
-  font-size: 13px;
+  font-size: var(--fs-row, 13px);
   font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
@@ -816,7 +816,7 @@ export default {
   text-overflow: ellipsis;
 }
 .home-songrow-artist {
-  font-size: 11px;
+  font-size: var(--fs-meta, 11px);
   color: var(--ink-64);
   white-space: nowrap;
   overflow: hidden;

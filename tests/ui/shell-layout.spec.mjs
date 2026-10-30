@@ -38,9 +38,10 @@ describe('style.css 源钉板：全宽壳 + --content-max 退役', () => {
     expect(wide).toContain('--feed-max: 1360px')
   })
 
-  it('下载页 ≥640 margin 挂点：--view-max 同式内容帽（100cqw）', () => {
-    const block = css.match(/@media \(min-width: 640px\)\s*\{[\s\S]*?\n\}/)?.[0] || ''
-    expect(block).toContain('.downloads-panel')
+  it('下载页 ≥641 margin 挂点：--view-max 同式内容帽（100cqw）', () => {
+    // 挂点走 compact 档 641/640.98 对——直接钉 .downloads-panel 所在媒体块
+    // （style.css 另有 asp-dialog 的 641 块，须按内容锁定防误锚）
+    const block = css.match(/@media \(min-width: 641px\)\s*\{\s*\.downloads-panel\s*\{[^}]*\}\s*\}/)?.[0] || ''
     expect(block).toContain('margin: 20px max(20px, calc((100cqw - var(--view-max, 1120px)) / 2))')
   })
 })
@@ -82,6 +83,12 @@ describe('BottomPlayer.vue 源钉板：全宽墨条', () => {
     expect(dock).toContain('left: calc(50% + var(--sidebar-w, 260px) / 2)')
     expect(dock).toContain('transform: translate(-50%, -50%)')
     expect(dock).not.toContain('content-max')
+  })
+
+  it('碰撞窗护挡：1024–1130 隐藏 .player-time（走带簇出流尾与右簇叠字）', () => {
+    const win = src.match(/@media \(min-width: 1024px\) and \(max-width: 1130px\)[\s\S]*?\n\}/)?.[0] || ''
+    expect(win).toContain('.player-time')
+    expect(win).toContain('display: none')
   })
 })
 

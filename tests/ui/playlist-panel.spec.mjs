@@ -94,6 +94,9 @@ describe('PlaylistPanel：⋯ 菜单换面', () => {
     await nextTick()
     await wrapper.find('button[aria-label="更多操作"]').trigger('click')
     await nextTick()
+    // ⋯ 开态行挂 menu-open 态类——动作键持显的 DOM 事实源
+    //（菜单 teleport 到 body 后指针移入菜单时行已失 hover，靠态类兜底）
+    expect(wrapper.find('.pl-row').classes()).toContain('pl-row--menu-open')
     const items = [...document.body.querySelectorAll('.playlist-menu .pg-menu-item')]
     const texts = items.map(el => el.textContent)
     expect(texts[0]).toContain('播放歌单')
@@ -206,6 +209,12 @@ describe('PlaylistPanel：侧栏主导航 + 行降噪（U3）', () => {
     expect(rows.length).toBe(3)
     expect(rows.map(r => r.text())).toEqual(['首页', '下载', '设置'])
     expect(rows[0].classes()).toContain('side-nav-row--active')
+    // 当前页行标 aria-current="page"，未命中行不挂该 attr
+    expect(rows[0].attributes('aria-current')).toBe('page')
+    expect(rows[1].attributes('aria-current')).toBeUndefined()
+    // rail 档 label 藏字后 icon-only 行的 accName/tooltip 来源（F-01）
+    expect(rows.map(r => r.attributes('aria-label'))).toEqual(['首页', '下载', '设置'])
+    expect(rows.map(r => r.attributes('title'))).toEqual(['首页', '下载', '设置'])
     expect(wrapper.find('.side-nav-sep').exists()).toBe(true)
   })
 

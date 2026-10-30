@@ -1816,7 +1816,7 @@ export default {
 }
 
 /* ── 氛围场：封面小图高糊放大铺全屏 + 双层 scrim 压回舞台黑 ── */
-/* 包含块登记：本 fixed 件锚 .app-main（其 container-type:inline-size 捕获 fixed 后代）而非视口——见 style.css .app-main 注释 */
+/* 包含块登记：本 fixed 件锚视口——CSSWG#10544 后 container-type 不含 fixed CB（与 style.css .app-main 注同口径） */
 .watch-ambient {
   position: fixed;
   inset: 0;

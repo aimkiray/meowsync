@@ -5,11 +5,14 @@
          当前页高亮 = App.vue centerView——与歌单行高亮同源；下载项的
          remoteMode 闸与旧 ⋯ 菜单同口径（host 藏入口、downloads 视图留逃生） -->
     <nav class="side-nav" aria-label="主导航">
+      <!-- title/aria-label：rail 档 label 藏字后 icon-only 行的 accName 与 tooltip 来源 -->
       <button
         type="button"
         class="side-nav-row"
         :class="{ 'side-nav-row--active': centerView === 'home' }"
         :aria-current="centerView === 'home' ? 'page' : undefined"
+        title="首页"
+        aria-label="首页"
         @click="$emit('nav-view', 'home')"
       ><PixelIcon name="home" :size="15" /><span class="side-nav-label">首页</span></button>
       <button
@@ -18,6 +21,8 @@
         class="side-nav-row"
         :class="{ 'side-nav-row--active': centerView === 'downloads' }"
         :aria-current="centerView === 'downloads' ? 'page' : undefined"
+        title="下载"
+        aria-label="下载"
         @click="$emit('nav-view', 'downloads')"
       ><PixelIcon name="download" :size="15" /><span class="side-nav-label">下载</span></button>
       <button
@@ -25,6 +30,8 @@
         class="side-nav-row"
         :class="{ 'side-nav-row--active': centerView === 'settings' }"
         :aria-current="centerView === 'settings' ? 'page' : undefined"
+        title="设置"
+        aria-label="设置"
         @click="$emit('nav-view', 'settings')"
       ><PixelIcon name="settings" :size="15" /><span class="side-nav-label">设置</span></button>
     </nav>
@@ -649,7 +656,7 @@ export default {
 }
 
 .panel-state-sub {
-  font-size: 11px;
+  font-size: var(--fs-meta, 11px);
   color: var(--ink-64);
 }
 
@@ -744,7 +751,7 @@ export default {
 }
 
 .pl-meta {
-  font-size: 11px;
+  font-size: var(--fs-meta, 11px);
   color: var(--ink-64);
   white-space: nowrap;
   overflow: hidden;

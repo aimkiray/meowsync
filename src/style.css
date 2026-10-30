@@ -596,7 +596,7 @@ button {
 
 /* forced-colors：只靠底色表达的状态加透明 outline——HC 模式下被强制显色 */
 @media (forced-colors: active) {
-  .pl-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
+  .pl-row--active, .side-nav-row--active, .pg-tab--active, .pg-chip--on, .dql-row--sel,
   .queue-row--current, .song-row--playing, .song-result-row--playing,
   .transport--active, .pg-icobtn--pressed,
   .topnav-suggest-item--active, .rc-queue-row--current,
@@ -807,8 +807,8 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
 @media (min-width: 1600px) { :root { --sidebar-w: 300px; --feed-max: 1360px; } }
 
 /* 首页节奏/字号阶令牌（U1）：组内 8 / 节题→内容 12 / 区块间 48 /
-   hero 上方 32；字号阶 28/16/13/11。声明在此、消费在 HomeFeed scoped——
-   主题侧（glitch）无需覆写 */
+   hero 上方 32；字号阶 28/16/13/11。声明在此、消费在 HomeFeed scoped
+   （--fs-meta 同被侧栏 PlaylistPanel 元信息行消费）——主题侧（glitch）无需覆写 */
 :root {
   --rhythm-intra: 8px;
   --rhythm-head: 12px;
@@ -1826,9 +1826,10 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   }
 }
 
-/* 下载页 margin 挂点：<640 留组件侧 m-3(12)；≥640 原 sm:m-5(20) 升为
-   与 --view-max 同式的内容帽——margin 挂点与 padding 挂点同式同律 */
-@media (min-width: 640px) {
+/* 下载页 margin 挂点：≤640.98 留组件侧 m-3(12)；≥641 原 sm:m-5(20) 升为
+   与 --view-max 同式的内容帽——margin 挂点与 padding 挂点同式同律
+   （挂点走 compact 档惯例 641/640.98 对，640–640.98 亚像素缝不落空档） */
+@media (min-width: 641px) {
   .downloads-panel { margin: 20px max(20px, calc((100cqw - var(--view-max, 1120px)) / 2)); }
 }
 

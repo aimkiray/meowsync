@@ -104,6 +104,7 @@ const { authState } = await import('../../src/lib/auth-state.js')
 const { resetSyncState } = await import('../../src/lib/sync.js')
 const { default: TopNavigation } = await import('../../src/components/TopNavigation.vue')
 const { default: PlaylistGrid } = await import('../../src/components/PlaylistGrid.vue')
+const { default: PlaylistPanel } = await import('../../src/components/PlaylistPanel.vue')
 const { default: BottomPlayer } = await import('../../src/components/BottomPlayer.vue')
 const { default: App } = await import('../../src/App.vue')
 
@@ -622,6 +623,42 @@ describe('App.vue：导航与多源搜索域接线', () => {
     w.vm.openWatchOrBack('queue')
     expect(w.vm.centerView).toBe('home')
     expect(backSpy).toHaveBeenCalledTimes(1) // 还是那一发——没再走 back
+    backSpy.mockRestore()
+  })
+
+  it('侧栏 nav-view → onSidebarNav：downloads 入页 / 同视图再调空操作 / home 回首页', async () => {
+    // 上例残留的 ?view=watch 先复位——applyUrlNav 会按 URL 立初态
+    window.history.replaceState(null, '', '/')
+    const w = track(shallowMount(App))
+    await vi.waitFor(() => expect(authState.booted).toBe(true))
+    await flush()
+
+    const panel = w.findComponent(PlaylistPanel)
+    expect(panel.exists()).toBe(true)
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+
+    // ① nav-view('downloads') → toggleCenterView 正向腿 → centerView 'downloads'
+    await panel.vm.$emit('nav-view', 'downloads')
+    await nextTick()
+    expect(w.vm.centerView).toBe('downloads')
+    const pushes = pushSpy.mock.calls.length
+    expect(pushes).toBeGreaterThan(0)
+
+    // ② 已在 downloads 再调 → 守卫拦截空操作（toggleCenterView 二次调用
+    //    会弹回上一视图）——pushState 不增、back 不触发、视图原地不动
+    await panel.vm.$emit('nav-view', 'downloads')
+    await nextTick()
+    expect(w.vm.centerView).toBe('downloads')
+    expect(pushSpy.mock.calls.length).toBe(pushes)
+    expect(backSpy).not.toHaveBeenCalled()
+
+    // ③ nav-view('home') → navHome → centerView 'home'
+    await panel.vm.$emit('nav-view', 'home')
+    await nextTick()
+    expect(w.vm.centerView).toBe('home')
+
+    pushSpy.mockRestore()
     backSpy.mockRestore()
   })
 })
