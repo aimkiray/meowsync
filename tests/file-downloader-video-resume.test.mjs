@@ -12,6 +12,15 @@
 //   - 不回归：全量一次成不触发续拉（fetch 调用数=1）
 //   - 兼容面：窗内回 200（服务端无视 Range）丢弃已收前缀后追加收齐
 //   - 病态上游：206 报 /3000 后续窗 200 无 CL 短件拉低 total——不产假完成
+//   - 200 无CL 短件假完成闸：body 短于已落盘前缀的干净 EOF 必须抛错
+//     （零进展窗耗尽判死），不得把截断件 rename 成完成
+//   - 206 起点闸：回错起点窗记零进展不追加错位字节 → 同 off 重试成
+//   - size>total 虚报闸：206 声明小实放多 → fatal 无 rename
+//   - 窗内 fatal 分诊：403 窗照零进展计可续；gzip fatal 无 upstreamStatus
+//     即死不烧窗；窗中 abort 穿透 + .part 清
+//   - deadline：axios timeout 按剩余预算钳制；预算耗尽判「下载总时长超限」
+//   - stale .part：预置垃圾前缀 O_TRUNC 清场不混入
+//   - BV 续拉头透传：窗内防盗链 Referer 不打折
 //   - 负向闸：全量腿非 403 上游 fatal（404）不转续拉（fetch 调用数=1）
 //   - 客户端轮次翻转：首轮 VISIONOS 签名批先行（配额自由批——ANDROID 批
 //     ~2MB/URL 即焚注定全灭），首批空/瞬断时次轮常规客户端链兜底，其
@@ -25,7 +34,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { seed, tmpDataDir } from './helpers.mjs';
 
@@ -117,11 +126,24 @@ const progOnly = (url, h = 720) => ({ streamingData: {
 } });
 
 // 断流响应体：吐 buf 后以 err 毁流（SABR 每连接限量放量的实测形态）。
-// 抛错前留 10ms 事件循环余量——fs.write 走线程池，同 tick 毁流会让未刷
-// 缓冲整体丢弃（bytesWritten=0），钉不住「半截字节已落盘」的续传前提
-const cutStream = (buf, err) => Readable.from((async function* () {
+// writer-acknowledged：毁流前轮询 partPath 落盘字节 ≥ base+buf.length
+// 才抛——fs.write 走线程池，同 tick 毁流会把未刷缓冲整体丢弃
+// （bytesWritten=0），钉不住「半截字节已落盘」的续传前提。setImmediate
+// 轮询不依赖定时器（mock.timers 用例也能跑）；~2s 不上账抛工装错
+const cutStream = (buf, err, partPath) => Readable.from((async function* () {
+  let base = 0;
+  try { base = partPath ? statSync(partPath).size : 0; } catch { /* 未建按 0 */ }
   if (buf) yield buf;
-  await new Promise(r => setTimeout(r, 10));
+  if (buf && partPath) {
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      let sz = 0;
+      try { sz = statSync(partPath).size; } catch { /* 尚未建 */ }
+      if (sz >= base + buf.length) break;
+      if (Date.now() > deadline) throw new Error('test rig: writer 未在 2s 内落盘 buf');
+      await new Promise(r => setImmediate(r));
+    }
+  }
   throw err;
 })());
 const okStream = (buf) => Readable.from([buf]);
@@ -164,16 +186,18 @@ test('断流续拉：全量腿半截断流 → 首窗放 1500B 断 → 次窗按
   const url = 'https://rr1---sn-x.googlevideo.com/v?itag=137';
   ytPlayerImpl = async () => progOnly(url);
   const tail = Buffer.alloc(1000, 0x42);
+  const dest = join(outDir, 'w1.mp4');
+  const partPath = `${dest}.part`; // 全量腿与续拉窗共用同一 .part
   fetchImpl = async (u, o) => {
     if (o.headers.Range === 'bytes=0-') {
       // 全量腿：206 起手放 1500 字节后 ECONNRESET（限量断流形态）
       return { status: 206, headers: { 'content-range': 'bytes 0-2499/2500' },
-        data: cutStream(Buffer.alloc(1500, 0x41), errReset()) };
+        data: cutStream(Buffer.alloc(1500, 0x41), errReset(), partPath) };
     }
     const off = rangeStart(o);
     if (off === 0) {
       // 首窗：同样只放 1500 字节断流——已收前缀留住，零进展不成立
-      return resp206(0, 2499, 2500, cutStream(Buffer.alloc(1500, 0x41), errReset()));
+      return resp206(0, 2499, 2500, cutStream(Buffer.alloc(1500, 0x41), errReset(), partPath));
     }
     if (off === 1500) {
       // 次窗续传：Content-Range 起点=已落盘字节
@@ -181,7 +205,6 @@ test('断流续拉：全量腿半截断流 → 首窗放 1500B 断 → 次窗按
     }
     throw new Error(`unexpected range ${o.headers.Range}`);
   };
-  const dest = join(outDir, 'w1.mp4');
   const r = await downloadVideo(YT_TRACK, dest, null, null, {});
   assert.equal(r.size, 2500);
   assert.equal(r.path, dest);
@@ -396,4 +419,227 @@ test('BV 回归：bv_ 走 resolveBiliMedia 合流档直落——yt 解析链零�
   assert.equal(r.videoMeta.source, 'progressive');
   assert.equal(ytPlayerCalls.length, 0, 'bvM 分支零扰动——yt 解析链一次不触');
   assert.equal(fetchCalls.length, 1);
+});
+
+// ── 200 无CL 短件假完成闸（blocker 修复钉）─────────────────────────
+
+test('200 无CL 短件假完成闸：W1 200 无CL 吐 3MiB 断流 → W2 200 无CL 500B 干净收尾 → 抛错非完成', async () => {
+  const url = 'https://rr10---sn-x.googlevideo.com/v?itag=137';
+  ytPlayerImpl = async () => progOnly(url);
+  const dest = join(outDir, 'w9.mp4');
+  const partPath = `${dest}.part`;
+  const THREE_MIB = 3 * 1024 * 1024;
+  fetchImpl = async (u, o) => {
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    const off = rangeStart(o);
+    if (off === 0) {
+      // 病态边沿节点无视 Range 回全量 200 无 CL：吐 3MiB 后 RST——
+      // 断流字节是真前缀（off=0 → skip=0 直通），total 探不到
+      return { status: 200, headers: {},
+        data: cutStream(Buffer.alloc(THREE_MIB, 0x41), errReset(), partPath) };
+    }
+    // off=3MiB 起同一病态节点恒回 500B 干净 EOF——body 连已落盘前缀
+    // 都没覆盖（skip 未耗尽即收尾）。旧逻辑 written=0 → win.total=
+    // offset+written=3MiB → stats.size===total 假完成；flush 闸改判
+    // 「短于已落盘前缀」可重试错 → 计零进展窗，3 连耗尽判死
+    assert.equal(off, THREE_MIB, '零进展窗按同 off 续试');
+    return { status: 200, headers: {}, data: okStream(Buffer.alloc(500, 0x66)) };
+  };
+  const e = await downloadVideo(YT_TRACK, dest, null, null, {})
+    .then(() => null, x => x);
+  assert.ok(e, '病态短件不得 rename 成完成件');
+  assert.match(e.message, /短于已落盘前缀/);
+  assert.ok(!existsSync(dest), '截断件不得以终名出现');
+  assert.ok(!existsSync(partPath), '.part 残片已清');
+  assert.equal(fetchCalls.length, 5,
+    '全量 1 + 进展窗 1 + 零进展窗 3（耗尽判死）');
+});
+
+// ── 窗内校验/分诊补强 ─────────────────────────────────────────────
+
+test('206 起点闸：回错起点窗（bytes 0-…）记零进展不追加错位字节 → 同 off 重试正确窗成功', async () => {
+  const url = 'https://rr11---sn-x.googlevideo.com/v?itag=137';
+  ytPlayerImpl = async () => progOnly(url);
+  const first = Buffer.alloc(1500, 0x41);
+  const tail = Buffer.alloc(1000, 0x42);
+  let servedBad = false;
+  fetchImpl = async (u, o) => {
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    const off = rangeStart(o);
+    if (off === 0) return resp206(0, 1499, 2500, okStream(first));
+    if (off === 1500 && !servedBad) {
+      servedBad = true;
+      // 错位窗：续传偏移 1500 却回起点 0——头期即拒，0xEE 一个字节都
+      // 不该落盘（若放行，盘上会混出 2500B 合法前缀+1000B 错位尾巴）
+      return resp206(0, 999, 2500, okStream(Buffer.alloc(1000, 0xEE)));
+    }
+    assert.equal(off, 1500);
+    return resp206(1500, 2499, 2500, okStream(tail));
+  };
+  const dest = join(outDir, 'w10.mp4');
+  const r = await downloadVideo(YT_TRACK, dest, null, null, {});
+  assert.equal(r.size, 2500);
+  assert.deepEqual(readFileSync(dest), Buffer.concat([first, tail]),
+    '错位窗零落盘——拼接后字节与资源一致');
+  assert.equal(fetchCalls.length, 4, '全量 1 + 窗 3（错位窗烧一次零进展额度）');
+  assert.equal(fetchCalls[2][1].headers.Range, fetchCalls[3][1].headers.Range,
+    '错位窗报废后按同 off 重试');
+});
+
+test('size>total 虚报闸：206 声明 /1000 实放 1500B → 虚报 fatal + 无 rename', async () => {
+  const url = 'https://rr12---sn-x.googlevideo.com/v?itag=22';
+  ytPlayerImpl = async () => progOnly(url);
+  fetchImpl = async () => resp206(0, 999, 1000, okStream(Buffer.alloc(1500, 0xEE)));
+  const dest = join(outDir, 'w11.mp4');
+  const e = await downloadVideo(YT_TRACK, dest, null, null, {})
+    .then(() => null, x => x);
+  assert.ok(e);
+  assert.match(e.message, /上游虚报长度/);
+  assert.equal(e.fatal, true, '上游虚报是确定性违规——fatal 不重试');
+  assert.equal(fetchCalls.length, 1, '对账 fatal 不转续拉不烧窗');
+  assert.ok(!existsSync(dest));
+  assert.ok(!existsSync(`${dest}.part`));
+});
+
+test('窗内 403 按零进展计不即死：连两窗 403 → 第三窗 206 收齐', async () => {
+  const url = 'https://rr13---sn-x.googlevideo.com/v?itag=22';
+  ytPlayerImpl = async () => progOnly(url);
+  let w = 0;
+  fetchImpl = async (u, o) => {
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    w++;
+    if (w <= 2) throw err403(); // 带 upstreamStatus 的上游码——换边节点可能放行
+    return resp206(0, 999, 1000, okStream(Buffer.alloc(1000, 0x55)));
+  };
+  const dest = join(outDir, 'w12.mp4');
+  const r = await downloadVideo(YT_TRACK, dest, null, null, {});
+  assert.equal(r.size, 1000);
+  assert.equal(fetchCalls.length, 4,
+    '两窗 403 各烧一次零进展额度，第三窗收齐');
+});
+
+test('窗内 fatal 无 upstreamStatus（content-encoding:gzip）即死不烧窗', async () => {
+  const url = 'https://rr14---sn-x.googlevideo.com/v?itag=22';
+  ytPlayerImpl = async () => progOnly(url);
+  fetchImpl = async (u, o) => {
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    // gzip 编码进 streamRangeWindow 同闸：fatal 且无 upstreamStatus
+    // ——换窗同果的确定性违规，立即穿透不烧零进展额度
+    return { status: 206, headers: { 'content-range': 'bytes 0-999/1000',
+      'content-encoding': 'gzip' }, data: okStream(Buffer.alloc(1000, 0x55)) };
+  };
+  const dest = join(outDir, 'w13.mp4');
+  const e = await downloadVideo(YT_TRACK, dest, null, null, {})
+    .then(() => null, x => x);
+  assert.ok(e);
+  assert.match(e.message, /压缩内容/);
+  assert.equal(e.fatal, true);
+  assert.equal(fetchCalls.length, 2, 'fatal 即死——零重试零烧窗');
+  assert.ok(!existsSync(dest));
+  assert.ok(!existsSync(`${dest}.part`));
+});
+
+test('窗中 abort：首块吐完后 abort 再断流 → aborted 穿透 + 零新窗 + .part 清', async () => {
+  const url = 'https://rr15---sn-x.googlevideo.com/v?itag=137';
+  ytPlayerImpl = async () => progOnly(url);
+  const ac = new AbortController();
+  const dest = join(outDir, 'w14.mp4');
+  fetchImpl = async (u, o) => {
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    return resp206(0, 1999, 2000, Readable.from((async function* () {
+      yield Buffer.alloc(500, 0x41);
+      ac.abort();        // 落盘中途取消——catch 顶 throwIfAborted 必须截住
+      throw errReset();
+    })()));
+  };
+  const e = await downloadVideo(YT_TRACK, dest, null, ac.signal, {})
+    .then(() => null, x => x);
+  assert.equal(e?.aborted, true, '取消语义穿透包装不丢');
+  assert.equal(fetchCalls.length, 2, 'abort 后零新窗——全量 1 + 首窗 1');
+  assert.ok(!existsSync(dest));
+  assert.ok(!existsSync(`${dest}.part`));
+});
+
+// ── deadline 约束（mock.timers——本组用例不碰 cutStream 的定时器轮询，
+//    okStream 数据走 microtask/线程池与 mock 时钟无涉）──────────────
+
+test('deadline 钳制：fetch 等待吃掉预算后次窗 axios timeout 按余量收缩（非恒 300s）', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
+  const url = 'https://rr16---sn-x.googlevideo.com/v?itag=22';
+  ytPlayerImpl = async () => progOnly(url);
+  fetchImpl = async (u, o) => {
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    const off = rangeStart(o);
+    if (off === 0) {
+      assert.equal(o.timeout, 300000, '首窗余量充足仍给满 300s');
+      // connect+headers 阶段吃掉 27min——返回时 deadline 只剩 ~3min
+      t.mock.timers.tick(27 * 60 * 1000);
+      return resp206(0, 99, 1000, okStream(Buffer.alloc(100, 0x41)));
+    }
+    assert.equal(off, 100);
+    assert.ok(o.timeout <= 181000 && o.timeout > 0,
+      `axios timeout 应钳到剩余 deadline ~180s（实得 ${o.timeout}）`);
+    return resp206(100, 999, 1000, okStream(Buffer.alloc(900, 0x42)));
+  };
+  const dest = join(outDir, 'w15.mp4');
+  const r = await downloadVideo(YT_TRACK, dest, null, null, {});
+  assert.equal(r.size, 1000);
+  assert.equal(fetchCalls.length, 3, '钳制不矫枉——余量内照样收齐');
+});
+
+test('deadline 耗尽：单窗等待超 30min → 判「下载总时长超限」不开新窗', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
+  const url = 'https://rr17---sn-x.googlevideo.com/v?itag=22';
+  ytPlayerImpl = async () => progOnly(url);
+  fetchImpl = async () => {
+    // 整段 30min 预算耗在一发 fetch 的等待里——真机形态是钳后的
+    // axios timeout 掐断；桩里以 tick 复刻「返回时已超时」
+    t.mock.timers.tick(31 * 60 * 1000);
+    throw errReset();
+  };
+  const dest = join(outDir, 'w16.mp4');
+  const e = await downloadVideo(YT_TRACK, dest, null, null, {})
+    .then(() => null, x => x);
+  assert.ok(e);
+  assert.match(e.message, /下载总时长超限/);
+  assert.equal(fetchCalls.length, 1,
+    '首发 fetch 耗尽预算——续拉窗零发出（二轮候选被 triedProgressive 去重）');
+});
+
+// ── 落盘卫生与头透传 ─────────────────────────────────────────────
+
+test('stale .part 闸：预置 7777B 垃圾 → O_TRUNC 清场后字节深等钉不混入', async () => {
+  const url = 'https://rr18---sn-x.googlevideo.com/v?itag=22';
+  ytPlayerImpl = async () => progOnly(url);
+  const dest = join(outDir, 'w17.mp4');
+  // 崩溃残留/上一候选残片——续拉 O_APPEND 下不清场就会混进前缀
+  writeFileSync(`${dest}.part`, Buffer.alloc(7777, 0xEE));
+  fetchImpl = async (u, o) => {
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    return resp206(0, 999, 1000, okStream(Buffer.alloc(1000, 0x77)));
+  };
+  const r = await downloadVideo(YT_TRACK, dest, null, null, {});
+  assert.equal(r.size, 1000, '垃圾前缀不计入——续拉起手 O_TRUNC 清场');
+  assert.deepEqual(readFileSync(dest), Buffer.alloc(1000, 0x77),
+    '落盘字节深等——无脏数据混入');
+});
+
+test('BV 续拉头透传：续拉窗防盗链 Referer 不打折', async () => {
+  const pUrl = 'https://upos-sz-m1.bilivideo.com/prog2.mp4';
+  biliMediaImpl = async () => ({ videos: [], audios: [],
+    progressive: async () => [{ url: pUrl, mimeType: 'video/mp4', br: null, h: 720 }] });
+  fetchImpl = async (u, o) => {
+    assert.equal(u, pUrl);
+    assert.equal(o.headers.Referer, 'https://www.bilibili.com',
+      'B 站防盗链 Referer 必须随窗透传（缺即 403）');
+    if (o.headers.Range === 'bytes=0-') throw err403();
+    return resp206(0, 499, 500, okStream(Buffer.alloc(500, 0x63)));
+  };
+  const dest = join(outDir, 'w18.mp4');
+  const r = await downloadVideo(BV_TRACK, dest, null, null, {});
+  assert.equal(r.size, 500);
+  assert.equal(fetchCalls.length, 2, '全量 403 一发 + 一窗收齐');
+  assert.equal(fetchCalls[1][1].headers.Range, `bytes=0-${rangeEnd(0)}`);
+  assert.equal(fetchCalls[1][1].headers.Referer, 'https://www.bilibili.com');
+  assert.equal(ytPlayerCalls.length, 0, 'bvM 分支——yt 解析链零触达');
 });

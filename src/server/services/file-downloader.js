@@ -235,7 +235,9 @@ async function downloadExternalAudio(bvM, ytM, outputPath, bitrate, onProgress, 
     const videoId = providerData?.youtube?.videoId || ytM[1];
     // 第二轮起升级 VISIONOS 直解：ANDROID/IOS 批被 SABR 闸控（首段窗外全
     // 403）时换签名体系——实测同一批自适应流它完全不受限，能拿到真最高
-    // 音质 opus251；首轮解析自身失败时它也顺带当第三客户端兜底
+    // 音质 opus251；首轮解析自身失败时它也顺带当第三客户端兜底。
+    // 与视频腿 :688 轮序刻意相反——视频已实测 ANDROID ~2MB/URL 焚故
+    // VISIONOS 先行；音频 URL 配额形态未实测，保留旧序待验
     if (clientEscalated) {
       console.info(`[youtube] ${videoId} 自适应流批次不可用——升级 VISIONOS 签名批重解`);
     }
@@ -427,17 +429,20 @@ async function resumeByRangeWindows(cand, dest, { onProgress, deadline, signal, 
       const win = { written: 0, total: 0 }; // 本窗战果——成败路径都带出真值
       try {
         const resp = await fetchStream(cand.url, {
-          timeout: 300000, signal,
+          // axios 空闲超时钳到剩余 deadline——connect+headers 等待阶段也
+          // 受总时长闸约束（否则单窗 fetch 可挂 300s 逃逸 deadline）
+          timeout: Math.min(300000, Math.max(remainMs, 1)), signal,
           // 有界窗必须覆盖调用方 RANGE_ALL 的 `bytes=0-`（无界即全量形态，
           // 闸控下回 403）；B 站防盗链头经 headers 透传不打折
           headers: { ...headers, Range: `bytes=${off}-${off + VIDEO_RANGE_WINDOW - 1}` },
         });
         await streamRangeWindow(resp, partPath, {
           offset: off, maxBytes: MAX_VIDEO_BYTES,
-          maxTotalMs: remainMs, onProgress, win,
+          // fetch 返回后重采样——headers 等待耗掉的额度不白送给流传输段
+          maxTotalMs: Math.max(deadline - Date.now(), 1), onProgress, win,
         });
       } catch (e) {
-        // 断流前已落盘的字节仍是真进展（bytesWritten 是盘上真值）
+        // 断流前已落盘的字节仍是真进展（win.written 取盘面对账真值）
         off += win.written;
         // total 只许上调不许下调（函数头注）——病态窗报小总长不收
         if (win.total) total = Math.max(total, win.total);
@@ -909,7 +914,9 @@ async function downloadExternalVideo(bvM, ytM, outputPath, onProgress, signal, p
     // 合流兜底只在客户端阶梯用尽后出场。
     // 无 ffmpeg 时自适应相位整体跳过，第二轮重解只值 formats 兜底表：
     // bv thunk 轮轮同料照旧白打一跳；yt 首轮 VISIONOS 批 formats 恒空，
-    // carry 仍空时第二轮常规链是合流兜底唯一来源——放它跑完
+    // carry 仍空时第二轮常规链是合流兜底唯一来源——放它跑完。
+    // streamingData 里还有个 hlsManifestUrl 未消费——VISIONOS 批被闸
+    // 时它是更深一层的保底（HLS 播单形态），暂记不实现
     if (!FFMPEG_OK && (bvM || progressiveCarry.length)) break;
   }
   // 自适应阶梯用尽/无 ffmpeg → MP4 合流兜底（B 站 thunk 懒取 durl；

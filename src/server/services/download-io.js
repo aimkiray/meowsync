@@ -340,14 +340,23 @@ async function streamToFile(response, outputPath, { maxBytes, onProgress, maxTot
 
     // O_NOFOLLOW on the .part write: a symlink planted at partPath must not
     // redirect the write outside the download tree — ELOOP lands in the
-    // shared catch below (FATAL_ERRNOS already lists it → deterministic)
-    const partFd = fs.openSync(partPath,
-      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+    // shared catch below (FATAL_ERRNOS already lists it → deterministic).
+    // openSync/createWriteStream 抛错时响应流永远没人消费——毁流再放行，
+    // 否则悬挂 socket（与 4xx/5xx catch 同款纪律）
+    let partFd;
+    try {
+      partFd = fs.openSync(partPath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+    } catch (e) {
+      response.data.destroy();
+      throw e;
+    }
     // fd 是裸数字无 GC——createWriteStream 构造期抛错要手动收
     let writer;
     try {
       writer = fs.createWriteStream(partPath, { fd: partFd, autoClose: true });
     } catch (e) {
+      response.data.destroy();
       try { fs.closeSync(partFd); } catch { /* already closed */ }
       throw e;
     }
@@ -389,10 +398,12 @@ async function streamToFile(response, outputPath, { maxBytes, onProgress, maxTot
 // - 200：服务端无视 Range 回全量——流起点是 0 不是 offset，丢弃前 offset
 //   字节后追加，前缀不变量不破。
 // win 出参 {written,total} 由调用方传入：written=本窗真实落盘字节
-//（writer.bytesWritten——断流已收的部分也算，缓冲未刷的不计，宁可多拉
-// 不错位）；total=探明的资源总长（206 的 Content-Range / 200 的
-// content-length 头期即记，断流也带出；200 无总长但干净收尾时=
-// offset+written——全量已齐的完成标记）。
+//（statSync(.part).size−offset——.part 恒为资源合法前缀，盘面对账是真
+// 值；writer.bytesWritten 在流被 error destroy 时会漏记已完成的在途
+// 写，off 低估 → 下窗 O_APPEND 写到文件尾但 Range 按旧偏移发＝错位。
+// 缓冲未刷的不计，宁可多拉不错位）；total=探明的资源总长（206 的
+// Content-Range / 200 的 content-length 头期即记，断流也带出；200 无
+// 总长但干净收尾时= offset+written——全量已齐的完成标记）。
 async function streamRangeWindow(response, partPath, { offset, maxBytes, maxTotalMs, onProgress, win }) {
   let skip = 0;
   let total = 0;
@@ -426,13 +437,21 @@ async function streamRangeWindow(response, partPath, { offset, maxBytes, maxTota
   }
   if (win) win.total = total;
   // O_APPEND 落点恒为文件尾：续拉循环保证盘上恒为资源前缀，尾即 offset——
-  // 与 streamToFile 同闸 O_NOFOLLOW（预埋符号链接不得把写引到下载树外）
-  const fd = fs.openSync(partPath,
-    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW);
+  // 与 streamToFile 同闸 O_NOFOLLOW（预埋符号链接不得把写引到下载树外）。
+  // openSync/createWriteStream 抛错时响应流永远没人消费——毁流再放行
+  let fd;
+  try {
+    fd = fs.openSync(partPath,
+      fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW);
+  } catch (e) {
+    response.data.destroy();
+    throw e;
+  }
   let writer;
   try {
     writer = fs.createWriteStream(partPath, { fd, autoClose: true });
   } catch (e) {
+    response.data.destroy();
     try { fs.closeSync(fd); } catch { /* already closed */ }
     throw e;
   }
@@ -464,19 +483,34 @@ async function streamRangeWindow(response, partPath, { offset, maxBytes, maxTota
         }
       }
       cb(null, chunk);
+    },
+    // 干净 EOF 闸：200 兼容路径下上游 body 若连已落盘前缀都没覆盖（skip
+    // 未耗尽），written=0 会让调用方拿 `offset+written=offset` 当完成
+    // 总长——截断件被 rename 成假完成。按可重试错抛出，调用方计零进展
+    // 窗、耗尽判死走降档；skip 恰耗尽（body===offset）是合法形态不拦
+    flush(cb) {
+      if (skip > 0) {
+        return cb(new Error(`上游 200 响应短于已落盘前缀（缺 ${skip} 字节）`));
+      }
+      cb();
     }
   });
+  // 本窗真实落盘：盘面对账 statSync−offset 为真值，bytesWritten 兜底
+  const diskWritten = () => {
+    try { return Math.max(0, fs.statSync(partPath).size - offset); }
+    catch { return writer.bytesWritten; }
+  };
   try {
     await pipeline(response.data, skipper, writer);
   } catch (e) {
-    if (win) win.written = writer.bytesWritten;
+    if (win) win.written = diskWritten();
     throw e;
   }
   if (win) {
-    win.written = writer.bytesWritten;
+    win.written = diskWritten();
     // 200 干净收尾=全量资源已齐：无 content-length 时落盘字节即完成总长；
     // 206 的总长在头期已记（断流路径也带出去了）
-    if (response.status === 200) win.total = total || offset + writer.bytesWritten;
+    if (response.status === 200) win.total = total || offset + win.written;
   }
 }
 
