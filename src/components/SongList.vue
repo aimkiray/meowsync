@@ -426,9 +426,9 @@
 
 <style scoped>
 .song-list-main {
-  /* 全向走全站页缘档 --page-pad-x（≤640 收成 12px，见 style.css）：
+  /* 竖向 --page-pad-x、横向 --view-max 内容帽公式（cqw 解析到 .app-main 容器）：
      360px 视口 40px 边距吃掉 11% 屏宽——行信息列优先 */
-  padding: var(--page-pad-x, 20px);
+  padding: var(--page-pad-x, 20px) max(var(--page-pad-x, 20px), calc((100cqw - var(--view-max, 1120px)) / 2));
 }
 
 .song-rows { scrollbar-gutter: stable; }

@@ -528,8 +528,8 @@ export default {
   /* 滚动条车道顶部内缩：透明 border-top 把轨道抬离页缘 20px，
      与内容首行轴齐平；底部不缩——border 落在 scrollport 外会
      留出页底色死缝，底缘滚齐播放器发丝线。
-     横向页缘走 --page-pad-x 全站档（≤640 收 12px） */
-  padding: 0 var(--page-pad-x, 20px);
+     横向页缘走 --feed-max 内容帽公式（主区宽 >帽+页缘时两侧等槽居中——cqw 解析到 .app-main 容器） */
+  padding: 0 max(var(--page-pad-x, 20px), calc((100cqw - var(--feed-max, 1280px)) / 2));
   border-top: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
@@ -818,8 +818,8 @@ export default {
   overflow-x: auto;
   padding: 4px 12px 8px;
   margin-inline: -12px;
-  margin-right: calc(-1 * var(--page-pad-x, 20px));
-  padding-right: var(--page-pad-x, 20px);
+  margin-right: calc(-1 * max(var(--page-pad-x, 20px), (100cqw - var(--feed-max, 1280px)) / 2));
+  padding-right: max(var(--page-pad-x, 20px), (100cqw - var(--feed-max, 1280px)) / 2);
 }
 /* ≥641 货架卡 160→200（新节奏档：卡体升一档撑全宽首屏） */
 @media (min-width: 641px) { .home-shelf { grid-auto-columns: 200px; gap: 24px; } }

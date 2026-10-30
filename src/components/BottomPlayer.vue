@@ -373,13 +373,11 @@ export default {
   align-items: center;
   gap: 16px;
   /* 横槽移到外层 .bottom-player（style.css 同款 max(16px,env)，全档生效）——
-     内列居中到 --content-max 后，≥1472 与顶栏/侧栏内容同轴（原为内槽 16px
-     错位：内列盒含槽，对齐基准偏半槽）。竖向 padding 4+4 + 播放键 60/56/52
+     内列不再限宽——≥1024 走带簇按 --sidebar-w 锚主区中线
+     （见下方全宽墨条款）。竖向 padding 4+4 + 播放键 60/56/52
      （桌面/phone/compact 三档）+ 发丝线 1.2 = 栏高 69.2/65.2/61.2——与
      style.css :root 的 --player-bar-h 令牌梯成对维护（watch 视频预算消费） */
   padding: 4px 0;
-  max-width: var(--content-max, 1440px);
-  margin: 0 auto;
 }
 
 /* 左列：封面 + 文字 */
@@ -527,7 +525,7 @@ export default {
   flex-shrink: 0;
 }
 /* 时间戳挂出流：absolute 贴中列右尾——五键簇恢复 play 键的几何对称，
-   使其落在 player-inner 正中心（左右 flank 同为 flex:1 等宽）；
+   使其落在走带簇中心（≥1024 簇对主区中线绝对定位，见下方全宽墨条款）；
    若在流内，其宽度会把簇中心向右推，播放键偏左 ~29px */
 .player-time {
   position: absolute;
@@ -589,6 +587,35 @@ export default {
   .player-right, .player-controls .transport--edge { display: none; }
   .transport { width: 44px; height: 44px; }
   .transport--play { width: 52px; height: 52px; }
+}
+
+/* ≥1024 全宽墨条：曲目区 = --sidebar-w（左侧栏列宽对齐）、走带簇绝对
+   定在主区正中（窗中线 + 半栏宽 = 主区中线）、右簇 flex:1 + 内容贴
+   右缘内槽 16（既有 flex:1/justify-content:flex-end 不动，margin 免添）。
+   横槽移出外层 .bottom-player（左右归零）由各件自带 pad 供——刘海
+   env 沿原档。controls 出流后 .player-time 仍锚其盒右尾（left:100%
+   关系不变）；≤1023 各媒体块照旧（分权拓扑/首轮减负不动） */
+@media (min-width: 1024px) {
+  .bottom-player { padding-left: 0; padding-right: 0; }
+  .player-inner { position: relative; }
+  .track-meta {
+    flex: 0 0 var(--sidebar-w, 260px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+  }
+  .player-controls {
+    position: absolute;
+    left: calc(50% + var(--sidebar-w, 260px) / 2);
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .player-right { padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+}
+
+/* 碰撞窗护挡：走带簇绝对锚主区中线后，player-time 出流尾(~+8起~90px)
+   在 vp≈1024–1112 与右簇静音键叠字——此窗内隐藏时刻（lg:inline 恰于
+   1024 亮起，1130 后右簇左缘已让出净空）。窗宽取 1130 含长时戳裕量 */
+@media (min-width: 1024px) and (max-width: 1130px) {
+  .player-time { display: none; }
 }
 
 /* Watch 舞台态：全局 --ink 已翻成亮色——本条自带「墨面纸字」极性，

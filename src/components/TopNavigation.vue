@@ -777,7 +777,7 @@ export default {
     onMounted(() => {
       document.addEventListener('pointerdown', onDocPointerDown)
       window.addEventListener('keydown', onMenuKeydown)
-      // ≥1472 时 inner 居中、触发键距右缘随视口漂移；resize 菜单位置即过期
+      // 触发键贴右窗缘随视口漂移；resize 菜单位置即过期
       window.addEventListener('resize', onResizeClose)
       searchMq = matchMedia('(max-width: 768px)')
       searchMq.addEventListener('change', onSearchMq)
@@ -872,9 +872,6 @@ export default {
    侧列不设 min-width:0：列宽下限=内容 min-content，空间不足时
    中列先收缩（字段 max-width:100%），侧簇永不溢出侵入中列 */
 .topnav-inner {
-  /* 与底栏内列/player-inner 同帽同轴（style.css 注释：顶栏内列同轴消费） */
-  max-width: var(--content-max, 1440px);
-  margin: 0 auto;
   height: 56px;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -882,26 +879,20 @@ export default {
   gap: 16px;
 }
 
-/* ≥1024：搜索框左缘钉死在内容列左缘（=侧栏 280 + 主区 padding 20），
-   全视图同位——顶栏是跨视图锚，切进 watch（无侧栏）搜索位置不许跳。
-   左列吃"内容缘 − gap − 顶栏 pad"的定宽，中列改 minmax(0,480) 让字段贴列左缘。
-   定宽轨代价：左簇若增肥超定宽会溢出侵入中列（fr/auto 轨的 min-content
-   防侵承诺对定宽轨不成立）——当前左簇 ~186px，裕量充足但改簇时记着。
-   顶栏 padding 16 只在 inner 未达 1440 上限时把 inner 推离 app-body 左缘，
-   故列宽分两档：<1472 扣 16，≥1472（inner 居中后与 app-body 同缘）不扣。
-   窄轨(768-1023)侧栏 64 + padding 20 = 84 目标缘 < 左簇 min-content(~186)，
-   对齐必然重叠 logo——窄轨维持居中搜索。 */
+/* ≥1024 全宽 masthead：左列 = --sidebar-w（logo 占侧栏宽），中列起点 =
+   侧栏缘 + --page-pad-x（搜索起点对齐主区内容起点），右簇 1fr 贴右窗缘
+   （外层 .topnav 右槽 16 全档保留）。column-gap 归零让左列缘严落侧栏缘——
+   定宽轨同旧注：左簇增肥超列宽会溢出侵入中列（当前 ~186px 裕量充足）。
+   顶栏左槽归零改由 .topnav-left 自带 pad 供（刘海区 env 同律）。
+   watch（无侧栏）几何不变——顶栏跨视图锚不跳位 */
 @media (min-width: 1024px) {
+  .topnav { padding-left: 0; }
   .topnav-inner {
-    /* 268 = 侧栏 280 + 页缘 pad 20 − 顶栏外槽 16 − gap 16 → 搜索左缘钉 300 */
-    grid-template-columns: 268px minmax(0, 480px) 1fr;
+    grid-template-columns: var(--sidebar-w, 260px) minmax(0, 480px) 1fr;
+    column-gap: 0;
   }
-}
-@media (min-width: 1472px) {
-  .topnav-inner {
-    /* 284 = 同式减外槽——≥1472 inner 居中，外槽 16 被 1440 帽抵进两侧 margin */
-    grid-template-columns: 284px minmax(0, 480px) 1fr;
-  }
+  .topnav-left { padding-left: max(16px, env(safe-area-inset-left, 0px)); }
+  .topnav-search { justify-content: flex-start; padding-left: var(--page-pad-x, 20px); }
 }
 
 .topnav-left {

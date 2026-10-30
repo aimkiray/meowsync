@@ -463,8 +463,6 @@
   --accent-danger-ink: #ff7a72;
   /* 绿（ok/完成态）亮档——#3ecf8e 在 #0b0b0b 上 ~9.9:1、#181818 上 ~8.9:1 */
   --accent-green-ink: #3ecf8e;
-  /* Watch 页不吃 1440 内容帽：顶栏内列/底栏内列/主区体同轴放宽 */
-  --content-max: 2200px;
 }
 :root[data-stage="watch"] .app-shell {
   --view-canvas: var(--stage-bg);
@@ -656,7 +654,7 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* 画布铺满视口——content 列限宽 1440 居中，两侧页缘由本层上色不留白 */
+  /* 画布铺满视口——内容列由各视图按 --view-max/--feed-max 自限居中，两侧页缘由本层上色不留白 */
   background: var(--view-canvas, var(--paper));
   transition: background-color .4s var(--ease-ink);
 }
@@ -674,8 +672,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   min-height: 0;
   display: flex;
   width: 100%;
-  max-width: var(--content-max);
-  margin: 0 auto;
 }
 
 /* 彩纸画布上的次级文字升档——ink-64 在 teal/pink/sage 上 <4.5:1。
@@ -767,15 +763,14 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
      公式（§1.4）都解析到本盒内联宽。inline-size 包含令本盒成后代
      abspos+fixed 共同包含块——现有 abspos 后代均有更近定位父级；
      树内 fixed 件仅 WatchView 的 .watch-ambient，改锚本盒后上下
-     差带被不透明 chrome 遮住、两侧差带仅本批 U1→U2 过渡期
-     vp>2200 可辨，U2 全宽落地后左右同缘自愈；
+     差带被不透明 chrome 遮住、左右与主区同缘无侧向差带；
      ptr-indicator/各视图内滚器均安全 */
   container-type: inline-size;
 }
 
 /* 桌面端：歌单库常驻侧栏（与主区同一张纸，发丝线分栏） */
 .app-sidebar {
-  width: 280px;
+  width: var(--sidebar-w, 260px);
   flex-shrink: 0;
   min-height: 0;
   border-right: var(--hairline);
@@ -786,9 +781,9 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
      写法 max-width:640.98px 配 min-width:641px——.98 防亚像素死带同 900.98）
    phone   ≤768：结构档（顶栏单行+搜索展开层、侧栏抽屉、底栏首轮减负、沉浸页纵排）
    wide    ≥901：内容双栏（watch 左右分栏；配对的 <901 写法是 max-width:900.98px）
-   dock    ≥1024：chrome 全量（侧栏定驻 280、汉堡消隐、搜索钉列、底栏时刻）
+   dock    ≥1024：chrome 全量（侧栏定驻 --sidebar-w、汉堡消隐、顶/底栏锚列）
    xl      ≥1280：主从分栏（下载页队列/任务双列、内滚 gutter 车道）
-   max     ≥1472：派生边（=1440 内容帽 + 2×16 chrome 槽，顶栏内列对轴）
+   max     ≥1600：宽屏档（侧栏 300、--feed-max 1360、主区内容区内居中）
    高度轴（max-height:500/540）、能力轴（hover:none/pointer:coarse/reduced-
    motion/forced-colors/print）不入宽度阶梯——正交通道 */
 
@@ -827,9 +822,6 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   --fs-row: 13px;
   --fs-meta: 11px;
 }
-
-/* 内容帽令牌：app-body 限宽值（顶栏内列/底栏内列同轴消费） */
-:root { --content-max: 1440px; }
 
 /* 底栏总高令牌：三段阶梯 69.2/65.2/61.2（= 内列 pad4+件高+pad4 + 1.2
    发丝线 + 进度溢位不增高）。栏高变动时此值与 BottomPlayer 媒体块成对维护 */
@@ -1823,8 +1815,7 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
 }
 
 /* iOS 安全区：避开 Home 指示条；横槽与顶栏外层同款 max(16px,env) 同轴——
-   内列（player-inner 限宽 --content-max 居中）在 ≥1472 与侧栏/顶栏内容齐轴，
-   <1472 等效原内槽 */
+   ≥1024 全宽后左右槽归零（件内自带 pad 接棒，见 BottomPlayer scoped） */
 .bottom-player {
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: max(16px, env(safe-area-inset-left, 0px));
@@ -1837,6 +1828,12 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
     padding-left: 12px;
     padding-right: 12px;
   }
+}
+
+/* 下载页 margin 挂点：<640 留组件侧 m-3(12)；≥640 原 sm:m-5(20) 升为
+   与 --view-max 同式的内容帽——margin 挂点与 padding 挂点同式同律 */
+@media (min-width: 640px) {
+  .downloads-panel { margin: 20px max(20px, calc((100cqw - var(--view-max, 1120px)) / 2)); }
 }
 
 /* 印刷稿致敬：打印时保留画布色与发丝线（这套美学本来就该上纸） */

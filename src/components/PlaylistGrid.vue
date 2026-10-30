@@ -449,8 +449,8 @@ export default {
 <style scoped>
 .playlist-grid-wrap {
   /* 同 .home-feed：border-top 抬滚动条车道离顶页缘，底缘滚齐
-     播放器发丝线；横向页缘走 --page-pad-x 全站档（≤640 收 12px） */
-  padding: 0 var(--page-pad-x, 20px);
+     播放器发丝线；横向页缘走 --view-max 内容帽公式（cqw 解析到 .app-main 容器） */
+  padding: 0 max(var(--page-pad-x, 20px), calc((100cqw - var(--view-max, 1120px)) / 2));
   border-top: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
