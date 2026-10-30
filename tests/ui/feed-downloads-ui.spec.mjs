@@ -553,6 +553,26 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
     expect(src).toContain('width: 280px')
     // 货架卡 ≥641 档 160→200
     expect(src).toContain('grid-auto-columns: 200px')
+    // 底缘对齐（F-B）：右栏节列吸满行高 + 行表 flex 列 space-between
+    // 摊余量进行隙——钉在 .home-topgrid 限定规则上，不被 .home-section-head
+    // 的同名 justify-content 误中
+    const homeSec = src.match(/\.home-topgrid \.home-section\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(homeSec).toContain('align-self: stretch')
+    // display:flex 是承重声明——删后 flex-direction/space-between 静默失效，各钉一条
+    expect(homeSec).toContain('display: flex')
+    expect(homeSec).toContain('flex-direction: column')
+    const homeSongs = src.match(/\.home-topgrid \.home-songs\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(homeSongs).toContain('flex: 1')
+    expect(homeSongs).toContain('display: flex')
+    expect(homeSongs).toContain('justify-content: space-between')
+    // 底缘对齐 hero 侧（F-B2）：hero 列撑满+封面顶吸、信息列撑满、按钮
+    // margin-top:auto 钉底——按钮底缘=栏底缘（右栏栏底=more-wrap 行底）
+    const homeHero = src.match(/\.home-topgrid \.home-hero\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(homeHero).toContain('align-self: stretch')
+    expect(homeHero).toContain('align-items: flex-start')
+    expect(src).toContain('.home-topgrid .home-hero-info { align-self: stretch; }')
+    const heroActions = src.match(/\.home-topgrid \.home-hero-actions\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(heroActions).toContain('margin-top: auto')
   })
 
   it('DOM 断言：12 行全量挂载（CSS 隐藏不改 DOM），「更多」翻 home-topgrid--open', async () => {

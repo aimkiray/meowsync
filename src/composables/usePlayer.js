@@ -283,6 +283,11 @@ export function usePlayer({
             const restoredIndex = restoredSongs.findIndex(song => String(song.id) === String(savedState.currentSongId))
             if (restoredIndex !== -1) {
               const restoredSong = restoredSongs[restoredIndex]
+              // 恢复途中用户已自行起播（selectPlaylist RTT 窗内抢点）——实时播放
+              // 优先，恢复不夺权；currentPlayingId 在 playSong 头部同步置位，是
+              // 最早的在场标记（与下方历史退路同款对称守卫）。放弃即整链不复原——
+              // selectedPlaylist 选中态残留属「播A浏览B」解耦既有语义，不复位
+              if (currentSong.value || currentPlayingId != null) return
               // 沉浸层 flag 先于 playSong 落地：恢复路径含网络跳（getSongUrl/loadLyrics），
               // 落地晚会让 watch 页在层盖上前先挂一次 <video> 白拉流
               if (savedState.isFullscreenPlayerOpen) {

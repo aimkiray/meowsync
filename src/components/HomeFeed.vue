@@ -647,12 +647,42 @@ export default {
     column-gap: 32px;
     align-items: start;
   }
-  .home-topgrid .home-hero { padding-bottom: 0; }
-  .home-topgrid .home-section { padding-bottom: 0; }
+  /* 底缘对齐 hero 侧：撑满行高（右栏 6 行+节头为行高锚）+ 封面顶吸
+     （align-items:flex-start 防基线 center 把封面沉进撑高列）+ 信息列
+     撑满，按钮 margin-top:auto 钉底——按钮底缘=栏底缘（右栏栏底即
+     more-wrap 行底、末行下 ~40px），余量落在元信息与按钮之间；
+     「更多」开 12 行右栏反超时同理钉底。
+     保持「左封面+右信息列」横排——列向分布走 .home-hero-info 内列，
+     不把 hero 本体改 column（会竖排封面违背主角区编排） */
+  .home-topgrid .home-hero {
+    padding-bottom: 0;
+    align-self: stretch;
+    align-items: flex-start;
+  }
+  .home-topgrid .home-hero-info { align-self: stretch; }
+  /* 按钮钉底——按钮底缘=右栏栏底（more-wrap 行底、末行下 ~40px） */
+  .home-topgrid .home-hero-actions { margin-top: auto; }
+  /* 右栏整列吸满行高（align-items:start 只给内容高，stretch 补回栏高）——
+     栏内 flex 列把余量交给行表：行距吸余量→末行底缘随栏底对齐 hero 底缘；
+     「更多」开 12 行右栏反超 hero 时余量为零，自然退化顶排不压行高 */
+  .home-topgrid .home-section {
+    padding-bottom: 0;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+  }
   /* 仅 1 条历史（hero 有、recents 空）时 hero 占满整行——单栏 5fr
      会把孤 hero 挤成 ~41% 宽 */
   .home-topgrid > .home-hero:only-child { grid-column: 1 / -1; }
-  .home-topgrid .home-songs { grid-template-columns: 1fr; }
+  .home-topgrid .home-songs {
+    grid-template-columns: 1fr;
+    /* space-between 摊栏内余高进行隙（行高不动仍 50px——分行距不拉行）；
+       基规则 gap 的 4px 行距作地板保留 */
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
   .home-topgrid:not(.home-topgrid--open) .home-songrow:nth-child(n+7) { display: none; }
   .home-hero-cover { width: 240px; height: 240px; }
   .home-hero-name { font-size: var(--fs-hero, 28px); }

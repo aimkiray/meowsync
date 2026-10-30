@@ -1000,6 +1000,29 @@ describe('usePlayer：持久化与恢复', () => {
     expect(player.playingSongs.value.map(s => s.id)).toEqual([1]) // 队列未被历史覆写
     expect(howls).toHaveLength(1)                             // 退路未再建 Howl
   })
+
+  it('restorePlaybackState：歌单链命中但 RTT 窗内用户已起播 → 守卫不夺权', async () => {
+    // filteredSongs=[1,2]（makePlayer songs 形参）含存档曲 2——selectPlaylist
+    // resolve(true) 后 restoredIndex 命中，走歌单链成功路径（非历史退路）
+    const { player, deps } = makePlayer({ songs: [song(1), song(2)] })
+    deps.userPlaylists.value = [{ id: 'pl_a', name: 'A' }]
+    // 挂起歌单选中 RTT——restore 阻塞在 await selectPlaylist 上
+    let releaseSelect
+    deps.selectPlaylist.mockImplementation(
+      () => new Promise(r => { releaseSelect = () => r(true) }))
+    const restoring = player.restorePlaybackState({
+      playingPlaylistId: 'pl_a', selectedPlaylistId: 'pl_a',
+      currentSongId: 2, currentTime: 12, isFullscreenPlayerOpen: true,
+    })
+    // RTT 窗内用户自行点歌——playSong 头部同步置位 currentPlayingId/currentSong
+    await player.playSong(song(1))
+    releaseSelect() // 歌单链命中 restoredIndex → 对称守卫见在播态直退（不越写旗/playSong）
+    await restoring
+    expect(player.currentSong.value?.id).toBe(1)                 // 仍是用户曲
+    expect(player.playingSongs.value.map(s => s.id)).toEqual([1, 2]) // 队列未被覆写
+    expect(player.isFullscreenPlayerOpen.value).toBe(false)      // 守卫坐在写旗前——沉浸层也不开
+    expect(howls).toHaveLength(1)                                // 恢复未再建 Howl
+  })
 })
 
 describe('usePlayer：外源歌词兜底与自动重匹配', () => {
