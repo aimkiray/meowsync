@@ -107,7 +107,7 @@ export function usePlayer({
   selectPlaylist, savePlaylistsToStorage,
   filteredSongs,
   showVipSongs, fullscreenLyricMode,
-  recordPlayHistory, recordPlaylistHistory,
+  recordPlayHistory, recordPlaylistHistory, playHistory,
   enterWatch, openWatchSong, selectPlaylistAndShow,
   setSidebarOpen, getSearchSongResults,
 }) {
@@ -271,35 +271,58 @@ export function usePlayer({
       const playlist = [savedState?.playingPlaylistId, savedState?.selectedPlaylistId]
         .map(id => id != null && userPlaylists.value.find(p => String(p.id) === String(id)))
         .find(Boolean)
-      if (!playlist) return
-
-      const selected = await selectPlaylist(playlist)
-      if (!selected) return // 恢复被更新的选择抢占或歌单加载失败，不继续播放
-
-      // 在 filteredSongs（= 将要被拍进播放快照的列表）中定位，保证恢复的
-      // 歌曲一定在播放队列里；用 songs 会漏掉 VIP 过滤，导致快照里没有当前歌、
-      // 下一首跳回队首
-      const restoredSongs = filteredSongs.value
-      if (!restoredSongs.length) return
-
-      // 仅按歌曲ID定位：索引兜底会在歌曲被移除后错播同位置的其他歌
-      const restoredIndex = restoredSongs.findIndex(song => String(song.id) === String(savedState.currentSongId))
-      if (restoredIndex === -1) {
-        console.log('⏭️ 上次播放的歌曲已不在该歌单中（或被 VIP 过滤隐藏），放弃恢复播放')
-        return
+      if (playlist) {
+        const selected = await selectPlaylist(playlist)
+        if (selected) {
+          // 在 filteredSongs（= 将要被拍进播放快照的列表）中定位，保证恢复的
+          // 歌曲一定在播放队列里；用 songs 会漏掉 VIP 过滤，导致快照里没有当前歌、
+          // 下一首跳回队首
+          const restoredSongs = filteredSongs.value
+          if (restoredSongs.length) {
+            // 仅按歌曲ID定位：索引兜底会在歌曲被移除后错播同位置的其他歌
+            const restoredIndex = restoredSongs.findIndex(song => String(song.id) === String(savedState.currentSongId))
+            if (restoredIndex !== -1) {
+              const restoredSong = restoredSongs[restoredIndex]
+              // 沉浸层 flag 先于 playSong 落地：恢复路径含网络跳（getSongUrl/loadLyrics），
+              // 落地晚会让 watch 页在层盖上前先挂一次 <video> 白拉流
+              if (savedState.isFullscreenPlayerOpen) {
+                isFullscreenPlayerOpen.value = true
+              }
+              await playSong(restoredSong, {
+                autoplay: false,
+                seekTime: Number.isFinite(savedState.currentTime) ? savedState.currentTime : 0
+              })
+              return
+            }
+          }
+        }
+        // 歌单链失败（单被删/选中失败/过滤隐藏/歌单丢失）不直接放弃——落历史退路
+        console.log('⏭️ 存档歌单链恢复未果，转最近播放历史退路')
       }
-
-      const restoredSong = restoredSongs[restoredIndex]
-
-      // 沉浸层 flag 先于 playSong 落地：恢复路径含网络跳（getSongUrl/loadLyrics），
-      // 落地晚会让 watch 页在层盖上前先挂一次 <video> 白拉流
+      // 历史退路：单曲分享/相关/搜索起播时存档本就无歌单归属
+      // （playingPlaylistId=null 或壳 id 已死）——旧码此时直接放弃恢复，
+      // currentSong 留空：首页「接着听」读 playHistory 照旧亮旧曲，
+      // 底栏却空着「选择歌曲开始播放」两张皮。playHistory 与 hero 同一份
+      // 事实源（recordPlayHistory 置顶的同一表），命中即按
+      // playSongFromRelated 同款语义恢复：队列=历史表、归属 null、
+      // autoplay:false 只回显不起播
+      const historyPool = Array.isArray(playHistory?.value) ? playHistory.value : []
+      const historyHit = historyPool.find(s => s && s.id != null && String(s.id) === String(savedState.currentSongId))
+      if (!historyHit) return
+      // 恢复途中用户已自行起播（RTT 窗内抢点）——实时播放优先，退路不夺权；
+      // currentPlayingId 在 playSong 头部同步置位，是最早的在场标记
+      if (currentSong.value || currentPlayingId != null) return
       if (savedState.isFullscreenPlayerOpen) {
         isFullscreenPlayerOpen.value = true
       }
-
-      await playSong(restoredSong, {
+      // 归属只清播放侧——浏览歌单残留选中态（selectedPlaylist）属
+      // 「播A浏览B」解耦既有语义，勿复位置 null（会清用户浏览上下文）
+      setQueue(historyPool.slice(), null)
+      playingPlaylistId.value = null
+      await playSong(historyHit, {
         autoplay: false,
-        seekTime: Number.isFinite(savedState.currentTime) ? savedState.currentTime : 0
+        seekTime: Number.isFinite(savedState.currentTime) ? savedState.currentTime : 0,
+        preserveContext: true
       })
     }
 

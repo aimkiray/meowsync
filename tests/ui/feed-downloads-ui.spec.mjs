@@ -174,11 +174,11 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
   })
 })
 
-// 宽/窄视口桩：HomeFeed 只问 (min-width: 901px)
+// 宽/窄视口桩：HomeFeed 只问 (min-width: 768px)
 const withViewport = (wide, fn) => {
   const origMM = window.matchMedia
   window.matchMedia = (q) => ({
-    matches: wide && String(q).includes('901'),
+    matches: wide && String(q) === '(min-width: 768px)',
     addEventListener() {}, removeEventListener() {},
   })
   try { return fn() } finally { window.matchMedia = origMM }
@@ -235,7 +235,7 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     expect(w.find('.grid-card-meta').text()).toBe('9 首')
   })
 
-  it('歌单货架门控：≥901px 收起（侧栏常驻，信息完全重复），窄视口保留', () => {
+  it('歌单货架门控：≥768 收起（dock/rail 侧栏在场，信息完全重复），窄视口保留', () => {
     const pls = [{ id: 'pl_1', name: '歌单一', trackCount: 5 }]
     const props = { recents: [], recentPlaylists: pls, userPlaylists: pls }
     withViewport(true, () => {

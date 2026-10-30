@@ -124,7 +124,7 @@
     </div>
 
     <!-- 常听歌单货架：优先 recentPlaylists（活副本富化，已删除的不上架），无可用
-         历史时回退 userPlaylists 前 8 项；≥901px 侧栏常驻，货架与之完全重复故收起 -->
+         历史时回退 userPlaylists 前 8 项；≥768 侧栏在场（常驻或窄轨），货架与之完全重复故收起 -->
     <section v-if="showPlaylistShelf" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
@@ -356,7 +356,7 @@ export default {
         .slice(0, 8)
         .map(p => ({ ...p, trackCount: p.trackCount ?? p.tracks?.length }))
     },
-    // ≥901px 侧栏常驻（与 sidebarOpen 无关——那是移动抽屉态），货架与之完全重复
+    // ≥768 侧栏在场（dock 常驻 / rail 窄轨；与 sidebarOpen 无关——那是移动抽屉态），货架与之完全重复
     showPlaylistShelf() {
       return !this.wideViewport && this.displayPlaylists.length > 0
     },
@@ -449,10 +449,10 @@ export default {
     const recentsOpen = ref(false)
     let cancelScrollRestore = null
 
-    // 宽视口判定（≥901px）：歌单货架门控的唯一外源——桌面侧栏常驻，
-    // 货架与侧栏歌单库信息完全重复故收起；窄视口侧栏是抽屉，货架保留
+    // 侧栏在场判定（≥768px）：歌单货架门控的唯一外源——dock/rail 歌单库
+    // 都可见，货架与其信息完全重复故收起；<768 侧栏是抽屉，货架保留
     const wideViewport = ref(false)
-    const mq = typeof window !== 'undefined' ? window.matchMedia?.('(min-width: 901px)') : null
+    const mq = typeof window !== 'undefined' ? window.matchMedia?.('(min-width: 768px)') : null
     wideViewport.value = !!mq?.matches
     const onMqChange = (e) => { wideViewport.value = !!e?.matches }
     // Safari <14 的 MediaQueryList 只有旧式 add/removeListener——双写兜底

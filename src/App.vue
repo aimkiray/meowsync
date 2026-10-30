@@ -924,6 +924,7 @@ export default {
       filteredSongs,
       showVipSongs, fullscreenLyricMode,
       recordPlayHistory, recordPlaylistHistory,
+      playHistory,
       // nav 域（useSearchNav）实例化在本 composable 之后——全部惰性转发
       enterWatch: () => enterWatch(),
       openWatchSong: (s) => openWatchSong(s),

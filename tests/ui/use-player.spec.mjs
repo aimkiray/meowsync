@@ -127,6 +127,7 @@ function makePlayer({ songs = [] } = {}) {
     showVipSongs: ref(true),
     fullscreenLyricMode: ref('lyric'),
     recordPlayHistory: vi.fn(),
+    playHistory: ref([]),
     recordPlaylistHistory: vi.fn(),
     enterWatch: vi.fn(), openWatchSong: vi.fn(), selectPlaylistAndShow: vi.fn(),
     setSidebarOpen: vi.fn(), getSearchSongResults: vi.fn(() => []),
@@ -910,12 +911,94 @@ describe('usePlayer：持久化与恢复', () => {
     expect(player.isPlaying.value).toBe(false) // autoplay=false 恢复态不起播
   })
 
-  it('restorePlaybackState：存档曲已不在歌单 → 放弃恢复', async () => {
+  it('restorePlaybackState：歌单链缺席 → 落 playHistory 退路恢复（接着听同源）', async () => {
+    const { player, deps } = makePlayer()
+    deps.playHistory.value = [song(9), song(8)]
+    await player.restorePlaybackState({
+      playingPlaylistId: 'saved_queue_dead', selectedPlaylistId: null,
+      currentSongId: 9, currentTime: 12,
+    })
+    expect(deps.selectPlaylist).not.toHaveBeenCalled()
+    expect(player.currentSong.value?.id).toBe(9)
+    expect(deps.playingPlaylistId.value).toBeNull()
+    expect(howls).toHaveLength(1)
+    howls[0].fire('onload')
+    expect(howls[0].seek()).toBe(12)
+    expect(player.isPlaying.value).toBe(false) // autoplay=false 恢复态不起播
+  })
+
+  it('restorePlaybackState：歌单链缺席且历史无命中 → 真放弃恢复', async () => {
+    const { player } = makePlayer()
+    await player.restorePlaybackState({
+      playingPlaylistId: null, selectedPlaylistId: null, currentSongId: 404,
+    })
+    expect(player.currentSong.value).toBeNull()
+    expect(howls).toHaveLength(0)
+  })
+
+  it('restorePlaybackState：存档曲已不在歌单且历史无命中 → 放弃恢复', async () => {
     const { player } = makePlayer({ songs: [song(1)] })
     await player.restorePlaybackState({
       playingPlaylistId: 'pl_a', selectedPlaylistId: 'pl_a', currentSongId: 404,
     })
+    // 新行为：先落历史退路，无命中才放弃（deps.playHistory 为空 → howls=0 照旧）
     expect(howls).toHaveLength(0)
+  })
+
+  it('restorePlaybackState：selectPlaylist 选中失败 → 落历史退路恢复成功', async () => {
+    const { player, deps } = makePlayer()
+    deps.userPlaylists.value = [{ id: 'pl_a', name: 'A' }]
+    deps.selectPlaylist.mockResolvedValue(false) // 选中 RTT 返 false → 歌单链断
+    deps.playHistory.value = [song(9), song(8)]
+    await player.restorePlaybackState({
+      playingPlaylistId: 'pl_a', selectedPlaylistId: 'pl_a',
+      currentSongId: 9, currentTime: 7,
+    })
+    expect(deps.selectPlaylist).toHaveBeenCalled()
+    expect(player.currentSong.value?.id).toBe(9)
+    // 退路队列 = 历史表全量（与「接着听」同一份事实源）
+    expect(player.playingSongs.value.map(s => s.id)).toEqual([9, 8])
+    expect(deps.playingPlaylistId.value).toBeNull()
+    expect(howls).toHaveLength(1)
+  })
+
+  it('restorePlaybackState：歌单在但存档曲缺席（restoredIndex=-1）→ 落历史退路恢复成功', async () => {
+    const { player, deps } = makePlayer()
+    deps.userPlaylists.value = [{ id: 'pl_a', name: 'A' }]
+    deps.filteredSongs.value = [song(1), song(2)] // 选中成功但存档曲不在列表内
+    deps.playHistory.value = [song(9), song(8)]
+    await player.restorePlaybackState({
+      playingPlaylistId: 'pl_a', selectedPlaylistId: 'pl_a',
+      currentSongId: 9, currentTime: 5,
+    })
+    expect(deps.selectPlaylist).toHaveBeenCalled()
+    expect(player.currentSong.value?.id).toBe(9)
+    expect(player.playingSongs.value.map(s => s.id)).toEqual([9, 8])
+    expect(deps.playingPlaylistId.value).toBeNull()
+    expect(howls).toHaveLength(1)
+    howls[0].fire('onload')
+    expect(howls[0].seek()).toBe(5)
+  })
+
+  it('restorePlaybackState：恢复途中用户已起播 → 退路守卫不夺权', async () => {
+    const { player, deps } = makePlayer({ songs: [song(1)] })
+    deps.userPlaylists.value = [{ id: 'pl_a', name: 'A' }]
+    deps.playHistory.value = [song(9), song(8)]
+    // 挂起歌单选中 RTT——restore 阻塞在 await selectPlaylist 上
+    let releaseSelect
+    deps.selectPlaylist.mockImplementation(
+      () => new Promise(r => { releaseSelect = () => r(false) }))
+    const restoring = player.restorePlaybackState({
+      playingPlaylistId: 'pl_a', selectedPlaylistId: 'pl_a',
+      currentSongId: 9, currentTime: 12,
+    })
+    // RTT 窗内用户自行点歌——playSong 头部同步置位 currentPlayingId/currentSong
+    await player.playSong(song(1))
+    releaseSelect() // 歌单链断 → 落历史退路 → 守卫见在播态直退
+    await restoring
+    expect(player.currentSong.value?.id).toBe(1)              // 仍是用户曲
+    expect(player.playingSongs.value.map(s => s.id)).toEqual([1]) // 队列未被历史覆写
+    expect(howls).toHaveLength(1)                             // 退路未再建 Howl
   })
 })
 
