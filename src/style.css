@@ -564,7 +564,7 @@ button {
 .ink-btn:focus-visible, .pg-icobtn:focus-visible, .pg-tab:focus-visible,
 .pg-chip:focus-visible, .pg-field:focus-within,
 .song-row:focus-visible, .song-row-main:focus-visible, .pl-row:focus-visible,
-.pl-row-main:focus-visible, .queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
+.queue-row-main:focus-visible, .dql-row-main:focus-visible, .dtl-group-toggle:focus-visible,
 .song-result-main:focus-visible, .home-songrow:focus-visible,
 .home-songrow-main:focus-visible, .grid-card-play:focus-visible,
 .transport:focus-visible,
@@ -604,8 +604,11 @@ button {
     outline: 1.2px solid transparent;
   }
   /* 透明 border 被强制色刷成 ButtonText 实心条——滚动条顶部内缩车道退化为
-     padding（滚动条恢复顶到页缘，HC 下可读性优先于车道美学） */
-  .home-feed, .playlist-grid-wrap { border-top: 0; padding-block: 20px; }
+     padding（滚动条恢复顶到页缘，HC 下可读性优先于车道美学）。
+     选择器须压 scoped (0,2,0)：两类的 border-top/padding 基规则在组件
+     scoped 层（类名+data-v 属性=0,2,0），裸类名 (0,1,0) 恒负永不生效——
+     .app-shell .app-body 前缀升 (0,3,0)（同彩布白名单口径） */
+  .app-shell .app-body .home-feed, .app-shell .app-body .playlist-grid-wrap { border-top: 0; padding-block: 20px; }
 }
 /* teleport 菜单触发器语态 */
 [aria-expanded="true"].song-menu-btn,

@@ -67,24 +67,24 @@
         class="pl-row"
         :class="{ 'pl-row--active': isRowActive(playlist), 'pl-row--menu-open': openMenuId === playlist.id }"
       >
-        <!-- 行级键盘激活带 .self：焦点落在行内原生键（封面 ▶/⋯ 簇）上按
-             Enter/Space 是键自己的激活，keydown 冒泡到行若不加 .self 会同键
-             双发——原生 click(播放) + 行级 emit(选中) -->
+        <!-- 行不再扮 role=button：内含原生键（封面 ▶、行尾分享/⋯）属嵌套
+             交互违规，且 children presentational 会把 .pl-name 的 h3 标题
+             语义对 AT 抹平（h1→h2→h3 链断）。整行 @click 保留——非交互
+             div 上的 click 监听合法，鼠标整行可选不变；键盘「打开」激活
+             点收进歌单名真按钮 .pl-name-btn（h3 内嵌 button，原生
+             Enter/Space→click 无需 keydown 绑），.stop 防冒泡双 emit。
+             aria-current 双挂（行壳+激活点）与 HomeFeed .grid-card 同例 -->
         <div
           @click="$emit('select-playlist', playlist)"
-          @keydown.enter.self="$emit('select-playlist', playlist)"
-          @keydown.space.self.prevent="$emit('select-playlist', playlist)"
           class="pl-row-main"
-          tabindex="0"
-          role="button"
-          :aria-label="`打开歌单 ${playlist.name}`"
           :aria-current="isRowActive(playlist) ? 'true' : undefined"
         >
           <div class="pl-cover-wrap">
+            <!-- alt 置空：封面与紧邻歌单名同源——名键 .pl-name-btn 已把名报给 SR -->
             <img
               v-if="coverSizeUrl(playlist.coverImgUrl, 96)"
               :src="httpsCover(coverSizeUrl(playlist.coverImgUrl, 96))"
-              :alt="playlist.name"
+              alt=""
               class="pl-cover"
               loading="lazy"
               decoding="async"
@@ -99,7 +99,14 @@
             ><PixelIcon name="play" :size="22" /></button>
           </div>
           <div class="pl-info" :title="`${playlist.name} · ${playlist.creator?.nickname || '神秘创建者'}`">
-            <h3 class="pl-name">{{ playlist.name }}</h3>
+            <!-- 名即「打开歌单」激活点：h3 保标题语义、原生 button 键盘可达；
+                 aria-current 随激活点落键上（旧 role=button 行壳同款语义） -->
+            <h3 class="pl-name"><button
+              type="button"
+              class="pl-name-btn"
+              :aria-current="isRowActive(playlist) ? 'true' : undefined"
+              @click.stop="$emit('select-playlist', playlist)"
+            >{{ playlist.name }}</button></h3>
             <p class="pl-meta">{{ playlist.trackCount ?? 0 }} 首</p>
           </div>
         </div>
@@ -749,6 +756,20 @@ export default {
   font-size: 12px;
   font-weight: 500;
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 歌单名=「打开歌单」激活点（h3 内嵌真按钮）。重置余量只剩块级满宽+左对齐
+   +截断三件套——font/color/background/border/cursor 已由全局 button 基重置
+   （style.css :549）覆盖；焦点环走全局 :focus-visible 的 +2px 外环，不入
+   -4px 内环名单（内陷环会横穿 12px 文本）；hover 借行 hover 底色不自绘 */
+.pl-name-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

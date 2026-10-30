@@ -12,6 +12,9 @@
 //      jsdom 不计算样式，几何锚全走源文本钉板
 //   U3：侧栏主导航组（首页/下载/设置，centerView 高亮 + remoteMode 闸）+
 //      歌单行降噪（pl-actions 浮出式、pl-meta 只留 N 首）
+//   深评 F-b：歌单行摘 role=button/tabindex/行级 keydown（内含原生键=嵌套
+//      交互违规，children presentational 还吃 h3 标题语义）——激活点收进
+//      .pl-name h3 内嵌真按钮 .pl-name-btn，行 @click 保留鼠标整行可选
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -246,21 +249,39 @@ describe('PlaylistPanel：侧栏主导航 + 行降噪（U3）', () => {
     expect(wrapper.emitted('nav-view')).toEqual([['settings']])
   })
 
-  it('.pl-row-main 行级 keydown 加 .self：行内原生键 Enter 不串触发行级 emit（单 emit 防口）', async () => {
+  it('.pl-row-main 摘 role=button/tabindex：激活点收进 .pl-name 内真按钮 .pl-name-btn', async () => {
+    wrapper = mountPanel(numericPlaylist, { selectedPlaylist: numericPlaylist, centerView: 'songs' })
+    await nextTick()
+    // 非交互外壳：无 role/tabindex（role=button 的 children presentational
+    // 曾吃 h3 标题语义且套原生键违规）；行级 keydown 已一并摘除
+    const row = wrapper.find('.pl-row-main')
+    expect(row.attributes('role')).toBeUndefined()
+    expect(row.attributes('tabindex')).toBeUndefined()
+    // 整行 @click 保留——鼠标点行任意处仍 emit select-playlist
+    await row.trigger('click')
+    expect(wrapper.emitted('select-playlist')).toEqual([[numericPlaylist]])
+    // h3 内嵌真按钮是键盘可达的「打开歌单」激活点（原生 Enter/Space→click），
+    // aria-current 随激活点落键上；.stop 阻冒泡——点名键不再触发行 click 双发
+    const nameBtn = wrapper.find('.pl-name .pl-name-btn')
+    expect(nameBtn.element.tagName).toBe('BUTTON')
+    expect(nameBtn.attributes('type')).toBe('button')
+    expect(nameBtn.text()).toBe('正常单')
+    expect(nameBtn.attributes('aria-current')).toBe('true')
+    await nameBtn.trigger('click')
+    expect(wrapper.emitted('select-playlist')).toEqual([[numericPlaylist], [numericPlaylist]])
+  })
+
+  it('歌单行零嵌套交互违规 + 行内原生键 Enter 不串行级 emit（行已无任何 keydown 绑）', async () => {
     wrapper = mountPanel(numericPlaylist)
     await nextTick()
-    // 焦点在封面 ▶ 原生 button 上按 Enter：原生 click 走 play-playlist，
-    // keydown 冒泡到行若不加 .self 会再发 select-playlist——同键双动作。
-    // VTU keydown bubbles:true，冒泡路径真实走到 .pl-row-main 处理器
+    expect(wrapper.find('button button').exists()).toBe(false)
+    expect(wrapper.find('[role="button"] button').exists()).toBe(false)
+    // 焦点在封面 ▶ 原生 button 上按 Enter：行级 keydown 已随 role=button
+    // 摘除——冒泡路径上不再有任何行处理器，select-playlist 无从双发
     const overlay = wrapper.find('.playlist-play-overlay')
     overlay.element.focus()
     await overlay.trigger('keydown.enter')
     expect(wrapper.emitted('select-playlist')).toBeUndefined()
-    // 对照：行自身（tabindex=0 role=button）聚焦按 Enter 仍发 select-playlist
-    const row = wrapper.find('.pl-row-main')
-    row.element.focus()
-    await row.trigger('keydown.enter')
-    expect(wrapper.emitted('select-playlist')).toEqual([[numericPlaylist]])
   })
 
   it('计数并入「我的歌单」节题（.panel-count），页脚 .pl-foot 已摘', async () => {
