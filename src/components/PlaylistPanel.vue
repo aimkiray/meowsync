@@ -556,14 +556,14 @@ export default {
 }
 
 /* 侧栏节题：去 pg-label 双语微标签后升格为唯一标题——14px/600 与主区
-   .home-section-sub 节题同族（大 1 档示栏首地位），字族随主题 --font-body。
+   .home-section-sub 节题（15px/600）同族、低半档（侧栏让位主区），字族随主题 --font-body。
    行高钉 20px：给下方 + 键同心算式一个确定行盒（CJK 标题 1 倍行高太挤） */
 .panel-label {
   font-size: 14px;
   font-weight: 600;
   line-height: 20px;
   color: var(--ink);
-  padding: 0 12px 12px; /* 顶距 0：顶缘严落 20px 首行轴，与主区 .home-title 同轴 */
+  padding: 0 12px 12px; /* 顶距 0：顶缘严落 20px 首行轴，与主区首页「接着听」封面顶缘同轴 */
   flex-shrink: 0;
 }
 

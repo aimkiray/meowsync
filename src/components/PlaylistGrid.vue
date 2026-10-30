@@ -464,7 +464,7 @@ export default {
 }
 
 /* 页头：大字标题 + 发丝方键关闭（search results 微标签摘除后
-   .grid-title 顶缘直接落在全站 20 首行轴，与 .home-title 同律） */
+   .grid-title 顶缘直接落在全站 20 首行轴，与首页 .home-hero 主角区顶缘同律） */
 .grid-head {
   display: flex;
   align-items: flex-end;

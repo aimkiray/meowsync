@@ -82,8 +82,10 @@
           :recents="playHistory"
           :current-song-id="currentSong?.id ?? null"
           :playing-playlist-id="playingPlaylistId"
-          :sidebar-open="sidebarOpen"
+          :is-playing="isPlaying"
           @open="openShelfPlaylist"
+          @open-watch="enterWatch"
+          @resume-watch="resumeWatch"
           @play-song="openWatchRecent"
           @play-playlist="playShelfPlaylist"
           @add-to-playlist="handleOpenAddToPlaylist"
@@ -969,6 +971,15 @@ export default {
       else openWatchPanel(tab)
     }
 
+    // 首页「继续播放」暂停态（hero 即当前曲但未在播）：进播放页并原地
+    // 续播。复用 togglePlay——有实例时 howl.play() 从暂停点接着放；实例
+    // 已销毁时它走 playSong(preserveContext + 挂账续播点)，同样不从头重播、
+    // 不重置队列。只在未播放时调用，防止与在播态撞成暂停
+    const resumeWatch = () => {
+      enterWatch()
+      if (!isPlaying.value) togglePlay()
+    }
+
     // Watch 沉浸舞台令牌层（style.css :root[data-stage="watch"]）：挂在
     // <html> 上才能让 teleport 到 body 的菜单/对话框/toast 同走舞台令牌；
     // 离场与卸载都摘除——页面之外是 print-grid 世界
@@ -1580,6 +1591,8 @@ export default {
       openWatchSong,
       openWatchSearchSong,
       openWatchRecent,
+      enterWatch, // 首页「接着听」在播态：只进播放页不重播
+      resumeWatch, // 首页「接着听」暂停态：进播放页并原地续播
       openShelfPlaylist,
       playShelfPlaylist,
       playingPlaylistId,

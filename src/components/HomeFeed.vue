@@ -1,25 +1,62 @@
 <template>
-  <!-- 首页发现流（白纸画布）：最近单曲网格 + 常听歌单/涉猎专辑横向货架。
-       货架全部由本地播放历史/歌单库派生，零网络请求。页脚版本戳收版（print-grid 签名） -->
+  <!-- 首页发现流（白纸画布）：「接着听」主角区 + 最近单曲网格 + 常听歌单
+       （仅窄视口）/涉猎专辑横向货架。货架全部由本地播放历史/歌单库派生，
+       零网络请求。页脚版本戳收版（print-grid 签名） -->
   <div ref="feedEl" class="home-feed">
-    <header class="home-head">
-      <div class="home-head-text">
-        <h2 class="home-title" data-nosnippet><GlitchText text="音乐概览" /></h2>
+    <!-- 接着听：hero = recents[0]——recordPlayHistory 把在播曲置顶，有曲在播时
+         它就是当前曲。主键分三态：非当前曲 → 继续播放（play-song，与行点击同语义）；
+         当前曲且在播 → 打开播放页（open-watch 不重播——play-song 会重置队列从头放）；
+         当前曲但暂停 → 继续播放（resume-watch：进播放页并原地续播，不重置队列）。
+         随机漫游作用于最近单曲，挂在这里作次键 -->
+    <section v-if="hero" class="home-hero" aria-labelledby="home-hero-title">
+      <!-- alt 留空：封面与紧邻歌名同源 -->
+      <img
+        v-if="songThumbUrl(hero, 288) && !coverErrs.has(`h:${hero.id}`)"
+        :src="httpsCover(songThumbUrl(hero, 288))"
+        alt=""
+        class="home-hero-cover"
+        decoding="async"
+        @error="coverErrs.add(`h:${hero.id}`)"
+      />
+      <span v-else class="home-hero-cover home-hero-fb" aria-hidden="true"><PixelIcon name="note" :size="28" /></span>
+      <div class="home-hero-info">
+        <h2 id="home-hero-title" class="home-hero-label">接着听</h2>
+        <p class="home-hero-name" :title="hero.name">{{ hero.name }}</p>
+        <p class="home-hero-sub">{{ songSubline(hero) }}</p>
+        <div class="home-hero-actions">
+          <button
+            v-if="heroIsCurrent && isPlaying"
+            type="button"
+            class="ink-btn home-hero-primary"
+            @click="$emit('open-watch')"
+          ><PixelIcon name="expand" :size="14" /> 打开播放页</button>
+          <button
+            v-else-if="heroIsCurrent"
+            type="button"
+            class="ink-btn home-hero-primary"
+            @click="$emit('resume-watch')"
+          ><PixelIcon name="play" :size="14" /> 继续播放</button>
+          <button
+            v-else
+            type="button"
+            class="ink-btn home-hero-primary"
+            @click="$emit('play-song', hero, recents)"
+          ><PixelIcon name="play" :size="14" /> 继续播放</button>
+          <button
+            type="button"
+            class="ink-btn ink-btn--ghost home-roam-btn"
+            title="随机漫游最近单曲"
+            @click="roamRecents"
+          ><PixelIcon name="shuffle" :size="14" /> 随机漫游</button>
+        </div>
       </div>
-      <button
-        type="button"
-        class="ink-btn ink-btn--ghost ink-btn--sm home-roam-btn"
-        :disabled="!recents.length"
-        title="随机漫游最近单曲"
-        @click="roamRecents"
-      ><PixelIcon name="shuffle" :size="14" /> 随机漫游</button>
-    </header>
+    </section>
 
     <!-- 最近单曲：行外壳 div 挂整卡 @click 消除内边距点击死区；主激活区
          .home-songrow-main 是原生 <button> 不重复绑 @click——键盘 Enter/Space
          触发的 click 事件冒泡到外壳，只发一次 play-song；行尾 + 键 @click.stop
          隔离冒泡（反嵌套律：button 不套 button） -->
-    <section v-if="recents.length" class="home-section">
+    <section v-if="visibleRecents.length" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
           <span class="home-section-sub">最近单曲</span>
@@ -67,14 +104,14 @@
       </div>
     </section>
 
-    <!-- 空态须三源皆空：货架被侧栏门控收掉但 displayPlaylists 非空时，
-         再亮「还没有播放记录」是误导 -->
-    <div v-if="!recents.length && !recentAlbums.length && !displayPlaylists.length" class="home-state" role="status">
+    <!-- 空态以实际可见内容为准：宽屏货架收起时库里有歌单也算空（专辑货架
+         由 recents 派生，recents 空即无专辑，不另判） -->
+    <div v-if="!recents.length && !showPlaylistShelf" class="home-state" role="status">
       <p class="home-state-text">还没有播放记录，去顶部搜索试试喵~</p>
     </div>
 
-    <!-- 常听歌单货架：优先 recentPlaylists（活副本富化），空时回退 userPlaylists 前 8 项；
-         sidebarOpen && ≥901px 时收起避免与展开侧栏重复 -->
+    <!-- 常听歌单货架：优先 recentPlaylists（活副本富化，已删除的不上架），无可用
+         历史时回退 userPlaylists 前 8 项；≥901px 侧栏常驻，货架与之完全重复故收起 -->
     <section v-if="showPlaylistShelf" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
@@ -223,10 +260,9 @@ import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-m
 import { songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, songSourceTag, isSingleSongShellId } from '../lib/song'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
-import GlitchText from './GlitchText.vue'
 
-// 最近播放网格展示上限：桌面 4 列×3 行=12；移动窄列行数随之浮动——
-// 限的是展示数不是数据（play-song 队列种子仍传全量 recents）
+// 最近播放网格展示上限：hero（recents[0]）之后的 12 条——桌面 4 列×3 行=12；
+// 移动窄列行数随之浮动。限的是展示数不是数据（play-song 队列种子仍传全量 recents）
 const RECENT_DISPLAY_CAP = 12
 
 // 合成专辑键：netease al.id 真值优先（'0'/0/空都是源站"无专辑"占位归一成
@@ -244,7 +280,7 @@ const albumKeyOf = (song) => {
 
 export default {
   name: 'HomeFeed',
-  components: { PrintMarks, PixelIcon, GlitchText },
+  components: { PrintMarks, PixelIcon },
   props: {
     recentPlaylists: {
       type: Array,
@@ -268,45 +304,54 @@ export default {
       type: [String, Number],
       default: null
     },
-    // 展开侧栏 && 宽视口时收起歌单货架（与侧栏信息重复）
-    sidebarOpen: {
+    // 播放器在播态：hero 是当前曲时据此分「打开播放页」/「继续播放(resume)」
+    isPlaying: {
       type: Boolean,
       default: false
     }
   },
-  emits: ['open', 'play-song', 'play-playlist', 'add-to-playlist'],
+  emits: ['open', 'play-song', 'play-playlist', 'add-to-playlist', 'open-watch', 'resume-watch'],
   computed: {
+    // 「接着听」主角：历史首曲（在播曲由 recordPlayHistory 置顶）；空历史不渲染
+    hero() {
+      return this.recents[0] || null
+    },
+    heroIsCurrent() {
+      return !!this.hero && this.isSongPlaying(this.hero)
+    },
     /* 歌单货架数据源：有历史时用 userPlaylists 活副本同步字段——history 快照
        里的 name/trackCount/cover 会随改名/增删过期，活副本命中即以库为准
-       （本地歌单 tracks 长度兜底 trackCount）。空历史回退库前 8 项（滤
-       single_song_ 分享壳——是单曲壳不是歌单，上架会混进假卡） */
+       （本地歌单 tracks 长度兜底 trackCount）。历史里已删除的歌单（库中查
+       不到活副本）不上架——点进去会失败；历史全失效时同空历史回退库前 8 项
+       （滤 single_song_ 分享壳——是单曲壳不是歌单，上架会混进假卡） */
     displayPlaylists() {
-      if (this.recentPlaylists.length) {
-        return this.recentPlaylists.map((pl) => {
-          // 双非空闸：任一侧 id 缺席即不比——'undefined'==='undefined' 会误配
-          const live = this.userPlaylists.find(p =>
-            p?.id != null && pl?.id != null && String(p.id) === String(pl.id))
-          if (!live) return pl
-          return {
-            ...pl, ...live,
-            coverImgUrl: live.coverImgUrl || live.picUrl || pl.coverImgUrl || '',
-            trackCount: live.trackCount ?? live.tracks?.length ?? pl.trackCount
-          }
-        })
-      }
-      // 空历史回退支：local_pl_ 本地单无 trackCount 字段，tracks.length 兜底 meta
+      const fromHistory = this.recentPlaylists.flatMap((pl) => {
+        // 双非空闸：任一侧 id 缺席即不比——'undefined'==='undefined' 会误配
+        const live = this.userPlaylists.find(p =>
+          p?.id != null && pl?.id != null && String(p.id) === String(pl.id))
+        if (!live) return []
+        return [{
+          ...pl, ...live,
+          coverImgUrl: live.coverImgUrl || live.picUrl || pl.coverImgUrl || '',
+          trackCount: live.trackCount ?? live.tracks?.length ?? pl.trackCount
+        }]
+      })
+      if (fromHistory.length) return fromHistory
+      // 回退支：local_pl_ 本地单无 trackCount 字段，tracks.length 兜底 meta
       return this.userPlaylists
         .filter(p => p && p.id != null && !isSingleSongShellId(p.id))
         .slice(0, 8)
         .map(p => ({ ...p, trackCount: p.trackCount ?? p.tracks?.length }))
     },
+    // ≥901px 侧栏常驻（与 sidebarOpen 无关——那是移动抽屉态），货架与之完全重复
     showPlaylistShelf() {
-      return !(this.sidebarOpen && this.wideViewport) && this.displayPlaylists.length > 0
+      return !this.wideViewport && this.displayPlaylists.length > 0
     },
-    // 单曲卡网格只渲前 RECENT_DISPLAY_CAP 条（截尾部保原序）；
-    // 不影响 @click emit 的队列种子——那边仍给 this.recents 全量
+    // 单曲卡网格渲 hero 之后的 RECENT_DISPLAY_CAP 条（recents[0] 已在主角区，
+    // 网格不重复；截尾部保原序）。不影响 @click emit 的队列种子——那边仍给
+    // this.recents 全量（含 hero）
     visibleRecents() {
-      return this.recents.slice(0, RECENT_DISPLAY_CAP)
+      return this.recents.slice(1, RECENT_DISPLAY_CAP + 1)
     },
     /* 涉猎专辑：按专辑键去重，保留最近次序，截 12 上货架。
        伪专辑准入两闸：① 专辑键非空（albumKeyOf 合成——netease 真值 id 或
@@ -388,8 +433,8 @@ export default {
     const coverErrs = reactive(new Set())
     let cancelScrollRestore = null
 
-    // 宽视口判定（≥901px）：歌单货架门控的唯一外源——展开侧栏态下货架与
-    // 侧栏信息重复故收起；桌面常态 sidebarOpen=false 不挡货架常显
+    // 宽视口判定（≥901px）：歌单货架门控的唯一外源——桌面侧栏常驻，
+    // 货架与侧栏歌单库信息完全重复故收起；窄视口侧栏是抽屉，货架保留
     const wideViewport = ref(false)
     const mq = typeof window !== 'undefined' ? window.matchMedia?.('(min-width: 901px)') : null
     wideViewport.value = !!mq?.matches
@@ -441,7 +486,6 @@ export default {
         props.recentPlaylists.map(p => p?.id).join(','),
         props.userPlaylists.map(p => p?.id).join(','),
         props.recents.map(s => s?.id).join(','),
-        props.sidebarOpen,
         wideViewport.value
       ],
       () => nextTick(updateAllShelfNav)
@@ -476,30 +520,95 @@ export default {
   position: relative;
 }
 
-/* 页头：大字标题居左，「随机漫游」键贴右——flex-end 底对齐让键下缘与
-   标题块下缘齐平。顶距 0——overview 微标签摘除后 .home-title 顶缘
-   直接落在全站 20 首行轴（与侧栏 .panel-label 同轴，y≈77） */
-.home-head {
+/* 「接着听」主角区：左封面 + 右信息列。顶距 0——封面顶缘直接落在全站
+   20 首行轴（与侧栏 .panel-label 同轴）。与下方区块隔全页最大间距 40，
+   不用发丝线——层级靠留白与体量分，不靠框 */
+.home-hero {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 0 16px;
-  position: relative;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 40px;
+  min-width: 0;
 }
-
-.home-title {
+.home-hero-cover {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  flex-shrink: 0;
+  display: block;
+  border: var(--hairline);
+  background: var(--ink-06); /* 加载中呈浅墨底而非白框（不像坏图） */
+}
+.home-hero-fb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-64);
+}
+.home-hero-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 区块名（这个区的 h2），与下方节题同族但降一档灰——让位给歌名 */
+.home-hero-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink-64);
+}
+.home-hero-name {
+  margin-top: 4px;
   font-family: var(--font-display);
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
-  line-height: 1.15;
+  line-height: 1.25;
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-hero-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-hero-actions {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* 桌面（≥901）主角区升一档体量：封面 144、歌名 26、间距 24；信息列限宽
+   480 让长歌名在宽屏也按合理行长省略（单行 nowrap+ellipsis 不变）。
+   ≤900 两档保持原值 */
+@media (min-width: 901px) {
+  .home-hero { gap: 24px; }
+  .home-hero-cover { width: 144px; height: 144px; }
+  .home-hero-info { max-width: 480px; }
+  .home-hero-name { font-size: 26px; }
+}
+/* glitch-restoration 主题封面圆角：与 style.css 主题名单同档——大封面随
+   货架封面 6px，行缩略图随列表缩略 4px。不用 :global()——Vue scoped 下
+   `:global(A) B` 会整条折成全局 `A`（丢掉 B，误伤 :root）；直写即可：
+   scoped 属性只挂末段复合选择器，编译为
+   :root[data-theme=…] .home-hero-cover[data-v-xxx] */
+:root[data-theme="glitch-restoration"] .home-hero-cover { border-radius: 6px; }
+:root[data-theme="glitch-restoration"] .home-songrow-cover { border-radius: 4px; }
+@media (max-width: 640.98px) {
+  .home-hero { gap: 14px; padding-bottom: 32px; }
+  .home-hero-cover { width: 88px; height: 88px; }
+  .home-hero-name { font-size: 18px; }
+  .home-hero-actions { margin-top: 10px; }
 }
 
-/* 区块：发丝线起头 + 节题行 */
+/* 区块：间距分组（无发丝线）——区块间 32，节题→内容 10 */
 .home-section {
-  border-top: var(--hairline-soft);
-  padding: 12px 0 18px;
+  padding-bottom: 32px;
 }
 
 .home-section-head {
@@ -507,7 +616,7 @@ export default {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 .home-section-title {
   display: flex;
@@ -516,10 +625,11 @@ export default {
   min-width: 0;
 }
 
-/* 节题：英文 pg-label 微标签摘除后中文副题升格为唯一节题——13px/600。
+/* 节题：英文 pg-label 微标签摘除后中文副题升格为唯一节题——15px/600
+   （发丝线摘除后区块边界全靠节题体量撑）。
    （已出彩布白名单——scoped --ink 全壳生效，不再被 ink-86 托档） */
 .home-section-sub {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--ink);
 }
@@ -534,30 +644,28 @@ export default {
   align-self: center;
 }
 
-/* 最近播放单曲卡网格：auto-fill 自适应列数，230px 地板收两行信息 */
+/* 最近播放单曲卡网格：auto-fill 自适应列数，230px 地板收两行信息。
+   行无框后列间 16 撑开列界，行间 4 + 行内 padding 撑点击面 */
 .home-songs {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 8px;
+  gap: 4px 16px;
 }
 
-/* 单曲行：div 外壳挂整卡 @click（内边距可点零死区），微框边界把歌名与
-   行尾 + 键连成一个容器——大列宽下左右两端不再视觉断裂 */
+/* 单曲行：div 外壳挂整卡 @click（内边距可点零死区）。常态无框无底——
+   一格一框是噪声；hover 浅墨底把歌名与行尾 + 键连成一个容器。
+   点击面 6+38+6=50px ≥ 44 触屏下限，padding 不能再缩 */
 .home-songrow {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   padding: 6px 8px;
-  border: var(--hairline-soft);
-  background: var(--paper);
   cursor: pointer;
-  transition: background .12s, border-color .12s;
+  transition: background .12s;
 }
-/* 行 hover 走浅墨+实发丝——song-result-row:hover 同档 */
 .home-songrow:hover {
   background: var(--ink-06);
-  border: var(--hairline);
 }
 /* 主激活区是原生 <button>：Enter/Space 天然可激活，点击冒泡给外壳统一定音 */
 .home-songrow-main {
@@ -569,11 +677,13 @@ export default {
   text-align: left;
   cursor: pointer;
 }
-/* 正在播放：整行反白（墨色底+纸色文），+ 键随行走反白对比档 */
+/* 正在播放：整行反白（墨色底+纸色文），+ 键随行走反白对比档。
+   color 置纸色：全局焦点环 outline: 2px solid currentColor 在墨底上才可见
+   （与 style.css 既有反白行同构） */
 .home-songrow--playing,
 .home-songrow--playing:hover {
   background: var(--ink);
-  border: var(--hairline);
+  color: var(--paper);
 }
 .home-songrow--playing .home-songrow-name { color: var(--paper); }
 .home-songrow--playing .home-songrow-artist { color: var(--label-grey); }
@@ -592,6 +702,7 @@ export default {
   border: var(--hairline);
   flex-shrink: 0;
   display: block;
+  background: var(--ink-06); /* 懒加载中呈浅墨底而非白框 */
 }
 .home-songrow-fb {
   display: flex;
@@ -630,7 +741,6 @@ export default {
   align-items: center;
   gap: 12px;
   padding: 64px 16px;
-  border-top: var(--hairline-soft);
 }
 
 .home-state-text {
@@ -659,6 +769,36 @@ export default {
 /* 卡片外壳已上收全局 style.css——这里只留「整卡可点」语义 */
 .grid-card { cursor: pointer; }
 
+/* 首页货架卡去外框：卡外框 + 封面框是双层框噪声，首页只留封面框
+   （PlaylistGrid 同类卡不动）。.home-feed 前缀把特异性抬到 (0,4,0)，
+   压过 glitch-restoration 的 :root[data-theme] .grid-card（0,3,0）圆角柔影，
+   不靠样式表加载顺序 */
+.home-feed .home-shelf .grid-card {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+/* 封面加载占位：懒加载中呈浅墨底而非白框 */
+.home-feed .home-shelf .grid-card-cover { background: var(--ink-06); }
+/* 播放中卡：原卡外框 inset 描边随外框摘除——改由封面外加一圈 accent 环
+   （外扩 box-shadow 不被封面自身 overflow:hidden 裁；货架上 4px 内边距容得下），
+   左上「播放中」戳保留 */
+.home-feed .home-shelf .grid-card--playing {
+  border: 0;
+  box-shadow: none;
+}
+.home-feed .home-shelf .grid-card--playing .grid-card-cover {
+  border-color: var(--accent-magenta-ink, var(--ink));
+  box-shadow: 0 0 0 1.2px var(--accent-magenta-ink, var(--ink));
+}
+
+/* 触屏（无 hover / 粗指针）：横滑本身就是翻页手势，‹ › 键无用 */
+@media (hover: none), (pointer: coarse) {
+  .home-shelf-nav { display: none; }
+}
+
 /* 移动窄屏：12 行单列霸屏退成三行横滑轨——grid-auto-flow:column +
    3 行模板把 12 条折成 4 列滑卡，scroll-snap 列级停靠；右缘同款出血
    到容器边界（末列不再硬裁在页距内） */
@@ -678,10 +818,9 @@ export default {
   }
 }
 
-/* 页脚收版（pg-stamp 自带 text-align:center，无需再排栅） */
+/* 页脚收版（pg-stamp 自带 text-align:center，无需再排栅）——与区块同走
+   间距分组，不再起发丝线 */
 .home-foot {
-  border-top: var(--hairline-soft);
-  margin-top: 8px;
-  padding: 18px 0 12px;
+  padding: 8px 0 12px;
 }
 </style>

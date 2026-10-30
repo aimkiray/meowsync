@@ -1,9 +1,10 @@
 // 发现流/下载域/系统令牌 修复轮回归：
 //   HomeFeed 最近播放单曲卡（封面/歌手·来源副行/行尾 + 键/@error 兜底）+
-//     网格展示截 RECENT_DISPLAY_CAP=12（emit 队列种子仍全量）+
+//     网格展示 hero 之后的 RECENT_DISPLAY_CAP=12 条（与主角区去重；emit 队列种子仍全量）+
 //     recentAlbums 伪专辑准入（al.id 真值或 QQ albummid 合成键 ∧ 名≠歌名）+
-//     页头随机漫游/歌单货架门控与活副本富化/专辑同键聚合/
-//     播放态 --playing+aria-current/反嵌套零违规/货架翻页键
+//     「接着听」主角区（继续播放/打开播放页/暂停态续播三态 + 随机漫游次键）/
+//     歌单货架宽视口门控与活副本富化（已删除歌单不上架）/空态按可见内容判/专辑同键聚合/
+//     播放态 --playing+aria-current/反嵌套零违规/货架翻页键/去框降噪源码钉
 //   Downloads：DQL meta 去内部 id/progressbar 具名、DTL 文案去「左侧」、
 //     DTR 去 #id/.dtr-done、err-tag 本地化、封面 @error；
 //     DownloadsPanel <xl 选中滚任务列
@@ -113,20 +114,29 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
   it('songrow 渲封面/歌名/歌手·来源副行（行尾 chip 摘除），点击发 play-song', async () => {
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
     const rows = w.findAll('.home-songrow')
-    expect(rows).toHaveLength(5)
-    // 来源徽标黑框摘除——来源并进副行文本：数字 id 网易曲也出「网易云」，
-    // yt→YouTube，bv→B站，qq→QQ音乐
+    // recents[0] 已在「接着听」主角区——网格从 recents[1] 起，不重复 hero
+    expect(rows).toHaveLength(4)
+    // 来源徽标黑框摘除——来源并进副行文本：yt→YouTube，bv→B站，qq→QQ音乐
+    // （数字 id 网易曲出「网易云」由主角区副行钉）
     for (const r of rows) expect(r.find('.home-src-tag').exists()).toBe(false)
     const artists = rows.map(r => r.find('.home-songrow-artist').text())
-    expect(artists).toEqual(['艺人A · 网易云', 'UP主 · YouTube', 'UP乙 · B站', '艺 · QQ音乐', '艺丙 · QQ音乐'])
-    expect(rows[1].find('.home-songrow-name').text()).toBe('视频歌')
+    expect(artists).toEqual(['UP主 · YouTube', 'UP乙 · B站', '艺 · QQ音乐', '艺丙 · QQ音乐'])
+    expect(rows[0].find('.home-songrow-name').text()).toBe('视频歌')
     expect(rows[0].find('img.home-songrow-cover').exists()).toBe(true)
     await rows[0].trigger('click')
-    expect(w.emitted('play-song')[0][0].id).toBe(1)
+    expect(w.emitted('play-song')[0][0].id).toBe(RECENTS[1].id)
+    // 队列种子仍是全量 recents（含 hero）
     expect(w.emitted('play-song')[0][1]).toEqual(RECENTS)
   })
 
-  it('网格只渲前 12 条（RECENT_DISPLAY_CAP），play-song 队列种子仍给全量 recents', async () => {
+  it('recents 仅 1 条（只够 hero）时「最近单曲」节整段不渲染（不留空节头）', () => {
+    const w = track(mount(HomeFeed, { props: { recents: [RECENTS[0]], recentPlaylists: [] } }))
+    expect(w.find('.home-hero').exists()).toBe(true)
+    expect(w.findAll('.home-songrow')).toHaveLength(0)
+    expect(w.text()).not.toContain('最近单曲')
+  })
+
+  it('网格渲 hero 之后的 12 条（RECENT_DISPLAY_CAP），play-song 队列种子仍给全量 recents', async () => {
     // 15 条 > 展示上限 12；al.name==歌名 → 不上专辑架，断言面隔离在 songrow
     const MANY = Array.from({ length: 15 }, (_, i) => ({
       id: 1000 + i, name: `队列歌${i}`, ar: [{ name: '艺人' }],
@@ -135,10 +145,11 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
     const w = track(mount(HomeFeed, { props: { recents: MANY, recentPlaylists: [] } }))
     const rows = w.findAll('.home-songrow')
     expect(rows).toHaveLength(12)
-    // 截的是尾部保原序：末位可见是第 12 条（index 11）
-    expect(rows.at(-1).find('.home-songrow-name').text()).toBe('队列歌11')
+    // 首行跳过 hero（index 0）；截的是尾部保原序：末位可见是 index 12
+    expect(rows[0].find('.home-songrow-name').text()).toBe('队列歌1')
+    expect(rows.at(-1).find('.home-songrow-name').text()).toBe('队列歌12')
     await rows[0].trigger('click')
-    expect(w.emitted('play-song')[0][0].id).toBe(1000)
+    expect(w.emitted('play-song')[0][0].id).toBe(1001)
     // 展示截断不碰 emit 实参——队列种子仍是全量 15 条
     expect(w.emitted('play-song')[0][1]).toEqual(MANY)
     expect(w.emitted('play-song')[0][1]).toHaveLength(15)
@@ -147,8 +158,8 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
   it('封面 @error 落图标兜底（songrow 与货架卡同簿记）', async () => {
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
     const rows = w.findAll('.home-songrow')
-    await rows[1].find('img.home-songrow-cover').trigger('error')
-    expect(rows[1].find('.home-songrow-fb').exists()).toBe(true)
+    await rows[0].find('img.home-songrow-cover').trigger('error')
+    expect(rows[0].find('.home-songrow-fb').exists()).toBe(true)
     // 货架专辑卡同口径：裂图换 fallback 格（取有封面的首张——qq_ 曲无 picUrl 本就走占位）
     const albumCard = w.findAll('.grid-card').at(0)
     await albumCard.find('img').trigger('error')
@@ -163,17 +174,31 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
   })
 })
 
-describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
-  it('页头无 overview 微标签、.home-title 含音乐概览；随机漫游发 play-song(pool[0], 乱序全量) 且不改原数组', async () => {
+// 宽/窄视口桩：HomeFeed 只问 (min-width: 901px)
+const withViewport = (wide, fn) => {
+  const origMM = window.matchMedia
+  window.matchMedia = (q) => ({
+    matches: wide && String(q).includes('901'),
+    addEventListener() {}, removeEventListener() {},
+  })
+  try { return fn() } finally { window.matchMedia = origMM }
+}
+
+describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
+  it('「音乐概览」空标题撤下、无 pg-label；随机漫游（主角区次键）发 play-song(pool[0], 乱序全量) 且不改原数组', async () => {
+    // 空历史：主角区整段不渲 → 随机漫游键随之不存在（不再是挂在页头的禁用键）
     const empty = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: [] } }))
-    expect(empty.find('.home-roam-btn').attributes('disabled')).toBeDefined()
+    expect(empty.find('.home-roam-btn').exists()).toBe(false)
     empty.unmount()
 
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
-    // overview 双语微标签已摘除——中文标题升格后页头不再有 pg-label
-    expect(w.find('.home-head .pg-label').exists()).toBe(false)
+    // overview 双语微标签已摘除；「音乐概览」空标题由「接着听」主角区替换
+    expect(w.find('.home-title').exists()).toBe(false)
+    expect(w.text()).not.toContain('音乐概览')
+    expect(w.findAll('.home-hero .pg-label')).toHaveLength(0)
     expect(w.findAll('.home-section .pg-label')).toHaveLength(0)
-    expect(w.find('.home-title').text()).toContain('音乐概览')
+    // 随机漫游挂在主角区（作用域就是最近单曲）
+    expect(w.find('.home-hero .home-roam-btn').exists()).toBe(true)
     const orderBefore = RECENTS.map(s => s.id)
     await w.find('.home-roam-btn').trigger('click')
     const emitted = w.emitted('play-song')
@@ -210,29 +235,66 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
     expect(w.find('.grid-card-meta').text()).toBe('9 首')
   })
 
-  it('歌单货架门控：sidebarOpen && ≥901px 时收起（与展开侧栏信息重复）', () => {
-    const origMM = window.matchMedia
-    window.matchMedia = (q) => ({
-      matches: String(q).includes('901'),
-      addEventListener() {}, removeEventListener() {},
-    })
-    try {
-      const pls = [{ id: 'pl_1', name: '歌单一', trackCount: 5 }]
-      const w = track(mount(HomeFeed, {
-        props: { recents: [], recentPlaylists: pls, sidebarOpen: true },
-      }))
+  it('歌单货架门控：≥901px 收起（侧栏常驻，信息完全重复），窄视口保留', () => {
+    const pls = [{ id: 'pl_1', name: '歌单一', trackCount: 5 }]
+    const props = { recents: [], recentPlaylists: pls, userPlaylists: pls }
+    withViewport(true, () => {
+      const w = track(mount(HomeFeed, { props }))
       expect(w.text()).not.toContain('常听歌单')
       expect(w.findAll('.grid-card')).toHaveLength(0)
       w.unmount()
-      // 同宽视口但侧栏未展开 → 货架常显
-      const w2 = track(mount(HomeFeed, {
-        props: { recents: [], recentPlaylists: pls, sidebarOpen: false },
-      }))
+    })
+    withViewport(false, () => {
+      const w2 = track(mount(HomeFeed, { props }))
       expect(w2.text()).toContain('常听歌单')
       expect(w2.findAll('.grid-card')).toHaveLength(1)
-    } finally {
-      window.matchMedia = origMM
-    }
+      // 窄视口货架可见 → 页面非空，不亮空态
+      expect(w2.find('.home-state').exists()).toBe(false)
+    })
+  })
+
+  it('空态以实际可见内容为准：宽视口 + 空 recents + 库有歌单（货架收起）仍渲 .home-state', () => {
+    const props = { recents: [], recentPlaylists: [], userPlaylists: [{ id: 'pl_1', name: '歌单一', trackCount: 5 }] }
+    withViewport(true, () => {
+      const w = track(mount(HomeFeed, { props }))
+      // 货架被宽视口门控收起 → 主区实际空白，空态文案须出现（否则整页只剩页脚）
+      expect(w.find('.home-state').exists()).toBe(true)
+      expect(w.find('.home-state').text()).toContain('还没有播放记录')
+      w.unmount()
+    })
+  })
+
+  it('歌单货架：历史里查不到活副本（已删除）的歌单不上架', () => {
+    const w = track(mount(HomeFeed, {
+      props: {
+        recents: [],
+        recentPlaylists: [
+          { id: 'pl_gone', name: '已删歌单', trackCount: 3 },
+          { id: 'pl_live', name: '旧快照名', trackCount: 1 },
+        ],
+        userPlaylists: [{ id: 'pl_live', name: '活歌单', trackCount: 2 }],
+      },
+    }))
+    expect(w.findAll('.grid-card-name').map(n => n.text())).toEqual(['活歌单'])
+    expect(w.text()).not.toContain('已删歌单')
+  })
+
+  it('歌单货架：历史全失效时回退库前 8 项（货架不因历史失效而消失）', () => {
+    const libs = [
+      { id: 'single_song_1', name: '分享壳', trackCount: 1 },
+      ...Array.from({ length: 10 }, (_, i) => ({ id: `pl_${i}`, name: `歌单${i}`, trackCount: i + 1 })),
+    ]
+    const w = track(mount(HomeFeed, {
+      props: {
+        recents: [],
+        recentPlaylists: [{ id: 'pl_gone', name: '已删歌单', trackCount: 3 }],
+        userPlaylists: libs,
+      },
+    }))
+    const names = w.findAll('.grid-card-name').map(n => n.text())
+    expect(names).toEqual(Array.from({ length: 8 }, (_, i) => `歌单${i}`))
+    expect(w.text()).not.toContain('已删歌单')
+    expect(w.text()).not.toContain('分享壳')
   })
 
   it('专辑卡 meta 诚实（歌手 · 含《来源曲》），货架封面 alt 全空', () => {
@@ -272,15 +334,20 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
   })
 
   it('播放态高亮：命中行/卡挂 --playing + aria-current + .grid-card-badge', () => {
+    // hero 不入网格：把在播曲（id 1，真专辑成员）排到 recents[1]，使其落在网格首行
+    const recents = [RECENTS[1], RECENTS[0], ...RECENTS.slice(2)]
     const w = track(mount(HomeFeed, {
       props: {
-        recents: RECENTS,
+        recents,
+        // 历史条目须有库中活副本才上架（已删除的不上架）
         recentPlaylists: [{ id: 'pl_9', name: '在播单', trackCount: 4 }],
+        userPlaylists: [{ id: 'pl_9', name: '在播单', trackCount: 4 }],
         currentSongId: 1,
         playingPlaylistId: 'pl_9',
       },
     }))
     const rows = w.findAll('.home-songrow')
+    expect(rows[0].find('.home-songrow-name').text()).toBe('真曲')
     expect(rows[0].classes()).toContain('home-songrow--playing')
     expect(rows[0].find('.home-songrow-main').attributes('aria-current')).toBe('true')
     expect(rows[1].classes()).not.toContain('home-songrow--playing')
@@ -300,7 +367,11 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
 
   it('快捷操作与反嵌套零违规：行尾 + 键发 add-to-playlist、卡面 ▶ 发 play-playlist', async () => {
     const w = track(mount(HomeFeed, {
-      props: { recents: RECENTS, recentPlaylists: [{ id: 'pl_1', name: '货架单', trackCount: 2 }] },
+      props: {
+        recents: RECENTS,
+        recentPlaylists: [{ id: 'pl_1', name: '货架单', trackCount: 2 }],
+        userPlaylists: [{ id: 'pl_1', name: '货架单', trackCount: 2 }],
+      },
     }))
     expect(w.find('button button').exists()).toBe(false)
     expect(w.find('[role="button"] button').exists()).toBe(false)
@@ -310,7 +381,7 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
     // 行尾 + 键 @click.stop：只发 add-to-playlist（带触发锚元素），不冒泡成 play-song
     await w.find('.row-add-btn').trigger('click')
     expect(w.emitted('add-to-playlist')).toHaveLength(1)
-    expect(w.emitted('add-to-playlist')[0][0].id).toBe(1)
+    expect(w.emitted('add-to-playlist')[0][0].id).toBe(RECENTS[1].id) // 网格首行 = hero 之后一条
     expect(w.emitted('add-to-playlist')[0][1]).toBe(w.find('.row-add-btn').element)
     expect(w.emitted('play-song')).toHaveLength(1)
     // 卡面 ▶ @click.stop：只发 play-playlist，不冒泡成 open
@@ -323,7 +394,7 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
 
   it('货架翻页键 [‹][›]：可滚才显、边界禁态、点击调 scrollBy', async () => {
     const pls = Array.from({ length: 5 }, (_, i) => ({ id: `pl_${i}`, name: `单${i}`, trackCount: i }))
-    const w = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: pls } }))
+    const w = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: pls, userPlaylists: pls } }))
     // jsdom 默认 0 宽不可滚 → 翻页组不渲
     expect(w.find('.home-shelf-nav').exists()).toBe(false)
     const shelf = w.find('.home-shelf').element
@@ -346,7 +417,7 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
     expect(next.attributes('disabled')).toBeDefined()
   })
 
-  it('主页/结果页无英文双语微标签（源钉板：label 摘除 + 中文节题升格 13/600）', () => {
+  it('主页/结果页无英文双语微标签（源钉板：label 摘除 + 中文节题升格 首页 15/600、结果页 13/600）', () => {
     // 中英双语微标签全摘、只留中文名——jsdom 不算样式，结构/字号全走源码钉
     const home = vueSrc('HomeFeed.vue')
     for (const tag of ['>overview<', '>recent<', '>playlists<', '>albums<']) {
@@ -357,7 +428,8 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
       expect(grid).not.toContain(tag)
     }
     const homeSub = home.match(/\.home-section-sub\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(homeSub).toContain('font-size: 13px')
+    // 首页发丝线摘除后节题升到 15px 撑区块边界
+    expect(homeSub).toContain('font-size: 15px')
     expect(homeSub).toContain('font-weight: 600')
     const gridSub = grid.match(/\.result-section-sub\s*\{[^}]*\}/)?.[0] ?? ''
     expect(gridSub).toContain('font-size: 13px')
@@ -369,6 +441,100 @@ describe('HomeFeed：页头/货架/播放态/快捷操作', () => {
     const block = src.match(/^\.home-songrow-cover\s*\{[^}]*\}/m)?.[0] ?? ''
     expect(block).not.toContain('pixelated')
     expect(block).not.toContain('image-rendering')
+  })
+
+  it('首页去框降噪（源码断言）：区块/单曲行/页脚无发丝线，货架卡去外框，触屏隐翻页键，封面浅墨占位', () => {
+    const src = vueSrc('HomeFeed.vue')
+    const style = src.slice(src.indexOf('<style'))
+    const block = (sel) => style.match(new RegExp(`^${sel.replace(/[.]/g, '\\.')}\\s*\\{[^}]*\\}`, 'm'))?.[0] ?? ''
+    for (const sel of ['.home-section', '.home-songrow', '.home-songrow:hover', '.home-foot', '.home-state']) {
+      const b = block(sel)
+      expect(b, sel).not.toBe('')
+      expect(b, sel).not.toMatch(/border(-top)?\s*:/)
+    }
+    const card = block('.home-feed .home-shelf .grid-card')
+    expect(card).toContain('border: 0')
+    expect(card).toContain('padding: 0')
+    expect(card).toContain('background: transparent')
+    expect(style).toMatch(/@media \(hover: none\), \(pointer: coarse\)\s*\{\s*\.home-shelf-nav\s*\{\s*display: none;/)
+    for (const sel of ['.home-songrow-cover', '.home-hero-cover', '.home-feed .home-shelf .grid-card-cover']) {
+      expect(block(sel), sel).toContain('background: var(--ink-06)')
+    }
+    // 空标题与 GlitchText 依赖一并撤下
+    expect(src).not.toContain('GlitchText')
+  })
+})
+
+describe('HomeFeed：「接着听」主角区', () => {
+  it('recents 空时主角区不渲染', () => {
+    const w = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: [] } }))
+    expect(w.find('.home-hero').exists()).toBe(false)
+    expect(w.text()).not.toContain('接着听')
+  })
+
+  it('渲染 recents[0]：h2「接着听」命名 section、歌名/歌手·来源副行、封面 alt 空', () => {
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
+    const hero = w.find('section.home-hero')
+    expect(hero.exists()).toBe(true)
+    const h2 = hero.find('h2')
+    expect(h2.text()).toBe('接着听')
+    expect(hero.attributes('aria-labelledby')).toBe(h2.attributes('id'))
+    expect(hero.find('.home-hero-name').text()).toBe('真曲')
+    expect(hero.find('.home-hero-sub').text()).toBe('艺人A · 网易云')
+    const img = hero.find('img.home-hero-cover')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('alt')).toBe('')
+    // 主角区不吃 .grid-card / .home-songrow 类——不污染货架与行网格计数
+    expect(hero.find('.grid-card').exists()).toBe(false)
+    expect(hero.find('.home-songrow').exists()).toBe(false)
+  })
+
+  it('封面 @error 落图标兜底（h: 前缀键）', async () => {
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
+    await w.find('img.home-hero-cover').trigger('error')
+    expect(w.find('.home-hero-fb').exists()).toBe(true)
+    // hero 不入行网格；行网格封面不受牵连（簿记键分域）
+    const rows = w.findAll('.home-songrow')
+    expect(rows.map(r => r.find('.home-songrow-name').text())).not.toContain(RECENTS[0].name)
+    expect(rows[0].find('img.home-songrow-cover').exists()).toBe(true)
+  })
+
+  it('非当前曲：主键「继续播放」emit play-song(hero, recents)', async () => {
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [], currentSongId: 'other', isPlaying: true } }))
+    const btn = w.find('.home-hero-primary')
+    expect(btn.text()).toContain('继续播放')
+    await btn.trigger('click')
+    expect(w.emitted('play-song')).toHaveLength(1)
+    expect(w.emitted('play-song')[0][0]).toEqual(RECENTS[0]) // props 经响应式代理，比值不比引用
+    expect(w.emitted('play-song')[0][1]).toEqual(RECENTS)
+    expect(w.emitted('open-watch')).toBeUndefined()
+    expect(w.emitted('resume-watch')).toBeUndefined()
+  })
+
+  it('hero 正是当前曲且在播：主键切「打开播放页」只 emit open-watch（不重播、不续播）', async () => {
+    // 数值 id 与串 currentSongId 同判（isSongPlaying 归一 String）
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [], currentSongId: '1', isPlaying: true } }))
+    const btn = w.find('.home-hero-primary')
+    expect(btn.text()).toContain('打开播放页')
+    expect(btn.text()).not.toContain('继续播放')
+    await btn.trigger('click')
+    expect(w.emitted('open-watch')).toHaveLength(1)
+    expect(w.emitted('play-song')).toBeUndefined()
+    expect(w.emitted('resume-watch')).toBeUndefined()
+  })
+
+  it('hero 是当前曲但暂停：主键「继续播放」只 emit resume-watch（不重播、不重置队列）', async () => {
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [], currentSongId: 1, isPlaying: false } }))
+    const btn = w.find('.home-hero-primary')
+    expect(btn.text()).toContain('继续播放')
+    expect(btn.text()).not.toContain('打开播放页')
+    await btn.trigger('click')
+    expect(w.emitted('resume-watch')).toHaveLength(1)
+    expect(w.emitted('play-song')).toBeUndefined()
+    expect(w.emitted('open-watch')).toBeUndefined()
+    // 在播态翻转：同一实例主键随 isPlaying 切回「打开播放页」
+    await w.setProps({ isPlaying: true })
+    expect(w.find('.home-hero-primary').text()).toContain('打开播放页')
   })
 })
 
