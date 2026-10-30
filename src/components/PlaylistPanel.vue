@@ -5,13 +5,14 @@
          当前页高亮 = App.vue centerView——与歌单行高亮同源；下载项的
          remoteMode 闸与旧 ⋯ 菜单同口径（host 藏入口、downloads 视图留逃生） -->
     <nav class="side-nav" aria-label="主导航">
-      <!-- title/aria-label：rail 档 label 藏字后 icon-only 行的 accName 与 tooltip 来源 -->
+      <!-- title/aria-label：rail 档 label 藏字后 icon-only 行的 accName 与 tooltip 来源；
+           激活行 title 换「已在 X 页」提示当前页（aria-label 恒为纯名保导航语义） -->
       <button
         type="button"
         class="side-nav-row"
         :class="{ 'side-nav-row--active': centerView === 'home' }"
         :aria-current="centerView === 'home' ? 'page' : undefined"
-        title="首页"
+        :title="centerView === 'home' ? '已在首页' : '首页'"
         aria-label="首页"
         @click="$emit('nav-view', 'home')"
       ><PixelIcon name="home" :size="15" /><span class="side-nav-label">首页</span></button>
@@ -21,7 +22,7 @@
         class="side-nav-row"
         :class="{ 'side-nav-row--active': centerView === 'downloads' }"
         :aria-current="centerView === 'downloads' ? 'page' : undefined"
-        title="下载"
+        :title="centerView === 'downloads' ? '已在下载页' : '下载'"
         aria-label="下载"
         @click="$emit('nav-view', 'downloads')"
       ><PixelIcon name="download" :size="15" /><span class="side-nav-label">下载</span></button>
@@ -30,7 +31,7 @@
         class="side-nav-row"
         :class="{ 'side-nav-row--active': centerView === 'settings' }"
         :aria-current="centerView === 'settings' ? 'page' : undefined"
-        title="设置"
+        :title="centerView === 'settings' ? '已在设置页' : '设置'"
         aria-label="设置"
         @click="$emit('nav-view', 'settings')"
       ><PixelIcon name="settings" :size="15" /><span class="side-nav-label">设置</span></button>
@@ -66,10 +67,13 @@
         class="pl-row"
         :class="{ 'pl-row--active': isRowActive(playlist), 'pl-row--menu-open': openMenuId === playlist.id }"
       >
+        <!-- 行级键盘激活带 .self：焦点落在行内原生键（封面 ▶/⋯ 簇）上按
+             Enter/Space 是键自己的激活，keydown 冒泡到行若不加 .self 会同键
+             双发——原生 click(播放) + 行级 emit(选中) -->
         <div
           @click="$emit('select-playlist', playlist)"
-          @keydown.enter="$emit('select-playlist', playlist)"
-          @keydown.space.prevent="$emit('select-playlist', playlist)"
+          @keydown.enter.self="$emit('select-playlist', playlist)"
+          @keydown.space.self.prevent="$emit('select-playlist', playlist)"
           class="pl-row-main"
           tabindex="0"
           role="button"

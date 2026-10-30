@@ -213,8 +213,9 @@ describe('PlaylistPanel：侧栏主导航 + 行降噪（U3）', () => {
     expect(rows[0].attributes('aria-current')).toBe('page')
     expect(rows[1].attributes('aria-current')).toBeUndefined()
     // rail 档 label 藏字后 icon-only 行的 accName/tooltip 来源（F-01）
+    // 激活行 title 换「已在 X 页」情境提示（F-02）；aria-label 恒纯名不动
     expect(rows.map(r => r.attributes('aria-label'))).toEqual(['首页', '下载', '设置'])
-    expect(rows.map(r => r.attributes('title'))).toEqual(['首页', '下载', '设置'])
+    expect(rows.map(r => r.attributes('title'))).toEqual(['已在首页', '下载', '设置'])
     expect(wrapper.find('.side-nav-sep').exists()).toBe(true)
   })
 
@@ -243,6 +244,23 @@ describe('PlaylistPanel：侧栏主导航 + 行降噪（U3）', () => {
     const settings = wrapper.findAll('.side-nav-row').find(r => r.text() === '设置')
     await settings.trigger('click')
     expect(wrapper.emitted('nav-view')).toEqual([['settings']])
+  })
+
+  it('.pl-row-main 行级 keydown 加 .self：行内原生键 Enter 不串触发行级 emit（单 emit 防口）', async () => {
+    wrapper = mountPanel(numericPlaylist)
+    await nextTick()
+    // 焦点在封面 ▶ 原生 button 上按 Enter：原生 click 走 play-playlist，
+    // keydown 冒泡到行若不加 .self 会再发 select-playlist——同键双动作。
+    // VTU keydown bubbles:true，冒泡路径真实走到 .pl-row-main 处理器
+    const overlay = wrapper.find('.playlist-play-overlay')
+    overlay.element.focus()
+    await overlay.trigger('keydown.enter')
+    expect(wrapper.emitted('select-playlist')).toBeUndefined()
+    // 对照：行自身（tabindex=0 role=button）聚焦按 Enter 仍发 select-playlist
+    const row = wrapper.find('.pl-row-main')
+    row.element.focus()
+    await row.trigger('keydown.enter')
+    expect(wrapper.emitted('select-playlist')).toEqual([[numericPlaylist]])
   })
 
   it('计数并入「我的歌单」节题（.panel-count），页脚 .pl-foot 已摘', async () => {
