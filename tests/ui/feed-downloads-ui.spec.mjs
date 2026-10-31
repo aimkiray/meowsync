@@ -2,7 +2,8 @@
 //   HomeFeed 最近播放单曲卡（封面/歌手·来源副行/行尾 + 键/@error URL 指纹簿记）+
 //     网格展示 hero 之后的全部剩余条（无展示帽——与主角区去重；emit 队列种子仍全量）+
 //     recentAlbums 伪专辑准入（al.id 真值或 QQ albummid 合成键 ∧ 名≠歌名）+
-//     「接着听」主角区（继续播放/打开播放页/暂停态续播三态 + 随机漫游次键 +
+//     「接着听」主角区（继续播放/打开播放页/暂停态续播三态单源 + 封面整面可点 +
+//     随机漫游节头归位 +
 //     hero 封面走舞台位 HD 链——useStageCover 占位→实探顶替、stale 闸、h:id 簿记隔离）/
 //     歌单货架宽视口门控与活副本富化（已删除歌单不上架）/空态按可见内容判/专辑同键聚合/
 //     播放态 --playing+aria-current（在播专辑键歌单库兜底）/「更多」展开态 scroll-mem
@@ -140,10 +141,12 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
     expect(w.find('.home-hero').exists()).toBe(true)
     expect(w.findAll('.home-songrow')).toHaveLength(0)
     expect(w.text()).not.toContain('最近单曲')
+    // roam 键随节消失——单条历史洗牌本就无意义
+    expect(w.find('.home-roam-btn').exists()).toBe(false)
   })
 
   it('网格渲 hero 之后的全部剩余条（slice(1) 无展示帽），play-song 队列种子仍给全量 recents', async () => {
-    // 15 条全进 DOM——默认 6 行显隐归 CSS nth-child(n+7)，数据不截；
+    // 15 条全进 DOM——双栏档默认 12 首显隐归 CSS nth-child(n+13)，数据不截；
     // al.name==歌名 → 不上专辑架，断言面隔离在 songrow
     const MANY = Array.from({ length: 15 }, (_, i) => ({
       id: 1000 + i, name: `队列歌${i}`, ar: [{ name: '艺人' }],
@@ -207,7 +210,7 @@ const withViewport = (wide, fn) => {
 }
 
 describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
-  it('「音乐概览」空标题撤下、无 pg-label；随机漫游（主角区次键）发 play-song(pool[0], 乱序全量) 且不改原数组', async () => {
+  it('「音乐概览」空标题撤下、无 pg-label；随机漫游（最近单曲节头键）发 play-song(pool[0], 乱序全量) 且不改原数组', async () => {
     // 空历史：主角区整段不渲 → 随机漫游键随之不存在（不再是挂在页头的禁用键）
     const empty = track(mount(HomeFeed, { props: { recents: [], recentPlaylists: [] } }))
     expect(empty.find('.home-roam-btn').exists()).toBe(false)
@@ -219,8 +222,10 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     expect(w.text()).not.toContain('音乐概览')
     expect(w.findAll('.home-hero .pg-label')).toHaveLength(0)
     expect(w.findAll('.home-section .pg-label')).toHaveLength(0)
-    // 随机漫游挂在主角区（作用域就是最近单曲）
-    expect(w.find('.home-hero .home-roam-btn').exists()).toBe(true)
+    // 随机漫游收「最近单曲」节头右侧操作组（全端归位，作用域不变）——
+    // 反钉：不再挂在主角区内
+    expect(w.find('.home-hero .home-roam-btn').exists()).toBe(false)
+    expect(w.find('.home-section-actions .home-roam-btn').exists()).toBe(true)
     const orderBefore = RECENTS.map(s => s.id)
     await w.find('.home-roam-btn').trigger('click')
     const emitted = w.emitted('play-song')
@@ -560,16 +565,28 @@ describe('HomeFeed：「接着听」主角区', () => {
     expect(w.text()).not.toContain('接着听')
   })
 
-  it('渲染 recents[0]：h2「接着听」命名 section、歌名/歌手·来源副行、封面 alt 空', () => {
+  it('渲染 recents[0]：h2「接着听」顶层命名 section、封面整面 button 可点、歌名/歌手·来源副行、封面 alt 空', () => {
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
     const hero = w.find('section.home-hero')
     expect(hero.exists()).toBe(true)
     const h2 = hero.find('h2')
     expect(h2.text()).toBe('接着听')
+    // 节题提到 hero 顶层首元素（从 .home-hero-info 内搬出），aria-labelledby 链不变
+    expect(hero.element.firstElementChild).toBe(h2.element)
     expect(hero.attributes('aria-labelledby')).toBe(h2.attributes('id'))
+    // 封面整面可点：原生 button 承载主键同动作——aria-label 具名
+    // （内部全是 alt 空/ aria-hidden 附层，不给按钮文本名）
+    const wrap = hero.find('.home-hero-cover-wrap')
+    expect(wrap.element.tagName).toBe('BUTTON')
+    expect(wrap.attributes('type')).toBe('button')
+    expect(wrap.attributes('aria-label')).toBe('继续播放')
+    // 徽标/悬停 cue 是 aria-hidden 附层（cue 复用 .grid-card-play 显隐链）
+    const cue = wrap.find('.grid-card-play.home-hero-cover-cue')
+    expect(cue.exists()).toBe(true)
+    expect(cue.attributes('aria-hidden')).toBe('true')
     expect(hero.find('.home-hero-name').text()).toBe('真曲')
     expect(hero.find('.home-hero-sub').text()).toBe('艺人A · 网易云')
-    const img = hero.find('img.home-hero-cover')
+    const img = wrap.find('img.home-hero-cover')
     expect(img.exists()).toBe(true)
     expect(img.attributes('alt')).toBe('')
     // baseCover 吃 songCoverUrl 原档而非 songThumbUrl 降档链：src 经
@@ -594,16 +611,24 @@ describe('HomeFeed：「接着听」主角区', () => {
     expect(rows[0].find('img.home-songrow-cover').exists()).toBe(true)
   })
 
-  it('非当前曲：主键「继续播放」emit play-song(hero, recents)', async () => {
+  it('非当前曲：主键「继续播放」emit play-song(hero, recents)；封面键同动作（单源 onHeroPrimary）', async () => {
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [], currentSongId: 'other', isPlaying: true } }))
     const btn = w.find('.home-hero-primary')
     expect(btn.text()).toContain('继续播放')
+    // 封面键 aria-label 钉实值——与主键同文案单源（heroPrimaryText）
+    const wrap = w.find('.home-hero-cover-wrap')
+    expect(wrap.attributes('aria-label')).toBe('继续播放')
     await btn.trigger('click')
     expect(w.emitted('play-song')).toHaveLength(1)
     expect(w.emitted('play-song')[0][0]).toEqual(RECENTS[0]) // props 经响应式代理，比值不比引用
     expect(w.emitted('play-song')[0][1]).toEqual(RECENTS)
     expect(w.emitted('open-watch')).toBeUndefined()
     expect(w.emitted('resume-watch')).toBeUndefined()
+    // 封面键与主键走同一 onHeroPrimary 单源——再点封面补发同语义 play-song
+    await wrap.trigger('click')
+    expect(w.emitted('play-song')).toHaveLength(2)
+    expect(w.emitted('play-song')[1][0]).toEqual(RECENTS[0])
+    expect(w.emitted('play-song')[1][1]).toEqual(RECENTS)
   })
 
   it('hero 正是当前曲且在播：主键切「打开播放页」只 emit open-watch（不重播、不续播）', async () => {
@@ -614,6 +639,15 @@ describe('HomeFeed：「接着听」主角区', () => {
     expect(btn.text()).not.toContain('继续播放')
     await btn.trigger('click')
     expect(w.emitted('open-watch')).toHaveLength(1)
+    expect(w.emitted('play-song')).toBeUndefined()
+    expect(w.emitted('resume-watch')).toBeUndefined()
+    // 「播放中」徽标在场但对 SR 隐身——不抢封面键语义
+    const badge = w.find('.home-hero .grid-card-badge')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('aria-hidden')).toBe('true')
+    // 封面键 = 主键同动作第二分支：在播态点封面同发 open-watch（不重播）
+    await w.find('.home-hero-cover-wrap').trigger('click')
+    expect(w.emitted('open-watch')).toHaveLength(2)
     expect(w.emitted('play-song')).toBeUndefined()
     expect(w.emitted('resume-watch')).toBeUndefined()
   })
@@ -632,55 +666,95 @@ describe('HomeFeed：「接着听」主角区', () => {
     expect(w.find('.home-hero-primary').text()).toContain('打开播放页')
   })
 
-  it('源钉：≤640.98 移动档 .home-hero-cover 显式覆写 120（主角区体量不随屏缩倒挂）', () => {
+  it('源钉：≤640.98 移动档 .home-hero-cover-wrap 显式覆写 120（主角区体量不随屏缩倒挂）', () => {
     const src = vueSrc('HomeFeed.vue')
     // 同文件有两个 640.98 媒体块（hero 档与 .home-songs 横滑档）——逐个
-    // 取块内规则锁定含覆写的那块；覆写值与基规则同为 120，裸搜 120px
-    // 无区分度，钉的是「该媒体块内存在此覆写规则且宽高 120」的结构断言
+    // 取块内规则锁定含覆写的那块；尺寸档已全挪 wrap（img/fb 恒 100% 填格），
+    // 覆写值与基规则同为 120、裸搜 120px 无区分度——钉的是「该媒体块内存在
+    // 此覆写规则且宽高 120」的结构断言
     const tiers = [...src.matchAll(/@media \(max-width: 640\.98px\)\s*\{((?:[^{}]|\{[^}]*\})*)\}/g)].map(m => m[1])
-    const heroTier = tiers.find(t => t.includes('.home-hero-cover')) ?? ''
-    const cover = heroTier.match(/\.home-hero-cover\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(cover).not.toBe('')
-    expect(cover).toContain('width: 120px')
-    expect(cover).toContain('height: 120px')
+    const heroTier = tiers.find(t => t.includes('.home-hero-cover-wrap')) ?? ''
+    const wrap = heroTier.match(/\.home-hero-cover-wrap\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(wrap).not.toBe('')
+    expect(wrap).toContain('width: 120px')
+    expect(wrap).toContain('height: 120px')
   })
 })
 
 describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更多」展开', () => {
-  it('源钉板：容器阈值 960 / 网格 5fr:7fr / n+7 隐藏 / 封面 240·280 / 货架卡 200', () => {
+  it('源钉板：容器阈值 960 / 左竖卡右双列 2×6 / n+13 隐藏 / 列宽变量 240·260 / 病根规则不复活 / 货架卡 200', () => {
     const src = vueSrc('HomeFeed.vue')
     // 阈值走容器轴（.app-main container-type:inline-size 在 style.css 登记）
     expect(src).toContain('@container (min-width: 960px)')
-    // 「更多」键基规则恒藏——仅双栏档 @container 块内翻 display:flex
-    expect(src).toMatch(/\.home-more-wrap\s*\{\s*display:\s*none;\s*\}/)
-    expect(src).toContain('grid-template-columns: minmax(0, 5fr) minmax(0, 7fr)')
-    expect(src).toContain('nth-child(n+7)')
-    expect(src).toContain('width: 240px')
-    // hero 封面 ≥1600 视口再升档（视口轴非容器轴，冻结决策）
+    // 结构性提取：@container 块 → 规则表（完整选择器串 → 声明体）。容器块内
+    // 规则均无再嵌套，一层 {…} 展开即得——比裸搜字符串准（-wrap/-btn 这类
+    // 前缀兄弟选择器、:not() 限定规则都靠整键区分，不会误中）。先剥 /* */
+    // 注释——行内注释紧邻选择器会被并进键串
+    const container = src.match(/@container \(min-width: 960px\)\s*\{((?:[^{}]|\{[^}]*\})*)\}/)?.[1] ?? ''
+    expect(container).not.toBe('')
+    const body = container.replace(/\/\*[\s\S]*?\*\//g, '')
+    const rules = new Map()
+    for (const m of body.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      rules.set(m[1].trim(), (rules.get(m[1].trim()) ?? '') + m[2])
+    }
+    // 左栏定宽 + 右栏余宽（列宽/栏距走变量，≥1600 视口升档），不再 5fr:7fr
+    const topgrid = rules.get('.home-topgrid') ?? ''
+    expect(topgrid).toContain('grid-template-columns: var(--hero-col-w, 240px) minmax(0, 1fr)')
+    expect(topgrid).toContain('column-gap: var(--hero-col-gap, 36px)')
+    // 竖卡黑胶台（仅非孤 hero）：flex 列、封面 1:1 吃满栏宽、双行歌名 20px、
+    // 主键满宽；孤 hero 保持横排画报占满行（封面 200 / info 560 / hero 档字号）
+    const heroCol = rules.get('.home-topgrid .home-hero:not(:only-child)') ?? ''
+    expect(heroCol).toContain('display: flex')
+    expect(heroCol).toContain('flex-direction: column')
+    const heroWrap = rules.get('.home-topgrid .home-hero:not(:only-child) .home-hero-cover-wrap') ?? ''
+    expect(heroWrap).toContain('aspect-ratio: 1')
+    const heroName = rules.get('.home-topgrid .home-hero:not(:only-child) .home-hero-name') ?? ''
+    expect(heroName).toContain('font-size: 20px')
+    expect(heroName).toContain('-webkit-line-clamp: 2')
+    const heroPrimary = rules.get('.home-topgrid .home-hero:not(:only-child) .home-hero-primary') ?? ''
+    expect(heroPrimary).toContain('width: 100%')
+    expect(rules.get('.home-topgrid > .home-hero:only-child')).toContain('grid-column: 1 / -1')
+    expect(rules.get('.home-topgrid > .home-hero:only-child .home-hero-cover-wrap')).toContain('width: 200px')
+    expect(rules.get('.home-topgrid > .home-hero:only-child .home-hero-info')).toContain('max-width: 560px')
+    expect(rules.get('.home-topgrid > .home-hero:only-child .home-hero-name')).toContain('font-size: var(--fs-hero, 28px)')
+    // 右栏 2 列紧凑网格默认 12 首（2×6）——n+13 隐藏钉在 :not(--open) 限定规则内
+    const homeSongs = rules.get('.home-topgrid .home-songs') ?? ''
+    expect(homeSongs).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
+    expect(homeSongs).toContain('align-content: start')
+    expect(rules.get('.home-topgrid:not(.home-topgrid--open) .home-songrow:nth-child(n+13)')).toContain('display: none')
+    expect(src).not.toContain('nth-child(n+7)')
+    // 「更多」键：基档恒藏（.home-section-actions 限定抬权压全局
+    // .ink-btn{display:inline-flex} 的同特异度拼序）、双栏档翻 inline-flex；
+    // .home-more-wrap 包裹层整块拆除
+    const moreBase = src.match(/\.home-section-actions \.home-more-btn\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(moreBase).toContain('display: none')
+    expect(rules.get('.home-topgrid .home-more-btn')).toContain('display: inline-flex')
+    expect(src).not.toContain('home-more-wrap')
+    // 病根反向钉：旧双栏对齐链（hero 撑高+封面顶吸+info 撑满+按钮
+    // margin-top:auto 钉底 / 右栏 flex 列 space-between 摊行隙）不复活——
+    // 裸规则整键缺席（新实现只在 :not(:only-child)/:only-child 限定下出现）
+    for (const sel of ['.home-topgrid .home-hero-info', '.home-topgrid .home-hero-actions', '.home-hero-name', '.home-hero-cover', '.home-more-wrap']) {
+      expect(rules.has(sel), sel).toBe(false)
+    }
+    const heroBare = rules.get('.home-topgrid .home-hero') ?? ''
+    expect(heroBare).not.toContain('align-self')
+    expect(heroBare).not.toContain('align-items')
+    const secBare = rules.get('.home-topgrid .home-section') ?? ''
+    expect(secBare).not.toContain('display: flex')
+    expect(secBare).not.toContain('align-self')
+    expect(homeSongs).not.toContain('display: flex')
+    expect(homeSongs).not.toContain('justify-content')
+    expect(body).not.toContain('margin-top: auto')
+    expect(body).not.toContain('space-between')
+    expect(body).not.toContain('flex: 1')
+    // ≥1600 视口升档走列宽变量（封面不再直写 280）——视口轴非容器轴
     expect(src).toContain('@media (min-width: 1600px)')
-    expect(src).toContain('width: 280px')
+    const wide = src.match(/@media \(min-width: 1600px\)\s*\{((?:[^{}]|\{[^}]*\})*)\}/)?.[1] ?? ''
+    expect(wide).toContain('--hero-col-w: 260px')
+    expect(wide).toContain('font-size: 22px')
+    expect(src).not.toContain('width: 280px')
     // 货架卡 ≥641 档 160→200
     expect(src).toContain('grid-auto-columns: 200px')
-    // 底缘对齐（F-B）：右栏节列吸满行高 + 行表 flex 列 space-between
-    // 摊余量进行隙——钉在 .home-topgrid 限定规则上，不被 .home-section-head
-    // 的同名 justify-content 误中
-    const homeSec = src.match(/\.home-topgrid \.home-section\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(homeSec).toContain('align-self: stretch')
-    // display:flex 是承重声明——删后 flex-direction/space-between 静默失效，各钉一条
-    expect(homeSec).toContain('display: flex')
-    expect(homeSec).toContain('flex-direction: column')
-    const homeSongs = src.match(/\.home-topgrid \.home-songs\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(homeSongs).toContain('flex: 1')
-    expect(homeSongs).toContain('display: flex')
-    expect(homeSongs).toContain('justify-content: space-between')
-    // 底缘对齐 hero 侧（F-B2）：hero 列撑满+封面顶吸、信息列撑满、按钮
-    // margin-top:auto 钉底——按钮底缘=栏底缘（右栏栏底=more-wrap 行底）
-    const homeHero = src.match(/\.home-topgrid \.home-hero\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(homeHero).toContain('align-self: stretch')
-    expect(homeHero).toContain('align-items: flex-start')
-    expect(src).toContain('.home-topgrid .home-hero-info { align-self: stretch; }')
-    const heroActions = src.match(/\.home-topgrid \.home-hero-actions\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(heroActions).toContain('margin-top: auto')
   })
 
   it('DOM 断言：网格全量挂载无展示帽（CSS 隐藏不改 DOM），「更多」翻 home-topgrid--open', async () => {
@@ -709,8 +783,9 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
 
   it('「更多」展开态随 scroll-mem 落会话：离场重挂初始即 open（setup 期读回，不闪收起）', async () => {
     // onBeforeUnmount 写 {top, recentsOpen}、setup 首渲前读回——重挂的
-    // 初始 class 就带 open，不是挂载后再翻
-    const MANY = Array.from({ length: 9 }, (_, i) => ({
+    // 初始 class 就带 open，不是挂载后再翻。14 条 → 网格 13 行越 >12 门，
+    // 「更多」键在场可点
+    const MANY = Array.from({ length: 14 }, (_, i) => ({
       id: 4000 + i, name: `记忆歌${i}`, ar: [{ name: '艺人' }],
       al: { name: `记忆歌${i}` }, // al.name==歌名 → 不入专辑架，断言面隔离在双栏件
     }))
@@ -724,27 +799,34 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
     expect(w2.find('.home-more-btn').text()).toBe('收起')
   })
 
-  it('可见 ≤6 条时无「更多」键（v-if=visibleRecents.length>6 边界）', () => {
-    const SEVEN = Array.from({ length: 7 }, (_, i) => ({
+  it('可见 ≤12 条时无「更多」键，第 13 行越门出键（v-if=visibleRecents.length>12 边界）', () => {
+    const mk = (n) => Array.from({ length: n }, (_, i) => ({
       id: 3000 + i, name: `歌${i}`, ar: [{ name: '艺人' }],
       al: { name: `歌${i}` },
     }))
-    const w = track(mount(HomeFeed, { props: { recents: SEVEN, recentPlaylists: [] } }))
-    // hero 占 1 → 网格恰 6 行，不越 >6 门
-    expect(w.findAll('.home-songrow')).toHaveLength(6)
+    // hero 占 1 → 13 条 recents 网格恰 12 行：不越 >12 门无键
+    const w = track(mount(HomeFeed, { props: { recents: mk(13), recentPlaylists: [] } }))
+    expect(w.findAll('.home-songrow')).toHaveLength(12)
     expect(w.find('.home-more-btn').exists()).toBe(false)
     // 包裹层仍在（hero 存在即渲）但无 open 类
     expect(w.find('.home-topgrid').exists()).toBe(true)
     expect(w.find('.home-topgrid').classes()).not.toContain('home-topgrid--open')
+    w.unmount()
+    // 14 条 → 13 行：第 13 行越门出键
+    const w2 = track(mount(HomeFeed, { props: { recents: mk(14), recentPlaylists: [] } }))
+    expect(w2.findAll('.home-songrow')).toHaveLength(13)
+    expect(w2.find('.home-more-btn').exists()).toBe(true)
+    expect(w2.find('.home-more-btn').text()).toBe('更多')
   })
 
-  it('钉板：孤 hero 信息列 720 帽（F5）/ 节题 h2 语义（F6）/ hero 封面走 HD 链（F8）', () => {
+  it('钉板：孤 hero 信息列 560 帽（F5）/ 节题 h2 语义（F6）/ hero 封面走 HD 链（F8）', () => {
     const src = vueSrc('HomeFeed.vue')
-    // F5：仅 1 条历史（hero 有、网格空）时 hero 占满整行，信息列松绑 480→720
+    // F5：仅 1 条历史（hero 有、网格空）时 hero 占满整行，信息列松绑 480→560
     expect(src).toContain('home-hero:only-child .home-hero-info')
-    expect(src).toContain('max-width: 720px')
+    expect(src).toContain('max-width: 560px')
+    expect(src).not.toContain('max-width: 720px')
     // F8：主角位封面接舞台位 HD 链——useStageCover 接线 + 模板吃 heroCoverSrc
-    // （songThumbUrl(hero, 560) 的 mq 降档是 38px 行位口径，280px 展示位必虚）
+    // （songThumbUrl(hero, 560) 的 mq 降档是 38px 行位口径，240~260px 展示位必虚）
     expect(src).toContain('useStageCover(() => props.recents[0]')
     expect(src).toContain('httpsCover(heroCoverSrc)')
     expect(src).toContain('coverOk(`h:${hero.id}`, heroCoverSrc)')

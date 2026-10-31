@@ -4,55 +4,48 @@
        零网络请求。页脚版本戳收版（print-grid 签名） -->
   <div ref="feedEl" class="home-feed">
     <!-- 接着听：hero = recents[0]——recordPlayHistory 把在播曲置顶，有曲在播时
-         它就是当前曲。主键分三态：非当前曲 → 继续播放（play-song，与行点击同语义）；
-         当前曲且在播 → 打开播放页（open-watch 不重播——play-song 会重置队列从头放）；
-         当前曲但暂停 → 继续播放（resume-watch：进播放页并原地续播，不重置队列）。
-         随机漫游作用于最近单曲，挂在这里作次键 -->
+         它就是当前曲。主键单源三态（heroPrimary* 三方法）：非当前曲 → 继续播放
+         （play-song，与行点击同语义）；当前曲且在播 → 打开播放页（open-watch
+         不重播——play-song 会重置队列从头放）；当前曲但暂停 → 继续播放
+         （resume-watch：进播放页并原地续播，不重置队列）。封面键与主键同动作。
+         随机漫游作用于最近单曲，收「最近单曲」节头右侧（全端归位） -->
     <div v-if="hero" class="home-topgrid" :class="{ 'home-topgrid--open': recentsOpen }">
-    <section v-if="hero" class="home-hero" aria-labelledby="home-hero-title">
-      <!-- alt 留空：封面与紧邻歌名同源。heroCoverSrc 走舞台位 HD 链——占位
-           先铺 songCoverUrl 原档口径（非 songThumbUrl 的列表降档：mq 档是
-           38px 行位口径，套进 280px 展示位必虚），HD 顶替由 useStageCover
-           实探升档（yt maxres 实探、404 回落），与 WatchView/FullscreenPlayer
-           同链；280px 展示位 @2x 高分屏需 ≥560 源才不发虚 -->
-      <img
-        v-if="coverOk(`h:${hero.id}`, heroCoverSrc)"
-        :src="httpsCover(heroCoverSrc)"
-        alt=""
-        class="home-hero-cover"
-        decoding="async"
-        @error="markCoverErr(`h:${hero.id}`, $event.target.getAttribute('src'))"
-      />
-      <span v-else class="home-hero-cover home-hero-fb" aria-hidden="true"><PixelIcon name="note" :size="28" /></span>
+    <section class="home-hero" aria-labelledby="home-hero-title">
+      <h2 id="home-hero-title" class="home-hero-label">接着听</h2>
+      <!-- 封面整面可点：原生 button 承载主键同动作（禁 div@click 的反 a11y
+           模式）；「播放中」徽标与悬停 cue 是 aria-hidden 附层，不抢按钮语义 -->
+      <button
+        type="button"
+        class="home-hero-cover-wrap"
+        :aria-label="heroPrimaryText()"
+        @click="onHeroPrimary"
+      >
+        <!-- alt 留空：封面与紧邻歌名同源。heroCoverSrc 走舞台位 HD 链——占位
+             先铺 songCoverUrl 原档口径（非 songThumbUrl 的列表降档：mq 档是
+             38px 行位口径，套进 240~260px 展示位必虚），HD 顶替由 useStageCover
+             实探升档（yt maxres 实探、404 回落），与 WatchView/FullscreenPlayer
+             同链；260px 展示位 @2x 高分屏需 ≥520 源才不发虚 -->
+        <img
+          v-if="coverOk(`h:${hero.id}`, heroCoverSrc)"
+          :src="httpsCover(heroCoverSrc)"
+          alt=""
+          class="home-hero-cover"
+          decoding="async"
+          @error="markCoverErr(`h:${hero.id}`, $event.target.getAttribute('src'))"
+        />
+        <span v-else class="home-hero-cover home-hero-fb" aria-hidden="true"><PixelIcon name="note" :size="28" /></span>
+        <span v-if="heroIsCurrent && isPlaying" class="grid-card-badge" aria-hidden="true"><PixelIcon name="vol" :size="11" /> 播放中</span>
+        <span class="grid-card-play home-hero-cover-cue" aria-hidden="true"><PixelIcon :name="heroPrimaryIcon()" :size="14" /></span>
+      </button>
       <div class="home-hero-info">
-        <h2 id="home-hero-title" class="home-hero-label">接着听</h2>
         <p class="home-hero-name" :title="hero.name">{{ hero.name }}</p>
         <p class="home-hero-sub">{{ songSubline(hero) }}</p>
         <div class="home-hero-actions">
           <button
-            v-if="heroIsCurrent && isPlaying"
             type="button"
             class="ink-btn home-hero-primary"
-            @click="$emit('open-watch')"
-          ><PixelIcon name="expand" :size="14" /> 打开播放页</button>
-          <button
-            v-else-if="heroIsCurrent"
-            type="button"
-            class="ink-btn home-hero-primary"
-            @click="$emit('resume-watch')"
-          ><PixelIcon name="play" :size="14" /> 继续播放</button>
-          <button
-            v-else
-            type="button"
-            class="ink-btn home-hero-primary"
-            @click="$emit('play-song', hero, recents)"
-          ><PixelIcon name="play" :size="14" /> 继续播放</button>
-          <button
-            type="button"
-            class="ink-btn ink-btn--ghost home-roam-btn"
-            title="随机漫游最近单曲"
-            @click="roamRecents"
-          ><PixelIcon name="shuffle" :size="14" /> 随机漫游</button>
+            @click="onHeroPrimary"
+          ><PixelIcon :name="heroPrimaryIcon()" :size="14" /> {{ heroPrimaryText() }}</button>
         </div>
       </div>
     </section>
@@ -65,6 +58,25 @@
       <div class="home-section-head">
         <div class="home-section-title">
           <h2 class="home-section-sub">最近单曲</h2>
+        </div>
+        <!-- 节头右侧操作组：随机漫游全端归位（原 hero 次键——作用域不变仍是
+             最近单曲）；「更多/收起」只服务双栏档（默认 12 首 2×6、点击放全量，
+             ≤12 条无键），窄档显隐归 CSS——auto-fill/横滑轨本就全量直排 -->
+        <div class="home-section-actions">
+          <button
+            type="button"
+            class="ink-btn ink-btn--sm ink-btn--ghost home-roam-btn"
+            title="随机漫游最近单曲"
+            @click="roamRecents"
+          ><PixelIcon name="shuffle" :size="14" /> 随机漫游</button>
+          <button
+            v-if="visibleRecents.length > 12"
+            type="button"
+            class="ink-btn ink-btn--sm ink-btn--ghost home-more-btn"
+            :aria-expanded="recentsOpen"
+            aria-controls="home-songs"
+            @click="recentsOpen = !recentsOpen"
+          >{{ recentsOpen ? '收起' : '更多' }}</button>
         </div>
       </div>
       <div id="home-songs" class="home-songs">
@@ -106,17 +118,6 @@
             @click.stop="$emit('add-to-playlist', song, $event.currentTarget)"
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
-      </div>
-      <!-- 「更多」展开剩余全部：双栏档 6 行默认、点击放全量（≤6 条无键）；
-           显隐由 CSS 容器阈值接管（窄档 auto-fill 网格本就全量直排） -->
-      <div v-if="visibleRecents.length > 6" class="home-more-wrap">
-        <button
-          type="button"
-          class="ink-btn ink-btn--sm ink-btn--ghost home-more-btn"
-          :aria-expanded="recentsOpen"
-          aria-controls="home-songs"
-          @click="recentsOpen = !recentsOpen"
-        >{{ recentsOpen ? '收起' : '更多' }}</button>
       </div>
     </section>
     </div>
@@ -378,9 +379,9 @@ export default {
       return !this.wideViewport && this.displayPlaylists.length > 0
     },
     // 单曲卡网格渲 hero 之后的全部剩余条（recents[0] 已在主角区，网格不重复）
-    // ——无展示帽：历史池上限 20 由上游 useHomeFeed 管，slice(1) ≤19 行；默认
-    // 6 行显隐归 CSS nth-child(n+7)（display:none 内 lazy 图不加载，无成本），
-    // 「更多」翻的是显隐不是数据——按钮语义与全量渲染一致
+    // ——无展示帽：历史池上限 20 由上游 useHomeFeed 管，slice(1) ≤19 行；双栏档
+    // 默认 12 首（2×6）显隐归 CSS nth-child(n+13)（display:none 内 lazy 图
+    // 不加载，无成本），「更多」翻的是显隐不是数据——按钮语义与全量渲染一致
     visibleRecents() {
       return this.recents.slice(1)
     },
@@ -441,6 +442,21 @@ export default {
       const src = songSourceTag(song)
       return src ? `${artist} · ${src}` : artist
     },
+    // hero 主键单源三态：封面键与主键共用文案/图标/动作（模板不再三分支）。
+    // 非当前曲 → play-song(hero, recents)；当前曲在播 → open-watch（不重播）；
+    // 当前曲暂停 → resume-watch（原地续播不重置队列）——与行点击/旧三键
+    // emit 语义逐一对应
+    heroPrimaryText() {
+      return this.heroIsCurrent && this.isPlaying ? '打开播放页' : '继续播放'
+    },
+    heroPrimaryIcon() {
+      return this.heroIsCurrent && this.isPlaying ? 'expand' : 'play'
+    },
+    onHeroPrimary() {
+      if (this.heroIsCurrent && this.isPlaying) this.$emit('open-watch')
+      else if (this.heroIsCurrent) this.$emit('resume-watch')
+      else this.$emit('play-song', this.hero, this.recents)
+    },
     // 随机漫游：Fisher-Yates 洗牌全量 recents 后从首曲起播——队列种子是乱序
     // 副本不是原数组（洗牌就地，不篡改 props 历史序）
     roamRecents() {
@@ -497,7 +513,7 @@ export default {
     const coverErrs = reactive(new Map())
     /* 「接着听」主角位 HD 封面：与 WatchView/FullscreenPlayer 舞台位同协议——
        baseCover 先铺 songCoverUrl 原档口径（songThumbUrl 的 mq 降档是 38px
-       行位口径，套进 280px 展示位必虚），resolveStageCover 实探落地再顶替；
+       行位口径，套进 240~260px 展示位必虚），resolveStageCover 实探落地再顶替；
        onCleanup stale 闸与换曲重解都收 composables/useStageCover.js 单点。
        getSong 直读 recents[0]（hero 即历史置顶曲）——options computed hero
        同值单源，模板/heroIsCurrent 照原样消费不上移 */
@@ -505,9 +521,9 @@ export default {
     // baseCover 兼作 watch 同曲换封面源（trackOverrides 改图/封面自愈），与
     // WatchView.vue:760 / FullscreenPlayer.vue:256 同一管线口径
     const heroCoverSrc = useStageCover(() => props.recents[0] || null, heroBaseCover)
-    // 「更多」展开态：双栏档最近单曲默认 6 行，点击放剩余全部；
+    // 「更多」展开态：双栏档最近单曲默认 12 首（2×6），点击放剩余全部；
     // 只翻类不改数据——visibleRecents 恒 slice(1) 全量，行数显隐归 CSS 容器阈值管。
-    // 展开态随滚动记忆落会话——离场再回保持展开，不塌回 6 行
+    // 展开态随滚动记忆落会话——离场再回保持展开，不塌回 12 首
     const recentsOpen = ref(false)
     // 记忆 setup 期即读：展开态还原必须在首渲前——晚一拍（onMounted 的
     // nextTick 段）会把用户首帧内的「更多」点击覆盖回收起。scrollTop
@@ -608,21 +624,35 @@ export default {
   flex-direction: column;
 }
 
-/* 「接着听」主角区：左封面 + 右信息列。顶距 0——封面顶缘直接落在全站
-   20 首行轴（与侧栏 .panel-label 同轴）。与下方区块隔区块距 --rhythm-section(48)，
+/* 「接着听」主角区基态：节题占右上格、封面通吃两行纵中、信息列右下——
+   grid 直排与旧 flex align-items:center 视觉等价（尺寸档全部挂 wrap，
+   img/fb 恒 100% 填格）。顶距 0——封面顶缘直接落在全站 20 首行轴（与侧栏
+   .panel-label 同轴）。与下方区块隔区块距 --rhythm-section(48)，
    不用发丝线——层级靠留白与体量分，不靠框 */
 .home-hero {
-  display: flex;
-  align-items: center;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  column-gap: 20px;
   padding-bottom: var(--rhythm-section, 48px);
   min-width: 0;
 }
-.home-hero-cover {
+/* 封面整面可点的 button 外壳：尺寸档全挪此层（120→144/孤 200/双栏 1:1 满宽），
+   img/fb 恒填 100%。全局 button 重置已给 font/color/border/background/cursor——
+   只补 padding 归零 */
+.home-hero-cover-wrap {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  align-self: center; /* 旧 flex align-items:center 的等价：封面纵中 */
+  position: relative; /* 「播放中」徽标与悬停 cue 的浮层锚点 */
   width: 120px;
   height: 120px;
+  padding: 0;
+}
+.home-hero-cover {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  flex-shrink: 0;
   display: block;
   border: var(--hairline);
   background: var(--ink-06); /* 加载中呈浅墨底而非白框（不像坏图） */
@@ -633,14 +663,25 @@ export default {
   justify-content: center;
   color: var(--ink-64);
 }
+/* 封面悬停 cue 显形：.grid-card-play 的 .grid-card:hover 显形链吃不到 hero，
+   本键自己 hover/focus-visible 点亮。pointer-events 随全局 .grid-card-play
+   走——桌面档 none 纯指示、@media (hover:none) 触屏档 auto（cue 均裹在
+   封面 button 内，命中归并父键不截获）；该触屏规则同时令 cue 常显——
+   与货架卡同律的可点暗示（已裁定接受），勿补隐藏 */
+.home-hero-cover-wrap:hover .home-hero-cover-cue,
+.home-hero-cover-wrap:focus-visible .home-hero-cover-cue { opacity: 1; }
 .home-hero-info {
-  flex: 1;
+  grid-column: 2;
+  grid-row: 2;
+  align-self: start;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
 /* 区块名（这个区的 h2），与下方节题同族但降一档灰——让位给歌名 */
 .home-hero-label {
+  grid-column: 2;
+  grid-row: 1;
   font-size: var(--fs-row, 13px);
   font-weight: 600;
   line-height: 1.3;
@@ -673,10 +714,11 @@ export default {
 }
 /* 桌面（≥901）主角区升一档体量：封面 144、歌名 26、间距 24；信息列限宽
    480 让长歌名在宽屏也按合理行长省略（单行 nowrap+ellipsis 不变）。
-   ≤900 两档保持原值 */
+   ≤900 两档保持原值。column-gap 不裸写 gap——grid 下 gap 简写会带出
+   行距（节题行→信息行），旧 flex 的 gap 只作用横向 */
 @media (min-width: 901px) {
-  .home-hero { gap: 24px; }
-  .home-hero-cover { width: 144px; height: 144px; }
+  .home-hero { column-gap: 24px; }
+  .home-hero-cover-wrap { width: 144px; height: 144px; }
   .home-hero-info { max-width: 480px; }
   .home-hero-name { font-size: 26px; }
 }
@@ -688,18 +730,20 @@ export default {
 :root[data-theme="glitch-restoration"] .home-hero-cover { border-radius: 6px; }
 :root[data-theme="glitch-restoration"] .home-songrow-cover { border-radius: 4px; }
 @media (max-width: 640.98px) {
-  .home-hero { gap: 14px; padding-bottom: 32px; }
+  .home-hero { column-gap: 14px; padding-bottom: 32px; }
   /* 封面回 120 基础档——主角区体量不随屏缩倒挂（与基规则同值的显式钉档） */
-  .home-hero-cover { width: 120px; height: 120px; }
+  .home-hero-cover-wrap { width: 120px; height: 120px; }
   .home-hero-name { font-size: 18px; }
   .home-hero-actions { margin-top: 10px; }
 }
 
 /* 「接着听｜最近单曲」双栏：阈值走容器轴（.app-main container-type:inline-size，
    style.css 登记）——主区 <960 保持现状堆叠（平板 auto-fill、≤640.98 三行横滑
-   不动）。hero 上方 32 = .home-feed 20 车道 + 本列 12 顶槽；区块间 48 由
-   .home-topgrid 承底（内层两节底距归零防叠双）。右栏一列默认 6 行、
-   「更多」放开剩余全部（visibleRecents 无帽——历史池上限 20 由上游管） */
+   不动）。双栏 = 左定宽竖卡（节题→1:1 封面→双行歌名→满宽主键，列宽走
+   --hero-col-w/--hero-col-gap 变量，≥1600 视口升档）+ 右栏 2 列网格默认
+   12 首（2×6）、「更多」放开剩余全部（visibleRecents 无帽——历史池上限 20
+   由上游管）。hero 上方 32 = .home-feed 20 车道 + 本列 12 顶槽；区块间 48
+   由 .home-topgrid 承底（内层两节底距归零防叠双） */
 .home-topgrid {
   display: block;
   padding-top: calc(var(--rhythm-hero-top, 32px) - 20px);
@@ -708,64 +752,101 @@ export default {
 /* 包内末节底距归零交还给本层承底——否则堆叠态 hero 底距与 recents
    节底距各自 48 与包裹层 48 叠双（两栏态内层两节已由容器规则归零） */
 .home-topgrid > :last-child { padding-bottom: 0; }
+/* 节头右侧操作组（roam + 更多/收起）：贴节头右缘、self-center 对齐节头盒
+   ——与 .home-shelf-nav 同构但【不】吃其 hover:none 隐藏规则（roam 是功能键
+   不是翻页键，触屏也要在） */
+.home-section-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--rhythm-intra, 8px);
+  flex-shrink: 0;
+  align-self: center;
+}
 /* 「更多」键只服务于双栏档——窄档 auto-fill/三行轨全量直排，键藏。
-   基规则须排在 @container 块【之前】：同特异度 (0,1,0) 后序者胜，
-   容器命中时块内 display:flex 压过基规则 */
-.home-more-wrap { display: none; }
+   限定 .home-section-actions 抬权到 (0,2,0)：裸 .home-more-btn 与全局
+   .ink-btn{display:inline-flex} 同特异度 (0,1,0)，输赢取决于样式表序——
+   抬权后不靠序。基规则须排在 @container 块【之前】：容器块内同 (0,2,0)
+   的 display:inline-flex 靠后序胜 */
+.home-section-actions .home-more-btn { display: none; }
 @container (min-width: 960px) {
   .home-topgrid {
     display: grid;
-    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-    column-gap: 32px;
+    grid-template-columns: var(--hero-col-w, 240px) minmax(0, 1fr);
+    column-gap: var(--hero-col-gap, 36px);
     align-items: start;
   }
-  /* 底缘对齐 hero 侧：撑满行高（右栏 6 行+节头为行高锚）+ 封面顶吸
-     （align-items:flex-start 防基线 center 把封面沉进撑高列）+ 信息列
-     撑满，按钮 margin-top:auto 钉底——按钮底缘=栏底缘（右栏栏底即
-     more-wrap 行底、末行下 ~40px），余量落在元信息与按钮之间；
-     「更多」放开右栏反超时同理钉底。
-     保持「左封面+右信息列」横排——列向分布走 .home-hero-info 内列，
-     不把 hero 本体改 column（会竖排封面违背主角区编排） */
-  .home-topgrid .home-hero {
-    padding-bottom: 0;
-    align-self: stretch;
-    align-items: flex-start;
-  }
-  .home-topgrid .home-hero-info { align-self: stretch; }
-  /* 按钮钉底——按钮底缘=右栏栏底（more-wrap 行底、末行下 ~40px） */
-  .home-topgrid .home-hero-actions { margin-top: auto; }
-  /* 右栏整列吸满行高（align-items:start 只给内容高，stretch 补回栏高）——
-     栏内 flex 列把余量交给行表：行距吸余量→末行底缘随栏底对齐 hero 底缘；
-     「更多」放开右栏反超 hero 时余量为零，自然退化顶排不压行高 */
-  .home-topgrid .home-section {
-    padding-bottom: 0;
-    align-self: stretch;
+  .home-topgrid .home-hero { padding-bottom: 0; }
+  /* 竖卡黑胶台：flex 列自上而下 节题→1:1 封面→信息列；align-self:start
+     自立门户——右栏展开不再拉扯（旧 stretch 撑高 + margin-top:auto 钉底
+     病根整块移除，竖卡高度只随自身内容走） */
+  .home-topgrid .home-hero:not(:only-child) {
     display: flex;
     flex-direction: column;
+    align-self: start;
   }
-  /* 仅 1 条历史（hero 有、recents 空）时 hero 占满整行——单栏 5fr
-     会把孤 hero 挤成 ~41% 宽 */
+  /* 节题升格为栏题：与右栏「最近单曲」节题同级同档（原 13px 灰降档撤） */
+  .home-topgrid .home-hero:not(:only-child) .home-hero-label {
+    font-size: var(--fs-section, 16px);
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--ink);
+    margin-bottom: var(--rhythm-head, 12px);
+    align-self: flex-start;
+  }
+  /* 封面吃满栏宽成正方——展示尺寸 = 列宽变量（240/≥1600 260） */
+  .home-topgrid .home-hero:not(:only-child) .home-hero-cover-wrap {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    align-self: stretch;
+  }
+  .home-topgrid .home-hero:not(:only-child) .home-hero-info {
+    padding-top: 14px;
+    max-width: none; /* ≥901 的 480 限宽松绑——栏宽即行长 */
+    align-self: stretch; /* 满栏宽，主键 width:100% 才有参照 */
+  }
+  /* 竖卡歌名 20px 双行封顶：nowrap 单行省略换 -webkit-box 两行钳 */
+  .home-topgrid .home-hero:not(:only-child) .home-hero-name {
+    margin-top: 0;
+    font-size: 20px;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-wrap: balance;
+  }
+  .home-topgrid .home-hero:not(:only-child) .home-hero-actions { margin-top: 14px; }
+  .home-topgrid .home-hero:not(:only-child) .home-hero-primary {
+    width: 100%;
+    justify-content: center;
+  }
+  /* 孤 hero（最近单曲节缺席）：保持基态 grid 横排画报占满行——
+     封面 200、信息列松绑 480→560、歌名维持 hero 档字号 */
   .home-topgrid > .home-hero:only-child { grid-column: 1 / -1; }
-  /* 孤 hero 占满行时信息列松绑 480→720：右半不再大片留白，行长仍有上限 */
-  .home-topgrid > .home-hero:only-child .home-hero-info { max-width: 720px; }
+  .home-topgrid > .home-hero:only-child .home-hero-cover-wrap { width: 200px; height: 200px; }
+  .home-topgrid > .home-hero:only-child .home-hero-info { max-width: 560px; }
+  .home-topgrid > .home-hero:only-child .home-hero-name { font-size: var(--fs-hero, 28px); }
+
+  /* 右栏：2 列紧凑网格、默认 12 首（2×6）；顶排 align-content:start——
+     旧 flex 列 + space-between 摊行隙病根移除（少曲不再拉裂） */
+  .home-topgrid .home-section { padding-bottom: 0; }
   .home-topgrid .home-songs {
-    grid-template-columns: 1fr;
-    /* space-between 摊栏内余高进行隙（行高不动仍 50px——分行距不拉行）；
-       基规则 gap 的 4px 行距作地板保留 */
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 20px;
+    align-content: start;
   }
-  .home-topgrid:not(.home-topgrid--open) .home-songrow:nth-child(n+7) { display: none; }
-  .home-hero-cover { width: 240px; height: 240px; }
-  .home-hero-name { font-size: var(--fs-hero, 28px); }
-  .home-more-wrap { display: flex; padding-top: var(--rhythm-intra, 8px); }
+  .home-topgrid:not(.home-topgrid--open) .home-songrow:nth-child(n+13) { display: none; }
+  .home-topgrid .home-more-btn { display: inline-flex; }
 }
-/* ≥1600 视口 hero 封面再升档 240→280（冻结档：视口轴非容器轴；
+/* ≥1600 视口：左栏列宽/栏距/歌名/行隙再升一档（视口轴非容器轴；
    ≥1600 主区恒 ≥960 阈值，无需叠加容器条件） */
 @media (min-width: 1600px) {
-  .home-hero-cover { width: 280px; height: 280px; }
+  .home-topgrid { --hero-col-w: 260px; --hero-col-gap: 44px; }
+  .home-topgrid .home-hero:not(:only-child) .home-hero-name { font-size: 22px; }
+  .home-topgrid .home-songs { gap: 14px 24px; }
 }
 
 /* 区块：间距分组（无发丝线）——区块间 --rhythm-section(48)，节题→内容 --rhythm-head(12) */
