@@ -10,14 +10,15 @@
          随机漫游作用于最近单曲，挂在这里作次键 -->
     <div v-if="hero" class="home-topgrid" :class="{ 'home-topgrid--open': recentsOpen }">
     <section v-if="hero" class="home-hero" aria-labelledby="home-hero-title">
-      <!-- alt 留空：封面与紧邻歌名同源 -->
+      <!-- alt 留空：封面与紧邻歌名同源。560 档：主角位最大展示 280px
+           （≥1600 视口），@2x 高分屏需 560 才不发虚 -->
       <img
-        v-if="songThumbUrl(hero, 288) && !coverErrs.has(`h:${hero.id}`)"
-        :src="httpsCover(songThumbUrl(hero, 288))"
+        v-if="coverOk(`h:${hero.id}`, songThumbUrl(hero, 560))"
+        :src="httpsCover(songThumbUrl(hero, 560))"
         alt=""
         class="home-hero-cover"
         decoding="async"
-        @error="coverErrs.add(`h:${hero.id}`)"
+        @error="markCoverErr(`h:${hero.id}`, $event.target.getAttribute('src'))"
       />
       <span v-else class="home-hero-cover home-hero-fb" aria-hidden="true"><PixelIcon name="note" :size="28" /></span>
       <div class="home-hero-info">
@@ -60,7 +61,7 @@
     <section v-if="visibleRecents.length" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
-          <span class="home-section-sub">最近单曲</span>
+          <h2 class="home-section-sub">最近单曲</h2>
         </div>
       </div>
       <div id="home-songs" class="home-songs">
@@ -79,13 +80,13 @@
           >
             <!-- alt 留空：封面与紧邻歌名同源——命名会让 SR 把歌名报两遍 -->
             <img
-              v-if="songThumbUrl(song, 96) && !coverErrs.has(`s:${song.id}`)"
+              v-if="coverOk(`s:${song.id}`, songThumbUrl(song, 96))"
               :src="httpsCover(songThumbUrl(song, 96))"
               alt=""
               class="home-songrow-cover"
               loading="lazy"
               decoding="async"
-              @error="coverErrs.add(`s:${song.id}`)"
+              @error="markCoverErr(`s:${song.id}`, $event.target.getAttribute('src'))"
             />
             <span v-else class="home-songrow-cover home-songrow-fb" aria-hidden="true"><PixelIcon name="note" :size="14" /></span>
             <span class="home-songrow-info">
@@ -103,7 +104,7 @@
           ><PixelIcon name="plus" :size="14" /></button>
         </div>
       </div>
-      <!-- 「更多」展开其余 6 首：双栏档 6 行默认、点击放全量（≤6 条无键）；
+      <!-- 「更多」展开剩余全部：双栏档 6 行默认、点击放全量（≤6 条无键）；
            显隐由 CSS 容器阈值接管（窄档 auto-fill 网格本就全量直排） -->
       <div v-if="visibleRecents.length > 6" class="home-more-wrap">
         <button
@@ -128,7 +129,7 @@
     <section v-if="showPlaylistShelf" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
-          <span class="home-section-sub">常听歌单</span>
+          <h2 class="home-section-sub">常听歌单</h2>
         </div>
         <div v-if="shelfNav.pl.canScroll" class="home-shelf-nav">
           <button
@@ -161,12 +162,12 @@
           <div class="grid-card-cover">
             <!-- alt 留空：封面与紧邻卡名同源——命名会让 SR 把名单报两遍 -->
             <img
-              v-if="coverSizeUrl(pl.coverImgUrl, 320) && !coverErrs.has(`pl:${pl.id}`)"
+              v-if="coverOk(`pl:${pl.id}`, coverSizeUrl(pl.coverImgUrl, 320))"
               :src="httpsCover(coverSizeUrl(pl.coverImgUrl, 320))"
               alt=""
               loading="lazy"
               decoding="async"
-              @error="coverErrs.add(`pl:${pl.id}`)"
+              @error="markCoverErr(`pl:${pl.id}`, $event.target.getAttribute('src'))"
             />
             <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             <span v-if="isPlaylistPlaying(pl)" class="grid-card-badge" aria-hidden="true"><PixelIcon name="vol" :size="11" /> 播放中</span>
@@ -206,7 +207,7 @@
     <section v-if="recentAlbums.length" class="home-section">
       <div class="home-section-head">
         <div class="home-section-title">
-          <span class="home-section-sub">涉猎专辑</span>
+          <h2 class="home-section-sub">涉猎专辑</h2>
         </div>
         <div v-if="shelfNav.al.canScroll" class="home-shelf-nav">
           <button
@@ -239,15 +240,24 @@
           <div class="grid-card-cover">
             <!-- alt 留空：封面与紧邻卡名同源 -->
             <img
-              v-if="coverSizeUrl(al.picUrl, 320) && !coverErrs.has(`al:${al.key}`)"
+              v-if="coverOk(`al:${al.key}`, coverSizeUrl(al.picUrl, 320))"
               :src="httpsCover(coverSizeUrl(al.picUrl, 320))"
               alt=""
               loading="lazy"
               decoding="async"
-              @error="coverErrs.add(`al:${al.key}`)"
+              @error="markCoverErr(`al:${al.key}`, $event.target.getAttribute('src'))"
             />
             <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             <span v-if="isAlbumPlaying(al)" class="grid-card-badge" aria-hidden="true"><PixelIcon name="vol" :size="11" /> 播放中</span>
+            <!-- 播放键与歌单卡同例挂 cover 层而非 .grid-card-main 内：外壳无
+                 role=button，根除 [role=button] > button 的 ARIA 嵌套违规 -->
+            <button
+              type="button"
+              class="grid-card-play"
+              title="播放专辑"
+              :aria-label="`播放专辑 ${al.name}`"
+              @click.stop="playAlbum(al)"
+            ><PixelIcon name="play" :size="14" /></button>
           </div>
           <div
             class="grid-card-body grid-card-main"
@@ -280,10 +290,6 @@ import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-m
 import { songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, songSourceTag, isSingleSongShellId } from '../lib/song'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
-
-// 最近播放网格展示上限：hero（recents[0]）之后的 12 条——桌面 4 列×3 行=12；
-// 移动窄列行数随之浮动。限的是展示数不是数据（play-song 队列种子仍传全量 recents）
-const RECENT_DISPLAY_CAP = 12
 
 // 合成专辑键：netease al.id 真值优先（'0'/0/空都是源站"无专辑"占位归一成
 // null 不计）；QQ 曲的 al.id 只在 netease 匹配成功时非 null（buildQQSong），
@@ -367,35 +373,21 @@ export default {
     showPlaylistShelf() {
       return !this.wideViewport && this.displayPlaylists.length > 0
     },
-    // 单曲卡网格渲 hero 之后的 RECENT_DISPLAY_CAP 条（recents[0] 已在主角区，
-    // 网格不重复；截尾部保原序）。不影响 @click emit 的队列种子——那边仍给
-    // this.recents 全量（含 hero）
+    // 单曲卡网格渲 hero 之后的全部剩余条（recents[0] 已在主角区，网格不重复）
+    // ——无展示帽：历史池上限 20 由上游 useHomeFeed 管，slice(1) ≤19 行；默认
+    // 6 行显隐归 CSS nth-child(n+7)（display:none 内 lazy 图不加载，无成本），
+    // 「更多」翻的是显隐不是数据——按钮语义与全量渲染一致
     visibleRecents() {
-      return this.recents.slice(1, RECENT_DISPLAY_CAP + 1)
+      return this.recents.slice(1)
     },
-    /* 涉猎专辑：按专辑键去重，保留最近次序，截 12 上货架。
+    /* 涉猎专辑：按专辑键去重，保留最近次序，截 12 上货架。桶只扫 recents——
+       同键曲目聚合移到点击时懒算（playAlbum），渲染路径零歌单库扫描。
        伪专辑准入两闸：① 专辑键非空（albumKeyOf 合成——netease 真值 id 或
        QQ albummid 域前缀键）；② 专辑名 ≠ 歌名（trim+lowercase 归一）——
        YouTube/B 站曲的 al.name 恒等歌名，网易云同名「单曲专辑」也一并
        滤掉。去重键与准入键同一合成值——name 不作键也不兜底：无 id 又无
-       albummid 的行不入架，同名不同 id 的专辑也不坍缩。
-       tracks 是同键本地曲目聚合（recents + 歌单库 tracks/addedTracks，按
-       String(id) 去重）——点卡时 ≥2 首才给专辑队列，单曲回退 recents 连播 */
+       albummid 的行不入架，同名不同 id 的专辑也不坍缩 */
     recentAlbums() {
-      const bucket = new Map()
-      const put = (s) => {
-        const key = albumKeyOf(s)
-        if (key == null) return
-        let arr = bucket.get(key)
-        if (!arr) { arr = []; bucket.set(key, arr) }
-        if (!arr.some(t => String(t?.id) === String(s?.id))) arr.push(s)
-      }
-      for (const s of this.recents) put(s)
-      for (const pl of this.userPlaylists) {
-        for (const list of [pl?.tracks, pl?.addedTracks]) {
-          if (Array.isArray(list)) for (const s of list) put(s)
-        }
-      }
       const norm = (s) => String(s ?? '').trim().toLowerCase()
       const seen = new Set()
       const list = []
@@ -406,12 +398,39 @@ export default {
         if (norm(al?.name) === norm(song?.name)) continue
         seen.add(key)
         // songCoverUrl 收口：file_ 上传曲封面走 file 端点，provider 曲走 al.picUrl
-        list.push({ key, name: al?.name ?? '', picUrl: songCoverUrl(song) || '', artist: songArtists(song), song, tracks: bucket.get(key) || [song] })
+        list.push({ key, name: al?.name ?? '', picUrl: songCoverUrl(song) || '', artist: songArtists(song), song })
       }
       return list.slice(0, 12)
+    },
+    /* 在播曲所属专辑键：命中的曲对象先在 recents 找，找不到再扫歌单库
+       tracks/addedTracks（首个命中即停——在播曲可能不在历史池，如歌单内
+       直接点播）。取 albumKeyOf 同口径合成键；无专辑信息归 null */
+    playingAlbumKey() {
+      if (this.currentSongId == null) return null
+      const hit = (s) => s?.id != null && String(s.id) === String(this.currentSongId)
+      let song = this.recents.find(hit) || null
+      for (const pl of this.userPlaylists) {
+        if (song) break
+        for (const list of [pl?.tracks, pl?.addedTracks]) {
+          if (!Array.isArray(list)) continue
+          song = list.find(hit) || null
+          if (song) break
+        }
+      }
+      return song ? albumKeyOf(song) : null
     }
   },
   methods: {
+    // 封面可渲判定：有 URL 且未记过裂——簿记指纹与渲染 :src 同域
+    // （httpsCover(url) 实值），封面源修复/换图后新 URL ≠ 簿记值即放行复图
+    coverOk(key, url) {
+      return !!url && this.coverErrs.get(key) !== httpsCover(url)
+    },
+    // 参入记事件目标真实 src 而非重算 URL——prop 换图渲染间隙里旧图 error
+    // 派发，此刻重算拿到的是新 URL，会把从未失败的源误簿
+    markCoverErr(key, url) {
+      this.coverErrs.set(key, url)
+    },
     // 行尾副行：歌手 · 来源——行尾黑框 chip 摘除后来源并进副行文本
     songSubline(song) {
       const artist = songArtists(song)
@@ -429,11 +448,29 @@ export default {
       }
       this.$emit('play-song', pool[0], pool)
     },
-    // 专辑卡点击：同键本地曲目 ≥2 首才给专辑队列（伪专辑整专连播）；
-    // 仅 1 首回退 recents——点专辑卡只播一首即停太突兀，保连播不断流
+    /* 专辑卡点击：同键曲目此时懒聚合（渲染路径零库扫描）——recents 先扫、
+       库曲（userPlaylists tracks/addedTracks）后补，String(id) 去重保序；
+       ≥2 首给专辑队列（伪专辑整专连播），仅 1 首回退 recents——点专辑卡
+       只播一首即停太突兀，保连播不断流 */
     playAlbum(al) {
-      const queue = Array.isArray(al?.tracks) && al.tracks.length >= 2 ? al.tracks : this.recents
-      this.$emit('play-song', al.song, queue)
+      const seen = new Set()
+      const queue = []
+      const put = (s) => {
+        if (albumKeyOf(s) !== al?.key) return
+        // id 缺席曲不入队：String(undefined) 归一会让多首无 id 同键曲坍缩成一首
+        if (s?.id == null) return
+        const id = String(s.id)
+        if (seen.has(id)) return
+        seen.add(id)
+        queue.push(s)
+      }
+      for (const s of this.recents) put(s)
+      for (const pl of this.userPlaylists) {
+        for (const list of [pl?.tracks, pl?.addedTracks]) {
+          if (Array.isArray(list)) for (const s of list) put(s)
+        }
+      }
+      this.$emit('play-song', al.song, queue.length >= 2 ? queue : this.recents)
     },
     isSongPlaying(song) {
       return this.currentSongId != null && song?.id != null && String(song.id) === String(this.currentSongId)
@@ -441,19 +478,28 @@ export default {
     isPlaylistPlaying(pl) {
       return this.playingPlaylistId != null && pl?.id != null && String(pl.id) === String(this.playingPlaylistId)
     },
+    // 「在播曲所属专辑」命中即亮——语义不是「同键成员在播」：当前曲经
+    // playingAlbumKey 反查专辑键（在播曲不在 recents 时扫歌单库兜底）
     isAlbumPlaying(al) {
-      return this.currentSongId != null && Array.isArray(al?.tracks)
-        && al.tracks.some(s => String(s?.id) === String(this.currentSongId))
+      return this.playingAlbumKey != null && al?.key === this.playingAlbumKey
     }
   },
   setup(props) {
     // 离场滚动记忆：换页即整卸——回首页还停在原货架位置（数据全本地，首帧即完整）
     const feedEl = ref(null)
-    // 封面 @error 簿记：裂图位换回图标兜底（前缀键 s:/pl:/al: 防 id 撞名）
-    const coverErrs = reactive(new Set())
-    // 「更多」展开态：双栏档最近单曲默认 6 行，点击放其余（RECENT_DISPLAY_CAP 内）；
-    // 只翻类不改数据——visibleRecents 恒 12，行数显隐归 CSS 容器阈值管
+    /* 封面 @error 簿记：裂图位换回图标兜底（前缀键 h:/s:/pl:/al: 防 id 撞名）。
+       Map 记「出错时的 img src 实值」作指纹——coverOk 判当前 URL ≠ 簿记值
+       即放行：封面源修复/换图（URL 变脸）自动复图，旧簿记不永挡 */
+    const coverErrs = reactive(new Map())
+    // 「更多」展开态：双栏档最近单曲默认 6 行，点击放剩余全部；
+    // 只翻类不改数据——visibleRecents 恒 slice(1) 全量，行数显隐归 CSS 容器阈值管。
+    // 展开态随滚动记忆落会话——离场再回保持展开，不塌回 6 行
     const recentsOpen = ref(false)
+    // 记忆 setup 期即读：展开态还原必须在首渲前——晚一拍（onMounted 的
+    // nextTick 段）会把用户首帧内的「更多」点击覆盖回收起。scrollTop
+    // 还位仍走 onMounted+nextTick（要等 DOM 灌入量高）
+    const memEntry = readScrollMem('home')
+    if (memEntry) recentsOpen.value = !!memEntry.recentsOpen
     let cancelScrollRestore = null
 
     // 侧栏在场判定（≥768px）：歌单货架门控的唯一外源——dock/rail 歌单库
@@ -497,8 +543,7 @@ export default {
     }
 
     onMounted(() => nextTick(() => {
-      const m = readScrollMem('home')
-      if (m) cancelScrollRestore = restoreScrollTop(feedEl.value, m.top)
+      if (memEntry) cancelScrollRestore = restoreScrollTop(feedEl.value, memEntry.top)
       updateAllShelfNav() // 首帧货架量完再定翻页键显隐
     }))
     // 数据/门控变脸后货架尺寸可能变——nextTick 等 DOM patch 落地再复测。
@@ -516,7 +561,7 @@ export default {
     window.addEventListener('resize', updateAllShelfNav)
     onBeforeUnmount(() => {
       cancelScrollRestore?.() // 等待窗内卸载即停轮询
-      writeScrollMem('home', { top: feedEl.value?.scrollTop ?? 0 })
+      writeScrollMem('home', { top: feedEl.value?.scrollTop ?? 0, recentsOpen: recentsOpen.value })
       if (mq?.removeEventListener) mq.removeEventListener('change', onMqChange)
       else mq?.removeListener?.(onMqChange) // 与挂载期 addListener 兜底对称
       window.removeEventListener('resize', updateAllShelfNav)
@@ -535,8 +580,10 @@ export default {
   /* 滚动条车道顶部内缩：透明 border-top 把轨道抬离页缘 20px，
      与内容首行轴齐平；底部不缩——border 落在 scrollport 外会
      留出页底色死缝，底缘滚齐播放器发丝线。
-     横向页缘走 --feed-max 内容帽公式（主区宽 >帽+页缘时两侧等槽居中——cqw 解析到 .app-main 容器） */
-  padding: 0 max(var(--page-pad-x, 20px), calc((100cqw - var(--feed-max, 1280px)) / 2));
+     横向页缘走 --feed-max 内容帽公式（主区宽 >帽+页缘时两侧等槽居中——cqw 解析到 .app-main 容器）。
+     公式单源进 --feed-bleed：.home-shelf 右出血负边距与回补页距引用同一变量，不再双写 */
+  --feed-bleed: max(var(--page-pad-x, 20px), calc((100cqw - var(--feed-max, 1280px)) / 2));
+  padding: 0 var(--feed-bleed);
   border-top: 20px solid transparent;
   height: 100%;
   overflow-y: auto;
@@ -634,7 +681,7 @@ export default {
    style.css 登记）——主区 <960 保持现状堆叠（平板 auto-fill、≤640.98 三行横滑
    不动）。hero 上方 32 = .home-feed 20 车道 + 本列 12 顶槽；区块间 48 由
    .home-topgrid 承底（内层两节底距归零防叠双）。右栏一列默认 6 行、
-   「更多」开 RECENT_DISPLAY_CAP(12) 全量 */
+   「更多」放开剩余全部（visibleRecents 无帽——历史池上限 20 由上游管） */
 .home-topgrid {
   display: block;
   padding-top: calc(var(--rhythm-hero-top, 32px) - 20px);
@@ -658,7 +705,7 @@ export default {
      （align-items:flex-start 防基线 center 把封面沉进撑高列）+ 信息列
      撑满，按钮 margin-top:auto 钉底——按钮底缘=栏底缘（右栏栏底即
      more-wrap 行底、末行下 ~40px），余量落在元信息与按钮之间；
-     「更多」开 12 行右栏反超时同理钉底。
+     「更多」放开右栏反超时同理钉底。
      保持「左封面+右信息列」横排——列向分布走 .home-hero-info 内列，
      不把 hero 本体改 column（会竖排封面违背主角区编排） */
   .home-topgrid .home-hero {
@@ -671,7 +718,7 @@ export default {
   .home-topgrid .home-hero-actions { margin-top: auto; }
   /* 右栏整列吸满行高（align-items:start 只给内容高，stretch 补回栏高）——
      栏内 flex 列把余量交给行表：行距吸余量→末行底缘随栏底对齐 hero 底缘；
-     「更多」开 12 行右栏反超 hero 时余量为零，自然退化顶排不压行高 */
+     「更多」放开右栏反超 hero 时余量为零，自然退化顶排不压行高 */
   .home-topgrid .home-section {
     padding-bottom: 0;
     align-self: stretch;
@@ -681,6 +728,8 @@ export default {
   /* 仅 1 条历史（hero 有、recents 空）时 hero 占满整行——单栏 5fr
      会把孤 hero 挤成 ~41% 宽 */
   .home-topgrid > .home-hero:only-child { grid-column: 1 / -1; }
+  /* 孤 hero 占满行时信息列松绑 480→720：右半不再大片留白，行长仍有上限 */
+  .home-topgrid > .home-hero:only-child .home-hero-info { max-width: 720px; }
   .home-topgrid .home-songs {
     grid-template-columns: 1fr;
     /* space-between 摊栏内余高进行隙（行高不动仍 50px——分行距不拉行）；
@@ -724,6 +773,7 @@ export default {
    （发丝线摘除后区块边界全靠节题体量撑）。
    （已出彩布白名单——scoped --ink 全壳生效，不再被 ink-86 托档） */
 .home-section-sub {
+  margin: 0; /* 节题是 h2——默认 margin 会破节头 baseline 排布，归零 */
   font-size: var(--fs-section, 16px);
   font-weight: 600;
   color: var(--ink);
@@ -846,7 +896,8 @@ export default {
 /* 横向货架：滚动条行（YTM carousel 语义）。左缘 padding 12 + margin -12
    把首卡外缘拉回 --page-pad-x 左轴同时给卡影留 12px 内收车道；右缘
    margin-right 负一页边距出血到容器右界（末卡不再半卡硬裁），padding-right
-   补回页距让滚到的末卡与右缘仍隔一档 */
+   补回页距让滚到的末卡与右缘仍隔一档。两式与页缘公式同源——
+   --feed-bleed 单源（.home-feed 声明），不再双写 */
 .home-shelf {
   display: grid;
   grid-auto-flow: column;
@@ -855,8 +906,8 @@ export default {
   overflow-x: auto;
   padding: 4px 12px 8px;
   margin-inline: -12px;
-  margin-right: calc(-1 * max(var(--page-pad-x, 20px), (100cqw - var(--feed-max, 1280px)) / 2));
-  padding-right: max(var(--page-pad-x, 20px), (100cqw - var(--feed-max, 1280px)) / 2);
+  margin-right: calc(-1 * var(--feed-bleed));
+  padding-right: var(--feed-bleed);
 }
 /* ≥641 货架卡 160→200（新节奏档：卡体升一档撑全宽首屏） */
 @media (min-width: 641px) { .home-shelf { grid-auto-columns: 200px; gap: 24px; } }
@@ -894,8 +945,8 @@ export default {
   .home-shelf-nav { display: none; }
 }
 
-/* 移动窄屏：12 行单列霸屏退成三行横滑轨——grid-auto-flow:column +
-   3 行模板把 12 条折成 4 列滑卡，scroll-snap 列级停靠；右缘同款出血
+/* 移动窄屏：长单列霸屏退成三行横滑轨——grid-auto-flow:column +
+   3 行模板把行表折成多列滑卡，scroll-snap 列级停靠；右缘同款出血
    到容器边界（末列不再硬裁在页距内） */
 @media (max-width: 640.98px) {
   .home-songs {

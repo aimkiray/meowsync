@@ -1,10 +1,11 @@
 // 发现流/下载域/系统令牌 修复轮回归：
-//   HomeFeed 最近播放单曲卡（封面/歌手·来源副行/行尾 + 键/@error 兜底）+
-//     网格展示 hero 之后的 RECENT_DISPLAY_CAP=12 条（与主角区去重；emit 队列种子仍全量）+
+//   HomeFeed 最近播放单曲卡（封面/歌手·来源副行/行尾 + 键/@error URL 指纹簿记）+
+//     网格展示 hero 之后的全部剩余条（无展示帽——与主角区去重；emit 队列种子仍全量）+
 //     recentAlbums 伪专辑准入（al.id 真值或 QQ albummid 合成键 ∧ 名≠歌名）+
 //     「接着听」主角区（继续播放/打开播放页/暂停态续播三态 + 随机漫游次键）/
 //     歌单货架宽视口门控与活副本富化（已删除歌单不上架）/空态按可见内容判/专辑同键聚合/
-//     播放态 --playing+aria-current/反嵌套零违规/货架翻页键/去框降噪源码钉
+//     播放态 --playing+aria-current（在播专辑键歌单库兜底）/「更多」展开态 scroll-mem
+//     会话记忆/反嵌套零违规/货架翻页键/去框降噪源码钉
 //   Downloads：DQL meta 去内部 id/progressbar 具名、DTL 文案去「左侧」、
 //     DTR 去 #id/.dtr-done、err-tag 本地化、封面 @error；
 //     DownloadsPanel <xl 选中滚任务列
@@ -51,6 +52,7 @@ import AuthGate from '../../src/components/AuthGate.vue'
 import RemoteController from '../../src/components/RemoteController.vue'
 import FeedbackHost from '../../src/components/FeedbackHost.vue'
 import { toast } from '../../src/lib/feedback.js'
+import { writeScrollMem } from '../../src/lib/scroll-mem.js'
 
 // jsdom 缺口补丁：matchMedia（DownloadsPanel <xl 判定）在生产浏览器有，
 // 这里只保证存在——需要断言的分支自行 vi.stubGlobal 覆写
@@ -82,6 +84,9 @@ const track = (w) => { mounted.push(w); return w }
 afterEach(() => {
   while (mounted.length) mounted.pop().unmount()
   vi.restoreAllMocks()
+  // scroll-mem 是模块级 Map 跨测试存活：上面 unmount 时各 HomeFeed 已把
+  // recentsOpen/scrollTop 落笔——复位 'home' 防展开态漏入下一用例
+  writeScrollMem('home', { top: 0, recentsOpen: false })
 })
 
 /* ═══ HomeFeed ═══ */
@@ -136,21 +141,22 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
     expect(w.text()).not.toContain('最近单曲')
   })
 
-  it('网格渲 hero 之后的 12 条（RECENT_DISPLAY_CAP），play-song 队列种子仍给全量 recents', async () => {
-    // 15 条 > 展示上限 12；al.name==歌名 → 不上专辑架，断言面隔离在 songrow
+  it('网格渲 hero 之后的全部剩余条（slice(1) 无展示帽），play-song 队列种子仍给全量 recents', async () => {
+    // 15 条全进 DOM——默认 6 行显隐归 CSS nth-child(n+7)，数据不截；
+    // al.name==歌名 → 不上专辑架，断言面隔离在 songrow
     const MANY = Array.from({ length: 15 }, (_, i) => ({
       id: 1000 + i, name: `队列歌${i}`, ar: [{ name: '艺人' }],
       al: { name: `队列歌${i}` },
     }))
     const w = track(mount(HomeFeed, { props: { recents: MANY, recentPlaylists: [] } }))
     const rows = w.findAll('.home-songrow')
-    expect(rows).toHaveLength(12)
-    // 首行跳过 hero（index 0）；截的是尾部保原序：末位可见是 index 12
+    expect(rows).toHaveLength(14)
+    // 首行跳过 hero（index 0）；保原序不截尾：末位可见是 index 14
     expect(rows[0].find('.home-songrow-name').text()).toBe('队列歌1')
-    expect(rows.at(-1).find('.home-songrow-name').text()).toBe('队列歌12')
+    expect(rows.at(-1).find('.home-songrow-name').text()).toBe('队列歌14')
     await rows[0].trigger('click')
     expect(w.emitted('play-song')[0][0].id).toBe(1001)
-    // 展示截断不碰 emit 实参——队列种子仍是全量 15 条
+    // 网格去重 hero 不碰 emit 实参——队列种子仍是全量 15 条
     expect(w.emitted('play-song')[0][1]).toEqual(MANY)
     expect(w.emitted('play-song')[0][1]).toHaveLength(15)
   })
@@ -164,6 +170,21 @@ describe('HomeFeed：最近播放单曲卡 + 伪专辑过滤', () => {
     const albumCard = w.findAll('.grid-card').at(0)
     await albumCard.find('img').trigger('error')
     expect(albumCard.find('.grid-card-cover-fallback').exists()).toBe(true)
+  })
+
+  it('封面 @error 簿记带 URL 指纹可自愈：同键换新 URL 图片回显', async () => {
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
+    const firstRow = () => w.findAll('.home-songrow')[0]
+    await firstRow().find('img.home-songrow-cover').trigger('error')
+    expect(firstRow().find('.home-songrow-fb').exists()).toBe(true)
+    // 源站换图/修复：同 id 曲封面 URL 变脸——簿记按出错时 URL 记，
+    // 新 URL ≠ 簿记值即放行（旧实现 Set 记键不记值，同键永挡）
+    const healed = RECENTS.map(s => s === RECENTS[1]
+      ? { ...s, al: { ...s.al, picUrl: 'https://i.ytimg.com/vi/zzzzzzzzzzz/hqdefault.jpg' } }
+      : s)
+    await w.setProps({ recents: healed })
+    expect(firstRow().find('img.home-songrow-cover').exists()).toBe(true)
+    expect(firstRow().find('.home-songrow-fb').exists()).toBe(false)
   })
 
   it('过滤后无真专辑时专辑 section 整段不渲染', () => {
@@ -306,7 +327,9 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     for (const img of imgs) expect(img.attributes('alt')).toBe('')
   })
 
-  it('专辑同键曲目跨 recents+userPlaylists 聚合：≥2 首给专辑队列，去重后仅 1 首回退 recents', async () => {
+  it('专辑卡点击时懒聚合同键曲目（recents+userPlaylists，recents 先库曲后）：≥2 首给专辑队列，仅 1 首回退 recents', async () => {
+    // 聚合不在渲染期——recentAlbums 只扫 recents 产 {key,name,picUrl,artist,song}，
+    // 同键曲目池点击时现算（playAlbum 懒聚合，渲染路径零歌单库扫描）
     const sameAlbum = { id: 77, name: '同专二曲', ar: [{ name: '艺人A' }], al: { id: 42, name: '真专辑' } }
     const w = track(mount(HomeFeed, {
       props: {
@@ -331,6 +354,21 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     const card2 = w2.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
     await card2.trigger('click')
     expect(w2.emitted('play-song')[0][1]).toEqual([RECENTS[0]])
+  })
+
+  it('专辑卡补 .grid-card-play 悬停键（与歌单卡对称）：aria-label 具名、@click.stop 只发一次 play-song', async () => {
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
+    const card = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
+    const btn = card.find('.grid-card-play')
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('type')).toBe('button')
+    expect(btn.attributes('aria-label')).toBe('播放专辑 真专辑')
+    await btn.trigger('click')
+    // .stop 隔离冒泡——卡壳 @click 也是 playAlbum，不双发
+    expect(w.emitted('play-song')).toHaveLength(1)
+    expect(w.emitted('play-song')[0][0].id).toBe(RECENTS[0].id)
+    // 懒聚合仅命中 1 首 → 队列回退全量 recents 保连播
+    expect(w.emitted('play-song')[0][1]).toEqual(RECENTS)
   })
 
   it('播放态高亮：命中行/卡挂 --playing + aria-current + .grid-card-badge', () => {
@@ -359,12 +397,46 @@ describe('HomeFeed：接着听/货架/播放态/快捷操作', () => {
     // aria-current 双挂：行壳 + 新激活点（卡名真按钮）同亮
     expect(plCard.find('.grid-card-name-btn').attributes('aria-current')).toBe('true')
     expect(plCard.find('.grid-card-badge').exists()).toBe(true)
-    // 专辑卡同律：currentSongId 命中其同键 tracks 成员
+    // 专辑卡同律：在播曲专辑键命中（playingAlbumKey 反查在播曲所属专辑）
     const alCard = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
     expect(alCard.classes()).toContain('grid-card--playing')
     expect(alCard.find('.grid-card-badge').exists()).toBe(true)
     const other = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === 'QQ真专辑')
     expect(other.classes()).not.toContain('grid-card--playing')
+  })
+
+  it('播放态高亮库兜底：在播曲只在歌单库 tracks 里（recents 无此 id），同键专辑卡仍亮', () => {
+    // 真场景：歌单内直接点播——在播曲不进 recents。专辑卡靠 recents 里
+    // 另一条同键曲（RECENTS[0] al.id=42）先上货架，playingAlbumKey
+    // recents 命中不到 → 扫 userPlaylists tracks 反查专辑键
+    const libraryOnly = { id: 77, name: '库独曲', ar: [{ name: '艺人A' }], al: { id: 42, name: '真专辑' } }
+    const w = track(mount(HomeFeed, {
+      props: {
+        recents: [RECENTS[0]],
+        recentPlaylists: [],
+        userPlaylists: [{ id: 'pl_1', name: '库单', tracks: [libraryOnly] }],
+        currentSongId: 77,
+      },
+    }))
+    const alCard = w.findAll('.grid-card').find(c => c.find('.grid-card-name').text() === '真专辑')
+    expect(alCard.classes()).toContain('grid-card--playing')
+    expect(alCard.attributes('aria-current')).toBe('true')
+    expect(alCard.find('.grid-card-badge').exists()).toBe(true)
+  })
+
+  it('播放态高亮库兜底：在播曲 recents/歌单库双不在 → 无任何专辑卡 --playing', () => {
+    const w = track(mount(HomeFeed, {
+      props: {
+        recents: RECENTS,
+        recentPlaylists: [],
+        userPlaylists: [{ id: 'pl_1', name: '库单', tracks: [RECENTS[0]] }],
+        currentSongId: 'gone_999',
+      },
+    }))
+    // 货架上专辑卡齐在（真专辑/QQ真专辑）+ 库单回退卡——无一亮
+    expect(w.findAll('.grid-card').length).toBeGreaterThan(0)
+    expect(w.findAll('.grid-card--playing')).toHaveLength(0)
+    expect(w.find('.grid-card-badge').exists()).toBe(false)
   })
 
   it('快捷操作与反嵌套零违规：行尾 + 键发 add-to-playlist、卡面 ▶ 发 play-playlist', async () => {
@@ -590,9 +662,10 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
     expect(heroActions).toContain('margin-top: auto')
   })
 
-  it('DOM 断言：12 行全量挂载（CSS 隐藏不改 DOM），「更多」翻 home-topgrid--open', async () => {
-    // hero + 12 = 13 条 → visibleRecents 打满 RECENT_DISPLAY_CAP
-    const MANY = Array.from({ length: 13 }, (_, i) => ({
+  it('DOM 断言：网格全量挂载无展示帽（CSS 隐藏不改 DOM），「更多」翻 home-topgrid--open', async () => {
+    // hero + 15 = 16 条 → visibleRecents = slice(1) 全量 15 行，无帽不截
+    // （历史池上限 20 由上游 useHomeFeed 管）
+    const MANY = Array.from({ length: 16 }, (_, i) => ({
       id: 2000 + i, name: `展开歌${i}`, ar: [{ name: '艺人' }],
       al: { name: `展开歌${i}` }, // al.name==歌名 → 不入专辑架，断言面隔离在双栏件
     }))
@@ -600,8 +673,8 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
     const grid = w.find('.home-topgrid')
     expect(grid.exists()).toBe(true)
     expect(grid.classes()).not.toContain('home-topgrid--open')
-    // 行数显隐归 CSS 容器阈值——DOM 恒渲 12 行不截
-    expect(w.findAll('.home-songrow')).toHaveLength(12)
+    // 行数显隐归 CSS 容器阈值——DOM 恒渲全部剩余行不截
+    expect(w.findAll('.home-songrow')).toHaveLength(15)
     const btn = w.find('.home-more-btn')
     expect(btn.exists()).toBe(true)
     expect(btn.text()).toBe('更多')
@@ -611,6 +684,23 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
     await w.find('.home-more-btn').trigger('click')
     expect(w.find('.home-topgrid').classes()).not.toContain('home-topgrid--open')
     expect(w.find('.home-more-btn').text()).toBe('更多')
+  })
+
+  it('「更多」展开态随 scroll-mem 落会话：离场重挂初始即 open（setup 期读回，不闪收起）', async () => {
+    // onBeforeUnmount 写 {top, recentsOpen}、setup 首渲前读回——重挂的
+    // 初始 class 就带 open，不是挂载后再翻
+    const MANY = Array.from({ length: 9 }, (_, i) => ({
+      id: 4000 + i, name: `记忆歌${i}`, ar: [{ name: '艺人' }],
+      al: { name: `记忆歌${i}` }, // al.name==歌名 → 不入专辑架，断言面隔离在双栏件
+    }))
+    const props = { recents: MANY, recentPlaylists: [] }
+    const w1 = track(mount(HomeFeed, { props }))
+    await w1.find('.home-more-btn').trigger('click')
+    expect(w1.find('.home-topgrid').classes()).toContain('home-topgrid--open')
+    w1.unmount()
+    const w2 = track(mount(HomeFeed, { props }))
+    expect(w2.find('.home-topgrid').classes()).toContain('home-topgrid--open')
+    expect(w2.find('.home-more-btn').text()).toBe('收起')
   })
 
   it('可见 ≤6 条时无「更多」键（v-if=visibleRecents.length>6 边界）', () => {
@@ -625,6 +715,18 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
     // 包裹层仍在（hero 存在即渲）但无 open 类
     expect(w.find('.home-topgrid').exists()).toBe(true)
     expect(w.find('.home-topgrid').classes()).not.toContain('home-topgrid--open')
+  })
+
+  it('钉板：孤 hero 信息列 720 帽（F5）/ 节题 h2 语义（F6）/ hero 封面 560 档（F8）', () => {
+    const src = vueSrc('HomeFeed.vue')
+    // F5：仅 1 条历史（hero 有、网格空）时 hero 占满整行，信息列松绑 480→720
+    expect(src).toContain('home-hero:only-child .home-hero-info')
+    expect(src).toContain('max-width: 720px')
+    // F8：主角位最大 280px 展示（≥1600 视口），@2x 高分屏要 560 档不发虚
+    expect(src).toContain('songThumbUrl(hero, 560)')
+    // F6：节题是 h2 语义标签（span 升格）——任一节题采样即可
+    const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
+    expect(w.find('.home-section-sub').element.tagName).toBe('H2')
   })
 })
 

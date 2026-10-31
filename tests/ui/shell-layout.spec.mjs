@@ -103,13 +103,15 @@ describe('逐视图限宽挂点（100cqw → .app-main 容器）', () => {
     expect(wrap).toContain('padding: 0 max(var(--page-pad-x, 20px), calc((100cqw - var(--view-max, 1120px)) / 2))')
   })
 
-  it('HomeFeed.vue .home-feed padding + .home-shelf 右出血同式 --feed-max', () => {
+  it('HomeFeed.vue .home-feed padding + .home-shelf 右出血同式 --feed-max（--feed-bleed 单源）', () => {
     const src = vueSrc('HomeFeed.vue')
     const feed = src.match(/\.home-feed\s*\{[^}]*\}/)?.[0] || ''
-    expect(feed).toContain('padding: 0 max(var(--page-pad-x, 20px), calc((100cqw - var(--feed-max, 1280px)) / 2))')
+    // 出血公式单源进 --feed-bleed 自定义属性，padding 与货架右出血同引一变量
+    expect(feed).toContain('--feed-bleed: max(var(--page-pad-x, 20px), calc((100cqw - var(--feed-max, 1280px)) / 2))')
+    expect(feed).toContain('padding: 0 var(--feed-bleed)')
     const shelf = src.match(/\.home-shelf\s*\{[\s\S]*?\n\}/)?.[0] || ''
-    expect(shelf).toContain('margin-right: calc(-1 * max(var(--page-pad-x, 20px), (100cqw - var(--feed-max, 1280px)) / 2))')
-    expect(shelf).toContain('padding-right: max(var(--page-pad-x, 20px), (100cqw - var(--feed-max, 1280px)) / 2)')
+    expect(shelf).toContain('margin-right: calc(-1 * var(--feed-bleed))')
+    expect(shelf).toContain('padding-right: var(--feed-bleed)')
   })
 
   it('DownloadsPanel.vue 根 class 删 sm:m-5（≥640 交 style.css 帽公式）', () => {
