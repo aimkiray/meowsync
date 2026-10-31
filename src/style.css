@@ -824,11 +824,11 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   --fs-meta: 11px;
 }
 
-/* 底栏总高令牌：三段阶梯 69.2/65.2/61.2（= 内列 pad4+件高+pad4 + 1.2
+/* 底栏总高令牌：三段阶梯 77.2/73.2/69.2（= 内列 pad8+件高+pad8 + 1.2
    发丝线 + 进度溢位不增高）。栏高变动时此值与 BottomPlayer 媒体块成对维护 */
-:root { --player-bar-h: 69.2px; }
-@media (max-width: 768px) { :root { --player-bar-h: 65.2px; } }
-@media (max-width: 640.98px) { :root { --player-bar-h: 61.2px; } }
+:root { --player-bar-h: 77.2px; }
+@media (max-width: 768px) { :root { --player-bar-h: 73.2px; } }
+@media (max-width: 640.98px) { :root { --player-bar-h: 69.2px; } }
 
 /* YTM watch 页是整页 surface：≥768 即藏歌单栏（768-1023 流内窄轨白吃 64px
    格宽——chrome-clean 自 phone 档起，YTM [is-hidden-guide-page] 同型）；

@@ -344,9 +344,12 @@ export default {
   /* 命中带并入本体：content-box + 顶 padding 让盒体上探到 y=-6（9px
      命中带），轨道色 bg-clip:content-box 不漫进垫层——可视轨道仍钉
      y∈[-1,3] 原轨位，旧 ::before 隐形带退役：盒体即命中域，focus 环/
-     指针域同一事实源。取舍：底沿 y=3 不变——恰在播放键顶缘 y≈4 上留
-     1px 不窃控件点击；上探 16→5px 收窄，主区末行底缘点击不再变 seek
-     （牺牲深命中换不抢主区）。hover 加高 4→6 向上生长（transform-origin
+     指针域同一事实源。取舍：底沿 y=3 不变——播放键顶缘 y=8、净空
+     1→5px 不窃控件点击（≥1024 依赖 .player-inner min-height:76
+     兜底——controls 出流不撑高，缺它键顶 y=-2 反被带盖 5px；<1024
+     键盒在流撑 inner=键高+16 槽、键顶同落 y=8，同账天然成立）；
+     上探 16→5px 收窄，主区末行底缘点击不再变 seek（牺牲深命中
+     换不抢主区）。hover 加高 4→6 向上生长（transform-origin
      钉底缘，顶缘上探——与 style.css .player-progress-bar 同口径） */
   top: -6px;
   left: 0;
@@ -373,11 +376,13 @@ export default {
   align-items: center;
   gap: 16px;
   /* 横槽移到外层 .bottom-player（style.css 同款 max(16px,env)，全档生效）——
-     内列不再限宽——≥1024 走带簇按 --sidebar-w 锚主区中线
-     （见下方全宽墨条款）。竖向 padding 4+4 + 播放键 60/56/52
-     （桌面/phone/compact 三档）+ 发丝线 1.2 = 栏高 69.2/65.2/61.2——与
-     style.css :root 的 --player-bar-h 令牌梯成对维护（watch 视频预算消费） */
-  padding: 4px 0;
+     内列不再限宽——≥1024 走带簇绝对锚页面中线（视口 50%：用户点名
+     播放键页面居中，见下方全宽墨条款）。竖向 padding 8+8 + 播放键
+     60/56/52（桌面/phone/compact 三档；≥1024 键盒随 controls 出流，
+     下方 min-height:76 兜底撑同高）+ 发丝线 1.2 = 栏高
+     77.2/73.2/69.2——与 style.css :root 的 --player-bar-h 令牌梯
+     成对维护（watch 视频预算消费） */
+  padding: 8px 0;
 }
 
 /* 左列：封面 + 文字 */
@@ -471,11 +476,11 @@ export default {
 .transport--active { color: var(--accent-magenta-on-ink); }
 /* 播放=主键：实心纸盘反白——pg-icobtn--pressed 同极性语言（纸底墨字
    即主态），实心圆先例 watch-video-toggle / fullscreen --primary。
-   盒尺寸纹丝不动：栏高=竖槽 4 + 键盒 60/56/52 + 发丝线 钉死
+   盒尺寸纹丝不动：栏高=竖槽 8 + 键盒 60/56/52 + 发丝线 钉死
    （.player-inner 注），盘只在盒内画——border 归零让位内槽，
    4px padding + content-box clip 把纸色收进内容盒 → 盘径=盒−8
    （52/48/44，三档同式不随档调槽）；盘永不溢出盒——bp-progress
-   命中带底沿钉 y=3、键顶 y≈4 仅 1px 净空，外溢即被带抢点击。
+   命中带底沿钉 y=3、键顶 y≈8 净空更宽，外溢即被带抢点击。
    字形 -ink（PixelIcon fill=currentColor），watch 舞台态 --ink
    翻暗玻璃仍深、glitch 走 var——极性天然成立，均无需特判 */
 .transport--play {
@@ -525,7 +530,7 @@ export default {
   flex-shrink: 0;
 }
 /* 时间戳挂出流：absolute 贴中列右尾——五键簇恢复 play 键的几何对称，
-   使其落在走带簇中心（≥1024 簇对主区中线绝对定位，见下方全宽墨条款）；
+   使其落在走带簇中心（≥1024 簇对视口中线绝对定位，见下方全宽墨条款）；
    若在流内，其宽度会把簇中心向右推，播放键偏左 ~29px */
 .player-time {
   position: absolute;
@@ -546,8 +551,9 @@ export default {
   display: flex;
   align-items: center;
   gap: 4px;
-  /* 音量组与视图入口三键组的组间分隔抬到 16px——与栏右缘页距同档
-     （三键组左边 8px 档距 vs 页缘 16px 曾是不对称书挡；槽在外层） */
+  /* 音量组与沉浸入口的组间分隔抬到 16px——bp-xtra 现是右簇唯一邻件
+     （队列/歌词键已删，模板注）——与栏右缘页距同档（邻件左边 8px
+     档距 vs 页缘 16px 曾是不对称书挡；槽在外层） */
   margin-right: 8px;
 }
 .vol-range { width: 76px; }
@@ -590,32 +596,34 @@ export default {
 }
 
 /* ≥1024 全宽墨条：曲目区 = --sidebar-w（左侧栏列宽对齐）、走带簇绝对
-   定在主区正中（窗中线 + 半栏宽 = 主区中线）、右簇 flex:1 + 内容贴
-   右缘内槽 16（既有 flex:1/justify-content:flex-end 不动，margin 免添）。
+   定在页面正中——页面中线=视口 50%（用户点名播放键要页面居中，侧栏
+   列宽不再参与定位；五键簇 48+48+60+48+48+gap16=268 对称，播放键恰
+   落簇几何正中）、右簇 flex:1 + 内容贴右缘内槽 16（既有
+   flex:1/justify-content:flex-end 不动，margin 免添）。
    横槽移出外层 .bottom-player（左右归零）由各件自带 pad 供——刘海
    env 沿原档。controls 出流后 .player-time 仍锚其盒右尾（left:100%
    关系不变）；≤1023 各媒体块照旧（分权拓扑/首轮减负不动） */
 @media (min-width: 1024px) {
   .bottom-player { padding-left: 0; padding-right: 0; }
-  .player-inner { position: relative; }
+  .player-inner {
+    position: relative;
+    /* controls 出流不撑高——min-height 复在流键盒撑高效应：76=键盒
+       60+竖槽 16（全局 border-box 下 min-height 含 padding，写 60
+       只得 inner 60=栏 61.2）。缺了它栏高坍成 8+40+8+1.2=57.2
+       （令牌虚高 20）且键顶 y=-2 被命中带盖 5px 窃点 */
+    min-height: 76px;
+  }
   .track-meta {
     flex: 0 0 var(--sidebar-w, 260px);
     padding-left: max(16px, env(safe-area-inset-left, 0px));
   }
   .player-controls {
     position: absolute;
-    left: calc(50% + var(--sidebar-w, 260px) / 2);
+    left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
   }
   .player-right { padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-}
-
-/* 碰撞窗护挡：走带簇绝对锚主区中线后，player-time 出流尾(~+8起~90px)
-   在 vp≈1024–1112 与右簇静音键叠字——此窗内隐藏时刻（lg:inline 恰于
-   1024 亮起，1130 后右簇左缘已让出净空）。窗宽取 1130 含长时戳裕量 */
-@media (min-width: 1024px) and (max-width: 1130px) {
-  .player-time { display: none; }
 }
 
 /* Watch 舞台态：全局 --ink 已翻成亮色——本条自带「墨面纸字」极性，

@@ -38,6 +38,12 @@ describe('style.css 源钉板：全宽壳 + --content-max 退役', () => {
     expect(wide).toContain('--feed-max: 1360px')
   })
 
+  it('--player-bar-h 令牌梯升档：77.2/73.2/69.2（底栏竖槽 4→8 同步）', () => {
+    expect(css).toContain('--player-bar-h: 77.2px')
+    expect(css).toContain('--player-bar-h: 73.2px')
+    expect(css).toContain('--player-bar-h: 69.2px')
+  })
+
   it('下载页 ≥641 margin 挂点：--view-max 同式内容帽（100cqw）', () => {
     // 挂点走 compact 档 641/640.98 对——直接钉 .downloads-panel 所在媒体块
     // （style.css 另有 asp-dialog 的 641 块，须按内容锁定防误锚）
@@ -76,19 +82,32 @@ describe('BottomPlayer.vue 源钉板：全宽墨条', () => {
     expect(inner).not.toContain('margin: 0 auto')
   })
 
-  it('≥1024：track-meta 吃 --sidebar-w、走带簇锚主区中线、外层槽归零', () => {
+  it('.player-inner 竖槽升档：padding: 8px 0（栏高 77.2/73.2/69.2 配套）', () => {
+    const inner = src.match(/\.player-inner\s*\{[^}]*\}/)?.[0] || ''
+    expect(inner).toContain('padding: 8px 0')
+  })
+
+  it('≥1024：track-meta 吃 --sidebar-w、走带簇锚视口中线、外层槽归零', () => {
     const dock = src.match(/@media \(min-width: 1024px\)[\s\S]*?\n\}/)?.[0] || ''
     expect(dock).toContain('.bottom-player { padding-left: 0; padding-right: 0; }')
     expect(dock).toContain('flex: 0 0 var(--sidebar-w, 260px)')
-    expect(dock).toContain('left: calc(50% + var(--sidebar-w, 260px) / 2)')
+    expect(dock).toContain('left: 50%;')
     expect(dock).toContain('transform: translate(-50%, -50%)')
     expect(dock).not.toContain('content-max')
   })
 
-  it('碰撞窗护挡：1024–1130 隐藏 .player-time（走带簇出流尾与右簇叠字）', () => {
-    const win = src.match(/@media \(min-width: 1024px\) and \(max-width: 1130px\)[\s\S]*?\n\}/)?.[0] || ''
-    expect(win).toContain('.player-time')
-    expect(win).toContain('display: none')
+  it('≥1024 .player-inner min-height:76 兜底：controls 出流不撑高，缺它栏高坍 57.2', () => {
+    // 76=在流键盒60+竖槽16——全局 border-box 下 min-height 含 padding，
+    // 写 60 只得 inner 60=栏 61.2（令牌虚高 16）；缺钉键顶 y=-2 被命中带盖 5px
+    const dock = src.match(/@media \(min-width: 1024px\)[\s\S]*?\n\}/)?.[0] || ''
+    const inner = dock.match(/\.player-inner\s*\{[^}]*\}/)?.[0] || ''
+    expect(inner).toContain('min-height: 76px')
+  })
+
+  it('碰撞窗护挡退役：簇移视口中线后 player-time 全程不叠右簇（无 1130 块）', () => {
+    // 几何：time 右端 W/2+~232（簇半宽134+margin8+戳~90）vs 右簇左缘 W−176
+    // → 碰撞需 W<816 <1024，护挡域内永不触发，整块删除、时戳恢复显示
+    expect(src).not.toMatch(/@media[^{]*1130/)
   })
 })
 
