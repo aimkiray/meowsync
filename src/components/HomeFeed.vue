@@ -689,7 +689,8 @@ export default {
 :root[data-theme="glitch-restoration"] .home-songrow-cover { border-radius: 4px; }
 @media (max-width: 640.98px) {
   .home-hero { gap: 14px; padding-bottom: 32px; }
-  .home-hero-cover { width: 88px; height: 88px; }
+  /* 封面回 120 基础档——主角区体量不随屏缩倒挂（与基规则同值的显式钉档） */
+  .home-hero-cover { width: 120px; height: 120px; }
   .home-hero-name { font-size: 18px; }
   .home-hero-actions { margin-top: 10px; }
 }

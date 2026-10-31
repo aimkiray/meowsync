@@ -631,6 +631,19 @@ describe('HomeFeed：「接着听」主角区', () => {
     await w.setProps({ isPlaying: true })
     expect(w.find('.home-hero-primary').text()).toContain('打开播放页')
   })
+
+  it('源钉：≤640.98 移动档 .home-hero-cover 显式覆写 120（主角区体量不随屏缩倒挂）', () => {
+    const src = vueSrc('HomeFeed.vue')
+    // 同文件有两个 640.98 媒体块（hero 档与 .home-songs 横滑档）——逐个
+    // 取块内规则锁定含覆写的那块；覆写值与基规则同为 120，裸搜 120px
+    // 无区分度，钉的是「该媒体块内存在此覆写规则且宽高 120」的结构断言
+    const tiers = [...src.matchAll(/@media \(max-width: 640\.98px\)\s*\{((?:[^{}]|\{[^}]*\})*)\}/g)].map(m => m[1])
+    const heroTier = tiers.find(t => t.includes('.home-hero-cover')) ?? ''
+    const cover = heroTier.match(/\.home-hero-cover\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(cover).not.toBe('')
+    expect(cover).toContain('width: 120px')
+    expect(cover).toContain('height: 120px')
+  })
 })
 
 describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更多」展开', () => {
