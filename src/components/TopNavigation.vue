@@ -861,7 +861,10 @@ export default {
 @media (min-width: 1024px) {
   .topnav { padding-left: 0; }
   .topnav-inner {
-    grid-template-columns: var(--sidebar-w, 260px) minmax(0, 480px) 1fr;
+    /* 中列轨吃整组 max-content（480 字段 + 8 + 徽牌钮）——480px 帽会把
+       源钮宽度从字段里扣（实用仅 ~390）；min 0 保持不足时可缩、左缘锚
+       侧栏缘 + page-pad-x 不变 */
+    grid-template-columns: var(--sidebar-w, 260px) minmax(0, max-content) 1fr;
     column-gap: 0;
   }
   .topnav-left { padding-left: max(16px, env(safe-area-inset-left, 0px)); }

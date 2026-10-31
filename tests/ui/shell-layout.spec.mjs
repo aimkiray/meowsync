@@ -55,8 +55,8 @@ describe('TopNavigation.vue 源钉板：三列 chrome 对齐', () => {
     expect(inner).not.toContain('margin: 0 auto')
   })
 
-  it('≥1024 三列：--sidebar-w minmax(0,480) 1fr + column-gap 归零', () => {
-    expect(src).toContain('grid-template-columns: var(--sidebar-w, 260px) minmax(0, 480px) 1fr')
+  it('≥1024 三列：--sidebar-w 中列吃整组 max-content 1fr + column-gap 归零', () => {
+    expect(src).toContain('grid-template-columns: var(--sidebar-w, 260px) minmax(0, max-content) 1fr')
     expect(src).toContain('column-gap: 0')
     expect(src).toContain('.topnav { padding-left: 0; }')
     expect(src).toContain('.topnav-search { justify-content: flex-start; padding-left: var(--page-pad-x, 20px); }')
@@ -116,5 +116,50 @@ describe('逐视图限宽挂点（100cqw → .app-main 容器）', () => {
 
   it('DownloadsPanel.vue 根 class 删 sm:m-5（≥640 交 style.css 帽公式）', () => {
     expect(vueSrc('DownloadsPanel.vue')).not.toContain('sm:m-5')
+  })
+})
+
+describe('4K 审计修复源钉板：#5 货架滚条常隐 + #7 悬脚批', () => {
+  it('.home-shelf 横滚条全态常隐（scrollbar-width:none + ::-webkit-scrollbar display:none）', () => {
+    const src = vueSrc('HomeFeed.vue')
+    const shelf = src.match(/\.home-shelf\s*\{[\s\S]*?\n\}/)?.[0] || ''
+    expect(shelf).toContain('scrollbar-width: none')
+    const webkit = src.match(/\.home-shelf::-webkit-scrollbar\s*\{[^}]*\}/)?.[0] || ''
+    expect(webkit).toContain('display: none')
+  })
+
+  it('.home-feed 列 flex + .home-foot margin-top:auto（短钉底、长随流）', () => {
+    const src = vueSrc('HomeFeed.vue')
+    const feed = src.match(/\.home-feed\s*\{[^}]*\}/)?.[0] || ''
+    expect(feed).toContain('display: flex')
+    expect(feed).toContain('flex-direction: column')
+    const foot = src.match(/\.home-foot\s*\{[^}]*\}/)?.[0] || ''
+    expect(foot).toContain('margin-top: auto')
+  })
+
+  it('SongList .song-rows 列 flex + 直子 shrink:0/min-width:0（垫片契约 + min-content 地板）+ .song-list-footer auto', () => {
+    const src = vueSrc('SongList.vue')
+    const rows = src.match(/\.song-rows\s*\{[^}]*\}/)?.[0] || ''
+    expect(rows).toContain('display: flex')
+    expect(rows).toContain('flex-direction: column')
+    const shrink = src.match(/\.song-rows\s*>\s*\*\s*\{[^}]*\}/)?.[0] || ''
+    expect(shrink).toContain('flex-shrink: 0')
+    // min-width:0 解交叉轴 min-content 地板——缺它 .song-artist 等 nowrap
+    // 省略链最外端贡献整段文本宽，窄视口撑出横滚
+    expect(shrink).toContain('min-width: 0')
+    const foot = src.match(/\.song-list-footer\s*\{[^}]*\}/)?.[0] || ''
+    expect(foot).toContain('margin-top: auto')
+  })
+
+  it('PlaylistGrid .playlist-grid-wrap 列 flex + 直子 shrink:0/min-width:0 + .grid-foot auto（同型延伸）', () => {
+    const src = vueSrc('PlaylistGrid.vue')
+    const wrap = src.match(/\.playlist-grid-wrap\s*\{[^}]*\}/)?.[0] || ''
+    expect(wrap).toContain('display: flex')
+    expect(wrap).toContain('flex-direction: column')
+    const shrink = src.match(/\.playlist-grid-wrap\s*>\s*\*\s*\{[^}]*\}/)?.[0] || ''
+    expect(shrink).toContain('flex-shrink: 0')
+    expect(shrink).toContain('min-width: 0')
+    const foot = src.match(/\.grid-foot\s*\{[^}]*\}/)?.[0] || ''
+    expect(foot).toContain('margin-top: auto')
   })
 })

@@ -35,6 +35,7 @@ vi.mock('../../src/composables/usePlayer.js', () => ({
 import { toast } from '../../src/lib/feedback.js'
 import { notifyRemoteSeek } from '../../src/composables/usePlayer.js'
 import { useRemoteControl } from '../../src/composables/useRemoteControl.js'
+import { REMOTE_LIMITS } from '../../src/shared/protocol.js'
 
 function makeDeps() {
   const deps = {
@@ -217,5 +218,50 @@ describe('useRemoteControl：state_update 上行', () => {
     deps.currentSong.value = { id: 999, name: 'x', ar: [] }
     ws.recv({ type: 'request_state' })
     expect(lastSentPayload(ws).queueIndex).toBe(-1)
+  })
+
+  it('超 8K 状态帧砍队尾至达标，截尾循环真跑', () => {
+    const deps = makeDeps()
+    // 50 首 × ~430B 序列化 → 全量帧 ~22KB 必超 8KB——const 时代首帧即抛
+    // TypeError（onmessage 吞掉后 sent 全空，本断言即红→绿分水岭）
+    deps.playingSongs.value = Array.from({ length: 50 }, (_, i) => ({
+      id: i + 1, name: `song-${i}-${'x'.repeat(400)}`, ar: []
+    }))
+    deps.currentSong.value = deps.playingSongs.value[0]
+    const rc = useRemoteControl(deps)
+    rc.connectRemoteHost()
+    const ws = sockets.at(-1)
+    ws.open()
+    ws.recv({ type: 'request_state' })
+    const frame = ws.sent.at(-1)
+    expect(frame).toBeTruthy()
+    // 末帧按 UTF-8 字节量落回上限内——队列被真截过（<50）但未砍空（≥1）
+    expect(new TextEncoder().encode(frame).length)
+      .toBeLessThanOrEqual(REMOTE_LIMITS.MAX_STATE_PAYLOAD_BYTES)
+    const payload = JSON.parse(frame).payload
+    // 本钉不区分 floor/ceil 取半（50→25 两式同值）——区分面在下钉
+    // 「单体超限」：length=1 时 ceil(1/2)=1 是不动点会原地死循环，
+    // floor 砍空才走到丢帧兜底
+    expect(payload.queue.length).toBeLessThan(50)
+    expect(payload.queue.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('currentSong 单体超限：砍空弃帧不抛错', () => {
+    vi.useFakeTimers()
+    const deps = makeDeps()
+    deps.playingSongs.value = [{ id: 1, name: 'a', ar: [] }, { id: 2, name: 'b', ar: [] }]
+    // 单体 ~20KB：队列砍空帧仍超 → 上限外 if 兜住整帧弃发（丢帧等下一拍）
+    deps.currentSong.value = { id: 1, name: 'x'.repeat(20 * 1024), ar: [] }
+    const rc = useRemoteControl(deps)
+    rc.connectRemoteHost()
+    const ws = sockets.at(-1)
+    ws.open()
+    ws.recv({ type: 'request_state' })
+    expect(ws.sent).toHaveLength(0)
+    // 2s 心跳真跑 sendRemoteState（interval 回调直调、不经 onmessage 吞错网）——
+    // 截尾路径抛错会穿透定时器炸用例；静默丢帧才是达标
+    vi.advanceTimersByTime(2000)
+    ws.recv({ type: 'request_state' })
+    expect(ws.sent).toHaveLength(0)
   })
 })

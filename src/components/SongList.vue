@@ -431,7 +431,17 @@
   padding: var(--page-pad-x, 20px) max(var(--page-pad-x, 20px), calc((100cqw - var(--view-max, 1120px)) / 2));
 }
 
-.song-rows { scrollbar-gutter: stable; }
+.song-rows {
+  scrollbar-gutter: stable;
+  /* 列 flex：页脚短内容钉底缘；> * shrink:0 守虚拟垫片高度契约——
+     空内容 spacer 的 auto 最小高是 0，不锁会被 flex 压扁滚塌 scrollHeight */
+  display: flex;
+  flex-direction: column;
+}
+/* min-width:0 解列 flex item 的 min-content 地板（stretch 交叉轴下 auto 按
+   min-content 计）——不松则 .song-artist 等 nowrap 省略链最外端贡献整段
+   文本宽，窄视口撑出横滚 */
+.song-rows > * { flex-shrink: 0; min-width: 0; }
 
 /* ── 歌单页头：裁切角标封面 + 墨块按钮组 ── */
 .playlist-hero {
@@ -849,6 +859,7 @@
   gap: 14px;
   padding: 12px 0;
   flex-wrap: wrap;
+  margin-top: auto; /* 内容不满时吃满自由空间把脚钉底缘；溢出归 0 随流可滚到 */
 }
 
 /* ── ⋯ 菜单点击捕手（菜单本体走全局 .pg-menu——teleport 出 scoped 域） ── */

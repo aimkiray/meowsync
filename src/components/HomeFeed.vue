@@ -603,6 +603,9 @@ export default {
   overflow-y: auto;
   scrollbar-gutter: stable;
   position: relative;
+  /* 短内容页脚钉底缘：宿主列 flex，.home-foot margin-top:auto 吃自由空间 */
+  display: flex;
+  flex-direction: column;
 }
 
 /* 「接着听」主角区：左封面 + 右信息列。顶距 0——封面顶缘直接落在全站
@@ -922,7 +925,12 @@ export default {
   margin-inline: -12px;
   margin-right: calc(-1 * var(--feed-bleed));
   padding-right: var(--feed-bleed);
+  /* 货架横滚条全态常隐（YTM carousel 语义）——翻页键/横滑承担导航；
+     全局 * thin 在 ≥901 细指针经典滚动条平台会出 10px 车道；
+     canScroll 判定吃 scrollWidth-clientWidth，滚道有无不影响 */
+  scrollbar-width: none;
 }
+.home-shelf::-webkit-scrollbar { display: none; }
 /* ≥641 货架卡 160→200（新节奏档：卡体升一档撑全宽首屏） */
 @media (min-width: 641px) { .home-shelf { grid-auto-columns: 200px; gap: 24px; } }
 
@@ -982,5 +990,6 @@ export default {
    间距分组，不再起发丝线 */
 .home-foot {
   padding: 8px 0 12px;
+  margin-top: auto; /* 内容满时归 0——长列表仍滚得到 */
 }
 </style>

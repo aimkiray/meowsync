@@ -469,7 +469,16 @@ export default {
   height: 100%;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  /* 列 flex：.grid-foot 短内容钉底缘；> * shrink:0 守虚拟垫片高度契约——
+     .result-section 内的空内容 spacer 最小高是 0，宿主列 flex 溢出期不锁
+     会被压扁滚塌 scrollHeight（同 .song-rows 修法） */
+  display: flex;
+  flex-direction: column;
 }
+/* min-width:0 同 .song-rows：解列 flex item 的 min-content 地板——否则
+   .song-result-meta/.grid-head-ctx 等 nowrap 省略链最外端贡献整段
+   文本宽，窄视口撑出横滚 */
+.playlist-grid-wrap > * { flex-shrink: 0; min-width: 0; }
 
 /* 歌单卡渐进渲染哨兵：居中 ghost 键 */
 .grid-more {
@@ -742,5 +751,6 @@ export default {
   border-top: var(--hairline-soft);
   padding: 12px 0;
   text-align: center;
+  margin-top: auto; /* 短结果钉底缘；内容满时归 0——长列表仍滚得到 */
 }
 </style>

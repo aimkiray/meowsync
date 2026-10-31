@@ -70,7 +70,8 @@ export function useRemoteControl(deps) {
     // 上行会白占消息配额（30/s 比 host 桶紧），本地直接不发
     if (remoteWsRole !== 'host' || !remoteWs || remoteWs.readyState !== WebSocket.OPEN) return
     // 待播队列广播：封顶 50 条防止大歌单撑爆状态帧上限
-    const queue = playingSongs.value.slice(0, 50).map(serializeRemoteSong)
+    // （let：下面的超帧截尾循环会就地收窄它——勿回写 const）
+    let queue = playingSongs.value.slice(0, 50).map(serializeRemoteSong)
     // queueIndex 以「已发送 queue」为准按 id 重定位——currentPlayingIndex
     // 是 playbackList 全量坐标系，快照截断/快照源切换都会让它漂出已发
     // 队列的窗口；按 id 重定位天然与 frame 内队列同口径（找不到发 -1）
@@ -94,7 +95,9 @@ export function useRemoteControl(deps) {
     // string.length 把中文按 1 计，UTF-8 线上实际 3B
     const frameBytes = () => new TextEncoder().encode(frame).length
     while (queue.length && frameBytes() > REMOTE_LIMITS.MAX_STATE_PAYLOAD_BYTES) {
-      queue = queue.slice(0, Math.ceil(queue.length / 2))
+      // floor 取半才砍得空：ceil 在 length=1 是不动点（ceil(1/2)=1），
+      // 单体超限帧会原地死循环；砍空仍超由下面 if 兜住丢帧
+      queue = queue.slice(0, Math.floor(queue.length / 2))
       frame = buildFrame(queue)
     }
     if (frameBytes() <= REMOTE_LIMITS.MAX_STATE_PAYLOAD_BYTES) remoteWs.send(frame)
