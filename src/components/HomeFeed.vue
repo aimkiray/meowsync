@@ -10,11 +10,14 @@
          随机漫游作用于最近单曲，挂在这里作次键 -->
     <div v-if="hero" class="home-topgrid" :class="{ 'home-topgrid--open': recentsOpen }">
     <section v-if="hero" class="home-hero" aria-labelledby="home-hero-title">
-      <!-- alt 留空：封面与紧邻歌名同源。560 档：主角位最大展示 280px
-           （≥1600 视口），@2x 高分屏需 560 才不发虚 -->
+      <!-- alt 留空：封面与紧邻歌名同源。heroCoverSrc 走舞台位 HD 链——占位
+           先铺 songCoverUrl 原档口径（非 songThumbUrl 的列表降档：mq 档是
+           38px 行位口径，套进 280px 展示位必虚），HD 顶替由 useStageCover
+           实探升档（yt maxres 实探、404 回落），与 WatchView/FullscreenPlayer
+           同链；280px 展示位 @2x 高分屏需 ≥560 源才不发虚 -->
       <img
-        v-if="coverOk(`h:${hero.id}`, songThumbUrl(hero, 560))"
-        :src="httpsCover(songThumbUrl(hero, 560))"
+        v-if="coverOk(`h:${hero.id}`, heroCoverSrc)"
+        :src="httpsCover(heroCoverSrc)"
         alt=""
         class="home-hero-cover"
         decoding="async"
@@ -284,10 +287,11 @@
 </template>
 
 <script>
-import { ref, reactive, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { httpsCover } from '../lib/url'
 import { readScrollMem, writeScrollMem, restoreScrollTop } from '../lib/scroll-mem'
-import { songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, songSourceTag, isSingleSongShellId } from '../lib/song'
+import { songArtists, songCoverUrl, coverSizeUrl, songThumbUrl, songSourceTag, isSingleSongShellId, proxiedCoverUrl } from '../lib/song'
+import { useStageCover } from '../composables/useStageCover.js'
 import PrintMarks from './PrintMarks.vue'
 import PixelIcon from './PixelIcon.vue'
 
@@ -491,6 +495,16 @@ export default {
        Map 记「出错时的 img src 实值」作指纹——coverOk 判当前 URL ≠ 簿记值
        即放行：封面源修复/换图（URL 变脸）自动复图，旧簿记不永挡 */
     const coverErrs = reactive(new Map())
+    /* 「接着听」主角位 HD 封面：与 WatchView/FullscreenPlayer 舞台位同协议——
+       baseCover 先铺 songCoverUrl 原档口径（songThumbUrl 的 mq 降档是 38px
+       行位口径，套进 280px 展示位必虚），resolveStageCover 实探落地再顶替；
+       onCleanup stale 闸与换曲重解都收 composables/useStageCover.js 单点。
+       getSong 直读 recents[0]（hero 即历史置顶曲）——options computed hero
+       同值单源，模板/heroIsCurrent 照原样消费不上移 */
+    const heroBaseCover = computed(() => proxiedCoverUrl(songCoverUrl(props.recents[0] || null)))
+    // baseCover 兼作 watch 同曲换封面源（trackOverrides 改图/封面自愈），与
+    // WatchView.vue:760 / FullscreenPlayer.vue:256 同一管线口径
+    const heroCoverSrc = useStageCover(() => props.recents[0] || null, heroBaseCover)
     // 「更多」展开态：双栏档最近单曲默认 6 行，点击放剩余全部；
     // 只翻类不改数据——visibleRecents 恒 slice(1) 全量，行数显隐归 CSS 容器阈值管。
     // 展开态随滚动记忆落会话——离场再回保持展开，不塌回 6 行
@@ -569,7 +583,7 @@ export default {
     return {
       httpsCover, songArtists, coverSizeUrl, songThumbUrl, feedEl, coverErrs,
       wideViewport, plShelfEl, alShelfEl, shelfNav, updateShelfNav, scrollShelf,
-      recentsOpen
+      recentsOpen, heroCoverSrc
     }
   }
 }
@@ -773,7 +787,7 @@ export default {
    （发丝线摘除后区块边界全靠节题体量撑）。
    （已出彩布白名单——scoped --ink 全壳生效，不再被 ink-86 托档） */
 .home-section-sub {
-  margin: 0; /* 节题是 h2——默认 margin 会破节头 baseline 排布，归零 */
+  margin: 0; /* 防御性归零——全局 * 重置已覆盖，显式声明防未来重置变更波及节头 baseline */
   font-size: var(--fs-section, 16px);
   font-weight: 600;
   color: var(--ink);

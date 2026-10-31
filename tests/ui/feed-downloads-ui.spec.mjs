@@ -2,7 +2,8 @@
 //   HomeFeed 最近播放单曲卡（封面/歌手·来源副行/行尾 + 键/@error URL 指纹簿记）+
 //     网格展示 hero 之后的全部剩余条（无展示帽——与主角区去重；emit 队列种子仍全量）+
 //     recentAlbums 伪专辑准入（al.id 真值或 QQ albummid 合成键 ∧ 名≠歌名）+
-//     「接着听」主角区（继续播放/打开播放页/暂停态续播三态 + 随机漫游次键）/
+//     「接着听」主角区（继续播放/打开播放页/暂停态续播三态 + 随机漫游次键 +
+//     hero 封面走舞台位 HD 链——useStageCover 占位→实探顶替、stale 闸、h:id 簿记隔离）/
 //     歌单货架宽视口门控与活副本富化（已删除歌单不上架）/空态按可见内容判/专辑同键聚合/
 //     播放态 --playing+aria-current（在播专辑键歌单库兜底）/「更多」展开态 scroll-mem
 //     会话记忆/反嵌套零违规/货架翻页键/去框降噪源码钉
@@ -571,6 +572,13 @@ describe('HomeFeed：「接着听」主角区', () => {
     const img = hero.find('img.home-hero-cover')
     expect(img.exists()).toBe(true)
     expect(img.attributes('alt')).toBe('')
+    // baseCover 吃 songCoverUrl 原档而非 songThumbUrl 降档链：src 经
+    // /img-proxy?url= 编码包装时 126 域名片段在编码串内仍明文可见；
+    // songThumbUrl 会给 126 加 ?param= 缩放键——代理形下编码成
+    // param%3D，两种形态双侧钉死（RECENTS[0] 是 126 域曲）
+    expect(img.attributes('src')).toContain('p1.music.126.net')
+    expect(img.attributes('src')).not.toContain('param=')
+    expect(img.attributes('src')).not.toContain('param%3D')
     // 主角区不吃 .grid-card / .home-songrow 类——不污染货架与行网格计数
     expect(hero.find('.grid-card').exists()).toBe(false)
     expect(hero.find('.home-songrow').exists()).toBe(false)
@@ -717,16 +725,129 @@ describe('HomeFeed：「接着听｜最近单曲」双栏容器查询 + 「更�
     expect(w.find('.home-topgrid').classes()).not.toContain('home-topgrid--open')
   })
 
-  it('钉板：孤 hero 信息列 720 帽（F5）/ 节题 h2 语义（F6）/ hero 封面 560 档（F8）', () => {
+  it('钉板：孤 hero 信息列 720 帽（F5）/ 节题 h2 语义（F6）/ hero 封面走 HD 链（F8）', () => {
     const src = vueSrc('HomeFeed.vue')
     // F5：仅 1 条历史（hero 有、网格空）时 hero 占满整行，信息列松绑 480→720
     expect(src).toContain('home-hero:only-child .home-hero-info')
     expect(src).toContain('max-width: 720px')
-    // F8：主角位最大 280px 展示（≥1600 视口），@2x 高分屏要 560 档不发虚
-    expect(src).toContain('songThumbUrl(hero, 560)')
+    // F8：主角位封面接舞台位 HD 链——useStageCover 接线 + 模板吃 heroCoverSrc
+    // （songThumbUrl(hero, 560) 的 mq 降档是 38px 行位口径，280px 展示位必虚）
+    expect(src).toContain('useStageCover(() => props.recents[0]')
+    expect(src).toContain('httpsCover(heroCoverSrc)')
+    expect(src).toContain('coverOk(`h:${hero.id}`, heroCoverSrc)')
+    expect(src).not.toContain('songThumbUrl(hero, 560)')
+    // 行网格 96 档缩略仍走 songThumbUrl(song, 96)——防 hero 改造误伤缩略路径
+    expect(src).toContain('songThumbUrl(song, 96)')
     // F6：节题是 h2 语义标签（span 升格）——任一节题采样即可
     const w = track(mount(HomeFeed, { props: { recents: RECENTS, recentPlaylists: [] } }))
     expect(w.find('.home-section-sub').element.tagName).toBe('H2')
+  })
+})
+
+describe('HomeFeed：hero 封面舞台位 HD 链（useStageCover 实探升档）', () => {
+  // FakeImage 桩复用 cover-url.spec.mjs 形制：set src 按 URL 内档名明文
+  // （encodeURIComponent 不编字母数字）includes 结算 onload/onerror。恢复
+  // 手动做而不调 vi.unstubAllGlobals——那会连带摘掉文件头给
+  // RemoteController 挂载面用的 WebSocket 桩
+  const realImage = globalThis.Image
+  const installFakeImage = (deadGrades = []) => {
+    vi.stubGlobal('Image', class {
+      set src(v) {
+        queueMicrotask(() => {
+          if (deadGrades.some(g => v.includes(g))) this.onerror?.()
+          else this.onload?.()
+        })
+      }
+    })
+  }
+  afterEach(() => { globalThis.Image = realImage })
+
+  // yt 曲夹具：al.name==歌名 → 伪专辑不上架，断言面隔离在 hero
+  const ytHero = (vid, grade = 'hq') => ({
+    id: `yt_${vid}`, name: `yt曲${vid}`, ar: [{ name: 'UP' }],
+    youtube: { videoId: vid },
+    al: { name: `yt曲${vid}`, picUrl: `https://i.ytimg.com/vi/${vid}/${grade}default.jpg` },
+  })
+
+  it('yt hero：首帧铺 proxied 原档占位，实探落地顶替 maxres——同一 <img> 不换 DOM、fb 不闪', async () => {
+    installFakeImage([])
+    const w = track(mount(HomeFeed, { props: { recents: [ytHero('hrmax00001')], recentPlaylists: [] } }))
+    const img = () => w.find('img.home-hero-cover')
+    // T0 占位即 songCoverUrl 原档（hqdefault）——不再是 mqdefault 行位降档
+    expect(img().attributes('src')).toContain('img-proxy?url=')
+    expect(img().attributes('src')).toContain('hqdefault')
+    const el = img().element
+    await flushPromises()
+    // T1 实探落地：maxres 档顶替——同元素仅 patch src，无 fallback 闪帧
+    expect(img().element).toBe(el)
+    expect(img().attributes('src')).toContain('maxresdefault')
+    expect(w.find('.home-hero-fb').exists()).toBe(false)
+  })
+
+  it('yt hero：maxres/sd 实探全灭 → 回落恒在档 hqdefault（不落 fallback）', async () => {
+    installFakeImage(['maxresdefault', 'sddefault'])
+    const w = track(mount(HomeFeed, { props: { recents: [ytHero('hrhq000002')], recentPlaylists: [] } }))
+    await flushPromises()
+    const src = w.find('img.home-hero-cover').attributes('src')
+    expect(src).toContain('hqdefault')
+    expect(src).not.toContain('maxresdefault')
+    expect(w.find('.home-hero-fb').exists()).toBe(false)
+  })
+
+  it('yt hero：@error 落 fb（簿记 h:id 指纹）；同 id 换封面 URL 指纹自愈回渲、同 URL 不回渲', async () => {
+    installFakeImage([])
+    const song = ytHero('hrheal0003')
+    const w = track(mount(HomeFeed, { props: { recents: [song], recentPlaylists: [] } }))
+    await flushPromises()   // 待 maxres 顶替后裂——簿记的是 HD 档实值 src
+    await w.find('img.home-hero-cover').trigger('error')
+    expect(w.find('.home-hero-fb').exists()).toBe(true)
+    // 同 URL 重喂不回渲（指纹命中，不重发必死请求）
+    await w.setProps({ recents: [{ ...song }] })
+    expect(w.find('.home-hero-fb').exists()).toBe(true)
+    // 同 id 换封面源（trackOverrides/封面自愈场景）：新 URL≠簿记指纹即放行
+    const healed = { ...song, al: { ...song.al, picUrl: 'https://p1.music.126.net/healed.jpg' } }
+    await w.setProps({ recents: [healed] })
+    await flushPromises()
+    const img = w.find('img.home-hero-cover')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toContain('healed.jpg')
+  })
+
+  it('yt hero 换曲：先铺新曲 base；旧曲迟到探测被 stale 闸丢弃；簿记键 h:id 隔离', async () => {
+    // 手动裁定桩：Image 不自结算，探测结果交测试按序放行——构造「A 探测
+    // 在途时切 B」的竞态面
+    const pending = []
+    vi.stubGlobal('Image', class {
+      constructor() { pending.push(this) }
+      set src(v) { this._src = v }
+    })
+    const a = ytHero('hrstalea04')
+    const b = ytHero('hrstaleb05')
+    const w = track(mount(HomeFeed, { props: { recents: [a], recentPlaylists: [] } }))
+    await nextTick()
+    expect(pending).toHaveLength(1)               // A 的 maxres 探测在途
+    // A 曲簿记：裂图键 h:yt_hrstalea04 落账 → fb
+    await w.find('img.home-hero-cover').trigger('error')
+    expect(w.find('.home-hero-fb').exists()).toBe(true)
+    // 换 hero → B 是全新簿记键，A 的裂图不连坐；先铺 B base（hq 档）
+    await w.setProps({ recents: [b] })
+    await flushPromises()
+    const img = () => w.find('img.home-hero-cover')
+    expect(img().exists()).toBe(true)
+    expect(w.find('.home-hero-fb').exists()).toBe(false)
+    expect(img().attributes('src')).toContain('hrstaleb05')
+    expect(img().attributes('src')).toContain('hqdefault')
+    expect(pending).toHaveLength(2)               // B 的探测已开探
+    // A 探测迟到落地——stale 闸丢弃不写：src 仍是 B 的 base
+    pending[0].onload?.()
+    await flushPromises()
+    expect(img().attributes('src')).not.toContain('hrstalea04')
+    expect(img().attributes('src')).toContain('hqdefault')
+    // B 探测落地 → maxres 顶替
+    pending[1].onload?.()
+    await flushPromises()
+    expect(img().attributes('src')).toContain('hrstaleb05')
+    expect(img().attributes('src')).toContain('maxresdefault')
   })
 })
 
