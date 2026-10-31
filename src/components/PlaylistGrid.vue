@@ -26,7 +26,7 @@
       <!-- YTM 分区结果：歌曲行在前（可直接播放），歌单卡片区在后 -->
       <section v-if="songs.length" class="result-section">
         <div class="result-section-head">
-          <span class="result-section-sub">歌曲</span>
+          <h3 class="result-section-sub">歌曲</h3>
           <span class="pg-label pg-label--dim result-section-hint">点击即播</span>
         </div>
         <!-- 虚拟滚动上沿 spacer（行高 56px 均匀）；曲列深挖可累积数千行 -->
@@ -109,7 +109,7 @@
 
       <section v-if="results.length" class="result-section">
         <div class="result-section-head">
-          <span class="result-section-sub">歌单</span>
+          <h3 class="result-section-sub">歌单</h3>
         </div>
         <div class="playlist-grid">
           <div
@@ -117,7 +117,7 @@
             :key="playlist.id"
             class="grid-card"
           >
-            <!-- -main 不再扮 role=button：children presentational 抹平 h3 标题
+            <!-- -main 不再扮 role=button：children presentational 抹平 h4 标题
                  语义。整区 @click 保留——鼠标整卡可开不变；键盘「打开」激活点
                  收进卡名真按钮 .grid-card-name-btn（原生 Enter/Space→click），
                  .stop 防冒泡双 emit；title 随激活点落键上 -->
@@ -137,12 +137,12 @@
               <div v-else class="grid-card-cover-fallback"><PixelIcon name="note" :size="22" /></div>
             </div>
             <div class="grid-card-body">
-              <h3 class="grid-card-name"><button
+              <h4 class="grid-card-name"><button
                 type="button"
                 class="grid-card-name-btn"
                 :title="`打开《${playlist.name}》`"
                 @click.stop="$emit('open', playlist)"
-              >{{ playlist.name }}</button></h3>
+              >{{ playlist.name }}</button></h4>
               <p class="grid-card-meta">{{ playlist.creator?.nickname || '神秘创建者' }} · {{ playlist.trackCount }} 首</p>
             </div>
             </div>
@@ -539,6 +539,7 @@ export default {
 /* 节题：英文 pg-label 微标签摘除后中文副题升格为唯一节题——13px/600，
    与 .home-section-sub 同律（已出彩布白名单，scoped --ink 全壳生效） */
 .result-section-sub {
+  margin: 0; /* 防御性归零——全局 * 重置已覆盖，显式声明防未来重置变更波及节头 baseline */
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
@@ -704,7 +705,7 @@ export default {
 /* 卡片外壳/cover/-name/-meta/.grid-card-main 均已上收全局 style.css。
    .grid-card-main 是鼠标整卡点击区（非交互 div+@click 合法）；键盘激活点在
    卡名真按钮 .grid-card-name-btn（全局样式）——动作键是它叔辈节点，
-   无嵌套可交互、无 children-presentational 吃 h3 语义 */
+   无嵌套可交互、无 children-presentational 吃 h4 标题语义 */
 
 .grid-card-actions {
   display: flex;

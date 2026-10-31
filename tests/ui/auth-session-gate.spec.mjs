@@ -3,7 +3,8 @@
 //      initApp（钉：initSync/pullFromServer 必须被调到——此前没有任何补跑路径）
 //   F2 会话过期弹门清场：resolveConfirm(false) 结算悬挂框 + 全局热键在门后
 //      彻底失能（钉：'m' 静音键不再写 PLAYER_STATE.volume）
-//   F4 AuthGate 输入可访问名 / 错误 role=alert / aria-invalid 随 error 联动
+//   F4 AuthGate 输入可访问名 / 错误 role=alert / aria-invalid 随 error 联动 /
+//      门页唯一题 .auth-title 升 h1（门整页接管时 topnav h1 不在 DOM）
 //   F3+F5 DownloadQueueList：行容器 role=group 且摘要标签含状态/失败/进度、
 //      搜索框与状态 select 有可访问名、封面装饰图 alt 为空、菜单有标签
 //   F3-M1 过期门起清场须盖 loading 态 Howl（isPlaying=false 也 pause——
@@ -251,6 +252,14 @@ describe('App.vue：过期门起暂停 loading 态 Howl（F3-M1）', () => {
 // ── F4：AuthGate 可访问性 ──
 
 describe('AuthGate 可访问性（F4）', () => {
+  it('门页唯一题 .auth-title 是 h1——门整页接管时 topnav 的 h1 不在 DOM', () => {
+    const wrapper = mount(AuthGate)
+    const title = wrapper.find('.auth-title')
+    expect(title.element.tagName).toBe('H1')
+    expect(title.text()).toContain('MeowSync')
+    wrapper.unmount()
+  })
+
   it('输入有可访问名；提交失败时错误段落带 role=alert 且输入翻 aria-invalid', async () => {
     const wrapper = mount(AuthGate)
     const inputs = wrapper.findAll('.auth-input')

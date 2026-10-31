@@ -1,10 +1,10 @@
 <template>
   <div class="auth-gate">
     <form class="auth-card" @submit.prevent="submit">
-      <div class="auth-title">
+      <h1 class="auth-title">
         <PixelIcon :name="effectiveSetup ? 'warn' : 'note'" :size="20" />
         <span>{{ effectiveSetup ? '初始化管理员' : 'MeowSync' }}</span>
-      </div>
+      </h1>
       <p class="auth-sub">
         {{ effectiveSetup
           ? '首次启动：创建管理员账号。完成前请勿将本实例暴露到公网。'

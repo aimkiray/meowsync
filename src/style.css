@@ -544,7 +544,7 @@ body {
   color: var(--paper);
 }
 
-h1, h2, h3 { text-wrap: balance; }
+h1, h2, h3, h4 { text-wrap: balance; }
 
 button {
   font: inherit;
@@ -1552,12 +1552,12 @@ button.queue-head-name:hover { color: var(--accent-magenta-ink); text-decoration
   font-weight: 600;
   color: var(--ink);
   line-height: 1.35;
-  /* 两行 clamp 不在 h3 上——h3 若留 overflow:hidden 会裁掉内嵌
-     .grid-card-name-btn 的 :focus-visible 外环（祖先 overflow 裁后代
-     outline）；clamp 由键自负 */
+  /* 两行 clamp 不在卡名标题上——标题（PG h4/HomeFeed h3）若留
+     overflow:hidden 会裁掉内嵌 .grid-card-name-btn 的 :focus-visible
+     外环（祖先 overflow 裁后代 outline）；clamp 由键自负 */
 }
 
-/* 卡名=「打开」激活点（h3 内嵌真按钮，PlaylistGrid/HomeFeed 三处共用）。
+/* 卡名=「打开」激活点（卡名标题内嵌真按钮，PlaylistGrid h4/HomeFeed h3 三处共用）。
    -webkit-box+clamp:2 自备两行截断面；font/color/background/border/cursor
    已由全局 button 基重置（:549）覆盖；焦点环走全局 :focus-visible +2px
    外环，不入 -4px 内环名单（内陷环会横穿 13px 文本） */

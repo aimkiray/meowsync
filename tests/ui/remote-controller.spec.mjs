@@ -2,6 +2,7 @@
 // 相对路径上线（协议见 shared/protocol.js 注释），本端用自身
 // resolveApiBaseUrl 拼回；外部 http(s) 链经 proxiedCoverUrl 收编——白名单
 // 域包成 /img-proxy 形，非白名单 fail-closed 出占位图。顺带钉 connect 幂等。
+// 另钉待播队列分区题 .rc-queue-title 的 h2 语义级（遥控页唯一分区题）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
@@ -57,6 +58,19 @@ describe('RemoteController：封面 apiBase 相对路径还原', () => {
     await nextTick()
     expect(wrapper.find('img.rc-cover').attributes('src'))
       .toBe(`${resolveApiBaseUrl()}/img-proxy?url=${encodeURIComponent('https://i.ytimg.com/vi/x/mqdefault.jpg')}`)
+  })
+
+  it('待播队列分区题 .rc-queue-title 是 h2；曲名行 div 原级不动', async () => {
+    wrapper = mountCtl()
+    const ws = sockets.at(-1)
+    ws.open()
+    feedState(ws, { queue: [{ id: 1, name: '队曲', ar: [] }], queueIndex: 0 })
+    await nextTick()
+    const title = wrapper.find('.rc-queue-title')
+    expect(title.exists()).toBe(true)
+    expect(title.element.tagName).toBe('H2')
+    // 曲名/艺人行是浮层面板内行信息非页题——div 原级不动
+    expect(wrapper.find('.rc-song-name').element.tagName).toBe('DIV')
   })
 
   it('connect 幂等：在途 socket 被 detach+close 收编，迟到 close 不再叠连', async () => {

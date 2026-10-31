@@ -80,7 +80,7 @@
 
       <!-- 待播队列：host 广播的播放快照，点选跳转 -->
       <div v-if="queueItems.length" class="rc-queue">
-        <div class="rc-queue-title">待播队列</div>
+        <h2 class="rc-queue-title">待播队列</h2>
         <div class="rc-queue-list">
           <button
             v-for="(s, i) in queueItems"

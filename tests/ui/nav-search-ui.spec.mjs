@@ -5,7 +5,8 @@
 //                   钮上源短标徽牌；⋯ 菜单 remote:off 双行中文指路
 //   PlaylistGrid  — 页头「"词" · 源名」上下文行（立案词 searchSongQuery）；
 //                   行内来源角标 chip；副行专辑名==歌名去重（NFKC 归一）；
-//                   yt/bili 无歌单腿指路行；封面 alt="" + @error 按曲 id 落占位
+//                   yt/bili 无歌单腿指路行；封面 alt="" + @error 按曲 id 落占位；
+//                   节题语义链：节题 h3 / 卡名 h4（歌名 p 原级不动）
 //   useSearchNav  — searchSource/searchSongQuery 随 handler 立案定调
 //   useAddToPlaylist — 裸关键词按 prefSearchSource 分派 qq/yt/bili/网易云
 //   App.vue       — :is-search-view/:search-source/:watch-open 绑定透传；
@@ -13,6 +14,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick, ref } from 'vue'
 import { mount, shallowMount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const { musicApi, toast } = vi.hoisted(() => ({
   musicApi: {
@@ -448,6 +451,36 @@ describe('PlaylistGrid：点击区重排（深评 F-a）', () => {
     await gBtn.trigger('click')
     expect(w.emitted('open')).toHaveLength(1)
     expect(w.emitted('open')[0][0].id).toBe('pl_x')
+  })
+})
+
+describe('PlaylistGrid：节题语义级', () => {
+  const PL = { id: 'pl_h', name: '节题单', trackCount: 3, coverImgUrl: '', creator: { nickname: '阿喵' } }
+
+  it('页题 h2 → 节题 h3（歌曲/歌单各一）→ 卡名 h4；歌名 p、点击即播 span 原级不动', async () => {
+    const w = await mountGrid({ songs: [NE_SONG], results: [PL] })
+    expect(w.find('.grid-title').element.tagName).toBe('H2')
+    const subs = w.findAll('.result-section-sub')
+    expect(subs).toHaveLength(2)
+    expect(subs[0].element.tagName).toBe('H3')
+    expect(subs[0].text()).toBe('歌曲')
+    expect(subs[1].element.tagName).toBe('H3')
+    expect(subs[1].text()).toBe('歌单')
+    // 节题升 h3 后卡名级联降 h4 保链（HomeFeed 卡名仍 h3——其节题是 h2，链本就正确）
+    expect(w.find('.grid-card-name').element.tagName).toBe('H4')
+    // 行内歌名/注记非节题域——原级不动
+    expect(w.find('.song-result-name').element.tagName).toBe('P')
+    expect(w.find('.result-section-hint').element.tagName).toBe('SPAN')
+  })
+
+  it('源码钉：result-section-sub 不再是 span；style.css text-wrap:balance 收 h4', () => {
+    const src = readFileSync(join(process.cwd(), 'src/components/PlaylistGrid.vue'), 'utf8')
+    expect(src).not.toContain('<span class="result-section-sub"')
+    const css = readFileSync(join(process.cwd(), 'src/style.css'), 'utf8')
+    expect(css).toContain('h1, h2, h3, h4 { text-wrap: balance; }')
+    // 反向钉：HomeFeed 卡名保 h3——其节题是 h2 链已正确，防未来误随 PG 降 h4
+    const homeSrc = readFileSync(join(process.cwd(), 'src/components/HomeFeed.vue'), 'utf8')
+    expect(homeSrc).toContain('<h3 class="grid-card-name"')
   })
 })
 
