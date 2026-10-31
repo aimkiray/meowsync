@@ -1,7 +1,8 @@
 // 「换源」手动媒体源绑定钉板（vitest+jsdom）：
 //   SourcePicker — 开屏并行拉「媒体源候选 + 现有绑定」（检索词=客户端
 //                 KWFORM 镜像派生显式传 keyword——服务端在场跳过 detail
-//                 兜底）、源徽标/封面 img-proxy/时长贴近排序（客户端持
+//                 兜底）、源徽标/封面 img-proxy+裂图 Map 指纹簿记自愈
+//                 （换 URL 复图/同 URL 永封）/时长贴近排序（客户端持
 //                 song0.dt 自排）/当前绑定标、选定→POST→applied+关窗、
 //                 404「已失效或不可播」内联留窗、errors 单源故障部行、
 //                 恢复自动匹配解绑、sp-direct 粘贴直绑：本地净形零出站
@@ -234,6 +235,53 @@ describe('SourcePicker：候选列表', () => {
     submitSearch()
     await flush()
     expect(document.querySelector('.sp-state')?.textContent).toBe('「无果词」没有候选媒体源')
+  })
+
+  it('封面裂图 Map 指纹簿记：error→fallback；同键换 URL 复图、同 URL 仍封、非白名单仍兜底', async () => {
+    const w = mountPicker()
+    await flush()
+    // 时长贴近排序后首行是 BV 候选（206s 贴 205s）——其封面走 img-proxy
+    const row0 = () => rowEls()[0]
+    const firstSrc = row0().querySelector('img.sp-thumb').getAttribute('src')
+    expect(firstSrc).toContain(encodeURIComponent('https://i0.hdslb.com/bfs/c.jpg'))
+    // 裂图 → 簿记出错时 img src 实值 → 该行落 fallback 音符块
+    row0().querySelector('img.sp-thumb').dispatchEvent(new Event('error'))
+    await flush()
+    expect(row0().querySelector('img.sp-thumb')).toBeNull()
+    expect(row0().querySelector('.sp-thumb--fallback')).toBeTruthy()
+
+    // 反向钉：同 ckey 重喂同 cover URL → 指纹命中仍 fallback（不重发必死请求）
+    const bv = CANDIDATES.find(c => c.source === 'bilibili')
+    w.vm.candidates = [{ ...bv }]
+    await flush()
+    expect(row0().querySelector('img.sp-thumb')).toBeNull()
+    expect(row0().querySelector('.sp-thumb--fallback')).toBeTruthy()
+
+    // 指纹自愈：同 ckey 封面换 URL（重检回包换图/上游修复）→ img 回渲，
+    // 新 src 走新 url= 编码串——旧 Set 簿记下此用例恒 fallback
+    w.vm.candidates = [{ ...bv, cover: 'https://i0.hdslb.com/bfs/c2.jpg' }]
+    await flush()
+    const revived = row0().querySelector('img.sp-thumb')
+    expect(revived).toBeTruthy()
+    expect(revived.getAttribute('src')).toContain(encodeURIComponent('https://i0.hdslb.com/bfs/c2.jpg'))
+
+    // 新 URL 也裂 → 记新指纹回 fallback；!!url 闸：非白名单 cover 归 '' 仍兜底
+    revived.dispatchEvent(new Event('error'))
+    await flush()
+    expect(row0().querySelector('.sp-thumb--fallback')).toBeTruthy()
+    w.vm.candidates = [{ ...bv, cover: 'https://evil.example/x.jpg' }]
+    await flush()
+    expect(row0().querySelector('img.sp-thumb')).toBeNull()
+    expect(row0().querySelector('.sp-thumb--fallback')).toBeTruthy()
+  })
+
+  it('源码钉：coverErrs 落 Map 指纹簿记（Set/has/add 记黑病灶不回潮）', () => {
+    const sfc = readFileSync(resolve('src/components/SourcePicker.vue'), 'utf8')
+    expect(sfc).toContain('coverErrs: new Map()')
+    expect(sfc).toContain('coverErrs.get(')
+    expect(sfc).toContain('coverErrs.set(')
+    expect(sfc).not.toContain('coverErrs.has(')
+    expect(sfc).not.toContain('coverErrs.add(')
   })
 })
 

@@ -133,13 +133,13 @@
               >
                 <span class="sp-badge" :class="`sp-badge--${c.source}`" aria-hidden="true">{{ sourceBadge(c.source) }}</span>
                 <img
-                  v-if="coverUrl(c) && !coverErrs.has(ckey(c))"
+                  v-if="coverOk(c)"
                   :src="coverUrl(c)"
                   alt=""
                   class="sp-thumb"
                   loading="lazy"
                   decoding="async"
-                  @error="coverErrs.add(ckey(c))"
+                  @error="markCoverErr(c, $event.target.getAttribute('src'))"
                 />
                 <span v-else class="sp-thumb sp-thumb--fallback" aria-hidden="true"><PixelIcon name="note" :size="14" /></span>
                 <span class="sp-text">
@@ -255,9 +255,10 @@ export default {
       lastFeed: null,
       // 直绑输入行现值——与检索框分槽（不占检索语义，互不清扰）
       directInput: '',
-      // 封面裂图记黑（key=source:mediaId）——换 fallback 音符块，
-      // watch-related-row 同款（img 元素随 v-if 拆，不重试烧外联）
-      coverErrs: new Set()
+      // 封面裂图簿记（key=source:mediaId → 出错时 img src 实值指纹）——
+      // Map 记真实失败 src，cover 换源（重检/换图）URL 变脸≠簿记值即放行
+      // 复图，与 HomeFeed coverErrs 同律；img 元素随 v-if 拆，不重试烧外联
+      coverErrs: new Map()
     }
   },
   computed: {
@@ -369,6 +370,17 @@ export default {
     // v-if 落 fallback 音符块
     coverUrl(c) {
       return proxiedCoverUrl(c?.cover)
+    },
+    // 封面可渲判定：有 URL 且未记过裂——簿记指纹与渲染 :src 同域
+    // （coverUrl(c) 实值，本组件无 httpsCover 段），源站换图即放行复图
+    coverOk(c) {
+      const url = this.coverUrl(c)
+      return !!url && this.coverErrs.get(this.ckey(c)) !== url
+    },
+    // 记事件目标真实 src 而非重算 coverUrl——重检换装间隙旧图 error 派发
+    // 时重算拿到的是新 URL，会把从未失败的源误簿（HomeFeed markCoverErr 同律）
+    markCoverErr(c, src) {
+      this.coverErrs.set(this.ckey(c), src)
     },
     // 当前绑定行高亮：source+mediaId 双键全中才算（同 mediaId 异源不亮）
     isCurrent(c) {
