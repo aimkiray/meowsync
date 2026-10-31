@@ -201,6 +201,18 @@ describe('WatchView：队列来源徽标与缩略图记黑', () => {
   })
 })
 
+describe('WatchView：侧栏面板体 --fit 挂载', () => {
+  // audit#13：queue/related 面板体贴合短内容（flex-basis:auto 按内容撑高）；
+  // lyrics 不挂——35cqh 大垫与跟随滚数学仍要 size 容器满高
+  it('三 .watch-side-body 仅 queue/related 带 --fit，lyrics 不带', () => {
+    const w = mountWatch({ tab: 'queue' })
+    expect(w.findAll('.watch-side-body')).toHaveLength(3) // v-show 三面板常驻
+    expect(w.find('#watch-panel-queue').classes()).toContain('watch-side-body--fit')
+    expect(w.find('#watch-panel-related').classes()).toContain('watch-side-body--fit')
+    expect(w.find('#watch-panel-lyrics').classes()).not.toContain('watch-side-body--fit')
+  })
+})
+
 describe('WatchView：歌词校准键面方向词', () => {
   it('延后/提前键面带方向词，title/aria 口径不变', () => {
     const w = mountWatch({ lyrics: [{ time: 1, text: '一' }], tab: 'lyrics' })
@@ -281,5 +293,41 @@ describe('CSS 源钉板：命中带/字号地板/分段锚', () => {
     // 旧菜单音画组特件随上移退役
     expect(css).not.toContain('menuitemradio')
     expect(css).not.toContain('.watch-menu-check')
+  })
+
+  it('WatchView 4K 几何钉：view 升容器/头行三态宽式/封面 clamp 帽/横轴统一/--fit 规则', () => {
+    const css = readSrc('WatchView.vue')
+    // #11 view 升定尺寸容器——只认合并双栏块（@supports 回退块选择器同式撞名，
+    // 用含 .watch-head 的那枚）；头行 cqh 由此解析到 view 净高
+    const merged = [...css.matchAll(
+      /@media \(min-width: 901px\), \(max-width: 900\.98px\) and \(max-height: 599\.98px\) \{[\s\S]*?\n\}/g,
+    )].map(m => m[0]).find(b => b.includes('.watch-head')) || ''
+    const viewBlock = merged.match(/\.watch-view\s*\{[\s\S]*?\}/)?.[0] || ''
+    expect(viewBlock).toContain('container-type: size')
+    const headBlock = merged.match(/\.watch-head\s*\{[^}]*\}/)?.[0] || ''
+    expect(headBlock).toContain('justify-self: center')
+    // #11 头行宽=媒体宽三态式：cqh 解析到 view 净高（content-box——view
+    // 24 底垫不进口径），≥901 减 120（40 头行+24/56 音垫）、矮窗减 40；
+    // 视频态两档同式 -40·16/9——≥901 与矮窗块各一条，计数钉 2
+    expect(css).toContain('.watch-head { width: min(100%, calc(100cqh - 120px), clamp(760px, calc((100cqh - 120px) * 0.55), 1200px)); }')
+    expect(css).toContain('.watch-head { width: min(100%, calc(100cqh - 40px), clamp(760px, calc((100cqh - 40px) * 0.55), 1200px)); }')
+    const videoHeadWidth = '.watch-view--video .watch-head { width: min(100%, calc((100cqh - 40px) * 16 / 9)); }'
+    expect(css.split(videoHeadWidth).length - 1).toBe(2)
+    // 无 cqh 内核回落：四条公式各前置一行 100%——缺此行 justify-self:center
+    // 下 width:auto 会塌成 ~250px 窄簇而非回满宽（回落行是实际回退路径）
+    expect(css.match(/\n {2}\.watch-head \{ width: 100%; \}/g)).toHaveLength(2)
+    expect(css.match(/\n {2}\.watch-view--video \.watch-head \{ width: 100%; \}/g)).toHaveLength(2)
+    // #10 封面帽成地板 + @supports 回退同步（45svh 近似主列 55%）
+    expect(css).toContain('width: min(100cqw, 100cqh, clamp(760px, 55cqh, 1200px))')
+    expect(css).toContain('width: min(100%, 60svh, clamp(760px, 45svh, 1200px))')
+    // #12 音画横轴统一 center——flex-start 全文件零命中；
+    // 类名仍在（:not() 垫排除与模板绑定继续消费）
+    expect(css).not.toContain('.watch-main--video { align-items: flex-start')
+    expect(css).toContain('watch-main--video')
+    // #13 贴合变体：flex-basis:auto 按内容撑高 + inline-size 覆盖防
+    // size 包容把 flex-basis 塌成 0（lyrics 保 size 不挂此变体）
+    const fitBlock = css.match(/\.watch-side-body--fit\s*\{[^}]*\}/)?.[0] || ''
+    expect(fitBlock).toContain('flex: 0 1 auto')
+    expect(fitBlock).toContain('container-type: inline-size')
   })
 })

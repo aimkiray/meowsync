@@ -270,7 +270,7 @@
           role="tabpanel"
           aria-labelledby="watch-tab-queue"
           v-show="tab === 'queue'"
-          class="watch-side-body"
+          class="watch-side-body watch-side-body--fit"
           ref="queueContainer"
         >
           <!-- 队列抬头已并入刊头右段（.watch-side-meta——源名/规模）；
@@ -509,7 +509,7 @@
           role="tabpanel"
           aria-labelledby="watch-tab-related"
           v-show="tab === 'related'"
-          class="watch-side-body"
+          class="watch-side-body watch-side-body--fit"
           ref="relatedEl"
         >
           <div v-if="relatedLoading" class="watch-empty">
@@ -1953,7 +1953,9 @@ export default {
   align-items: center;
   justify-content: center;
 }
-.watch-main--video { align-items: flex-start; }
+/* 音画横轴统一 center：16:9 视频在超宽列左贴与居中封面错开 ~396px（4K）。
+   纵轴保留差异——音频 24/56 垫是封面投影观感补偿（86253b0），视频无投影
+   按几何居中；视频盒 cqw 占满列宽时横轴无差，cqh 约束矮宽列才显现 */
 
 /* 媒体盒：单列态封面 ≤28svh 方形居中、视频满宽 16:9；双栏态改容器单位 */
 .watch-cover-wrap {
@@ -2202,6 +2204,13 @@ export default {
   scrollbar-color: rgba(255, 255, 255, .2) transparent;
   scrollbar-gutter: stable;
 }
+/* 短内容贴合：队列/相关面板体不再强制吃满栏高——4K 栏近 2k 时短队列
+   留下 ~1100px 滚动口空洞、页脚钉死在栏底。flex-basis:auto 按内容撑高、
+   溢出照常 shrink 回滚口；container-type:size 会清零内禀高度必须降到
+   inline-size（歌词面板仍要 size 给 35cqh 大垫——不挂此变体）。
+   警示：降到 inline-size 后子孙 cqh 会越级解析到 .watch-view——
+   当前两面板子孙无 cqh 消费点，给面板内新增 cqh 样式前先想清参照 */
+.watch-side-body--fit { flex: 0 1 auto; container-type: inline-size; }
 
 .watch-empty {
   text-align: center;
@@ -2513,14 +2522,24 @@ export default {
   .watch-tab { height: 40px; }
   .watch-queue-foot,
   .lyric-tools { padding-block: 8px; }
+  /* 矮窗无 view 底垫、音频无 pad——高项只减页头行 40；
+     前置 100% 回落行同上：无 cqh 内核回满宽而非 center 塌窄簇 */
+  .watch-head { width: 100%; }
+  .watch-head { width: min(100%, calc(100cqh - 40px), clamp(760px, calc((100cqh - 40px) * 0.55), 1200px)); }
+  .watch-view--video .watch-head { width: 100%; }
+  .watch-view--video .watch-head { width: min(100%, calc((100cqh - 40px) * 16 / 9)); }
 }
 @media (min-width: 901px), (max-width: 900.98px) and (max-height: 599.98px) {
   .watch-view {
     display: grid;
     grid-template-rows: 40px minmax(0, 1fr);
+    /* 头行宽度要算 cqh——view 升定尺寸查询容器（size 含 layout/style 包容：
+       ambient fixed 件本就不进 container CB——CSSWG#10544，L1819 注同口径；
+       已查无 counter、absolute 后代各有 relative 锚） */
+    container-type: size;
   }
   .watch-layout { display: contents; }
-  .watch-head { grid-column: 1; grid-row: 1; min-width: 0; }
+  .watch-head { grid-column: 1; grid-row: 1; min-width: 0; justify-self: center; }
   .watch-main { grid-column: 1; grid-row: 2; min-width: 0; }
   .watch-side { grid-column: 2; grid-row: 1 / -1; }
   .watch-main {
@@ -2528,7 +2547,12 @@ export default {
     container-type: size;
     overflow: hidden; /* 媒体超高不外溢 */
   }
+  /* 下行嵌套-clamp 的 parse 兜底——支持 cqh 的内核必然支持 clamp，
+     现代实为防御性死代码（真回退走 @supports 块），勿误删 */
   .watch-cover-wrap { width: min(100cqw, 100cqh, 760px); }
+  /* 帽成地板：主列净高 55% 与旧帽取大——cqh≤1382（视口高约 <1676）时
+     与旧 760 逐像素一致，4K 长列才按比例长个；1200 防极端竖屏失控 */
+  .watch-cover-wrap { width: min(100cqw, 100cqh, clamp(760px, 55cqh, 1200px)); }
   .watch-cover-wrap--video { width: min(100cqw, 100cqh * 16 / 9); }
 }
 @media (min-width: 901px) {
@@ -2542,17 +2566,27 @@ export default {
      padding-bottom:56px 是视觉补偿：封面 box-shadow 0 24px 64px
      （:1965）暗晕向下视达 ≈ offsetY 24 + blur 密部 ~32 = ~56px，
      底垫多垫这份观感才真等距——投影参数改则此数同步改。
-     视频态排除：16:9 盒维持原摆放。container-type:size 下两垫同向
-     收缩 cqh——矮窗封面按余量自动再缩，无溢出风险 */
+     视频态排除：无投影观感补偿项，走几何居中。container-type:size
+     下两垫同向收缩 cqh——矮窗封面按余量自动再缩，无溢出风险 */
   .watch-main:not(.watch-main--video) {
     padding-top: 24px;
     padding-bottom: 56px;
   }
+  /* 头行宽=媒体宽：100%=col1 轨（同 main 100cqw）；120px=40 页头行+
+     24/56 音频垫——cqh 解析到 view 净高（content-box），view 的 24
+     底垫不在口径内勿重复减；视频态无音垫只减页头行 40。
+     帽与 .watch-cover-wrap 同 clamp——两式跨容器同参成对维护；
+     前置 100% 回落行：无 cqh 内核公式整条作废，回满宽而非
+     justify-self:center 下塌成窄簇（cover-wrap 双行同构） */
+  .watch-head { width: 100%; }
+  .watch-head { width: min(100%, calc(100cqh - 120px), clamp(760px, calc((100cqh - 120px) * 0.55), 1200px)); }
+  .watch-view--video .watch-head { width: 100%; }
+  .watch-view--video .watch-head { width: min(100%, calc((100cqh - 40px) * 16 / 9)); }
 }
 /* 容器单位缺席的老内核：回旧式视口高预算 */
 @supports not (width: 1cqh) {
   @media (min-width: 901px), (max-width: 900.98px) and (max-height: 599.98px) {
-    .watch-cover-wrap { width: min(100%, 60svh, 760px); }
+    .watch-cover-wrap { width: min(100%, 60svh, clamp(760px, 45svh, 1200px)); }
     .watch-cover-wrap--video { width: min(100%, calc((100dvh - 260px) * 16 / 9)); }
   }
 }

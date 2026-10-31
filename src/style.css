@@ -762,8 +762,10 @@ body::-webkit-scrollbar { width: 0; background: transparent; }
   display: flex;
   flex-direction: column;
   /* 主区容器：home 双栏阈值 @container(min-width:960) 与 100cqw 对齐
-     公式（§1.4）都解析到本盒内联宽。container-type 仅建 inline-size
-     查询容器，不含 layout CB——fixed 后代（.watch-ambient）仍锚视口 */
+     公式（§1.4）都解析到本盒内联宽。现代引擎（CSSWG#10544 后）
+     container-type 不立 fixed 包含块——fixed 后代（.watch-ambient）
+     锚视口；旧引擎 inline-size 强制的 layout 包容本就把 fixed CB
+     锚到本盒，两世皆非新回归 */
   container-type: inline-size;
 }
 
